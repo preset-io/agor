@@ -78,3 +78,4 @@ export const kbGraphEdges = schema.kbGraphEdges;
 export type * from './schema.sqlite';
 
 export const kbImportReceipts = schema.kbImportReceipts;
+export const opencodeCheckpointAttempts = schema.opencodeCheckpointAttempts;

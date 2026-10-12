@@ -12,6 +12,7 @@
 import { Forbidden, feathers, feathersExpress, rest } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { createRequireAuthHook } from './auth/require-auth';
 import { type RegisterHooksContext, registerHooks } from './register-hooks';
 import { ARTIFACTS_SERVICE_TRANSPORT_METHODS } from './services/artifacts';
 import { CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS } from './services/capability-policies';
@@ -635,4 +636,79 @@ describe('Feathers method-list enforcement', () => {
       await new Promise((resolve) => server.close(resolve));
     }
   });
+});
+
+describe('executor interruption report registration', () => {
+  it('rejects rebinding a tenant-a executor report into tenant-b before the method runs', async () => {
+    const requireAuth = createRequireAuthHook(async (context) => context, {
+      mode: 'required_from_auth',
+      static_tenant_id: 'unused' as never,
+      auth_claim: 'tenant_id',
+    });
+    const method = vi.fn();
+    const context = {
+      path: 'tasks',
+      method: 'reportExecutorInterruption',
+      data: { task_id: 'task-1', signal: 'SIGTERM' },
+      params: {
+        provider: 'socketio',
+        tenant: { tenant_id: 'tenant-b', source: 'explicit' },
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-task',
+            sub: 'user-a',
+            tenant_id: 'tenant-a',
+            session_id: 'session-1',
+            branch_id: 'branch-1',
+            task_id: 'task-1',
+          },
+        },
+      },
+    } as unknown as HookContext;
+    const run = async () => {
+      await requireAuth(context);
+      for (const hook of captureRegisteredHooks().get('tasks')!.before.reportExecutorInterruption!)
+        await hook(context);
+      method();
+    };
+    await expect(run()).rejects.toThrow('Conflicting tenant identities');
+    expect(method).not.toHaveBeenCalled();
+  });
+
+  it.each(['executor-task', 'ordinary-user', 'another-task', 'executor-command'])(
+    'requires the exact task-scoped credential (%s)',
+    async (kind) => {
+      const chain = captureRegisteredHooks().get('tasks')!.before.reportExecutorInterruption;
+      expect(chain?.length).toBeGreaterThan(0);
+      expect(TASKS_SERVICE_TRANSPORT_METHODS).toContain('reportExecutorInterruption');
+      const ctx = {
+        path: 'tasks',
+        method: 'reportExecutorInterruption',
+        data: { task_id: 'task-1', signal: 'SIGTERM' },
+        params: {
+          provider: 'socketio',
+          authentication: {
+            strategy: 'jwt',
+            payload:
+              kind === 'ordinary-user'
+                ? { sub: 'user-1' }
+                : {
+                    type: 'executor-session',
+                    purpose: kind === 'executor-command' ? 'executor-command' : 'executor-task',
+                    session_id: 'session-1',
+                    branch_id: 'branch-1',
+                    task_id: kind === 'another-task' ? 'task-other' : 'task-1',
+                  },
+          },
+        },
+      } as unknown as HookContext;
+      const run = async () => {
+        for (const hook of chain!) await hook(ctx);
+      };
+      if (kind === 'executor-task') await expect(run()).resolves.toBeUndefined();
+      else await expect(run()).rejects.toThrow(/scoped to this executor task/);
+    }
+  );
 });

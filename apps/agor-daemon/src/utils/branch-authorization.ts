@@ -934,6 +934,85 @@ export function protectGatewaySourceMetadata(context: HookContext): HookContext 
   return context;
 }
 
+type CallbackConfig = NonNullable<Session['callback_config']>;
+
+/** Where and whether completion callbacks deliver, resolved as dispatch does. */
+function effectiveCallback(
+  config: { callback_session_id?: string | null; enabled?: boolean | null } | null | undefined,
+  genealogyParentId: string | null | undefined
+) {
+  return {
+    targetId: config?.callback_session_id ?? genealogyParentId ?? undefined,
+    active: config?.enabled !== false,
+  };
+}
+
+/**
+ * Keep the callback principal under daemon ownership.
+ *
+ * `callback_config.callback_created_by` becomes the delivered callback Task's
+ * `created_by`, which selects the executor identity, environment, and
+ * credentials. External callers never choose it: a supplied value is
+ * discarded. Any write that moves the effective callback target (including via
+ * `null` or the genealogy-parent fallback) or turns delivery back on binds the
+ * principal to the caller, after checking they may prompt the new target.
+ * Writes that leave delivery unchanged keep the stored principal.
+ *
+ * Must run after `loadSession` on patch/update so the stored session is known.
+ */
+export function stampCallbackPrincipal(branchRepo: BranchRepository) {
+  return async (context: HookContext) => {
+    if (!context.params.provider) return context;
+
+    const stored =
+      context.method === 'create' ? undefined : (context.params.session as Session | undefined);
+    const before = stored
+      ? effectiveCallback(stored.callback_config, stored.genealogy?.parent_session_id)
+      : { targetId: undefined, active: false };
+
+    const writes = Array.isArray(context.data) ? context.data : [context.data];
+    for (const write of writes) {
+      if (!write || typeof write !== 'object') continue;
+      const data = write as { callback_config?: unknown; genealogy?: Session['genealogy'] | null };
+      if (data.callback_config === undefined && data.genealogy === undefined) continue;
+
+      let requested: Omit<CallbackConfig, 'callback_created_by'> | undefined;
+      if (data.callback_config !== undefined) {
+        const config = data.callback_config;
+        if (!config || typeof config !== 'object' || Array.isArray(config)) {
+          throw new BadRequest('session.callback_config must be an object');
+        }
+        const { callback_created_by: _discarded, ...rest } = config as CallbackConfig;
+        requested = rest;
+        data.callback_config = requested;
+      }
+
+      const merged = <K extends 'callback_session_id' | 'enabled'>(key: K) =>
+        requested?.[key] !== undefined ? requested[key] : stored?.callback_config?.[key];
+      const genealogyParentId =
+        data.genealogy === null
+          ? undefined
+          : data.genealogy?.parent_session_id !== undefined
+            ? data.genealogy.parent_session_id
+            : stored?.genealogy?.parent_session_id;
+      const after = effectiveCallback(
+        { callback_session_id: merged('callback_session_id'), enabled: merged('enabled') },
+        genealogyParentId
+      );
+
+      if (!after.targetId || !after.active) continue;
+      if (after.targetId === before.targetId && before.active) continue;
+
+      const userId = context.params.user?.user_id;
+      if (!userId) throw new NotAuthenticated('Authentication required to configure callbacks');
+      await ensureCanPromptTargetSession(after.targetId, userId, context.app, branchRepo);
+      data.callback_config = { ...requested, callback_created_by: userId };
+    }
+
+    return context;
+  };
+}
+
 /**
  * Load a user's current `unix_username` by user id.
  *
@@ -1705,7 +1784,7 @@ export function determineSpawnIdentity(
 // Schedule-tier RBAC helpers
 // ============================================================================
 // Schedules inherit their RBAC from the parent branch (same model as
-// sessions). See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
+// sessions).
 
 /**
  * Scope schedules.find() to schedules whose parent branch the user can view.

@@ -4,6 +4,7 @@
 
 import type { AgorClient, Board, UUID } from '@agor-live/client';
 import { useState } from 'react';
+import { formatActionError } from '../utils/connectionErrors';
 import { useThemedMessage } from '../utils/message';
 
 interface UseBoardActionsResult {
@@ -27,9 +28,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
       const created = await client.service('boards').create(board);
       return created;
     } catch (error) {
-      showError(
-        `Failed to create board: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('create the board', error, { idempotent: false }));
       return null;
     } finally {
       setLoading(false);
@@ -44,9 +43,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
       const updated = await client.service('boards').patch(boardId, updates);
       return updated;
     } catch (error) {
-      showError(
-        `Failed to update board: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('update the board', error, { idempotent: true }));
       return null;
     } finally {
       setLoading(false);
@@ -61,9 +58,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
       await client.service('boards').remove(boardId);
       return true;
     } catch (error) {
-      showError(
-        `Failed to delete board: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('delete the board', error, { idempotent: true }));
       return false;
     } finally {
       setLoading(false);
@@ -78,9 +73,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
       const archived = await client.service(`boards/${boardId}/archive`).create({});
       return archived as Board;
     } catch (error) {
-      showError(
-        `Failed to archive board: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('archive the board', error, { idempotent: true }));
       return null;
     } finally {
       setLoading(false);
@@ -95,9 +88,7 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
       const unarchived = await client.service(`boards/${boardId}/unarchive`).create({});
       return unarchived as Board;
     } catch (error) {
-      showError(
-        `Failed to unarchive board: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('unarchive the board', error, { idempotent: true }));
       return null;
     } finally {
       setLoading(false);

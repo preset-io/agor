@@ -1,3 +1,4 @@
+import { branchMaintenanceCapabilities } from '@agor/core/config/browser';
 import type { AgorClient, EffectiveBranchAccess, Repo } from '@agor-live/client';
 import { DEFAULT_REPO_CLEANUP_POLICY } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -6,7 +7,9 @@ import { makeBranch, makeRepo, makeUser } from '../BranchModal/testUtils';
 import { ArchiveDeleteBranchModal } from './ArchiveDeleteBranchModal';
 
 function fixture(enabled = false) {
-  const branch = makeBranch();
+  const branch = makeBranch({
+    maintenance_capabilities: branchMaintenanceCapabilities({}, 'clone'),
+  });
   let repo = makeRepo({
     name: 'Test repo',
     cleanup_policy: { ...DEFAULT_REPO_CLEANUP_POLICY, enabled },
@@ -58,7 +61,7 @@ it('defaults to Preserve when disabled, saves settings above archive, and refres
       'Cleanup is disabled for this repository. Archiving will keep workspace files on disk.'
     )
   ).toBeInTheDocument();
-  expect(screen.getByRole('radio', { name: /Leave untouched/ })).toBeChecked();
+  expect(screen.getByRole('radio', { name: /^Leave untouched/ })).toBeChecked();
   expect(screen.getByRole('radio', { name: /Clean —/ })).toBeDisabled();
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Open repository settings' })).toBeVisible()
@@ -84,7 +87,7 @@ it('defaults to Preserve when disabled, saves settings above archive, and refres
     });
   });
   await waitFor(() => expect(screen.getByRole('radio', { name: /Clean —/ })).toBeDisabled());
-  expect(screen.getByRole('radio', { name: /Leave untouched/ })).toBeChecked();
+  expect(screen.getByRole('radio', { name: /^Leave untouched/ })).toBeChecked();
   expect(screen.getAllByText(/Custom cleanup commands are unavailable/).length).toBeGreaterThan(0);
 });
 
@@ -106,7 +109,7 @@ it('does not steal explicit Preserve, falls back when protection changes, and fa
     screen.getByText(/When enabled, this command runs when branch cleanup is requested/)
   ).toBeInTheDocument();
   expect(screen.queryByText('Cleanup deletes files; there is no undo')).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('radio', { name: /Leave untouched/ }));
+  fireEvent.click(screen.getByRole('radio', { name: /^Leave untouched/ }));
   await act(async () => {
     await repos.patch('unused', {
       cleanup_policy: { ...DEFAULT_REPO_CLEANUP_POLICY, enabled: true, command: 'git clean -fdX' },
@@ -115,14 +118,14 @@ it('does not steal explicit Preserve, falls back when protection changes, and fa
   await waitFor(() =>
     expect(screen.getByRole('radio', { name: /Clean — git clean -fdX/ })).toBeEnabled()
   );
-  expect(screen.getByRole('radio', { name: /Leave untouched/ })).toBeChecked();
+  expect(screen.getByRole('radio', { name: /^Leave untouched/ })).toBeChecked();
   fireEvent.click(screen.getByRole('radio', { name: /Clean —/ }));
   branch.cleanup_protected = true;
   await act(async () => {
     await repos.patch('unused', {});
   });
   await waitFor(() => expect(screen.getByRole('radio', { name: /Clean —/ })).toBeDisabled());
-  expect(screen.getByRole('radio', { name: /Leave untouched/ })).toBeChecked();
+  expect(screen.getByRole('radio', { name: /^Leave untouched/ })).toBeChecked();
   repos.get.mockRejectedValueOnce(new Error('unavailable'));
   await act(async () => {
     await repos.patch('unused', {});
@@ -177,7 +180,7 @@ it('permanent deletion always removes files, independent of cleanup policy and a
   );
   fireEvent.click(screen.getByRole('radio', { name: /^Delete permanently/ }));
   expect(screen.getByRole('radio', { name: /Delete completely/ })).toBeChecked();
-  expect(screen.getByRole('radio', { name: /Leave untouched/ })).toBeDisabled();
+  expect(screen.getByRole('radio', { name: /^Leave untouched/ })).toBeDisabled();
   expect(
     screen.queryByRole('button', { name: 'Open repository settings' })
   ).not.toBeInTheDocument();
@@ -187,7 +190,7 @@ it('permanent deletion always removes files, independent of cleanup policy and a
     filesystemAction: 'deleted',
   });
   fireEvent.click(screen.getByRole('radio', { name: /Archive \(recommended\)/ }));
-  expect(screen.getByRole('radio', { name: /Leave untouched/ })).toBeChecked();
+  expect(screen.getByRole('radio', { name: /^Leave untouched/ })).toBeChecked();
   fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
   expect(confirm).toHaveBeenLastCalledWith({
     metadataAction: 'archive',
@@ -379,6 +382,107 @@ it('after refreshing eligibility, revoked or failed permissions disable all subm
   await act(async () => {
     await repos.patch('unused', {});
   });
-  await screen.findByText('Branch permissions could not be loaded.');
+  await screen.findAllByText('Branch permissions could not be loaded.');
   expect(screen.getByRole('button', { name: 'Delete Permanently' })).toBeDisabled();
+});
+
+it.each(['disabled', 'missing'] as const)(
+  'blocks %s permanent deletion before confirmation without changing it to archive',
+  async (state) => {
+    const { client, branch } = fixture();
+    branch.maintenance_capabilities =
+      state === 'missing'
+        ? undefined
+        : branchMaintenanceCapabilities({ execution: { unix_user_mode: 'delegated' } }, 'clone');
+    const confirm = vi.fn();
+    render(
+      <ArchiveDeleteBranchModal
+        client={client}
+        currentUser={makeUser()}
+        branch={branch}
+        open
+        initialMetadataAction="delete"
+        onConfirm={confirm}
+        onCancel={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(
+          state === 'missing' ? /upgrade the daemon/ : /verify the deletion storage mount contract/
+        ).length
+      ).toBeGreaterThan(0)
+    );
+    expect(screen.getByRole('radio', { name: /^Delete permanently/ })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Delete Permanently' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Permanently' }));
+    expect(confirm).not.toHaveBeenCalled();
+  }
+);
+
+it('allows clone archive removal while permanent deletion is disabled, and keeps preserve available for external worktrees', async () => {
+  const { client, branch, repos } = fixture(true);
+  const config = { execution: { unix_user_mode: 'delegated' as const } };
+  branch.maintenance_capabilities = branchMaintenanceCapabilities(config, 'clone');
+  const confirm = vi.fn();
+  render(
+    <ArchiveDeleteBranchModal
+      client={client}
+      currentUser={makeUser()}
+      branch={branch}
+      open
+      onConfirm={confirm}
+      onCancel={vi.fn()}
+    />
+  );
+  await waitFor(() => expect(screen.getByRole('radio', { name: /Clean —/ })).toBeEnabled());
+  expect(screen.getByRole('radio', { name: /^Delete permanently/ })).toBeDisabled();
+  fireEvent.click(screen.getByRole('radio', { name: /Delete completely/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Archive Branch' }));
+  expect(confirm).toHaveBeenCalledWith({ metadataAction: 'archive', filesystemAction: 'deleted' });
+  branch.maintenance_capabilities = branchMaintenanceCapabilities(config, 'worktree');
+  await act(async () => {
+    await repos.patch('unused', {});
+  });
+  await waitFor(() =>
+    expect(screen.getByRole('radio', { name: /Delete completely/ })).toBeDisabled()
+  );
+  // An explicit destructive selection is not silently changed into preserve.
+  expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('radio', { name: /^Leave untouched/ }));
+  expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled();
+});
+
+it('describes permanent file deletion independently of unsupported archive removal', async () => {
+  const { client, branch } = fixture();
+  branch.maintenance_capabilities = branchMaintenanceCapabilities(
+    { execution: { unix_user_mode: 'delegated', delegated_branch_deletion: true } },
+    'worktree'
+  );
+  const confirm = vi.fn();
+  render(
+    <ArchiveDeleteBranchModal
+      client={client}
+      currentUser={makeUser()}
+      branch={branch}
+      open
+      initialMetadataAction="delete"
+      onConfirm={confirm}
+      onCancel={vi.fn()}
+    />
+  );
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Delete Permanently' })).toBeEnabled()
+  );
+  expect(
+    screen.getByRole('radio', {
+      name: 'Delete completely Removes workspace, branch SDK home, and owned uploads',
+    })
+  ).toBeChecked();
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Permanently' }));
+  expect(confirm).toHaveBeenCalledWith({ metadataAction: 'delete', filesystemAction: 'deleted' });
+  fireEvent.click(screen.getByRole('radio', { name: /Archive \(recommended\)/ }));
+  expect(
+    screen.getByRole('radio', { name: /Delete completely External workspace cleanup/ })
+  ).toBeDisabled();
 });

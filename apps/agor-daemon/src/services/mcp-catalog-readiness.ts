@@ -7,10 +7,15 @@ import type {
   MCPCatalogServerCandidate,
   UserID,
 } from '@agor/core/types';
-import { selectCatalogCandidate } from './mcp-catalog-credential-match.js';
+import { readCatalogSharing } from './mcp-catalog-access.js';
+import {
+  isUsableSharedCatalogCandidate,
+  selectCatalogCandidate,
+} from './mcp-catalog-credential-match.js';
 import { catalogOAuthConfig } from './mcp-catalog-install-policy.js';
 
 export interface MCPCatalogReadinessDeps {
+  redirectUri?(entry: MCPCatalogEntry): string | undefined;
   listCandidates(userId: UserID, params: AuthenticatedParams): Promise<MCPCatalogServerCandidate[]>;
   isGrantAuthorized(
     candidate: MCPCatalogServerCandidate,
@@ -34,6 +39,7 @@ export class MCPCatalogReadinessService {
   async get(id: Id, params?: AuthenticatedParams): Promise<MCPCatalogReadiness> {
     const userId = params?.user?.user_id as UserID | undefined;
     if (!userId || !params) throw new NotAuthenticated('Authentication required');
+    const sharing = readCatalogSharing(params.query?.sharing);
     const catalogKey = String(id);
     const entry = (await this.app.service('mcp-catalog').get(catalogKey, {
       ...params,
@@ -43,7 +49,29 @@ export class MCPCatalogReadinessService {
       throw new BadRequest('This catalog entry has no Marketplace-connectable remote endpoint');
     }
     const remoteEntry = entry as MCPCatalogEntry & { remote_url: string };
-    const candidates = await this.deps.listCandidates(userId, params);
+    const inventory = await this.deps.listCandidates(userId, params);
+    // Configuration availability is independent of whose grant is live and of
+    // the selected ownership. This only offers an explicit use-existing choice;
+    // Connect still authorizes the current caller and row after probing.
+    const sharedConfiguration =
+      entry.auth_type !== 'credentials' &&
+      inventory.some((candidate) =>
+        isUsableSharedCatalogCandidate(
+          candidate,
+          remoteEntry,
+          entry.auth_type === 'oauth' || candidate.server.auth?.type === 'oauth'
+            ? catalogOAuthConfig(remoteEntry)
+            : { type: 'none' }
+        )
+      );
+    const sharedAvailability = sharedConfiguration
+      ? { shared_configuration_available: true as const }
+      : {};
+    const candidates = inventory.filter(({ server }) =>
+      sharing === 'shared' ? !server.owner_user_id : server.owner_user_id === userId
+    );
+    const redirectUri = entry.oauth?.configured_client ? this.deps.redirectUri?.(entry) : undefined;
+    const setup = redirectUri ? { redirect_uri: redirectUri } : {};
     const knownOAuthInstall = candidates.some(
       ({ server }) =>
         server.source === 'catalog' &&
@@ -65,19 +93,28 @@ export class MCPCatalogReadinessService {
         oauthPool,
         userId,
         Date.now(),
-        { isGrantAuthorized: (candidate) => this.deps.isGrantAuthorized(candidate, params) }
+        { isGrantAuthorized: (candidate) => this.deps.isGrantAuthorized(candidate, params) },
+        sharing
       );
       if (selection.live) {
         return {
           catalog_key: catalogKey,
+          ...sharedAvailability,
+          ...setup,
           state: selection.liveKind === 'catalog_install' ? 'installed_ready' : 'reusable_oauth',
         };
       }
-      return { catalog_key: catalogKey, state: 'oauth_required' };
+      return {
+        catalog_key: catalogKey,
+        ...sharedAvailability,
+        ...setup,
+        state: 'oauth_required',
+        ...(selection.currentCatalog ? { reusable_configuration: true } : {}),
+      };
     }
 
     if (entry.auth_type === 'credentials') {
-      return { catalog_key: catalogKey, state: 'bearer_required' };
+      return { catalog_key: catalogKey, ...sharedAvailability, state: 'bearer_required' };
     }
     const selection = await selectCatalogCandidate(
       remoteEntry,
@@ -85,10 +122,12 @@ export class MCPCatalogReadinessService {
       candidates,
       userId,
       Date.now(),
-      { isGrantAuthorized: async () => false }
+      { isGrantAuthorized: async () => false },
+      sharing
     );
     return {
       catalog_key: catalogKey,
+      ...sharedAvailability,
       state: selection.currentCatalog ? 'installed_ready' : 'no_auth',
     };
   }

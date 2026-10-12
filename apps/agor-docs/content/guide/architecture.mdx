@@ -160,6 +160,21 @@ sequenceDiagram
   broadcast fallback; clients cannot select tenant rooms
 - **Optimistic UI** - React hooks listen to events and update state immediately
 
+### Real-Time Data Sync
+
+The browser never loads the whole workspace. At first paint it reads small
+global lists (boards, users, repos, card types, comments) and the newest of
+your own sessions. Right after paint it loads the rest of your scope: all
+of your active sessions, your branches, teammate branches you can see, and
+the branches your sessions and comment threads point at. A board's branches,
+sessions and annotations load when you open it, and a few recently used
+boards stay cached. Search, deep links and settings tables read the server
+on demand. Every read goes through the same access checks as any other
+query. Realtime events keep everything loaded current. A load never
+overwrites a change that arrived while it was in flight. After a reconnect
+the visible board and your scope are reconciled with the server. The
+contract is in `context/concepts/user-first-scoped-hydration.md`.
+
 ## Core Services
 
 The daemon exposes 12 FeathersJS services via REST and WebSocket:

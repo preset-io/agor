@@ -5,7 +5,7 @@ import type { GalleryFilter, TeammateGalleryCardId } from '../../utils/teammateT
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { TeammateGalleryCards, TeammateGalleryFilters } from '../TeammateGallery/TeammateGallery';
 
-const { Paragraph, Text, Title } = Typography;
+const { Text, Title } = Typography;
 
 interface OnboardingTeammateGalleryStepProps {
   goals: readonly string[];
@@ -51,24 +51,15 @@ export const OnboardingTeammateGalleryStep: React.FC<OnboardingTeammateGallerySt
             transition: 'max-height 0.25s ease, opacity 0.2s ease, margin-bottom 0.25s ease',
           }}
         >
-          <div style={{ marginBottom: 12 }}>
-            <Title
-              ref={headingRef}
-              data-step="workspace"
-              level={3}
-              tabIndex={-1}
-              style={{ color: token.colorText, margin: 0, outline: 'none' }}
-            >
-              Build your teammate
-            </Title>
-          </div>
-          <Paragraph
-            className="onb-workspace-intro-copy"
-            style={{ color: token.colorTextSecondary, margin: 0 }}
+          <Title
+            ref={headingRef}
+            data-step="workspace"
+            level={3}
+            tabIndex={-1}
+            style={{ color: token.colorText, margin: 0, outline: 'none' }}
           >
-            Name your teammate and pick a starter template to shape what they do, or start blank.
-            Change anything later.
-          </Paragraph>
+            Build your teammate
+          </Title>
         </div>
 
         <Flex vertical gap={token.marginSM}>

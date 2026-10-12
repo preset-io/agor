@@ -190,6 +190,9 @@ export const gatewayRouteHook = async (context: HookContext) => {
       {
         session_id: message.session_id,
         message_id: message.message_id,
+        // The reply address travels with the Task, not the Session. Optional
+        // only because messages predating per-message Task attribution exist.
+        task_id: message.task_id,
         message: messageText,
         metadata: message.metadata,
       },

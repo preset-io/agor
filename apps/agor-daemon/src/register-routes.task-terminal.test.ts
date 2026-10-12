@@ -8,6 +8,7 @@ import {
   findMatchingUnverifiedTerminationTask,
   projectMcpReconnectRecoveryForViewer,
   rejectRemovedClaudeCliRestart,
+  resolveCleanupRetryTarget,
 } from './register-routes.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from './utils/agentic-tool-runtime.js';
 
@@ -79,7 +80,7 @@ describe('MCP reconnect route authorization', () => {
           message: 'Sign in again.',
         },
       ],
-    } as MCPRuntimeRecovery;
+    } as unknown as MCPRuntimeRecovery;
     const session = { session_id: 'session-1', created_by: 'owner' } as Session;
 
     const projected = projectMcpReconnectRecoveryForViewer({
@@ -212,4 +213,48 @@ describe('force-fail route authorization and request fencing', () => {
 it('keeps the stale restart endpoint as an explicit removed-runtime tombstone', () => {
   expect(rejectRemovedClaudeCliRestart).toThrow(BadRequest);
   expect(rejectRemovedClaudeCliRestart).toThrow(REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE);
+});
+
+describe('cleanup retry exact-session boundary', () => {
+  const body = {
+    expected_task_id: '018f0000-0000-7000-8000-000000000001',
+    termination_requested_at: 'epoch',
+    recovery_revision: 'revision',
+  };
+  it('rejects a task in another session even if readable', async () => {
+    await expect(
+      resolveCleanupRetryTarget({
+        sessionId: 'session-a' as never,
+        body,
+        findTask: async () => ({ task_id: body.expected_task_id, session_id: 'session-b' }) as Task,
+      })
+    ).rejects.toBeInstanceOf(Forbidden);
+  });
+  it('does not fall back to unscoped lookup when the tenant-scoped lookup denies access', async () => {
+    const findTask = vi.fn().mockRejectedValue(new NotFound('Task not found'));
+    await expect(
+      resolveCleanupRetryTarget({ sessionId: 'session-a' as never, body, findTask })
+    ).rejects.toBeInstanceOf(NotFound);
+    expect(findTask).toHaveBeenCalledOnce();
+  });
+  it('requires an exact task and recovery revision before reading', async () => {
+    const findTask = vi.fn();
+    await expect(
+      resolveCleanupRetryTarget({
+        sessionId: 'session-a' as never,
+        body: { ...body, expected_task_id: 'short-id' },
+        findTask,
+      })
+    ).rejects.toBeInstanceOf(BadRequest);
+    expect(findTask).not.toHaveBeenCalled();
+  });
+  it('passes the observed revision unchanged to the repository fence', async () => {
+    expect(
+      await resolveCleanupRetryTarget({
+        sessionId: 'session-a' as never,
+        body,
+        findTask: async () => ({ task_id: body.expected_task_id, session_id: 'session-a' }) as Task,
+      })
+    ).toEqual({ taskId: body.expected_task_id, requestedAt: 'epoch', revision: 'revision' });
+  });
 });

@@ -37,6 +37,15 @@ export function formatGatewayFollowUpRoutingMessage(
   return `Mention received — routing to ${formatGatewayMarkdownSessionReference(sessionId, sessionUrl)}.`;
 }
 
+export interface GatewaySystemMessageOptions {
+  /**
+   * Discord: append the follow-up guidance to a session-created notice.
+   * Defaults to true; false where follow-ups need no mention (DMs, forums in
+   * `all` response mode).
+   */
+  followUpHint?: boolean;
+}
+
 /**
  * Format low-volume gateway lifecycle messages for external channels.
  *
@@ -45,20 +54,31 @@ export function formatGatewayFollowUpRoutingMessage(
  * messages plain, and route Slack text through the existing markdown→mrkdwn
  * converter so link formatting and escaping stay centralized.
  */
-export function formatGatewaySystemMessage(channelType: ChannelType, text: string): string {
+export function formatGatewaySystemMessage(
+  channelType: ChannelType,
+  text: string,
+  options: GatewaySystemMessageOptions = {}
+): string {
   const sessionCreatedMatch = text.match(/^Session created: (https?:\/\/\S+)$/);
-  const slackMentionGuidance = 'Mention me again to follow up.';
+  const mentionGuidance = 'Mention me again to follow up.';
 
   if (channelType === 'slack') {
     const markdown = sessionCreatedMatch
-      ? `${GATEWAY_SYSTEM_PREFIX} Session created: [View session](${sessionCreatedMatch[1]}). ${slackMentionGuidance}`
+      ? `${GATEWAY_SYSTEM_PREFIX} Session created: [View session](${sessionCreatedMatch[1]}). ${mentionGuidance}`
       : text.startsWith('Session ') && text.includes(' created, sending prompt to agent.')
-        ? `${GATEWAY_SYSTEM_PREFIX} ${text} ${slackMentionGuidance}`
+        ? `${GATEWAY_SYSTEM_PREFIX} ${text} ${mentionGuidance}`
         : text.startsWith('Mention received')
-          ? `${GATEWAY_SYSTEM_PREFIX} ${text} ${slackMentionGuidance}`
+          ? `${GATEWAY_SYSTEM_PREFIX} ${text} ${mentionGuidance}`
           : `${GATEWAY_SYSTEM_PREFIX} ${text}`;
 
     return markdownToMrkdwn(markdown);
+  }
+
+  if (channelType === 'discord' && sessionCreatedMatch) {
+    // A masked link like Slack's; the angle brackets stop Discord from
+    // expanding a link preview of the session page.
+    const guidance = options.followUpHint === false ? '' : ` ${mentionGuidance}`;
+    return `${GATEWAY_SYSTEM_PREFIX} Session created: [View session](<${sessionCreatedMatch[1]}>).${guidance}`;
   }
 
   return `${GATEWAY_SYSTEM_PREFIX} ${text}`;
@@ -73,9 +93,10 @@ export function formatGatewaySystemMessage(channelType: ChannelType, text: strin
  */
 export function formatGatewaySystemPayload(
   channelType: ChannelType,
-  text: string
+  text: string,
+  options: GatewaySystemMessageOptions = {}
 ): OutboundPayload {
-  const formatted = formatGatewaySystemMessage(channelType, text);
+  const formatted = formatGatewaySystemMessage(channelType, text, options);
 
   if (channelType !== 'slack') {
     return { text: formatted };

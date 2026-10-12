@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { theme } from 'antd';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CatalogToolbar } from './CatalogToolbar';
 
 function selectInput(label: string): HTMLElement {
@@ -21,7 +22,55 @@ function selectOption(label: string): void {
 }
 
 describe('Marketplace catalog toolbar', () => {
-  it('publishes category choices from the Segmented control and resets to All', () => {
+  it.each([1200, 390])(
+    'clears only the chosen filter and restores its default at %ipx',
+    async (width) => {
+      const widthSpy = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(width);
+      const props = {
+        category: 'search' as const,
+        capability: 'web-search',
+        sort: 'name' as const,
+        search: 'documentation',
+        onSearchChange: vi.fn(),
+        onCategoryChange: vi.fn(),
+        onCapabilityChange: vi.fn(),
+        onSortChange: vi.fn(),
+        matchSummary: { matched: 1, total: 52 },
+      };
+      try {
+        const { rerender } = render(<CatalogToolbar {...props} />);
+        if (width === 390) {
+          fireEvent.click(screen.getByRole('button', { name: 'Filters, 2 active' }));
+          await screen.findByRole('dialog', { name: 'Filters' });
+        }
+        const category = selectInput('Filter by category').closest('.ant-select')!;
+        const capability = selectInput('Filter by capability').closest('.ant-select')!;
+        fireEvent.click(capability.querySelector('.ant-select-clear')!);
+        expect(props.onCapabilityChange).toHaveBeenCalledExactlyOnceWith(undefined);
+        expect(props.onCategoryChange).not.toHaveBeenCalled();
+        rerender(<CatalogToolbar {...props} capability={undefined} />);
+        expect(within(capability as HTMLElement).getByText('Any')).toBeVisible();
+        expect(capability.querySelector('.ant-select-clear')).toBeNull();
+        expect(within(category as HTMLElement).getByText('Search')).toBeVisible();
+
+        fireEvent.click(category.querySelector('.ant-select-clear')!);
+        expect(props.onCategoryChange).toHaveBeenCalledExactlyOnceWith(undefined);
+        rerender(<CatalogToolbar {...props} category={undefined} capability={undefined} />);
+        expect(within(category as HTMLElement).getByText('All')).toBeVisible();
+        expect(category.querySelector('.ant-select-clear')).toBeNull();
+        expect(props.onSearchChange).not.toHaveBeenCalled();
+        expect(props.onSortChange).not.toHaveBeenCalled();
+        expect(screen.getByRole('textbox', { name: 'Search MCP servers' })).toHaveValue(
+          'documentation'
+        );
+        expect(selectInput('Sort servers').closest('.ant-select')).toHaveTextContent('A–Z');
+      } finally {
+        widthSpy.mockRestore();
+      }
+    }
+  );
+
+  it('publishes category choices from the Category select and resets to All', () => {
     const onCategoryChange = vi.fn();
     const props = {
       category: 'observability' as const,
@@ -35,13 +84,15 @@ describe('Marketplace catalog toolbar', () => {
     };
     render(<CatalogToolbar {...props} />);
 
-    expect(screen.getByText('Observability').closest('label')).toHaveClass(
-      'ant-segmented-item-selected'
-    );
-    fireEvent.click(screen.getByText('Dev tools').closest('label')!);
+    const select = selectInput('Filter by category').closest('.ant-select') as HTMLElement;
+    expect(within(select).getByText('Category')).toBeVisible();
+    expect(within(select).getByText('Observability')).toBeVisible();
+    openSelect('Filter by category');
+    selectOption('Dev tools');
     expect(onCategoryChange).toHaveBeenLastCalledWith('dev-tools');
 
-    fireEvent.click(screen.getByText('All').closest('label')!);
+    openSelect('Filter by category');
+    selectOption('All');
     expect(onCategoryChange).toHaveBeenLastCalledWith(undefined);
   });
 
@@ -58,6 +109,10 @@ describe('Marketplace catalog toolbar', () => {
         matchSummary={null}
       />
     );
+
+    const capability = selectInput('Filter by capability').closest('.ant-select') as HTMLElement;
+    expect(within(capability).getByText('Capability')).toBeVisible();
+    expect(within(capability).getByText('Any')).toBeVisible();
 
     openSelect('Filter by capability');
     const input = selectInput('Filter by capability');
@@ -77,7 +132,7 @@ describe('Marketplace catalog toolbar', () => {
 
   it('labels the default ordering Curated, changes sorting, and renders match context', () => {
     const onSortChange = vi.fn();
-    render(
+    const { rerender } = render(
       <CatalogToolbar
         sort="popularity"
         search=""
@@ -88,12 +143,26 @@ describe('Marketplace catalog toolbar', () => {
         matchSummary={{ matched: 3, total: 52 }}
       />
     );
+    // REQ-CAT-3: the count appears only once something narrows the catalog.
+    expect(screen.queryByText(/servers match/)).toBeNull();
+    rerender(
+      <CatalogToolbar
+        sort="popularity"
+        search="docs"
+        onSearchChange={vi.fn()}
+        onCategoryChange={vi.fn()}
+        onCapabilityChange={vi.fn()}
+        onSortChange={onSortChange}
+        matchSummary={{ matched: 3, total: 52 }}
+      />
+    );
 
-    const sort = selectInput('Sort servers');
-    expect(sort.parentElement).toHaveTextContent('Sort: Curated');
+    const sort = selectInput('Sort servers').closest('.ant-select') as HTMLElement;
+    expect(within(sort).getByText('Sort')).toBeVisible();
+    expect(within(sort).getByText('Curated')).toBeVisible();
     expect(screen.getByText('3 of 52 servers match')).toBeVisible();
     openSelect('Sort servers');
-    selectOption('Sort: A–Z');
+    selectOption('A–Z');
 
     expect(onSortChange.mock.calls.at(-1)?.[0]).toBe('name');
   });
@@ -120,18 +189,102 @@ describe('Marketplace catalog toolbar', () => {
     fireEvent.click(container.querySelector('.ant-input-clear-icon')!);
     expect(onSearchChange).toHaveBeenLastCalledWith('');
 
-    const capability = selectInput('Filter by capability');
-    fireEvent.mouseEnter(capability.closest('.ant-select')!);
-    fireEvent.click(
-      within(capability.closest('.ant-select')!).getByRole('button', { name: 'Clear' })
-    );
+    openSelect('Filter by capability');
+    selectOption('Any');
     expect(onCapabilityChange).toHaveBeenLastCalledWith(undefined);
 
-    fireEvent.click(screen.getByText('All').closest('label')!);
+    openSelect('Filter by category');
+    selectOption('All');
     expect(onCategoryChange).toHaveBeenLastCalledWith(undefined);
 
     openSelect('Sort servers');
-    selectOption('Sort: Curated');
+    selectOption('Curated');
     expect(onSortChange.mock.calls.at(-1)?.[0]).toBe('popularity');
+  });
+});
+
+describe('Marketplace catalog toolbar in a narrow container', () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(390);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const baseProps = {
+    sort: 'popularity' as const,
+    search: '',
+    onSearchChange: vi.fn(),
+    onCategoryChange: vi.fn(),
+    onCapabilityChange: vi.fn(),
+    onSortChange: vi.fn(),
+    matchSummary: { matched: 3, total: 52 },
+  };
+
+  it('puts the filters behind a button that counts the active filters', () => {
+    const { rerender } = render(<CatalogToolbar {...baseProps} />);
+
+    expect(screen.getByRole('textbox', { name: 'Search MCP servers' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeVisible();
+    expect(document.querySelector('input[aria-label="Filter by category"]')).toBeNull();
+    expect(document.querySelector('.ant-badge-count')).toBeNull();
+
+    rerender(
+      <CatalogToolbar {...baseProps} category="observability" capability="logs" sort="name" />
+    );
+    expect(screen.getByRole('button', { name: 'Filters, 2 active' })).toBeVisible();
+    const badge = document.querySelector('.ant-badge-count');
+    expect(badge).toHaveTextContent('2');
+    expect(badge).toHaveStyle({ backgroundColor: theme.getDesignToken().colorPrimary });
+
+    // Sort is an ordering, not a filter.
+    rerender(<CatalogToolbar {...baseProps} sort="name" />);
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeVisible();
+    expect(document.querySelector('.ant-badge-count')).toBeNull();
+  });
+
+  it('opens the same filters in a bottom sheet and closes it on Show', async () => {
+    const onCategoryChange = vi.fn();
+    render(<CatalogToolbar {...baseProps} onCategoryChange={onCategoryChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filters' });
+    for (const label of ['Filter by category', 'Filter by capability', 'Sort servers']) {
+      expect(sheet.querySelector(`input[aria-label="${label}"]`)).not.toBeNull();
+    }
+    openSelect('Filter by category');
+    selectOption('Dev tools');
+    expect(onCategoryChange).toHaveBeenLastCalledWith('dev-tools');
+
+    // Text query: jsdom's CSS parser rejects the primary button's border shorthand.
+    fireEvent.click(within(sheet).getByText('Show 3 servers'));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Filters' })).toBeNull());
+  });
+
+  it('resets category, capability and sort from the sheet', async () => {
+    const props = {
+      ...baseProps,
+      onCategoryChange: vi.fn(),
+      onCapabilityChange: vi.fn(),
+      onSortChange: vi.fn(),
+    };
+    render(<CatalogToolbar {...props} category="search" capability="logs" sort="name" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filters, 2 active' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filters' });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Reset' }));
+
+    expect(props.onCategoryChange).toHaveBeenLastCalledWith(undefined);
+    expect(props.onCapabilityChange).toHaveBeenLastCalledWith(undefined);
+    expect(props.onSortChange).toHaveBeenLastCalledWith('popularity');
+  });
+
+  it('enables Reset for a non-default sort alone and disables it at the defaults', async () => {
+    const { rerender } = render(<CatalogToolbar {...baseProps} sort="name" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filters' });
+    const reset = within(sheet).getByText('Reset').closest('button');
+    expect(reset).toBeEnabled();
+
+    rerender(<CatalogToolbar {...baseProps} />);
+    expect(reset).toBeDisabled();
   });
 });

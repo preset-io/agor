@@ -47,8 +47,10 @@ const configMocks = vi.hoisted(() => ({
   getDaemonUrl: vi.fn(),
 }));
 
+import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
+import { isExecutorCleanupUnverified } from '../../termination-state.js';
 import { CodexTool } from './codex-tool.js';
-import { CodexPromptService } from './prompt-service.js';
+import { CodexPromptService, type CodexStreamEvent } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
 let mockInstanceCount = 0;
@@ -563,7 +565,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(mockInstanceCount).toBe(1);
       expect(mockInstanceConfigs).toEqual([
         {
-          features: { goals: false, multi_agent: false },
+          features: { goals: false, multi_agent: false, plugins: false },
           // Agor always opts Codex into its sticky-task-list planning tool.
           tools: { update_plan: { enabled: true } },
           model_instructions_file: '/tmp/agor-codex-instructions-flow.md',
@@ -584,6 +586,71 @@ describe('CodexPromptService - prompt flow client initialization', () => {
         model: 'gpt-5.4',
         modelReasoningEffort: 'medium',
       });
+    }
+  );
+
+  it.each(
+    [undefined, false, true].flatMap((includePlugins) =>
+      [null, 'existing-thread'].map((threadId) => ({ includePlugins, threadId }))
+    )
+  )(
+    'uses session plugins $includePlugins on fresh/resume $threadId and notices toggles',
+    async ({ includePlugins, threadId }) => {
+      const service = new CodexPromptService(
+        mockMessagesRepo,
+        mockSessionsRepo,
+        mockSessionMCPServerRepo,
+        mockBranchesRepo,
+        undefined,
+        'test-key'
+      );
+      const setup = service as unknown as {
+        ensureCodexInstructionsFile: () => Promise<string>;
+        buildMcpServersConfig: () => Promise<{
+          servers: Record<string, { url: string }>;
+          total: number;
+        }>;
+      };
+      setup.ensureCodexInstructionsFile = vi
+        .fn()
+        .mockResolvedValue('/tmp/plugin-policy-instructions.md');
+      setup.buildMcpServersConfig = vi
+        .fn()
+        .mockResolvedValue({ servers: { direct: { url: 'http://localhost:3030/mcp' } }, total: 1 });
+      const session = {
+        session_id: 'plugin-policy',
+        branch_id: 'branch-1',
+        sdk_session_id: threadId,
+        permission_config: { codex: { includePlugins } },
+        model_config: {},
+        mcp_token: 'test-token',
+      };
+      mockSessionsRepo.findById.mockResolvedValue(session);
+      mockBranchesRepo.findById.mockResolvedValue({ branch_id: 'branch-1', path: process.cwd() });
+      mockStreamEvents = [
+        {
+          type: 'turn.completed',
+          usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 },
+        },
+      ];
+      for await (const _ of service.promptSessionStreaming('plugin-policy' as SessionID, 'test')) {
+        /* drain */
+      }
+      expect(mockInstanceConfigs.at(-1)).toMatchObject({
+        features: { goals: false, multi_agent: false },
+        mcp_servers: { direct: { url: 'http://localhost:3030/mcp' } },
+      });
+      if (includePlugins) expect(mockInstanceConfigs.at(-1)).not.toHaveProperty('features.plugins');
+      else expect(mockInstanceConfigs.at(-1)).toHaveProperty('features.plugins', false);
+      expect(threadId ? mockResumeThreadOptions : mockStartThreadOptions).toHaveLength(1);
+      session.permission_config.codex.includePlugins = !includePlugins;
+      for await (const _ of service.promptSessionStreaming('plugin-policy' as SessionID, 'again')) {
+        /* drain */
+      }
+      expect(mockInstanceConfigs).toHaveLength(2);
+      if (!includePlugins)
+        expect(mockInstanceConfigs.at(-1)).not.toHaveProperty('features.plugins');
+      else expect(mockInstanceConfigs.at(-1)).toHaveProperty('features.plugins', false);
     }
   );
 
@@ -785,9 +852,13 @@ describe('CodexPromptService - forked sessions', () => {
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
   });
 
-  it.each(['direct', 'nested'])(
-    'forks %s parent history with fresh model-visible and MCP identity on both turns',
-    async (kind) => {
+  it.each(
+    ['direct', 'nested'].flatMap((kind) =>
+      [undefined, false, true].map((includePlugins) => ({ kind, includePlugins }))
+    )
+  )(
+    'forks $kind history with session plugins $includePlugins on both turns',
+    async ({ kind, includePlugins }) => {
       const service = new CodexPromptService(
         mockMessagesRepo,
         mockSessionsRepo,
@@ -811,7 +882,7 @@ describe('CodexPromptService - forked sessions', () => {
         created_at: new Date().toISOString(),
         sdk_session_id: null,
         genealogy: { forked_from_session_id: 'parent-session' },
-        permission_config: { codex: {} },
+        permission_config: { codex: { includePlugins } },
         model_config: { effort: 'max' },
         mcp_token: 'child-test-token',
       };
@@ -883,8 +954,15 @@ describe('CodexPromptService - forked sessions', () => {
         expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledTimes(1);
         expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledWith(
           'parent-thread-id',
-          expect.objectContaining({ env: expect.any(Object) })
+          expect.objectContaining({
+            env: expect.any(Object),
+            includePlugins: includePlugins === true,
+          })
         );
+        for (const config of mockInstanceConfigs) {
+          if (includePlugins) expect(config).not.toHaveProperty('features.plugins');
+          else expect(config).toHaveProperty('features.plugins', false);
+        }
         expect(mockSessionsRepo.update).toHaveBeenCalledWith('child-session', {
           sdk_session_id: 'forked-thread-id',
         });
@@ -2012,6 +2090,205 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     });
   });
 
+  describe('completed tool payload retention', () => {
+    const TOOL_COUNT = 20;
+    const payload = (label: string) => `PAYLOAD-${label}:${'tool output line\n'.repeat(10_000)}`;
+
+    function toolHeavyTurn(): Array<Record<string, unknown>> {
+      const events: Array<Record<string, unknown>> = [{ type: 'turn.started' }];
+      for (let i = 0; i < TOOL_COUNT; i++) {
+        const item = {
+          id: `cmd-${i}`,
+          type: 'command_execution',
+          command: `cat INPUT-${i}.log`,
+          aggregated_output: payload(`cmd-${i}`),
+          exit_code: 0,
+          status: 'completed',
+        };
+        events.push({
+          type: 'item.started',
+          item: { ...item, aggregated_output: '', status: 'in_progress' },
+        });
+        events.push({ type: 'item.completed', item });
+        if (i === TOOL_COUNT / 2) {
+          events.push({
+            type: 'event_msg',
+            payload: { type: 'agent_message', message: 'Halfway through the logs.' },
+          });
+        }
+      }
+      const todo = {
+        id: 'todo-1',
+        type: 'todo_list',
+        items: [{ text: 'Summarize logs', completed: true }],
+      };
+      events.push(
+        {
+          type: 'item.completed',
+          item: {
+            id: 'mcp-1',
+            type: 'mcp_tool_call',
+            server: 'agor',
+            tool: 'agor_execute_tool',
+            arguments: { tool_name: 'INPUT-mcp' },
+            result: { content: [{ type: 'text', text: payload('mcp') }] },
+            status: 'completed',
+          },
+        },
+        { type: 'item.updated', item: todo },
+        { type: 'item.completed', item: todo },
+        {
+          type: 'item.completed',
+          item: { id: 'reasoning-1', type: 'reasoning', text: 'Thinking' },
+        },
+        { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'Done.' } },
+        {
+          type: 'turn.completed',
+          usage: { input_tokens: 10, output_tokens: 5, cached_input_tokens: 0 },
+        }
+      );
+      return events;
+    }
+
+    const isToolBlock = (block: { type: string }) =>
+      block.type === 'tool_use' || block.type === 'tool_result';
+
+    async function collect(retainCompletedTools?: boolean) {
+      const { service } = await makeInitializedStreamingService(null);
+      mockStreamEvents = toolHeavyTurn();
+      const events: CodexStreamEvent[] = [];
+      for await (const event of service.promptSessionStreaming(
+        testSessionId,
+        'go',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        retainCompletedTools === undefined ? undefined : { retainCompletedTools }
+      )) {
+        events.push(event);
+      }
+      return events;
+    }
+
+    it('drops turn-end tool copies when asked, emitting identical tool events', async () => {
+      const retained = await collect();
+      const dropped = await collect(false);
+      expect(await collect(true)).toEqual(retained);
+
+      // Every streamed event other than the final complete is unchanged.
+      expect(dropped.slice(0, -1)).toEqual(retained.slice(0, -1));
+      const toolCompletes = dropped.filter((event) => event.type === 'tool_complete');
+      expect(toolCompletes).toHaveLength(TOOL_COUNT + 2); // + MCP + one TodoWrite
+      expect(toolCompletes[0]).toMatchObject({ toolUse: { output: payload('cmd-0') } });
+
+      const retainedFinal = retained.at(-1);
+      const droppedFinal = dropped.at(-1);
+      if (retainedFinal?.type !== 'complete' || droppedFinal?.type !== 'complete') {
+        throw new Error('expected a final complete event');
+      }
+
+      // Legacy/default mode keeps the full copies for the final message.
+      expect(retainedFinal.toolUses).toHaveLength(TOOL_COUNT + 2);
+      const retainedBlocks = retainedFinal.content.filter(isToolBlock);
+      // The todo list has no output/status, so it has no tool_result block.
+      expect(retainedBlocks.filter((block) => block.type === 'tool_use')).toHaveLength(
+        TOOL_COUNT + 2
+      );
+      expect(retainedBlocks.filter((block) => block.type === 'tool_result')).toHaveLength(
+        TOOL_COUNT + 1
+      );
+      for (let i = 0; i < TOOL_COUNT; i++) {
+        expect(JSON.stringify(retainedFinal)).toContain(`PAYLOAD-cmd-${i}:`);
+      }
+
+      // Without retention the final event carries only the non-tool blocks, in order,
+      // and nothing held until turn end references a tool payload or input.
+      expect(droppedFinal).toEqual({
+        ...retainedFinal,
+        content: retainedFinal.content.filter((block) => !isToolBlock(block)),
+        toolUses: undefined,
+      });
+      expect(droppedFinal.content).toEqual([{ type: 'text', text: 'Halfway through the logs.' }]);
+      const finalJson = JSON.stringify(droppedFinal);
+      expect(finalJson).not.toContain('PAYLOAD-');
+      expect(finalJson).not.toContain('INPUT-');
+    });
+
+    it('streaming execution persists the same messages without the turn-end copies', async () => {
+      async function persistTurn(forceRetain: boolean) {
+        const { service } = await makeInitializedStreamingService(null);
+        const original = service.promptSessionStreaming.bind(service);
+        const spy = vi
+          .spyOn(service, 'promptSessionStreaming')
+          .mockImplementation(
+            (...args: Parameters<CodexPromptService['promptSessionStreaming']>) =>
+              forceRetain
+                ? original(args[0], args[1], args[2], args[3], args[4], args[5], {
+                    ...args[6],
+                    retainCompletedTools: true,
+                  })
+                : original(...args)
+          );
+        const messagesRepo = {
+          findInitialUserMessagesByTaskId: vi.fn(async () => []),
+          getNextIndexBySessionId: vi.fn(async () => 0),
+        };
+        const messagesService = {
+          create: vi.fn(async (message: Partial<Message>) => message as Message),
+          patch: vi.fn(async (_id: string, message: Partial<Message>) => message as Message),
+        } satisfies MessagesService;
+        const tool = new CodexTool(
+          messagesRepo as unknown as MessagesRepository,
+          mockSessionsRepo,
+          mockSessionMCPServerRepo,
+          mockBranchesRepo,
+          undefined,
+          'test-api-key',
+          messagesService
+        );
+        Reflect.set(tool, 'promptService', service);
+        // No branch path: keeps edit-baseline snapshots off this repository.
+        mockBranchesRepo.findById.mockResolvedValue({ branch_id: 'branch-1' });
+        mockStreamEvents = toolHeavyTurn();
+        await tool.executePromptWithStreaming(testSessionId, 'go');
+
+        // Message ids and timestamps are generated per run; identify rows by index.
+        const indexById = new Map<string, number>();
+        const writes = [
+          ...messagesService.create.mock.calls.map(([message]) => {
+            indexById.set(String(message.message_id), Number(message.index));
+            const { message_id: _id, timestamp: _timestamp, ...rest } = message;
+            return { op: 'create', ...rest };
+          }),
+          ...messagesService.patch.mock.calls.map(([id, patch]) => ({
+            op: 'patch',
+            index: indexById.get(id),
+            ...patch,
+          })),
+        ];
+        return { writes, options: spy.mock.calls[0]?.[6] };
+      }
+
+      const legacy = await persistTurn(true);
+      const current = await persistTurn(false);
+      expect(current.options).toEqual({ retainCompletedTools: false });
+      expect(current.writes).toEqual(legacy.writes);
+
+      // Each tool result is persisted exactly once, on its own tool row.
+      const results = current.writes
+        .flatMap((write) => (Array.isArray(write.content) ? write.content : []))
+        .filter((block) => block.type === 'tool_result');
+      expect(results.map((block) => block.tool_use_id).sort()).toEqual(
+        [...Array.from({ length: TOOL_COUNT }, (_, i) => `cmd-${i}`), 'mcp-1'].sort()
+      );
+      expect(results.find((block) => block.tool_use_id === 'cmd-0')).toMatchObject({
+        content: payload('cmd-0'),
+        is_error: false,
+      });
+    });
+  });
+
   it('persists a failed MCP result as is_error even when the Codex turn subsequently completes', async () => {
     const { service } = await makeInitializedStreamingService(null);
     const initialRuns = mockRunStreamedInputs.length;
@@ -2258,7 +2535,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     'runtime failure SENTINEL_RUNTIME',
   ])('keeps real message-only SDK failures unknown and generic: %s', async (message) => {
     const { service } = await makeInitializedStreamingService('existing-thread-id');
-    // 0.156.1 ThreadError has no status/code/context discriminator.
+    // 0.160.0 ThreadError has no status/code/context discriminator.
     const events: ThreadEvent[] = [
       { type: 'error', message },
       { type: 'turn.failed', error: { message } },
@@ -2530,6 +2807,107 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     ).resolves.toBeUndefined();
 
     expect(emitted.some((e) => e.type === 'stopped')).toBe(true);
+  });
+
+  it('does not treat a mid-stream Stop as CLI exit evidence', async () => {
+    const { service, codex } = await makeInitializedStreamingService('existing-thread-id');
+    const abortController = new AbortController();
+    const returned = vi.fn();
+    codex.resumeThread = vi.fn(() => ({
+      id: 'existing-thread-id',
+      run: vi.fn(),
+      runStreamed: vi.fn().mockResolvedValue({
+        events: {
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          async next() {
+            expect(service.stopTask(testSessionId)).toEqual({ success: true });
+            abortController.abort();
+            return { done: false, value: { type: 'turn.started' } };
+          },
+          // Like the SDK's early return: the child is signalled, not awaited.
+          async return() {
+            returned();
+            return { done: true, value: undefined };
+          },
+        },
+      }),
+    }));
+
+    const emitted = await drain(service, abortController);
+
+    expect(emitted).toContainEqual({ type: 'stopped', threadId: 'existing-thread-id' });
+    expect(returned).toHaveBeenCalledOnce();
+    await expectSignalQuiescence(abortController, false);
+  });
+
+  it('does not treat a turn completion event as CLI exit evidence', async () => {
+    const { service, codex } = await makeInitializedStreamingService('existing-thread-id');
+    const abortController = new AbortController();
+    const returned = vi.fn();
+    const events = [{ type: 'turn.completed', usage: {} }];
+    codex.resumeThread = vi.fn(() => ({
+      id: 'existing-thread-id',
+      run: vi.fn(),
+      runStreamed: vi.fn().mockResolvedValue({
+        events: {
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          async next() {
+            const value = events.shift();
+            return value ? { done: false, value } : { done: true, value: undefined };
+          },
+          // Like the SDK's early return: the child is signalled, not awaited.
+          async return() {
+            returned();
+            return { done: true, value: undefined };
+          },
+        },
+      }),
+    }));
+
+    const emitted = await drain(service, abortController);
+
+    expect(emitted.some((event) => event.type === 'complete')).toBe(true);
+    expect(returned).toHaveBeenCalledOnce();
+    await expectSignalQuiescence(abortController, false);
+  });
+
+  it('keeps the normal completion result unchanged when cleanup is unverified', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    const abortController = new AbortController();
+    mockStreamEvents = [
+      { type: 'item.completed', item: { id: 'm1', type: 'agent_message', text: 'done' } },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 2 },
+      },
+    ];
+
+    const emitted = await drain(service, abortController);
+
+    expect(abortController.signal.aborted).toBe(false);
+    expect(isExecutorCleanupUnverified(abortController)).toBe(true);
+    expect(emitted.map((event) => event.type)).toEqual(['complete', 'complete']);
+    expect(emitted[0]).toMatchObject({ content: [{ type: 'text', text: 'done' }] });
+    expect(emitted[1]).toMatchObject({
+      threadId: 'existing-thread-id',
+      usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 },
+      rawSdkEvent: { type: 'turn.completed' },
+    });
+  });
+
+  it('accepts stream exhaustion as CLI exit evidence', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    const abortController = new AbortController();
+    mockStreamEvents = [{ type: 'turn.started' }];
+
+    await expect(drain(service, abortController)).rejects.toThrow(
+      'Codex ended the turn without a completion event'
+    );
+    await expectSignalQuiescence(abortController, true);
   });
 
   it('ignores unknown event_msg payload types without throwing', async () => {

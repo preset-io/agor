@@ -13,7 +13,7 @@ import {
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
-import { BadRequest, Conflict } from '@agor/core/feathers';
+import { BadRequest, Conflict, NotFound } from '@agor/core/feathers';
 import { MCPAuthValidationError, MCPServerWriteValidationError } from '@agor/core/mcp';
 import type {
   CreateMCPServerInput,
@@ -212,6 +212,19 @@ export class MCPServersService extends DrizzleService<
       }
       throw error;
     }
+  }
+
+  override async remove(
+    id: string | null,
+    params?: MCPServerParams
+  ): Promise<MCPServer | MCPServer[]> {
+    const transactionDb = mutationDatabase();
+    if (!transactionDb || id === null) return super.remove(id, params);
+    const repository = new MCPServerRepository(transactionDb);
+    const server = await repository.findById(id);
+    if (!server) throw new NotFound('MCP server not found');
+    await repository.delete(id);
+    return server;
   }
 
   /** Internal compensation primitive; deliberately not registered as a REST method. */

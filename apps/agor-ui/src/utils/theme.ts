@@ -84,3 +84,60 @@ export const ensureColorVisible = (
     return isDark ? ABSOLUTE_WHITE : ABSOLUTE_BLACK;
   }
 };
+
+type Rgb = { r: number; g: number; b: number };
+
+const toOpaqueRgb = (color: string, under: Rgb): Rgb => {
+  const { r, g, b, a } = new AggregationColor(color).toRgb();
+  return {
+    r: r * a + under.r * (1 - a),
+    g: g * a + under.g * (1 - a),
+    b: b * a + under.b * (1 - a),
+  };
+};
+
+const relativeLuminance = ({ r, g, b }: Rgb): number => {
+  const linearize = (channel: number) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b);
+};
+
+/** WCAG contrast of a (possibly translucent) foreground over a background laid on `base`. */
+export const contrastRatio = (foreground: string, background: string, base: string): number => {
+  const ground = toOpaqueRgb(background, toOpaqueRgb(base, { r: 0, g: 0, b: 0 }));
+  const [light, dark] = [
+    relativeLuminance(toOpaqueRgb(foreground, ground)),
+    relativeLuminance(ground),
+  ].sort((x, y) => y - x);
+  return (light + 0.05) / (dark + 0.05);
+};
+
+/**
+ * First candidate reaching `minRatio` on the background. If none does, the
+ * highest-contrast candidate keeps its hue and moves away from the background's
+ * brightness until it passes.
+ */
+export const pickAccessibleColor = (
+  candidates: string[],
+  background: string,
+  base: string,
+  minRatio = 4.5
+): string => {
+  const ratio = (color: string) => contrastRatio(color, background, base);
+  const passing = candidates.find((color) => ratio(color) >= minRatio);
+  if (passing) return passing;
+  const best = [...candidates].sort((x, y) => ratio(y) - ratio(x))[0];
+  const ground = toOpaqueRgb(background, toOpaqueRgb(base, { r: 0, g: 0, b: 0 }));
+  const darken = relativeLuminance(ground) > 0.18;
+  const hsb = new AggregationColor(best).toHsb();
+  for (let step = 0; step < 50; step++) {
+    if (darken) hsb.b = Math.max(0, hsb.b - 0.02);
+    else if (hsb.b < 1) hsb.b = Math.min(1, hsb.b + 0.02);
+    else hsb.s = Math.max(0, hsb.s - 0.02);
+    const adjusted = new AggregationColor({ ...hsb, a: 1 }).toHexString();
+    if (ratio(adjusted) >= minRatio) return adjusted;
+  }
+  return darken ? ABSOLUTE_BLACK : ABSOLUTE_WHITE;
+};

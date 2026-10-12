@@ -147,10 +147,12 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
         : 'cleaned'
       : filesystemAction;
 
+  const filesystemDeletionReason =
+    metadataAction === 'delete' ? eligibility.deletionReason : eligibility.workspaceReason;
   const actionReason =
     primaryReason ??
     (metadataAction === 'delete' || selectedFilesystemAction === 'deleted'
-      ? eligibility.workspaceReason
+      ? filesystemDeletionReason
       : selectedFilesystemAction === 'cleaned'
         ? eligibility.cleanupReason
         : eligibility.managementReason);
@@ -222,8 +224,9 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                 {boardPrimary && (
                   <>
                     <Text>
-                      First clear or replace this board's primary teammate. Nothing changes until
-                      you confirm.
+                      First clear this board's primary teammate. To choose a replacement afterward,
+                      open the board and use Assign in its Teammate panel. Nothing changes until you
+                      confirm.
                     </Text>
                     <Space wrap>
                       {eligibility.canEditBoard && (
@@ -240,9 +243,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                         </Button>
                       )}
                       {!eligibility.boardUnavailable && (
-                        <Typography.Link href={eligibility.board?.url}>
-                          Open board to replace primary
-                        </Typography.Link>
+                        <Typography.Link href={eligibility.board?.url}>Open board</Typography.Link>
                       )}
                     </Space>
                     {!eligibility.canEditBoard && (
@@ -343,11 +344,14 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   </Text>
                 </div>
               </Radio>
-              <Radio value="deleted" disabled={!!eligibility.workspaceReason || !!primaryReason}>
+              <Radio value="deleted" disabled={!!filesystemDeletionReason || !!primaryReason}>
                 <div>
                   <div>Delete completely</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    Removes entire branch directory from disk
+                    {filesystemDeletionReason ||
+                      (metadataAction === 'delete'
+                        ? 'Removes workspace, branch SDK home, and owned uploads'
+                        : 'Removes entire branch directory from disk')}
                   </Text>
                 </div>
               </Radio>
@@ -407,11 +411,11 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   </Text>
                 </div>
               </Radio>
-              <Radio value="delete" disabled={!!eligibility.workspaceReason}>
+              <Radio value="delete" disabled={!!eligibility.deletionReason || !!primaryReason}>
                 <div>
                   <div>Delete permanently</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    Owned branch data and files deleted — no undo
+                    {eligibility.deletionReason || 'Owned branch data and files deleted — no undo'}
                   </Text>
                 </div>
               </Radio>

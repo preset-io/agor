@@ -64,13 +64,17 @@ env:
 
 jobs:
   postgres-integration:
-    name: PostgreSQL integration (non-superuser RLS)
+    name: PostgreSQL ${{ matrix.pg }} integration (non-superuser RLS)
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [16, 18]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     services:
       postgres:
-        image: pgvector/pgvector:0.8.2-pg16-trixie
+        image: pgvector/pgvector:0.8.2-pg${{ matrix.pg }}-trixie
         env:
           POSTGRES_DB: agor
           POSTGRES_USER: agor_bootstrap

@@ -1,3 +1,4 @@
+import type { MCPCatalogSharing } from '@agor/core/types';
 /**
  * The Catalog: browse the MCP catalog, open an entry, connect it.
  *
@@ -94,13 +95,14 @@ function useSettledFlag(active: boolean, delayMs: number): boolean {
 }
 
 const DISCONNECT_NOTICE_DELAY_MS = 2000;
+const GRID_GUTTER = 16;
 
 const CatalogGrid = memo<{
   entries: MCPCatalogEntry[];
   onOpen: (entry: MCPCatalogEntry) => void;
 }>(({ entries, onOpen }) => (
   // Keep the half-gutters inside the scroll container, not outside its width.
-  <Row gutter={[16, 16]} style={{ marginInline: 0 }}>
+  <Row gutter={[GRID_GUTTER, GRID_GUTTER]} style={{ marginInline: 0 }}>
     {entries.map((entry) => (
       <Col key={entry.name} {...GRID_SPANS}>
         <CatalogCard entry={entry} onOpen={onOpen} />
@@ -151,6 +153,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const navigate = useNavigate();
   const [filters, setFilters] = useState<CatalogFilterState>(INITIAL_FILTERS);
   const [page, setPage] = useState(1);
+  const [sharing, setSharing] = useState<MCPCatalogSharing>('private');
   const [selected, setSelected] = useState<MCPCatalogEntry | null>(null);
   const drawerOpen = useRef(false);
   const drawerTrigger = useRef<HTMLElement | null>(null);
@@ -274,10 +277,16 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         ]
       : null
   );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: ownership consent resets at entry and caller boundaries
+  useEffect(() => {
+    setSharing('private');
+  }, [selected?.name, currentUser?.user_id]);
   const readiness = useCatalogReadiness({
+    sharing,
+    capabilityKey: `${currentUser?.role}:${memberPolicy.policy}:${memberPolicy.canConfigure}`,
     client,
     entryKey: selected?.name,
-    ready: connectionReady,
+    ready: connectionReady && !policyPending,
     authGeneration,
     userId: currentUser?.user_id,
   });
@@ -503,24 +512,24 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     [restoreDrawerFocus]
   );
 
-  // `REQ-CAT-3`: the count is a filtering aid, so it appears only once
-  // filtering is happening.
   const matchSummary = useMemo(
     () =>
-      status === 'ready' && isFilterActive(filters) && catalogSize !== null
+      status === 'ready' && catalogSize !== null
         ? { matched: matchCount, total: catalogSize }
         : null,
-    [status, filters, catalogSize, matchCount]
+    [status, catalogSize, matchCount]
   );
 
   const handleConnect = useCallback(
     async ({
       acknowledgedDisclosure,
       bearerToken,
+      oauthClient,
       oauthPopup,
     }: {
       acknowledgedDisclosure: string;
       bearerToken?: string;
+      oauthClient?: { client_id: string; client_secret?: string };
       oauthPopup?: MarketplaceOAuthPopup;
     }) => {
       const authority = operationGuard.begin();
@@ -538,8 +547,10 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       try {
         const result = await client.service('mcp-catalog/connect').create({
           catalog_key: selected.name,
+          sharing,
           acknowledged_disclosure: acknowledgedDisclosure,
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
+          ...(oauthClient ? { oauth_client: oauthClient } : {}),
         });
         if (!operation.isCurrent()) {
           oauthPopup?.close();
@@ -616,7 +627,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, selected, onboarding]
+    [client, operationGuard, selected, onboarding, sharing]
   );
 
   const continueSurpriseOAuth = useCallback(
@@ -804,6 +815,11 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         connectCapability={connectCapability}
         policyPending={policyPending}
         policyPendingHint={policyPendingHint}
+        sharing={sharing}
+        onSharingChange={(value) => {
+          setSharing(value);
+          setConnectError(null);
+        }}
         readiness={readiness.readiness}
         readinessLoading={readiness.loading}
         readinessError={readiness.error}
@@ -820,17 +836,20 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
 
   return (
     <Flex vertical gap={token.margin}>
-      <CatalogToolbar
-        search={filters.search}
-        category={filters.category}
-        capability={filters.capability}
-        sort={filters.sort}
-        onSearchChange={onSearchChange}
-        onCategoryChange={onCategoryChange}
-        onCapabilityChange={onCapabilityChange}
-        onSortChange={onSortChange}
-        matchSummary={matchSummary}
-      />
+      {/* Inset by the grid's half-gutter so the toolbar lines up with the cards. */}
+      <div style={{ paddingInline: GRID_GUTTER / 2 }}>
+        <CatalogToolbar
+          search={filters.search}
+          category={filters.category}
+          capability={filters.capability}
+          sort={filters.sort}
+          onSearchChange={onSearchChange}
+          onCategoryChange={onCategoryChange}
+          onCapabilityChange={onCapabilityChange}
+          onSortChange={onSortChange}
+          matchSummary={matchSummary}
+        />
+      </div>
 
       {showDisconnected && (
         <Alert
@@ -857,7 +876,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         />
       ) : status === 'loading' ? (
         showDisconnected ? null : (
-          <Row gutter={[16, 16]} style={{ marginInline: 0 }}>
+          <Row gutter={[GRID_GUTTER, GRID_GUTTER]} style={{ marginInline: 0 }}>
             {Array.from({ length: 6 }, (_, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder grid
               <Col key={index} {...GRID_SPANS}>

@@ -14,6 +14,9 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   plugins: [react()],
+  // AntD's test-mode useId returns the same ID for every overlay, breaking
+  // nested focus/Escape stacks. Browser tests need the real development IDs.
+  define: { 'process.env.NODE_ENV': JSON.stringify('development') },
   resolve: {
     conditions: ['source'],
     alias: { '@': path.resolve(import.meta.dirname, './src') },
@@ -25,6 +28,9 @@ export default defineConfig({
     globals: true,
     setupFiles: './src/test/setup.ts',
     include: ['src/**/*.browser.test.tsx'],
+    // Each worker owns a Chromium page. Bound concurrency so the four viewport
+    // projects do not exhaust browser sessions or the CI lane's time budget.
+    maxWorkers: 2,
     testTimeout: 30_000,
     browser: {
       enabled: true,

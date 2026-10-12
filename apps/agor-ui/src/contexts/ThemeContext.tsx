@@ -28,6 +28,20 @@ const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 const THEME_MODE_KEY = 'agor:themeMode';
 const CUSTOM_THEME_KEY = 'agor:customTheme';
 
+/** Agor's seed tokens, shared by every theme mode. */
+export const AGOR_THEME_TOKENS = {
+  colorPrimary: '#2e9a92', // Agor teal
+  colorSuccess: '#52c41a',
+  colorWarning: '#faad14',
+  colorError: '#ff4d4f',
+  colorInfo: '#2e9a92',
+  colorLink: '#2e9a92',
+  borderRadius: 8,
+  // Use Inter font from Bunny Fonts CDN with system font fallbacks
+  fontFamily:
+    "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif",
+} satisfies ThemeConfig['token'];
+
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Initialize theme mode from localStorage (default to 'dark')
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => {
@@ -75,21 +89,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // re-injects styles, which manifests as a brief unstyled flicker whenever
   // anything mounts/unmounts (drawers opening, task expand/collapse, etc).
   const currentThemeConfig = useMemo<ThemeConfig>(() => {
-    const baseTheme: ThemeConfig = {
-      // CSS variables are enabled by default in antd v6
-      token: {
-        colorPrimary: '#2e9a92', // Agor teal
-        colorSuccess: '#52c41a',
-        colorWarning: '#faad14',
-        colorError: '#ff4d4f',
-        colorInfo: '#2e9a92',
-        colorLink: '#2e9a92',
-        borderRadius: 8,
-        // Use Inter font from Bunny Fonts CDN with system font fallbacks
-        fontFamily:
-          "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif",
-      },
-    };
+    // CSS variables are enabled by default in antd v6
+    const baseTheme: ThemeConfig = { token: AGOR_THEME_TOKENS };
 
     if (themeMode === 'custom' && customTheme) {
       // Custom themes don't include algorithm - users should use dark/light mode

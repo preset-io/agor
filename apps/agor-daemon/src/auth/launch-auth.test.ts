@@ -18,15 +18,18 @@ import {
   insert,
   runWithTenantDatabaseScope,
   select,
+  TenantDisplayRepository,
   TenantPublicRoutingRepository,
   update,
   userExternalIdentities,
   users,
 } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
-import type { InternalUser, User, UserID } from '@agor/core/types';
+import type { AuthenticatedParams, InternalUser, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { authenticatedHealthInstance } from '../health/instance.js';
+import { UsersService } from '../services/users.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './launch-auth.js';
 
 const ASSERTION_SECRET = 'test-launch-assertion-secret';
@@ -274,6 +277,114 @@ execution:
     );
   });
 
+  it('shows the signed tenant display label to authenticated health, else the config label', async () => {
+    const config: AgorConfig = { ...baseConfig(), daemon: { instanceLabel: 'config-label' } };
+    const healthLabel = async () =>
+      (
+        await authenticatedHealthInstance(config, () =>
+          runWithTenantDatabaseScope(db, 'default', (scoped) =>
+            new TenantDisplayRepository(scoped).find()
+          )
+        )
+      ).label;
+    mockExchange(signClaims());
+    await service(config).create({ launchCode: 'without-claim' });
+    await expect(healthLabel()).resolves.toBe('config-label');
+
+    mockExchange(signClaims({ workspace_display_name: '  Data team sandbox  ' }));
+    await service(config).create({ launchCode: 'with-claim' });
+    await expect(healthLabel()).resolves.toBe('Data team sandbox');
+
+    // A later launch without the claim keeps the last observed label.
+    mockExchange(signClaims({ sub: 'another-user', email: 'another@example.test' }));
+    await service(config).create({ launchCode: 'legacy' });
+    await expect(healthLabel()).resolves.toBe('Data team sandbox');
+  });
+
+  it.each([
+    ['empty', ''],
+    ['too long', `Label-${'x'.repeat(80)}`],
+    ['control character', 'Private\nLabel'],
+    ['non-string', 4242],
+  ])(
+    'ignores an invalid display label claim (%s) without failing or logging it',
+    async (_case, value) => {
+      const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
+        vi.spyOn(console, method).mockImplementation(() => {})
+      );
+      try {
+        mockExchange(signClaims({ workspace_display_name: value }));
+        const result = await service().create({ launchCode: 'invalid-label' });
+        expect(result.accessToken).toBeTruthy();
+        await runWithTenantDatabaseScope(db, 'default', (scoped) =>
+          expect(new TenantDisplayRepository(scoped).find()).resolves.toBeNull()
+        );
+        const warn = spies[2];
+        expect(warn.mock.calls).toEqual([['[auth/launch] launch_workspace_display_name_invalid']]);
+        const logged = spies.flatMap((spy) => spy.mock.calls.flat().map(String)).join('\n');
+        if (typeof value === 'string' && value) expect(logged).not.toContain(value.trim());
+        expect(logged).not.toContain('4242');
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+    }
+  );
+
+  it.each([
+    ['missing', undefined],
+    ['negative', -1],
+    ['non-integer', Math.floor(Date.now() / 1000) + 0.5],
+  ])(
+    'ignores a valid display label whose iat is %s, without public_base_url',
+    async (_case, iat) => {
+      const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
+        vi.spyOn(console, method).mockImplementation(() => {})
+      );
+      try {
+        // An explicit exp keeps jsonwebtoken from deriving it from the bad iat.
+        mockExchange(
+          jwt.sign(
+            {
+              sub: 'external-user-1',
+              email: 'person@example.test',
+              instance_id: 'instance-1',
+              workspace_display_name: 'Iat Dependent Label',
+              exp: Math.floor(Date.now() / 1000) + 300,
+              ...(iat === undefined ? {} : { iat }),
+            },
+            ASSERTION_SECRET,
+            {
+              algorithm: 'HS256',
+              noTimestamp: iat === undefined,
+              issuer: 'https://issuer.example.test',
+              audience: 'runtime:test',
+            }
+          )
+        );
+        const result = await service().create({ launchCode: 'label-iat' });
+        expect(result.accessToken).toBeTruthy();
+        await runWithTenantDatabaseScope(db, 'default', (scoped) =>
+          expect(new TenantDisplayRepository(scoped).find()).resolves.toBeNull()
+        );
+        expect(spies[2].mock.calls).toEqual([
+          ['[auth/launch] launch_workspace_display_name_invalid'],
+        ]);
+        const logged = spies.flatMap((spy) => spy.mock.calls.flat().map(String)).join('\n');
+        expect(logged).not.toContain('Iat Dependent Label');
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+    }
+  );
+
+  it('never exchanges a callback-purpose assertion for a runtime login', async () => {
+    // Even a mistakenly launch-audienced assertion with the correct signing key
+    // cannot turn the relay purpose into a login credential.
+    mockExchange(signClaims({ purpose: 'mcp_oauth_callback' }));
+    await expect(service().create({ launchCode: 'code' })).rejects.toThrow('purpose');
+    expect(await select(db).from(users).all()).toHaveLength(0);
+  });
+
   it('rejects when disabled', async () => {
     await expect(
       service({ external_launch: { ...baseConfig().external_launch, enabled: false } }).create({
@@ -512,6 +623,9 @@ execution:
             .data as Record<string, unknown>),
           preferences: { audio: { enabled: false } },
           default_mcp_server_ids: ['mcp-1'],
+          avatar_source: 'slack',
+          avatar_source_id: 'U_PREVIOUS',
+          avatar_synced_at: '2026-10-09T00:00:00.000Z',
         },
       })
       .where(eq(users.user_id, first.user.user_id))
@@ -543,10 +657,74 @@ execution:
     });
     expect(row?.data).toMatchObject({
       avatar_url: 'https://cdn.example.test/second.png',
+      avatar_source: 'launch-auth',
       preferences: { audio: { enabled: false } },
       default_mcp_server_ids: ['mcp-1'],
     });
+    expect(row?.data).not.toHaveProperty('avatar_source_id');
+    expect(row?.data).not.toHaveProperty('avatar_synced_at');
   });
+
+  it.each(['manual', 'slack'] as const)(
+    'preserves an Agor-managed %s avatar while updating external identity on login',
+    async (source) =>
+      runWithTenantDatabaseScope(db, 'default', async (scoped) => {
+        const config = externalAuthorityConfig();
+        config.identity = { ...config.identity, avatar_authority: 'internal' };
+        mockExchange(signClaims({ avatar: 'https://example.test/initial-claim.png' }));
+        const first = await service(config).create({ launchCode: 'first' });
+        const local = new UsersService(scoped, undefined, config);
+        expect((await local.get(first.user.user_id)).avatar_url).toBeUndefined();
+        const ownedAvatar = {
+          avatar_url: 'https://example.test/agor-owned.png',
+          avatar_source: source,
+          ...(source === 'slack'
+            ? { avatar_source_id: 'U_AVATAR', avatar_synced_at: '2026-10-09T00:00:00.000Z' }
+            : {}),
+        };
+        await local.patch(first.user.user_id, ownedAvatar, {
+          provider: 'rest',
+          user: first.user,
+        } as AuthenticatedParams);
+        mockExchange(
+          signClaims({
+            email: 'updated@example.test',
+            name: 'Updated',
+            role: 'admin',
+            avatar: 'https://example.test/replacement-claim.png',
+          })
+        );
+        const second = await service(config).create({ launchCode: 'second' });
+        expect(second.user.user_id).toBe(first.user.user_id);
+        expect(await local.get(first.user.user_id)).toMatchObject({
+          ...ownedAvatar,
+          email: 'updated@example.test',
+          name: 'Updated',
+          role: 'admin',
+        });
+      })
+  );
+
+  it('does not repopulate a cleared Agor avatar from a later picture claim', async () =>
+    runWithTenantDatabaseScope(db, 'default', async (scoped) => {
+      const config = externalAuthorityConfig();
+      config.identity = { ...config.identity, avatar_authority: 'internal' };
+      mockExchange(signClaims());
+      const first = await service(config).create({ launchCode: 'first' });
+      const local = new UsersService(scoped, undefined, config);
+      const params = { provider: 'rest', user: first.user } as AuthenticatedParams;
+      await local.patch(
+        first.user.user_id,
+        { avatar_url: 'https://example.test/manual.png' },
+        params
+      );
+      await local.patch(first.user.user_id, { avatar_url: null }, params);
+      mockExchange(signClaims({ picture: 'https://example.test/provider.png' }));
+      await service(config).create({ launchCode: 'second' });
+      const user = await local.get(first.user.user_id);
+      expect(user.avatar_url).toBeUndefined();
+      expect(user.avatar_source).toBeUndefined();
+    }));
 
   it('invalidates tenant authority only when launch projection changes a persisted role', async () => {
     const invalidated = vi.fn();

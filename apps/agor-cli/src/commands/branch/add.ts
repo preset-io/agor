@@ -123,13 +123,15 @@ export default class BranchAdd extends BaseCommand {
         // Case 1, 2, 5: Create new branch
         ref = flags.branch || args.name;
         createBranch = true;
-        sourceBranch = flags.from || repo.default_branch || 'main';
+        // Omission stays implicit so the executor resolves the remote default, not a stale local one.
+        sourceBranch = flags.from || undefined;
+        const sourceLabel = sourceBranch ?? repo.default_branch ?? 'main';
 
         this.log(
-          chalk.dim(`  Creating new branch ${chalk.cyan(ref)} from ${chalk.cyan(sourceBranch)}`)
+          chalk.dim(`  Creating new branch ${chalk.cyan(ref)} from ${chalk.cyan(sourceLabel)}`)
         );
         if (pullLatest) {
-          this.log(chalk.dim(`  Resolving source ref ${chalk.cyan(sourceBranch)}`));
+          this.log(chalk.dim(`  Resolving source ref ${chalk.cyan(sourceLabel)}`));
         }
       }
 

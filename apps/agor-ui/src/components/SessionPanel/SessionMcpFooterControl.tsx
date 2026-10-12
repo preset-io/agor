@@ -7,6 +7,7 @@ import { useConnectionState } from '@/contexts/ConnectionContext';
 import { useMCPCatalogModal } from '@/contexts/MCPCatalogModalContext';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useAgorStore } from '../../store/agorStore';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { updateSessionMcpServers } from '../../utils/sessionMcpServers';
@@ -67,8 +68,71 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
       ? `${currentUserId}:${role}:${authGeneration}`
       : null;
   const editMutationAllowed = isAdmin && callerAuthorityReady;
+  // Until this session's links are loaded `sessionMcpServerIds` may be
+  // partial, and an edit diff would detach what it never saw.
+  const linksLoaded = useAgorStore((s) => s.sessionMcpLoaded.has(sessionId));
   const [saving, setSaving] = React.useState(false);
   const [open, setOpen] = React.useState(false);
+  // Bind the response to every authority/inventory input at render time, not
+  // just effect cleanup. A stale response cannot enable an option for one render.
+  const availabilityRequest = React.useMemo(
+    () => ({
+      client,
+      sessionId,
+      open,
+      callerAuthorityReady,
+      currentUserId,
+      role,
+      authGeneration,
+      mcpServerById,
+    }),
+    [
+      client,
+      sessionId,
+      open,
+      callerAuthorityReady,
+      currentUserId,
+      role,
+      authGeneration,
+      mcpServerById,
+    ]
+  );
+  const [availability, setAvailability] = React.useState<{
+    request: typeof availabilityRequest;
+    servers: MCPServer[];
+    error: 'forbidden' | 'unavailable' | null;
+  } | null>(null);
+  const availabilityCurrent =
+    open && callerAuthorityReady && availability?.request === availabilityRequest;
+  const availableServers = availabilityCurrent ? availability.servers : [];
+  const serversError = availabilityCurrent ? availability.error : null;
+  const loadingServers = open && callerAuthorityReady && !availabilityCurrent;
+  React.useEffect(() => {
+    if (!open || !client || !callerAuthorityReady) return;
+    let active = true;
+    void client
+      .service(`sessions/${sessionId}/mcp-servers`)
+      .find({ query: { available: true } })
+      .then((result) => {
+        if (active)
+          setAvailability({
+            request: availabilityRequest,
+            servers: (Array.isArray(result) ? result : result.data) as MCPServer[],
+            error: null,
+          });
+      })
+      .catch((error: { code?: number }) => {
+        if (active)
+          setAvailability({
+            request: availabilityRequest,
+            servers: [],
+            error: error.code === 403 ? 'forbidden' : 'unavailable',
+          });
+      });
+    return () => {
+      active = false;
+    };
+  }, [open, client, callerAuthorityReady, sessionId, availabilityRequest]);
   const [editingServer, setEditingServer] = React.useState<MCPServer | null>(null);
   const [editModalOpen, setEditModalOpen] = React.useState(false);
   const operationGuard = useAuthorityOperationGuard(
@@ -168,7 +232,25 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
 
   const handleChange = async (nextIds: string[]) => {
     const operation = operationGuard.begin();
-    if (!client || !operation.isCurrent()) return;
+    if (
+      !client ||
+      !operation.isCurrent() ||
+      !linksLoaded ||
+      !availabilityCurrent ||
+      serversError ||
+      saving
+    )
+      return;
+    // Display-only selected metadata must never authorize a new attachment,
+    // including a queued Select event racing an inventory/authority refresh.
+    if (
+      nextIds.some(
+        (id) =>
+          !sessionMcpServerIds.includes(id) &&
+          !availableServers.some((server) => server.mcp_server_id === id && server.enabled)
+      )
+    )
+      return;
     setSaving(true);
     try {
       await updateSessionMcpServers(client, sessionId, sessionMcpServerIds, nextIds);
@@ -238,21 +320,28 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
 
         <MCPServerSelect
           onBrowseCatalog={catalog ? handleBrowseCatalog : undefined}
-          mcpServers={Array.from(mcpServerById.values())}
+          mcpServers={availableServers}
+          selectedServers={attachedServers}
           placeholder="Attach MCP servers…"
           value={sessionMcpServerIds}
           onChange={handleChange}
-          loading={saving}
-          disabled={!client || saving}
+          loading={saving || loadingServers || !linksLoaded}
+          disabled={!callerAuthorityReady || !linksLoaded || saving || !!serversError}
           style={{ width: '100%' }}
           getPopupContainer={(trigger) =>
             popupRef.current ?? trigger.parentElement ?? document.body
           }
         />
+        {serversError && (
+          <Typography.Text type="danger">
+            {serversError === 'forbidden'
+              ? 'Only the session owner or an administrator can change attached MCP servers.'
+              : 'Could not load available servers. Close and reopen to retry.'}
+          </Typography.Text>
+        )}
         {catalog && (
           <Typography.Text type="secondary">
-            Catalog Connect creates a new session. Select an existing server above to attach it
-            here.
+            Catalog Connect adds a server to My Servers. Select it above to attach it here.
           </Typography.Text>
         )}
       </Space>
@@ -386,7 +475,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
  */
 export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (props) => (
   <SessionMcpFooterControlForIdentity
-    key={props.currentUserId ?? '__no-authenticated-user__'}
+    key={`${props.currentUserId ?? '__no-authenticated-user__'}:${props.sessionId}`}
     {...props}
   />
 );

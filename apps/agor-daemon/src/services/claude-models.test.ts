@@ -43,6 +43,17 @@ describe('Claude model discovery materialization', () => {
     ]);
   });
 
+  it('materializes the Claude Sonnet 5.5 alias as native 1M without a suffixed variant', () => {
+    expect(toModelOptions([model('claude-sonnet-5-5', 'Claude Sonnet 5.5')])).toEqual([
+      {
+        id: 'claude-sonnet-5-5',
+        displayName: 'Claude Sonnet 5.5 · 1M',
+        description: 'Best combination of speed and intelligence; native 1M context window',
+        source: 'dynamic',
+      },
+    ]);
+  });
+
   it('materializes the verified Claude Fable 5.1 alias as native 1M', () => {
     expect(toModelOptions([model('claude-fable-5-1', 'Claude Fable 5.1')])).toEqual([
       {

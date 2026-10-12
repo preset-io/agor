@@ -19,6 +19,7 @@ export type OpenCodeEventEffect =
     }
   | { type: 'unknown-activity' }
   | { type: 'idle' }
+  | { type: 'provider-retry'; attempt: number; message: string; next: number }
   | { type: 'error'; message: string };
 
 export type OpenCodeEventTranslator = {
@@ -166,11 +167,20 @@ export function createOpenCodeEventTranslator(input: {
     type: 'status' | 'idle'
   ): OpenCodeEventEffect[] => {
     if (string(properties.sessionID) !== input.sessionId) return [];
-    const status = type === 'idle' ? 'idle' : string(record(properties.status)?.type);
+    const details = record(properties.status);
+    const status = type === 'idle' ? 'idle' : string(details?.type);
     if (status === 'idle') return activeAssistantSeen ? [{ type: 'idle' }] : [];
-    if (status === 'busy' || status === 'retry') {
-      return [{ type: 'runtime-activity', detail: `session.status.${status}` }];
+    if (status === 'retry') {
+      return [
+        {
+          type: 'provider-retry',
+          attempt: number(details?.attempt),
+          message: string(details?.message) ?? '',
+          next: number(details?.next),
+        },
+      ];
     }
+    if (status === 'busy') return [{ type: 'runtime-activity', detail: 'session.status.busy' }];
     return compatibilityFailure(`session.status.${status ?? 'missing'}`);
   };
 

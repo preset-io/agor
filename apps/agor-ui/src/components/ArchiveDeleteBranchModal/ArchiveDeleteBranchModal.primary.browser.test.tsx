@@ -1,6 +1,6 @@
 import type { AgorClient, Board } from '@agor-live/client';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import { App } from 'antd';
+import { App, ConfigProvider } from 'antd';
 import { afterEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
@@ -63,28 +63,32 @@ function mount(
   const client = {
     service: (name: string) => services[name as keyof typeof services],
   } as unknown as AgorClient;
+  // No AntD motion: an entrance animation is visible only once the browser
+  // paints a frame of it, which a loaded CI runner can delay past `waitFor`.
   render(
-    <App>
-      <ConnectionProvider
-        value={{
-          connected: true,
-          connecting: false,
-          authGeneration: 0,
-          outOfSync: false,
-          capturedSha: null,
-          currentSha: null,
-        }}
-      >
-        <ArchiveDeleteBranchModal
-          client={client}
-          currentUser={user}
-          branch={branch}
-          open
-          onCancel={cancel}
-          onConfirm={confirm}
-        />
-      </ConnectionProvider>
-    </App>
+    <ConfigProvider theme={{ token: { motion: false } }}>
+      <App>
+        <ConnectionProvider
+          value={{
+            connected: true,
+            connecting: false,
+            authGeneration: 0,
+            outOfSync: false,
+            capturedSha: null,
+            currentSha: null,
+          }}
+        >
+          <ArchiveDeleteBranchModal
+            client={client}
+            currentUser={user}
+            branch={branch}
+            open
+            onCancel={cancel}
+            onConfirm={confirm}
+          />
+        </ConnectionProvider>
+      </App>
+    </ConfigProvider>
   );
   return { clear, retire, cancel, confirm };
 }
@@ -108,9 +112,18 @@ for (const width of [1280, 390]) {
     );
     expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Retire teammate — keep files' })).toBeDisabled();
-    expect(
-      screen.getByRole('link', { name: 'Open board to replace primary' }).getAttribute('href')
-    ).toBe('/ui/b/fixture/');
+    expect(screen.getByRole('link', { name: 'Open board', exact: true })).toHaveAttribute(
+      'href',
+      '/ui/b/fixture/'
+    );
+    expect(screen.queryByRole('link', { name: 'Open board to replace primary' })).toBeNull();
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "First clear this board's primary teammate. To choose a replacement afterward, open the board and use Assign in its Teammate panel. Nothing changes until you confirm."
+        )
+      ).toBeVisible()
+    );
     await click(screen.getByRole('button', { name: 'Clear board primary' }));
     expect(f.clear).not.toHaveBeenCalled();
     await waitFor(() =>
@@ -164,8 +177,7 @@ for (const boardRead of ['absent', 'forbidden', 'failed', 'access-failed'] as co
     await screen.findByText(/Board details or permissions are unavailable/);
     expect(screen.queryByText('Branch permissions could not be loaded.')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Clear board primary' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Open board to replace primary' })).toBeNull();
-    // Data can resolve before AntD's entrance animation makes the modal visible.
+    expect(screen.queryByRole('link', { name: 'Open board', exact: true })).toBeNull();
     await waitFor(() =>
       expect(
         screen.getByText(/Any active teammate may be someone else's private primary/)

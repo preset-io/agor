@@ -48,11 +48,13 @@ const checks = [
       // channel proves executor control events are registered by Feathers and
       // cross Socket.IO rather than only exercising the publisher directly.
       'apps/agor-daemon/src/register-services.tasks-events.test.ts': 4,
+      // MCP creation regression: two in-memory Feathers daemons with explicit
+      // tenant memberships prove post-commit relay and cross-tenant exclusion.
+      'apps/agor-daemon/src/mcp/tools/branches.realtime.test.ts': 3,
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 1,
-      'apps/agor-daemon/src/services/repos.ts': 1,
       // Real REST + Socket.IO contract harness: the one authenticated test
       // connection is joined to a local-only channel so transport-level
       // response and realtime secret redaction can be asserted end to end.
@@ -304,7 +306,6 @@ export const APPROVED_UNCLASSIFIED_SERVICE_BASELINE = [
   'board-comments/:id/toggle-reaction',
   'board-comments/:id/reposition',
   'repos/local',
-  'repos/clone',
   'repos/:id/branches',
   'repos/:id/branches/:name',
   'repos/:id/export-agor-yml',

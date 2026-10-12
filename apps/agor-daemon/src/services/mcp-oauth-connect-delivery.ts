@@ -14,8 +14,6 @@
  * binding the redemption verifies is re-read from its own authority and
  * compared against the sealed token's claims, so there is no second copy here
  * to fall out of step with the rows that govern it.
- *
- * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.
  */
 
 import { generateId, type MessagesRepository } from '@agor/core/db';

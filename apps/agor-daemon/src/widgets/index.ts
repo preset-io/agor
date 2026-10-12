@@ -6,8 +6,6 @@
  * startup calls `registerAllWidgets()` once at boot to populate the
  * registry that the submit/dismiss routes (and any future internal
  * callers) dispatch through.
- *
- * See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
 import { registerEnvVarsWidget } from './env-vars/index.js';

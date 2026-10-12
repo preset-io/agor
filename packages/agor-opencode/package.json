@@ -1,6 +1,6 @@
 {
   "name": "@agor-live/opencode",
-  "version": "0.26.7",
+  "version": "0.26.10",
   "description": "Version-aligned opencode agentic tool integration for Agor",
   "type": "module",
   "main": "./dist/index.js",
@@ -19,7 +19,8 @@
     "build": "tsup && tsc --emitDeclarationOnly --declaration --declarationMap --noEmit false --incremental false",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
-    "check:pack": "npm pack --dry-run"
+    "check:pack": "npm pack --dry-run",
+    "generate:hosted-providers": "node scripts/generate-hosted-providers.mjs"
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.18.31",

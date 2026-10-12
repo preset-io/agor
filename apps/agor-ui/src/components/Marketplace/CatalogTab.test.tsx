@@ -540,7 +540,7 @@ describe('catalog browsing', () => {
     await findCard('DeepWiki');
     const before = catalogReads.length;
 
-    fireEvent.click(screen.getByText('Observability').closest('label')!);
+    chooseSelectOption('Filter by category', 'Observability');
     await waitFor(() => expect(queryCard('DeepWiki')).not.toBeInTheDocument());
     expect(queryCard('Logs')).toBeInTheDocument();
     expect(queryCard('Metrics')).toBeInTheDocument();

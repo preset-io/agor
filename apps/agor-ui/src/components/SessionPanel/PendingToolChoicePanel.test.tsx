@@ -1,3 +1,4 @@
+import type { Branch } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
 import type React from 'react';
@@ -47,6 +48,22 @@ describe('PendingToolChoicePanel', () => {
     expect(textarea).toHaveAttribute('disabled');
     expect(screen.getByText('Options').closest('button')).toHaveAttribute('disabled');
     expect(screen.getByText('Send').closest('button')).toHaveAttribute('disabled');
+  });
+
+  it('shows the branch as a meta line under the session title', () => {
+    render(
+      <Wrapper>
+        <PendingToolChoicePanel
+          branch={{ name: 'feature-x' } as Branch}
+          availableAgents={agents}
+          onChoose={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </Wrapper>
+    );
+
+    expect(screen.getByText('Untitled session')).toBeInTheDocument();
+    expect(screen.getByText('feature-x')).toBeInTheDocument();
   });
 
   it('calls onChoose with the tool id when a tile is clicked', () => {

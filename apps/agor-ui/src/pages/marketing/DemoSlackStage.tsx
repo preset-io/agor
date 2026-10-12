@@ -9,6 +9,8 @@
 // session. Everything is a pure function of the scene's virtual clock `t`:
 //   uiFlags.slackPhase   0 = prior chatter · 1 = Sam's @Agor ping landed
 //                        2 = the agent's reply posted back to the channel
+//                        3 = the agent posts what Ari asked for from Agor
+//                        4 = Sam's thanks
 //   textTracks.slackInput  char-by-char composer contents
 //
 // Colors are Slack-adjacent (aubergine #3F0E40, active-channel #1164A3,
@@ -371,6 +373,20 @@ export const DemoSlackStage = ({ scene, t, prompt }: DemoSlackStageProps) => {
             <SlackMessage emoji="🤖" avatarBg="#3D2E52" name="Agor" time="9:44 AM" isApp>
               Found it — last night’s deploy changed the OAuth redirect URL. Patched{' '}
               <InlineCode>oauth-config.ts</InlineCode> and redeployed staging ✅
+            </SlackMessage>
+          )}
+
+          {phase >= 3 && (
+            <SlackMessage emoji="🤖" avatarBg="#3D2E52" name="Agor" time="9:46 AM" isApp>
+              Before: <InlineCode>/auth/callback-v1</InlineCode> → after:{' '}
+              <InlineCode>/auth/callback</InlineCode>. Both now resolve on staging.{' '}
+              <span style={{ color: MUTED, fontSize: 13 }}>(asked by Ari in Agor)</span>
+            </SlackMessage>
+          )}
+
+          {phase >= 4 && (
+            <SlackMessage emoji="⚡" avatarBg="#5D3A2F" name="Sam" time="9:47 AM">
+              perfect, thanks <Mention>@Agor</Mention> (and Ari 🙌)
             </SlackMessage>
           )}
 

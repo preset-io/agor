@@ -7,18 +7,22 @@ import type {
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import { Alert, Button, Flex, Spin } from 'antd';
-import { useCallback, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Alert, Button, Flex, Spin, theme } from 'antd';
+import { useMemo, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
 import { usePermissionDecision } from '../../hooks/usePermissionDecision';
+import { usePinnedOpenRows } from '../../hooks/usePinnedRows';
+import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { useAgorStore } from '../../store/agorStore';
-import { makeSessionMcpServerIdsSelector } from '../../store/selectors';
 import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
+import { mobilePageStyle } from './constants';
+import { MobileHeader } from './MobileHeader';
 import { sessionBoardId } from './sessionBoardId';
+import { useMobileBack } from './useMobileBack';
 
 interface SessionPageProps {
   client: AgorClient | null;
@@ -36,13 +40,16 @@ interface SessionPageProps {
   onSpawnSession: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
   onUpdateSession: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession: (sessionId: string) => void;
-  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionMcpServers?: (
+    sessionId: string,
+    mcpServerIds: string[],
+    /** The links the user was shown; the change is diffed against them. */
+    baselineIds?: string[]
+  ) => void;
   onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
   onOpenBranch?: AppActionsContextValue['onOpenBranch'];
   onOpenAgenticToolSettings?: AppActionsContextValue['onOpenAgenticToolSettings'];
 }
-
-const EMPTY_MCP_IDS: string[] = [];
 
 /**
  * Full-screen mobile session view. Reuses the shared desktop `SessionPanel`
@@ -68,6 +75,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   onOpenAgenticToolSettings,
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const { token } = theme.useToken();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const resolvedSessionId = sessionId
@@ -78,20 +86,27 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   const session = resolvedSessionId ? sessionById.get(resolvedSessionId) : undefined;
   const branch = session?.branch_id ? (branchById.get(session.branch_id) ?? null) : null;
   const canonicalSessionId = session?.session_id;
+  // The open session and its branch stay while shown, whatever scope evicts.
+  usePinnedOpenRows({ sessions: [canonicalSessionId] });
 
-  const sessionMcpServerIds =
-    useAgorStore(
-      useMemo(() => makeSessionMcpServerIdsSelector(canonicalSessionId), [canonicalSessionId])
-    ) ?? EMPTY_MCP_IDS;
+  // Loaded on first need; the footer's edit control waits for it.
+  const { ids: sessionMcpServerIds } = useSessionMcpServerIds(client, canonicalSessionId);
 
-  const navigate = useNavigate();
   const loading = useAgorStore((state) => state.loading);
+  // "Not loaded" only once the targeted read missed (`useAgorData`), or once a
+  // session this page showed left the store; until then the read may be in flight.
+  const missed = useAgorStore((state) => !!sessionId && state.missingLinkTargets.has(sessionId));
+  const [shownId, setShownId] = useState<string>();
+  if (session && shownId !== sessionId) setShownId(sessionId);
+  const waiting = loading || (!missed && shownId !== sessionId);
   const boardId = sessionBoardId(session, branchById, boardById);
-  // X is an exit, not browser Back. Replace this detail entry so a cold link
-  // also closes inside Agor. Earlier deliberate navigations remain in history.
-  const closeSession = useCallback(() => {
-    navigate(boardId ? `/m/board/${boardId}` : '/m', { replace: true });
-  }, [navigate, boardId]);
+  // The leading control is a REAL history Back: it returns to the actual
+  // previous surface (previous session, Home, the Sessions list, ...) instead of
+  // always dumping the user on the owning board. A cold deep-link has no in-app
+  // history (location key === 'default'), so it falls back to the owning board
+  // (or Home) — still closing inside Agor. No `replace`, so the back-stack and
+  // Forward stay intact.
+  const closeSession = useMobileBack(boardId ? `/m/board/${boardId}` : '/m');
 
   const handlePermissionDecision = usePermissionDecision(client);
 
@@ -128,34 +143,49 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 
   if (!sessionId) {
     return (
-      <div style={{ padding: 16 }}>
+      <div style={{ padding: token.padding }}>
         <Alert type="error" title="No session ID provided" />
       </div>
     );
   }
 
   if (!session) {
+    // Give the missing/loading state the same shell chrome as every other mobile
+    // page: a header with a working Back (plus the persistent bottom tab bar,
+    // rendered by MobileApp), instead of a bare centered card. Back and the
+    // in-body button share the same history-aware handler.
     return (
-      <Flex vertical align="center" justify="center" gap="middle" style={{ height: '100%' }}>
-        {loading ? (
-          <Spin size="large" />
-        ) : (
-          // Bootstrap may be complete while the data owner fetches an uncached
-          // session. Do not infer a failed request from its absence in the store.
-          <Alert
-            type="info"
-            title="Session not loaded"
-            description="It may still be loading or may no longer be available."
-          />
-        )}
-        <Button onClick={closeSession}>Back to home</Button>
-      </Flex>
+      <div style={mobilePageStyle}>
+        <MobileHeader title="Session" onBack={closeSession} />
+        <Flex
+          vertical
+          align="center"
+          justify="center"
+          gap="middle"
+          style={{ flex: 1, minHeight: 0, padding: token.padding }}
+        >
+          {waiting ? (
+            <Spin size="large" />
+          ) : (
+            <Alert
+              type="info"
+              title="Session not loaded"
+              description="It may still be loading or may no longer be available."
+            />
+          )}
+          <Button onClick={closeSession}>Back to home</Button>
+        </Flex>
+      </div>
     );
   }
 
   return (
     <AppActionsProvider value={appActions}>
-      <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* Fill the shell's content slot (which already sits ABOVE the docked tab
+          bar), not the whole viewport. Using `100dvh` here would push the
+          composer down behind the persistent tab bar; `flex: 1` reserves exactly
+          the space left over the bar and its safe-area inset. */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <SessionPanel
           client={client}
           session={session}

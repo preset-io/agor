@@ -1,10 +1,4 @@
-import type {
-  AgorClient,
-  Board,
-  BoardEntityObject,
-  CardType,
-  CardWithType,
-} from '@agor-live/client';
+import type { AgorClient, Board, CardType, CardWithType } from '@agor-live/client';
 import { ExportOutlined, PushpinFilled } from '@ant-design/icons';
 import { Button, Empty, Input, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { type Key, useCallback, useEffect, useMemo, useState } from 'react';
@@ -12,7 +6,6 @@ import { useAppNavigation } from '@/hooks/useAppNavigation';
 import { useSettingsRoute } from '@/hooks/useSettingsRoute';
 import { useAgorStore } from '@/store/agorStore';
 import { selectBranchById, selectUserById } from '@/store/selectors';
-import { mapToArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { getBoardEmoji } from '../BoardTile';
 import CardModal from '../CardModal/CardModal';
@@ -20,27 +13,32 @@ import { HighlightMatch } from '../HighlightMatch';
 import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { useSettingsDrill } from './SettingsDrill';
+import { useSettingsCards } from './useSettingsCards';
 
 interface AllCardsPanelProps {
   client: AgorClient | null;
-  cardById: Map<string, CardWithType>;
   cardTypeById: Map<string, CardType>;
   boardById: Map<string, Board>;
-  boardObjects?: BoardEntityObject[];
+  /** The caller may read card placements (MEMBER floor), from the resolved user. */
+  canReadPlacements: boolean;
   /** Close the parent Settings modal so the board isn't obscured after navigation. */
   onClose?: () => void;
 }
 
+const NO_CARDS: CardWithType[] = [];
+
 export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
   client,
-  cardById,
   cardTypeById,
   boardById,
-  boardObjects,
+  canReadPlacements,
   onClose,
 }) => {
   const branchById = useAgorStore(selectBranchById);
   const userById = useAgorStore(selectUserById);
+  // The store holds only loaded boards' cards; this panel reads every card.
+  const { data: cardsData, error: cardsError } = useSettingsCards(client, { canReadPlacements });
+  const allCards = cardsData?.cards ?? NO_CARDS;
   const navigation = useAppNavigation({ boardById, branchById });
   // The route's item segment (/settings/cards/<typeId>/) seeds the Type filter —
   // this is the shareable "View cards →" deep-link from a card type.
@@ -63,13 +61,13 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
     }
   }, [cardModalOpen, cardModalCard, openDrill, closeDrill]);
 
-  // card_id → zone info (name + color) from board objects.
+  // card_id → zone info (name + color) from the card placements.
   const cardZoneInfo = useMemo(() => {
     const map = new Map<string, { zoneName: string; zoneColor?: string }>();
-    if (!boardObjects) return map;
-    for (const bo of boardObjects) {
+    if (!cardsData) return map;
+    for (const bo of cardsData.placements) {
       if (!bo.card_id || !bo.zone_id) continue;
-      const zoneObj = boardById.get(bo.board_id)?.objects?.[bo.zone_id];
+      const zoneObj = cardsData.zoneBoards.get(bo.board_id)?.objects?.[bo.zone_id];
       if (zoneObj && zoneObj.type === 'zone') {
         map.set(bo.card_id, {
           zoneName: zoneObj.label || 'Unknown Zone',
@@ -78,7 +76,7 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
       }
     }
     return map;
-  }, [boardObjects, boardById]);
+  }, [cardsData]);
 
   const cardTypeName = useCallback(
     (card: CardWithType) =>
@@ -88,7 +86,7 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
   );
 
   const cards = useMemo(() => {
-    const all = mapToArray(cardById)
+    const all = allCards
       .filter((c) => !c.archived)
       .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
     return filterBySettingsSearch(all, searchTerm, [
@@ -105,13 +103,13 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
       },
       (card) => JSON.stringify(card.data ?? {}),
     ]);
-  }, [cardById, searchTerm, boardById, cardZoneInfo, userById, cardTypeName]);
+  }, [allCards, searchTerm, boardById, cardZoneInfo, userById, cardTypeName]);
 
   // Type filter options come from the types actually in use, so the dropdown
   // never offers an empty bucket.
   const typeFilters = useMemo(() => {
     const present = new Map<string, string>();
-    for (const card of mapToArray(cardById)) {
+    for (const card of allCards) {
       if (card.archived) continue;
       const name = cardTypeName(card);
       if (card.card_type_id && name) present.set(card.card_type_id, name);
@@ -120,11 +118,11 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
     return Array.from(present.entries())
       .sort((a, b) => a[1].localeCompare(b[1]))
       .map(([value, text]) => ({ text, value }));
-  }, [cardById, cardTypeName]);
+  }, [allCards, cardTypeName]);
 
   const boardFilters = useMemo(() => {
     const present = new Map<string, string>();
-    for (const card of mapToArray(cardById)) {
+    for (const card of allCards) {
       if (card.archived) continue;
       const board = boardById.get(card.board_id);
       if (board) present.set(board.board_id, board.name);
@@ -132,11 +130,11 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
     return Array.from(present.entries())
       .sort((a, b) => a[1].localeCompare(b[1]))
       .map(([value, text]) => ({ text, value }));
-  }, [cardById, boardById]);
+  }, [allCards, boardById]);
 
   const zoneFilters = useMemo(() => {
     const present = new Set<string>();
-    for (const card of mapToArray(cardById)) {
+    for (const card of allCards) {
       if (card.archived) continue;
       const zone = cardZoneInfo.get(card.card_id);
       if (zone) present.add(zone.zoneName);
@@ -144,7 +142,7 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
     return Array.from(present)
       .sort((a, b) => a.localeCompare(b))
       .map((zoneName) => ({ text: zoneName, value: zoneName }));
-  }, [cardById, cardZoneInfo]);
+  }, [allCards, cardZoneInfo]);
 
   const openOnBoard = (card: CardWithType) => {
     onClose?.();
@@ -332,8 +330,14 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
         }
       />
 
+      {cardsError && (
+        <Typography.Text type="danger">
+          Could not load cards. Close and reopen to retry.
+        </Typography.Text>
+      )}
       <Table
         dataSource={cards}
+        loading={!cardsData && !cardsError}
         columns={columns}
         rowKey="card_id"
         size="small"

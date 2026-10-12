@@ -185,7 +185,9 @@ export async function runFirstRunAdminBootstrap(
         name: 'Admin',
         role: 'superadmin',
         unix_username: 'admin',
-        must_change_password: !useDevelopmentDefault,
+        // An operator-selected secret can explicitly be treated as permanent.
+        // This factory runs only for a missing admin; never rotate/reset existing users.
+        must_change_password: process.env.AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE !== 'false',
       });
     }
 
@@ -271,7 +273,9 @@ export function logFirstRunAdminBootstrap(result: DaemonBootstrapResult): void {
       process.stderr.write('    Password:  set via the AGOR_ADMIN_PASSWORD env var\n');
     }
     process.stderr.write('\n');
-    process.stderr.write('    You will be prompted to change the password on first login.\n');
+    if (result.admin.must_change_password !== false) {
+      process.stderr.write('    You will be prompted to change the password on first login.\n');
+    }
     process.stderr.write('================================================================\n');
     process.stderr.write('\n');
   }

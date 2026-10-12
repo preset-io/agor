@@ -111,11 +111,16 @@ export function scrubBranchDeletionReferences(
   return result;
 }
 
-function collectIds(value: unknown, ids: Set<string>, path = '') {
+// The list occurs three times in the ownership UNION: <= 753 bind parameters,
+// including branch IDs, even on SQLite builds with the historical 999 limit.
+const OWNERSHIP_QUERY_IDS = 250;
+const PAGE_OWNERSHIP_QUERIES = 25;
+
+function* collectIds(value: unknown, path = ''): Generator<string> {
   if (!object(value)) return;
   for (const [key, item] of Object.entries(value)) {
     const childPath = path ? `${path}.${key}` : key;
-    if (REFERENCE_PATHS.has(childPath)) collectIds(item, ids, childPath);
+    if (REFERENCE_PATHS.has(childPath)) yield* collectIds(item, childPath);
     if (path === 'custom_context' || /^custom_context\.(teammate|assistant|agent)$/.test(path))
       continue;
     if (
@@ -124,26 +129,42 @@ function collectIds(value: unknown, ids: Set<string>, path = '') {
         key === 'callback_session_id') &&
       typeof item === 'string'
     )
-      ids.add(item);
+      yield item;
     if (key === 'children' && Array.isArray(item))
-      for (const id of item) if (typeof id === 'string') ids.add(id);
+      for (const id of item) if (typeof id === 'string') yield id;
     if (['relative', 'completion_callback'].includes(key) && object(item)) {
       for (const field of ['parent_id', 'target_session_id', 'requested_from_session_id'])
-        if (typeof item[field] === 'string') ids.add(item[field]);
+        if (typeof item[field] === 'string') yield item[field];
     }
     if (['grants', 'callback_dispatches'].includes(key) && Array.isArray(item))
       for (const entry of item) {
         if (object(entry))
           for (const field of ['namespace_id', 'target_session_id', 'queued_task_id'])
-            if (typeof entry[field] === 'string') ids.add(entry[field]);
+            if (typeof entry[field] === 'string') yield entry[field];
       }
   }
-  if (ids.size > 1000)
-    throw new Error('Structured deletion references exceed the bounded reconciliation limit');
+}
+
+function* referenceIdBatches(value: unknown): Generator<Set<string>> {
+  let ids = new Set<string>();
+  for (const id of collectIds(value)) {
+    ids.add(id);
+    if (ids.size === OWNERSHIP_QUERY_IDS) {
+      yield ids;
+      ids = new Set<string>();
+    }
+  }
+  if (ids.size) yield ids;
 }
 
 /**
- * One bounded keyset page before any owning session/task/namespace is removed.
+ * At most 25 rows before any owning session/task/namespace is removed. Ownership
+ * queries have bounded bind lists; after 25 queries we yield at a row boundary.
+ * A single row is indivisible: its JSON read/scrub/write and query count still
+ * scale with its size (not a constant byte/time bound). Keep its lock until the
+ * complete scrub commits with the keyset cursor, rather than persisting array
+ * offsets that become invalid when writers reorder arrays or scrubbing shrinks
+ * them. No total-reference cap: legitimate unrelated genealogy may be wide.
  * The cursor lives in the branch's private claim; no growing resource manifest.
  * Call under the invocation Branch lock. No external work in this transaction.
  */
@@ -169,7 +190,11 @@ export async function reconcileBranchDeletionReferencesBatch(
     WHERE ${sql.identifier(scan.key)} > ${cursor.after ?? ''} ${where} ORDER BY ${sql.identifier(scan.key)} LIMIT 25 ${isPostgresDatabase(db) ? sql`FOR UPDATE` : sql``}`
     )
   );
+  let queries = 0;
+  let after = cursor.after;
   for (const row of rows) {
+    if (queries >= PAGE_OWNERSHIP_QUERIES) break;
+    after = String(row.id);
     const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
     if (!object(data)) continue;
     // Restrict traversal to application-owned metadata; never inspect message
@@ -190,10 +215,8 @@ export async function reconcileBranchDeletionReferencesBatch(
                   primary_assistant_id: data.primary_assistant_id,
                 }
               : { custom_context: data.custom_context };
-    const ids = new Set<string>();
-    collectIds(selected, ids);
     const owned = new Set<string>([branchId]);
-    if (ids.size) {
+    for (const ids of referenceIdBatches(selected)) {
       const list = sql.join(
         [...ids].map((id) => sql`${id}`),
         sql`, `
@@ -207,6 +230,7 @@ export async function reconcileBranchDeletionReferencesBatch(
         UNION ALL SELECT namespace_id AS id FROM kb_namespaces WHERE branch_id = ${branchId} AND kind = 'branch' AND namespace_id IN (${list})`
         )
       );
+      queries++;
       for (const item of found) owned.add(String(item.id));
     }
     const scrubbed = scrubBranchDeletionReferences(selected, owned) as JsonObject;
@@ -225,8 +249,6 @@ export async function reconcileBranchDeletionReferencesBatch(
   }
   return {
     done: false,
-    cursor: rows.length
-      ? { table: cursor.table, after: String(rows[rows.length - 1]!.id) }
-      : { table: cursor.table + 1 },
+    cursor: rows.length ? { table: cursor.table, after } : { table: cursor.table + 1 },
   };
 }

@@ -196,8 +196,6 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
     // provider returned" — Notion is the canonical example (omits expires_in
     // on both initial grant and refresh). The token is still usable; the
     // operator can force a refresh from this pill if it stops working.
-    // (A retry-on-401 transport shim is tracked as a follow-up — see
-    // `context/explorations/mcp-oauth-token-lifecycle.md` Phase 5.)
     authedTooltip = (
       <>
         <div>Expires in: unknown</div>

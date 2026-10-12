@@ -28,6 +28,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
+import { mcpServerRemoved } from '../../store/agorRealtimeActions';
 import { MCPServerEditModal } from '../MCPServer/MCPServerEditModal';
 import {
   canDeleteMcpServer,
@@ -393,8 +394,11 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
       await refresh();
       return operation.isCurrent();
     } catch (cause) {
-      if (operation.isCurrent())
+      if (operation.isCurrent()) {
         message.error(cause instanceof Error ? cause.message : 'Action failed');
+        // A concurrent attachment may have invalidated the confirmed count.
+        if (key.startsWith('remove:')) await Promise.resolve(refresh()).catch(() => undefined);
+      }
       return false;
     } finally {
       if (operation.isCurrent())
@@ -946,10 +950,13 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
             () =>
               client!.service('mcp-marketplace/remove-unattached').create({
                 mcp_server_id: server.mcp_server_id,
+                detach: true,
+                expected_session_count: server.session_count,
               }),
             'Server removed',
             () => {
               if (!currentUser) return;
+              mcpServerRemoved(server);
               clearRemovalFocusAuthority();
               const authority: RemovalFocusAuthority = {
                 userId: currentUser.user_id,

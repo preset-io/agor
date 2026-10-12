@@ -3,7 +3,9 @@ import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
+import { encryptApiKey, eq, UsersRepository, update, users } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 
 const {
   buildSandboxWrapMock,
@@ -497,6 +499,40 @@ describe('configured executor spawning', () => {
     }
   });
 
+  it('stamps the admission class from the command map on templated payloads', async () => {
+    const { requestExecutor, spawnExecutor } = await import('./spawn-executor');
+    const templated = { executorCommandTemplate: 'launch {command}' };
+    const launched = (command: string, claimed?: string) => {
+      const proc = createMockProcess();
+      spawnMock.mockReturnValueOnce(proc);
+      spawnExecutor({ command, ...(claimed ? { admissionClass: claimed } : {}) }, templated);
+      return (JSON.parse(proc.written) as { admissionClass?: string }).admissionClass;
+    };
+
+    expect(launched('prompt')).toBe('agent');
+    expect(launched('environment.lifecycle')).toBe('utility');
+    expect(launched('unknown.command')).toBe('agent');
+    expect(launched('prompt', 'utility')).toBe('agent');
+
+    const proc = createMockProcess();
+    spawnMock.mockReturnValueOnce(proc);
+    const browse = requestExecutor({ command: 'branch.files.browse' }, templated);
+    expect(JSON.parse(proc.written)).toMatchObject({
+      command: 'branch.files.browse',
+      admissionClass: 'utility',
+      executorMode: 'request',
+    });
+    await deliverExecutorResponse(proc, { success: true, data: { files: [] } });
+    await expect(browse).resolves.toEqual({ success: true, data: { files: [] } });
+
+    const unknown = createMockProcess();
+    spawnMock.mockReturnValueOnce(unknown);
+    const unknownRequest = requestExecutor({ command: 'unknown.command' }, templated);
+    expect(JSON.parse(unknown.written)).toMatchObject({ admissionClass: 'agent' });
+    await deliverExecutorResponse(unknown, { success: true });
+    await unknownRequest;
+  });
+
   it('calls onExit for templated spawns', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
@@ -700,6 +736,56 @@ describe('configured executor spawning', () => {
     expect(vi.mocked(console.log).mock.calls.flat().join(' ')).not.toContain(secret);
     expect(vi.mocked(console.error).mock.calls.flat().join(' ')).not.toContain(secret);
   });
+
+  for (const { option, scratch } of [
+    { option: 'preparedEnv', scratch: '/synthetic/user/scratch' },
+    { option: 'env', scratch: 'relative/scratch' },
+  ] as const) {
+    dbTest(
+      `excludes stored user scratch from the local ${option} while preserving other settings`,
+      async ({ db }) => {
+        const user = await new UsersRepository(db).create({
+          email: 'scratch-regression@example.com',
+          name: 'Scratch regression',
+        });
+        await update(db, users)
+          .set({
+            data: {
+              env_vars: {
+                AGOR_EXECUTOR_SCRATCH_ROOT: {
+                  value_encrypted: encryptApiKey(scratch),
+                  scope: 'global',
+                },
+                SYNTHETIC_SESSION_SETTING: {
+                  value_encrypted: encryptApiKey('ordinary-session-value'),
+                  scope: 'global',
+                },
+              },
+            },
+          })
+          .where(eq(users.user_id, user.user_id))
+          .run();
+        const { createUserProcessEnvironment } = await import('@agor/core/config');
+        const sessionEnv = await createUserProcessEnvironment(user.user_id, db);
+        expect(sessionEnv.AGOR_EXECUTOR_SCRATCH_ROOT).toBe(scratch);
+        const installed = installMockExecutor('agor-executor-user-scratch-');
+        try {
+          const { spawnExecutor } = await import('./spawn-executor');
+          spawnExecutor({ command: 'prompt', env: sessionEnv }, { [option]: sessionEnv });
+
+          expect(spawnMock).toHaveBeenCalledOnce();
+          const spawnOptions = spawnMock.mock.calls[0][2] as {
+            env: Record<string, string>;
+          };
+          expect(spawnOptions.env.AGOR_EXECUTOR_SCRATCH_ROOT).toBeUndefined();
+          expect(spawnOptions.env.SYNTHETIC_SESSION_SETTING).toBe('ordinary-session-value');
+          expect(sessionEnv.AGOR_EXECUTOR_SCRATCH_ROOT).toBe(scratch);
+        } finally {
+          installed.restore();
+        }
+      }
+    );
+  }
 
   it('launches a local executor from its operator-owned package directory, not payload cwd', async () => {
     const proc = createMockProcess();
@@ -1092,6 +1178,54 @@ describe('configured executor spawning', () => {
     await Promise.resolve();
     expect(settled).toBe(false);
 
+    await deliverExecutorResponse(proc, { success: true, data: { files: [] } });
+    await expect(promise).resolves.toEqual({ success: true, data: { files: [] } });
+  });
+
+  it('fails a templated request immediately when an opted-in launcher refuses it', async () => {
+    const { configureLaunchRefusedExit } = await import('./task-launch-state');
+    configureLaunchRefusedExit({ AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT: '75' });
+    try {
+      const proc = createMockProcess();
+      spawnMock.mockReturnValue(proc);
+      const { requestExecutor } = await import('./spawn-executor');
+      const promise = requestExecutor(
+        { command: 'branch.files.browse' },
+        { executorCommandTemplate: 'launch {command}' }
+      );
+      proc.emit('exit', 75);
+
+      await expect(promise).resolves.toEqual({
+        success: false,
+        error: {
+          code: 'EXECUTOR_LAUNCH_REFUSED',
+          message:
+            'Your team has reached its limit of work running at once. Wait for something to finish, then try again.',
+        },
+      });
+    } finally {
+      configureLaunchRefusedExit({});
+    }
+  });
+
+  it('keeps waiting on a templated exit 75 without the launcher opt-in', async () => {
+    const { configureLaunchRefusedExit } = await import('./task-launch-state');
+    configureLaunchRefusedExit({});
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { requestExecutor } = await import('./spawn-executor');
+    const promise = requestExecutor(
+      { command: 'branch.files.browse' },
+      { executorCommandTemplate: 'launch {command}' }
+    );
+    proc.emit('exit', 75);
+
+    let settled = false;
+    void promise.finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
     await deliverExecutorResponse(proc, { success: true, data: { files: [] } });
     await expect(promise).resolves.toEqual({ success: true, data: { files: [] } });
   });

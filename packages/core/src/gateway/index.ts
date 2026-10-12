@@ -15,6 +15,7 @@ export type {
   InboundFile,
   InboundMessage,
   InboundPreparationContext,
+  InboundSkippedFile,
   OutboundPayload,
 } from './connector';
 export { normalizeOutbound, normalizeSendReceipt } from './connector';
@@ -22,8 +23,10 @@ export { getConnector, hasConnector, registerConnector } from './connector-regis
 export {
   chunkDiscordMessage,
   DiscordConnector,
-  extractDiscordInboundFiles,
+  DiscordDirectMessageError,
+  DiscordThreadUnavailableError,
   isAllowedDiscordAttachmentUrl,
+  partitionDiscordInboundFiles,
   stripDiscordBotMention,
 } from './connectors/discord';
 export type {
@@ -33,6 +36,8 @@ export type {
 export {
   DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT,
   DISCORD_CHANNEL_HISTORY_MAX_LIMIT,
+  DISCORD_FORUM_POSTS_DEFAULT_LIMIT,
+  DISCORD_FORUM_POSTS_MAX_LIMIT,
   DiscordHistoryError,
   fetchDiscordProviderHistory,
 } from './connectors/discord-history';
@@ -110,6 +115,8 @@ export type {
 export {
   buildDiscordDeliveryMetadata,
   buildDiscordDeliveryNonce,
+  buildDiscordDirectMessageMetadata,
+  buildDiscordDirectMessageThreadKey,
   buildDiscordInboundMetadata,
   buildDiscordLegacyThreadKey,
   buildDiscordMessageThreadKey,
@@ -125,7 +132,11 @@ export {
   type GatewayListenerFailureKind,
   gatewayListenerFailure,
 } from './listener-error';
-export { gatewayFailureCode, sanitizeGatewayProviderError } from './provider-error';
+export {
+  gatewayFailureCode,
+  isPermanentProviderRefusal,
+  sanitizeGatewayProviderError,
+} from './provider-error';
 export { redactGatewayChannelSecrets } from './redaction';
 export {
   formatGatewayFollowUpRoutingMessage,

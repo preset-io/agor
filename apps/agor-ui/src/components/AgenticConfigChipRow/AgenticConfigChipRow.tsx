@@ -3,6 +3,7 @@ import {
   agenticToolRequiresModelSelection,
   getAgenticToolModelSelectionError,
 } from '@agor/agentic-tools';
+import { GEMINI_MANUAL_MESSAGE, isGeminiManualMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   AgenticToolName,
   AgorClient,
@@ -63,6 +64,11 @@ export interface AgenticConfigChipRowProps {
   branchId?: string;
   /** Display-only defaults. Undefined form value still means inherit on the server. */
   inheritedMcpServerIds?: string[];
+  /**
+   * The MCP selection is still loading (an existing session's links): the
+   * chip is read-only until the form holds the complete selection.
+   */
+  mcpLoading?: boolean;
   catalogEnabled?: boolean;
   /** Require integration-owned exact model selection on direct create/edit surfaces. */
   validateModelSelection?: boolean;
@@ -127,6 +133,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   currentUser,
   branchId,
   inheritedMcpServerIds,
+  mcpLoading = false,
   catalogEnabled = true,
   validateModelSelection = false,
   fieldName = 'agenticToolPresetId',
@@ -217,8 +224,11 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     : shortModelName(tool, resolvedModel);
   const permissionLabel = getPermissionModeLabel(tool, resolvedPermission);
   const effortLabel = `Effort: ${resolvedEffort ? EFFORT_LABELS[resolvedEffort] : 'Inherited'}`;
-  const mcpLabel =
-    mcpCount > 0 ? `${mcpCount} MCP server${mcpCount === 1 ? '' : 's'}` : 'No MCP servers';
+  const mcpLabel = mcpLoading
+    ? 'Loading MCP servers…'
+    : mcpCount > 0
+      ? `${mcpCount} MCP server${mcpCount === 1 ? '' : 's'}`
+      : 'No MCP servers';
   const advisorLabel = advisorModel
     ? `Advisor: ${shortModelName(tool, advisorModel)}`
     : 'Advisor: Off';
@@ -247,6 +257,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
       codexSandboxMode: current.codexSandboxMode,
       codexApprovalPolicy: current.codexApprovalPolicy,
       codexNetworkAccess: current.codexNetworkAccess,
+      codexIncludePlugins: current.codexIncludePlugins ?? false,
     });
   };
   const ensureCustom = () => {
@@ -351,7 +362,15 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         label={permissionLabel}
         title="Permission mode"
         editable={inlineAllowed}
-        managedNote={managedNote}
+        managedNote={
+          tool === 'gemini' && isGeminiManualMode(resolvedPermission) ? (
+            <Typography.Text type="warning">
+              {GEMINI_MANUAL_MESSAGE} Ask a workspace admin to update the preset.
+            </Typography.Text>
+          ) : (
+            managedNote
+          )
+        }
         color={permissionColor}
         width={340}
         testid="permission-chip"
@@ -398,7 +417,10 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         icon={<ApiOutlined />}
         label={mcpLabel}
         title="MCP servers"
-        editable
+        editable={!mcpLoading}
+        managedNote={
+          <Typography.Text type="secondary">Loading attached MCP servers…</Typography.Text>
+        }
         width={360}
         testid="mcp-chip"
         renderContent={() => (
@@ -582,31 +604,17 @@ const EditableChip: React.FC<EditableChipProps> = ({
     </Button>
   );
 
-  if (!editable) {
-    return (
-      <Popover
-        open={open}
-        onOpenChange={setOpen}
-        trigger="click"
-        placement="bottomLeft"
-        title={title}
-        content={managedNote}
-      >
-        {chip}
-      </Popover>
-    );
-  }
-
   return (
     <Popover
       open={open}
       onOpenChange={setOpen}
       trigger="click"
       placement="bottomLeft"
+      align={editable ? undefined : { overflow: { adjustX: true, adjustY: true, shiftX: true } }}
       title={title}
       content={
         <div style={{ width, maxWidth: `calc(100vw - ${token.marginLG * 2}px)` }}>
-          {renderContent(() => setOpen(false))}
+          {editable ? renderContent(() => setOpen(false)) : managedNote}
         </div>
       }
     >

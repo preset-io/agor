@@ -32,6 +32,7 @@ export function getEffectiveCodexFormValues(config: DefaultAgenticToolConfig) {
     codexSandboxMode: config.codexSandboxMode ?? defaults.sandboxMode,
     codexApprovalPolicy: config.codexApprovalPolicy ?? defaults.approvalPolicy,
     codexNetworkAccess: config.codexNetworkAccess ?? defaults.networkAccess,
+    codexIncludePlugins: config.codexIncludePlugins ?? false,
   };
 }
 
@@ -49,6 +50,7 @@ export interface AgenticFormValues {
   codexSandboxMode?: string;
   codexApprovalPolicy?: string;
   codexNetworkAccess?: boolean;
+  codexIncludePlugins?: boolean;
 }
 
 /** Fold the standalone form field into the canonical model config without retaining stale effort. */
@@ -79,6 +81,7 @@ export function getFormValuesFromConfig(
       codexSandboxMode: config?.codexSandboxMode,
       codexApprovalPolicy: config?.codexApprovalPolicy,
       codexNetworkAccess: config?.codexNetworkAccess,
+      codexIncludePlugins: config?.codexIncludePlugins,
     }),
   };
 }
@@ -101,6 +104,7 @@ export function buildConfigFromFormValues(
       codexApprovalPolicy:
         values.codexApprovalPolicy as DefaultAgenticToolConfig['codexApprovalPolicy'],
       codexNetworkAccess: values.codexNetworkAccess,
+      codexIncludePlugins: values.codexIncludePlugins ?? false,
     }),
   };
 }
@@ -123,6 +127,7 @@ export function scheduleConfigToDefaultConfig(
       codexSandboxMode: cfg.codex_sandbox_mode,
       codexApprovalPolicy: cfg.codex_approval_policy,
       codexNetworkAccess: cfg.codex_network_access,
+      codexIncludePlugins: cfg.codex_include_plugins,
     }),
   };
 }
@@ -153,6 +158,7 @@ export function buildScheduleConfigFromFormValues(
     codex_sandbox_mode: tool === 'codex' ? builtDefault.codexSandboxMode : undefined,
     codex_approval_policy: tool === 'codex' ? builtDefault.codexApprovalPolicy : undefined,
     codex_network_access: tool === 'codex' ? builtDefault.codexNetworkAccess : undefined,
+    codex_include_plugins: tool === 'codex' ? builtDefault.codexIncludePlugins : undefined,
   };
 }
 
@@ -168,6 +174,7 @@ export function getClearedFormValues(tool: AgenticToolName): AgenticFormValues {
       codexSandboxMode: undefined,
       codexApprovalPolicy: undefined,
       codexNetworkAccess: undefined,
+      codexIncludePlugins: undefined,
     }),
   };
 }

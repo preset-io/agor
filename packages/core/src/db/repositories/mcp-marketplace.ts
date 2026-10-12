@@ -29,6 +29,7 @@ import { RepositoryError } from './base';
 import { visibleSessionReferenceAccessExists } from './branch-access';
 
 type SafeServerRow = {
+  session_count: number;
   mcp_server_id: string;
   name: string;
   transport: MCPMarketplaceServer['transport'];
@@ -234,6 +235,7 @@ export class MCPMarketplaceRepository {
       const serverRows = (await select(this.db, {
         mcp_server_id: mcpServers.mcp_server_id,
         name: mcpServers.name,
+        session_count: sql<number>`(select count(*) from ${sessionMcpServers} where ${sessionMcpServers.mcp_server_id} = ${mcpServers.mcp_server_id})`,
         transport: mcpServers.transport,
         enabled: mcpServers.enabled,
         source: mcpServers.source,
@@ -319,14 +321,6 @@ export class MCPMarketplaceRepository {
         branch_name: row.branch_name,
       }));
 
-      const countByServer = new Map<string, number>();
-      for (const attachment of attachments) {
-        countByServer.set(
-          attachment.mcp_server_id,
-          (countByServer.get(attachment.mcp_server_id) ?? 0) + 1
-        );
-      }
-
       const servers: MCPMarketplaceServer[] = serverRows.map((row) => {
         const createdAt = iso(row.created_at)!;
         return {
@@ -346,7 +340,7 @@ export class MCPMarketplaceRepository {
                 ),
               }
             : {}),
-          session_count: countByServer.get(row.mcp_server_id) ?? 0,
+          session_count: Number(row.session_count),
           created_at: createdAt,
           updated_at: iso(row.updated_at) ?? createdAt,
         };

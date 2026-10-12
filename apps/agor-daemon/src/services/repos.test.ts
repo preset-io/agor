@@ -42,6 +42,7 @@ vi.mock('@agor/core/config', async (importOriginal) => {
 
 const repositoryMocks = vi.hoisted(() => ({
   deleteRepo: vi.fn(),
+  claimClone: vi.fn(),
   findAllBranchesByRepoId: vi.fn(),
   lockRepoForBranchInventory: vi.fn(),
   resolveBranchUserAccess: vi.fn(),
@@ -90,6 +91,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
     RepoRepository: vi.fn().mockImplementation(function RepoRepository() {
       return {
         create: vi.fn(),
+        claimClone: repositoryMocks.claimClone,
         findById: vi.fn(),
         findAll: vi.fn(async () => []),
         update: vi.fn(),
@@ -668,6 +670,19 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
 });
 
 describe('ReposService.cloneRepository Git lifecycle execution', () => {
+  beforeEach(() => {
+    repositoryMocks.claimClone.mockReset().mockImplementation(async (data) => ({
+      repo: {
+        ...data,
+        repo_id: '550e8400-e29b-41d4-a716-446655440001',
+        clone_status: 'cloning',
+        clone_generation: 1,
+      },
+      acquired: true,
+      created: true,
+    }));
+  });
+
   it('creates managed storage without delegated user routing', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
 
@@ -684,13 +699,9 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       }),
     } as unknown as Application;
     const service = new ReposService({} as never, app);
-    vi.spyOn(service, 'create').mockResolvedValue({
-      repo_id: '550e8400-e29b-41d4-a716-446655440001',
-      slug: 'preset-io/agor-teammate',
-    } as never);
 
     await service.cloneRepository({ url: 'https://github.com/preset-io/agor-teammate.git' }, {
-      user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
+      user: { user_id: '550e8400-e29b-41d4-a716-446655440004', role: 'member' },
     } as never);
 
     expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
@@ -716,10 +727,6 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       }),
     } as unknown as Application;
     const service = new ReposService({} as never, app);
-    vi.spyOn(service, 'create').mockResolvedValue({
-      repo_id: '550e8400-e29b-41d4-a716-446655440001',
-      slug: 'preset-io/agor-admin-clone',
-    } as never);
 
     await service.cloneRepository({ url: 'https://github.com/preset-io/agor-admin-clone.git' }, {
       provider: 'rest',
@@ -740,11 +747,12 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
 
   it('persists clone-exit failure in a fresh write-gated tenant unit', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
-    const db = { marker: 'base-db' };
+    const db = { marker: 'base-db', run: vi.fn() };
     const current = {
       repo_id: '550e8400-e29b-41d4-a716-446655440001',
       slug: 'preset-io/agor-failed-clone',
       clone_status: 'cloning',
+      clone_generation: 1,
     };
     const repos = {
       get: vi.fn(async () => current),
@@ -762,11 +770,10 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
       }),
     } as unknown as Application;
     const service = new ReposService(db as never, app);
-    vi.spyOn(service, 'create').mockResolvedValue(current as never);
 
     await service.cloneRepository({ url: 'https://github.com/preset-io/agor-failed-clone.git' }, {
       tenant: { tenant_id: 'tenant-a', source: 'explicit' },
-      user: { user_id: '550e8400-e29b-41d4-a716-446655440004' },
+      user: { user_id: '550e8400-e29b-41d4-a716-446655440004', role: 'member' },
     } as never);
     const spawnOptions = executorMocks.spawnExecutorFireAndForget.mock.calls.at(-1)?.[1] as
       | { onExit?: (code: number | null) => Promise<void> | void }
@@ -782,10 +789,11 @@ describe('ReposService.cloneRepository Git lifecycle execution', () => {
     expect(repos.get).toHaveBeenCalledWith(current.repo_id);
     expect(repos.patch).toHaveBeenCalledWith(current.repo_id, {
       clone_status: 'failed',
+      clone_generation: 1,
       clone_error: {
         exit_code: 17,
         category: 'unknown',
-        message: 'Clone exited with code 17 before reporting an error.',
+        message: 'Repository setup worker exited (17) before reporting an outcome.',
       },
     });
   });

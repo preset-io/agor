@@ -38,6 +38,36 @@ export type AuthenticatedOpenCodeSubjectContext = OpenCodeCredentialNamespace & 
   executorEnv: Record<string, string>;
 };
 
+/** The hosted (managed-projection) caller: identity plus saved-key presence, no filesystem. */
+export type ManagedOpenCodeSubject = {
+  subjectUserId: UserID;
+  /** Provider ids with a saved encrypted key for this user. */
+  savedProviderIds: Set<string>;
+};
+
+export async function resolveManagedOpenCodeSubject(
+  db: TenantScopeAwareDatabase,
+  params?: AuthenticatedParams
+): Promise<ManagedOpenCodeSubject> {
+  const callerId = params?.user?.user_id as UserID | undefined;
+  if (!callerId) throw new NotAuthenticated('Sign in before using OpenCode.');
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) throw new NotAuthenticated('Missing tenant context for OpenCode.');
+  const user = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+    if (!(await isTenantAgenticToolEnabled('opencode', tenantDb))) {
+      throw new BadRequest('OpenCode is disabled for this workspace.');
+    }
+    return new UsersRepository(tenantDb).findById(callerId);
+  });
+  if (!user) throw new NotAuthenticated('Authenticated OpenCode user no longer exists.');
+  // Presence flags only: the public DTO never carries decrypted values.
+  const presence = (user.agentic_tools?.opencode ?? {}) as Record<string, boolean | undefined>;
+  return {
+    subjectUserId: callerId,
+    savedProviderIds: new Set(Object.keys(presence).filter((providerId) => presence[providerId])),
+  };
+}
+
 /** Resolve the authenticated caller's one native OpenCode execution context. */
 export async function resolveAuthenticatedOpenCodeSubjectContext(
   db: TenantScopeAwareDatabase,

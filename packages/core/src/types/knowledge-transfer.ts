@@ -174,3 +174,73 @@ export const knowledgeTransferCheckpointSchema = z
     exported_at: z.string().datetime(),
   })
   .strict();
+
+/** Editable on-disk format; the bounded transfer HTTP protocol remains unchanged. */
+export const KNOWLEDGE_REPOSITORY = {
+  version: 2,
+  manifest: 'manifest.yaml',
+  documentFormat: 'agor-knowledge-document',
+  state: '.agor',
+  snapshot: 'snapshot',
+  baseline: '.agor/baseline.json',
+  pending: '.agor/pending.json',
+  stage: '.agor/stage',
+  lock: '.agor-lock',
+  maxFileBytes: KNOWLEDGE_TRANSFER.maxDocumentBytes + KNOWLEDGE_TRANSFER.maxManifestBytes,
+} as const;
+
+export const knowledgeRepositoryManifestSchema = z
+  .object({
+    format: z.literal(KNOWLEDGE_TRANSFER.format),
+    version: z.literal(KNOWLEDGE_REPOSITORY.version),
+    namespace: knowledgeTransferManifestSchema.shape.namespace,
+    documents: z.array(z.string().min(1).max(2048)).max(KNOWLEDGE_TRANSFER.maxDocuments),
+    omissions: knowledgeTransferManifestSchema.shape.omissions,
+  })
+  .strict();
+export type KnowledgeRepositoryManifest = z.infer<typeof knowledgeRepositoryManifestSchema>;
+
+export const knowledgeRepositoryHeaderSchema = z
+  .object({
+    format: z.literal(KNOWLEDGE_REPOSITORY.documentFormat),
+    version: z.literal(KNOWLEDGE_REPOSITORY.version),
+    agor: knowledgeTransferEntrySchema
+      .omit({ key: true, sha256: true, bytes: true, frontmatter: true, provenance: true })
+      .extend({
+        id: z
+          .string()
+          .uuid()
+          .transform((value) => value.toLowerCase()),
+      }),
+    frontmatter: jsonObject.nullable(),
+    provenance: jsonObject,
+  })
+  .strict();
+export type KnowledgeRepositoryHeader = z.infer<typeof knowledgeRepositoryHeaderSchema>;
+
+export const knowledgeRepositoryBaselineSchema = z
+  .object({
+    version: z.literal(2),
+    files: z.record(z.string(), knowledgeTransferHash),
+  })
+  .strict();
+export type KnowledgeRepositoryBaseline = z.infer<typeof knowledgeRepositoryBaselineSchema>;
+export const knowledgeRepositoryPublicationSchema = z
+  .object({
+    version: z.literal(2),
+    sourceIdentity: z.string().min(1).max(1024),
+    writes: z
+      .array(
+        z
+          .object({
+            file: z.string(),
+            before: knowledgeTransferHash.nullable(),
+            after: knowledgeTransferHash,
+          })
+          .strict()
+      )
+      .max(KNOWLEDGE_TRANSFER.maxDocuments + 1),
+    next: knowledgeRepositoryBaselineSchema,
+  })
+  .strict();
+export type KnowledgeRepositoryPublication = z.infer<typeof knowledgeRepositoryPublicationSchema>;

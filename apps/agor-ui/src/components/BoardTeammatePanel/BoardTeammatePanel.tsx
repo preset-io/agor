@@ -6,14 +6,13 @@ import type {
   Repo,
   SpawnConfig,
 } from '@agor-live/client';
-import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
+import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
+import { LeftOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
   Badge,
   Button,
   Empty,
-  Modal,
   Select,
   Skeleton,
   Space,
@@ -25,8 +24,10 @@ import {
 } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
-import { useAgorStore } from '../../store/agorStore';
+import { type AgorState, useAgorStore } from '../../store/agorStore';
+import { makeBoardPartitionSelector } from '../../store/boardPartitions';
 import {
   selectBranchById,
   selectCommentById,
@@ -34,6 +35,7 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import { selectTeammatesLoaded } from '../../store/userScope';
 import { mapToArray } from '../../utils/mapHelpers';
 import { useThemedMessage } from '../../utils/message';
 import { BranchSessionSections } from '../BranchCard';
@@ -44,23 +46,43 @@ import { BranchMetadataRow } from '../BranchMetadataRow';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { BoardPartitionError } from '../SessionCanvas/BoardPartitionStatus';
 
-export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'all-branches' | 'comments';
+export type BoardTeammatePanelTab =
+  | 'board'
+  | 'teammate'
+  | 'all-sessions'
+  | 'all-branches'
+  | 'comments';
 
 interface BoardTeammatePanelProps {
   board: Board | null;
+  /** Content of a leading "Board" tab (the mobile board view). */
+  boardTab?: React.ReactNode;
+  showBranchesTab?: boolean;
+  /** Touch-size tabs (44px, 14px labels) for the mobile board screen. */
+  touch?: boolean;
   activeTab?: BoardTeammatePanelTab;
   onTabChange?: (tab: BoardTeammatePanelTab) => void;
   primaryTeammateBranch?: Branch;
   primaryTeammateRepo?: Repo;
   primaryTeammateInaccessible: boolean;
+  /**
+   * Whether the board's partition is complete. Until it is, an absent teammate
+   * branch or empty session list means "not loaded yet", so both tabs show a
+   * skeleton instead of empty/inaccessible states. Defaults to ready.
+   */
+  boardReady?: boolean;
   currentUserId?: string;
   selectedSessionId?: string | null;
   onSessionClick: (sessionId: string) => void;
   onCreateSession?: (branchId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
-  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDelete?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   onOpenSettings?: (branchId: string, tab?: BranchModalTab) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onOpenTerminal?: (commands: string[], branchId?: string) => void;
@@ -79,6 +101,8 @@ interface BoardTeammatePanelProps {
   unreadCommentsCount?: number;
   hasUserMentions?: boolean;
   onCollapse?: () => void;
+  /** Opens teammate creation targeted at this board (it becomes the primary). */
+  onCreateTeammate?: () => void;
   deferSessionDetails?: boolean;
   onDeferredDetailsHydrated?: () => void;
   client: AgorClient | null;
@@ -86,11 +110,15 @@ interface BoardTeammatePanelProps {
 
 const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   board,
+  boardTab,
+  showBranchesTab = true,
+  touch = false,
   activeTab: controlledActiveTab,
   onTabChange,
   primaryTeammateBranch,
   primaryTeammateRepo,
   primaryTeammateInaccessible,
+  boardReady = true,
   currentUserId,
   selectedSessionId,
   onSessionClick,
@@ -109,6 +137,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   unreadCommentsCount = 0,
   hasUserMentions = false,
   onCollapse,
+  onCreateTeammate,
   deferSessionDetails = false,
   onDeferredDetailsHydrated,
   client,
@@ -119,6 +148,8 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   // this panel when its own slice changes.
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const branchById = useAgorStore(selectBranchById);
+  // The assign list is the user scope's teammates (U3): empty means none only once it lands.
+  const teammatesLoaded = useAgorStore(selectTeammatesLoaded);
   const repoById = useAgorStore(selectRepoById);
   const userById = useAgorStore(selectUserById);
   const commentById = useAgorStore(selectCommentById);
@@ -128,13 +159,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     board ?? undefined,
     currentUserId ? userById.get(currentUserId) : undefined
   );
-  const [primaryAction, setPrimaryAction] = useState<'clear' | 'replace' | null>(null);
-  const [changingPrimary, setChangingPrimary] = useState(false);
-  const primaryId = board?.primary_teammate_id;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: cancel stale confirmation when realtime designation or board identity changes.
-  useEffect(() => {
-    setPrimaryAction(null);
-  }, [board?.board_id, primaryId]);
+  // A primary whose branch or repo is not loaded yet must not be offered for replacement.
+  const canCreateTeammate =
+    canEditBoard && !!onCreateTeammate && !board?.primary_teammate_id && !primaryTeammateBranch;
   const defaultTab: BoardTeammatePanelTab = primaryTeammateInaccessible
     ? 'all-sessions'
     : 'teammate';
@@ -206,17 +233,10 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   }, [primaryTeammateBranch?.primary_owner_user_id, primaryTeammateBranch?.created_by, userById]);
 
   const teammateOptions = useMemo(() => {
+    if (primaryTeammateBranch || primaryTeammateInaccessible) return [];
+
     return Array.from(branchById.values())
-      .filter(
-        (branch) =>
-          isTeammate(branch) &&
-          !branch.archived &&
-          branch.branch_id !== primaryId &&
-          // Replacing an existing designation is atomic only for this board's
-          // teammates. Cross-board movement retains its own authorization flow;
-          // clear first to use the existing empty-board assignment workflow.
-          (!primaryId || branch.board_id === board?.board_id)
-      )
+      .filter((branch) => isTeammate(branch) && !branch.archived)
       .sort((a, b) => {
         const aConfig = getTeammateConfig(a);
         const bConfig = getTeammateConfig(b);
@@ -234,7 +254,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           repo,
         };
       });
-  }, [branchById, primaryId, board?.board_id, repoById]);
+  }, [branchById, primaryTeammateBranch, primaryTeammateInaccessible, repoById]);
   const [selectedTeammateId, setSelectedTeammateId] = useState<string | undefined>();
   const [assigningTeammate, setAssigningTeammate] = useState(false);
 
@@ -272,41 +292,66 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     }
   };
 
-  const handleChangePrimary = async () => {
-    if (!board || !client || !canEditBoard || !primaryAction || changingPrimary) return;
-    if (primaryAction === 'replace' && !selectedTeammateId) return;
-    setChangingPrimary(true);
-    try {
-      if (primaryAction === 'clear') {
-        await client.service('boards').clearPrimaryTeammate(board.board_id);
-      } else {
-        await client.service('boards').setPrimaryTeammate({
-          boardId: board.board_id,
-          branchId: selectedTeammateId!,
-        });
-      }
-      setPrimaryAction(null);
-      showSuccess(
-        primaryAction === 'clear'
-          ? 'Board primary teammate cleared'
-          : 'Board primary teammate replaced'
-      );
-    } catch (error) {
-      showError(
-        `Failed to ${primaryAction} board primary teammate: ${error instanceof Error ? error.message : String(error)}`
-      );
-    } finally {
-      setChangingPrimary(false);
+  // A primary teammate on another board: its sessions come with that board's
+  // partition, loaded in the background (the shown board stays displayed).
+  const teammateBoardId = primaryTeammateBranch?.board_id;
+  const { boardReady: teammateBoardReady, status: teammateBoardStatus } = useBoardPartition(
+    client,
+    teammateBoardId !== board?.board_id ? teammateBoardId : null,
+    {
+      canUseMemberWorkspaceServices: hasMinimumRole(
+        currentUserId ? userById.get(currentUserId)?.role : undefined,
+        ROLES.MEMBER
+      ),
+      background: true,
     }
-  };
-
+  );
   const teammateSessions = useMemo(
     () =>
       primaryTeammateBranch ? sessionsByBranch.get(primaryTeammateBranch.branch_id) || [] : [],
     [primaryTeammateBranch, sessionsByBranch]
   );
 
+  // Subscribes to the failed flag only, so other partition entry changes don't re-render the panel.
+  const boardFailed = useAgorStore(
+    useMemo(() => {
+      const selectPartition = makeBoardPartitionSelector(board?.board_id);
+      return (s: AgorState) => selectPartition(s)?.status === 'error';
+    }, [board?.board_id])
+  );
+  /** A board still loading; a failed load offers Retry instead of loading forever. */
+  const boardLoading = (failedBoardId?: string) =>
+    failedBoardId ? (
+      <BoardPartitionError
+        boardId={failedBoardId}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: token.marginXS,
+          padding: token.padding,
+        }}
+      />
+    ) : (
+      boardLoadingSkeleton
+    );
+  const boardLoadingSkeleton = (
+    <div style={{ padding: 16 }} data-testid="board-partition-skeleton">
+      <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          Loading board…
+        </Typography.Text>
+        <Skeleton active paragraph={{ rows: 4 }} title={false} />
+      </Space>
+    </div>
+  );
+
   const teammateContent = (() => {
+    // No board (or one that doesn't exist): nothing is loading.
+    if (board && !boardReady) return boardLoading(boardFailed ? board.board_id : undefined);
+    if (board && !teammateBoardReady) {
+      return boardLoading(teammateBoardStatus === 'error' ? teammateBoardId : undefined);
+    }
+
     if (primaryTeammateBranch && primaryTeammateRepo) {
       const teammateConfig = getTeammateConfig(primaryTeammateBranch);
       const teammateDescription = primaryTeammateBranch.notes?.trim();
@@ -333,11 +378,13 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               borderBottom: `1px solid ${token.colorBorderSecondary}`,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: token.marginXS, minWidth: 0 }}
+            >
               <div
                 style={{
-                  width: 36,
-                  height: 36,
+                  width: token.fontSizeHeading3,
+                  height: token.fontSizeHeading3,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -345,24 +392,28 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                 }}
               >
                 {isCreating ? (
-                  <Spin />
+                  <Spin size="small" />
                 ) : teammateConfig?.emoji ? (
-                  <span style={{ fontSize: 30 }}>{teammateConfig.emoji}</span>
+                  <span style={{ fontSize: token.fontSizeHeading3, lineHeight: 1 }}>
+                    {teammateConfig.emoji}
+                  </span>
                 ) : (
-                  <RobotOutlined style={{ fontSize: 30, color: token.colorInfo }} />
+                  <RobotOutlined
+                    style={{ fontSize: token.fontSizeHeading3, color: token.colorInfo }}
+                  />
                 )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 <Typography.Title
-                  level={4}
-                  style={{ margin: 0, fontWeight: 600 }}
+                  level={5}
+                  style={{ margin: 0 }}
                   ellipsis={{
                     tooltip: teammateConfig?.displayName ?? primaryTeammateBranch.name,
                   }}
                 >
                   {teammateConfig?.displayName ?? primaryTeammateBranch.name}
                 </Typography.Title>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                   Primary teammate
                 </Typography.Text>
               </div>
@@ -454,10 +505,18 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             </Typography.Text>
           }
           style={{ padding: '24px 0 16px' }}
-        />
-        {canEditBoard && (
+        >
+          {canCreateTeammate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={onCreateTeammate}>
+              Create AI teammate
+            </Button>
+          )}
+        </Empty>
+        {canEditBoard && (!canCreateTeammate || teammateOptions.length > 0) && (
           <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-            <Typography.Text strong>Assign an existing teammate</Typography.Text>
+            <Typography.Text strong>
+              {canCreateTeammate ? 'Or assign an existing teammate' : 'Assign an existing teammate'}
+            </Typography.Text>
             <Select
               showSearch
               aria-label="Select a teammate"
@@ -467,15 +526,16 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               options={teammateOptions}
               optionFilterProp="searchText"
               disabled={assigningTeammate || teammateOptions.length === 0}
+              loading={!teammatesLoaded}
               style={{ width: '100%' }}
             />
-            {teammateOptions.length === 0 && (
+            {teammateOptions.length === 0 && teammatesLoaded && (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 No existing teammates are available to assign.
               </Typography.Text>
             )}
             <Button
-              type="primary"
+              type={canCreateTeammate ? 'default' : 'primary'}
               onClick={handleAssignTeammate}
               loading={assigningTeammate}
               disabled={!selectedTeammateId || !board || !client}
@@ -493,100 +553,28 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       style={{
         height: '100%',
         background: token.colorBgContainer,
-        borderRight: `1px solid ${token.colorBorderSecondary}`,
+        borderRight: touch ? undefined : `1px solid ${token.colorBorderSecondary}`,
         overflow: 'hidden',
       }}
     >
-      <Modal
-        open={canEditBoard && primaryAction !== null}
-        title={
-          primaryAction === 'clear'
-            ? 'Clear board primary teammate?'
-            : 'Replace board primary teammate'
-        }
-        okText={primaryAction === 'clear' ? 'Clear primary' : 'Replace primary'}
-        onOk={handleChangePrimary}
-        onCancel={() => {
-          if (!changingPrimary) setPrimaryAction(null);
-        }}
-        confirmLoading={changingPrimary}
-        cancelButtonProps={{ disabled: changingPrimary }}
-        okButtonProps={{
-          disabled: changingPrimary || (primaryAction === 'replace' && !selectedTeammateId),
-        }}
-        closable={!changingPrimary}
-        mask={{ closable: !changingPrimary }}
-        keyboard={!changingPrimary}
-        destroyOnHidden
-      >
-        <Typography.Paragraph>
-          This changes only the board's primary designation. It does not retire the teammate or
-          change personal primary assistants.
-        </Typography.Paragraph>
-        {primaryAction === 'replace' && (
-          <Space orientation="vertical" style={{ width: '100%' }}>
-            <Select
-              aria-label="Replacement teammate"
-              placeholder="Select a replacement"
-              showSearch
-              optionFilterProp="searchText"
-              options={teammateOptions}
-              value={selectedTeammateId}
-              onChange={setSelectedTeammateId}
-              disabled={changingPrimary || teammateOptions.length === 0}
-              style={{ width: '100%' }}
-            />
-            <Typography.Text type="secondary">
-              Choose a teammate on this board. To move one from another board, clear the primary
-              first, then assign it.
-            </Typography.Text>
-          </Space>
-        )}
-      </Modal>
       <Tabs
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as BoardTeammatePanelTab)}
         items={[
+          ...(boardTab ? [{ key: 'board', label: 'Board', children: boardTab }] : []),
           {
             key: 'teammate',
             label: 'Teammate',
-            children: (
-              <div
-                style={{
-                  height: '100%',
-                  overflow: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                }}
-              >
-                {primaryId && canEditBoard && (
-                  <Space wrap style={{ padding: token.paddingSM, flexShrink: 0 }}>
-                    <Button
-                      size="small"
-                      onClick={() => setPrimaryAction('replace')}
-                      disabled={changingPrimary}
-                    >
-                      Replace primary teammate
-                    </Button>
-                    <Button
-                      size="small"
-                      onClick={() => setPrimaryAction('clear')}
-                      disabled={changingPrimary}
-                    >
-                      Clear primary teammate
-                    </Button>
-                  </Space>
-                )}
-                <div style={{ flex: 1, minHeight: 0 }}>{teammateContent}</div>
-              </div>
-            ),
+            children: <div style={{ height: '100%', overflow: 'auto' }}>{teammateContent}</div>,
           },
           {
             key: 'all-sessions',
             label: 'Sessions',
             children: board ? (
-              <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
-                {sessionDetailsHydrated ? (
+              <div style={{ height: '100%', overflow: 'auto' }}>
+                {!boardReady ? (
+                  boardLoading(boardFailed ? board.board_id : undefined)
+                ) : sessionDetailsHydrated ? (
                   <BoardSessionList
                     board={board}
                     currentBoardId={board.board_id}
@@ -609,7 +597,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             key: 'all-branches',
             label: 'Branches',
             children: board ? (
-              <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
+              <div style={{ height: '100%', overflow: 'auto' }}>
                 {sessionDetailsHydrated ? (
                   <BoardBranchList board={board} repoById={repoById} client={client} />
                 ) : (
@@ -625,19 +613,35 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           {
             key: 'comments',
             label: (
-              <Badge
-                count={unreadCommentsCount}
-                size="small"
-                offset={[8, 0]}
-                style={{
-                  backgroundColor: hasUserMentions ? token.colorError : token.colorPrimaryBgHover,
-                }}
-              >
-                <span>Comments</span>
-              </Badge>
+              <span style={{ display: 'inline-flex', alignItems: 'flex-start' }}>
+                Comments
+                {/* In-flow (so the tab measures it and the scrolling list never clips it),
+                    raised into the tab's top padding and tucked over the label's end. */}
+                <Badge
+                  count={unreadCommentsCount}
+                  size="small"
+                  styles={{
+                    root: {
+                      position: 'relative',
+                      top: -token.paddingXS,
+                      // An empty badge still has a root; do not subtract from
+                      // the measured label width after the unread count clears.
+                      // Touch tabs have room (no Branches tab), so the badge clears the label.
+                      marginInlineStart:
+                        unreadCommentsCount > 0 ? (touch ? token.marginXXS : -token.marginXS) : 0,
+                    },
+                    indicator: {
+                      paddingInline: token.paddingXXS,
+                      backgroundColor: hasUserMentions
+                        ? token.colorError
+                        : token.colorPrimaryBgHover,
+                    },
+                  }}
+                />
+              </span>
             ),
             children: board ? (
-              <div style={{ height: 'calc(100vh - 112px)' }}>
+              <div style={{ height: '100%' }}>
                 <CommentsPanel
                   client={client}
                   boardId={board.board_id}
@@ -659,23 +663,37 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No board selected" />
             ),
           },
-        ]}
+        ].filter((item) => showBranchesTab || item.key !== 'all-branches')}
+        rootClassName="agor-panel-tabs"
+        tabBarGutter={token.marginSM}
         style={{ height: '100%' }}
-        styles={{ body: { height: '100%' }, content: { height: '100%' } }}
-        tabBarStyle={{ margin: 0, padding: '0 12px' }}
+        styles={{
+          body: { height: '100%' },
+          content: { height: '100%' },
+          item: touch
+            ? { fontSize: token.fontSize, padding: `${token.paddingSM}px 0` }
+            : { fontSize: token.fontSizeSM, padding: `${token.paddingXS}px 0` },
+        }}
+        tabBarStyle={{ margin: 0 }}
+        // Insets live in the extra slots, not tab-bar padding: rc-tabs measures the bar
+        // minus its extras, so padding would hide overflow from its scroll/fade logic.
         tabBarExtraContent={{
-          right: onCollapse ? (
-            <Tooltip title="Collapse panel" placement="bottom">
-              <Button
-                type="text"
-                size="small"
-                aria-label="Collapse panel"
-                icon={<LeftOutlined style={{ fontSize: 11 }} />}
-                onClick={onCollapse}
-                style={{ marginRight: 4 }}
-              />
-            </Tooltip>
-          ) : undefined,
+          left: <div style={{ width: token.padding }} />,
+          right: (
+            <div style={{ paddingInlineEnd: token.paddingXXS }}>
+              {onCollapse && (
+                <Tooltip title="Collapse panel" placement="bottom">
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label="Collapse panel"
+                    icon={<LeftOutlined style={{ fontSize: 11 }} />}
+                    onClick={onCollapse}
+                  />
+                </Tooltip>
+              )}
+            </div>
+          ),
         }}
       />
     </div>

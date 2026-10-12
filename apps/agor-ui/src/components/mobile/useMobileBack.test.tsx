@@ -1,6 +1,14 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { useEffect } from 'react';
+import {
+  BrowserRouter,
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom';
+import { afterEach, describe, expect, it } from 'vitest';
 import { useMobileBack } from './useMobileBack';
 
 function Detail() {
@@ -45,5 +53,40 @@ describe('useMobileBack', () => {
     renderAt('/m/search');
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(screen.getByText('home')).toBeInTheDocument();
+  });
+});
+
+function RedirectedPage() {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const goBack = useMobileBack('/m');
+  // A redirect like the device router's: it replaces the deep-linked entry, giving it a new key.
+  useEffect(() => {
+    if (pathname === '/teammates') navigate('/m/teammates', { replace: true });
+  }, [navigate, pathname]);
+  return (
+    <>
+      <span data-testid="path">{pathname}</span>
+      <button type="button" onClick={goBack}>
+        Back
+      </button>
+    </>
+  );
+}
+
+describe('useMobileBack with the browser router', () => {
+  afterEach(() => window.history.replaceState(null, '', '/'));
+
+  it('goes to the fallback after a redirected deep link instead of leaving the app', async () => {
+    window.history.replaceState(null, '', '/teammates');
+    render(
+      <BrowserRouter>
+        <RedirectedPage />
+      </BrowserRouter>
+    );
+    expect(screen.getByTestId('path')).toHaveTextContent('/m/teammates');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Back' })));
+    expect(screen.getByTestId('path')).toHaveTextContent('/m');
+    expect(window.location.pathname).toBe('/m');
   });
 });

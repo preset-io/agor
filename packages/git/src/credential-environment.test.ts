@@ -10,9 +10,11 @@ import {
   createBranch,
   createGit,
   filterUserGitEnvironment,
+  resolveContainedRepoPath,
   scrubGitConfigRemoteCredentials,
   simpleGit,
 } from './index';
+import { assertNetworkGitRemoteUrl } from './pure';
 
 const cleanup: string[] = [];
 
@@ -158,6 +160,7 @@ describe('buildAuthenticatedGitTransportEnvironment', () => {
     );
     const git = simpleGit({
       baseDir: root,
+      allowEnvironment: Object.keys(env),
       unsafe: {
         allowUnsafeConfigPaths: true,
         allowUnsafeConfigEnvCount: true,
@@ -336,6 +339,77 @@ describe('assertSafeGitRemoteUrl', () => {
       'https://forge.example/repo.git\n--upload-pack=capture',
     ]) {
       expect(() => assertSafeGitRemoteUrl(candidate)).toThrow(/Git remote/i);
+    }
+  });
+});
+
+describe('assertNetworkGitRemoteUrl', () => {
+  it('accepts network transports and rejects every local filesystem form', () => {
+    for (const url of [
+      'https://forge.example/org/repo.git',
+      'ssh://git@forge.example/org/repo.git',
+      'git://forge.example/org/repo.git',
+      'git@forge.example:org/repo.git',
+    ]) {
+      expect(assertNetworkGitRemoteUrl(url)).toBe(url);
+    }
+
+    for (const url of [
+      'file:///home/agor/.agor/tenants/victim/repos/acme/private',
+      'FILE:///srv/repo.git',
+      '/home/agor/.agor/tenants/victim/repos/acme/private',
+      './relative/repository',
+      'fd::17',
+      'ext::sh -c capture',
+    ]) {
+      expect(() => assertNetworkGitRemoteUrl(url)).toThrow(/Git remote/i);
+    }
+  });
+});
+
+describe('resolveContainedRepoPath', () => {
+  async function tenantRoots() {
+    const base = mkdtempSync(join(tmpdir(), 'agor-tenant-roots-'));
+    cleanup.push(base);
+    const attacker = join(base, 'attacker', 'repos');
+    const victimRepo = join(base, 'victim', 'repos', 'acme', 'private');
+    await mkdir(join(attacker, 'org', 'repo'), { recursive: true });
+    await mkdir(victimRepo, { recursive: true });
+    return { attacker, victimRepo };
+  }
+
+  it('accepts a root reached through a symlinked data home', async () => {
+    const { attacker } = await tenantRoots();
+    const alias = `${attacker}-alias`;
+    await symlink(attacker, alias);
+    cleanup.push(alias);
+
+    await expect(resolveContainedRepoPath(join(attacker, 'org', 'repo'), alias)).resolves.toMatch(
+      /attacker\/repos\/org\/repo$/
+    );
+  });
+
+  it('returns the canonical path for a repository inside the tenant root', async () => {
+    const { attacker } = await tenantRoots();
+    await expect(
+      resolveContainedRepoPath(join(attacker, 'org', 'repo'), attacker)
+    ).resolves.toMatch(/attacker\/repos\/org\/repo$/);
+  });
+
+  it("rejects another tenant's repository, traversal, the root itself, and symlink escapes", async () => {
+    const { attacker, victimRepo } = await tenantRoots();
+    await symlink(victimRepo, join(attacker, 'org', 'alias'));
+
+    for (const candidate of [
+      victimRepo,
+      join(attacker, '..', '..', 'victim', 'repos', 'acme', 'private'),
+      attacker,
+      join(attacker, 'org', 'alias'),
+      'org/repo',
+    ]) {
+      await expect(resolveContainedRepoPath(candidate, attacker)).rejects.toThrow(
+        /outside the managed repositories root/
+      );
     }
   });
 });

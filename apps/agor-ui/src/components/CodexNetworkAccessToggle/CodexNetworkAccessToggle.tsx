@@ -28,6 +28,7 @@ export const CodexNetworkAccessToggle: React.FC<CodexNetworkAccessToggleProps> =
     <Space orientation="vertical" style={{ width: '100%' }}>
       <Space>
         <Switch
+          aria-label="Enable Network Access"
           checked={isEnabled}
           onChange={onChange}
           checkedChildren={<GlobalOutlined />}

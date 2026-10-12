@@ -1,7 +1,7 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: exact color inputs and emitted alpha values are the helper contract
 import { theme } from 'antd';
 import { describe, expect, it } from 'vitest';
-import { glassCardStyle, glassSurfaceStyle, withAlpha } from './glassStyles';
+import { glassCardStyle, glassSurfaceStyle, pageGlassPanelProps, withAlpha } from './glassStyles';
 
 describe('shared glass styles', () => {
   it('applies alpha to hex and rgb theme colors', () => {
@@ -24,5 +24,14 @@ describe('shared glass styles', () => {
 
     expect(style.background).toBe(withAlpha(token.colorBgContainer, 0.82));
     expect(style.boxShadow).toContain('inset 0 1px 0');
+  });
+
+  it('gives page cards a denser, edged fill only on light themes', () => {
+    const light = pageGlassPanelProps(theme.getDesignToken());
+    const dark = pageGlassPanelProps(theme.getDesignToken({ algorithm: theme.darkAlgorithm }));
+
+    expect(light.surfaceAlpha).toBeGreaterThan(dark.surfaceAlpha);
+    expect(light.style?.border).toBeTruthy();
+    expect(dark.style).toBeUndefined();
   });
 });

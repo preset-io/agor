@@ -1,4 +1,8 @@
-import { MigrationError, OfflineMigrationCutoverRequiredError } from '@agor/core/db';
+import {
+  MigrationError,
+  OfflineMigrationCutoverRequiredError,
+  OWNER_ATTRIBUTION_SQLSTATE,
+} from '@agor/core/db';
 import { describe, expect, it } from 'vitest';
 import {
   databaseBackupGuidance,
@@ -96,6 +100,21 @@ describe('db migrate presentation', () => {
       expect(output).not.toContain(sensitive);
       expect(output).not.toContain(encodeURIComponent(sensitive));
     }
+  });
+
+  it('gives bounded ownership recovery guidance without printing driver IDs, hints, or SQL', () => {
+    const message = migrationFailureMessage(
+      new MigrationError('Migration failed', {
+        code: OWNER_ATTRIBUTION_SQLSTATE,
+        message: databaseUrl,
+        hint: databaseUrl,
+        query: databaseUrl,
+      })
+    );
+    expect(message).toContain('same-tenant Admin/Superadmin');
+    expect(message).toContain('board_owners/branch_owners');
+    expect(message).toContain('zero-user tenant');
+    expectSecretSafe(message);
   });
 
   it('retains only explicitly recognized actionable migration failures', () => {

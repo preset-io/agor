@@ -201,11 +201,13 @@ async function fillDiscordWizard({
   allowedUserId,
   allowedRoleId,
   files = false,
+  directMessages = false,
   channelHistory = false,
 }: {
   allowedUserId?: string;
   allowedRoleId?: string;
   files?: boolean;
+  directMessages?: boolean;
   channelHistory?: boolean;
 }) {
   clickButton(/Add Channel/);
@@ -233,12 +235,13 @@ async function fillDiscordWizard({
   clickButton(/^Continue$/);
   await waitForStep('Access');
 
-  expect(screen.getByLabelText('Allowed public text channel IDs')).toBeInTheDocument();
+  expect(screen.getByLabelText('Allowed public channel IDs')).toBeInTheDocument();
   expect(screen.getByLabelText('Application ID')).not.toBeVisible();
-  if (files) fireEvent.click(screen.getByLabelText(/Enable inbound PNG\/JPEG image attachments/));
+  if (directMessages) fireEvent.click(screen.getByLabelText('Direct messages'));
+  if (files) fireEvent.click(screen.getByLabelText(/Enable inbound image and text attachments/));
   if (channelHistory)
     fireEvent.click(screen.getByLabelText(/Let session agents read channel history/));
-  addTag('Allowed public text channel IDs', CHANNEL_ID);
+  addTag('Allowed public channel IDs', CHANNEL_ID);
   if (allowedUserId) addTag('Allowed user IDs', allowedUserId);
   if (allowedRoleId) addTag('Allowed role IDs', allowedRoleId);
   fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
@@ -272,6 +275,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
         allowed_channel_ids: [CHANNEL_ID],
         allowed_user_ids: [USER_ID],
         allowed_role_ids: [],
+        direct_messages_enabled: false,
       },
     });
     expect(channelCreate.mock.calls[0][0].config.bot_token).toBeUndefined();
@@ -291,6 +295,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
       allowedUserId: USER_ID,
       allowedRoleId: ROLE_ID,
       files: true,
+      directMessages: true,
       channelHistory: true,
     });
     await createDraft(channelCreate);
@@ -320,6 +325,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
           rate_limit_max_total_delay_ms: 10000,
         },
         files: true,
+        direct_messages_enabled: true,
         agent_tools: { channel_history: true },
       },
     });
@@ -373,6 +379,7 @@ describe('GatewayChannelsTable Discord edit', () => {
       thread_auto_archive_minutes: 1440,
       align_discord_users: false,
       files: false,
+      direct_messages_enabled: true,
       agent_tools: { channel_history: true },
       outbound_enabled: false,
       default_outbound_target: null,
@@ -387,6 +394,7 @@ describe('GatewayChannelsTable Discord edit', () => {
     fireEvent.click(screen.getByTitle('Edit'));
     const checkbox = await screen.findByLabelText(/Let session agents read channel history/);
     const checked = (checkbox as HTMLInputElement).checked;
+    expect(await screen.findByLabelText('Direct messages')).toHaveAttribute('aria-checked', 'true');
     clickButton(/^Save$/);
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1), ASYNC);
     return { checked, updates: onUpdate.mock.calls[0]![1] as { config: Record<string, unknown> } };
@@ -396,6 +404,7 @@ describe('GatewayChannelsTable Discord edit', () => {
     const { checked, updates } = await saveEdit(storedChannel);
     expect(checked).toBe(true);
     expect(updates.config.agent_tools).toEqual({ channel_history: true });
+    expect(updates.config.direct_messages_enabled).toBe(true);
   }, 30_000);
 
   it('shows a legacy agent_tools:[] row as off', async () => {

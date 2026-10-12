@@ -12,6 +12,8 @@ export default defineConfig({
     alias: {
       '@agor/core/client': path.join(coreSrc, 'client/index.ts'),
       '@agor/core/config/agor-home': path.join(coreSrc, 'config/agor-home.ts'),
+      // Tests only: the real durable Task-ID generators (callback IDs).
+      '@agor/core/ids': path.join(coreSrc, 'lib/ids.ts'),
     },
   },
   test: {

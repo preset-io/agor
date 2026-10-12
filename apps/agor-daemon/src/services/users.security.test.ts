@@ -8,10 +8,11 @@
  */
 
 import type { AgorConfig } from '@agor/core/config';
-import { AgenticToolPresetRepository } from '@agor/core/db';
+import { AgenticToolPresetRepository, runWithTenantDatabaseScope } from '@agor/core/db';
 import type { AuthenticatedParams, Params, UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { markTrustedUserMutation } from './user-mutation-trust';
 import { markLocalAuthenticationLookup, UsersService } from './users';
 
 const externalIdentityConfig: AgorConfig = {
@@ -289,6 +290,78 @@ describe('UsersService — external identity authority', () => {
     ).resolves.toMatchObject({ preferences: { theme: 'dark' } });
   });
 
+  dbTest(
+    'permits owned avatar writes without unlocking Cloud identity fields or other users',
+    async ({ db }) =>
+      runWithTenantDatabaseScope(db, 'default', async (scoped) => {
+        const local = new UsersService(scoped);
+        const id = await makeUser(local);
+        const otherId = await makeUser(local);
+        const user = await local.get(id);
+        const external = new UsersService(scoped, undefined, {
+          ...externalIdentityConfig,
+          identity: { ...externalIdentityConfig.identity, avatar_authority: 'internal' },
+        });
+        const params = { provider: 'rest', user } as AuthenticatedParams;
+        await expect(
+          external.patch(id, { avatar_url: 'https://example.test/manual.png' }, params)
+        ).resolves.toMatchObject({ avatar_source: 'manual' });
+        for (const patch of [
+          { email: 'changed@example.test' },
+          { name: 'Changed' },
+          { role: 'admin' as const },
+          { unix_username: 'changed-home' },
+          { password: 'changed-password-1234' },
+        ]) {
+          await expect(
+            external.patch(
+              id,
+              { ...patch, avatar_url: 'https://example.test/forbidden.png' },
+              params
+            )
+          ).rejects.toMatchObject({ code: 403 });
+          expect((await external.get(id)).avatar_url).toBe('https://example.test/manual.png');
+        }
+        await expect(
+          external.create(
+            { email: 'no-local-account@example.test', password: 'fixture-password-1234' },
+            params
+          )
+        ).rejects.toMatchObject({ code: 403 });
+        await expect(external.remove(id, params)).rejects.toMatchObject({ code: 403 });
+        await expect(
+          external.patch(otherId, { avatar_url: 'https://example.test/forbidden.png' }, params)
+        ).rejects.toMatchObject({ code: 403 });
+        expect((await external.get(otherId)).avatar_url).toBeUndefined();
+        await expect(external.patch(id, { avatar_url: null }, params)).resolves.toMatchObject({
+          avatar_url: undefined,
+          avatar_source: undefined,
+        });
+      })
+  );
+
+  dbTest('keeps every avatar field gated even for trusted Slack mutations', async ({ db }) =>
+    runWithTenantDatabaseScope(db, 'default', async (scoped) => {
+      const local = new UsersService(scoped);
+      const id = await makeUser(local);
+      const external = new UsersService(scoped, undefined, externalIdentityConfig);
+      const params = {} as Params;
+      markTrustedUserMutation(params, 'avatar-sync');
+      for (const field of [
+        'avatar_url',
+        'avatar',
+        'avatar_source',
+        'avatar_source_id',
+        'avatar_synced_at',
+      ] as const) {
+        await expect(external.patch(id, { [field]: null }, params)).rejects.toMatchObject({
+          code: 403,
+          data: { capability: 'users.avatar.write' },
+        });
+      }
+    })
+  );
+
   dbTest('disables local password lookup and avatar mutation surfaces', async ({ db }) => {
     const external = new UsersService(db, undefined, externalIdentityConfig);
     const params = { provider: 'rest', query: { email: 'person@test.local' } } as Params;
@@ -306,6 +379,7 @@ describe('UsersService — external identity authority', () => {
       code: 403,
       data: { capability: 'users.avatar-settings.write' },
     });
+    await expect(external.refreshAvatarFromSettings('external-user' as UserID)).resolves.toBeNull();
   });
 });
 
@@ -462,5 +536,24 @@ describe('UsersService — OpenCode defaults', () => {
       provider: 'openai',
       model: 'gpt-test',
     });
+  });
+});
+
+describe('UsersService — Codex plugin defaults', () => {
+  dbTest('stores opt-in/opt-out and rejects invalid defaults', async ({ db }) => {
+    const service = new UsersService(db);
+    const id = await makeUser(service);
+    for (const codexIncludePlugins of [true, false]) {
+      await service.patch(id, { default_agentic_config: { codex: { codexIncludePlugins } } });
+      expect((await service.get(id)).default_agentic_config?.codex?.codexIncludePlugins).toBe(
+        codexIncludePlugins
+      );
+    }
+    for (const codexIncludePlugins of ['true', 'false', 0, null]) {
+      await expect(
+        service.patch(id, { default_agentic_config: { codex: { codexIncludePlugins } } } as never)
+      ).rejects.toThrow('codexIncludePlugins must be a boolean');
+    }
+    expect((await service.get(id)).default_agentic_config?.codex?.codexIncludePlugins).toBe(false);
   });
 });

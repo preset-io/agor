@@ -232,6 +232,19 @@ describe('OpenCode event translator', () => {
     ).toEqual([{ type: 'error', message: 'provider failed' }]);
   });
 
+  it('reports provider retries with their attempt and reason', () => {
+    const events = translator([]);
+    expect(
+      events.translate({
+        type: 'session.status',
+        properties: {
+          sessionID: 'session-active',
+          status: { type: 'retry', attempt: 2, message: 'rate limited', next: 1234 },
+        },
+      })
+    ).toEqual([{ type: 'provider-retry', attempt: 2, message: 'rate limited', next: 1234 }]);
+  });
+
   it('retains unknown active-session activity without accepting foreign or unscoped events', () => {
     const events = translator();
 

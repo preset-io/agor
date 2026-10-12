@@ -6,7 +6,7 @@ import type { EffortLevel, SessionID } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenCodeCleanupUnverifiedError } from './managed-server.js';
-import { OpenCodeTool } from './opencode-tool.js';
+import { type OpenCodeRetryBudget, OpenCodeTool } from './opencode-tool.js';
 
 type AbortResponse = { data: boolean; error: undefined } | { data: undefined; error: unknown };
 
@@ -282,5 +282,138 @@ describe('OpenCodeTool prompt variants', () => {
 
     expect(request?.body).not.toHaveProperty('variant');
     expect(request?.body?.system).toContain('Agor Session Context');
+  });
+});
+
+describe('OpenCodeTool provider failures', () => {
+  async function failedTurn(events: unknown[], retryBudget?: OpenCodeRetryBudget) {
+    const stream = (async function* () {
+      for (const event of events) yield event;
+      await new Promise(() => undefined);
+    })();
+    const client = {
+      event: { subscribe: vi.fn(async () => ({ stream })) },
+      session: {
+        messages: vi.fn(async () => ({ data: [], error: undefined })),
+        // OpenCode's prompt call blocks while it retries the provider.
+        prompt: vi.fn(() => new Promise(() => undefined)),
+      },
+    };
+    const runtime = new OpenCodeTool({ retryBudget }) as unknown as {
+      executeTask(...args: unknown[]): Promise<unknown>;
+    };
+    const started = Date.now();
+    const result = runtime.executeTask(
+      client,
+      {
+        agorSessionId: 'session-1',
+        taskId: 'task-1',
+        prompt: 'hi',
+        agorAssistantMessageId: 'message-1',
+        signal: new AbortController().signal,
+        title: 'Test',
+        directory: '/workspace',
+        persistOpenCodeSessionId: vi.fn(),
+      },
+      {
+        opencodeSessionId: 'opencode-session-1',
+        provider: 'any-provider',
+        model: 'any-model',
+        branchPath: '/workspace',
+      },
+      undefined,
+      () => undefined,
+      { error: (value: unknown) => (value instanceof Error ? value : new Error(String(value))) }
+    );
+    return { result, started };
+  }
+
+  const retry = (attempt: number, message: string, nextInMs = 1_000) => ({
+    type: 'session.status',
+    properties: {
+      sessionID: 'opencode-session-1',
+      status: { type: 'retry', attempt, message, next: Date.now() + nextInMs },
+    },
+  });
+
+  it('fails fast with the provider reason once the retry budget is spent', async () => {
+    const { result, started } = await failedTurn([
+      retry(1, 'Insufficient balance'),
+      retry(2, 'Insufficient balance'),
+      retry(3, 'Insufficient balance'),
+    ]);
+    await expect(result).rejects.toThrow(
+      'OpenCode prompt failed for any-provider/any-model: gave up after 3 provider retries: Insufficient balance'
+    );
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('fails after the wait budget when no further retry event arrives', async () => {
+    const { result, started } = await failedTurn([retry(1, 'Insufficient balance', 10)], {
+      maxRetries: 2,
+      maxWaitMs: 100,
+    });
+    await expect(result).rejects.toThrow(
+      'OpenCode prompt failed for any-provider/any-model: gave up after 0.1s of provider retries: Insufficient balance'
+    );
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('stops the wait budget once the model produces output after a retry', async () => {
+    const { result } = await failedTurn(
+      [
+        retry(1, 'overloaded', 10),
+        {
+          type: 'message.updated',
+          properties: { info: { id: 'a-1', sessionID: 'opencode-session-1', role: 'assistant' } },
+        },
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: 'p-1',
+              sessionID: 'opencode-session-1',
+              messageID: 'a-1',
+              type: 'text',
+              text: '',
+            },
+          },
+        },
+        {
+          type: 'message.part.delta',
+          properties: {
+            sessionID: 'opencode-session-1',
+            messageID: 'a-1',
+            partID: 'p-1',
+            field: 'text',
+            delta: 'Hi',
+          },
+        },
+      ],
+      { maxRetries: 2, maxWaitMs: 100 }
+    );
+    const outcome = await Promise.race([
+      result.then(
+        () => 'resolved',
+        (error: Error) => error.message
+      ),
+      new Promise((resolve) => setTimeout(() => resolve('still running'), 400)),
+    ]);
+    expect(outcome).toBe('still running');
+  });
+
+  it('surfaces the provider error message instead of a generic reconnect hint', async () => {
+    const { result } = await failedTurn([
+      {
+        type: 'session.error',
+        properties: {
+          sessionID: 'opencode-session-1',
+          error: { name: 'APIError', data: { message: 'model not found', statusCode: 404 } },
+        },
+      },
+    ]);
+    await expect(result).rejects.toThrow(
+      'OpenCode prompt failed for any-provider/any-model: model not found'
+    );
   });
 });

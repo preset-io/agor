@@ -73,6 +73,7 @@ type ReferencedScheduleAgenticToolConfig = (
   codex_sandbox_mode?: never;
   codex_approval_policy?: never;
   codex_network_access?: never;
+  codex_include_plugins?: never;
 };
 
 type InlineScheduleAgenticToolConfig = {
@@ -100,6 +101,7 @@ type InlineScheduleAgenticToolConfig = {
 
   /** Codex-specific: network access (outbound HTTP/HTTPS). */
   codex_network_access?: boolean;
+  codex_include_plugins?: boolean;
 };
 
 export type ScheduleAgenticToolConfig = ScheduleAgenticToolConfigBase &
@@ -123,6 +125,7 @@ export type PersistedScheduleAgenticToolConfig = {
   codex_sandbox_mode?: CodexSandboxMode;
   codex_approval_policy?: CodexApprovalPolicy;
   codex_network_access?: boolean;
+  codex_include_plugins?: boolean;
 };
 
 /** Narrow a storage-facing configuration before using it at a current runtime/write boundary. */
@@ -142,8 +145,6 @@ export function isActiveScheduleAgenticToolConfig(
  * Replaces the four `branches.schedule_*` columns and the
  * `branches.data.schedule` jsonb blob that existed pre-#1253.
  * Runs are sessions, linked back via `sessions.schedule_id`.
- *
- * See `docs/internal/schedules-first-class-design-2026-05-24.md`.
  */
 export interface Schedule {
   // ===== Identity =====

@@ -237,7 +237,7 @@ jobs:
             --no-fund --no-audit "$CLIENT" "$LIVE"
           npm install -g --prefix "$ROOT/prefix" --cache "$ROOT/cache" \
             --no-fund --no-audit --ignore-scripts \
-            hot-shots@17.1.0
+            hot-shots@17.1.1
           PACKAGE_ROOT="$ROOT/prefix/lib/node_modules/agor-live"
           test -d "$ROOT/prefix/lib/node_modules/hot-shots"
           node --input-type=module - "$PACKAGE_ROOT" <<'NODE'

@@ -112,10 +112,32 @@ environment:
         --binding {{shellQuote branch.id}}
       app: https://railway.com
       description: >-
-        EXPERIMENTAL, opt-in Railway SQLite preview. Requires an explicitly adopted
-        branch binding and the caller's secure Railway project token/admin password.
-        Stop retains data; Nuke replaces the owned volume and requires RAILWAY_API_TOKEN.
-        Public app with Agor authentication. Single trusted operator, not Cloud/HA.
+        Opt-in branch-local Railway preview launcher. Requires RAILWAY_AGOR_PROJECT_ID,
+        RAILWAY_API_TOKEN and RAILWAY_AGOR_ADMIN_PASSWORD in secure Global variables. No dependency installation. Start ensures the preview is up.
+        Stop retains data and storage charges; Nuke permanently deletes the owned preview.
+    railway-docs:
+      extends: railway-sqlite
+      start: >-
+        node scripts/managed-environments/railway/launcher.mjs start --profile docs
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      stop: >-
+        node scripts/managed-environments/railway/launcher.mjs stop --profile docs
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      logs: >-
+        node scripts/managed-environments/railway/launcher.mjs logs --profile docs
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      nuke: >-
+        node scripts/managed-environments/railway/launcher.mjs nuke --profile docs
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      description: >-
+        Public docs-only Railway dev preview, following the pushed branch every 10 seconds.
+        Requires secure RAILWAY_AGOR_PROJECT_ID and RAILWAY_API_TOKEN; no admin password.
+        Separate from railway-sqlite; Stop retains the checkout cache and storage charges,
+        Nuke deletes only this docs preview. Push dependency/startup changes, then Stop/Start.
     codespaces-sqlite:
       start: >-
         node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs start

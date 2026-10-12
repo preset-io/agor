@@ -32,14 +32,53 @@ _A coordinator session fanned out to eight parallel security-review children, ea
 Long user and assistant messages in older turns start collapsed, with **show more**
 to reveal the full text. The latest whole turn and live turns stay expanded; a new
 turn never automatically collapses text you were already reading. Your explicit
-**show more / show less** choices last while that conversation is mounted, including
-reconnects and tool-detail loading. Reopening it applies the history defaults again.
+**show more / show less** choices last while that turn stays loaded, including
+reconnects and tool-detail loading. A turn loaded again after it was unloaded, or a
+reopened conversation, starts from the history defaults.
 
 Collapsed messages show a shortened preview. Expand the message to use code or
 table export controls. The message copy action still copies the full source;
 collapsing is a display preference, not a reduction in saved content.
 
+An open conversation keeps tool output and reasoning in memory for the ten most
+recently loaded or live turns, plus the latest turn, running turns, any tool or
+reasoning section you have expanded, and any turn holding keyboard focus, part of a text
+selection, or an open fullscreen table or diagram. Older turns keep their text; opening their tool
+calls again reloads the details from saved history. The limit counts turns, not
+bytes, so one very large turn can still use a lot of memory.
+
 ---
+
+## Interrupted tasks and lost contact
+
+If the agent loses contact, Agor shows **Connection interrupted — recovering…**.
+You do not need to press Stop again. Messages already received stay in the
+conversation, and queued prompts wait while Agor checks that the previous work
+has stopped. Once recovery succeeds, the interrupted turn is marked failed and
+you can **Continue conversation**. A turn you explicitly stopped is marked stopped.
+
+If Agor cannot confirm shutdown, the notice changes to **Cleanup needs attention**.
+Automatic cleanup is attempted once, not retried indefinitely. Choose **Retry
+cleanup** to try again. A lost connection does not necessarily mean the previous
+work stopped; Agor keeps the session blocked to avoid overlapping execution.
+
+As a last resort, a branch owner or administrator can choose **Reopen anyway…**
+and acknowledge the risk by typing `STOP`. This reopens the conversation but
+**does not stop the previous work**. It may still change files or run commands,
+and queued prompts may start. Ask for support if cleanup keeps failing rather
+than routinely bypassing this protection. The conversation records that cleanup
+was not confirmed; technical diagnostics are available under **Technical details**.
+
+Local execution uses Agor's existing process-group cleanup. Remote deployments
+need an operator-configured [cleanup command](./containerized-execution#remote-execution-cleanup)
+for automatic recovery after the executor dies. Without one, Agor can still
+recover when the agent confirms that its work stopped, but cannot independently
+confirm remote death. Some agents (Codex today) cannot confirm their own shutdown,
+so remote recovery for them requires the cleanup command.
+
+Catchable termination signals allow bounded, best-effort cleanup and reporting.
+Abrupt kills and host failures do not. Unsaved output or uploads cannot be
+guaranteed when the daemon is unavailable.
 
 ## Three ways to branch
 
@@ -370,7 +409,15 @@ without creating a session, avoiding repeated retries while their configuration 
 ## Conversation history
 
 Conversations open with the latest ten turns, showing user and assistant messages.
-Scroll up or select **Load older history** to read earlier turns.
+Scroll up or select **Load older history** to read earlier turns. While you stay at the
+latest turn, the conversation normally keeps the latest 30 turns loaded: older turns are
+unloaded and return through **Load older history**. Turns still running, awaiting an
+approval or answer, or open in an expanded section stay loaded, along with everything
+after them. Nothing is unloaded while you are scrolled up; after you return to the
+latest turn, older turns are unloaded by the time the next turn arrives. Unloaded turns forget
+their **show more / show less** choices. After a reconnect that missed
+more than 30 turns, the conversation loads the latest 30, plus any such turn and everything
+after it.
 
 Expand **Tool calls** to load a turn's recorded tool activity. Tool groups are
 collapsed by default; inside an open group, file edits show their diffs. Expand
@@ -382,8 +429,8 @@ and token usage. On touch screens, tap the prompt to toggle the metadata; press
 Escape to dismiss it. Stopped and failed turns show a notice below their content,
 with an error explanation when available.
 
-Search covers loaded history only. Load earlier turns to include them in search;
-tool details become searchable after expansion.
+Search covers loaded history only. Load earlier turns, including unloaded ones, to include
+them in search; tool details become searchable after expansion.
 
 ## Related
 

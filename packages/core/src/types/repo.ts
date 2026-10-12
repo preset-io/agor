@@ -138,6 +138,9 @@ export interface Repo {
    */
   clone_status?: RepoCloneStatus;
 
+  /** Monotonic clone attempt generation; terminal reports must echo it. Not filesystem readiness. */
+  clone_generation?: number;
+
   /**
    * Populated when `clone_status === 'failed'`. Cleared on retry.
    *

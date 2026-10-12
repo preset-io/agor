@@ -38,7 +38,7 @@ export function buildGeminiMcpServerConfig<T>(
     options.headers,
     undefined, // tcp
     undefined, // type
-    undefined, // timeout
+    undefined, // timeout: also bounds every tool call, so it stays at the SDK default (10 min)
     undefined, // trust
     undefined, // description
     undefined, // includeTools

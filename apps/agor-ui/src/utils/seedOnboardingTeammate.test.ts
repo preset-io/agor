@@ -2,14 +2,18 @@ import type { Branch, Repo, Session, UserID } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FRAMEWORK_REPO_SLUG, findFrameworkRepo } from '../hooks/useFrameworkRepo';
 import { ONBOARDING_INTEGRATION_RECOMMENDATIONS } from './onboardingGoals';
+import { stagePromptDraftSeed } from './promptDrafts';
 import { type SeedOnboardingTeammateInput, seedOnboardingTeammate } from './seedOnboardingTeammate';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import { createTeammateBranch } from './teammateCreation';
+import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
 
 // These are the two collaborators the completion path must actually invoke —
 // the original bug meant neither ever ran (the fallback fired instead).
 vi.mock('./teammateCreation', () => ({ createTeammateBranch: vi.fn() }));
 vi.mock('./startTeammateBootstrapSession', () => ({ startTeammateBootstrapSession: vi.fn() }));
+vi.mock('./waitForBranchFilesystemReady', () => ({ waitForBranchFilesystemReady: vi.fn() }));
+vi.mock('./promptDrafts', () => ({ stagePromptDraftSeed: vi.fn() }));
 
 const createTeammateBranchMock = vi.mocked(createTeammateBranch);
 const startTeammateBootstrapSessionMock = vi.mocked(startTeammateBootstrapSession);
@@ -41,6 +45,7 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
     teammateName: 'Rusty',
     teammateEmoji: '🤖',
     agent: 'claude-code',
+    startInitialTurn: true,
     suggestedIntegrations: [
       ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack,
       ONBOARDING_INTEGRATION_RECOMMENDATIONS.github,
@@ -70,7 +75,43 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
 }
 
 describe('seedOnboardingTeammate', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(waitForBranchFilesystemReady).mockReset().mockResolvedValue(undefined);
+  });
+
+  it('opens an idle session with an owner-scoped starter draft when AI setup was skipped', async () => {
+    createTeammateBranchMock.mockResolvedValue({ branch_id: 'branch-1' } as Branch);
+    startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
+    const { input } = setup({ startInitialTurn: false });
+
+    expect(await seedOnboardingTeammate(input)).toMatchObject({
+      sessionId: 'session-1',
+      workspaceReady: true,
+    });
+    expect(startTeammateBootstrapSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionConfig: expect.objectContaining({ agent: 'claude-code', initialPrompt: undefined }),
+      })
+    );
+    expect(stagePromptDraftSeed).toHaveBeenCalledWith(
+      USER_ID,
+      'session-1',
+      expect.stringContaining('Rusty')
+    );
+  });
+
+  it('does not stage the starter after the authenticated owner changes during session creation', async () => {
+    createTeammateBranchMock.mockResolvedValue({ branch_id: 'branch-1' } as Branch);
+    let current = true;
+    startTeammateBootstrapSessionMock.mockImplementationOnce(async () => {
+      current = false;
+      return completeInitialization;
+    });
+    const { input } = setup({ startInitialTurn: false, isCurrentUser: () => current });
+    expect(await seedOnboardingTeammate(input)).toEqual({});
+    expect(stagePromptDraftSeed).not.toHaveBeenCalled();
+  });
 
   it('creates a teammate branch + goal-primed onboarding session when the framework repo is present', async () => {
     createTeammateBranchMock.mockResolvedValue({
@@ -126,6 +167,7 @@ describe('seedOnboardingTeammate', () => {
     expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');
 
     expect(result).toEqual({
+      workspaceReady: true,
       branchId: 'branch-1',
       sessionId: 'session-1',
       initialization: completeInitialization,
@@ -176,6 +218,7 @@ describe('seedOnboardingTeammate', () => {
     const result = await seedOnboardingTeammate(setup().input);
 
     expect(result).toEqual({
+      workspaceReady: true,
       branchId: 'branch-1',
       sessionId: 'session-1',
       initialization: incompleteInitialization,
@@ -230,6 +273,7 @@ describe('seedOnboardingTeammate', () => {
       expect.anything()
     );
     expect(result).toEqual({
+      workspaceReady: true,
       branchId: 'branch-1',
       sessionId: 'session-1',
       initialization: completeInitialization,
@@ -289,6 +333,19 @@ describe('seedOnboardingTeammate', () => {
     );
   });
 
+  it('passes the resolved framework repo so its source rule does not depend on the map snapshot', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
+
+    const { input } = setup({ repoById: new Map() });
+    await seedOnboardingTeammate(input);
+
+    expect(createTeammateBranchMock.mock.calls[0][0].repo).toBe(input.frameworkRepo);
+  });
+
   it('warns (non-fatal) and returns no session when teammate creation throws', async () => {
     createTeammateBranchMock.mockRejectedValue(new Error('boom'));
     const { input, onWarn } = setup();
@@ -301,12 +358,37 @@ describe('seedOnboardingTeammate', () => {
     expect(result).toEqual({});
   });
 
-  // The LLM step is skippable, so `agent` can legitimately be null at completion.
-  // Bootstrapping a claude-code session anyway would fail on the first turn with
-  // no credentials — the workspace is still created, but the caller gets no
-  // session id and therefore lands the user on their board.
+  it.each(['Template fetch failed', 'Authentication failed', 'Git branch does not exist'])(
+    'guides recovery of the saved teammate without duplicating it: %s',
+    async (detail) => {
+      const saved = {
+        branch_id: 'branch-1',
+        board_id: 'board-1',
+        custom_context: {
+          teammate: { kind: 'teammate', createdViaOnboarding: true, displayName: 'Rusty' },
+        },
+      } as unknown as Branch;
+      createTeammateBranchMock.mockResolvedValue(saved);
+      startTeammateBootstrapSessionMock.mockRejectedValueOnce(new Error(detail));
+      const { input, onWarn } = setup();
+      expect(await seedOnboardingTeammate(input)).toEqual({ branchId: saved.branch_id });
+      expect(onWarn).toHaveBeenCalledWith(expect.stringContaining('Retry on that same teammate'));
+      expect(onWarn).toHaveBeenCalledWith(expect.stringContaining(detail));
+      expect(onWarn.mock.calls[0][0]).not.toContain('create one from the board');
+      input.branchById.set(saved.branch_id, saved);
+      startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
+      expect(await seedOnboardingTeammate(input)).toMatchObject({
+        branchId: saved.branch_id,
+        sessionId: completeInitialization.sessionId,
+      });
+      expect(createTeammateBranchMock).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  // If no fallback agent is available, readiness is still required, but no
+  // session should be started with an arbitrary provider.
   for (const agent of [null, undefined] as const) {
-    it(`creates the workspace but no session when the LLM step was skipped (agent: ${agent})`, async () => {
+    it(`waits for the workspace but creates no session when no agent is available (agent: ${agent})`, async () => {
       createTeammateBranchMock.mockResolvedValue({
         branch_id: 'branch-1',
         board_id: 'board-1',
@@ -320,7 +402,8 @@ describe('seedOnboardingTeammate', () => {
       // ...but nothing is prompted, and no claude-code default sneaks in.
       expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
       expect(onCreateSession).not.toHaveBeenCalled();
-      expect(result).toEqual({ branchId: 'branch-1' });
+      expect(result).toEqual({ branchId: 'branch-1', workspaceReady: true });
+      expect(waitForBranchFilesystemReady).toHaveBeenCalledWith(input.client, 'branch-1');
       expect(setPrimaryTeammateIfUnset).toHaveBeenCalledWith({
         branchId: 'branch-1',
         expectedUserId: USER_ID,
@@ -331,6 +414,43 @@ describe('seedOnboardingTeammate', () => {
       expect(onWarn.mock.calls[0][0]).toMatch(/connect an ai model/i);
     });
   }
+
+  it('does not report no-agent setup complete before filesystem readiness', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    let resolveReady!: () => void;
+    vi.mocked(waitForBranchFilesystemReady).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveReady = resolve;
+      })
+    );
+    const { input } = setup({ agent: null });
+    const finished = vi.fn();
+    const seeding = seedOnboardingTeammate(input).then((result) => {
+      finished(result);
+      return result;
+    });
+    await vi.waitFor(() => expect(waitForBranchFilesystemReady).toHaveBeenCalled());
+    expect(finished).not.toHaveBeenCalled();
+    resolveReady();
+    await expect(seeding).resolves.toEqual({ branchId: 'branch-1', workspaceReady: true });
+  });
+
+  it('retains a failed no-agent workspace for retry without claiming readiness', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    vi.mocked(waitForBranchFilesystemReady).mockRejectedValueOnce(
+      new Error('Template fetch failed')
+    );
+    const { input, onWarn } = setup({ agent: null });
+    await expect(seedOnboardingTeammate(input)).resolves.toEqual({ branchId: 'branch-1' });
+    expect(onWarn).toHaveBeenCalledWith(expect.stringContaining('Retry on that same teammate'));
+    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
+  });
 
   it('does nothing when no teammate was named (the workspace step was skipped)', async () => {
     const { input, onWarn } = setup({ teammateName: '   ' });
@@ -379,6 +499,7 @@ describe('seedOnboardingTeammate', () => {
       branchId: 'branch-existing',
     });
     expect(result).toEqual({
+      workspaceReady: true,
       branchId: 'branch-existing',
       sessionId: 'session-existing',
     });
@@ -432,6 +553,7 @@ describe('seedOnboardingTeammate', () => {
     expect(createTeammateBranchMock).not.toHaveBeenCalled();
     expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
     expect(result).toEqual({
+      workspaceReady: true,
       branchId: 'branch-existing',
       sessionId: 'session-existing',
     });

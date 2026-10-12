@@ -35,6 +35,24 @@ describe('gatewayRouteHook', () => {
     );
   });
 
+  it('carries the Message\u2019s Task so the reply is addressed, not guessed', async () => {
+    // Outbound routing resolves the destination from the Task, because a
+    // Session can be mapped to more than one thread and is therefore not an
+    // address.
+    const routeMessageAfterCommit = vi.fn();
+    const context = contextFor(
+      { message_id: 'assistant-1', task_id: 'task-dm' },
+      routeMessageAfterCommit
+    );
+
+    await gatewayRouteHook(context);
+
+    expect(routeMessageAfterCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ task_id: 'task-dm' }),
+      context.params
+    );
+  });
+
   it('does not echo a gateway-originated user Message', async () => {
     const routeMessageAfterCommit = vi.fn();
     const context = contextFor(

@@ -9,6 +9,7 @@ import type {
 } from '@agor-live/client';
 import {
   getBranchCleanupBlockReason,
+  getBranchMaintenanceBlockReason,
   isTeammate,
   resolveRepoCleanupPolicy,
 } from '@agor-live/client';
@@ -116,16 +117,23 @@ export function useArchiveDeleteEligibility(
     : !(current.access.is_owner || current.access.can === 'all')
       ? 'Branch Manager authority is required to archive or delete.'
       : undefined;
-  const workspaceReason =
+  const writableReason =
     managementReason ??
     (current?.access.fs_access !== 'write'
       ? 'Writable workspace access is required to clean or delete files.'
       : undefined);
+  const workspaceReason =
+    writableReason ??
+    getBranchMaintenanceBlockReason(current?.branch.maintenance_capabilities, 'archive_remove');
+  const deletionReason =
+    writableReason ??
+    getBranchMaintenanceBlockReason(current?.branch.maintenance_capabilities, 'permanent_delete');
   const cleanupReason = !current
     ? loadError
       ? 'Cleanup policy or permissions could not be loaded.'
       : 'Loading cleanup policy and permissions…'
-    : (workspaceReason ??
+    : (writableReason ??
+      getBranchMaintenanceBlockReason(current.branch.maintenance_capabilities, 'archive_clean') ??
       getBranchCleanupBlockReason(policy, current.branch.cleanup_protected ?? false));
   return {
     policy,
@@ -135,6 +143,7 @@ export function useArchiveDeleteEligibility(
     cleanupReason,
     managementReason,
     workspaceReason,
+    deletionReason,
     repo: current?.repo,
     refresh: () => setRevision((value) => value + 1),
   };

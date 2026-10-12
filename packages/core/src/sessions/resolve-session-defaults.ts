@@ -110,6 +110,7 @@ export function resolveSessionDefaults(args: ResolveSessionDefaultsArgs): Resolv
         codexSandboxMode: sameToolParent.permission_config?.codex?.sandboxMode,
         codexApprovalPolicy: sameToolParent.permission_config?.codex?.approvalPolicy,
         codexNetworkAccess: sameToolParent.permission_config?.codex?.networkAccess,
+        codexIncludePlugins: sameToolParent.permission_config?.codex?.includePlugins,
       }
     : undefined;
 

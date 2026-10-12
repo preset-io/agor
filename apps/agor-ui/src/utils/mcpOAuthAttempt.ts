@@ -93,10 +93,11 @@ export async function refetchMCPOAuthDurableState(
   const server = fresh as MCPServer;
   agorStore.getState().applyMaps((prev) => {
     const mcpServerById = new Map(prev.mcpServerById);
-    mcpServerById.set(server.mcp_server_id, server);
+    const deleted = agorStore.getState().deletedMcpServerIds;
+    if (!deleted.has(server.mcp_server_id)) mcpServerById.set(server.mcp_server_id, server);
     return {
       ...prev,
-      userAuthenticatedMcpServerIds: new Set(ids),
+      userAuthenticatedMcpServerIds: new Set(ids.filter((id) => !deleted.has(id))),
       mcpServerById,
     };
   });

@@ -6,8 +6,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
+import { SOCKET_DISCONNECTED_ERROR } from '../../utils/connectionErrors';
 import { getPromptDraft, savePromptDraft, stagePromptDraftSeed } from '../../utils/promptDrafts';
 import type { UploadFilesToSessionResult } from '../FileUpload/upload';
+import { sendPromptWithReconciliation } from './promptReconciliation';
 import SessionPanel from './SessionPanel';
 
 const uploadMockState = vi.hoisted(() => ({
@@ -715,5 +717,57 @@ describe('responsive shared prompt input', () => {
     } finally {
       viewport.mockRestore();
     }
+  });
+});
+
+describe('SessionPanel send after a lost connection', () => {
+  beforeEach(() => {
+    agorStore.getState().reset();
+    localStorage.clear();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  // Outcome matrix lives in promptReconciliation.test.ts; this proves the composer wiring.
+  function sendThroughLostConnection(landed: boolean) {
+    const showError = vi.fn();
+    const find = vi.fn(async ({ query }: { query: { $limit: number } }) => ({
+      data:
+        query.$limit === 1 || !landed
+          ? []
+          : [
+              {
+                task_id: 'task-1',
+                session_id: 'session-1',
+                created_by: 'user-a',
+                full_prompt: 'Ship it',
+              },
+            ],
+    }));
+    const client = { io: { connected: true }, service: () => ({ find }) } as unknown as AgorClient;
+    const onSendPrompt = (sessionId: string, prompt: string) =>
+      sendPromptWithReconciliation({
+        send: () => Promise.reject(new Error(SOCKET_DISCONNECTED_ERROR)),
+        getClient: () => client,
+        attempt: { sessionId, userId: 'user-a', prompt },
+        showError,
+        reconnectTimeoutMs: 50,
+      });
+    const view = renderSessionPanel({ onSendPrompt });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'Ship it' } });
+    fireEvent.click(view.container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    return { showError, textarea };
+  }
+
+  it('clears the composer without a toast when the prompt landed', async () => {
+    const { showError, textarea } = sendThroughLostConnection(true);
+    await waitFor(() => expect(textarea).toHaveValue(''));
+    expect(showError).not.toHaveBeenCalled();
+  });
+
+  it('keeps the text with one toast when the outcome is unknown', async () => {
+    const { showError, textarea } = sendThroughLostConnection(false);
+    await waitFor(() => expect(showError).toHaveBeenCalledOnce());
+    expect(textarea).toHaveValue('Ship it');
   });
 });

@@ -8,6 +8,8 @@ import {
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden, NotFound } from '@agor/core/feathers';
 import {
+  knowledgeTransferValidationIssues,
+  knowledgeTransferValidationSummary,
   transferDigest,
   transferDocumentMetadata,
   transferEntryDigest,
@@ -36,12 +38,22 @@ import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
 import { KnowledgeDocumentsService } from './knowledge-documents.js';
 
-function parseTransfer<T>(schema: z.ZodType<T>, input: unknown): T {
+function parseTransfer<T>(
+  schema: z.ZodType<T>,
+  input: unknown,
+  method: 'GET' | 'POST',
+  route: 'collection' | 'document' = 'collection'
+): T {
   const result = schema.safeParse(input);
-  if (!result.success)
-    throw new BadRequest('Invalid Knowledge transfer request', {
-      issues: result.error.issues.map(({ path, message }) => ({ path, message })),
-    });
+  if (!result.success) {
+    const issues = knowledgeTransferValidationIssues(result.error.issues);
+    throw new BadRequest(
+      `Invalid Knowledge transfer request (${method} /${KNOWLEDGE_TRANSFER.path}${route === 'document' ? '/:id' : ''}): ${knowledgeTransferValidationSummary(issues)}`,
+      {
+        issues,
+      }
+    );
+  }
   return result.data;
 }
 
@@ -136,7 +148,7 @@ export class KnowledgeTransfersService {
   }
   async find(params?: TransferParams): Promise<KnowledgeTransferPage> {
     const user = this.user(params);
-    const query = parseTransfer(querySchema, params?.query);
+    const query = parseTransfer(querySchema, params?.query, 'GET');
     const repo = new KnowledgeTransferRepository(this.db);
     if (!query.bundle) {
       const ns = await this.source(query.namespace, user);
@@ -178,11 +190,13 @@ export class KnowledgeTransfersService {
     const user = this.user(params);
     const query = parseTransfer(
       z.object({ namespace: knowledgeTransferSlug, version: z.string().uuid() }).strict(),
-      params?.query
+      params?.query,
+      'GET',
+      'document'
     );
     const ns = await this.source(query.namespace, user);
     const doc = await new KnowledgeDocumentRepository(this.db).findById(
-      parseTransfer(z.string().uuid(), id)
+      parseTransfer(z.string().uuid(), id, 'GET', 'document')
     );
     if (!doc || doc.archived || doc.namespace_id !== ns.namespace_id)
       throw new NotFound('Knowledge document not found');
@@ -215,7 +229,7 @@ export class KnowledgeTransfersService {
   }
   async create(input: unknown, params?: TransferParams): Promise<KnowledgeTransferWriteResult> {
     const user = this.user(params);
-    const data = parseTransfer(knowledgeTransferWriteSchema, input);
+    const data = parseTransfer(knowledgeTransferWriteSchema, input, 'POST');
     if (transferRequestBytes(data) > KNOWLEDGE_TRANSFER.maxRequestBytes)
       throw new BadRequest('Transfer request exceeds size limit');
     if (

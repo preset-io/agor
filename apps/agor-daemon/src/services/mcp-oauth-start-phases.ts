@@ -8,8 +8,7 @@
  * have been exercised through a live HTTP fixture, which is exactly the kind
  * of coverage that does not get written.
  *
- * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` for the incident
- * this answers: a user waited seventy seconds on a blank popup, and neither
+ * The incident this answers: a user waited seventy seconds on a blank popup, and neither
  * they nor the log could tell a slow start from a hung one.
  */
 

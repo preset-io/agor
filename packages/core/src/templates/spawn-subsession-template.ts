@@ -30,6 +30,7 @@ export interface SpawnSubsessionContext {
   codexSandboxMode?: string;
   codexApprovalPolicy?: string;
   codexNetworkAccess?: boolean;
+  codexIncludePlugins?: boolean;
   mcpServerIds?: string[];
   hasCallbackConfig?: boolean;
   callbackConfig?: {
@@ -204,6 +205,7 @@ export function renderSpawnSubsessionPrompt(context: SpawnSubsessionContext): st
         codexSandboxMode: context.codexSandboxMode,
         codexApprovalPolicy: context.codexApprovalPolicy,
         codexNetworkAccess: context.codexNetworkAccess,
+        codexIncludePlugins: context.codexIncludePlugins,
         mcpServerIds: context.mcpServerIds,
         enableCallback: context.callbackConfig?.enableCallback,
         includeLastMessage: context.callbackConfig?.includeLastMessage,

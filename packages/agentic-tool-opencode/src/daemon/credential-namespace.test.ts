@@ -6,6 +6,9 @@ import {
 } from './credential-namespace';
 import { OPENCODE_DAEMON_CONTRIBUTION } from './index.js';
 
+const SESSION_ID = '0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b';
+const TASK_ID = '0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c';
+
 describe('OpenCode credential namespace routing', () => {
   it('is stable for one tenant and subject without exposing either identifier in the path', () => {
     const first = resolveOpenCodeCredentialNamespace({
@@ -73,14 +76,42 @@ describe('OpenCode credential namespace routing', () => {
   it('uses the credential namespace as the primary writer coordination key', () => {
     const input = {
       tenantId: 'tenant-a',
-      session: { created_by: 'owner', unix_username: 'alice' },
+      session: { created_by: 'owner', unix_username: 'alice', session_id: SESSION_ID },
+      taskId: TASK_ID,
       homeDir: '/home/alice',
+      config: {},
     };
     const namespace = resolveOpenCodeTaskCredentialNamespace(input);
 
     expect(OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch(input)).toEqual({
+      requiresLocalContainment: true,
       namespaceKey: namespace.namespaceKey,
       executorPayload: { agenticToolContext: { dataHome: namespace.dataHome } },
+    });
+  });
+
+  it('sends hosted executors logical identity only, with no daemon-side fence', () => {
+    expect(
+      OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch({
+        tenantId: 'tenant-a',
+        session: { created_by: 'owner', unix_username: null, session_id: SESSION_ID },
+        taskId: TASK_ID,
+        homeDir: '/home/daemon',
+        config: {
+          multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+          execution: {
+            unix_user_mode: 'delegated',
+            executor_command_template: 'launch {task_id}',
+            executor_storage: { user_home: 'persistent-per-user' },
+          },
+          agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
+        },
+      })
+    ).toEqual({
+      requiresLocalContainment: false,
+      executorPayload: {
+        agenticToolContext: { mode: 'managed', sessionId: SESSION_ID, taskId: TASK_ID },
+      },
     });
   });
 

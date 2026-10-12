@@ -6,7 +6,7 @@ import { createOpenCodeModelsService } from './models-service.js';
 export function registerOpenCodeServices(
   ctx: Pick<RegisterServicesContext, 'app' | 'db' | 'config' | 'requireAuth'>
 ): void {
-  ctx.app.use('/opencode-auth', createOpenCodeAuthService(ctx.db, ctx.config));
+  ctx.app.use('/opencode-auth', createOpenCodeAuthService(ctx.db, ctx.config, ctx.app));
   ctx.app.service('/opencode-auth').hooks({ before: { all: [ctx.requireAuth] } });
   ctx.app.service('/opencode-auth').publish(() => []);
 

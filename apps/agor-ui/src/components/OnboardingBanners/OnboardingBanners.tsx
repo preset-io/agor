@@ -86,7 +86,8 @@ function ReminderBanner({
       closable={
         onDismiss && {
           closeIcon: (
-            <Tooltip title={dismissLabel}>
+            // Centered, this tooltip overflows the viewport and the scrollbars shift the X away.
+            <Tooltip title={dismissLabel} placement="bottomRight">
               <CloseOutlined />
             </Tooltip>
           ),

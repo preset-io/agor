@@ -14,7 +14,7 @@ import {
   type TenantScopeAwareDatabase,
   uploads,
 } from '@agor/core/db';
-import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
+import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
   BRANCH_DELETION_ACTIONS,
@@ -34,6 +34,7 @@ import { captureBranchRemovalRealtimeVisibility } from '../utils/branch-removal-
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { getUploadStagingStore } from '../utils/upload-staging.js';
+import { deletionErrorCategory } from './branch-deletion-diagnostics';
 import { issueExecutorCommandToken } from './session-token-service';
 
 const reportSchema = z
@@ -76,6 +77,48 @@ export class BranchDeletionStepsService {
       params.authentication?.payload?.tenant_id !== tenantId
     )
       throw new Forbidden('Deletion tenant scope does not match');
+    const started = performance.now();
+    const correlation = `branch_id=${data.branch_id} operation_id=${data.operation_id} generation=${data.generation} invocation_id=${data.execution_id} action=${data.action}`;
+    try {
+      const result = await this.execute(data, params);
+      const duration = Math.round(performance.now() - started);
+      if (data.action === 'settled' || data.action === 'failed' || duration >= 5_000)
+        console.info(
+          `[branch.delete] event=daemon_step_complete ${correlation} category=committed duration_ms=${duration}`
+        );
+      return result;
+    } catch (error) {
+      // Status and exception text are not transaction evidence. Only the
+      // allowlisted database abort codes below identify a DB transaction abort;
+      // even those say nothing about previous batches or external storage.
+      const category = deletionErrorCategory(error);
+      // Only the settlement replay uses this delivery distinction. A failed
+      // exact-claim precondition is definitive rejection, not a transient DB
+      // outage. It may follow a lost committed response; never report success
+      // based on an absent/replaced claim or relax the invocation check.
+      const settlementRejected =
+        data.action === 'settled' && category === 'ownership_or_precondition';
+      const status =
+        error instanceof Forbidden
+          ? 403
+          : error instanceof BadRequest
+            ? 400
+            : settlementRejected
+              ? 409
+              : 500;
+      console.error(
+        `[branch.delete] event=daemon_step_failed ${correlation} category=${category} http_status=${status} duration_ms=${Math.round(performance.now() - started)}`
+      );
+      if (error instanceof Forbidden || error instanceof BadRequest) throw error;
+      if (settlementRejected) throw new Conflict('Deletion settlement ownership no longer matches');
+      throw new Error(
+        `Deletion step failed (${category}); inspect daemon diagnostics. No retry was started.`
+      );
+    }
+  }
+
+  private async execute(data: z.infer<typeof reportSchema>, params: AuthenticatedParams) {
+    const tenantId = requireCurrentTenantId();
     const claim: BranchMaintenanceClaim = {
       branch_id: data.branch_id as BranchID,
       operation_id: data.operation_id as UUID,
@@ -195,9 +238,13 @@ export class BranchDeletionStepsService {
           });
         });
         return { deleted: true };
-      } else if (data.action === 'failed') {
-        // The worker reports only AFTER all its awaited storage work settles.
-        // Unknown/lost reports cannot get here and retain their invocation.
+      } else if (data.action === 'failed' || data.action === 'settled') {
+        // The worker attests that all its direct storage work has stopped and
+        // every upload RPC was acknowledged. DB-only RPCs may still be unknown:
+        // failSettled takes their Branch lock, draining already-admitted work
+        // and fencing delayed requests atomically. No timeout/HTTP status is
+        // treated as storage containment. Legacy workers use "failed" only
+        // when every daemon request was acknowledged.
         await deletion.failSettled(
           claim,
           execution,

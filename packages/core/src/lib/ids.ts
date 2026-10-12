@@ -25,6 +25,12 @@ import {
 } from '../types/id';
 import { uuidV7FromRandomBytes } from './uuid-v7';
 
+export {
+  completionCallbackTaskId,
+  gatewayInboundSessionId,
+  gatewayInboundTaskId,
+  widgetAutoResumeTaskId,
+} from './durable-task-ids';
 export { findByShortIdPrefix, SHORT_ID_LENGTH, shortId, toShortId, URL_SHORT_ID_LENGTH };
 
 // ============================================================================

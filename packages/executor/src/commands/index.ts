@@ -11,6 +11,7 @@ import {
   BRANCH_ARCHIVE_COMMAND,
   BRANCH_CLEANUP_COMMAND,
   BRANCH_DELETION_COMMAND,
+  type ExecutorCommandName,
 } from '@agor/core/types';
 import { ToolRegistry } from '../handlers/sdk/tool-registry.js';
 import type {
@@ -84,17 +85,18 @@ type InteractiveCommandHandler<T extends ExecutorPayload> = (
 const interactiveCommandHandlers = new Map<string, InteractiveCommandHandler<ExecutorPayload>>();
 
 /**
- * Register a command handler
+ * Register a command handler. The name must have an admission class in
+ * `EXECUTOR_COMMAND_ADMISSION` (`@agor/core/types`).
  */
 export function registerCommand<T extends ExecutorPayload>(
-  command: string,
+  command: ExecutorCommandName,
   handler: CommandHandler<T>
 ): void {
   commandHandlers.set(command, handler as CommandHandler<ExecutorPayload>);
 }
 
 export function registerInteractiveCommand<T extends ExecutorPayload>(
-  command: string,
+  command: ExecutorCommandName,
   handler: InteractiveCommandHandler<T>
 ): void {
   interactiveCommandHandlers.set(command, handler as InteractiveCommandHandler<ExecutorPayload>);

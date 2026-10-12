@@ -1,3 +1,4 @@
+import { ToolBetaBadge } from '../ToolIcon/ToolBetaBadge';
 /**
  * Detail view for one catalog entry, and the only place a connect starts.
  *
@@ -13,6 +14,7 @@ import type {
   MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
   MCPCatalogReadiness,
+  MCPCatalogSharing,
 } from '@agor/core/types';
 import { getTeammateConfig } from '@agor-live/client';
 import {
@@ -29,6 +31,7 @@ import {
   Flex,
   Form,
   Input,
+  Radio,
   Select,
   Space,
   Tag,
@@ -40,6 +43,8 @@ import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import {
   canAddMcpServer,
+  canAddSharedMcpServer,
+  canUseExistingMcpServer,
   explainAddRestriction,
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
@@ -59,7 +64,12 @@ const { Title, Paragraph, Text, Link } = Typography;
 const DEFAULT_AGENT: AgenticToolName = 'claude-code';
 
 const AGENT_OPTIONS = AVAILABLE_AGENTS.map((agent) => ({
-  label: agent.name,
+  label: (
+    <Space>
+      <span>{agent.name}</span>
+      <ToolBetaBadge tool={agent.id as AgenticToolName} />
+    </Space>
+  ),
   value: agent.id,
 }));
 
@@ -108,6 +118,8 @@ export interface CatalogDetailDrawerProps {
   /** The policy read has not landed; fail closed without claiming a policy value. */
   policyPending: boolean;
   policyPendingHint: string;
+  sharing?: MCPCatalogSharing;
+  onSharingChange?: (sharing: MCPCatalogSharing) => void;
   readiness?: MCPCatalogReadiness | null;
   readinessLoading?: boolean;
   readinessError?: string | null;
@@ -135,6 +147,7 @@ export interface CatalogDetailDrawerProps {
   onConnect: (input: {
     acknowledgedDisclosure: string;
     bearerToken?: string;
+    oauthClient?: { client_id: string; client_secret?: string };
     oauthPopup?: MarketplaceOAuthPopup;
   }) => void;
 }
@@ -160,6 +173,8 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   connectCapability,
   policyPending,
   policyPendingHint,
+  sharing = 'private',
+  onSharingChange,
   readiness,
   readinessLoading = false,
   readinessError = null,
@@ -212,6 +227,11 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
 
   const title = entry ? entryTitle(entry) : '';
   const connect = entry ? connectStatus(entry) : undefined;
+  const oauthPresentation = {
+    readiness: 'sign-in' as const,
+    label: `Connect with ${title || 'provider'}`,
+    detail: 'Sign in with your own account in a separate secure window.',
+  };
   const readinessPresentation = (() => {
     switch (readiness?.state) {
       case 'no_auth':
@@ -231,11 +251,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
         };
       }
       case 'oauth_required':
-        return {
-          readiness: 'sign-in' as const,
-          label: `Connect with ${title || 'provider'}`,
-          detail: 'Sign in with your own account in a separate secure window.',
-        };
+        return oauthPresentation;
       case 'installed_ready':
         return {
           readiness: 'ready' as const,
@@ -253,7 +269,9 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             : 'Reuse your existing connection in a new session without signing in again.',
         };
       default:
-        return connect;
+        // Sharing refreshes must clear readiness, not the current entry's
+        // provider copy. Derive it afresh; never retain a previous reuse grant.
+        return connect?.readiness === 'sign-in' ? oauthPresentation : connect;
     }
   })();
   const advisoryStatus = connect?.readiness === 'blocked' ? connect : readinessPresentation;
@@ -309,6 +327,18 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   // empty for any entry it was not.
   const [pastedKey, setPastedKey] = useState<{ entryId: string; value: string } | null>(null);
   const [popupBlocked, setPopupBlocked] = useState(false);
+  const [appCredentials, setAppCredentials] = useState<{
+    entryId: string;
+    client_id: string;
+    client_secret: string;
+  } | null>(null);
+  const configuredApp = entry?.oauth?.configured_client;
+  const appFields = appCredentials?.entryId === entryId ? appCredentials : null;
+  useEffect(() => {
+    setAppCredentials((held) =>
+      open && !success && configuredApp && held?.entryId === entryId ? held : null
+    );
+  }, [open, success, configuredApp, entryId]);
 
   // The endpoint's answer beats the catalog file's claim. `auth_type` decides
   // what the card promises before anything is dialled, which is all it can do;
@@ -346,13 +376,55 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   // biome-ignore lint/correctness/useExhaustiveDependencies: both interaction boundaries clear a prior popup refusal
   useEffect(() => setPopupBlocked(false), [open, entryId]);
 
+  const canShare = canAddSharedMcpServer(connectCapability);
+  const canUseShared =
+    !policyPending &&
+    !readinessLoading &&
+    !readinessError &&
+    readiness?.shared_configuration_available === true &&
+    canUseExistingMcpServer(connectCapability);
+  const reusable =
+    !readinessLoading &&
+    !readinessError &&
+    (readiness?.state === 'installed_ready' ||
+      readiness?.state === 'reusable_oauth' ||
+      readiness?.reusable_configuration === true);
   const policyRefusal = policyPending
     ? policyPendingHint
-    : canAddMcpServer(connectCapability)
+    : (
+          sharing === 'shared'
+            ? canShare || canUseShared
+            : canAddMcpServer(connectCapability) ||
+              (reusable && canUseExistingMcpServer(connectCapability))
+        )
       ? undefined
-      : explainAddRestriction(connectCapability);
+      : sharing === 'shared' && canUseExistingMcpServer(connectCapability)
+        ? readinessLoading
+          ? 'Checking whether an existing shared installation is available…'
+          : readinessError
+            ? 'Existing shared availability could not be verified. Reopen Catalog to try again.'
+            : 'No eligible shared installation is available. You cannot publish or repair shared configuration under the current policy. Choose Private if allowed, or ask an admin.'
+        : canUseShared
+          ? 'Choose Use existing shared to connect without adding a private server.'
+          : explainAddRestriction(connectCapability);
+  // An existing shared install already carries its OAuth app; only whoever
+  // creates an install enters the app credentials.
+  const reusesSharedApp = Boolean(
+    configuredApp && sharing === 'shared' && readiness?.shared_configuration_available
+  );
+  const appForm = configuredApp && !reusesSharedApp ? configuredApp : undefined;
   const canConnect = Boolean(
-    !blockedReason && !policyRefusal && acknowledged && !connecting && (!needsApiKey || bearerToken)
+    !(sharing === 'shared' && needsApiKey) &&
+      !blockedReason &&
+      !policyRefusal &&
+      acknowledged &&
+      !connecting &&
+      (!needsApiKey || bearerToken) &&
+      (!appForm ||
+        (readiness?.catalog_key === entryId &&
+          readiness.redirect_uri &&
+          appFields?.client_id.trim() &&
+          (!appForm.secret_required || appFields?.client_secret)))
   );
   const connectDisabledReason = connecting
     ? 'Connection in progress.'
@@ -741,6 +813,105 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 </Form>
               )}
 
+              <Form layout="vertical">
+                <Form.Item
+                  label="Installation ownership"
+                  extra={
+                    sharing === 'shared'
+                      ? 'Shared configuration only. Each user signs in separately. Available to attach; not enabled globally.'
+                      : 'Only you can use this configuration. Available to attach to your sessions.'
+                  }
+                >
+                  <Radio.Group
+                    value={sharing}
+                    onChange={(event) => onSharingChange?.(event.target.value)}
+                    disabled={connecting}
+                  >
+                    <Radio value="private">Private</Radio>
+                    {(canShare || canUseShared || sharing === 'shared') && (
+                      <Radio
+                        value="shared"
+                        disabled={needsApiKey || policyPending || (!canShare && !canUseShared)}
+                      >
+                        {canShare ? 'Shared' : 'Use existing shared'}
+                      </Radio>
+                    )}
+                  </Radio.Group>
+                </Form.Item>
+                {needsApiKey && (
+                  <Text type="secondary">
+                    Bearer/API-key installations stay private because the credential is stored with
+                    the configuration.
+                  </Text>
+                )}
+                {reusesSharedApp && (
+                  <Text type="secondary">
+                    Uses the OAuth app already configured for this shared installation.
+                  </Text>
+                )}
+              </Form>
+
+              {appForm && (
+                <Form layout="vertical">
+                  <Alert
+                    type="info"
+                    showIcon
+                    title="Use your own OAuth app"
+                    description={
+                      <>
+                        <Link href={appForm.setup_url} target="_blank" rel="noopener noreferrer">
+                          Create an app in the provider console
+                        </Link>{' '}
+                        and configure the callback shown by Agor. Provider distribution and approval
+                        rules still apply. These are app credentials, not a personal access token.
+                        Each user signs in separately. Enter the secret only here, never in agent
+                        chat.
+                      </>
+                    }
+                  />
+                  <Form.Item label="Register this exact callback URL">
+                    {readiness?.redirect_uri ? (
+                      <Text code copyable>
+                        {readiness.redirect_uri}
+                      </Text>
+                    ) : (
+                      <Text type="secondary">
+                        Callback unavailable. Ask the deployment operator to configure the public
+                        callback before connecting.
+                      </Text>
+                    )}
+                  </Form.Item>
+                  <Form.Item label="OAuth app Client ID" required>
+                    <Input
+                      aria-label="OAuth app Client ID"
+                      value={appFields?.client_id ?? ''}
+                      autoComplete="off"
+                      onChange={(event) =>
+                        setAppCredentials({
+                          entryId: entryId!,
+                          client_id: event.target.value,
+                          client_secret: appFields?.client_secret ?? '',
+                        })
+                      }
+                    />
+                  </Form.Item>
+                  <Form.Item label="OAuth app Client secret" required={appForm.secret_required}>
+                    <Input.Password
+                      aria-label="OAuth app Client secret"
+                      value={appFields?.client_secret ?? ''}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) =>
+                        setAppCredentials({
+                          entryId: entryId!,
+                          client_id: appFields?.client_id ?? '',
+                          client_secret: event.target.value,
+                        })
+                      }
+                    />
+                  </Form.Item>
+                </Form>
+              )}
               {connectError && <Alert type="error" showIcon title={connectError} />}
               {policyRefusal && <Alert type="info" showIcon title={policyRefusal} />}
 
@@ -778,6 +949,16 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     // that never wanted one is refused by the daemon, and the
                     // field it would have come from is not rendered anyway.
                     ...(needsApiKey ? { bearerToken } : {}),
+                    ...(appForm && appFields
+                      ? {
+                          oauthClient: {
+                            client_id: appFields.client_id.trim(),
+                            ...(appFields.client_secret
+                              ? { client_secret: appFields.client_secret }
+                              : {}),
+                          },
+                        }
+                      : {}),
                     ...(oauthPopup ? { oauthPopup } : {}),
                   });
                 }}

@@ -35,7 +35,6 @@ export interface AgenticToolUIIntegration {
   agentSelectionOption?: {
     icon: string;
     description: string;
-    beta?: boolean;
   };
   onboardingOption?: {
     symbol: string;

@@ -12,7 +12,6 @@ import {
   AppstoreOutlined,
   BranchesOutlined,
   CheckOutlined,
-  CloseOutlined,
   CommentOutlined,
   DeleteOutlined,
   SendOutlined,
@@ -34,6 +33,8 @@ import {
 } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutationGate } from '../../contexts/ConnectionContext';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
+import { commentMentionsUser } from '../../utils/commentMentions';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { AgorEmojiPicker } from '../EmojiPickerInput';
 import { MarkdownRenderer } from '../MarkdownRenderer';
@@ -41,7 +42,7 @@ import { MetaRow } from '../MetaRow';
 import { ZONE_CONTENT_OPACITY } from '../SessionCanvas/canvas/BoardObjectNodes';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 export interface CommentsPanelProps {
   client: AgorClient | null;
@@ -53,9 +54,6 @@ export interface CommentsPanelProps {
   branchById?: Map<string, Branch>; // For branch names
   loading?: boolean;
   collapsed?: boolean;
-  onToggleCollapse?: () => void;
-  /** Hide the internal "Comments" header (mobile already shows a board header). */
-  hideHeader?: boolean;
   onSendComment: (content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -525,39 +523,6 @@ const CommentThread: React.FC<{
 };
 
 /**
- * Escape special regex characters in a string
- */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Check if comment content mentions a user by name or email.
- * Uses word boundary matching to avoid false positives (e.g., @ann matching @anna).
- */
-function checkMentionsUser(content: string, userName?: string, userEmail?: string): boolean {
-  if (!userName && !userEmail) return false;
-
-  const patterns: RegExp[] = [];
-
-  if (userName) {
-    // @name not followed by word char (avoids @ann matching @anna)
-    patterns.push(new RegExp(`@${escapeRegex(userName)}(?![\\w])`, 'i'));
-    // @"name" quoted form
-    patterns.push(new RegExp(`@"${escapeRegex(userName)}"`, 'i'));
-  }
-
-  if (userEmail) {
-    // @email not followed by word char
-    patterns.push(new RegExp(`@${escapeRegex(userEmail)}(?![\\w])`, 'i'));
-    // @"email" quoted form
-    patterns.push(new RegExp(`@"${escapeRegex(userEmail)}"`, 'i'));
-  }
-
-  return patterns.some((pattern) => pattern.test(content));
-}
-
-/**
  * Main CommentsPanel component - permanent left sidebar with threading and reactions
  */
 export const CommentsPanel: React.FC<CommentsPanelProps> = ({
@@ -570,8 +535,6 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   branchById,
   loading = false,
   collapsed = false,
-  onToggleCollapse,
-  hideHeader = false,
   onSendComment,
   onReplyComment,
   onResolveComment,
@@ -582,6 +545,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   alwaysShowActions,
 }) => {
   const { token } = theme.useToken();
+  const isMobile = useIsMobileViewport();
   const [filter, setFilter] = useState<FilterMode>('active');
   const [commentInputValue, setCommentInputValue] = useState('');
 
@@ -641,12 +605,12 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   const threadMentionsUser = useMemo(() => {
     return (thread: BoardComment) => {
       // Check thread root
-      if (checkMentionsUser(thread.content, currentUserName, currentUserEmail)) {
+      if (commentMentionsUser(thread.content, currentUserName, currentUserEmail)) {
         return true;
       }
       // Check replies
       const replies = repliesByParent[thread.comment_id] || [];
-      return replies.some((r) => checkMentionsUser(r.content, currentUserName, currentUserEmail));
+      return replies.some((r) => commentMentionsUser(r.content, currentUserName, currentUserEmail));
     };
   }, [repliesByParent, currentUserName, currentUserEmail]);
 
@@ -764,48 +728,10 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
         flexDirection: 'column',
       }}
     >
-      {/* Header — hidden on mobile, where the board header already titles the view */}
-      {!hideHeader && (
-        <div
-          style={{
-            padding: 12,
-            borderBottom: `1px solid ${token.colorBorder}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <Space>
-            <CommentOutlined />
-            <Title level={5} style={{ margin: 0 }}>
-              Comments
-            </Title>
-            <Badge
-              count={filteredThreads.length}
-              showZero={false}
-              style={{
-                backgroundColor: filteredThreads.some(threadMentionsUser)
-                  ? token.colorError
-                  : token.colorPrimaryBgHover,
-              }}
-            />
-          </Space>
-          {onToggleCollapse && (
-            <Button
-              type="text"
-              size="small"
-              icon={<CloseOutlined />}
-              onClick={onToggleCollapse}
-              danger
-            />
-          )}
-        </div>
-      )}
-
       {/* Filter Tabs */}
       <div
         style={{
-          padding: 12,
+          padding: `${token.paddingSM}px ${token.padding}px`,
           borderBottom: `1px solid ${token.colorBorder}`,
           backgroundColor: token.colorBgContainer,
         }}
@@ -841,7 +767,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
               color: token.colorTextSecondary,
               // On mobile the panel fills the screen, so centre the empty state
               // instead of clustering it at the top.
-              ...(hideHeader
+              ...(isMobile
                 ? {
                     height: '100%',
                     display: 'flex',
@@ -936,7 +862,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
       {/* Input Box for new top-level comment */}
       <div
         style={{
-          padding: 12,
+          padding: `${token.paddingSM}px ${token.padding}px`,
           borderTop: `1px solid ${token.colorBorder}`,
           backgroundColor: token.colorBgContainer,
           display: 'flex',

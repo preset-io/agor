@@ -44,12 +44,17 @@ import {
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer } from '@agor/core/types';
 import {
+  CODEX_LIFECYCLE_MESSAGES,
+  type CodexLifecycleFailureCode,
+  type CodexSandboxMode,
+  type ContextUsageSnapshot,
   getDefaultPermissionMode,
   isGatewaySession,
   MCP_CLIENT_HINT_HEADER,
   MCP_CLIENT_HINTS,
+  type MCPServer,
+  type Session,
 } from '@agor/core/types';
 import { mapToCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import type * as CodexSdk from '@openai/codex-sdk';
@@ -66,12 +71,14 @@ import type {
 } from '../../db/feathers-repositories.js';
 import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import { markExecutorCleanupUnverified } from '../../termination-state.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
 import { applyAgorCodexLaunchPolicy } from './launch-policy.js';
+import { findLatestRolloutRecord } from './rollout-tail.js';
 import {
   CODEX_MCP_UNKNOWN_FAILURE,
   CodexRuntimeDiagnostics,
@@ -132,27 +139,6 @@ function applyMcpToolPermissions(config: CodexConfigObject, server: MCPServer): 
   );
 }
 const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
-
-type CodexLifecycleFailureCode =
-  | 'authentication_required'
-  | 'completed_without_response'
-  | 'turn_failed'
-  | 'stream_start_failed'
-  | 'stream_interrupted'
-  | 'stream_ended_without_completion';
-
-const CODEX_LIFECYCLE_MESSAGES: Record<CodexLifecycleFailureCode, string> = {
-  authentication_required:
-    'Codex authentication is not configured. Review Codex authentication settings and retry the prompt.',
-  completed_without_response:
-    'Codex completed after a stream error but returned no assistant response. Retry the prompt.',
-  turn_failed:
-    'Codex failed the turn. Retry the prompt; review Codex authentication or runtime status if it continues.',
-  stream_start_failed: 'Codex could not start the turn. Retry the prompt.',
-  stream_interrupted: 'The Codex turn was interrupted before completion. Retry the prompt.',
-  stream_ended_without_completion:
-    'Codex ended the turn without a completion event. Retry the prompt; restart the session if it continues.',
-};
 
 function projectCodexCompletedEvent(
   event: TurnCompletedEvent
@@ -260,25 +246,8 @@ async function extractLatestContextUsageFromRollout(
   const rolloutPath = await findCodexRolloutFile(threadId);
   if (!rolloutPath) return undefined;
 
-  let contents: string;
-  try {
-    contents = await fs.readFile(rolloutPath, 'utf8');
-  } catch {
-    return undefined;
-  }
-
-  let latest: ContextUsageSnapshot | undefined;
-  for (const line of contents.split('\n')) {
-    if (!line.includes('token_count')) continue;
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      latest = extractCodexContextSnapshotFromEvent(parsed) ?? latest;
-    } catch {
-      // Ignore malformed / partially-written JSONL lines.
-    }
-  }
-
-  return latest;
+  // Newest-first bounded scan: rollout logs grow with the whole conversation.
+  return findLatestRolloutRecord(rolloutPath, 'token_count', extractCodexContextSnapshotFromEvent);
 }
 
 export interface CodexPromptResult {
@@ -363,6 +332,16 @@ export type CodexStreamEvent =
       rawSdkEvent?: import('../../types/sdk-response').CodexSdkResponse; // The actual turn.completed event from Codex SDK
       rawContextUsage?: ContextUsageSnapshot;
     };
+
+export interface CodexStreamingOptions {
+  /**
+   * Keep completed tool_use/tool_result blocks (and `toolUses`) for the final
+   * `complete` event. Defaults to true. Consumers that persist every
+   * `tool_complete` event as it arrives pass false so tool payloads are not
+   * held a second time until the turn ends.
+   */
+  retainCompletedTools?: boolean;
+}
 
 export class CodexPromptService {
   private codex?: InstanceType<typeof CodexSdk.Codex>;
@@ -511,14 +490,15 @@ export class CodexPromptService {
   private buildCodexOptions(
     apiKey: string | undefined,
     baseUrl: string | undefined,
-    config: CodexConfigObject | undefined
+    config: CodexConfigObject | undefined,
+    includePlugins = false
   ): ConstructorParameters<typeof CodexSdk.Codex>[0] {
     const useSubscription = this.useNativeAuth && !apiKey;
 
     const options: ConstructorParameters<typeof CodexSdk.Codex>[0] = {
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
-      config: applyAgorCodexLaunchPolicy(config),
+      config: applyAgorCodexLaunchPolicy(config, includePlugins),
     };
 
     if (useSubscription) {
@@ -590,12 +570,16 @@ export class CodexPromptService {
    * rotated MCP bearer tokens invalidate the cache even when the config
    * shape stays the same — see `snapshotMcpEnvValues()`.
    */
-  private async ensureCodexClient(config: CodexConfigObject): Promise<void> {
+  private async ensureCodexClient(
+    config: CodexConfigObject,
+    includePlugins = false
+  ): Promise<void> {
     const baseUrl = this.resolveBaseUrl();
     const fingerprint = JSON.stringify({
       apiKey: this.apiKey || '',
       baseUrl: baseUrl ?? '',
       useNativeAuth: this.useNativeAuth,
+      includePlugins,
       config,
       mcpEnv: this.snapshotMcpEnvValues(),
     });
@@ -607,7 +591,9 @@ export class CodexPromptService {
     codexDebug(
       `🔄 [Codex] Per-session config changed, reinitializing SDK (apiKey=${this.apiKey ? 'set' : 'unset'}, useNativeAuth=${this.useNativeAuth})`
     );
-    await this.replaceCodexClient(this.buildCodexOptions(this.apiKey, baseUrl, config));
+    await this.replaceCodexClient(
+      this.buildCodexOptions(this.apiKey, baseUrl, config, includePlugins)
+    );
     this.lastApiKey = this.apiKey || null;
     this.lastBaseUrl = baseUrl ?? null;
     this.lastClientFingerprint = fingerprint;
@@ -1064,6 +1050,7 @@ export class CodexPromptService {
     session: {
       genealogy?: { forked_from_session_id?: SessionID };
       sdk_session_id?: string | null;
+      permission_config?: Session['permission_config'];
     }
   ): Promise<void> {
     if (session.sdk_session_id) return;
@@ -1093,6 +1080,7 @@ export class CodexPromptService {
 
     const forkedThreadId = await forkCodexThreadViaAppServer(parentSession.sdk_session_id, {
       env: appServerEnv,
+      includePlugins: session.permission_config?.codex?.includePlugins === true,
     });
     await this.sessionsRepo.update(sessionId, { sdk_session_id: forkedThreadId });
     session.sdk_session_id = forkedThreadId;
@@ -1113,6 +1101,8 @@ export class CodexPromptService {
    * @param taskId - Optional task ID
    * @param permissionMode - Permission mode for tool execution ('ask' | 'auto' | 'allow-all')
    * @param abortController - Optional AbortController for cancellation support
+   * @param onActivity - Optional SDK activity callback (liveness pulse)
+   * @param options - See CodexStreamingOptions
    * @returns Async generator of streaming events
    */
   async *promptSessionStreaming(
@@ -1121,8 +1111,10 @@ export class CodexPromptService {
     taskId?: TaskID,
     permissionMode?: PermissionMode,
     abortController?: AbortController,
-    onActivity?: SdkActivityCallback
+    onActivity?: SdkActivityCallback,
+    options: CodexStreamingOptions = {}
   ): AsyncGenerator<CodexStreamEvent> {
+    const retainCompletedTools = options.retainCompletedTools ?? true;
     // Get session to check for existing thread ID and working directory
     const session = await this.sessionsRepo.findById(sessionId);
     if (!session) {
@@ -1234,7 +1226,10 @@ export class CodexPromptService {
 
     // Recreate Codex instance only if the per-session config payload (or
     // apiKey/baseUrl) actually changed — issue #133 protection.
-    await this.ensureCodexClient(codexConfigPayload);
+    await this.ensureCodexClient(
+      codexConfigPayload,
+      session.permission_config?.codex?.includePlugins === true
+    );
 
     codexDebug(
       `   Configured: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}, ${mcpServerCount} MCP server(s)`
@@ -1375,6 +1370,10 @@ export class CodexPromptService {
 
     let streamReturned = false;
     let firstEventObserved = false;
+    // The SDK awaits CLI exit only at EOF; break/return/throw/abort kill it
+    // without awaiting exit. Completion events prove the turn ended, not that
+    // the CLI is gone, so only stream exhaustion counts as teardown evidence.
+    let streamExhausted = false;
     try {
       codexDebug(
         `▶️  [Codex] Running prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`
@@ -1607,38 +1606,43 @@ export class CodexPromptService {
                   event.item.type === 'todo_list' &&
                   todoIdsEmittedViaUpdate.has(toolUseComplete.id);
 
-                // Add to allToolUses for backward compatibility (tool_uses field)
-                allToolUses.push({
-                  id: toolUseComplete.id,
-                  name: toolUseComplete.name,
-                  input: toolUseComplete.input,
-                });
-
-                // Add tool_use block to content array (for UI rendering)
-                currentMessage.push({
-                  type: 'tool_use',
-                  id: toolUseComplete.id,
-                  name: toolUseComplete.name,
-                  input: toolUseComplete.input,
-                });
-
-                // Add tool_result block if we have output OR status (for UI rendering)
-                if (toolUseComplete.output !== undefined || toolUseComplete.status) {
-                  const isError =
-                    toolUseComplete.status === 'failed' || toolUseComplete.status === 'error';
-
-                  // Build content: prefer output, fall back to status message
-                  let content = toolUseComplete.output || '';
-                  if (!content && toolUseComplete.status) {
-                    content = `[${toolUseComplete.status}]`;
-                  }
-
-                  currentMessage.push({
-                    type: 'tool_result',
-                    tool_use_id: toolUseComplete.id,
-                    content,
-                    is_error: isError,
+                // Only consumers that persist the final `complete` event as one
+                // message need these copies; streaming consumers have already
+                // persisted the tool_complete event and drop tool blocks there.
+                if (retainCompletedTools) {
+                  // Add to allToolUses for backward compatibility (tool_uses field)
+                  allToolUses.push({
+                    id: toolUseComplete.id,
+                    name: toolUseComplete.name,
+                    input: toolUseComplete.input,
                   });
+
+                  // Add tool_use block to content array (for UI rendering)
+                  currentMessage.push({
+                    type: 'tool_use',
+                    id: toolUseComplete.id,
+                    name: toolUseComplete.name,
+                    input: toolUseComplete.input,
+                  });
+
+                  // Add tool_result block if we have output OR status (for UI rendering)
+                  if (toolUseComplete.output !== undefined || toolUseComplete.status) {
+                    const isError =
+                      toolUseComplete.status === 'failed' || toolUseComplete.status === 'error';
+
+                    // Build content: prefer output, fall back to status message
+                    let content = toolUseComplete.output || '';
+                    if (!content && toolUseComplete.status) {
+                      content = `[${toolUseComplete.status}]`;
+                    }
+
+                    currentMessage.push({
+                      type: 'tool_result',
+                      tool_use_id: toolUseComplete.id,
+                      content,
+                      is_error: isError,
+                    });
+                  }
                 }
 
                 if (!isDuplicateTodoCompletion) {
@@ -1759,6 +1763,7 @@ export class CodexPromptService {
       // exited without emitting a terminal event (turn.completed / task_complete / turn_complete),
       // which is the bug described in issue #1749.
       if (!didStop) {
+        streamExhausted = true;
         diagnostics.recordFailure('stream_ended_without_completion', undefined);
         throw new CodexLifecycleError('stream_ended_without_completion');
       }
@@ -1791,6 +1796,9 @@ export class CodexPromptService {
       // Preserve the existing UI distinction independently of diagnostic phase.
       throw new CodexLifecycleError(streamReturned ? 'stream_interrupted' : 'stream_start_failed');
     } finally {
+      if (abortController && streamReturned && !streamExhausted) {
+        markExecutorCleanupUnverified(abortController);
+      }
       diagnostics.finish();
     }
   }

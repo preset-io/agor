@@ -1,6 +1,12 @@
 import { Alert } from 'antd';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { InitialLoadingScreen } from '../InitialLoadingScreen';
 import { GlobalCrashScreen } from './GlobalCrashScreen';
+import {
+  isDynamicImportFailure,
+  RELOAD_FALLBACK_MS,
+  reloadForStaleChunk,
+} from './staleChunkReload';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -23,6 +29,7 @@ interface ErrorBoundaryState {
   error: Error | null;
   errorInfo: ErrorInfo | null;
   resetKey: unknown;
+  reloading: boolean;
 }
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
@@ -30,7 +37,10 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     error: null,
     errorInfo: null,
     resetKey: this.props.resetKey,
+    reloading: false,
   };
+
+  private reloadFallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
     return { error };
@@ -41,22 +51,42 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     state: ErrorBoundaryState
   ): Partial<ErrorBoundaryState> | null {
     if (props.resetKey !== state.resetKey) {
-      return { error: null, errorInfo: null, resetKey: props.resetKey };
+      return { error: null, errorInfo: null, resetKey: props.resetKey, reloading: false };
     }
     return null;
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
+    // The app is already lost to the crash screen, so a stale-chunk reload discards nothing more.
+    if (
+      this.props.variant === 'global' &&
+      isDynamicImportFailure(error) &&
+      reloadForStaleChunk(error)
+    ) {
+      console.warn('Reloading after a lazy chunk failed to load:', error.message);
+      this.setState({ errorInfo: info, reloading: true });
+      if (this.reloadFallbackTimer !== null) clearTimeout(this.reloadFallbackTimer);
+      this.reloadFallbackTimer = setTimeout(
+        () => this.setState({ reloading: false }),
+        RELOAD_FALLBACK_MS
+      );
+      return;
+    }
     console.error('ErrorBoundary caught render error:', error, info.componentStack);
     this.setState({ errorInfo: info });
   }
 
+  componentWillUnmount() {
+    if (this.reloadFallbackTimer !== null) clearTimeout(this.reloadFallbackTimer);
+  }
+
   render() {
-    const { error, errorInfo } = this.state;
+    const { error, errorInfo, reloading } = this.state;
     const { variant = 'scoped', fallbackTitle, children } = this.props;
 
     if (error) {
       if (variant === 'global') {
+        if (reloading) return <InitialLoadingScreen message="Reloading…" />;
         return <GlobalCrashScreen error={error} errorInfo={errorInfo} />;
       }
       return (

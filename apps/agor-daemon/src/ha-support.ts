@@ -1,7 +1,7 @@
 import type { ResolvedDeploymentConfig } from '@agor/core/config';
 import { Unavailable } from '@agor/core/feathers';
 import type { HookContext, PermissionMode, Session } from '@agor/core/types';
-import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
+import { isGeminiManualMode, mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
 
 export const HA_CONSTRAINED_PROFILE = 'constrained-active-active' as const;
 
@@ -75,7 +75,7 @@ export function isHaNonInteractivePermission(options: {
       // Agor permission callback regardless of the persisted display mode.
       return true;
     case 'gemini':
-      return mapPermissionMode(mode ?? 'default', 'gemini') === 'yolo';
+      return !isGeminiManualMode(mode);
     case 'opencode':
       // Even bypass/yolo still routes OpenCode `question` and `task`
       // permission effects through Agor's process-local permission manager.

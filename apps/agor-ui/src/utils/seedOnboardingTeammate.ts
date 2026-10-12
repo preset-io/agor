@@ -3,12 +3,14 @@ import { getTeammateConfig } from '@agor-live/client';
 import type { NewSessionConfig, SessionCreationResult } from '../domain/sessionCreation';
 import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
 import type { OnboardingSlackGatewayIntent } from './onboardingSlack';
+import { stagePromptDraftSeed } from './promptDrafts';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
   buildTeammateFirstSessionTitle,
 } from './teammateBootstrapPrompt';
 import { createTeammateBranch, type TeammateCreationDeps } from './teammateCreation';
+import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
 
 export interface SeedOnboardingTeammateInput {
   connectedMcpServerIds?: string[];
@@ -21,18 +23,20 @@ export interface SeedOnboardingTeammateInput {
   teammateEmoji?: string;
   /**
    * Framework source branch from the chosen gallery template. Undefined falls
-   * back to the framework repo's default branch (createTeammateBranch). A
-   * missing template branch on the remote surfaces as a non-fatal warning
-   * rather than blocking completion.
+   * back to the framework repo's default branch, or the public template's for a
+   * github.com private fork (createTeammateBranch). A missing template branch
+   * leaves setup incomplete and retryable.
    */
   sourceBranch?: string;
   /** Remote that owns sourceBranch when a built-in template is not on the destination remote. */
   sourceRemoteUrl?: string;
   /**
-   * Agent chosen in the LLM step. `null`/`undefined` means the user skipped that
-   * step and has no credentials, so no bootstrap session is started.
+   * Agent chosen in the LLM step or resolved by the caller as a fallback.
+   * `null`/`undefined` means no agent is available, so only the workspace is required.
    */
   agent?: AgenticToolName | null;
+  /** False for a fallback tool after skipping AI setup: create an idle session and draft. */
+  startInitialTurn: boolean;
   /** Goal-tailored tools/connections with their real Agor setup surface. */
   suggestedIntegrations?: OnboardingIntegrationRecommendation[];
   /** Onboarding goal ids (order-preserving, primary first); [] when skipped. */
@@ -58,24 +62,10 @@ export interface SeedOnboardingTeammateInput {
     config: NewSessionConfig,
     boardId: string
   ) => Promise<SessionCreationResult | null>;
-  /** Non-fatal warning surface — teammate creation must never block completion. */
+  /** Guidance surface; the returned readiness determines whether setup completed. */
   onWarn: (message: string) => void;
 }
 
-/**
- * Seeds the user's first AI teammate at the end of onboarding: a branch on the
- * framework repo plus a goal-primed onboarding session, reusing the board the
- * wizard already created.
- *
- * Best-effort by contract: if the framework repo isn't ready yet, or branch /
- * session creation throws, it surfaces a non-fatal warning and resolves without
- * a session so the caller can still finish onboarding on the board. Durable
- * branch/session ids are returned so completion retries can resume exactly.
- *
- * Skipping the LLM step is a supported outcome, not a failure: the teammate's
- * workspace is still created, but no session is started, so the caller lands the
- * user on their board rather than in a conversation that cannot run.
- */
 function isOnboardingTeammateForBoard(branch: Branch, boardId: string): boolean {
   const teammate = branch.custom_context?.teammate as
     | { kind?: unknown; createdViaOnboarding?: unknown }
@@ -162,9 +152,23 @@ async function findExistingSession(
   return sessions.find(isBootstrap);
 }
 
+/**
+ * Seeds the user's first AI teammate at the end of onboarding: a branch on the
+ * framework repo plus a goal-primed onboarding session, reusing the board the
+ * wizard already created.
+ *
+ * Durable IDs are recovery handles, not proof of success. The caller must require
+ * workspaceReady and, when an agent is selected, a session before completing
+ * onboarding. Failures retain IDs so retries can resume without duplicate work.
+ *
+ * When no agent is available, the workspace must still become filesystem-ready;
+ * the caller can then land on the board without starting a session.
+ */
 export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput): Promise<{
   branchId?: string;
   sessionId?: string;
+  /** Explicit success signal; IDs alone can also be returned after failed setup. */
+  workspaceReady?: true;
   initialization?: SessionCreationResult;
 }> {
   const isCurrentUser = () => input.isCurrentUser(input.expectedUserId);
@@ -201,6 +205,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
             displayName: teammateName,
             emoji: input.teammateEmoji,
             repoId: input.frameworkRepo.repo_id,
+            repo: input.frameworkRepo,
             sourceBranch: input.sourceBranch,
             sourceRemoteUrl: input.sourceRemoteUrl,
             boardId: input.boardId,
@@ -230,7 +235,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
     // the bootstrap session below.
     if (!input.client) {
       warn(
-        `${teammateName}'s workspace is ready, but it could not be saved as your primary assistant yet.`
+        `${teammateName}'s workspace is saved, but it could not be saved as your primary assistant yet.`
       );
     } else {
       try {
@@ -240,32 +245,53 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
         });
       } catch (error) {
         warn(
-          `${teammateName}'s workspace is ready, but it could not be saved as your primary assistant: ${
+          `${teammateName}'s workspace is saved, but it could not be saved as your primary assistant: ${
             error instanceof Error ? error.message : String(error)
           }.`
         );
       }
     }
     if (!isCurrentUser()) return {};
+    if (!input.client) throw new Error('Reconnect to Agor to confirm workspace readiness.');
 
     const existingSession = await findExistingSession(input, branch.branch_id);
     if (!isCurrentUser()) return {};
+    // New sessions wait in the shared bootstrap runner. Paths that do not
+    // start a session must independently confirm the same filesystem contract.
+    if (existingSession || !input.agent) {
+      await waitForBranchFilesystemReady(input.client, branch.branch_id);
+      if (!isCurrentUser()) return {};
+    }
     if (existingSession) {
-      return { branchId: branch.branch_id, sessionId: existingSession.session_id };
+      return {
+        branchId: branch.branch_id,
+        sessionId: existingSession.session_id,
+        workspaceReady: true,
+      };
     }
 
     // Callers resolve a fallback agent so onboarding lands in the first-task
-    // composer even when the LLM step was skipped (the composer then surfaces
-    // the inline connect-model panel). This branch only remains for the rare
+    // composer even when the LLM step was skipped. This branch only remains for the rare
     // case where no agentic tool is available at all — then there is nothing to
     // open a session with, so stop at the workspace with guidance.
     if (!input.agent) {
       warn(
         `${teammateName}'s workspace is ready. Connect an AI model in Settings - AI & Agents to start your first session.`
       );
-      return { branchId: branch.branch_id };
+      return { branchId: branch.branch_id, workspaceReady: true };
     }
 
+    const starterPrompt = buildTeammateBootstrapPrompt({
+      displayName: teammateName,
+      emoji: input.teammateEmoji,
+      userName: input.user?.name,
+      userEmail: input.user?.email,
+      goals: input.goals,
+      templateId: input.templateId,
+      localHome: getTeammateConfig(branch)?.localHome,
+      suggestedIntegrations: input.suggestedIntegrations,
+      slackGatewayIntent: input.slackGatewayIntent,
+    });
     const initialization = await startTeammateBootstrapSession({
       client: input.client,
       branchId: branch.branch_id,
@@ -280,33 +306,30 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
           displayName: teammateName,
           emoji: input.teammateEmoji,
         }),
-        initialPrompt: buildTeammateBootstrapPrompt({
-          displayName: teammateName,
-          emoji: input.teammateEmoji,
-          userName: input.user?.name,
-          userEmail: input.user?.email,
-          goals: input.goals,
-          templateId: input.templateId,
-          localHome: getTeammateConfig(branch)?.localHome,
-          suggestedIntegrations: input.suggestedIntegrations,
-          slackGatewayIntent: input.slackGatewayIntent,
-        }),
+        initialPrompt: input.startInitialTurn ? starterPrompt : undefined,
       },
       onCreateSession: input.onCreateSession,
       shouldContinue: isCurrentUser,
     });
 
     if (!isCurrentUser()) return {};
+    if (!input.startInitialTurn) {
+      stagePromptDraftSeed(input.expectedUserId, initialization.sessionId, starterPrompt);
+    }
     return {
       branchId: branch.branch_id,
       sessionId: initialization.sessionId,
+      workspaceReady: true,
       initialization,
     };
   } catch (error) {
+    const recovery = branch
+      ? 'Your teammate is saved. Open it on the board for details. If provisioning failed, ask an admin to check template setup and Git access, then use Retry on that same teammate.'
+      : 'You can create one from the board anytime.';
     warn(
-      `Your board is ready, but we couldn't start your AI teammate: ${
+      `Your board is ready, but we couldn't start your AI teammate. ${recovery} Details: ${
         error instanceof Error ? error.message : String(error)
-      }. You can create one from the board anytime.`
+      }`
     );
     return isCurrentUser() && branch ? { branchId: branch.branch_id } : {};
   }

@@ -144,34 +144,15 @@ describe('SettingsModal navigation gating', () => {
  * The menu and the content read one predicate; these hold them together.
  */
 describe('SettingsModal compact (mobile) shell', () => {
-  it('replaces the persistent Sider menu with a full-width section Select', () => {
+  it('replaces the persistent Sider menu with the grouped section index', () => {
     vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: false });
     renderNav('admin');
 
-    // The always-open Sider menu is gone at mobile widths...
+    // The always-open Sider menu is gone at mobile widths, with no dropdown in
+    // its place: SettingsModal.mobile.test covers the index itself.
     expect(screen.queryByRole('menuitem')).not.toBeInTheDocument();
-    // ...replaced by a searchable section Select that doesn't eat horizontal space.
-    expect(screen.getByRole('combobox', { name: 'Settings section' })).toBeInTheDocument();
-  });
-
-  it('lists the same gated sections in the compact Select', () => {
-    vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: false });
-    renderNav('admin', 'boards');
-
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Settings section' }));
-    expect(screen.getByText('People · Users')).toBeInTheDocument();
-    // Admin-only section is offered in the compact Select too.
-    expect(screen.getByText('People · Groups')).toBeInTheDocument();
-    expect(screen.getByText('Resources · Repositories')).toBeInTheDocument();
-  });
-
-  it('offers a member the compact Select without admin-only sections', () => {
-    vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: false });
-    renderNav('member', 'boards');
-
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Settings section' }));
-    expect(screen.getByText('People · Users')).toBeInTheDocument();
-    expect(screen.queryByText('People · Groups')).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Settings section' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Users' })).toBeInTheDocument();
   });
 });
 

@@ -392,6 +392,54 @@ describe('Catalog responsive layout (real browser)', () => {
     expectReachableInViewport(manage);
   });
 
+  it('confirms the real attachment count with reachable Cancel and Delete and detach actions', async () => {
+    const server = {
+      mcp_server_id: 'delete-fixture' as MCPServerID,
+      name: 'Delete fixture',
+      source: 'catalog' as const,
+      transport: 'http' as const,
+      enabled: true,
+      tools: [],
+      session_count: 2,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const remove = vi.fn();
+    render(
+      <ServerSettingsDrawer
+        server={server}
+        connection={marketplaceCredentialPresentation(undefined)}
+        attachments={[]}
+        cursorAttached={false}
+        canRefresh
+        canChangeTools
+        canReconnect
+        canRemove
+        busy={new Set()}
+        onClose={vi.fn()}
+        onAfterOpenChange={vi.fn()}
+        onRefreshTools={vi.fn()}
+        onToggleTool={vi.fn()}
+        onRemove={remove}
+      />
+    );
+    const trigger = await screen.findByRole('button', { name: 'Remove Delete fixture server' });
+    trigger.scrollIntoView({ block: 'center' });
+    fireEvent.click(trigger);
+    await waitFor(() =>
+      expect(screen.getByText(/2 sessions are attached to this server/)).toBeVisible()
+    );
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    expectReachableInViewport(cancel);
+    fireEvent.click(cancel);
+    expect(remove).not.toHaveBeenCalled();
+    fireEvent.click(trigger);
+    const confirm = await screen.findByRole('button', { name: 'Delete and detach' });
+    await waitFor(() => expectReachableInViewport(confirm));
+    fireEvent.click(confirm);
+    expect(remove).toHaveBeenCalledExactlyOnceWith(server);
+  });
+
   it('shows expired GitLab refresh pending, then actionable reauth without claiming Connected', async () => {
     const server = {
       mcp_server_id: 'gitlab' as MCPServerID,

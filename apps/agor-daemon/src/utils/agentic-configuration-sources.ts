@@ -24,6 +24,7 @@ export function scheduleAgenticToolConfigToSource(
       codexSandboxMode: config.codex_sandbox_mode,
       codexApprovalPolicy: config.codex_approval_policy,
       codexNetworkAccess: config.codex_network_access,
+      codexIncludePlugins: config.codex_include_plugins,
     },
   };
 }
@@ -51,6 +52,9 @@ export function materializedAgenticToolConfigurationToScheduleConfig(
     ...(materialized.permission_config.codex?.networkAccess !== undefined
       ? { codex_network_access: materialized.permission_config.codex.networkAccess }
       : {}),
+    ...(materialized.permission_config.codex?.includePlugins !== undefined
+      ? { codex_include_plugins: materialized.permission_config.codex.includePlugins }
+      : {}),
   };
 }
 
@@ -73,6 +77,9 @@ export function materializedAgenticToolConfigurationToGatewayConfig(
     ...(materialized.permission_config.codex?.networkAccess !== undefined
       ? { codexNetworkAccess: materialized.permission_config.codex.networkAccess }
       : {}),
+    ...(materialized.permission_config.codex?.includePlugins !== undefined
+      ? { codexIncludePlugins: materialized.permission_config.codex.includePlugins }
+      : {}),
   };
 }
 
@@ -93,5 +100,6 @@ export function gatewayAgenticConfigToInlineConfiguration(
     codexSandboxMode: config?.codexSandboxMode,
     codexApprovalPolicy: config?.codexApprovalPolicy,
     codexNetworkAccess: config?.codexNetworkAccess,
+    codexIncludePlugins: config?.codexIncludePlugins,
   };
 }

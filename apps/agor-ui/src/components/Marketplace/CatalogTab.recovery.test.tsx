@@ -138,6 +138,7 @@ describe('CatalogTab add then start-session flow', () => {
     expect(api.connect).toHaveBeenCalledWith({
       catalog_key: ENTRY.name,
       acknowledged_disclosure: ENTRY.permission_disclosure,
+      sharing: 'private',
     });
     expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
     expect(await drawer.findByText('Added to My Servers')).toBeInTheDocument();
@@ -354,6 +355,7 @@ describe('explicit onboarding context', () => {
     expect(api.connect).toHaveBeenCalledWith({
       catalog_key: ENTRY.name,
       acknowledged_disclosure: ENTRY.permission_disclosure,
+      sharing: 'private',
     });
     expect(onConnected).toHaveBeenCalledExactlyOnceWith('server-1');
     expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();

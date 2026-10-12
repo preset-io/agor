@@ -47,3 +47,12 @@ describe('BoardTeammatePanel controlled tabs', () => {
     });
   });
 });
+
+describe('BoardTeammatePanel without a board', () => {
+  it('never shows “Loading board…” for an unresolved board link', () => {
+    // `/b/does-not-exist/`, or a `/s/` or `/w/` link that resolves no board.
+    renderPanel({ board: null, boardReady: false, activeTab: 'teammate' });
+    expect(screen.queryByTestId('board-partition-skeleton')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading board…')).not.toBeInTheDocument();
+  });
+});

@@ -92,6 +92,45 @@ describe('SessionsService SDK-home admission', () => {
     });
   });
 
+  dbTest(
+    'stamps hosted OpenCode branch-scoped so its checkpoints are shared on the branch',
+    async ({ db }) => {
+      const { user, branch } = await fixture(db);
+      const config = {
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        execution: {
+          unix_user_mode: 'delegated',
+          executor_command_template: 'launch {task_id}',
+          executor_storage: { user_home: 'persistent-per-user' },
+          sandbox: { sdk_home_mode: 'per_branch' },
+        },
+      } as AgorConfig;
+      const app = { get: (key: string) => (key === 'config' ? config : undefined) };
+      const service = new SessionsService(db, app as unknown as Application);
+
+      const session = await service.create(
+        {
+          branch_id: branch.branch_id,
+          created_by: user.user_id,
+          agentic_tool: 'opencode',
+          status: SessionStatus.IDLE,
+          model_config: {
+            mode: 'exact',
+            provider: 'zai',
+            model: 'glm-4.6',
+            updated_at: new Date().toISOString(),
+          },
+        },
+        { _agenticConfigResolved: true } as never
+      );
+
+      expect(session.sdk_home_scope).toBe('branch');
+      await expect(new BranchRepository(db).findById(branch.branch_id)).resolves.toMatchObject({
+        sdk_home: 'per_branch',
+      });
+    }
+  );
+
   dbTest('refuses an incompatible tool without adopting the branch', async ({ db }) => {
     const { user, branch } = await fixture(db);
     const service = new SessionsService(db, appWithMode('per_branch'));

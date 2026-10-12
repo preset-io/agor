@@ -11,6 +11,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   assertAsyncEnvironmentCommandConfig,
+  branchMaintenanceCapabilities,
   createUserProcessEnvironment,
   ENVIRONMENT,
   ensureBranchCloneDepthAllowed,
@@ -20,9 +21,11 @@ import {
   getBranchHomePath,
   getTenantDataRoot,
   PAGINATION,
+  permanentBranchDeletionCapability,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
   usesAsyncEnvironmentCommands,
+  usesExternalBranchExecutor,
 } from '@agor/core/config';
 import {
   BoardObjectRepository,
@@ -72,6 +75,7 @@ import {
   NotFound,
 } from '@agor/core/feathers';
 import { stripGitUrlCredentials } from '@agor/core/git/pure';
+import { assertSearchTerms, idFilterValues } from '@agor/core/lib/feathers-validation';
 import type {
   AuthenticatedParams,
   BoardID,
@@ -94,6 +98,7 @@ import {
   BRANCH_DELETION_COMMAND,
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
   BRANCH_WORKSPACE_OPERATION_BUDGET_MS,
+  BRANCH_WORKSPACE_SERVER_FIELDS,
   type BranchCleanAccepted,
   type BranchWorkspaceRequest,
   branchCleanupCommandId,
@@ -127,10 +132,15 @@ import {
   ensureCanControlBranchEnvironment,
   hasBranchPermission,
   isSuperAdmin,
+  withoutPrefetchedRecord,
 } from '../utils/branch-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
+import { verifyBranchWorkspacePreflight } from '../utils/branch-workspace-preflight.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-import { dispatchEnvironmentCommand } from '../utils/environment-command-dispatch.js';
+import {
+  dispatchEnvironmentCommand,
+  ExecutorLaunchRefusedError,
+} from '../utils/environment-command-dispatch.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
@@ -153,6 +163,8 @@ export const BRANCH_MATERIALIZATION_INTENT = Symbol('branchMaterializationIntent
  */
 export type BranchParams = QueryParams<{
   branch_id?: BranchID | { $in?: BranchID[] };
+  created_by?: UUID;
+  teammate?: true;
   repo_id?: UUID;
   name?: string;
   ref?: string;
@@ -177,7 +189,10 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
     'board_id',
     'repo_id',
     'branch_id',
+    'created_by',
     'zone_id',
+    'search',
+    'teammate',
     '$limit',
     '$skip',
     '$sort',
@@ -186,7 +201,7 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
   // An empty virtual filter historically goes through the generic adapter;
   // do not turn it into an unrestricted SQL page.
   if (query.zone_id === '') return false;
-  for (const key of ['archived', 'board_id', 'repo_id', 'zone_id']) {
+  for (const key of ['archived', 'board_id', 'repo_id', 'zone_id', 'created_by', 'search']) {
     if (query[key] !== undefined && typeof query[key] !== 'boolean' && key === 'archived') {
       return false;
     }
@@ -194,13 +209,7 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
       return false;
     }
   }
-  if (query.branch_id !== undefined) {
-    const value = query.branch_id;
-    if (typeof value !== 'string') {
-      const ids = value && typeof value === 'object' ? (value as { $in?: unknown }).$in : undefined;
-      if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) return false;
-    }
-  }
+  if (query.branch_id !== undefined && idFilterValues(query.branch_id) === undefined) return false;
   const sort = query.$sort as Record<string, unknown> | undefined;
   if (sort) {
     const columns = new Set(['branch_id', 'name', 'ref', 'created_at', 'updated_at']);
@@ -519,9 +528,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           spawnExecutor(payload, executorOptions);
         }
       }
-    } catch {
+    } catch (error) {
+      const refused = error instanceof ExecutorLaunchRefusedError;
       await this.withTenantDatabase(params, () =>
-        new EnvironmentCommandRepository(this.db).dispatchFailed(branch.branch_id, attemptId)
+        new EnvironmentCommandRepository(this.db).dispatchFailed(
+          branch.branch_id,
+          attemptId,
+          refused ? 'launch_refused' : 'unknown'
+        )
       );
     }
     return publish();
@@ -1347,8 +1361,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   /**
    * Override patch to handle board_objects when board_id changes.
    *
-   * Schedule config lives on the `schedules` table now (see
-   * docs/internal/schedules-first-class-design-2026-05-24.md); patches
+   * Schedule config lives on the `schedules` table now; patches
    * to schedule fields go through the `schedules` service, not here.
    */
   async patch(
@@ -1446,15 +1459,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         throw new BadRequest('filesystem_status is managed by branch materialization.');
       }
     }
-    if (
-      [
-        'workspace_snapshot',
-        'workspace_operation',
-        'cleanup_last_error',
-        'last_cleanup_succeeded_at',
-        'last_cleanup_operation_id',
-      ].some((key) => Object.hasOwn(data, key))
-    )
+    if (BRANCH_WORKSPACE_SERVER_FIELDS.some((key) => Object.hasOwn(data, key)))
       throw new BadRequest('Workspace operation state is server-managed');
     if (Object.hasOwn(data, 'sdk_home')) {
       throw new BadRequest(
@@ -1644,6 +1649,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const branch = await super.get(id, params);
     const withZone = await this.branchRepo.enrichWithZoneInfo(branch as Branch);
 
+    // A missing runtime config is unknown, never an implicit local capability.
+    const config = this.app.get('config');
+    withZone.maintenance_capabilities = config
+      ? branchMaintenanceCapabilities(config, withZone.storage_mode)
+      : undefined;
+
     // Only enrich with session activity if explicitly requested
     if (includeSessions === true || includeSessions === 'true') {
       const truncationLengthQuery = params?.query?.last_message_truncation_length;
@@ -1737,20 +1748,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (zoneId && !shouldSqlPageBranchQuery(params?.query)) {
       const branchIdsInZone = await this.branchRepo.findBranchIdsByZone(zoneId);
       const existingBranchFilter = params?.query?.branch_id;
-      let filteredBranchIds = branchIdsInZone;
-
-      if (typeof existingBranchFilter === 'string') {
-        filteredBranchIds = branchIdsInZone.includes(existingBranchFilter as BranchID)
-          ? [existingBranchFilter as BranchID]
-          : [];
-      } else if (
-        existingBranchFilter &&
-        typeof existingBranchFilter === 'object' &&
-        Array.isArray(existingBranchFilter.$in)
-      ) {
-        const allowed = new Set(existingBranchFilter.$in);
-        filteredBranchIds = branchIdsInZone.filter((branchId) => allowed.has(branchId));
-      }
+      const requested = idFilterValues(existingBranchFilter);
+      const filteredBranchIds = requested
+        ? branchIdsInZone.filter((branchId) => requested.includes(branchId))
+        : branchIdsInZone;
 
       const { zone_id: _zoneId, ...queryWithoutZone } = params?.query ?? {};
       findParams = {
@@ -1763,27 +1764,36 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     const query = findParams?.query as Record<string, unknown> | undefined;
+    assertSearchTerms(query?.search);
     if (shouldSqlPageBranchQuery(query)) {
       const branchFilter = query?.branch_id;
-      const branchIds =
-        typeof branchFilter === 'string'
-          ? [branchFilter as BranchID]
-          : branchFilter &&
-              typeof branchFilter === 'object' &&
-              Array.isArray((branchFilter as { $in?: unknown }).$in)
-            ? (branchFilter as { $in: BranchID[] }).$in
-            : undefined;
-      const { limit, skip } = this.pageWindow(query ?? {});
+      const branchIds = idFilterValues(branchFilter) as BranchID[] | undefined;
+      const teammate = query?.teammate === true;
+      const window = this.pageWindow(query ?? {});
+      // `teammate` reads at most MAX_TEAMMATE_BRANCHES, newest first; the
+      // real `total` tells a capped page from a complete one.
+      const limit = teammate
+        ? Math.min(
+            (query?.$limit as number | undefined) ?? PAGINATION.MAX_TEAMMATE_BRANCHES,
+            PAGINATION.MAX_TEAMMATE_BRANCHES
+          )
+        : window.limit;
+      const skip = window.skip;
       const page = await this.branchRepo.findPage({
         repo_id: typeof query?.repo_id === 'string' ? (query.repo_id as UUID) : undefined,
         board_id: typeof query?.board_id === 'string' ? (query.board_id as BoardID) : undefined,
         zone_id: typeof query?.zone_id === 'string' ? query.zone_id : undefined,
         archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
         branchIds,
+        createdBy: typeof query?.created_by === 'string' ? (query.created_by as UUID) : undefined,
+        search: typeof query?.search === 'string' ? query.search : undefined,
+        teammate: teammate || undefined,
         visibleToUserId: findParams?._agorSqlBranchAccessUserId,
         limit,
         offset: skip,
-        sort: query?.$sort as Record<string, 1 | -1> | undefined,
+        sort:
+          (query?.$sort as Record<string, 1 | -1> | undefined) ??
+          (teammate ? { branch_id: -1 } : undefined),
       });
       const enriched = await this.branchRepo.enrichManyWithZoneInfo(page.data);
       return {
@@ -1792,6 +1802,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         skip,
         data: enriched,
       };
+    }
+
+    if (query?.search !== undefined) {
+      throw new BadRequest('search is supported only for SQL-paginated branch queries');
     }
 
     // Use default find to ensure all hooks and scoping are applied (including repo_id filter)
@@ -1866,16 +1880,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
     const config = this.app.get('config');
     const needsFiles = filesystemAction !== 'preserved';
-    if (
-      needsFiles &&
-      (config.execution?.unix_user_mode === 'delegated' ||
-        config.execution?.executor_command_template ||
-        (config.deployment?.mode === 'ha' &&
-          config.deployment.ha?.execution_topology === 'external'))
-    )
-      throw new Conflict(
-        'Workspace maintenance requires supported local executor containment; delegated execution is not supported'
-      );
+    const externalExecutor = usesExternalBranchExecutor(config);
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     const authorize = async (repository: BranchRepository, current: Branch) => {
       if (needsFiles)
@@ -1904,6 +1909,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     };
     id = branch.branch_id;
     await this.withTenantDatabase(params, () => authorize(this.branchRepo, branch));
+    const support = branchMaintenanceCapabilities(config, branch.storage_mode);
+    const capability = support[filesystemAction === 'cleaned' ? 'archive_clean' : 'archive_remove'];
+    if (needsFiles && !capability.supported) throw new Conflict(capability.reason);
     const repo = await this.withTenantDatabase(params, () =>
       new RepoRepository(this.db).findById(branch.repo_id)
     );
@@ -1914,7 +1922,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const validate = async (tx: import('@agor/core/db').Database) => {
       const repository = new BranchRepository(tx);
       const current = await repository.findById(id);
-      if (!current || current.path !== branch.path || current.repo_id !== branch.repo_id)
+      if (
+        !current ||
+        current.path !== branch.path ||
+        current.repo_id !== branch.repo_id ||
+        current.storage_mode !== branch.storage_mode
+      )
         throw new Conflict('Branch location changed; refresh before maintenance');
       await authorize(repository, current);
       if (policy) {
@@ -1973,36 +1986,44 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               now.getTime() + BRANCH_WORKSPACE_OPERATION_BUDGET_MS
             ).toISOString(),
           },
-          { repo_id: branch.repo_id, path: branch.path, repo_path: repo.local_path ?? '', policy }
+          {
+            repo_id: branch.repo_id,
+            path: branch.path,
+            repo_path: repo.local_path ?? '',
+            storage_mode: branch.storage_mode,
+            policy,
+          }
         )
       );
       const context = needsFiles
         ? await this.resolveEnvironmentExecutorContext(branch, params)
         : undefined;
-      if (needsFiles) {
+      if (filesystemAction === 'cleaned') {
         // Read-only executor preflight. No daemon filesystem access or fallback mkdir.
+        // Removal deliberately skips this probe: its storage owner verifies the
+        // managed root and absence, including an already-absent checkout on retry.
         const statusToken = await this.withTenantDatabase(params, () =>
           issueExecutorCommandToken(this.app, 'branch-filesystem-status', user.user_id, id)
         );
-        const status = await requestExecutor(
-          {
-            command: 'branch.filesystem.status',
-            sessionToken: statusToken,
-            daemonUrl: getDaemonUrl(),
-            params: { branchId: id },
-          },
-          {
-            preparedEnv: context!.env,
-            templateVariables: { branch_id: id, user_id: user.user_id, branch_fs_access: 'write' },
-          }
+        await verifyBranchWorkspacePreflight(id, () =>
+          requestExecutor(
+            {
+              command: 'branch.filesystem.status',
+              sessionToken: statusToken,
+              daemonUrl: getDaemonUrl(),
+              params: { branchId: id },
+            },
+            {
+              preparedEnv: context!.env,
+              delegatedHomeKey: context!.delegatedHomeKey,
+              templateVariables: {
+                branch_id: id,
+                user_id: user.user_id,
+                branch_fs_access: 'write',
+              },
+            }
+          )
         );
-        if (
-          !status.success ||
-          !status.data ||
-          typeof status.data !== 'object' ||
-          (status.data as { exists?: boolean }).exists !== true
-        )
-          throw new Conflict('Branch workspace is unavailable; nothing was cleaned');
       }
       if (action === 'archive') {
         await this.withTenantDatabase(params, () =>
@@ -2018,7 +2039,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           new BranchWorkspaceOperationRepository(this.db).finishPreserve(admission.claim)
         );
         this.closeBranchTerminals(id, String(tenantId));
-        const current = await this.withTenantDatabase(params, () => this.get(id, params));
+        const current = await this.readCommittedBranch(id, params);
         emitServiceEvent(this.app, {
           path: 'branches',
           event: 'patched',
@@ -2047,6 +2068,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               operationId: admission.claim.operation_id,
               generation: admission.claim.generation,
               executionId,
+              ...(externalExecutor
+                ? {
+                    delegatedStorage: {
+                      tenantDataRoot: getTenantDataRoot(tenantId),
+                      branchesRoot: getBranchesDir(tenantId),
+                      branchPath: branch.path,
+                      repoPath: repo.local_path!,
+                      storageMode: 'clone' as const,
+                    },
+                  }
+                : {}),
               ...(filesystemAction === 'deleted'
                 ? {
                     filesystemAction: 'deleted' as const,
@@ -2069,13 +2101,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           },
           {
             preparedEnv: context!.env,
+            delegatedHomeKey: context!.delegatedHomeKey,
             logPrefix: '[Branch workspace maintenance]',
             templateVariables: { branch_id: id, user_id: user.user_id, branch_fs_access: 'write' },
           }
         );
       };
       if (!enqueueAfterTenantDatabaseCommit(dispatch)) dispatch();
-      const current = await this.withTenantDatabase(params, () => this.get(id, params));
+      const current = await this.readCommittedBranch(id, params);
       emitServiceEvent(this.app, { path: 'branches', event: 'patched', data: current, params, id });
       return { branch_id: id, operation_id: admission.claim.operation_id, status: 'accepted' };
     } catch (error) {
@@ -2086,6 +2119,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
       throw error;
     }
+  }
+
+  /** Post-write read that skips the request's pre-write authorization prefetch. */
+  private readCommittedBranch(id: BranchID, params?: BranchParams) {
+    return this.withTenantDatabase(params, () =>
+      this.getCanonicalBranch(id, withoutPrefetchedRecord(params))
+    );
   }
 
   /** Best-effort attachment closure shared by archive and permanent deletion. */
@@ -2099,15 +2139,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const user = (params as AuthenticatedParams | undefined)?.user;
     if (!user) throw new NotAuthenticated('Authenticated branch management authority is required');
     const config = this.app.get('config');
-    const externalExecutor =
-      config.execution?.unix_user_mode === 'delegated' ||
-      Boolean(config.execution?.executor_command_template) ||
-      (config.deployment?.mode === 'ha' && config.deployment.ha?.execution_topology === 'external');
-    if (externalExecutor && config.execution?.delegated_branch_deletion !== true) {
-      throw new Conflict(
-        'Permanent deletion requires a supported local storage executor. Delegated/external deletion containment is not available.'
-      );
-    }
+    const externalExecutor = usesExternalBranchExecutor(config);
+    const capability = permanentBranchDeletionCapability(config);
+    if (!capability.supported) throw new Conflict(capability.reason);
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
     if (!tenantId) throw new Forbidden('Deletion tenant context is required');
@@ -2192,6 +2226,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           },
           {
             preparedEnv: context.env,
+            delegatedHomeKey: context.delegatedHomeKey,
             logPrefix: `[Branch.delete ${branch.branch_id}]`,
             templateVariables: {
               branch_id: branch.branch_id,
@@ -2203,7 +2238,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       };
       if (!enqueueAfterTenantDatabaseCommit(dispatch)) dispatch();
     }
-    const current = await this.withTenantDatabase(params, () => this.get(branch.branch_id, params));
+    // Authorization may have prefetched the old failed row. Return committed
+    // lifecycle truth, not that pre-admission snapshot, and avoid re-entering
+    // wrapped get hooks which can reintroduce the request's RBAC cache.
+    const current = await this.withTenantDatabase(params, () =>
+      this.getCanonicalBranch(branch.branch_id, withoutPrefetchedRecord(params))
+    );
+    if (!admission.acquired && current.deletion_status === 'deletion_failed') {
+      throw new Conflict(
+        'Deletion recovery is blocked: the prior invocation has no verified settlement. ' +
+          'No replacement was started. Process exit, elapsed time, and confirmation are not containment proof. ' +
+          'See the branch deletion recovery guide; legacy claimed invocations cannot be automatically recovered.'
+      );
+    }
     emitServiceEvent(this.app, {
       path: 'branches',
       event: 'patched',
@@ -2247,8 +2294,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return this.requestPermanentDeletion(id, params);
     }
 
-    await this.requestWorkspaceOperation(id, { action: 'archive', filesystemAction }, params);
-    return this.withTenantDatabase(params, () => this.get(id, params));
+    const accepted = await this.requestWorkspaceOperation(
+      id,
+      { action: 'archive', filesystemAction },
+      params
+    );
+    return this.readCommittedBranch(accepted.branch_id, params);
   }
 
   /**
@@ -2293,7 +2344,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           // commit-deferred events and eviction; refused admission rolls it back.
           await lockTenantAuthorizationFence(db, params);
           await lockBranchReferenceMutation(db);
-          const current = await this.get(id, params);
+          // Committed placement under the locks, not the request's cached row.
+          const current = await this.readCommittedBranch(branch.branch_id, params);
           if (current.board_id !== options?.boardId) {
             await this.patch(id, { board_id: options?.boardId }, params);
           }
@@ -2341,7 +2393,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
 
     console.log(`✅ Unarchived branch ${branch.name} and ${unarchivedSessions.count} session(s)`);
-    return this.withTenantDatabase(params, () => this.get(id, params));
+    return this.readCommittedBranch(branch.branch_id, params);
   }
 
   /**
@@ -3009,6 +3061,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       app: snapshot.app,
     });
 
+    // Persist as an internal write. The caller already passed the control gate
+    // above and the values come from the repo's admin-managed templates, so the
+    // patch hooks must not re-check them as a direct env command edit, which
+    // is admin-only (#2803). The env policy hook still runs on internal calls.
     return await this.withTenantDatabase(params, () =>
       this.patch(
         id,
@@ -3022,7 +3078,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           app_url: snapshot.app,
           updated_at: new Date().toISOString(),
         },
-        params
+        { ...params, provider: undefined }
       )
     );
   }

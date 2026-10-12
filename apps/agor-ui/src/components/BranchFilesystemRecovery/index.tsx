@@ -1,4 +1,4 @@
-import { classifyBranchFilesystemReadiness } from '@agor/core/types';
+import { classifyBranchFilesystemReadiness, isTeammate } from '@agor/core/types';
 import type { AgorClient, Branch } from '@agor-live/client';
 import { ReloadOutlined } from '@ant-design/icons';
 import { Alert, Button } from 'antd';
@@ -49,7 +49,28 @@ export function BranchFilesystemRecovery({
             ? 'Provisioning failed'
             : 'Filesystem unavailable'
       }
-      description={branch.error_message}
+      description={
+        readiness === 'failed' &&
+        isTeammate(branch) &&
+        branch.provisioning_operation !== 'restore' ? (
+          <>
+            <p>
+              We couldn’t prepare your teammate’s workspace. Ask a workspace admin to check that the
+              teammate template repository is available, its required starter branch exists, and
+              your Git access is working. Then use Retry here to continue with this teammate—no need
+              to create another one.
+            </p>
+            {branch.error_message && (
+              <details>
+                <summary>Technical details</summary>
+                {branch.error_message}
+              </details>
+            )}
+          </>
+        ) : (
+          branch.error_message
+        )
+      }
       action={
         !creating && (
           <Button

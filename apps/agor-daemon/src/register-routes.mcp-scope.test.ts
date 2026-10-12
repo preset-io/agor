@@ -88,7 +88,7 @@ describe('Session MCP executor read scope', () => {
     const route = source.slice(routeStart, routeEnd);
 
     expect(routeStart).toBeGreaterThan(0);
-    expect(route.match(/authorizeAndLoadSessionForMcpConfig\(id, params\);/g)).toHaveLength(4);
+    expect(route.match(/authorizeAndLoadSessionForMcpConfig\(id, params\);/g)).toHaveLength(5);
     expect(
       route.match(
         /authorizeAndLoadSessionForMcpConfig\(id, params, \{\s*allowExecutorProjection: true,?\s*\}\)/g

@@ -710,6 +710,7 @@ export const repos = pgTable(
         // Async clone lifecycle: 'cloning' → 'ready' | 'failed'. Undefined for
         // legacy rows and for local-type repos. See packages/core/src/types/repo.ts.
         clone_status?: 'cloning' | 'ready' | 'failed';
+        clone_generation?: number;
         clone_error?: {
           exit_code: number;
           category: 'auth_failed' | 'not_found' | 'network' | 'git_unavailable' | 'unknown';
@@ -860,7 +861,7 @@ export const branches = pgTable(
       .$type<'none' | 'read' | 'write'>()
       .default('read'),
 
-    // Branch storage model — see context/explorations/clone-redesign.md.
+    // Branch storage model.
     // 'worktree' = native `git worktree add` (shared base .git/config — legacy default).
     // 'clone'    = self-standing `git clone` (own .git/ — closes cross-branch leak vectors).
     //
@@ -1171,7 +1172,7 @@ export const users = pgTable(
           copilot?: {
             COPILOT_GITHUB_TOKEN?: string;
           };
-          opencode?: Record<string, never>;
+          opencode?: Record<string, string>;
         };
         agentic_auth_methods?: import('../types/user').AgenticAuthMethods;
         agentic_credential_sources?: import('../types/user').AgenticCredentialSources;
@@ -1183,7 +1184,7 @@ export const users = pgTable(
         //
         // Writes always produce the object form. Scope validation lives in the app
         // layer — no SQL CHECK constraint — so adding future scope values stays
-        // schema-free. See `context/explorations/env-var-access.md`.
+        // schema-free.
         env_vars?: Record<
           string,
           | string // legacy
@@ -1215,6 +1216,7 @@ export const users = pgTable(
             codexSandboxMode?: string;
             codexApprovalPolicy?: string;
             codexNetworkAccess?: boolean;
+            codexIncludePlugins?: boolean;
           };
           gemini?: {
             modelConfig?: {
@@ -3653,6 +3655,38 @@ export const kbImportReceipts = pgTable(
       table.bundle,
       table.slug,
       table.entry_key
+    ),
+  })
+);
+
+/** Hosted OpenCode checkpoints; no FKs so deleted Sessions' rows survive until their files are cleaned. */
+export const opencodeCheckpointAttempts = pgTable(
+  'opencode_checkpoint_attempts',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    attempt_id: varchar('attempt_id', { length: 36 }).primaryKey(),
+    session_id: varchar('session_id', { length: 36 }).notNull(),
+    task_id: varchar('task_id', { length: 36 }).notNull(),
+    owner_user_id: varchar('owner_user_id', { length: 36 }).notNull(),
+    holder_instance_id: varchar('holder_instance_id', { length: 36 }).notNull(),
+    input_task_id: varchar('input_task_id', { length: 36 }),
+    state: text('state', { enum: ['open', 'accepted', 'superseded'] }).notNull(),
+    manifest: t.json<import('@agor/core/types').OpenCodeCheckpointManifest>('manifest'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    tenantIdx: index('opencode_checkpoint_attempts_tenant_idx').on(table.tenant_id),
+    taskUnique: uniqueIndex('opencode_checkpoint_attempts_task_unique').on(
+      table.tenant_id,
+      table.task_id
+    ),
+    acceptedUnique: uniqueIndex('opencode_checkpoint_attempts_accepted_unique')
+      .on(table.tenant_id, table.session_id)
+      .where(sql`${table.state} = 'accepted'`),
+    ownerIdx: index('opencode_checkpoint_attempts_owner_idx').on(
+      table.tenant_id,
+      table.owner_user_id
     ),
   })
 );

@@ -45,6 +45,8 @@ export interface PermissionDecision {
   scope: PermissionScope;
   decidedBy: string; // userId
   timedOut?: boolean; // true when the decision was an automatic timeout (not an explicit deny)
+  /** The configured timeout that elapsed, present only when `timedOut`. */
+  timeoutMs?: number;
 }
 
 // Re-export for convenience
@@ -138,6 +140,7 @@ export class PermissionService {
           scope: PermissionScope.ONCE,
           decidedBy: 'system',
           timedOut: true,
+          timeoutMs: this.timeoutMs,
         });
       }, this.timeoutMs);
 

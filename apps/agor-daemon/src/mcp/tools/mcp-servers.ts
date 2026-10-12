@@ -1,4 +1,5 @@
 import { NotFound } from '@agor/core/feathers';
+import { isUserEnvPlaceholder } from '@agor/core/mcp';
 import { filterCatalog } from '@agor/core/mcp-catalog/query';
 import { MCP_AUTH_SECRET_FIELDS, redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import { redactMCPEnvSecrets } from '@agor/core/tools/mcp/env-secrets';
@@ -365,7 +366,10 @@ const mcpAuthInputSchema = z
     ),
     oauth_client_secret: mcpOptionalString(
       'auth.oauth_client_secret',
-      'Optional OAuth client secret. Prefer {{ user.env.OAUTH_CLIENT_SECRET }} templates; raw secrets are not returned by this tool.'
+      'Only an environment-variable reference, never a raw app secret. Enter customer app secrets in the secure Catalog or MCP Settings form, not chat.'
+    ).refine(
+      (value) => value === undefined || isUserEnvPlaceholder(value),
+      'Use the secure UI for OAuth app secrets; tools accept only an environment reference'
     ),
     oauth_scope: mcpOptionalString('auth.oauth_scope', 'Optional OAuth scopes, space-separated.'),
     oauth_grant_type: z
@@ -457,7 +461,13 @@ const mcpAuthPatchSchema = z
     oauth_authorization_url: nullableString('OAuth authorization endpoint override.'),
     oauth_token_url: nullableString('OAuth token endpoint override.'),
     oauth_client_id: nullableString('OAuth client ID.'),
-    oauth_client_secret: nullableString('OAuth client secret.'),
+    oauth_client_secret: nullableString(
+      'OAuth app secret environment reference; use secure UI for raw values.'
+    ).refine(
+      (value) =>
+        value == null || value === MCP_HEADER_REDACTED_SENTINEL || isUserEnvPlaceholder(value),
+      'Use the secure UI for OAuth app secrets; tools accept only an environment reference'
+    ),
     oauth_scope: nullableString('OAuth scopes, space-separated.'),
     oauth_grant_type: z.enum(['client_credentials', 'authorization_code']).nullable().optional(),
     oauth_mode: z.enum(['per_user', 'shared']).nullable().optional(),
@@ -1054,7 +1064,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_create',
     {
       description:
-        'Register a new MCP server definition. Permissions are service-enforced: admins always may, members only when the workspace `mcp_member_policy` allows it, and members are limited to remote transports and to servers owned by themselves. Scope matters: enabled `global` servers are automatically in each session\'s effective MCP set; `session` scoped servers must be linked with `agor_sessions_add_mcp_server` (or `attachToCurrentSession` / `attachToSessionId`). Start simple for remote OAuth: `name` + `url` + `auth:{type:"oauth"}`; add endpoint/client fields only if discovery/DCR fails. For stdio use `transport:"stdio"` + `command` (+ `args`). Use `auth`, not Authorization headers. Prefer `{{ user.env.SECRET_NAME }}` templates; raw secrets are visible in the MCP transcript though never returned.',
+        'Register a new MCP server definition. Permissions are service-enforced: admins always may, members only when the workspace `mcp_member_policy` allows it, and members are limited to remote transports and to servers owned by themselves. Scope matters: enabled `global` servers are automatically in each session\'s effective MCP set; `session` scoped servers must be linked with `agor_sessions_add_mcp_server` (or `attachToCurrentSession` / `attachToSessionId`). Start simple for remote OAuth: `name` + `url` + `auth:{type:"oauth"}`; add endpoint/client fields only if discovery/DCR fails. For stdio use `transport:"stdio"` + `command` (+ `args`). Use `auth`, not Authorization headers. Use secure Catalog or MCP Settings for OAuth app client secrets, never chat; `oauth_client_secret` accepts only a `{{ user.env.NAME }}` reference. Prefer environment references for other credentials too.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: mcpServerCreateSchema,
     },

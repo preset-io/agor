@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, stat, symlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -270,6 +270,7 @@ describe('managed executor git/fs commands', () => {
             url: 'https://example.com/repo.git',
             outputPath: '/safe/repos/repo',
             repoId,
+            cloneGeneration: 2,
             createDbRecord: true,
             importEnvironmentConfig: false,
           },
@@ -282,6 +283,7 @@ describe('managed executor git/fs commands', () => {
       });
       expect(patchedRepos).toContainEqual({
         clone_status: 'failed',
+        clone_generation: 2,
         clone_error: { category: 'auth_failed', exit_code: 1, message: result.error?.message },
       });
       const surfaces = JSON.stringify({ result, patchedRepos, logs: log.mock.calls });
@@ -546,6 +548,48 @@ describe('managed executor git/fs commands', () => {
     expect(patchedBranches.some((patch) => 'start_command' in patch)).toBe(false);
   });
 
+  it('redacts template source failures before logging or publishing technical details', async () => {
+    const token = 'synthetic-template-token';
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: { repo_id: repoId, remote_url: 'https://example.test/private.git' },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'teammate',
+        ref: 'teammate',
+        new_branch: true,
+        storage_mode: 'clone',
+        custom_context: { teammate: { kind: 'teammate', displayName: 'Fixture' } },
+      },
+      gitEnv: { GITHUB_TOKEN: token },
+      patchedBranches,
+    });
+    mocks.resolveGitRef.mockRejectedValueOnce(
+      new Error(`Authentication failed ${token} https://user:secret@example.test/private.git`)
+    );
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await handleGitBranchAdd(
+        {
+          command: 'git.branch.add',
+          sessionToken: 'fixture',
+          params: { branchId, repoId, allowExistingCheckout: false, useReference: false },
+        },
+        {}
+      );
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toContain('Authentication failed');
+      const diagnostic = JSON.stringify([result, patchedBranches, log.mock.calls]);
+      expect(diagnostic).not.toContain(token);
+      expect(diagnostic).not.toContain('user:secret');
+      expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('resolves once before worktree dispatch and reports the concrete ref and SHA', async () => {
     const patchedBranches: Array<Record<string, unknown>> = [];
     createClient({
@@ -611,12 +655,13 @@ describe('managed executor git/fs commands', () => {
   });
 
   it.each([
-    ['personal/topic', false],
-    ['refs/remotes/personal/topic', false],
-    ['personal/topic', true],
+    ['personal/topic', false, false],
+    ['refs/remotes/personal/topic', false, false],
+    ['personal/topic', true, false],
+    ['personal/topic', false, true],
   ] as const)(
-    'withholds managed credentials from configured/persisted clone source %s (restore=%s)',
-    async (baseRef, restoreMode) => {
+    'withholds managed credentials from configured/persisted clone source %s (restore=%s, teammate=%s)',
+    async (baseRef, restoreMode, teammate) => {
       const actual = await vi.importActual<typeof import('@agor/git')>('@agor/git');
       const authorization: Array<string | undefined> = [];
       const server = createServer((req, res) => {
@@ -643,7 +688,12 @@ describe('managed executor git/fs commands', () => {
             name: 'feature',
             ref: 'feature',
             base_ref: baseRef,
-            ...(restoreMode ? { base_source: { name: 'topic', remote_url: remoteUrl } } : {}),
+            ...(restoreMode || teammate
+              ? { base_source: { name: 'topic', remote_url: remoteUrl } }
+              : {}),
+            ...(teammate
+              ? { custom_context: { teammate: { kind: 'teammate', displayName: 'Fixture' } } }
+              : {}),
             new_branch: true,
             ref_type: 'branch',
             storage_mode: 'clone',
@@ -682,7 +732,7 @@ describe('managed executor git/fs commands', () => {
         );
         expect(authorization.length).toBeGreaterThan(0); // Real clone transport reached the server.
         expect(authorization.every((header) => header === undefined)).toBe(true);
-        if (restoreMode) {
+        if (restoreMode || teammate) {
           expect(mocks.resolveGitRef).toHaveBeenLastCalledWith(undefined, 'topic', {
             refType: 'branch',
             remote: { url: remoteUrl },
@@ -1065,27 +1115,71 @@ describe('managed executor git/fs commands', () => {
   });
 
   it('realigns an origin from daemon-authoritative inputs without a daemon client', async () => {
-    mocks.ensureGitRemoteUrl.mockResolvedValueOnce({ changed: true });
-    const result = await handleGitRepoRealignOrigin(
-      {
-        command: 'git.repo.realign-origin',
-        params: {
-          repoId,
-          repoPath: '/managed/repo',
-          remoteUrl: 'https://example.com/org/repo.git',
-          repoSlug: 'org/repo',
+    const reposRoot = await mkdtemp(join(tmpdir(), 'agor-realign-root-'));
+    try {
+      const repoPath = join(reposRoot, 'org', 'repo');
+      await mkdir(repoPath, { recursive: true });
+      mocks.ensureGitRemoteUrl.mockResolvedValueOnce({ changed: true });
+      const result = await handleGitRepoRealignOrigin(
+        {
+          command: 'git.repo.realign-origin',
+          params: {
+            repoId,
+            repoPath,
+            remoteUrl: 'https://example.com/org/repo.git',
+            repoSlug: 'org/repo',
+            reposRoot,
+          },
         },
-      },
-      {}
-    );
+        {}
+      );
 
-    expect(result).toMatchObject({ success: true, data: { repoId, changed: true } });
-    expect(mocks.ensureGitRemoteUrl).toHaveBeenCalledWith(
-      '/managed/repo',
-      'origin',
-      'https://example.com/org/repo.git'
-    );
-    expect(mocks.createExecutorClient).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ success: true, data: { repoId, changed: true } });
+      expect(mocks.ensureGitRemoteUrl).toHaveBeenCalledWith(
+        await realpath(repoPath),
+        'origin',
+        'https://example.com/org/repo.git'
+      );
+      expect(mocks.createExecutorClient).not.toHaveBeenCalled();
+    } finally {
+      await rm(reposRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to realign another tenant's repository or branch checkout", async () => {
+    const tenantsBase = await mkdtemp(join(tmpdir(), 'agor-realign-tenants-'));
+    try {
+      const reposRoot = join(tenantsBase, 'attacker', 'repos');
+      const victimRepo = join(tenantsBase, 'victim', 'repos', 'acme', 'private');
+      const victimCheckout = join(tenantsBase, 'victim', 'worktrees', 'acme', 'private', 'main');
+      await mkdir(join(reposRoot, 'attacker'), { recursive: true });
+      await mkdir(victimRepo, { recursive: true });
+      await mkdir(victimCheckout, { recursive: true });
+      await symlink(victimRepo, join(reposRoot, 'attacker', 'alias'));
+
+      for (const repoPath of [victimRepo, victimCheckout, join(reposRoot, 'attacker', 'alias')]) {
+        const result = await handleGitRepoRealignOrigin(
+          {
+            command: 'git.repo.realign-origin',
+            params: {
+              repoId,
+              repoPath,
+              remoteUrl: 'https://attacker.example/drop.git',
+              repoSlug: 'attacker/copy',
+              reposRoot,
+            },
+          },
+          {}
+        );
+        expect(result).toMatchObject({
+          success: false,
+          error: { code: 'GIT_REPO_REALIGN_ORIGIN_FAILED' },
+        });
+      }
+      expect(mocks.ensureGitRemoteUrl).not.toHaveBeenCalled();
+    } finally {
+      await rm(tenantsBase, { recursive: true, force: true });
+    }
   });
 
   it('paginates self-hosted reconciliation and dry-run does not mutate configs', async () => {
@@ -1230,6 +1324,7 @@ describe('managed executor git/fs commands', () => {
             url: 'https://github.com/preset-io/agor-assistant.git',
             slug: 'smoke/agor-assistant-pr1258',
             repoId,
+            cloneGeneration: 3,
             createDbRecord: true,
             importEnvironmentConfig: false,
           },
@@ -1244,12 +1339,14 @@ describe('managed executor git/fs commands', () => {
       expect(process.env.GIT_CONFIG_PARAMETERS).toContain(
         "'safe.directory=/safe/repos/smoke/agor-assistant-pr1258'"
       );
-      expect(patchedRepos).toContainEqual(
+      // One patch: separate metadata and ready patches can reach clients out of order (#2941).
+      expect(patchedRepos).toEqual([
         expect.objectContaining({
           local_path: '/safe/repos/smoke/agor-assistant-pr1258',
-        })
-      );
-      expect(patchedRepos.at(-1)).toMatchObject({ clone_status: 'ready' });
+          clone_status: 'ready',
+          clone_generation: 3,
+        }),
+      ]);
     } finally {
       if (previousGitConfigParameters === undefined) {
         delete process.env.GIT_CONFIG_PARAMETERS;
@@ -1291,6 +1388,54 @@ describe('managed executor git/fs commands', () => {
     expect(mocks.cloneRepo).toHaveBeenCalledWith(
       expect.objectContaining({ targetDir: '/tenant/acme/repos/preset-io/agor-teammate' })
     );
+  });
+
+  it('successful retry preserves the saved name and environment, including DB-only overrides', async () => {
+    const saved = {
+      repo_id: repoId,
+      name: 'Customized teammate repository',
+      environment: {
+        version: 2,
+        default: 'custom',
+        variants: { custom: { start: 'custom-start' } },
+        template_overrides: { start: 'db-only-start' },
+      },
+    };
+    const patchedRepos: Array<Record<string, unknown>> = [];
+    createClient({ repo: saved, patchedRepos });
+    mocks.parseAgorYml.mockReturnValue({
+      version: 2,
+      default: 'checkout',
+      variants: { checkout: { start: 'checkout-start' } },
+    });
+
+    const result = await handleGitClone(
+      {
+        command: 'git.clone',
+        sessionToken: 'tenant-bound-service-token',
+        params: {
+          url: 'https://github.com/preset-io/agor-teammate.git',
+          outputPath: '/tenant/acme/repos/preset-io/agor-teammate',
+          slug: 'preset-io/agor-teammate',
+          repoId,
+          cloneGeneration: 2,
+          createDbRecord: true,
+          importEnvironmentConfig: false,
+        },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.parseAgorYml).not.toHaveBeenCalled();
+    expect(patchedRepos).toHaveLength(1);
+    expect(patchedRepos[0]).not.toHaveProperty('name');
+    expect(patchedRepos[0]).not.toHaveProperty('environment');
+    expect({ ...saved, ...patchedRepos[0] }).toMatchObject({
+      ...saved,
+      clone_status: 'ready',
+      clone_generation: 2,
+    });
   });
 
   it.each([false, true])(

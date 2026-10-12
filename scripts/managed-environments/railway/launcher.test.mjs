@@ -1,298 +1,393 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import test from 'node:test';
-import { RailwayClient, RailwayPreview, selectBinding } from './launcher.mjs';
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { MARKER } from './configuration.mjs';
+import { run } from './launcher.mjs';
+import { conn, fixture } from './test-fixture.mjs';
 
-const bindings = JSON.parse(await readFile(new URL('./bindings.json', import.meta.url), 'utf8'));
-const binding = Object.keys(bindings)[0];
-const target = selectBinding(bindings, { binding, ...bindings[binding] });
-function snapshot() {
-  return {
-    projectToken: { projectId: target.projectId, environmentId: target.environmentId },
-    environment: {
-      projectId: target.projectId,
-      deploymentTriggers: { edges: [] },
-      volumeInstances: {
-        edges: [
-          {
-            node: {
-              volumeId: target.volumeId,
-              serviceId: target.serviceId,
-              mountPath: '/home/agor/.agor',
-            },
-          },
-        ],
-      },
-    },
-    serviceInstance: {
-      source: { repo: target.repository },
-      domains: { serviceDomains: [{ domain: target.domain, targetPort: 3030 }] },
-    },
-    variables: {
-      AGOR_MANAGED_BRANCH_ID: binding,
-      AGOR_SOURCE_BRANCH: target.ref,
-      AGOR_SOURCE_REPO: `https://github.com/${target.repository}.git`,
-    },
-  };
+test('Start creates missing resources; repeated Start is read-only; Stop retains data; Start restarts compute', async () => {
+  const f = fixture();
+  assert.deepEqual(await f.action('start'), {
+    app: 'https://test.up.railway.app/ui/',
+    health: 'https://test.up.railway.app/health',
+  });
+  const volume = f.state.volumes[0].id;
+  const before = f.mutations().length;
+  await f.action('start');
+  assert.equal(f.mutations().length, before);
+  await f.action('stop');
+  assert.equal(f.state.volumes[0].id, volume);
+  await f.action('start');
+  assert.equal(f.state.volumes[0].id, volume);
+  assert.equal(f.state.deployments.length, 2);
+  assert.equal(JSON.stringify(f.state.vars).includes(f.env.RAILWAY_API_TOKEN), false);
+  assert.equal(f.state.vars.AGOR_ADMIN_PASSWORD, f.env.RAILWAY_AGOR_ADMIN_PASSWORD);
+  assert.equal(f.state.vars.AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE, 'false');
+});
+test('check/Stop of absent preview never provision', async () => {
+  const f = fixture();
+  await f.action('check');
+  await f.action('stop');
+  assert.equal(f.mutations().length, 0);
+});
+test('opt-in, authorized repository, workspace token and pushed source are required', async () => {
+  const f = fixture();
+  await assert.rejects(run('start', f.input, {}, f.request), /Opt in/);
+  await assert.rejects(
+    run('start', { ...f.input, repository: 'foreign/repo' }, f.env, f.request),
+    /operator-authorized/
+  );
+  await assert.rejects(
+    run('start', f.input, { ...f.env, RAILWAY_API_TOKEN: '' }, f.request),
+    /token/
+  );
+  f.state.missing = true;
+  await assert.rejects(f.action('start'), /Push it/);
+  assert.equal(f.mutations().length, 0);
+});
+for (const key of [
+  'tenantId',
+  'workspaceId',
+  'projectId',
+  'repository',
+  'branchId',
+  'ref',
+  'volumeId',
+]) {
+  test(`rejects ${key} ownership drift before Start/Stop/Nuke`, async () => {
+    const f = fixture();
+    await f.action('start');
+    const marker = JSON.parse(f.state.vars[MARKER]);
+    marker[key] = randomUUID();
+    f.state.vars[MARKER] = JSON.stringify(marker);
+    const before = f.mutations().length;
+    for (const action of ['start', 'stop', 'nuke']) await assert.rejects(f.action(action));
+    assert.equal(f.mutations().length, before);
+  });
 }
-const env = { RAILWAY_AGOR_ADMIN_PASSWORD: 'synthetic-password-12345' };
-function fake(handler) {
-  const calls = [];
-  return {
-    calls,
-    async query(q, v) {
-      calls.push({ q, v });
-      return handler(q, v);
-    },
-  };
+for (const kind of [
+  'bootstrap',
+  'shared-volume',
+  'missing-volume',
+  'duplicate-environment',
+  'shared-secret',
+]) {
+  test(`rejects ${kind} before changing resources`, async () => {
+    const f = fixture();
+    await f.action('start');
+    if (kind === 'bootstrap') delete f.state.vars[MARKER];
+    if (kind === 'shared-volume')
+      f.state.volumes[0].volumeInstances.edges.push({
+        node: { id: randomUUID(), serviceId: randomUUID(), environmentId: randomUUID() },
+      });
+    if (kind === 'missing-volume') f.state.volumes = [];
+    if (kind === 'duplicate-environment')
+      f.state.environments.push({ ...f.state.environments[0], id: randomUUID() });
+    if (kind === 'shared-secret') f.state.shared.RAILWAY_API_TOKEN = 'foreign-secret';
+    const before = f.mutations().length;
+    await assert.rejects(f.action('start'));
+    assert.equal(f.mutations().length, before);
+  });
 }
-const inventory = (nodes) => ({
-  deployments: { edges: nodes.map((node) => ({ node })), pageInfo: { hasNextPage: false } },
-});
-
-test('binding rejects foreign branches, refs and shared resources before network access', () => {
-  assert.throws(() => selectBinding(bindings, { ...target, binding: 'foreign' }));
-  assert.throws(() => selectBinding(bindings, { ...target, ref: 'main' }));
-  assert.throws(() => selectBinding({ ...bindings, another: bindings[binding] }, target));
-});
-
-test('every action revalidates project-token scope, source marker, volume and trigger', async () => {
-  for (const change of [
-    (s) => {
-      s.projectToken.environmentId = 'foreign';
-    },
-    (s) => {
-      s.variables.AGOR_MANAGED_BRANCH_ID = 'foreign';
-    },
-    (s) => {
-      s.environment.volumeInstances.edges[0].node.volumeId = 'foreign';
-    },
-    (s) => {
-      s.environment.deploymentTriggers.edges = [
-        {
-          node: {
-            serviceId: target.serviceId,
-            repository: target.repository,
-            branch: 'main',
-            provider: 'github',
-          },
-        },
-      ];
-    },
-  ]) {
-    const s = snapshot();
-    change(s);
-    const client = fake(() => s);
-    await assert.rejects(new RailwayPreview(client, target, { env }).start());
-    assert.equal(client.calls.length, 1);
-  }
-});
-
-test('start configures secrets without replacement/deployment, deploys once and reports tiny URLs', async () => {
-  let lists = 0;
-  const client = fake((q, v) => {
-    if (q.includes('query Inspect')) return snapshot();
-    if (q.includes('mutation Variables')) {
-      assert.equal(v.input.skipDeploys, true);
-      assert.equal(v.input.replace, false);
-      assert.equal(v.input.variables.AGOR_ADMIN_PASSWORD, env.RAILWAY_AGOR_ADMIN_PASSWORD);
-      return {};
-    }
-    if (q.includes('mutation Trigger')) return { deploymentTriggerCreate: { id: 'trigger' } };
-    if (q.includes('query Deployments')) {
-      lists++;
-      return inventory([]);
-    }
-    if (q.includes('mutation Deploy')) return { serviceInstanceDeployV2: 'deployment' };
-    if (q.includes('query Deployment')) return { deployment: { status: 'SUCCESS' } };
-    throw new Error(q);
+for (const mutation of ['PreviewEnvironment', 'PreviewService', 'PreviewVolume', 'PreviewDomain']) {
+  test(`reconciles visible resources after lost ${mutation} response without recreating`, async () => {
+    const f = fixture();
+    f.state.fail = mutation;
+    await assert.rejects(f.action('start'), /No mutation was retried/);
+    await f.action('start');
+    assert.equal(f.mutations().filter((c) => c.q.includes(`${mutation}(`)).length, 1);
   });
-  const preview = new RailwayPreview(client, target, {
-    env,
-    request: async (url) => ({
-      ok: true,
-      json: async () =>
-        url.includes('api.github.com') ? { sha: 'a'.repeat(40) } : { status: 'ok' },
-    }),
-  });
-  assert.deepEqual(await preview.start(), {
-    app: `https://${target.domain}/ui/`,
-    health: `https://${target.domain}/health`,
-  });
-  assert.equal(lists, 1);
-  assert(!client.calls.some((c) => c.q.includes('deploymentTriggerCreate')));
-  assert.equal(client.calls.filter((c) => c.q.includes('mutation Deploy')).length, 1);
+}
+test('unknown deployment outcome is not blindly retried', async () => {
+  const f = fixture();
+  f.state.fail = 'PreviewDeploy(';
+  await assert.rejects(f.action('start'));
+  await assert.rejects(f.action('start'), /Unconfirmed/);
+  f.state.deployments = [];
+  await assert.rejects(f.action('start'), /outcome remains unknown/);
+  assert.equal(f.mutations().filter((c) => c.q.includes('PreviewDeploy(')).length, 1);
 });
-
-test('start adopts an in-flight deployment rather than creating a duplicate', async () => {
-  const client = fake((q) => {
-    if (q.includes('query Inspect')) return snapshot();
-    if (q.includes('query Deployments')) return inventory([{ id: 'existing', status: 'BUILDING' }]);
-    if (q.includes('query Deployment')) return { deployment: { status: 'SUCCESS' } };
-    if (q.includes('mutation Deploy')) assert.fail('duplicate deploy');
-    return {};
-  });
-  await new RailwayPreview(client, target, {
-    env,
-    request: async () => ({ ok: true, json: async () => ({ status: 'ok' }) }),
-  }).start();
+test('capacity check fails before creation and Logs redacts credentials/control records', async () => {
+  const f = fixture();
+  f.state.environments = Array.from({ length: 3 }, (_, index) => ({
+    id: randomUUID(),
+    name: `agor-other-${index}`,
+  }));
+  await assert.rejects(f.action('start'), /capacity/);
+  assert.equal(f.mutations().length, 0);
+  f.state.environments = [];
+  await f.action('start');
+  const logs = await f.action('logs');
+  assert.equal(logs.message.includes(f.env.RAILWAY_API_TOKEN), false);
+  assert.equal(logs.message.includes('AGOR_ENVIRONMENT_RESULT='), false);
 });
-
-test('Stop disables push trigger first, cancels queued work, removes compute and confirms empty inventory', async () => {
-  let disabled = false,
-    drained = false;
-  const client = fake((q) => {
-    if (q.includes('query Inspect')) {
-      const s = snapshot();
-      if (!disabled)
-        s.environment.deploymentTriggers.edges = [
-          {
-            node: {
-              id: 'trigger',
-              serviceId: target.serviceId,
-              repository: target.repository,
-              branch: target.ref,
-              provider: 'github',
-            },
-          },
-        ];
-      return s;
-    }
-    if (q.includes('mutation Disable')) {
-      disabled = true;
-      return {};
-    }
-    if (q.includes('query Deployments')) {
-      assert.equal(disabled, true);
-      return inventory(
-        drained
-          ? []
-          : [
-              { id: 'queue', status: 'BUILDING' },
-              { id: 'live', status: 'SUCCESS' },
-            ]
+test('only explicit Nuke removes owned resources', async () => {
+  const f = fixture();
+  await f.action('start');
+  await f.action('nuke');
+  assert.equal(f.state.volumes.length, 0);
+  assert.equal(f.state.services.length, 0);
+  assert.equal(f.state.environments.length, 0);
+});
+test('Start pins the published base, but an already active Start never resolves it again', async () => {
+  const f = fixture();
+  f.state.previewDigest = `sha256:${'b'.repeat(64)}`;
+  await f.action('start');
+  assert.ok(f.state.vars.AGOR_PREVIEW_BASE.endsWith(`@${f.state.previewDigest}`));
+  assert.equal(f.state.vars.AGOR_RUNTIME_TARGET, 'railway-preview');
+  f.state.registryStatus = 500;
+  await f.action('start');
+  assert.equal(f.state.registryCalls, 1);
+});
+test('Unsupported runtime sources fail before any network request', async () => {
+  for (const shared of [false, true]) {
+    for (const source of [
+      { repository: 'example/agor', ref: 'feature' },
+      { repository: 'preset-io/agor', ref: 'feature@preview' },
+      { repository: 'preset-io/agor', ref: 'feature..preview' },
+      { repository: 'preset-io/agor', ref: 'feature/' },
+    ]) {
+      const f = fixture();
+      const config = JSON.parse(f.env.RAILWAY_PREVIEW_CONFIG);
+      if (shared) {
+        delete f.env.RAILWAY_PREVIEW_CONFIG;
+        f.env.RAILWAY_AGOR_PROJECT_ID = config.projectId;
+      } else {
+        f.env.RAILWAY_PREVIEW_CONFIG = JSON.stringify({ ...config, repository: source.repository });
+      }
+      await assert.rejects(
+        run('start', { ...f.input, ...source }, f.env, async () => {
+          assert.fail('unsupported input reached the network');
+        }),
+        /Unsupported runtime source/
       );
     }
-    if (q.includes('deploymentCancel')) return {};
-    if (q.includes('deploymentRemove')) {
-      drained = true;
-      return {};
-    }
-    assert.fail(q);
-  });
-  const preview = new RailwayPreview(client, target, { wait: async () => {} });
-  await preview.stop();
-  await preview.stop();
-  assert(!client.calls.some((c) => /volumeDelete|serviceDelete|environmentDelete/.test(c.q)));
-});
-
-test('read-only logs neither deploy nor change variables and redact control records/secrets', async () => {
-  const client = fake((q) => {
-    assert(q.startsWith('query'));
-    if (q.includes('query Inspect')) return snapshot();
-    if (q.includes('query Deployments')) return inventory([{ id: 'old', status: 'REMOVED' }]);
-    return {
-      buildLogs: [],
-      deploymentLogs: [
-        { message: `${env.RAILWAY_AGOR_ADMIN_PASSWORD}\nAGOR_ENVIRONMENT_RESULT={}\nnormal` },
-      ],
-    };
-  });
-  const output = await new RailwayPreview(client, target, { env }).logs();
-  assert(!output.includes(env.RAILWAY_AGOR_ADMIN_PASSWORD));
-  assert(!output.includes('AGOR_ENVIRONMENT_RESULT='));
-  assert(output.includes('normal'));
-});
-
-test('API uses fixed endpoint/project header, refuses redirects and hides provider errors', async () => {
-  const secret = 'synthetic-provider-token';
-  const client = new RailwayClient(secret, {
-    request: async (url, options) => {
-      assert.equal(url, 'https://backboard.railway.com/graphql/v2');
-      assert.equal(options.redirect, 'error');
-      assert.equal(options.headers['Project-Access-Token'], secret);
-      return { ok: true, json: async () => ({ errors: [{ message: secret }] }) };
-    },
-  });
-  await assert.rejects(client.query('query {}'), (error) => !error.message.includes(secret));
-});
-
-test('persisted replacement is accepted only with matching seed/branch and ready state', async () => {
-  const s = snapshot();
-  const replacement = '22222222-2222-2222-2222-222222222222';
-  s.environment.volumeInstances.edges[0].node.volumeId = replacement;
-  const state = {
-    version: 1,
-    binding,
-    seedVolumeId: target.volumeId,
-    volumeId: replacement,
-    phase: 'ready',
-  };
-  s.variables.AGOR_MANAGED_VOLUME_STATE = JSON.stringify(state);
-  const preview = new RailwayPreview(
-    fake(() => s),
-    target
-  );
-  assert.equal((await preview.inspect()).volumeId, replacement);
-  for (const change of [
-    { phase: 'creating' },
-    { binding: 'foreign' },
-    { seedVolumeId: replacement },
-  ]) {
-    s.variables.AGOR_MANAGED_VOLUME_STATE = JSON.stringify({ ...state, ...change });
-    await assert.rejects(preview.inspect());
   }
 });
-
-test('workspace API credential uses Bearer only and is never part of service variables', async () => {
-  const c = new RailwayClient('synthetic-operator-token', {
-    accountToken: true,
-    request: async (_url, options) => {
-      assert.equal(options.headers.Authorization, 'Bearer synthetic-operator-token');
-      assert.equal(options.headers['Project-Access-Token'], undefined);
-      return { ok: true, json: async () => ({ data: {} }) };
-    },
-  });
-  await c.query('query {}');
-  const p = new RailwayPreview(
-    fake((_q, v) => {
-      assert.equal(v.input.variables.RAILWAY_API_TOKEN, undefined);
-      assert.equal(v.input.variables.RAILWAY_API_KEY, undefined);
-      return {};
-    }),
-    target,
-    { env: { ...env, RAILWAY_API_TOKEN: 'synthetic-operator-token' } }
-  );
-  await p.setVariables();
+test('Registry unavailable fails before any provider mutation', async () => {
+  const f = fixture();
+  f.state.registryStatus = 429;
+  await assert.rejects(f.action('start'), /Cannot resolve/);
+  assert.equal(f.mutations().length, 0);
+});
+test('Nuke refuses a detached volume moved to another environment or reattached', async () => {
+  for (const field of ['environmentId', 'serviceId', 'mountPath']) {
+    const f = fixture();
+    await f.action('start');
+    f.state.afterServiceDelete = () => {
+      f.state.volumes[0].volumeInstances.edges[0].node[field] = randomUUID();
+    };
+    await assert.rejects(f.action('nuke'), /reattached/);
+    assert.equal(f.state.volumes.length, 1);
+    assert.equal(
+      f.mutations().some((c) => c.q.includes('PreviewDeleteVolume')),
+      false
+    );
+    // Receipt survives service removal, but never authorizes moved resources.
+    await assert.rejects(f.action('start'), /cleanup is incomplete/);
+    await assert.rejects(f.action('nuke'), /reattached/);
+  }
+});
+test('Nuke accepts only confirmed soft deletion of the exact owned volume', async () => {
+  for (const status of ['confirmed', 'unconfirmed']) {
+    const f = fixture();
+    await f.action('start');
+    f.state.softDelete = status;
+    if (status === 'confirmed') {
+      await f.action('nuke');
+      assert.equal(f.state.environments.length, 0);
+    } else {
+      await assert.rejects(f.action('nuke'), /not yet visible/);
+      assert.equal(f.state.environments.length, 1);
+      f.state.softDelete = 'confirmed';
+      await f.action('nuke');
+      assert.equal(f.state.environments.length, 0);
+      assert.equal(f.mutations().filter((c) => c.q.includes('PreviewDeleteVolume(')).length, 1);
+    }
+  }
+});
+test('plain Node loads launcher; lifecycle commands never install dependencies', () => {
+  try {
+    execFileSync(
+      process.execPath,
+      [
+        fileURLToPath(new URL('./launcher.mjs', import.meta.url)),
+        'check',
+        '--binding',
+        randomUUID(),
+        '--repository',
+        'owner/repo',
+        '--ref',
+        'feature',
+      ],
+      { env: {}, stdio: 'pipe' }
+    );
+    assert.fail('configuration required');
+  } catch (error) {
+    assert.equal(error.status, 1);
+    assert.match(String(error.stderr), /Opt in/);
+  }
+  const yaml = readFileSync(new URL('../../../.agor.yml', import.meta.url), 'utf8');
+  assert.equal([...yaml.matchAll(/^ {4}railway-sqlite:/gm)].length, 1);
+  assert.doesNotMatch(yaml, /railway-auto/);
+  const config = yaml.split('railway-sqlite:')[1].split('    codespaces-sqlite:')[0];
+  assert.doesNotMatch(config, /npm|pnpm|npx|tsx/);
+  for (const action of ['start', 'stop', 'logs', 'nuke'])
+    assert.ok(config.includes(`launcher.mjs ${action}`));
 });
 
-test('Stop can drain compute during an interrupted reset without adopting/deleting a volume', async () => {
-  const s = snapshot();
-  s.variables.AGOR_MANAGED_VOLUME_STATE = JSON.stringify({
-    version: 1,
-    binding,
-    seedVolumeId: target.volumeId,
-    volumeId: target.volumeId,
-    phase: 'creating',
+for (const [mutation, collection] of [
+  ['PreviewVolume', 'volumes'],
+  ['PreviewDomain', 'domains'],
+]) {
+  test(`unknown ${mutation} outcome without read-back never repeats creation`, async () => {
+    const f = fixture();
+    f.state.fail = mutation;
+    await assert.rejects(f.action('start'), /No mutation was retried/);
+    f.state[collection] = [];
+    const before = f.mutations().length;
+    await assert.rejects(f.action('start'), /outcome remains unknown/);
+    assert.equal(f.mutations().filter((c) => c.q.includes(`${mutation}(`)).length, 1);
+    // Domain reconciliation may refresh the volume/service receipt, but cannot create again.
+    assert.ok(
+      f
+        .mutations()
+        .slice(before)
+        .every((c) => c.q.includes('PreviewMarker'))
+    );
   });
-  s.environment.volumeInstances.edges = [];
-  let removed = false;
-  const client = fake((q) => {
-    if (q.includes('query Inspect')) return s;
-    if (q.includes('query Deployments'))
-      return inventory(removed ? [] : [{ id: 'owned-deployment', status: 'SUCCESS' }]);
-    if (q.includes('deploymentRemove')) {
-      removed = true;
-      return {};
+}
+
+test('wrong provider workspace refuses every lifecycle action before mutation', async () => {
+  const f = fixture();
+  const request = async (url, options) => {
+    const response = await f.request(url, options);
+    const body = await response.json();
+    if (body.data?.project) body.data.project.workspaceId = randomUUID();
+    return new Response(JSON.stringify(body));
+  };
+  for (const action of ['start', 'stop', 'nuke'])
+    await assert.rejects(run(action, f.input, f.env, request), /authorization mismatch/);
+  assert.equal(f.mutations().length, 0);
+});
+
+function simpleFixture() {
+  const f = fixture();
+  delete f.env.RAILWAY_PREVIEW_CONFIG;
+  f.env.RAILWAY_AGOR_PROJECT_ID = f.config.projectId;
+  return f;
+}
+test('project ID only discovers workspace and preserves unrelated bootstrap through Start/Stop/Nuke', async () => {
+  const f = simpleFixture();
+  const environment = { id: randomUUID(), name: 'production' };
+  const service = { id: randomUUID(), name: 'bootstrap' };
+  service.serviceInstances = conn([
+    { id: randomUUID(), serviceId: service.id, environmentId: environment.id },
+  ]);
+  const volume = {
+    id: randomUUID(),
+    volumeInstances: conn([
+      {
+        id: randomUUID(),
+        serviceId: service.id,
+        environmentId: environment.id,
+        mountPath: '/home/agor/.agor',
+      },
+    ]),
+  };
+  f.state.environments.push(environment);
+  f.state.services.push(service);
+  f.state.volumes.push(volume);
+  await f.action('start');
+  const before = f.mutations().length;
+  await f.action('start');
+  assert.equal(f.mutations().length, before);
+  await f.action('stop');
+  await f.action('nuke');
+  assert.deepEqual(f.state.environments, [environment]);
+  assert.deepEqual(f.state.services, [service]);
+  assert.deepEqual(f.state.volumes, [volume]);
+  assert.ok(
+    f.state.calls.every(
+      (c) => !JSON.stringify(c.v).includes(service.id) && !JSON.stringify(c.v).includes(volume.id)
+    )
+  );
+});
+for (const key of ['workspaceId', 'projectId', 'repository', 'branchId', 'ref']) {
+  test(`simple setup rejects ${key} marker mismatch`, async () => {
+    const f = simpleFixture();
+    await f.action('start');
+    const record = JSON.parse(f.state.vars[MARKER]);
+    record[key] = randomUUID();
+    f.state.vars[MARKER] = JSON.stringify(record);
+    const before = f.mutations().length;
+    for (const action of ['start', 'stop', 'nuke']) await assert.rejects(f.action(action));
+    assert.equal(f.mutations().length, before);
+  });
+}
+test('simple setup refuses a volume shared with another environment', async () => {
+  const f = simpleFixture();
+  await f.action('start');
+  f.state.volumes[0].volumeInstances.edges.push({
+    node: { id: randomUUID(), serviceId: randomUUID(), environmentId: randomUUID() },
+  });
+  const before = f.mutations().length;
+  for (const action of ['start', 'stop', 'nuke']) await assert.rejects(f.action(action));
+  assert.equal(f.mutations().length, before);
+});
+test('simple setup validates project ID and refuses conflicting legacy config', async () => {
+  const f = simpleFixture();
+  f.env.RAILWAY_AGOR_PROJECT_ID = 'https://railway.com/project/example';
+  await assert.rejects(f.action('start'), /UUID/);
+  const legacy = fixture();
+  legacy.env.RAILWAY_AGOR_PROJECT_ID = randomUUID();
+  await assert.rejects(legacy.action('start'), /conflict/);
+  assert.equal(f.state.calls.length + legacy.state.calls.length, 0);
+});
+
+test('simple names fit provider validation and unknown service-row creation is not repeated', async () => {
+  const f = simpleFixture();
+  f.state.fail = 'PreviewServiceRow';
+  await assert.rejects(f.action('start'));
+  assert.ok(f.state.environments[0].name.length <= 32);
+  const before = f.mutations().length;
+  await assert.rejects(f.action('start'), /Foreign\/shared/);
+  assert.equal(f.mutations().length, before);
+});
+
+test('live region and limit response shapes are accepted without repeated limit updates', async () => {
+  const f = simpleFixture();
+  await f.action('start');
+  await f.action('stop');
+  const real = f.request;
+  const request = async (url, options) => {
+    const response = await real(url, options);
+    if (!options?.body) return response;
+    const query = JSON.parse(options.body).query;
+    const body = await response.json();
+    if (query.includes('PreviewDetails')) {
+      body.data.serviceInstance.region = null;
+      body.data.environment.config = {
+        services: {
+          [f.state.services[0].id]: { deploy: { multiRegionConfig: { sfo: { numReplicas: 1 } } } },
+        },
+      };
     }
-    throw new Error('Unexpected mutation');
-  });
-  const preview = new RailwayPreview(client, target, { wait: async () => {} });
-  await assert.rejects(preview.start());
-  await preview.stop();
-  assert.equal(removed, true);
-  assert.equal(
-    client.calls.some((c) => c.q.includes('volumeDelete') || c.q.includes('volumeCreate')),
-    false
+    if (query.includes('PreviewLimits'))
+      body.data.serviceInstanceLimits = {
+        containers: { cpu: 2, memoryBytes: 8000000000, pidLimit: 1000 },
+      };
+    return new Response(JSON.stringify(body));
+  };
+  const before = f.mutations().length;
+  await run('start', f.input, f.env, request);
+  assert.ok(
+    !f
+      .mutations()
+      .slice(before)
+      .some((c) => c.q.includes('PreviewLimitSet'))
   );
 });

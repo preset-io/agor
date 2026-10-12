@@ -1,3 +1,5 @@
+import { getReposDir } from '@agor/core/config';
+import { getCurrentTenantId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Repo, RepoID } from '@agor/core/types';
 import { spawnExecutorFireAndForget } from './spawn-executor.js';
@@ -34,6 +36,8 @@ export async function ensureRepoOriginAlignedForRepo(
   if (repo.repo_type !== 'remote') return;
   if (!repo.remote_url) return;
   if (!repo.local_path) return;
+  // The executor rejects any stored path outside the caller's tenant repos root.
+  const reposRoot = getReposDir(params?.tenant?.tenant_id ?? getCurrentTenantId());
 
   spawnExecutorFireAndForget(
     {
@@ -43,6 +47,7 @@ export async function ensureRepoOriginAlignedForRepo(
         repoPath: repo.local_path,
         remoteUrl: repo.remote_url,
         repoSlug: repo.slug,
+        reposRoot,
       },
     },
     {

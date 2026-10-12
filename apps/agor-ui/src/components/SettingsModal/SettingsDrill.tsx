@@ -10,27 +10,7 @@ import {
   useState,
 } from 'react';
 import type { SettingsSection } from '../../hooks/useSettingsRoute';
-
-/**
- * Labels for the first breadcrumb crumb — the section/list a drill-in was opened
- * from. Keyed by `DrillTarget.kind` so the shared frame derives it without every
- * caller passing a section name.
- */
-const SECTION_LABELS: Record<SettingsSection, string> = {
-  boards: 'Boards',
-  repos: 'Repositories',
-  branches: 'Branches',
-  teammates: 'Teammates',
-  'card-types': 'Card Types',
-  cards: 'Cards',
-  artifacts: 'Artifacts',
-  'workspace-preferences': 'Preferences',
-  'agentic-tools': 'Agentic Tools',
-  gateway: 'Gateway Channels',
-  groups: 'Groups',
-  users: 'Users',
-  about: 'About',
-};
+import { settingsSectionLabel } from './settingsNavigation';
 
 /**
  * Drill-in navigation for the Workspace Settings modal.
@@ -242,7 +222,7 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
   const { drill, confirmLeaveIfDirty, closeDrill, registerController } = useSettingsDrill();
   // First crumb = the section/list this drill-in was opened from, derived from
   // the active drill target (no caller needs to pass it).
-  const sectionLabel = drill ? SECTION_LABELS[drill.kind] : undefined;
+  const sectionLabel = drill ? settingsSectionLabel(drill.kind) : undefined;
 
   const back = useCallback(() => {
     if (onBack) {

@@ -337,6 +337,36 @@ environment:
 
 Notice that `postgres` and `full` both extend `lean` (not each other). That's the single-level rule. Both inherit `health` and `app` from `lean` and override the rest.
 
+### Agent configuration workflow
+
+Agents use the same environment service as the branch card's Play/Stop controls.
+Discover the tools with `agor_search_tools` and inspect their schemas with
+`agor_get_tool_details` before calling them:
+
+1. Inspect the target repository's `.agor.yml`, the imported definitions from
+   `agor_repos_get`, and the branch's current rendered commands and lifecycle state.
+   For a remote provider, adapt the [provider-neutral lifecycle pattern](#provider-neutral-lifecycle-pattern)
+   and [Railway reference](#railway-reference-implementation) to your application.
+2. Review the complete configuration, then call `agor_repos_import_environment`
+   with `repoId` and the source `branchId`. This requires admin access and branch
+   filesystem read access. It replaces the repository's variants and default,
+   preserves deployment-local overrides, and leaves existing branch snapshots alone.
+   Editing the file by itself does not apply it. The admin **Import `.agor.yml`**
+   action below is the fallback when the tool is unavailable.
+3. Call `agor_environment_set` with the target `branchId` and desired `variant`.
+   Omit `variant` to re-render the current one. Stop an active environment before
+   switching variants, and inspect the resulting commands before starting.
+4. Call `agor_environment_start`, then inspect `agor_environment_health` and
+   `agor_environment_logs`. An accepted request does not prove readiness.
+5. Use the reported app URL, and call `agor_environment_stop` when finished.
+   Use `agor_environment_nuke` only when destructive cleanup is intended.
+
+Import changes repository-wide definitions, including those other branches may
+render later. Keep every intended variant in the replacement and inspect existing
+configuration before changing it. Environment commands use the invoking user's
+**Global** environment variables; collect missing credentials through
+`agor_widgets_request_env_vars`, not YAML or rendered command arguments.
+
 ### Import / export
 
 Two admin-only actions in the repo editor header:
@@ -462,6 +492,14 @@ The reason members **cannot** hand-edit rendered commands: admins curate the set
 ### Execution permissions
 
 Start, Stop, Restart, Nuke, Logs, and Render controls require branch `all` permission or admin access. Health/status reads can remain available to users who can view the branch because they do not run the configured shell/log commands.
+
+### Environment logs
+
+**View Logs** separates **Commands** (Start/Stop/Nuke output and recent attempts)
+from **Runtime** (output of the configured `logs` command). Failed or in-flight
+commands open the Commands tab first. Their output remains available even when
+no runtime service exists or runtime logs are unavailable. Older attempts are
+collapsed; general remote-environment guidance is under **About remote environments**.
 
 ### Health-check lifecycle
 
@@ -657,7 +695,7 @@ Job, while the claim budget also covers cold-node scheduling and image pulls.
 | Bound                                           | Budget                                                             |
 | ----------------------------------------------- | ------------------------------------------------------------------ |
 | Local launcher admission                        | 30 seconds                                                         |
-| Executor claim, measured from durable admission | 180 seconds                                                         |
+| Executor claim, measured from durable admission | 180 seconds                                                        |
 | Command, measured from claim                    | At most 300 seconds, also capped by the admitted absolute deadline |
 | Owned process-group cleanup                     | TERM, then KILL after at most 5 seconds                            |
 | Result delivery grace                           | 30 seconds beyond the admitted command and cleanup deadline        |
@@ -854,14 +892,15 @@ Agor does not retain an old forwarded hostname.
 
 ### Railway reference implementation
 
-Agor's repository wires its `railway-sqlite` variant in
+Agor's repository wires its `railway-sqlite` and `railway-docs` variants in
 [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.agor.yml) to
 [`launcher.mjs`](https://github.com/preset-io/agor/blob/main/scripts/managed-environments/railway/launcher.mjs),
-a dependency-free Node script with adjacent tests and volume-reset logic. The
-[Railway bootstrap instructions](https://github.com/preset-io/agor/blob/main/.railway/README.md)
+a dependency-free, branch-local Node script with adjacent mocked API tests. The
+[Railway launcher instructions](https://github.com/preset-io/agor/blob/main/scripts/managed-environments/railway/README.md)
 describe the image, service, domain, and persistent volume.
 
-**The preview application in this example is Agor itself.** Hosting Agor on
+**The SQLite preview application in this example is Agor itself; `railway-docs`
+serves only this docs website.** Hosting Agor on
 Railway and using Agor to manage your app on Railway are different tasks; for
 your own app, replace the bootstrap and runtime details, not the lifecycle
 interface.
@@ -869,8 +908,8 @@ interface.
 ```yaml
 environment:
   variants:
-    railway:
-      description: Owned Railway preview
+    railway-sqlite:
+      description: Opt-in automatic Railway preview
       start: >-
         node scripts/managed-environments/railway/launcher.mjs start
         --repository {{shellQuote repo.github_slug}}
@@ -883,43 +922,180 @@ environment:
         node scripts/managed-environments/railway/launcher.mjs logs
         --repository {{shellQuote repo.github_slug}}
         --ref {{shellQuote branch.ref}} --binding {{shellQuote branch.id}}
+      # Optional: explicitly destructive removal of this preview and its data.
+      nuke: >-
+        node scripts/managed-environments/railway/launcher.mjs nuke
+        --repository {{shellQuote repo.github_slug}}
+        --ref {{shellQuote branch.ref}} --binding {{shellQuote branch.id}}
       app: https://railway.com
 ```
 
-**Binding.** The reference adopts an explicitly provisioned preview for one
-branch and one trusted operator; it does not provision a service per branch.
-[`bindings.json`](https://github.com/preset-io/agor/blob/main/scripts/managed-environments/railway/bindings.json)
-maps the Agor branch UUID to the exact repository/ref, Railway project,
-environment, service, volume, and domain, and the provider-side
-`AGOR_MANAGED_BRANCH_ID` marker must match. The launcher refuses unknown branches
-and mismatched ownership, source, volume, or domain state. Do not reuse the
-example's resource IDs or bind two branches to one service/volume.
+#### Automatic previews (opt-in)
 
-**Credentials.** Store these as the invoking user's Global environment
-variables, never in `.agor.yml` or command arguments:
+The `railway-sqlite` variant runs ordinary branch-local Node scripts
+in `scripts/managed-environments/railway`. **No npm install, SDK, PostgreSQL,
+or daemon-specific handler is needed.** Edit the launcher in the branch to
+iterate. Railway builds the app from its pushed public GitHub branch, not your
+dirty checkout. Private source resolution is not supported by this example.
+The included runtime currently supports only `preset-io/agor`; Start validates
+the repository and branch with the same validator used by runtime checkout,
+before making provider requests.
 
-| Variable                      | Purpose                                                                                                                |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `RAILWAY_API_KEY`             | Environment-scoped Railway [project token](https://docs.railway.com/integrations/api) (`RAILWAY_TOKEN` is a fallback). |
-| `RAILWAY_AGOR_ADMIN_PASSWORD` | Bootstrap password for the preview app; 15+ characters, at most 72 UTF-8 bytes. Not reset for existing accounts.       |
-| `RAILWAY_API_TOKEN`           | Separate workspace token, needed only for the optional destructive volume reset.                                       |
+Successful main CI also publishes a public preview dependency image. On a new
+deployment, the automatic launcher resolves its `preview-runtime-main` tag to an
+immutable digest and supplies it as `AGOR_PREVIEW_BASE`. Railway's thin
+`railway-preview` stage keeps the branch's startup scripts and dependency inputs;
+matching dependencies are reused, changed inputs trigger a frozen install.
+Application code still comes from the pushed branch. Before the first image is
+publicly available (registry 401/404), the same Dockerfile builds its local
+`runtime-build` base instead and reports the fallback. The Docker Hub repository
+must allow public pulls; no registry secrets enter branch builds. Rate-limit and network errors fail before
+provisioning rather than silently triggering an expensive cold build. Running
+previews are not redeployed when main publishes a newer base.
 
-**Lifecycle.** Start validates the binding, deploys the **pushed** branch (not
-the dirty checkout) or reuses an in-flight deployment, waits for readiness, and
-reports App and health URLs through the standard Start result; the static
-dashboard link is only the fallback. Logs reads bounded provider diagnostics
-without starting compute. Stop removes the GitHub push trigger and drains
-deployments, preserving the service, domain, data, and storage costs; a later
-infrastructure apply can restore the trigger. The full variant's Nuke **resets
-the owned volume** (erasing its accounts and data) rather than deleting the
-project, so back up first and inspect rather than repeat after an interruption.
+Start behaves like “ensure this branch's preview is up”: create missing
+resources, safely reuse owned ones, and leave an owned running deployment alone.
+Creating a Git branch or selecting the variant creates no paid resources.
 
-**Limits.** Its watch mode polls the pushed branch for source updates;
-dependency and migration changes need Stop/Start. Its cold-start wait can take up
-to 18 minutes, which fits the 25-minute standalone budget but not the five-minute
-[HA external command budget](#bounded-external-commands-in-ha). Its lifecycle
-lock is local to one controller. Keep app authentication enabled on the public
-URL, pin the reference revision you adopt, and retain its safety tests.
+One-time operator setup:
+
+1. Select an existing project authorized for previews. A dedicated preview-only
+   workspace is recommended, but unrelated resources in the selected project
+   are left untouched. Authorize Railway's GitHub integration.
+2. Save these in the invoking user's secure **Global environment variables**:
+
+   | Variable                      | Value                                                                                                  |
+   | ----------------------------- | ------------------------------------------------------------------------------------------------------ |
+   | `RAILWAY_AGOR_PROJECT_ID`     | Project UUID from its Railway dashboard URL (not the full URL). Workspace is discovered automatically. |
+   | `RAILWAY_API_TOKEN`           | Workspace-scoped token authorized for the preview project, or equivalent account token.                |
+   | `RAILWAY_AGOR_ADMIN_PASSWORD` | Preview bootstrap password: 15+ characters, at most 72 UTF-8 bytes.                                    |
+
+   The script reads these variables from its process environment at execution
+   time. Do not hardcode a project ID in this shared template: different users
+   or organizations can choose different projects. Agor supplies the branch UUID,
+   Git ref and repository; the script discovers the workspace. The project URL
+   is a dashboard link, not the eventual app URL reported by Start.
+
+   Environment-scoped `RAILWAY_API_KEY`/`RAILWAY_TOKEN` cannot provision across
+   environments. Use Agor's secure environment-variable widget for assisted
+   setup; never paste secrets into chat or interpolate them into commands.
+
+3. Import this branch's `.agor.yml` in the repository environment editor, then
+   select/re-render `railway-sqlite`. Old `railway-preview:start` markers
+   are not executable commands. Editing launcher modules later needs no import.
+4. Optionally run the launcher's read-only `check` action (configuration,
+   authorization and ownership, not source availability/readiness), push the
+   application branch, then click **Start** when ready to incur preview costs.
+
+The automatic preview sets `AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE=false` alongside
+`AGOR_ADMIN_PASSWORD`, so newly bootstrapped admins can keep the operator-selected
+password at first login. Other deployments still require a change by default;
+generated passwords always require it. This only affects initial account creation:
+restarts never reset an existing password or clear an existing change requirement.
+
+**Trust boundary:** branch code receives the credential's full provider authority.
+Never inject production credentials into untrusted branches. Agor applies normal
+branch lifecycle permissions; the launcher is not an additional tenant-admin
+gate. The selected project, discovered workspace, repository and globally unique branch
+UUID scope version-2 ownership receipts; they do not claim separate tenant
+attestation. Branch authorization and credential access remain Agor’s responsibility. Provider ownership receipts are
+not a defense against malicious code holding the same provisioning credential.
+
+Start creates an empty environment, environment-specific service, private volume
+at `/home/agor/.agor` and Railway domain on port 3030, without copying production
+secrets/data. Deterministic names and `AGOR_PREVIEW_BINDING` receipts live in
+Railway; no per-branch tracked binding edits or external database are needed.
+Controller credentials never enter the app. App/health URLs are reported after
+deployment admission; Agor's health observer determines readiness, not command
+success. Runtime watch mode follows the pushed application branch.
+
+Railway service creation can briefly add empty instances of the **new** service
+in other project environments. The launcher verifies those instances have no
+source, deployments or volumes, then removes only those new empty instances
+before configuring the preview. It never changes existing services. Interrupted
+service creation/cleanup fails closed and may require operator reconciliation.
+For strict separation with no transient instances in production, choose a
+preview-only project.
+
+**Stop preserves data** and removes/cancels compute only. Repeat after draining
+if needed. Storage charges continue. **Nuke permanently removes the owned
+service, volume and environment**, never the project. Missing recorded volumes
+are not silently recreated. Partial cleanup can require manual Railway recovery.
+
+Nuke saves a non-secret cleanup receipt in the owned environment before removing
+the service and waits for Railway's asynchronous deletion to become visible.
+If it stops partway through, repeat Nuke to resume from that receipt; Start will
+not reuse a preview being deleted. Unknown deletion outcomes are observed rather
+than blindly retried. Older failures without a receipt, manually deleted services,
+or changed resource ownership still require manual inspection in Railway.
+
+**Serialize actions through one lifecycle controller per project.** This simple
+launcher does not promise HA-safe concurrent starts or exactly-once creation.
+No mutation is automatically retried within an invocation. Inspect ambiguous
+results and allow provider state to settle before another action. Visible
+partials can be resumed; unresolved volume/domain/deployment markers fail closed.
+Initial environment/service creation has no external durable fence, so concurrent
+calls or retries before visibility can duplicate resources.
+
+Capacity is three retained previews in the simplified setup (legacy JSON can
+configure 1–10), checked before
+creation rather than enforced as an atomic quota. Stopped previews count. Each
+app has one `sfo` replica, 2 vCPUs/8 GB limits and bounded restart retries; inventory
+reads cap at 100 resources. These are not dollar spending limits. Configure
+Railway spending controls. No automatic destructive expiry, branch-deletion or
+tenant-offboarding cleanup exists: clean up before revoking credentials or
+removing the branch.
+
+See the [launcher setup and limitations](https://github.com/preset-io/agor/tree/main/scripts/managed-environments/railway).
+`webhook-only` installations still reject shell commands.
+
+Legacy `RAILWAY_PREVIEW_CONFIG` remains supported with version-1 receipts and
+dedicated-project rules; conflicting project settings fail closed. Do not remove
+legacy configuration to migrate retained resources without an explicit migration
+or cleanup: version-2 resource names differ.
+
+#### Docs website preview
+
+Choose **`railway-docs`** for a public Next/Nextra development instance of
+`apps/agor-docs`, with no Agor daemon, database or agent runtimes. It reuses the
+Railway lifecycle and ownership checks above, but requires only
+`RAILWAY_AGOR_PROJECT_ID` and `RAILWAY_API_TOKEN` in secure variables, **not**
+`RAILWAY_AGOR_ADMIN_PASSWORD`.
+
+Push the branch first. A repo administrator imports the updated `.agor.yml`,
+then renders `railway-docs` on the branch; Start is the explicit paid-resource
+opt-in. The launcher reports the website root as both App and Health. The
+container runs in `--watch` mode, polling the pushed branch every 10 seconds;
+content/component/style changes hot-reload without rebuilding the deployment.
+Unpushed local edits are not included.
+
+Dependency, lockfile, patch, runtime, Next/TypeScript configuration and docs
+build-script changes need **push, then Stop/Start**. Failed fetches or incompatible
+updates leave the last applied source running. Start on an already-running
+preview does not redeploy it. The production Pagefind index is not generated
+by this dev server, so full-text docs search is not a production-parity check.
+
+Docs and SQLite previews have separate resource identities even on the same
+branch. Stop a running variant before switching to avoid leaving billable
+compute behind. Stop retains the docs checkout/cache volume and storage charges;
+Nuke removes only the owned docs preview, never the SQLite preview or project.
+Both count toward the retained-preview limit. These are unauthenticated public
+dev servers: use trusted branches and preview-only credentials, not private data.
+See the [docs runtime details](https://github.com/preset-io/agor/blob/main/scripts/managed-environments/railway/README.md#docs-only-preview).
+
+#### Migration from earlier Railway variants
+
+`railway-sqlite` is the automatic application variant; `railway-auto-sqlite` was
+renamed. Import the updated `.agor.yml`, then select `railway-sqlite` to re-render
+saved branch commands (stop a running preview before switching). Existing automatic
+preview ownership and resource names do not change, so they remain reusable.
+
+The former binding-based launcher, tracked `bindings.json`, volume-reset helper,
+and `.railway` SDK bootstrap tooling have been removed. Previously manual/bootstrap
+resources remain untouched and are **not adopted** by the new launcher. Manage or
+retire those resources explicitly in Railway; retain an older source revision if
+you need the old tooling. Reusing the variant name does not migrate their data.
+Do not run a stale saved command until you have reviewed and re-rendered it.
 
 ### GitHub Codespaces reference implementation
 

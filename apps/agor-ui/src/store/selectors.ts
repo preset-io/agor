@@ -13,7 +13,28 @@
  */
 import type { Board, BoardEntityObject, Branch, Repo, Session } from '@agor-live/client';
 import { SessionStatus } from '@agor-live/client';
+import { boardIdForSession } from '../utils/boardIdForSession';
+import { commentMentionsUser } from '../utils/commentMentions';
 import type { AgorState } from './agorStore';
+
+// Home selectors live in homeSelectors.ts; re-exported so store selectors have one import surface.
+export {
+  compareHomeNeeds,
+  HOME_RECENT_BOARDS,
+  type HomeBucketsOptions,
+  type HomeCommentNeed,
+  type HomeNeed,
+  type HomeSessionNeed,
+  homeRecentBoardIds,
+  isSessionStartedByUser,
+  isUnreadResult,
+  lastRunStartedAt,
+  liveBoardIds,
+  makeCommentsForYouSelector,
+  makeHomeBucketsSelector,
+  makeLatestOwnSessionSelector,
+  makeTeammatesSelector,
+} from './homeSelectors';
 
 export const selectSessionById = (s: AgorState) => s.sessionById;
 export const selectSessionsByBranch = (s: AgorState) => s.sessionsByBranch;
@@ -31,7 +52,6 @@ export const selectGatewayChannelById = (s: AgorState) => s.gatewayChannelById;
 export const selectUserAuthenticatedMcpServerIds = (s: AgorState) =>
   s.userAuthenticatedMcpServerIds;
 export const selectArtifactById = (s: AgorState) => s.artifactById;
-export const selectSessionMcpServerIds = (s: AgorState) => s.sessionMcpServerIds;
 
 /**
  * Select a single board's board-object array. Curried so callers can memoize
@@ -161,11 +181,10 @@ export function makeCommentMentionSelector(
   return (s) => {
     if (!boardId || !userName) return false;
     for (const c of s.commentById.values()) {
-      if (c.board_id !== boardId || c.resolved) continue;
-      if (c.content.includes(`@${userName}`) || c.content.includes(`@"${userName}"`)) return true;
       if (
-        userEmail &&
-        (c.content.includes(`@${userEmail}`) || c.content.includes(`@"${userEmail}"`))
+        c.board_id === boardId &&
+        !c.resolved &&
+        commentMentionsUser(c.content, userName, userEmail)
       )
         return true;
     }
@@ -174,6 +193,62 @@ export function makeCommentMentionSelector(
 }
 
 const NO_BOARD_ACTIVITY = Object.freeze({ hasRunning: false, hasReady: false });
+
+// One pass over the caller's sessions per (sessionById, branchById, user),
+// shared by every board's own-activity selector.
+let ownActivityCache: {
+  sessionById: AgorState['sessionById'];
+  branchById: AgorState['branchById'];
+  userId: string;
+  byBoard: Map<string, { hasRunning: boolean; hasReady: boolean }>;
+} | null = null;
+
+function ownActivityByBoard(s: AgorState, userId: string) {
+  const cache = ownActivityCache;
+  if (
+    cache &&
+    cache.sessionById === s.sessionById &&
+    cache.branchById === s.branchById &&
+    cache.userId === userId
+  ) {
+    return cache.byBoard;
+  }
+  const byBoard = new Map<string, { hasRunning: boolean; hasReady: boolean }>();
+  for (const session of s.sessionById.values()) {
+    if (session.archived || session.created_by !== userId) continue;
+    const running = session.status === SessionStatus.RUNNING;
+    const ready =
+      session.status === SessionStatus.AWAITING_PERMISSION || !!session.ready_for_prompt;
+    if (!running && !ready) continue;
+    const boardId = boardIdForSession(session, s.branchById);
+    if (!boardId) continue;
+    const flags = byBoard.get(boardId) ?? { hasRunning: false, hasReady: false };
+    byBoard.set(boardId, {
+      hasRunning: flags.hasRunning || running,
+      hasReady: flags.hasReady || ready,
+    });
+  }
+  ownActivityCache = { sessionById: s.sessionById, branchById: s.branchById, userId, byBoard };
+  return byBoard;
+}
+
+/**
+ * Activity flags for one board built from the CALLER's sessions only (Home's
+ * recent-board dots; decision Q1): running, or needing the caller (awaiting
+ * permission or a result to read). Works for boards that aren't loaded, since
+ * the user scope holds every session of mine. Pair with `shallow`.
+ */
+export function makeOwnBoardActivitySelector(
+  boardId: string | null | undefined,
+  userId: string | null | undefined
+): (s: AgorState) => { hasRunning: boolean; hasReady: boolean } {
+  return (s) => {
+    if (!boardId || !userId) return NO_BOARD_ACTIVITY;
+    const flags = ownActivityByBoard(s, userId).get(boardId);
+    if (!flags) return NO_BOARD_ACTIVITY;
+    return flags.hasRunning || flags.hasReady ? flags : NO_BOARD_ACTIVITY;
+  };
+}
 
 /**
  * Session-activity flags for one board's favicon dots. Object result — pair

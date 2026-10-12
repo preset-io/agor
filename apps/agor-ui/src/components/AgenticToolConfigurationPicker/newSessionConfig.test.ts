@@ -140,3 +140,22 @@ describe('buildNewSessionConfig', () => {
     expect(config.attachmentFiles).toBeUndefined();
   });
 });
+
+describe('new session plugin preference', () => {
+  it.each([undefined, false, true])(
+    'uses the displayed inline preference %s without borrowing a saved opt-in',
+    (codexIncludePlugins) => {
+      const optedIn = { ...user, default_agentic_config: { codex: { codexIncludePlugins: true } } };
+      const result = buildNewSessionConfig({
+        user: optedIn,
+        tool: 'codex',
+        branch,
+        values: { agenticToolPresetId: INLINE_AGENTIC_CONFIGURATION, codexIncludePlugins },
+      });
+      expect(result.codexIncludePlugins).toBe(codexIncludePlugins ?? false);
+      expect(
+        getNewSessionToolSwitchValues(optedIn, 'claude-code').codexIncludePlugins
+      ).toBeUndefined();
+    }
+  );
+});

@@ -133,7 +133,11 @@ function repositories(
         }) as MCPServer,
     },
     threadMap: {
-      findBySession: async () => ({ channel_id: 'gateway-1', thread_id: THREAD }),
+      findByChannelAndThread: async () => ({
+        session_id: SESSION_ID,
+        channel_id: 'gateway-1',
+        thread_id: THREAD,
+      }),
     },
   } as unknown as SlackMCPOAuthAuthorityRepositories;
 }

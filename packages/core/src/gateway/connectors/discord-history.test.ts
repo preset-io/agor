@@ -4,6 +4,7 @@ import type { DiscordGatewayConfig } from '../../types/gateway';
 import {
   DiscordHistoryError,
   fetchDiscordChannelHistory,
+  fetchDiscordForumPosts,
   fetchDiscordProviderHistory,
 } from './discord-history';
 
@@ -567,6 +568,82 @@ describe('Discord channel history for agents', () => {
         DiscordHistoryError
       );
     }
+    expect(rest.get).not.toHaveBeenCalled();
+  });
+});
+
+describe('fetchDiscordForumPosts', () => {
+  const forumId = '333333333333333333';
+  const forum = { id: forumId, guild_id: '444444444444444444', type: 15 };
+  const post = (postId: string, patch: Record<string, unknown> = {}) => ({
+    id: postId,
+    parent_id: forumId,
+    type: 11,
+    name: 'post',
+    thread_metadata: { archived: true, archive_timestamp: '2026-10-01T00:00:00.000Z' },
+    ...patch,
+  });
+
+  it('derives created_at from the snowflake when Discord omits create_timestamp', async () => {
+    const rest = { get: vi.fn(async () => ({ threads: [post(id(1n))], has_more: false })) };
+    const result = await fetchDiscordForumPosts(rest, config, forum, {
+      channelId: forumId,
+      archived: true,
+    });
+    expect(result.posts[0]!.created_at).toBe(
+      new Date(Number((lower + 1n) >> 22n) + 1_420_070_400_000).toISOString()
+    );
+    expect(result).toMatchObject({ has_more: false, next_cursor: null });
+  });
+
+  it('fails closed on posts from another parent and on oversized archive pages', async () => {
+    const wrongParent = {
+      get: vi.fn(async () => ({ threads: [post(id(1n), { parent_id: id(9n) })] })),
+    };
+    await expect(
+      fetchDiscordForumPosts(wrongParent, config, forum, { channelId: forumId, archived: true })
+    ).rejects.toMatchObject({ kind: 'malformed_response' });
+
+    const noTimestamp = {
+      get: vi.fn(async () => ({
+        threads: [post(id(1n), { thread_metadata: { archived: true } })],
+        has_more: true,
+      })),
+    };
+    await expect(
+      fetchDiscordForumPosts(noTimestamp, config, forum, { channelId: forumId, archived: true })
+    ).rejects.toMatchObject({ kind: 'malformed_response' });
+
+    const oversized = {
+      get: vi.fn(async () => ({ threads: [post(id(1n)), post(id(2n)), post(id(3n))] })),
+    };
+    await expect(
+      fetchDiscordForumPosts(oversized, config, forum, {
+        channelId: forumId,
+        archived: true,
+        limit: 1,
+      })
+    ).rejects.toMatchObject({ kind: 'malformed_response' });
+
+    // A limit of 1 asks Discord for its minimum page of 2 and trims locally.
+    const minimum = { get: vi.fn(async () => ({ threads: [post(id(1n)), post(id(2n))] })) };
+    const trimmed = await fetchDiscordForumPosts(minimum, config, forum, {
+      channelId: forumId,
+      archived: true,
+      limit: 1,
+    });
+    expect(trimmed.posts).toHaveLength(1);
+    expect(trimmed).toMatchObject({
+      has_more: true,
+      next_cursor: { before: '2026-10-01T00:00:00.000Z' },
+    });
+  });
+
+  it('rejects a request whose forum record does not match before calling Discord', async () => {
+    const rest = { get: vi.fn() };
+    await expect(
+      fetchDiscordForumPosts(rest, config, { ...forum, id: id(5n) }, { channelId: forumId })
+    ).rejects.toBeInstanceOf(DiscordHistoryError);
     expect(rest.get).not.toHaveBeenCalled();
   });
 });

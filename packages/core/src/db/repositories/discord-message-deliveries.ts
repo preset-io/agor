@@ -16,6 +16,7 @@ import type {
   MessageID,
   ThreadSessionMapID,
 } from '@agor/core/types';
+import { isDiscordNoReply } from '@agor/core/types';
 import { and, asc, eq, isNull, lte, or, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database, SystemDatabase } from '../client';
@@ -37,6 +38,7 @@ import {
 } from '../schema';
 import { getCurrentTenantId } from '../tenant-context';
 import { RepositoryError } from './base';
+import { TaskRepository } from './tasks';
 
 export interface DiscordMessageDeliveryDiscoveryRef {
   tenant_id: string;
@@ -88,8 +90,8 @@ function messageText(message: Message): string {
 
 function isRoutableAssistantMessage(message: Message): boolean {
   if (message.role !== 'assistant') return false;
-  const text = messageText(message);
-  return text.trim().length > 0 && !/^thinking\s*\.{3}$/i.test(text.trim());
+  const text = messageText(message).trim();
+  return text.length > 0 && !/^thinking\s*\.{3}$/i.test(text) && !isDiscordNoReply(text);
 }
 
 /** Extract text only at the worker boundary; it is never stored in the intent. */
@@ -197,6 +199,22 @@ export class DiscordMessageDeliveryRepository {
   ): Promise<DiscordMessageDelivery | null> {
     if (!isRoutableAssistantMessage(message)) return null;
 
+    // Read through the Message transaction so routing and the durable intent
+    // observe the same Task. Never replace a known destination with another
+    // mapping of the Session, including when its stamped mapping was deleted.
+    const task = message.task_id ? await new TaskRepository(tx).findById(message.task_id) : null;
+    if (message.task_id && (!task || task.session_id !== message.session_id)) return null;
+    const source = task?.metadata?.gateway_task_source;
+    if (source && source.channel_type !== 'discord') return null;
+    const destination = source
+      ? and(
+          eq(threadSessionMap.channel_id, source.gateway_channel_id),
+          source.thread_session_map_id
+            ? eq(threadSessionMap.id, source.thread_session_map_id)
+            : eq(threadSessionMap.thread_id, source.thread_id)
+        )
+      : undefined;
+
     const candidates = (await select(tx, {
       mapping_id: threadSessionMap.id,
       mapping_metadata: threadSessionMap.metadata,
@@ -209,6 +227,7 @@ export class DiscordMessageDeliveryRepository {
       .where(
         and(
           eq(threadSessionMap.session_id, message.session_id),
+          destination,
           eq(gatewayChannels.enabled, true),
           eq(gatewayChannels.channel_type, 'discord'),
           sql`${gatewayChannels.provider_installation_id} IS NOT NULL`

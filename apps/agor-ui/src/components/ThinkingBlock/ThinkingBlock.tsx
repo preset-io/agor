@@ -11,7 +11,9 @@
 import { BulbOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
 import { Collapse, Typography, theme } from 'antd';
 import type React from 'react';
+import { useState } from 'react';
 import { TEXT_TRUNCATION } from '../../constants/ui';
+import { useRetainTaskDetailsWhile } from '../../hooks/useTaskDetailRetention';
 import { CollapsibleText } from '../CollapsibleText';
 
 const { Text } = Typography;
@@ -23,6 +25,8 @@ interface ThinkingBlockProps {
   isStreaming?: boolean;
   /** Whether to default to expanded state */
   defaultExpanded?: boolean;
+  /** A reader asked for this turn's detail: open on mount (and keep the turn). */
+  revealRequested?: boolean;
 }
 
 /**
@@ -36,8 +40,11 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
   content,
   isStreaming = false,
   defaultExpanded = false,
+  revealRequested = false,
 }) => {
   const { token } = theme.useToken();
+  const [expanded, setExpanded] = useState(defaultExpanded || revealRequested);
+  useRetainTaskDetailsWhile(expanded && (!!content || isStreaming));
 
   // Don't render if no content
   if (!content && !isStreaming) {
@@ -56,7 +63,8 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
 
   return (
     <Collapse
-      defaultActiveKey={defaultExpanded ? ['thinking'] : []}
+      activeKey={expanded ? ['thinking'] : []}
+      onChange={(keys) => setExpanded(keys.includes('thinking'))}
       expandIcon={({ isActive }) => (isActive ? <DownOutlined /> : <RightOutlined />)}
       style={{
         background: token.colorWarningBg,

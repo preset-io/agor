@@ -2,9 +2,32 @@ import { resolveRepoCleanupPolicy } from '@agor/core/types';
 import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Button, Card, Empty, Form, Input, Modal, Space, Table, Tooltip, Typography } from 'antd';
-import { type Key, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  Collapse,
+  Empty,
+  Form,
+  Input,
+  Modal,
+  Space,
+  Table,
+  Tooltip,
+  Typography,
+} from 'antd';
+import {
+  type Key,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { mapToArray } from '@/utils/mapHelpers';
+import { repositorySetupMessage } from '@/utils/repositorySetupMessage';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { RepoFormFields } from '../forms/RepoFormFields';
 import { HighlightMatch } from '../HighlightMatch';
@@ -17,15 +40,30 @@ interface ReposTableProps {
   repoById: Map<string, Repo>;
   /** Whether the caller may configure the branch cleanup policy (admin-only). */
   canConfigureCleanup?: boolean;
-  onCreate?: (data: CreateRepoRequest) => void;
-  onCreateLocal?: (data: CreateLocalRepoRequest) => void;
-  onUpdate?: (repoId: string, updates: Partial<Repo>) => void;
-  onDelete?: (repoId: string, cleanup: boolean) => void;
+  identityKey: string | null;
+  operationScope: readonly unknown[] | null;
+  onCreate?: (data: CreateRepoRequest, shouldApply?: () => boolean) => unknown;
+  onCreateLocal?: (
+    data: CreateLocalRepoRequest,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onUpdate?: (
+    repoId: string,
+    updates: Partial<Repo>,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDelete?: (
+    repoId: string,
+    cleanup: boolean,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
 }
 
 export const ReposTable: React.FC<ReposTableProps> = ({
   repoById,
   canConfigureCleanup = false,
+  identityKey,
+  operationScope,
   onCreate,
   onCreateLocal,
   onUpdate,
@@ -43,6 +81,20 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   const [repoToDelete, setRepoToDelete] = useState<Repo | null>(null);
 
   const { drill, openDrill, closeDrill } = useSettingsDrill();
+  const operationGuard = useAuthorityOperationGuard(operationScope);
+
+  // A different caller erases the selected caller-private row and any draft.
+  const authorityKeyRef = useRef(identityKey);
+  useLayoutEffect(() => {
+    if (authorityKeyRef.current === identityKey) return;
+    authorityKeyRef.current = identityKey;
+    repoForm.resetFields();
+    setRepoMode('remote');
+    setDirty(false);
+    setDeleteModalOpen(false);
+    setRepoToDelete(null);
+    closeDrill();
+  }, [identityKey, repoForm, closeDrill]);
 
   // Editing/creating swaps this section's Content pane for the drill-in editor
   // below, instead of stacking a second Modal on top of Settings.
@@ -101,51 +153,66 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     setDeleteModalOpen(true);
   };
 
-  const handleConfirmDelete = (cleanup: boolean) => {
-    if (repoToDelete) {
-      onDelete?.(repoToDelete.repo_id, cleanup);
+  const handleConfirmDelete = async (cleanup: boolean) => {
+    const operation = operationGuard.begin();
+    if (repoToDelete && operation.isCurrent()) {
+      await onDelete?.(repoToDelete.repo_id, cleanup, operation.isCurrent);
+      if (!operation.isCurrent()) return;
       setDeleteModalOpen(false);
       setRepoToDelete(null);
     }
   };
 
   const handleSave = useCallback(async () => {
-    const values = await repoForm.validateFields();
-    if (isEditing && editingRepo) {
-      const updates: Partial<Repo> = {
-        slug: values.slug,
-      };
-      if (values.default_branch) {
-        updates.default_branch = values.default_branch;
-      }
-      // Branch cleanup policy (#2742) — admin-only; only sent when actually changed.
-      if (
-        canConfigureCleanup &&
-        values.cleanup_policy &&
-        Object.entries(resolveRepoCleanupPolicy(editingRepo.cleanup_policy)).some(
-          ([key, value]) => values.cleanup_policy[key] !== value
-        )
-      ) {
-        updates.cleanup_policy = values.cleanup_policy;
-      }
-      onUpdate?.(editingRepo.repo_id, updates);
-    } else {
-      if (repoMode === 'local') {
-        onCreateLocal?.({
-          path: values.path,
-          slug: values.slug || undefined,
-        });
-      } else {
-        onCreate?.({
-          url: values.url,
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    try {
+      const values = await repoForm.validateFields();
+      if (!operation.isCurrent()) return;
+      if (isEditing && editingRepo) {
+        const updates: Partial<Repo> = {
           slug: values.slug,
-          default_branch: values.default_branch,
-        });
+        };
+        // Metadata-only saves must neither require executable-config authority
+        // nor overwrite an administrator's concurrent policy edit.
+        if (
+          canConfigureCleanup &&
+          values.cleanup_policy &&
+          Object.entries(resolveRepoCleanupPolicy(editingRepo.cleanup_policy)).some(
+            ([key, value]) => values.cleanup_policy[key] !== value
+          )
+        ) {
+          updates.cleanup_policy = values.cleanup_policy;
+        }
+        if (values.default_branch) {
+          updates.default_branch = values.default_branch;
+        }
+        await onUpdate?.(editingRepo.repo_id, updates, operation.isCurrent);
+      } else if (repoMode === 'local') {
+        await onCreateLocal?.(
+          { path: values.path, slug: values.slug || undefined },
+          operation.isCurrent
+        );
+      } else {
+        await onCreate?.(
+          {
+            url: values.url,
+            slug: values.slug,
+            default_branch: values.default_branch,
+          },
+          operation.isCurrent
+        );
       }
+      if (!operation.isCurrent()) return;
+      setDirty(false);
+      closeDrill();
+    } catch {
+      // Ant Design displays validation errors. Parent mutation errors already
+      // own their user-facing message; either way stale continuations do not
+      // close or clear a reconnect-preserved draft.
     }
-    setDirty(false);
-    closeDrill();
   }, [
+    operationGuard,
     repoForm,
     isEditing,
     editingRepo,
@@ -189,6 +256,13 @@ export const ReposTable: React.FC<ReposTableProps> = ({
           <Typography.Link ellipsis title={name} onClick={() => openEdit(repo)}>
             <HighlightMatch text={name} query={searchTerm} />
           </Typography.Link>
+          {(repo.clone_status === 'cloning' || repo.clone_status === 'failed') && (
+            <Tooltip title={repositorySetupMessage(repo)}>
+              <Tag color={repo.clone_status === 'failed' ? 'warning' : 'processing'}>
+                {repo.clone_status === 'failed' ? 'Setup failed' : 'Setting up'}
+              </Tag>
+            </Tooltip>
+          )}
         </Space>
       ),
     },
@@ -277,6 +351,24 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   if (editingRepo || isCreating) {
     return (
       <DrillInFrame title={drillTitle} dirty={dirty} saveLabel={drillSaveLabel} onSave={handleSave}>
+        {editingRepo && (
+          <RepoSetupStatus
+            repo={editingRepo}
+            onRetry={
+              onCreate
+                ? async (data) => {
+                    const operation = operationGuard.begin();
+                    if (!operation.isCurrent()) return;
+                    try {
+                      await onCreate(data, operation.isCurrent);
+                    } catch {
+                      // The explicit create handler owns the actionable notification.
+                    }
+                  }
+                : undefined
+            }
+          />
+        )}
         <Form
           form={repoForm}
           layout="vertical"
@@ -428,5 +520,70 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         )}
       </Modal>
     </div>
+  );
+};
+
+/** Setup progress / failure for a repository, with a retry for a failed remote clone. */
+const RepoSetupStatus: React.FC<{
+  repo: Repo;
+  onRetry?: (data: CreateRepoRequest) => void;
+}> = ({ repo, onRetry }) => {
+  if (repo.clone_status !== 'cloning' && repo.clone_status !== 'failed') return null;
+  const remoteUrl = repo.remote_url;
+  return (
+    <Space
+      orientation="vertical"
+      size={8}
+      style={{ width: '100%', maxWidth: 520, marginBottom: 16 }}
+    >
+      <Alert
+        type={repo.clone_status === 'failed' ? 'warning' : 'info'}
+        showIcon
+        title={
+          repo.clone_status === 'failed'
+            ? 'Repository setup failed'
+            : 'Repository setup in progress'
+        }
+        description={repositorySetupMessage(repo)}
+        action={
+          repo.clone_status === 'failed' && remoteUrl && onRetry ? (
+            <Button
+              size="small"
+              onClick={() =>
+                onRetry({
+                  url: remoteUrl,
+                  slug: repo.slug,
+                  default_branch: repo.default_branch || 'main',
+                })
+              }
+            >
+              Retry setup
+            </Button>
+          ) : undefined
+        }
+      />
+      {repo.clone_status === 'failed' && repo.clone_error && (
+        <Collapse
+          size="small"
+          items={[
+            {
+              key: 'setup',
+              label: 'Setup diagnostics',
+              children: (
+                <>
+                  <Typography.Paragraph>
+                    Attempt {repo.clone_generation ?? 'legacy'} · {repo.clone_error.category} · exit{' '}
+                    {repo.clone_error.exit_code}
+                  </Typography.Paragraph>
+                  <Typography.Paragraph code>
+                    {repo.clone_error.message.slice(0, 2000)}
+                  </Typography.Paragraph>
+                </>
+              ),
+            },
+          ]}
+        />
+      )}
+    </Space>
   );
 };

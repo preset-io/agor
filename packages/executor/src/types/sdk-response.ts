@@ -70,7 +70,14 @@ export type CodexSdkResponse = TurnCompletedEvent;
  * Gemini SDK Response - Direct import from Gemini SDK
  * This is the actual ServerGeminiFinishedEvent type with no modifications
  */
-export type GeminiSdkResponse = ServerGeminiFinishedEvent;
+export type GeminiSdkResponse = ServerGeminiFinishedEvent & {
+  agor?: {
+    usage: import('./token-usage.js').TokenUsage;
+    requestedModel: string;
+    reportedModel?: string;
+    costEstimated: true;
+  };
+};
 
 // ============================================================================
 // Copilot SDK Response (from GitHub Copilot SDK)

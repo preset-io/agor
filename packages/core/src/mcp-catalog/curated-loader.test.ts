@@ -8,6 +8,7 @@ import {
   loadCuratedCatalog,
   parseCuratedCatalog,
 } from './curated-loader';
+import { isCatalogEntryVisible } from './query';
 
 // Names an endpoint because the loader now refuses an entry that does not:
 // see `parseCuratedCatalog — entries nothing could install`.
@@ -600,13 +601,33 @@ describe('the shipped catalog', () => {
     // defensively pending production validation, not claimed to have passed it.
     const entries = await loadCuratedCatalog();
     expect(
-      entries.filter((entry) => entry.oauth !== undefined).map((entry) => [entry.name, entry.oauth])
+      entries
+        .filter((entry) => entry.oauth?.compatibility_mode !== undefined)
+        .map((entry) => [entry.name, entry.oauth])
     ).toEqual([
       ['com.monday/monday.com', { compatibility_mode: 'strict' }],
       ['com.cloudflare/mcp', { compatibility_mode: 'strict' }],
       ['io.preset/mcp-gateway', { compatibility_mode: 'strict' }],
       ['com.clickup/mcp', { compatibility_mode: 'strict' }],
     ]);
+  });
+
+  it('offers Asana V2 only with the documented customer app setup, never a shared credential', async () => {
+    const entry = (await loadCuratedCatalog())
+      .filter(isCatalogEntryVisible)
+      .find((entry) => entry.name === 'com.asana/mcp');
+    expect(entry).toMatchObject({
+      remote_url: 'https://mcp.asana.com/v2/mcp',
+      transport: 'streamable-http',
+      oauth: {
+        dcr_mode: 'disabled',
+        configured_client: {
+          secret_required: true,
+          setup_url: 'https://developers.asana.com/docs/integrating-with-asanas-mcp-server',
+        },
+      },
+    });
+    expect(entry?.oauth).not.toHaveProperty('client_id');
   });
 
   it('preserves Preset install identity and requires strict OAuth without hiding write authority', async () => {

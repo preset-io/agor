@@ -612,6 +612,15 @@ async function resolvePublishScope(
   context: PublishContext,
   accessCache: RealtimeAccessCache
 ): Promise<PublishScope> {
+  if (context.path === 'mcp-servers' && context.event === 'removed') {
+    // The row no longer exists. Removal carries only its ID and explicit
+    // pre-delete owner snapshot, including null for a shared server. Do not
+    // infer "shared" from an event that omitted the snapshot.
+    const record = asRecord(data);
+    if (record?.owner_user_id === null) return { kind: 'global' };
+    const owner = pickString(record, 'owner_user_id');
+    return owner ? { kind: 'users', userIds: new Set([owner]) } : { kind: 'serviceOnly' };
+  }
   const audience = audienceFor(context.path);
   switch (audience) {
     case 'board': {

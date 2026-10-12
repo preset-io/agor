@@ -1,4 +1,4 @@
-import { type SdkFailure, TaskStatus } from '@agor/core/types';
+import { type SdkFailure, type Task, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const beginExecutorTermination = vi.hoisted(() => vi.fn());
@@ -20,11 +20,10 @@ const task = {
   created_at: '2026-01-01T00:00:00.000Z',
   executor_connected_at: '2026-01-01T00:00:01.000Z',
   sdk_watchdog_mode: 'observe' as const,
-};
+} as Task;
 
 function serviceFor(current = task, observationAccepted = true) {
   const service = Object.create(TasksService.prototype) as TasksService & {
-    app: unknown;
     get: ReturnType<typeof vi.fn>;
   };
   service.get = vi.fn().mockResolvedValue(current);
@@ -36,14 +35,14 @@ function serviceFor(current = task, observationAccepted = true) {
     },
   });
   Object.defineProperty(service, 'db', { value: {} });
-  service.app = {
+  Reflect.set(service, 'app', {
     get: () => ({ execution: { sdk_watchdog: { abort_grace_ms: 25 } } }),
     service: (name: string) => {
       if (name === 'sessions') return { get: vi.fn().mockResolvedValue({ agentic_tool: 'codex' }) };
       if (name === 'tasks') return { emit: vi.fn() };
       throw new Error(`unexpected service ${name}`);
     },
-  };
+  });
   return service;
 }
 
@@ -173,5 +172,66 @@ describe('TasksService SDK health reports', () => {
         watchdog_action: 'enforced',
       })
     ).resolves.toBe(current);
+  });
+});
+
+describe('TasksService executor interruption reports', () => {
+  beforeEach(() => {
+    beginExecutorTermination.mockReset();
+    withFreshTenantWrite.mockClear();
+  });
+
+  it('uses fenced failure containment, never marks a signal as user cancellation or OOM', async () => {
+    const service = serviceFor();
+    await service.reportExecutorInterruption({ task_id: task.task_id, signal: 'SIGTERM' }, {
+      tenant: { tenant_id: 'tenant-a' },
+    } as never);
+    expect(beginExecutorTermination).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        taskId: task.task_id,
+        cause: 'executor_interrupted',
+        errorMessage: 'Executor received SIGTERM; execution was interrupted.',
+        sdkFailure: expect.objectContaining({
+          reason: 'executor_interrupted',
+          termination: 'requested',
+        }),
+      })
+    );
+    const input = beginExecutorTermination.mock.calls[0][0];
+    expect(input).not.toHaveProperty('absenceVerified');
+    await input.runInFreshTenantWriteDatabase(async () => undefined);
+    expect(withFreshTenantWrite).toHaveBeenCalledWith({}, 'tenant-a', expect.any(Function));
+  });
+
+  it('leaves an already completed task untouched', async () => {
+    const terminal = { ...task, status: TaskStatus.COMPLETED };
+    await expect(
+      serviceFor(terminal).reportExecutorInterruption({
+        task_id: task.task_id,
+        signal: 'SIGINT',
+      })
+    ).resolves.toBe(terminal);
+    expect(beginExecutorTermination).not.toHaveBeenCalled();
+  });
+
+  it('refuses SIGKILL/OOM claims from the signal reporter', async () => {
+    await expect(
+      serviceFor().reportExecutorInterruption({
+        task_id: task.task_id,
+        signal: 'SIGKILL' as never,
+      })
+    ).rejects.toThrow('invalid executor interruption signal');
+    expect(beginExecutorTermination).not.toHaveBeenCalled();
+  });
+
+  it('cannot mutate a task absent from the authenticated tenant view', async () => {
+    const service = serviceFor();
+    service.get.mockRejectedValue(new Error('Task not found in tenant-b'));
+    await expect(
+      service.reportExecutorInterruption({ task_id: task.task_id, signal: 'SIGTERM' }, {
+        tenant: { tenant_id: 'tenant-b' },
+      } as never)
+    ).rejects.toThrow('not found');
+    expect(beginExecutorTermination).not.toHaveBeenCalled();
   });
 });

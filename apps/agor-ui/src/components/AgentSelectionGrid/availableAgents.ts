@@ -5,7 +5,7 @@
  * Used across NewSessionModal, ScheduleTab, and other agent selection UIs.
  */
 
-import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { AGENTIC_TOOL_DISPLAY_NAMES, AGENTIC_TOOL_INTEGRATIONS } from '@agor/agentic-tools';
 import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type {
   AgenticToolName,
@@ -42,23 +42,20 @@ export const AVAILABLE_AGENTS: AgenticToolOption[] = [
     name: AGENTIC_TOOL_DISPLAY_NAMES.opencode,
     icon: openCodeOption.icon,
     description: openCodeOption.description,
-    beta: openCodeOption.beta,
   },
   {
     id: 'cursor',
     name: 'Cursor SDK',
     icon: '⌘',
     description: 'Cursor agentic runtime via the Cursor SDK',
-    beta: true,
   },
   {
     id: 'copilot',
     name: 'GitHub Copilot',
     icon: '✈️',
     description: 'GitHub Copilot agentic runtime',
-    beta: true,
   },
-];
+].map((agent) => ({ ...agent, beta: AGENTIC_TOOL_INTEGRATIONS[agent.id as AgenticToolName].beta }));
 
 /**
  * Resolve the tool that a creation picker will actually select once workspace

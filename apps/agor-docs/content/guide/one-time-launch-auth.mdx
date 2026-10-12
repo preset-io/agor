@@ -89,6 +89,43 @@ Agor-owned preferences, onboarding state, AI-provider credentials and defaults,
 environment variables, personal API keys, and MCP selections/OAuth grants stay
 editable.
 
+Avatar ownership can be configured independently with
+`identity.avatar_authority: internal | external`. When omitted, it follows
+`user_lifecycle`: the external profile above keeps provider-owned avatars and
+disables Agor avatar writes and Slack sync. This restriction is independent of
+HA and multi-tenant mode.
+
+If the launch provider owns accounts but Agor should own avatars, use:
+
+```yaml
+identity:
+  user_lifecycle: external
+  avatar_authority: internal
+  role_authority: claims
+  local_auth: disabled
+  external:
+    provider: external_launch
+    provisioning: jit
+```
+
+With `avatar_authority: internal`, users can edit their own avatars and admins
+can manage Slack avatar settings, subject to normal user-management permissions.
+Email, name, execution-home keys, account lifecycle, and roles remain externally
+managed. Launch `avatar` and `picture` claims are ignored, including on first
+login, so later logins cannot overwrite manual or Slack avatars or repopulate
+an avatar that was cleared. This setting permits Slack sync; it does not enable
+it or run a sync during login. Admins still select a Slack gateway and enable
+sync in the Avatars tab. Existing avatars are retained when changing this
+setting. Selecting `external` resumes provider projection on subsequent launches
+and requires the external account profile.
+
+The public health identity contract is version 2 and reports `avatarAuthority`,
+`capabilities.users.avatarWrite`, and `capabilities.users.avatarSettingsWrite`.
+Upgrade the UI and all daemon replicas together before enabling the new setting;
+clients reject unsupported contract versions rather than guessing permissions.
+A Cloud deployment must set `avatar_authority: internal` in its generated daemon
+configuration to opt in. Do not change `user_lifecycle` to enable avatars.
+
 The trusted `(tenant, provider, issuer, subject)` binding is stored in a
 tenant-owned relation with database uniqueness enforcement. PostgreSQL JIT
 projection is one tenant-scoped transaction and serializes the same subject
@@ -211,6 +248,8 @@ Optional claims:
   query or fragment. This claim is origin-only: a trailing `/` is accepted, but
   path prefixes and entity paths are rejected. Static configured base paths are
   unaffected.
+- `workspace_display_name`: an optional tenant display label for the header
+  badge. See [Tenant display label](#tenant-display-label).
 
 Required when `external_launch.instance_id` is configured:
 
@@ -246,6 +285,27 @@ Static/single-tenant installations retain their configured `AGOR_BASE_URL`,
 OAuth callback URLs and internal executor endpoints remain separate and are not
 changed by this claim. Knowledge reader links need no `mode=edit` query; both
 `/ui/kb/...` and `/ui/knowledge/...` are supported routes.
+
+### Tenant display label
+
+A verified launch can carry `workspace_display_name`, which Agor stores per
+tenant (reserved `app_variables` metadata, same transaction, tenant binding, and
+`iat` ordering as `public_base_url`) and shows as the header badge to
+authenticated users of that tenant. Precedence is the tenant label, then
+`daemon.instanceLabel`, then no badge. The public pre-login `GET /health` keeps
+returning only `daemon.instanceLabel`, so the tenant label is never disclosed
+before sign-in.
+
+The value is trimmed with JavaScript `String.prototype.trim()` and must then be
+1–80 UTF-16 code units long (JavaScript string length, so a character outside
+the Basic Multilingual Plane, such as an emoji, counts as 2) with no control
+characters. The label also requires `iat` to be a nonnegative integer
+NumericDate, independently of whether `public_base_url` is present.
+Because it is cosmetic, an invalid value or a missing/invalid `iat` does not
+fail the launch: Agor drops the label and logs only the warning code
+`launch_workspace_display_name_invalid`, never the value. A malformed stored label reads as absent and is replaced by the next
+valid launch. Omitting the claim keeps the last stored label; the badge updates
+on the next launch and page load.
 
 ## Compatibility and upgrade notes
 

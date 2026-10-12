@@ -1,10 +1,14 @@
-import { mkdtempSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   branchSdkHomeAuthUnsupportedReason,
+  branchSdkHomeUnsupportedReason,
+  isHostedOpenCode,
   resolveBranchSdkHomeLaunch,
+  resolveExecutionSdkHomeEnv,
   resolveNewSessionSdkHomeScope,
   resolveSdkHomeConfig,
   sessionUsesBranchSdkHome,
@@ -37,6 +41,31 @@ describe('sessionUsesBranchSdkHome', () => {
     expect(() =>
       sessionUsesBranchSdkHome({ sessionScope: 'branch', branchSdkHomeIntent: null })
     ).toThrow(/refusing fallback/);
+  });
+});
+
+describe('hosted OpenCode branch SDK homes', () => {
+  const hosted = {
+    multi_tenancy: { mode: 'required_from_auth' as const },
+    execution: {
+      unix_user_mode: 'delegated' as const,
+      executor_command_template: 'launch {task_id}',
+      executor_storage: { user_home: 'persistent-per-user' as const },
+      sandbox: { sdk_home_mode: 'per_branch' as const },
+    },
+  };
+
+  it('admits hosted OpenCode, whose credentials stay on Job scratch', () => {
+    expect(isHostedOpenCode(hosted)).toBe(true);
+    expect(branchSdkHomeUnsupportedReason('opencode', isHostedOpenCode(hosted))).toBeUndefined();
+  });
+
+  it('keeps refusing local OpenCode, whose data home holds native credentials', () => {
+    const local = { execution: { unix_user_mode: 'sandbox' as const } };
+    expect(isHostedOpenCode(local)).toBe(false);
+    expect(branchSdkHomeUnsupportedReason('opencode', isHostedOpenCode(local))).toMatch(
+      /credentials/
+    );
   });
 });
 
@@ -194,4 +223,45 @@ describe('branchSdkHomeAuthUnsupportedReason', () => {
       })
     ).toBeUndefined();
   });
+});
+
+describe('Gemini execution-home projection', () => {
+  it.each(['execution_home', undefined, 'branch'] as const)(
+    'starts the adapter in the selected %s home',
+    (sessionScope) => {
+      const executionHome = mkdtempSync(join(tmpdir(), 'gemini-launch-'));
+      const branchHome = mkdtempSync(join(tmpdir(), 'gemini-branch-'));
+      const branch = sessionUsesBranchSdkHome({ sessionScope, branchSdkHomeIntent: 'per_branch' });
+      const env = resolveExecutionSdkHomeEnv({
+        tool: 'gemini',
+        executionHome,
+        branchEnv: branch ? { GEMINI_CLI_HOME: branchHome } : undefined,
+      });
+      expect(env.GEMINI_CLI_HOME).toBe(branch ? branchHome : executionHome);
+      const probe = spawnSync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          '--input-type=module',
+          '-e',
+          `
+      import { enterGeminiRuntime } from '../../packages/executor/src/sdk-handlers/gemini/runtime.ts';
+      const close = await enterGeminiRuntime();
+      if (!process.env.TMPDIR.startsWith(process.env.GEMINI_CLI_HOME + '/.gemini/')) throw new Error('wrong home');
+      await close();
+    `,
+        ],
+        {
+          cwd: process.cwd(),
+          env: { ...process.env, AGOR_EXECUTOR_SCRATCH_ROOT: undefined, ...env },
+          encoding: 'utf8',
+          timeout: 30000,
+        }
+      );
+      rmSync(executionHome, { recursive: true, force: true });
+      rmSync(branchHome, { recursive: true, force: true });
+      expect(probe.status, probe.stderr).toBe(0);
+    }
+  );
 });

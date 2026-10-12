@@ -6,7 +6,7 @@
  * read and not enough for anyone to USE: before this, turning the projection
  * off during an incident meant writing an app variable by hand, and verifying
  * it meant reading one back the same way. A switch nobody can reach is not a
- * control, and §7.1.4 promised one.
+ * control.
  *
  * Four things an operator needs, and all four are here rather than in a
  * runbook's shell snippets:
@@ -22,9 +22,8 @@
  * database rather than only against the route's registration. The route is the
  * thin part: it supplies the admin floors and the tenant-scoped hooks.
  *
- * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.1.4 for the
- * procedure this exists for, including what happens to work stranded while the
- * card is off.
+ * The operator procedure, including what happens to work stranded while the
+ * card is off, is in the MCP Administration guide (`mcp-administration.mdx`).
  */
 
 import {

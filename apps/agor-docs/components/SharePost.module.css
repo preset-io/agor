@@ -1,0 +1,56 @@
+/* Blog post share row. Neutral tones so it sits in both docs themes. */
+.share {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.end {
+  margin-top: 3rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid rgba(127, 127, 127, 0.25);
+}
+
+.label {
+  margin-right: 4px;
+  font-size: 0.85rem;
+  opacity: 0.65;
+}
+
+.button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background-color 0.15s;
+}
+
+.button:hover {
+  border-color: #2ec4b6;
+  background: rgba(46, 196, 182, 0.1);
+  color: #2ec4b6;
+}
+
+.button:focus-visible {
+  outline: 2px solid #2ec4b6;
+  outline-offset: 2px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}

@@ -20,6 +20,7 @@ import {
 import { useState } from 'react';
 import type { NewSessionConfig } from '../domain/sessionCreation';
 import { captureSessionPatchCommit } from '../store/realtimeBatch';
+import { CLIENT_NOT_CONNECTED_ERROR, formatActionError } from '../utils/connectionErrors';
 
 export const ARCHIVE_REFRESH_WARNING =
   'Session and same-branch children archived; refresh required to update the session list.';
@@ -31,7 +32,7 @@ type ArchiveSessionResult = {
 
 interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session>;
-  updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session | null>;
+  updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session>;
   deleteSession: (sessionId: SessionID) => Promise<boolean>;
   archiveSession: (sessionId: SessionID) => Promise<ArchiveSessionResult | null>;
   unarchiveSession: (sessionId: SessionID) => Promise<Session | null>;
@@ -58,7 +59,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   const createSession = async (config: NewSessionConfig): Promise<Session> => {
     if (!client) {
       setError('Client not connected');
-      throw new Error('Client not connected');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
@@ -88,6 +89,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
           sandboxMode: config.codexSandboxMode ?? codexDefaults.sandboxMode,
           approvalPolicy: config.codexApprovalPolicy ?? codexDefaults.approvalPolicy,
           networkAccess: config.codexNetworkAccess ?? codexDefaults.networkAccess,
+          includePlugins: config.codexIncludePlugins ?? false,
         };
       }
 
@@ -125,7 +127,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   const forkSession = async (sessionId: SessionID, prompt: string): Promise<Session> => {
     if (!client) {
       setError('Client not connected');
-      throw new Error('Client not connected');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
@@ -159,7 +161,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   const btwForkSession = async (sessionId: SessionID, prompt: string): Promise<Session> => {
     if (!client) {
       setError('Client not connected');
-      throw new Error('Client not connected');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
@@ -198,7 +200,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   ): Promise<Session> => {
     if (!client) {
       setError('Client not connected');
-      throw new Error('Client not connected');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
@@ -229,10 +231,10 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   const updateSession = async (
     sessionId: SessionID,
     updates: Partial<Session>
-  ): Promise<Session | null> => {
+  ): Promise<Session> => {
     if (!client) {
-      setError('Client not connected');
-      return null;
+      setError(CLIENT_NOT_CONNECTED_ERROR);
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
@@ -240,10 +242,10 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       const updatedSession = await client.service('sessions').patch(sessionId, updates);
       return updatedSession;
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to update session';
-      setError(message);
-      console.error('Failed to update session:', err);
-      return null;
+      setError(formatActionError('update session', err, { idempotent: true }));
+      // Let the request-local notification boundary report the actual failure;
+      // shared hook state cannot identify which overlapping request failed.
+      throw err;
     }
   };
 

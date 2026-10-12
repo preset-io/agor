@@ -22,6 +22,8 @@ import {
   buildKnowledgeDocumentUri,
   getTeammateConfig,
   isTeammate,
+  KNOWLEDGE_ARCHIVE_BULK_LIMIT,
+  KNOWLEDGE_ARCHIVE_FILTERS,
   KNOWLEDGE_DOCUMENT_KINDS,
   KNOWLEDGE_DOCUMENT_STATUSES,
   KNOWLEDGE_DOCUMENT_URI_PREFIX,
@@ -449,6 +451,7 @@ type KnowledgeTreeDoc = {
   uri?: string;
   reference_uri?: string;
   status?: string;
+  archived?: boolean;
 };
 
 type KnowledgeTreeFolder = {
@@ -474,6 +477,7 @@ function compactKnowledgeTreeDoc(row: Record<string, unknown>): KnowledgeTreeDoc
 
   const doc: KnowledgeTreeDoc = {
     type: 'doc',
+    ...(typeof document.archived === 'boolean' ? { archived: document.archived } : {}),
     path,
   };
   if (document.icon_emoji !== undefined) doc.icon = coerceString(document.icon_emoji) ?? null;
@@ -1110,8 +1114,15 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
             : {
                 title: date,
                 kind: 'memory',
-                visibility: teammate?.kb?.default_visibility ?? namespace.visibility_default,
-                edit_policy: 'public',
+                // Daily memory is personal operational context, so it is
+                // created private/owner. The namespace's `visibility_default`
+                // governs ordinary docs and is the wrong signal here, and
+                // `kb.default_visibility` only mirrors it (teammate namespaces
+                // are created public), so neither is an opt-in to publish.
+                // Only the memory-specific fields, which nothing
+                // auto-populates, can widen this.
+                visibility: teammate?.kb?.memory_visibility ?? 'private',
+                edit_policy: teammate?.kb?.memory_edit_policy ?? 'owner',
                 status: 'published',
               }),
           content_text: nextContent,
@@ -1315,7 +1326,11 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         includeArchived: z
           .boolean()
           .optional()
-          .describe('Include archived documents (admins only; default: false)'),
+          .describe('Compatibility alias for archiveFilter:all'),
+        archiveFilter: z
+          .enum(KNOWLEDGE_ARCHIVE_FILTERS)
+          .optional()
+          .describe('active (default), archived only, or all; permissions still apply'),
         limit: z
           .number({
             error: 'limit must be a positive integer when provided.',
@@ -1337,6 +1352,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         q: '',
         namespace_slug: coerceString(args.namespace),
         include_archived: args.includeArchived === true,
+        ...(args.archiveFilter ? { archive_filter: args.archiveFilter } : {}),
         include_my_drafts: args.includeMyDrafts !== false,
         include_other_user_drafts: args.includeOtherUserDrafts === true,
         limit: (args.limit ?? 25) + 1,
@@ -1414,7 +1430,11 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         includeArchived: z
           .boolean()
           .optional()
-          .describe('Include archived documents (default: false)'),
+          .describe('Compatibility alias for archiveFilter:all'),
+        archiveFilter: z
+          .enum(KNOWLEDGE_ARCHIVE_FILTERS)
+          .optional()
+          .describe('active (default), archived only, or all; permissions still apply'),
         limit: mcpLimit(20, 100),
         mode: z
           .enum(['text', 'semantic', 'hybrid'])
@@ -1431,6 +1451,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
       const query: Record<string, unknown> = {
         q: coerceString(args.query) ?? '',
         include_archived: args.includeArchived === true,
+        ...(args.archiveFilter ? { archive_filter: args.archiveFilter } : {}),
       };
       if (args.namespace) query.namespace_slug = coerceString(args.namespace);
       if (args.pathPrefix) query.path_prefix = coerceString(args.pathPrefix);
@@ -1745,11 +1766,118 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     }
   );
 
+  const archiveTargetSchema = z
+    .object({
+      documentId: mcpRequiredId('documentId', 'Knowledge document'),
+      expectedVersion: mcpOptionalVersionToken(
+        'expectedVersion',
+        'Optional current content version guard'
+      ),
+      expectedArchived: z
+        .boolean()
+        .optional()
+        .describe('Optional archive-state guard; already-satisfied retries are no-ops'),
+    })
+    .strict();
+
+  server.registerTool(
+    'agor_kb_archive',
+    {
+      description:
+        'Archive or restore one explicitly identified Knowledge document. Set archived:false to restore. Owner/admin plus namespace write access required. Idempotent metadata-only PATCH; preserves identity, content, history and grants. Already-satisfied retries are no-ops. Archived namespace documents are not restored.',
+      annotations: { idempotentHint: true },
+      inputSchema: archiveTargetSchema.extend({ archived: z.boolean() }),
+    },
+    async (args) => {
+      const service = getOptionalService(ctx, 'kb/documents');
+      if (!service?.patch)
+        return knowledgeNotImplementedResult('agor_kb_archive', ['kb/documents.patch']);
+      return textResult(
+        await service.patch(
+          args.documentId,
+          {
+            archived: args.archived,
+            ...(args.expectedVersion !== undefined
+              ? { expected_version: args.expectedVersion }
+              : {}),
+            ...(args.expectedArchived !== undefined
+              ? { expected_archived: args.expectedArchived }
+              : {}),
+          },
+          await knowledgeWriteParams(ctx)
+        )
+      );
+    }
+  );
+
+  server.registerTool(
+    'agor_kb_archive_bulk',
+    {
+      description:
+        'Archive or restore 1–50 explicitly identified Knowledge documents (archived:false restores). Not atomic: each item is separately authorized and committed through PATCH; returns per-item results and continues after errors. No query/all-results mutation. Retries of already-satisfied targets are no-ops. Not-found and unauthorized targets share one error code.',
+      annotations: { idempotentHint: true },
+      inputSchema: z
+        .object({
+          archived: z.boolean(),
+          targets: z
+            .array(archiveTargetSchema)
+            .min(1)
+            .max(KNOWLEDGE_ARCHIVE_BULK_LIMIT)
+            .refine(
+              (targets) =>
+                new Set(targets.map((target) => target.documentId)).size === targets.length,
+              'Duplicate document IDs are not allowed'
+            ),
+        })
+        .strict(),
+    },
+    async (args) => {
+      const service = getOptionalService(ctx, 'kb/documents');
+      if (!service?.patch)
+        return knowledgeNotImplementedResult('agor_kb_archive_bulk', ['kb/documents.patch']);
+      const params = await knowledgeWriteParams(ctx);
+      const results = [];
+      for (const target of args.targets) {
+        try {
+          const document = await service.patch(
+            target.documentId,
+            {
+              archived: args.archived,
+              ...(target.expectedVersion !== undefined
+                ? { expected_version: target.expectedVersion }
+                : {}),
+              ...(target.expectedArchived !== undefined
+                ? { expected_archived: target.expectedArchived }
+                : {}),
+            },
+            params
+          );
+          results.push({ documentId: target.documentId, ok: true, document });
+        } catch (error) {
+          const code = (error as { code?: number })?.code;
+          results.push({
+            documentId: target.documentId,
+            ok: false,
+            error:
+              code === 403 || code === 404
+                ? 'not_found_or_forbidden'
+                : code === 409
+                  ? 'conflict'
+                  : code === 400
+                    ? 'invalid_request'
+                    : 'failed',
+          });
+        }
+      }
+      return textResult({ atomic: false, results });
+    }
+  );
+
   server.registerTool(
     'agor_kb_put',
     {
       description:
-        'Create or update a markdown Knowledge document. Idempotent upsert keyed by documentId, URI, or namespace + path when the backend implements putDocument. To build the knowledge graph, embed links to other KB docs in the markdown — each resolvable link becomes a "references" edge automatically on save. Prefer the rename-proof form [label](agor://kb/document/<documentId>); [label](agor://kb/<namespace>/<path>) also works but breaks if the target moves. Get a doc\'s reference_uri from agor_kb_search or agor_kb_get.',
+        'Create or update a markdown Knowledge document. Archived paths remain reserved: restore with agor_kb_archive first; ordinary upsert never restores. Idempotent upsert keyed by documentId, URI, or namespace + path when the backend implements putDocument. To build the knowledge graph, embed links to other KB docs in the markdown — each resolvable link becomes a "references" edge automatically on save. Prefer the rename-proof form [label](agor://kb/document/<documentId>); [label](agor://kb/<namespace>/<path>) also works but breaks if the target moves. Get a doc\'s reference_uri from agor_kb_search or agor_kb_get.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Existing Knowledge document'),

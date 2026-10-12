@@ -16,9 +16,6 @@
  * daemon directly from the browser (`POST /widgets/:widget_id/submit`) or
  * never touch the browser at all (the OAuth lane, where the provider redirects
  * to the daemon's own callback).
- *
- * See `docs/internal/in-conversation-widgets-design-2026-05-19.md` and
- * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
  */
 
 import { getBaseUrl } from '@agor/core/config';

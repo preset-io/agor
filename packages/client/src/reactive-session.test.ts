@@ -1,10 +1,15 @@
-import type { AgorClient, Message, Session, Task } from '@agor/core/client';
+import type { AgorClient, Message, Session, SessionID, Task, TaskID } from '@agor/core/client';
 import { TaskStatus } from '@agor/core/client';
+import { completionCallbackTaskId } from '@agor/core/ids';
 import { describe, expect, it, vi } from 'vitest';
 import {
   __streamSubscriptionCountForTest,
   attachReactiveSessionApi,
+  LEAN_TRANSCRIPT_DETAIL_BYTE_BUDGET,
+  LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT,
+  LEAN_TRANSCRIPT_TASK_WINDOW,
   ReactiveSessionHandle,
+  type ReactiveSessionOptions,
   releaseReactiveSession,
   retainReactiveSession,
   type TaskHydrationMode,
@@ -38,6 +43,8 @@ interface MockClientOptions {
   deferTaskMessageFetch?: string;
   deferSessionGet?: boolean;
   sessionTaskIds?: string[];
+  /** An older daemon: it ignores `include_tasks_complete`. */
+  omitTasksComplete?: boolean;
 }
 
 function createMockClient(opts: MockClientOptions) {
@@ -126,14 +133,31 @@ function createMockClient(opts: MockClientOptions) {
 
   const services: Record<string, unknown> = {
     sessions: {
-      get: vi.fn(async () => {
+      get: vi.fn(async (_id: string, params?: { query?: Record<string, unknown> }) => {
         order.push('hydrate');
         if (opts.deferSessionGet) {
           await new Promise<void>((resolve) => sessionGetResolvers.push(resolve));
         }
+        // The daemon appends Session.tasks at dispatch: never a queued or
+        // never-run (CREATED) Task.
+        const neverRun = (task: Task) =>
+          task.status === TaskStatus.QUEUED || task.status === TaskStatus.CREATED;
+        const tasks =
+          opts.sessionTaskIds ??
+          opts.tasks.filter((task) => !neverRun(task)).map((task) => task.task_id);
+        // Its completeness report: every entry a distinct Task of this
+        // Session, and every Task that ran listed.
+        const known = new Set<string>(opts.tasks.map((task) => task.task_id));
+        const complete =
+          new Set(tasks).size === tasks.length &&
+          tasks.every((id) => known.has(id)) &&
+          opts.tasks.every((task) => neverRun(task) || tasks.includes(task.task_id));
         return {
           session_id: SESSION_ID,
-          tasks: opts.sessionTaskIds ?? opts.tasks.map((task) => task.task_id),
+          tasks,
+          ...(params?.query?.include_tasks_complete && !opts.omitTasksComplete
+            ? { tasks_complete: complete }
+            : {}),
         } as Session;
       }),
       ...listener('sessions'),
@@ -146,7 +170,8 @@ function createMockClient(opts: MockClientOptions) {
           rows = rows.filter((task) => task.status === query.status);
         if (query.status && typeof query.status === 'object' && '$ne' in query.status)
           rows = rows.filter((task) => task.status !== (query.status as { $ne: string }).$ne);
-        const cursor = query.task_id as { $lte?: string; $gt?: string } | undefined;
+        const cursor = query.task_id as { $lte?: string; $gt?: string; $in?: string[] } | undefined;
+        if (cursor?.$in) rows = rows.filter((task) => cursor.$in!.includes(task.task_id));
         if (cursor?.$gt) rows = rows.filter((task) => task.task_id > cursor.$gt!);
         if ((query.$sort as { task_id?: number })?.task_id === 1) rows.reverse();
         if (cursor?.$lte) rows = rows.filter((task) => task.task_id <= cursor.$lte!);
@@ -215,6 +240,26 @@ function createMockClient(opts: MockClientOptions) {
       for (const resolve of sessionGetResolvers.splice(0)) resolve();
     },
   };
+}
+
+interface FetchInternals {
+  messageFetches: Map<number, number>;
+  taskFetches: Map<number, number>;
+  messageMutations: unknown[];
+  taskMutations: unknown[];
+  queueInflight: Promise<void> | null;
+  leanSyncInflight: Promise<void> | null;
+  resyncInflight: Promise<void> | null;
+}
+
+function expectNoStrandedFetches(internals: FetchInternals) {
+  expect(internals.messageFetches.size).toBe(0);
+  expect(internals.taskFetches.size).toBe(0);
+  expect(internals.messageMutations).toHaveLength(0);
+  expect(internals.taskMutations).toHaveLength(0);
+  expect(internals.queueInflight).toBeNull();
+  expect(internals.leanSyncInflight).toBeNull();
+  expect(internals.resyncInflight).toBeNull();
 }
 
 async function bootstrapHandle(opts: MockClientOptions, taskHydration: TaskHydrationMode) {
@@ -1316,7 +1361,9 @@ describe('snapshot reconciliation of persisted streams', () => {
     async (taskHydration) => {
       const message = makeMessage('task-2', 1);
       const opts: MockClientOptions = {
-        tasks: [makeTask('task-1', TaskStatus.COMPLETED), makeTask('task-2', TaskStatus.RUNNING)],
+        // Both are nonterminal: this test exercises unloaded/active streams,
+        // not late events for a task whose executor has already settled.
+        tasks: [makeTask('task-1', TaskStatus.RUNNING), makeTask('task-2', TaskStatus.RUNNING)],
         messagesByTask: { 'task-1': [makeMessage('task-1', 1)], 'task-2': [message] },
       };
       const mock = createMockClient(opts);
@@ -2014,6 +2061,60 @@ describe('lean transcript POC hydration', () => {
     expect(handle.state.tasks).toEqual([]);
     expect(handle.state.loadedTaskIds.has('task-023')).toBe(false);
   });
+
+  it('retires journals and single-flight markers stranded by a disconnect mid-sync', async () => {
+    const opts: MockClientOptions = history();
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    // Twenty reached Tasks: a resync refreshes them by ID.
+    await handle.loadOlderTasks();
+    const internals = handle as unknown as FetchInternals;
+    // Without an ack deadline, Socket.IO drops the callback of a request that
+    // was in flight at disconnect; the awaiting call never settles.
+    const taskFind = vi.mocked(mock.client.service('tasks').find);
+    const answer = taskFind.getMockImplementation()!;
+    let settleStranded: (() => void) | undefined;
+    taskFind.mockImplementationOnce(
+      (params) =>
+        new Promise((resolve) => {
+          settleStranded = () => resolve(answer(params));
+        })
+    );
+    const stranded = handle.resync();
+    await vi.waitFor(() => expect(settleStranded).toBeDefined());
+    expect(internals.taskFetches.size).toBe(1);
+    expect(internals.messageFetches.size).toBe(1);
+
+    mock.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+
+    opts.tasks.push(makeTask('task-024', TaskStatus.COMPLETED));
+    mock.fireIo('connect');
+    await vi.waitFor(() =>
+      expect(handle.state.tasks.some((task) => task.task_id === 'task-024')).toBe(true)
+    );
+    expect(handle.state.tasks).toHaveLength(21);
+    expect(handle.state.error).toBeNull();
+
+    // Executor heartbeats and message patches keep arriving on the new connection.
+    const running = makeTask('task-024', TaskStatus.RUNNING);
+    const message = makeMessage('task-024', 0);
+    for (let beat = 0; beat < 50; beat++) {
+      mock.emitServiceEvent('tasks', 'patched', running);
+      mock.emitServiceEvent('messages', 'patched', message);
+    }
+    expectNoStrandedFetches(internals);
+
+    // A stranded request that settles after the reconnect is discarded.
+    settleStranded!();
+    await stranded;
+    expect(handle.state.tasks).toHaveLength(21);
+    expect(handle.getTask('task-024')?.status).toBe(TaskStatus.RUNNING);
+    expect(handle.state.error).toBeNull();
+    expectNoStrandedFetches(internals);
+    handle.dispose();
+  });
 });
 
 it('retains consecutive tool activity across partial persistence, duplicate events and reconciliation', async () => {
@@ -2058,4 +2159,2351 @@ it('retains consecutive tool activity across partial persistence, duplicate even
   } finally {
     handle.dispose();
   }
+});
+
+// Only invented payloads and a fake transport; all lifecycle handlers are real.
+describe.each(['lean', 'lazy'] as const)('stream lifecycle (%s)', (taskHydration) => {
+  async function fixture() {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    const mock = createMockClient(opts);
+    const handle = attachReactiveSessionApi(mock.client).session(SESSION_ID, {
+      taskHydration,
+    });
+    await handle.ready();
+    const task = (id: string, status: TaskStatus = TaskStatus.RUNNING) => {
+      const row = makeTask(id, status);
+      opts.tasks = [...opts.tasks.filter((t) => t.task_id !== id), row];
+      mock.emitServiceEvent('tasks', 'patched', row);
+    };
+    const event = (name: string, id: string, taskId: string, extra = {}) =>
+      mock.emitServiceEvent('messages', name, {
+        session_id: SESSION_ID,
+        message_id: id,
+        task_id: taskId,
+        timestamp: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        ...extra,
+      });
+    const thinking = (id: string, taskId: string) => {
+      event('thinking:start', id, taskId);
+      event('thinking:chunk', id, taskId, { chunk: 'synthetic violet pebble '.repeat(64) });
+    };
+    const persist = (id: string, taskId: string) => {
+      const row = {
+        ...makeMessage(taskId, (opts.messagesByTask[taskId] ?? []).length),
+        message_id: id as Message['message_id'],
+        role: 'assistant',
+        content: [{ type: 'text', text: 'invented amber square' }],
+      } as Message;
+      opts.messagesByTask[taskId] = [...(opts.messagesByTask[taskId] ?? []), row];
+      mock.emitServiceEvent('messages', 'created', row);
+    };
+    return { ...mock, opts, handle, task, event, thinking, persist };
+  }
+
+  it.each(['separate', 'same', 'thinking-only'] as const)(
+    'releases 40 completed turns (%s IDs), including reconnect and resync',
+    async (ids) => {
+      const f = await fixture();
+      const retained: number[] = [];
+      for (let n = 0; n < 40; n++) {
+        const t = `turn-${String(n).padStart(2, '0')}`;
+        const thought = `${t}-thought`;
+        const text = ids === 'separate' ? `${t}-text` : thought;
+        f.task(t);
+        f.thinking(thought, t);
+        f.event('thinking:end', thought, t);
+        if (ids !== 'thinking-only') {
+          f.event('streaming:start', text, t);
+          f.event('streaming:chunk', text, t, { chunk: 'invented amber square' });
+          f.event('streaming:end', text, t);
+        }
+        f.persist(text, t);
+        f.task(t, TaskStatus.COMPLETED);
+        if ([10, 20, 40].includes(n + 1)) retained.push(f.handle.state.streamingMessages.size);
+      }
+      expect(retained).toEqual([0, 0, 0]);
+      f.fireIo('disconnect');
+      f.fireIo('connect');
+      await f.handle.ready();
+      await f.handle.resync();
+      expect(f.handle.state.streamingMessages.size).toBe(0);
+      f.handle.dispose();
+    }
+  );
+
+  it('does not mistake earlier assistant persistence for newer thinking completion', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('newer', 'turn');
+    f.persist('earlier', 'turn');
+    expect(f.handle.getStreamingMessage('newer')?.isThinking).toBe(true);
+    f.event('thinking:end', 'newer', 'turn');
+    expect(f.handle.getStreamingMessage('newer')).toMatchObject({
+      isThinking: false,
+      isStreaming: false,
+    });
+    // Even ended thinking may belong to a later, not-yet-persisted message.
+    f.persist('another-earlier', 'turn');
+    expect(f.handle.getStreamingMessage('newer')?.thinkingContent).toContain('violet');
+    f.task('turn', TaskStatus.COMPLETED);
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.handle.dispose();
+  });
+
+  it('cleans many blocks at the task boundary without sweeping another active task', async () => {
+    const f = await fixture();
+    f.task('first');
+    f.task('second');
+    f.thinking('live', 'second');
+    for (let n = 0; n < 40; n++) {
+      f.thinking(`block-${n}`, 'first');
+      f.event('thinking:end', `block-${n}`, 'first');
+      f.persist(`saved-${n}`, 'first');
+    }
+    f.task('first', TaskStatus.COMPLETED);
+    expect([...f.handle.state.streamingMessages.keys()]).toEqual(['live']);
+    expect(f.handle.getStreamingMessage('live')?.isThinking).toBe(true);
+    f.handle.dispose();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+  });
+
+  it.each([TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'clears stale activity on %s before persistence and ignores late thinking events',
+    async (status) => {
+      const f = await fixture();
+      f.task('turn');
+      f.thinking('thought', 'turn'); // no end was delivered
+      f.event('streaming:start', 'text', 'turn');
+      f.event('streaming:chunk', 'text', 'turn', { chunk: 'synthetic partial' });
+      f.event('streaming:start', 'error', 'turn');
+      f.event('streaming:error', 'error', 'turn', { error: 'invented failure' });
+      f.task('turn', status);
+      expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+      expect(f.handle.getStreamingMessage('text')).toMatchObject({
+        content: 'synthetic partial',
+        isStreaming: false,
+        isThinking: false,
+      });
+      expect(f.handle.getStreamingMessage('error')?.error).toBe('invented failure');
+      f.task('next');
+      f.event('thinking:chunk', 'thought', 'turn', { chunk: 'late synthetic' });
+      f.thinking('thought', 'turn');
+      f.event('thinking:end', 'thought', 'turn');
+      f.event('streaming:chunk', 'text', 'turn', { chunk: 'late synthetic' });
+      expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+      expect(f.handle.getStreamingMessage('text')?.content).toBe('synthetic partial');
+      f.persist('text', 'turn');
+      expect([...f.handle.state.streamingMessages.keys()]).toEqual(['error']);
+      f.handle.dispose();
+    }
+  );
+
+  it.each(['thinking', 'streaming'] as const)(
+    'preserves overlapping same-ID activity when %s ends first',
+    async (first) => {
+      const f = await fixture();
+      f.task('turn');
+      f.thinking('both', 'turn');
+      f.event('streaming:start', 'both', 'turn');
+      f.event('streaming:chunk', 'both', 'turn', { chunk: 'synthetic text' });
+      f.event(`${first}:end`, 'both', 'turn');
+      expect(f.handle.getStreamingMessage('both')).toMatchObject({
+        content: 'synthetic text',
+        isStreaming: true,
+      });
+      expect(f.handle.getStreamingMessage('both')?.thinkingContent).toContain('violet');
+      f.event(`${first === 'thinking' ? 'streaming' : 'thinking'}:end`, 'both', 'turn');
+      expect(f.handle.getStreamingMessage('both')?.isStreaming).toBe(false);
+      f.persist('both', 'turn');
+      expect(f.handle.state.streamingMessages.size).toBe(0);
+      f.handle.dispose();
+    }
+  );
+
+  it('ends thinking-only activity but does not turn stopping into terminal', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.task('turn', TaskStatus.STOPPING);
+    expect(f.handle.getStreamingMessage('thought')?.isThinking).toBe(true);
+    f.event('thinking:end', 'thought', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    expect(f.handle.getStreamingMessage('thought')?.isStreaming).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('recovers a missed terminal event through resync and reconnect', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    f.opts.tasks = [makeTask('turn', TaskStatus.COMPLETED)];
+    f.fireIo('disconnect');
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    await f.handle.resync();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.handle.dispose();
+  });
+
+  it('retains 40 intended partial errors, not 40 additional thinking orphans', async () => {
+    const f = await fixture();
+    for (let n = 0; n < 40; n++) {
+      const t = `error-turn-${n}`;
+      f.task(t);
+      f.thinking(`thought-${n}`, t);
+      f.event('thinking:end', `thought-${n}`, t);
+      f.event('streaming:start', `error-${n}`, t);
+      f.event('streaming:chunk', `error-${n}`, t, { chunk: 'invented partial square' });
+      f.event('streaming:error', `error-${n}`, t, { error: 'invented failure' });
+      f.task(t, TaskStatus.FAILED);
+    }
+    const streams = [...f.handle.state.streamingMessages.values()];
+    expect(streams).toHaveLength(40);
+    expect(streams.every((s) => s.error && s.content && !s.isStreaming && !s.isThinking)).toBe(
+      true
+    );
+    f.handle.dispose();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+  });
+
+  it('preserves text-first same-ID streams and duplicate starts without losing payloads', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.event('streaming:start', 'both', 'turn');
+    f.event('streaming:chunk', 'both', 'turn', { chunk: 'synthetic text' });
+    f.thinking('both', 'turn');
+    f.event('streaming:start', 'both', 'turn');
+    f.event('thinking:end', 'both', 'turn');
+    expect(f.handle.getStreamingMessage('both')).toMatchObject({
+      content: 'synthetic text',
+      isStreaming: true,
+    });
+    f.event('streaming:end', 'both', 'turn');
+    expect(f.handle.getStreamingMessage('both')?.isStreaming).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('uses the chunk task attribution instead of the latest task after reconnect', async () => {
+    const f = await fixture();
+    f.task('first');
+    f.task('latest');
+    f.event('thinking:chunk', 'thought', 'first', { chunk: 'synthetic early pebble' });
+    f.event('streaming:chunk', 'text', 'first', { chunk: 'synthetic early square' });
+    expect(f.handle.getStreamingMessage('thought')?.task_id).toBe('first');
+    expect(f.handle.getStreamingMessage('text')?.task_id).toBe('first');
+    f.task('first', TaskStatus.COMPLETED);
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    expect(f.handle.getStreamingMessage('text')?.isStreaming).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('ignores mismatched-task end/chunk/error events for the same stream ID', async () => {
+    const f = await fixture();
+    f.task('first');
+    f.task('second');
+    f.thinking('thought', 'first');
+    const before = f.handle.getStreamingMessage('thought');
+    f.event('thinking:end', 'thought', 'second');
+    f.event('thinking:chunk', 'thought', 'second', { chunk: 'foreign synthetic' });
+    f.event('streaming:end', 'thought', 'second');
+    f.event('streaming:error', 'thought', 'second', { error: 'foreign synthetic' });
+    expect(f.handle.getStreamingMessage('thought')).toBe(before);
+    f.handle.dispose();
+  });
+
+  it('settles late/duplicate chunks and ends after persistence and terminal-before-persistence', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.persist('text', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    f.event('thinking:chunk', 'thought', 'turn', { chunk: 'delayed synthetic pebble' });
+    f.event('thinking:end', 'thought', 'turn');
+    f.task('turn', TaskStatus.COMPLETED);
+    f.persist('text', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    f.event('streaming:end', 'text', 'turn');
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.handle.dispose();
+  });
+
+  it('rejects foreign-session lifecycle events even with colliding task/message IDs', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    const before = f.handle.getStreamingMessage('thought');
+    f.emitServiceEvent('tasks', 'patched', {
+      ...makeTask('turn', TaskStatus.COMPLETED),
+      session_id: 'foreign-session',
+    });
+    f.event('thinking:end', 'thought', 'turn', { session_id: 'foreign-session' });
+    f.event('thinking:chunk', 'thought', 'turn', {
+      session_id: 'foreign-session',
+      chunk: 'foreign synthetic',
+    });
+    expect(f.handle.getStreamingMessage('thought')).toBe(before);
+    f.handle.dispose();
+  });
+
+  it('refreshes the stream task index on replacement and clears it on reset/dispose', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('first', 'turn');
+    const originalTasks = f.handle.state.tasks;
+    f.task('turn', TaskStatus.FAILED);
+    expect(originalTasks[0].status).toBe(TaskStatus.RUNNING);
+    expect(f.handle.getStreamingMessage('first')).toBeUndefined();
+    f.task('turn');
+    f.thinking('fresh', 'turn');
+    expect(f.handle.getStreamingMessage('fresh')?.isThinking).toBe(true);
+    f.opts.tasks = [makeTask('replacement', TaskStatus.RUNNING)];
+    await f.handle.resync();
+    f.event('streaming:chunk', 'replacement-text', 'replacement', { chunk: 'synthetic square' });
+    expect(f.handle.getStreamingMessage('replacement-text')?.isStreaming).toBe(true);
+    // Inspect only the bounded memoization lifetime, not a public API contract.
+    const index = () => Reflect.get(f.handle, 'streamTaskIndex');
+    expect(index().tasks).toBe(f.handle.state.tasks);
+    expect(index().byId.has('turn')).toBe(false);
+    f.emitServiceEvent('sessions', 'removed', { session_id: SESSION_ID });
+    expect(index()).toBeUndefined();
+    f.handle.dispose();
+    expect(index()).toBeUndefined();
+  });
+
+  it.each([300, 3000])(
+    'does not rescan %i task rows during warmed real chunk updates',
+    async (count) => {
+      const f = await fixture();
+      f.opts.tasks = Array.from({ length: count }, (_, n) =>
+        makeTask(`history-${String(n).padStart(5, '0')}`, TaskStatus.COMPLETED)
+      );
+      // Load history through the real hydration path (lean intentionally pages).
+      await f.handle.resync();
+      f.task('zz-live');
+      f.event('streaming:chunk', 'text', 'zz-live', { chunk: 'x' });
+      const tasks = f.handle.state.tasks;
+      const reads = tasks.flatMap((task) => {
+        const taskId = task.task_id;
+        const status = task.status;
+        Object.defineProperty(task, 'task_id', { configurable: true, get: () => taskId });
+        Object.defineProperty(task, 'status', { configurable: true, get: () => status });
+        return [vi.spyOn(task, 'task_id', 'get'), vi.spyOn(task, 'status', 'get')];
+      });
+      for (let n = 0; n < 2000; n++) {
+        f.event('streaming:chunk', 'text', 'zz-live', { chunk: 'x' });
+      }
+      expect(f.handle.state.tasks).toBe(tasks);
+      expect(f.handle.getStreamingMessage('text')?.content.length).toBe(2001);
+      expect(reads.reduce((sum, spy) => sum + spy.mock.calls.length, 0)).toBe(0);
+      for (const spy of reads) spy.mockRestore();
+      f.handle.dispose();
+    }
+  );
+
+  it.each(['empty', 'thinking'] as const)(
+    'retains an attributed late error after terminal settlement (%s)',
+    async (kind) => {
+      const f = await fixture();
+      f.task('turn');
+      if (kind === 'thinking') f.thinking('retired', 'turn');
+      else f.event('streaming:start', 'retired', 'turn');
+      f.task('turn', TaskStatus.FAILED);
+      expect(f.handle.getStreamingMessage('retired')).toBeUndefined();
+      f.task('next');
+      f.thinking('active', 'next');
+      const active = f.handle.getStreamingMessage('active');
+      f.event('streaming:error', 'retired', 'turn', {
+        session_id: 'foreign-session',
+        error: 'synthetic foreign failure',
+      });
+      f.event('streaming:error', 'retired', 'next', { error: 'synthetic wrong task' });
+      f.event('streaming:error', 'retired', 'unknown-task', { error: 'synthetic unknown task' });
+      f.event('streaming:error', 'unknown-message', 'turn', { error: 'synthetic unknown message' });
+      expect([...f.handle.state.streamingMessages.keys()]).toEqual(['active']);
+      f.event('streaming:error', 'retired', 'turn', { error: 'synthetic late failure' });
+      expect(f.handle.getStreamingMessage('retired')).toMatchObject({
+        task_id: 'turn',
+        content: '',
+        error: 'synthetic late failure',
+        isStreaming: false,
+        isThinking: false,
+        isTextStreaming: false,
+      });
+      expect(f.handle.getStreamingMessage('retired')?.thinkingContent || '').toBe('');
+      expect(f.handle.getStreamingMessage('active')).toBe(active);
+      f.event('streaming:error', 'retired', 'turn', { error: 'synthetic late failure' });
+      f.event('thinking:chunk', 'retired', 'turn', { chunk: 'synthetic discarded' });
+      expect(f.handle.getStreamingMessage('retired')?.thinkingContent || '').toBe('');
+      expect(f.handle.getStreamingMessage('retired')?.isStreaming).toBe(false);
+      f.persist('retired', 'turn');
+      expect(f.handle.getStreamingMessage('retired')).toBeUndefined();
+      f.handle.dispose();
+    }
+  );
+
+  it('preserves late-error attribution across reconnect/resync but not persistence or task replacement', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.event('streaming:start', 'partial', 'turn');
+    f.event('streaming:chunk', 'partial', 'turn', { chunk: 'synthetic partial' });
+    f.task('turn', TaskStatus.FAILED);
+    f.fireIo('disconnect');
+    f.fireIo('connect');
+    await f.handle.ready();
+    await f.handle.resync();
+    f.event('streaming:error', 'thought', 'turn', { error: 'synthetic failure' });
+    f.event('streaming:error', 'partial', 'turn', { error: 'synthetic failure' });
+    expect(f.handle.getStreamingMessage('thought')?.error).toBe('synthetic failure');
+    expect(f.handle.getStreamingMessage('partial')).toMatchObject({
+      content: 'synthetic partial',
+      error: 'synthetic failure',
+      isStreaming: false,
+    });
+    f.task('next');
+    f.thinking('saved', 'next');
+    f.thinking('removed', 'next');
+    f.task('next', TaskStatus.FAILED);
+    f.persist('saved', 'next');
+    f.event('streaming:error', 'saved', 'next', { error: 'synthetic obsolete' });
+    expect(f.handle.getStreamingMessage('saved')).toBeUndefined();
+    f.task('next'); // reactivation discards the previous retirement window
+    f.event('streaming:error', 'removed', 'next', { error: 'synthetic obsolete' });
+    expect(f.handle.getStreamingMessage('removed')).toBeUndefined();
+    f.handle.dispose();
+  });
+
+  it('bounds retired attribution, drops unknown/evicted IDs, and clears it on reset/dispose', async () => {
+    const f = await fixture();
+    f.task('turn');
+    for (let n = 0; n < 300; n++) f.thinking(`thought-${n}`, 'turn');
+    f.task('turn', TaskStatus.FAILED);
+    const retired = () => Reflect.get(f.handle, 'retiredStreamTasks') as Map<string, string>;
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    expect(retired().size).toBe(256);
+    expect([...retired().values()].every((value) => value === 'turn')).toBe(true);
+    f.event('streaming:error', 'thought-0', 'turn', { error: 'synthetic evicted' });
+    f.event('streaming:error', 'thought-299', 'turn', {
+      task_id: undefined,
+      error: 'synthetic untagged',
+    });
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.event('streaming:error', 'thought-299', 'turn', { error: 'synthetic late failure' });
+    expect(f.handle.getStreamingMessage('thought-299')?.error).toBe('synthetic late failure');
+    f.emitServiceEvent('sessions', 'removed', { session_id: SESSION_ID });
+    expect(retired().size).toBe(0);
+    f.handle.dispose();
+    expect(retired().size).toBe(0);
+  });
+
+  it('clears a retired ID when persistence is learned through resync with no live streams', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.task('turn', TaskStatus.FAILED);
+    f.opts.messagesByTask.turn = [
+      {
+        ...makeMessage('turn', 0),
+        message_id: 'thought' as Message['message_id'],
+      },
+    ];
+    await f.handle.resync();
+    f.event('streaming:error', 'thought', 'turn', { error: 'synthetic obsolete' });
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    f.handle.dispose();
+  });
+
+  it('releases both populated memoization and retired attribution on direct disposal', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.task('turn', TaskStatus.FAILED);
+    expect(Reflect.get(f.handle, 'streamTaskIndex')).toBeDefined();
+    expect(Reflect.get(f.handle, 'retiredStreamTasks').size).toBe(1);
+    f.handle.dispose();
+    expect(Reflect.get(f.handle, 'streamTaskIndex')).toBeUndefined();
+    expect(Reflect.get(f.handle, 'retiredStreamTasks').size).toBe(0);
+  });
+});
+
+describe('lazy resync stranded by a disconnect', () => {
+  it('stops journaling, reconnects without waiting on it, and discards its late snapshot', async () => {
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.COMPLETED), makeTask('task-2', TaskStatus.COMPLETED)],
+      messagesByTask: {
+        'task-1': [makeMessage('task-1', 0)],
+        'task-2': [makeMessage('task-2', 0)],
+      },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+    const internals = handle as unknown as FetchInternals;
+
+    opts.deferTaskMessageFetch = 'task-2';
+    const stranded = handle.resync();
+    await vi.waitFor(() => expect(internals.messageFetches.size).toBe(1));
+    mock.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+
+    opts.deferTaskMessageFetch = undefined;
+    const newer = makeMessage('task-2', 1);
+    opts.messagesByTask['task-2'] = [...opts.messagesByTask['task-2'], newer];
+    mock.fireIo('connect');
+    await vi.waitFor(() => expect(handle.getTaskMessages('task-2')).toHaveLength(2));
+    for (let beat = 0; beat < 50; beat++) {
+      mock.emitServiceEvent('tasks', 'patched', makeTask('task-2', TaskStatus.RUNNING));
+      mock.emitServiceEvent('messages', 'patched', newer);
+    }
+    expectNoStrandedFetches(internals);
+
+    mock.releaseMessageFetch();
+    await stranded;
+    expect(handle.getTaskMessages('task-2').map((message) => message.message_id)).toEqual([
+      'task-2-msg-0',
+      newer.message_id,
+    ]);
+    expect(handle.state.error).toBeNull();
+    handle.dispose();
+  });
+});
+
+describe('bootstrap stranded by a disconnect', () => {
+  it.each(['lazy', 'eager'] as const)(
+    '%s: starts no hydration after abandonment and leaves no fetch token behind',
+    async (taskHydration) => {
+      const opts: MockClientOptions = {
+        tasks: [makeTask('task-1', TaskStatus.COMPLETED), makeTask('task-2', TaskStatus.COMPLETED)],
+        messagesByTask: {
+          'task-1': [makeMessage('task-1', 0)],
+          'task-2': [makeMessage('task-2', 0)],
+        },
+      };
+      const mock = createMockClient(opts);
+      // Session and Task reads resolve; the queue read is still in flight when
+      // the socket drops and then rejects with the transport.
+      const queueFind = vi.mocked(mock.client.service(`/sessions/${SESSION_ID}/tasks/queue`).find);
+      let rejectQueue: (() => void) | undefined;
+      queueFind.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectQueue = () => reject(new Error('socket has been disconnected'));
+          })
+      );
+      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration });
+      const internals = handle as unknown as FetchInternals;
+      await vi.waitFor(() => expect(rejectQueue).toBeDefined());
+      expect(mock.taskFindAll).toHaveBeenCalledTimes(1);
+
+      mock.fireIo('disconnect');
+      rejectQueue!();
+      await vi.waitFor(() => expect(handle.state.loading).toBe(false));
+      expect(mock.messageFindAll).not.toHaveBeenCalled();
+      expectNoStrandedFetches(internals);
+
+      const newer = makeMessage('task-2', 1);
+      opts.messagesByTask['task-2'] = [...opts.messagesByTask['task-2'], newer];
+      mock.fireIo('connect');
+      await vi.waitFor(() => expect(handle.getTaskMessages('task-2')).toHaveLength(2));
+      for (let beat = 0; beat < 50; beat++) {
+        mock.emitServiceEvent('tasks', 'patched', makeTask('task-2', TaskStatus.RUNNING));
+        mock.emitServiceEvent('messages', 'patched', newer);
+      }
+      expectNoStrandedFetches(internals);
+      expect(handle.state.tasks.map((task) => task.task_id)).toEqual(['task-1', 'task-2']);
+      expect(handle.isTaskLoaded('task-2')).toBe(true);
+      expect(handle.state.error).toBeNull();
+      handle.dispose();
+    }
+  );
+});
+
+describe('disconnect cleanup alongside terminal stream settlement', () => {
+  it('keeps retired thinking attribution across a stranded resync and reconnect', async () => {
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: { 'task-1': [makeMessage('task-1', 0)] },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+    const internals = handle as unknown as FetchInternals;
+    const retired = () => Reflect.get(handle, 'retiredStreamTasks') as Map<string, string>;
+    const thought = { message_id: 'thought', session_id: SESSION_ID, task_id: 'task-1' };
+    mock.emitServiceEvent('messages', 'thinking:start', {
+      ...thought,
+      timestamp: new Date().toISOString(),
+    });
+    mock.emitServiceEvent('messages', 'thinking:chunk', { ...thought, chunk: 'Considering' });
+    expect(handle.getStreamingMessage('thought')?.isThinking).toBe(true);
+
+    // The terminal boundary retires the payload-free thinking stream.
+    opts.tasks = [makeTask('task-1', TaskStatus.COMPLETED)];
+    mock.emitServiceEvent('tasks', 'patched', opts.tasks[0]);
+    expect(handle.getStreamingMessage('thought')).toBeUndefined();
+    expect(retired().get('thought')).toBe('task-1');
+
+    opts.deferTaskMessageFetch = 'task-1';
+    const stranded = handle.resync();
+    await vi.waitFor(() => expect(internals.messageFetches.size).toBe(1));
+    mock.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+    // Disconnect is not disposal: the bounded attribution window survives.
+    expect(retired().get('thought')).toBe('task-1');
+
+    opts.deferTaskMessageFetch = undefined;
+    mock.fireIo('connect');
+    await vi.waitFor(() => expect(internals.resyncInflight).toBeNull());
+    for (let beat = 0; beat < 50; beat++) {
+      mock.emitServiceEvent('tasks', 'patched', opts.tasks[0]);
+      mock.emitServiceEvent('messages', 'thinking:chunk', { ...thought, chunk: 'late' });
+    }
+    expectNoStrandedFetches(internals);
+    expect(handle.getStreamingMessage('thought')).toBeUndefined();
+
+    mock.emitServiceEvent('messages', 'streaming:error', { ...thought, error: 'late failure' });
+    expect(handle.getStreamingMessage('thought')).toMatchObject({
+      task_id: 'task-1',
+      error: 'late failure',
+      isStreaming: false,
+      isThinking: false,
+    });
+
+    mock.releaseMessageFetch();
+    await stranded;
+    expect(handle.getStreamingMessage('thought')?.error).toBe('late failure');
+    expect(handle.state.error).toBeNull();
+    handle.dispose();
+  });
+});
+
+describe('lean transcript detail retention', () => {
+  const turnId = (n: number) => `turn-${String(n).padStart(3, '0')}`;
+  /** `outputBytes` pads the tool result: a turn that read a large file. */
+  const fullMessage = (taskId: string, n: number, outputBytes = 0) =>
+    ({
+      ...makeMessage(taskId, n),
+      role: 'assistant',
+      content: [
+        { type: 'text', text: `Answer ${n}` },
+        { type: 'thinking', text: `Reasoning ${n}` },
+        { type: 'tool_use', id: `tool-${n}`, name: 'Read', input: { path: '/fixture' } },
+        {
+          type: 'tool_result',
+          tool_use_id: `tool-${n}`,
+          content: `TOOL_OUTPUT_${n}${'x'.repeat(outputBytes)}`,
+        },
+      ],
+      tool_uses: [{ id: `tool-${n}`, name: 'Read', input: { path: '/fixture' } }],
+      metadata: { model: 'synthetic', raw_sdk_message: `RAW_${n}` },
+    }) as unknown as Message;
+
+  async function fixture() {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    /** One live turn as the executor delivers it: running → payload → completed. */
+    const runTurn = (n: number, whileRunning?: (taskId: string) => void, outputBytes = 0) => {
+      const taskId = turnId(n);
+      const running = makeTask(taskId, TaskStatus.RUNNING);
+      opts.tasks = [...opts.tasks.filter((task) => task.task_id !== taskId), running];
+      mock.emitServiceEvent('tasks', 'created', running);
+      whileRunning?.(taskId);
+      opts.messagesByTask[taskId] = [fullMessage(taskId, n, outputBytes)];
+      mock.emitServiceEvent('messages', 'created', fullMessage(taskId, n, outputBytes));
+      const completed = makeTask(taskId, TaskStatus.COMPLETED);
+      opts.tasks = opts.tasks.map((task) => (task.task_id === taskId ? completed : task));
+      mock.emitServiceEvent('tasks', 'patched', completed);
+    };
+    const fullIds = () =>
+      [...handle.state.messagesByTask]
+        .filter(([, messages]) =>
+          messages.some(
+            (message) =>
+              Array.isArray(message.content) &&
+              message.content.some((block) => block.type === 'tool_result')
+          )
+        )
+        .map(([taskId]) => taskId)
+        .sort();
+    return { ...mock, opts, handle, runTurn, fullIds };
+  }
+
+  const range = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => turnId(from + i));
+
+  it('keeps recent and pinned turns full, projects older turns, and reloads them on demand', async () => {
+    const f = await fixture();
+    const releaseA = f.handle.retainTaskDetails(turnId(0));
+    const releaseB = f.handle.retainTaskDetails(turnId(0));
+    for (let n = 0; n < 30; n++) f.runTurn(n);
+    expect(LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT).toBe(10);
+    // History is projected, never deleted.
+    expect(f.handle.state.messagesByTask.size).toBe(30);
+    expect(f.fullIds()).toEqual([turnId(0), ...range(20, 29)]);
+    expect(f.handle.getTaskMessages(turnId(5))).toEqual([
+      {
+        message_id: `${turnId(5)}-msg-5`,
+        session_id: SESSION_ID,
+        task_id: turnId(5),
+        index: 5,
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Answer 5' }],
+        content_preview: '',
+        has_deferred_reasoning: true,
+        tool_uses: undefined,
+        parent_tool_use_id: undefined,
+        metadata: { model: 'synthetic' },
+      },
+    ]);
+
+    // One consumer's release (even repeated) cannot unpin another reader.
+    releaseA();
+    releaseA();
+    await Promise.resolve();
+    expect(f.fullIds()).toContain(turnId(0));
+    releaseB();
+    expect(f.fullIds()).toContain(turnId(0)); // deferred past React effect replacement
+    await Promise.resolve();
+    expect(f.fullIds()).toEqual(range(20, 29));
+
+    // A late persisted patch for an evicted turn lands projected.
+    f.emitServiceEvent('messages', 'patched', fullMessage(turnId(0), 0));
+    expect(f.fullIds()).toEqual(range(20, 29));
+    expect(f.handle.getTaskMessages(turnId(0))[0].content).toEqual([
+      { type: 'text', text: 'Answer 0' },
+    ]);
+
+    // Re-expanding reloads from persisted history and becomes the newest recent turn.
+    await f.handle.loadTaskMessages(turnId(0));
+    expect(f.handle.getTaskMessages(turnId(0))).toEqual([fullMessage(turnId(0), 0)]);
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(true);
+    expect(f.fullIds()).toEqual([turnId(0), ...range(21, 29)]);
+    expect(f.handle.isTaskLoaded(turnId(20))).toBe(false);
+
+    // Reconnect refetches only retained detail; evicted live turns come back lean.
+    f.messageFindAll.mockClear();
+    await f.handle.resync();
+    const fullFetches = f.messageFindAll.mock.calls
+      .filter(([params]) => params.query.transcript !== 'lean')
+      .map(([params]) => params.query.task_id as string)
+      .sort();
+    expect(fullFetches).toEqual([turnId(0), ...range(21, 29)]);
+    expect(f.fullIds()).toEqual([turnId(0), ...range(21, 29)]);
+    f.handle.dispose();
+    for (const name of ['recentDetailTaskIds', 'detailPins', 'detailTaskIds', 'leanLiveTaskIds'])
+      expect((Reflect.get(f.handle, name) as Set<string>).size).toBe(0);
+    // Late React cleanups/effects after disposal are harmless no-ops.
+    f.handle.retainTaskDetails(turnId(0))();
+    releaseB();
+  });
+
+  it('keeps a delayed reload that newer turns overtake until its reader can see it', async () => {
+    const f = await fixture();
+    for (let n = 0; n < 12; n++) f.runTurn(n);
+    expect(f.fullIds()).not.toContain(turnId(0));
+    f.opts.deferTaskMessageFetch = turnId(0);
+    const reload = f.handle.loadTaskMessages(turnId(0));
+    // A full recent-turn budget of newer turns arrives while the read is pending.
+    for (let n = 12; n < 12 + LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT; n++) f.runTurn(n);
+    f.opts.deferTaskMessageFetch = undefined;
+    f.releaseMessageFetch();
+    expect(await reload).toEqual([fullMessage(turnId(0), 0)]);
+    // The commit, not the request, makes it the newest recent turn.
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(true);
+    expect(f.handle.getTaskMessages(turnId(0))).toEqual([fullMessage(turnId(0), 0)]);
+    for (let n = 22; n < 22 + LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT - 1; n++) f.runTurn(n);
+    expect(f.fullIds()).toContain(turnId(0));
+    f.runTurn(31);
+    expect(f.fullIds()).not.toContain(turnId(0));
+    f.handle.dispose();
+  });
+
+  it('keeps no evicted turn reasoning in cached messages or settled thinking streams', async () => {
+    const f = await fixture();
+    for (let n = 0; n < 15; n++) {
+      // Live reasoning arrives on a temporary stream ID, then persists.
+      f.runTurn(n, (taskId) => {
+        const event = { session_id: SESSION_ID, message_id: `thought-${n}`, task_id: taskId };
+        f.emitServiceEvent('messages', 'thinking:start', event);
+        f.emitServiceEvent('messages', 'thinking:chunk', { ...event, chunk: `Streamed ${n}` });
+        f.emitServiceEvent('messages', 'thinking:end', event);
+        expect(f.handle.getStreamingMessage(`thought-${n}`)?.thinkingContent).toBe(`Streamed ${n}`);
+      });
+    }
+    const state = JSON.stringify({
+      messages: [...f.handle.state.messagesByTask],
+      streams: [...f.handle.state.streamingMessages],
+    });
+    const turnsWith = (label: string) =>
+      Array.from({ length: 15 }, (_, n) => n).filter((n) => state.includes(`${label} ${n}"`));
+    expect(turnsWith('Reasoning')).toEqual(Array.from({ length: 10 }, (_, i) => i + 5));
+    expect(turnsWith('Streamed')).toEqual([]);
+    // The evicted turn still advertises its reasoning, and a reload restores it.
+    expect(f.handle.getTaskMessages(turnId(0))[0]).toMatchObject({
+      content: [{ type: 'text', text: 'Answer 0' }],
+      has_deferred_reasoning: true,
+    });
+    await f.handle.loadTaskMessages(turnId(0));
+    expect(f.handle.getTaskMessages(turnId(0))[0].content).toContainEqual({
+      type: 'thinking',
+      text: 'Reasoning 0',
+    });
+    f.handle.dispose();
+  });
+
+  it('keeps executing, latest and early-payload turns full regardless of age', async () => {
+    const f = await fixture();
+    const active = makeTask('active-old', TaskStatus.RUNNING);
+    f.opts.tasks.push(active);
+    f.emitServiceEvent('tasks', 'created', active);
+    f.emitServiceEvent('messages', 'created', fullMessage(active.task_id, 99));
+    for (let n = 0; n < 15; n++) f.runTurn(n);
+    expect(f.fullIds()).toEqual(['active-old', ...range(5, 14)]);
+    // A payload ahead of its Task is charged to the recent budget, not dropped.
+    f.emitServiceEvent('messages', 'created', fullMessage('early', 100));
+    expect(f.fullIds()).toContain('early');
+    f.emitServiceEvent('tasks', 'created', makeTask('early', TaskStatus.RUNNING));
+    expect(f.fullIds()).toContain('early');
+    // The latest turn stays full even when the recent budget is spent elsewhere.
+    for (let n = 15; n < 26; n++) await f.handle.loadTaskMessages(turnId(n % 15));
+    expect(f.fullIds()).toEqual(expect.arrayContaining(['active-old', 'early', turnId(14)]));
+    f.handle.dispose();
+  });
+
+  it('leaves terminal stream settlement intact for evicted turns', async () => {
+    const f = await fixture();
+    const event = (name: string, id: string, taskId: string, extra = {}) =>
+      f.emitServiceEvent('messages', name, {
+        session_id: SESSION_ID,
+        message_id: id,
+        task_id: taskId,
+        timestamp: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        ...extra,
+      });
+    const failed = makeTask('failed', TaskStatus.RUNNING);
+    f.emitServiceEvent('tasks', 'created', failed);
+    event('thinking:start', 'thought', 'failed');
+    event('thinking:chunk', 'thought', 'failed', { chunk: 'considering' });
+    event('streaming:start', 'partial', 'failed');
+    event('streaming:chunk', 'partial', 'failed', { chunk: 'unpersisted partial' });
+    event('streaming:error', 'partial', 'failed', { error: 'synthetic failure' });
+    f.emitServiceEvent('tasks', 'patched', makeTask('failed', TaskStatus.FAILED));
+    for (let n = 0; n < 12; n++) f.runTurn(n);
+    expect(f.fullIds()).not.toContain('failed');
+    // The partial has no persisted reload path, so detail eviction keeps it.
+    expect(f.handle.getStreamingMessage('partial')).toMatchObject({
+      content: 'unpersisted partial',
+      error: 'synthetic failure',
+      isStreaming: false,
+    });
+    // Retired thinking attribution still accepts an exact late error only.
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    event('thinking:chunk', 'thought', 'failed', { chunk: 'late' });
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    event('streaming:error', 'thought', 'failed', { error: 'late failure' });
+    expect(f.handle.getStreamingMessage('thought')).toMatchObject({
+      task_id: 'failed',
+      error: 'late failure',
+    });
+    // Persistence replaces the partial and lands projected for the evicted turn.
+    f.emitServiceEvent('messages', 'created', {
+      ...fullMessage('failed', 50),
+      message_id: 'partial',
+    });
+    expect(f.handle.getStreamingMessage('partial')).toBeUndefined();
+    expect(f.handle.getTaskMessages('failed').map((message) => message.content)).toEqual([
+      [{ type: 'text', text: 'Answer 50' }],
+    ]);
+    f.handle.dispose();
+  });
+
+  it('strands no fetch tokens or journal entries across disconnect, eviction and reconnect', async () => {
+    const f = await fixture();
+    const internals = f.handle as unknown as FetchInternals;
+    for (let n = 0; n < 12; n++) f.runTurn(n);
+    const release = f.handle.retainTaskDetails(turnId(0));
+    f.opts.deferTaskMessageFetch = turnId(0);
+    const abandoned = f.handle.loadTaskMessages(turnId(0));
+    expect(internals.messageFetches.size).toBe(1);
+    f.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+    // Live traffic and evictions while offline neither journal nor regrow detail.
+    for (let n = 12; n < 30; n++) f.runTurn(n);
+    expect(internals.messageMutations).toHaveLength(0);
+    expect(f.fullIds()).toEqual(range(20, 29));
+    f.opts.deferTaskMessageFetch = undefined;
+    f.fireIo('connect');
+    await f.handle.ready();
+    f.releaseMessageFetch();
+    expect(await abandoned).toEqual([]);
+    expectNoStrandedFetches(internals);
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(false);
+    // A fresh expansion on the new connection commits as the newest recent turn.
+    await f.handle.loadTaskMessages(turnId(0));
+    expect(f.fullIds()).toEqual([turnId(0), ...range(21, 29)]);
+    release();
+    await Promise.resolve();
+    expect(f.fullIds()).toEqual([turnId(0), ...range(21, 29)]);
+    expectNoStrandedFetches(internals);
+    expect((Reflect.get(f.handle, 'leanLiveTaskIds') as Set<string>).size).toBeLessThanOrEqual(
+      LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT
+    );
+    f.handle.dispose();
+  });
+
+  const BUDGET = LEAN_TRANSCRIPT_DETAIL_BYTE_BUDGET;
+  /** Four of these fit the byte budget with their small text; a fifth does not. */
+  const QUARTER = BUDGET / 4 - 4096;
+
+  it('accounts retained detail bytes on commit, live and late messages', async () => {
+    const f = await fixture();
+    const bytes = () => f.handle.getRetainedDetailBytes();
+    expect(bytes()).toBe(0);
+    f.runTurn(0, undefined, 100_000);
+    const one = bytes();
+    expect(one).toBeGreaterThan(100_000);
+    expect(one).toBeLessThan(101_000);
+    // A live message adds its size; a patch replaces it rather than adding.
+    f.emitServiceEvent('messages', 'created', { ...fullMessage(turnId(0), 1, 5000) });
+    expect(bytes()).toBeGreaterThan(one + 5000);
+    f.emitServiceEvent('messages', 'patched', { ...fullMessage(turnId(0), 1, 100) });
+    expect(bytes()).toBeGreaterThan(one + 100);
+    expect(bytes()).toBeLessThan(one + 1000);
+    // Streaming chunks touch no message bucket and charge nothing.
+    const settled = bytes();
+    const stream = { session_id: SESSION_ID, message_id: 'stream-0', task_id: turnId(0) };
+    f.emitServiceEvent('messages', 'streaming:start', { ...stream, role: 'assistant' });
+    f.emitServiceEvent('messages', 'streaming:chunk', { ...stream, chunk: 'z'.repeat(9000) });
+    expect(bytes()).toBe(settled);
+    // Evicted turns stop counting; their late messages land projected and free.
+    for (let n = 1; n <= LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT; n++) f.runTurn(n);
+    expect(f.fullIds()).not.toContain(turnId(0));
+    const recent = bytes();
+    expect(recent).toBeLessThan(5000);
+    f.emitServiceEvent('messages', 'patched', fullMessage(turnId(0), 0, 50_000));
+    expect(bytes()).toBe(recent);
+    // A committed reload is charged again.
+    f.opts.messagesByTask[turnId(0)] = [fullMessage(turnId(0), 0, 20_000)];
+    await f.handle.loadTaskMessages(turnId(0));
+    expect(bytes()).toBeGreaterThan(20_000);
+    f.handle.dispose();
+    expect(bytes()).toBe(0);
+  });
+
+  it('evicts recent turns oldest first over the byte budget; the count bound still applies', async () => {
+    const f = await fixture();
+    for (let n = 0; n < 6; n++) f.runTurn(n, undefined, QUARTER);
+    expect(f.fullIds()).toEqual(range(2, 5));
+    expect(f.handle.getRetainedDetailBytes()).toBeLessThanOrEqual(BUDGET);
+    expect(f.handle.isTaskLoaded(turnId(1))).toBe(false);
+    expect(f.handle.getTaskMessages(turnId(1))[0]).toMatchObject({
+      content: [{ type: 'text', text: 'Answer 1' }],
+      has_deferred_reasoning: true,
+    });
+    // Small turns fill the count bound, which evicts on its own.
+    for (let n = 6; n < 12; n++) f.runTurn(n);
+    expect(f.fullIds()).toEqual(range(2, 11));
+    f.runTurn(12);
+    expect(f.fullIds()).toEqual(range(3, 12));
+    f.handle.dispose();
+  });
+
+  it('never evicts protected turns for the budget, and evicts every other turn', async () => {
+    const f = await fixture();
+    const release = f.handle.retainTaskDetails(turnId(0));
+    f.runTurn(0, undefined, BUDGET * 0.6);
+    const active = makeTask('active', TaskStatus.RUNNING);
+    f.opts.tasks.push(active);
+    f.emitServiceEvent('tasks', 'created', active);
+    f.emitServiceEvent('messages', 'created', fullMessage('active', 99, BUDGET * 0.6));
+    f.runTurn(1);
+    f.runTurn(2);
+    // Pinned + executing alone exceed the budget: both stay, with the latest.
+    expect(f.fullIds()).toEqual(['active', turnId(0), turnId(2)]);
+    expect(f.handle.getRetainedDetailBytes()).toBeGreaterThan(BUDGET);
+    release();
+    await Promise.resolve();
+    expect(f.fullIds()).toEqual(['active', turnId(2)]);
+    f.handle.dispose();
+  });
+
+  it('evicts a single over-budget turn to lean; it reloads, and stays while pinned', async () => {
+    const f = await fixture();
+    f.runTurn(0, undefined, BUDGET * 1.5);
+    // Latest: protected.
+    expect(f.fullIds()).toEqual([turnId(0)]);
+    f.runTurn(1);
+    expect(f.fullIds()).toEqual([turnId(1)]);
+    expect(f.handle.getTaskMessages(turnId(0))[0].content).toEqual([
+      { type: 'text', text: 'Answer 0' },
+    ]);
+    // A reader expanding it pins it first; the reload is kept until released.
+    const release = f.handle.retainTaskDetails(turnId(0));
+    const loaded = await f.handle.loadTaskMessages(turnId(0));
+    expect(loaded).toEqual([fullMessage(turnId(0), 0, BUDGET * 1.5)]);
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(true);
+    expect(f.fullIds()).toEqual([turnId(0), turnId(1)]);
+    release();
+    await Promise.resolve();
+    expect(f.fullIds()).toEqual([turnId(1)]);
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('keeps budget evictions out of the journal and the reconnect refetch', async () => {
+    const f = await fixture();
+    const internals = f.handle as unknown as FetchInternals;
+    f.runTurn(0, undefined, QUARTER);
+    f.opts.deferTaskMessageFetch = turnId(0);
+    const abandoned = f.handle.loadTaskMessages(turnId(0));
+    f.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+    for (let n = 1; n < 6; n++) f.runTurn(n, undefined, QUARTER);
+    expect(internals.messageMutations).toHaveLength(0);
+    expect(f.fullIds()).toEqual(range(2, 5));
+    f.opts.deferTaskMessageFetch = undefined;
+    f.messageFindAll.mockClear();
+    f.fireIo('connect');
+    await f.handle.ready();
+    f.releaseMessageFetch();
+    expect(await abandoned).toEqual([]);
+    expectNoStrandedFetches(internals);
+    const fullFetches = f.messageFindAll.mock.calls
+      .filter(([params]) => params.query.transcript !== 'lean')
+      .map(([params]) => params.query.task_id as string)
+      .sort();
+    expect(fullFetches).toEqual(range(2, 5));
+    expect(f.fullIds()).toEqual(range(2, 5));
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('keeps an evicted turn unpersisted partial stream when the budget evicts it', async () => {
+    const f = await fixture();
+    const failed = makeTask('failed', TaskStatus.RUNNING);
+    f.opts.tasks.push(failed);
+    f.emitServiceEvent('tasks', 'created', failed);
+    f.emitServiceEvent('messages', 'created', fullMessage('failed', 40, BUDGET * 0.6));
+    const event = (name: string, extra = {}) =>
+      f.emitServiceEvent('messages', name, {
+        session_id: SESSION_ID,
+        message_id: 'partial',
+        task_id: 'failed',
+        timestamp: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        ...extra,
+      });
+    event('streaming:start');
+    event('streaming:chunk', { chunk: 'unpersisted partial' });
+    event('streaming:error', { error: 'synthetic failure' });
+    f.emitServiceEvent('tasks', 'patched', makeTask('failed', TaskStatus.FAILED));
+    // One newer large turn pushes the failed turn over the budget, not the count.
+    f.runTurn(0, undefined, BUDGET * 0.6);
+    expect(f.fullIds()).toEqual([turnId(0)]);
+    expect(f.handle.getStreamingMessage('partial')).toMatchObject({
+      content: 'unpersisted partial',
+      error: 'synthetic failure',
+      isStreaming: false,
+    });
+    // Persistence replaces the partial and lands projected.
+    f.emitServiceEvent('messages', 'created', {
+      ...fullMessage('failed', 50, BUDGET * 0.6),
+      message_id: 'partial',
+    });
+    expect(f.handle.getStreamingMessage('partial')).toBeUndefined();
+    expect(f.fullIds()).toEqual([turnId(0)]);
+    f.handle.dispose();
+  });
+  it('keeps byte accounting and retention membership consistent through trims and a reconnect', async () => {
+    const f = await fixture();
+    const sets = () => ({
+      recent: Reflect.get(f.handle, 'recentDetailTaskIds') as Set<string>,
+      detail: Reflect.get(f.handle, 'detailTaskIds') as Set<string>,
+      live: Reflect.get(f.handle, 'leanLiveTaskIds') as Set<string>,
+      inflight: Reflect.get(f.handle, 'detailInflight') as Map<string, unknown>,
+    });
+    const strings = (value: unknown): number =>
+      typeof value === 'string'
+        ? value.length
+        : value && typeof value === 'object'
+          ? Object.values(value).reduce((sum: number, item) => sum + strings(item), 0)
+          : 0;
+    /** The budget's total is exactly the retained buckets of loaded turns. */
+    const expectConsistent = (gone: string[] = []) => {
+      const { recent, detail, live, inflight } = sets();
+      const loaded = new Set<string>(f.handle.state.tasks.map((task) => task.task_id));
+      for (const id of [...recent, ...detail, ...live]) expect(loaded.has(id), id).toBe(true);
+      for (const id of gone) {
+        expect(f.handle.state.messagesByTask.has(id), id).toBe(false);
+        for (const held of [recent, detail, live, new Set(inflight.keys())])
+          expect(held.has(id), id).toBe(false);
+      }
+      expect(f.handle.getRetainedDetailBytes()).toBe(
+        [...detail].reduce((sum, id) => sum + strings(f.handle.state.messagesByTask.get(id)), 0)
+      );
+    };
+    // The daemon appends Session.tasks at dispatch.
+    const publish = () =>
+      f.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: f.opts.tasks.map((task) => task.task_id),
+      });
+    // A reader's load pin (TaskBlock) holds an over-budget turn at the top.
+    const unpin = f.handle.retainTaskDetails(turnId(0));
+    f.runTurn(0, publish, BUDGET * 0.6);
+    for (let n = 1; n < 40; n++) f.runTurn(n, publish);
+    expect(f.handle.state.tasks).toHaveLength(40);
+    expect(f.fullIds()).toContain(turnId(0));
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    expect(f.handle.getRetainedDetailBytes()).toBeGreaterThan(BUDGET * 0.6);
+    expectConsistent();
+
+    // A detail read for a turn about to be trimmed is still in flight.
+    f.opts.deferTaskMessageFetch = turnId(1);
+    const stale = f.handle.loadTaskMessages(turnId(1));
+    f.opts.deferTaskMessageFetch = undefined;
+
+    unpin();
+    await Promise.resolve();
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    const trimmed = range(0, 9);
+    expect(f.handle.state.tasks.map((task) => task.task_id)).toEqual(range(10, 39));
+    expect(f.handle.getRetainedDetailBytes()).toBeLessThan(BUDGET * 0.1);
+    expectConsistent(trimmed);
+
+    // Offline: more than a window of turns, the newest still running a large read.
+    f.fireIo('disconnect');
+    for (let n = 40; n < 75; n++) {
+      const id = turnId(n);
+      f.opts.tasks.push(makeTask(id, n === 74 ? TaskStatus.RUNNING : TaskStatus.COMPLETED));
+      f.opts.messagesByTask[id] = [fullMessage(id, n, n === 74 ? BUDGET * 0.6 : 0)];
+    }
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.handle.state.tasks.map((task) => task.task_id)).toEqual(range(45, 74));
+    expect(f.fullIds()).toEqual([turnId(74)]);
+    expect(f.handle.getRetainedDetailBytes()).toBeGreaterThan(BUDGET * 0.6);
+    expectConsistent([...trimmed, ...range(10, 44)]);
+
+    // Paged back in, the trimmed turn reloads with its own read; the stale one
+    // resurrects nothing.
+    while (!f.handle.getTask(turnId(1))) await f.handle.loadOlderTasks();
+    const fresh = f.handle.loadTaskMessages(turnId(1));
+    f.releaseMessageFetch();
+    await Promise.all([fresh, stale]);
+    expect(f.handle.isTaskLoaded(turnId(1))).toBe(true);
+    expect(f.fullIds()).toEqual([turnId(1), turnId(74)]);
+    expectConsistent();
+    f.handle.dispose();
+    expect(f.handle.getRetainedDetailBytes()).toBe(0);
+  });
+});
+
+describe('lean transcript window trimming', () => {
+  const id = (n: number) => `task-${String(n).padStart(3, '0')}`;
+  const ids = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => id(from + i));
+  const answer = (taskId: string) =>
+    ({
+      ...makeMessage(taskId, 1),
+      role: 'assistant',
+      content: [
+        { type: 'text', text: `Answer ${taskId}` },
+        { type: 'tool_use', id: `tool-${taskId}`, name: 'Read', input: {} },
+      ],
+    }) as unknown as Message;
+
+  /** 24 persisted turns; the reader opens on the latest ten. */
+  async function fixture(options: ReactiveSessionOptions = { taskHydration: 'lean' }) {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 24; n++) {
+      opts.tasks.push(makeTask(id(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[id(n)] = [makeMessage(id(n), 0), answer(id(n))];
+    }
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, options);
+    await handle.ready();
+    let next = 24;
+    /** The daemon appends Session.tasks when a turn dispatches. */
+    const publishSession = () =>
+      mock.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: opts.tasks.map((task) => task.task_id),
+      });
+    /** Live turns as the executor publishes them while the reader watches. */
+    const addTurns = (count: number, live = true) => {
+      for (let i = 0; i < count; i++) {
+        const taskId = id(next++);
+        opts.tasks.push(makeTask(taskId, TaskStatus.COMPLETED));
+        opts.messagesByTask[taskId] = [makeMessage(taskId, 0), answer(taskId)];
+        if (!live) continue;
+        mock.emitServiceEvent('tasks', 'created', makeTask(taskId, TaskStatus.RUNNING));
+        publishSession();
+        for (const message of opts.messagesByTask[taskId])
+          mock.emitServiceEvent('messages', 'created', message);
+        mock.emitServiceEvent('tasks', 'patched', makeTask(taskId, TaskStatus.COMPLETED));
+      }
+    };
+    const reserve = () => id(next++);
+    const taskIds = () => handle.state.tasks.map((task): string => task.task_id);
+    /** Every per-task collection the handle exposes, keyed by Task ID. */
+    const heldIds = () =>
+      new Set([
+        ...handle.state.messagesByTask.keys(),
+        ...handle.state.toolsByTask.keys(),
+        ...handle.state.loadedTaskIds,
+        ...[...handle.state.streamingMessages.values()].map((stream) => stream.task_id),
+      ]);
+    return { ...mock, opts, handle, addTurns, reserve, publishSession, taskIds, heldIds };
+  }
+
+  it('drops the oldest turns beyond the window and pages them back in order', async () => {
+    const f = await fixture();
+    expect(LEAN_TRANSCRIPT_TASK_WINDOW).toBe(30);
+    f.addTurns(30);
+    f.emitServiceEvent('tasks', 'tool:start', {
+      session_id: SESSION_ID,
+      task_id: id(14),
+      tool_use_id: 'old',
+      tool_name: 'Read',
+    });
+    expect(f.taskIds()).toEqual(ids(14, 53));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    for (const trimmed of ids(14, 23)) expect(f.heldIds().has(trimmed)).toBe(false);
+    expect((Reflect.get(f.handle, 'leanLiveTaskIds') as Set<string>).has(id(14))).toBe(false);
+    expect(f.handle.trimOlderTasks()).toBe(false);
+
+    // The existing older-history path restores them, page by page, gap-free.
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(14, 53));
+    expect(f.handle.getTaskMessages(id(14)).map((message) => message.index)).toEqual([0, 1]);
+    expect(JSON.stringify(f.handle.getTaskMessages(id(14)))).not.toContain('tool_use');
+    await f.handle.loadOlderTasks();
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(0, 53));
+    expect(f.handle.state.hasOlderTasks).toBe(false);
+
+    // Back at the latest turns, the window applies again.
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    f.handle.dispose();
+  });
+
+  it('keeps a contiguous window: stops at protected turns and the first visible turn', async () => {
+    const f = await fixture();
+    f.addTurns(36); // 46 loaded: task-014 … task-059
+    // The first turn the reader sees bounds the trim.
+    expect(f.handle.trimOlderTasks(id(17))).toBe(true);
+    expect(f.taskIds()[0]).toBe(id(17));
+
+    // A pinned turn (expanded disclosure, focus, selection, overlay) holds itself and everything newer.
+    const release = f.handle.retainTaskDetails(id(20));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()[0]).toBe(id(20));
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    release();
+    await Promise.resolve();
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(30, 59));
+
+    // Unsettled turns: executing (which covers streaming) or awaiting the reader.
+    const blockers: Array<[string, () => void, () => void]> = [
+      [
+        'running',
+        () => f.emitServiceEvent('tasks', 'patched', makeTask(id(30), TaskStatus.RUNNING)),
+        () => f.emitServiceEvent('tasks', 'patched', makeTask(id(30), TaskStatus.COMPLETED)),
+      ],
+      [
+        'pending permission',
+        () =>
+          f.emitServiceEvent('messages', 'created', {
+            ...makeMessage(id(30), 5),
+            type: 'permission_request',
+            content: { request_id: 'r', tool_name: 'Bash', tool_input: {}, status: 'pending' },
+          }),
+        () =>
+          f.emitServiceEvent('messages', 'patched', {
+            ...makeMessage(id(30), 5),
+            type: 'permission_request',
+            content: { request_id: 'r', tool_name: 'Bash', tool_input: {}, status: 'approved' },
+          }),
+      ],
+      [
+        'pending widget',
+        () =>
+          f.emitServiceEvent('messages', 'created', {
+            ...makeMessage(id(30), 6),
+            type: 'widget_request',
+            metadata: { widget: { widget_type: 'env_vars', status: 'pending' } },
+          }),
+        () =>
+          f.emitServiceEvent('messages', 'patched', {
+            ...makeMessage(id(30), 6),
+            type: 'widget_request',
+            metadata: { widget: { widget_type: 'env_vars', status: 'submitted' } },
+          }),
+      ],
+    ];
+    for (const [label, block, settle] of blockers) {
+      f.addTurns(1);
+      block();
+      expect(f.handle.trimOlderTasks(), label).toBe(false);
+      expect(f.taskIds()[0]).toBe(id(30));
+      settle();
+    }
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toHaveLength(LEAN_TRANSCRIPT_TASK_WINDOW);
+    f.handle.dispose();
+  });
+
+  it('only trims a lean conversation reader', async () => {
+    for (const options of [
+      { taskHydration: 'lean', cacheScope: 'preview' },
+      { taskHydration: 'lazy' },
+      { taskHydration: 'eager' },
+    ] as ReactiveSessionOptions[]) {
+      const f = await fixture(options);
+      f.addTurns(40);
+      const before = f.taskIds();
+      expect(f.handle.trimOlderTasks()).toBe(false);
+      expect(f.taskIds()).toEqual(before);
+      f.handle.dispose();
+    }
+  });
+
+  it('never lets resync or late traffic resurrect a trimmed turn or open a gap', async () => {
+    const f = await fixture();
+    const internals = f.handle as unknown as FetchInternals;
+    f.addTurns(30);
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+
+    // Late traffic for trimmed turns: a Task patch, persisted messages, tools and streams.
+    const trimmed = id(20);
+    const event = { session_id: SESSION_ID, task_id: trimmed };
+    f.emitServiceEvent('tasks', 'patched', makeTask(trimmed, TaskStatus.COMPLETED));
+    f.emitServiceEvent('messages', 'created', makeMessage(trimmed, 7));
+    f.emitServiceEvent('messages', 'patched', answer(trimmed));
+    f.emitServiceEvent('messages', 'removed', makeMessage(trimmed, 0));
+    f.emitServiceEvent('tasks', 'tool:start', { ...event, tool_use_id: 't', tool_name: 'Read' });
+    f.emitServiceEvent('messages', 'streaming:chunk', { ...event, message_id: 's', chunk: 'x' });
+    f.emitServiceEvent('messages', 'thinking:chunk', { ...event, message_id: 'h', chunk: 'x' });
+    f.emitServiceEvent('messages', 'streaming:error', { ...event, message_id: 's', error: 'x' });
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    expect(f.heldIds().has(trimmed)).toBe(false);
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+
+    // Reconnect refreshes reached history only: no trimmed reads, no trimmed rows.
+    const taskFind = vi.mocked(f.client.service('tasks').find);
+    taskFind.mockClear();
+    await f.handle.resync();
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    const read = taskFind.mock.calls.flatMap(
+      ([params]) => (params?.query?.task_id as { $in?: string[] } | undefined)?.$in ?? []
+    );
+    expect(read).toEqual(ids(24, 53));
+    expect(vi.mocked(f.client.service('tasks').get)).not.toHaveBeenCalled();
+
+    // A trim is refused while a history read is in flight; a patch journaled
+    // for a trimmed turn during that read does not resurrect it at commit.
+    f.addTurns(1);
+    f.opts.deferTaskMessageFetch = id(54);
+    f.messageFindAll.mockClear();
+    const resync = f.handle.resync();
+    expect(internals.taskFetches.size).toBe(1);
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    f.emitServiceEvent('tasks', 'patched', makeTask(trimmed, TaskStatus.COMPLETED));
+    await vi.waitFor(() => expect(JSON.stringify(f.messageFindAll.mock.calls)).toContain(id(54)));
+    f.opts.deferTaskMessageFetch = undefined;
+    f.releaseMessageFetch();
+    await resync;
+    expect(f.taskIds()).toEqual(ids(24, 54));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(25, 54));
+
+    // More than a page of turns while offline: the window refills from the
+    // cursor without a gap, and stays above the trimmed history.
+    f.fireIo('disconnect');
+    f.addTurns(25, false);
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.taskIds()).toEqual(ids(25, 79));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(50, 79));
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(40, 79));
+    expectNoStrandedFetches(internals);
+    f.handle.dispose();
+  });
+
+  it('discards an older page abandoned by a disconnect once the window moved', async () => {
+    const f = await fixture();
+    const internals = f.handle as unknown as FetchInternals;
+    f.addTurns(30);
+    f.opts.deferTaskMessageFetch = id(13);
+    f.messageFindAll.mockClear();
+    const older = f.handle.loadOlderTasks();
+    await vi.waitFor(() => expect(JSON.stringify(f.messageFindAll.mock.calls)).toContain(id(13)));
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    f.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+    // Offline, the parked reader's view still trims.
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    f.opts.deferTaskMessageFetch = undefined;
+    f.releaseMessageFetch();
+    await older;
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(14, 53));
+    expectNoStrandedFetches(internals);
+    f.handle.dispose();
+  });
+
+  it('settles terminal streams before trimming and attributes nothing to a trimmed turn', async () => {
+    const f = await fixture();
+    const failed = f.reserve();
+    const stream = (name: string, messageId: string, extra = {}) =>
+      f.emitServiceEvent('messages', name, {
+        session_id: SESSION_ID,
+        message_id: messageId,
+        task_id: failed,
+        timestamp: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        ...extra,
+      });
+    f.opts.tasks.push(makeTask(failed, TaskStatus.FAILED));
+    f.opts.messagesByTask[failed] = [makeMessage(failed, 0)];
+    f.emitServiceEvent('tasks', 'created', makeTask(failed, TaskStatus.RUNNING));
+    f.publishSession();
+    stream('thinking:start', 'thought');
+    stream('thinking:chunk', 'thought', { chunk: 'considering' });
+    stream('streaming:start', 'partial');
+    stream('streaming:chunk', 'partial', { chunk: 'unpersisted partial' });
+    stream('streaming:error', 'partial', { error: 'synthetic failure' });
+    f.emitServiceEvent('tasks', 'patched', makeTask(failed, TaskStatus.FAILED));
+    // #2930: terminal settlement keeps the errored partial and retires the thought.
+    expect(f.handle.getStreamingMessage('partial')).toMatchObject({ isStreaming: false });
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    // Make the failed turn the oldest one loaded, then age it out.
+    f.addTurns(40);
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).not.toContain(failed);
+    // Its settled partial has no reload path and goes with it, as on a page reload.
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    expect((Reflect.get(f.handle, 'retiredStreamTasks') as Map<string, string>).size).toBe(0);
+    stream('streaming:error', 'thought', { error: 'late failure' });
+    stream('thinking:chunk', 'thought', { chunk: 'late' });
+    stream('streaming:chunk', 'partial', { chunk: 'late' });
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    // Paging back restores the persisted turn only.
+    while (!f.taskIds().includes(failed)) await f.handle.loadOlderTasks();
+    expect(f.handle.getTask(failed)?.status).toBe(TaskStatus.FAILED);
+    expect(f.handle.getTaskMessages(failed).map((message) => message.message_id)).toEqual([
+      `${failed}-msg-0`,
+    ]);
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.handle.dispose();
+  });
+});
+
+describe('lean transcript window follows displayed turn order', () => {
+  // UUIDv7-shaped IDs in creation order, as the daemon mints ordinary turns.
+  const turn = (n: number) => `0199c000-0000-7000-8000-${String(n).padStart(12, '0')}` as TaskID;
+  /** A Task from another Session that finished long before this one began. */
+  const earlierSource = '0199a000-0000-7000-8000-000000000001' as TaskID;
+  const answer = (taskId: string) => ({ ...makeMessage(taskId, 1), content: `Answer ${taskId}` });
+
+  async function fixture() {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 24; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    let next = 24;
+    /** The daemon appends Session.tasks at dispatch, in run order. */
+    const publishSession = () =>
+      mock.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: opts.tasks.filter((task) => task.status !== TaskStatus.QUEUED).map((t) => t.task_id),
+      });
+    /** One turn runs to completion; it may be a known (e.g. callback or queued) Task. */
+    const run = (taskId: string, { created = true } = {}) => {
+      const known = opts.tasks.find((task) => task.task_id === taskId);
+      if (known) opts.tasks.splice(opts.tasks.indexOf(known), 1);
+      opts.tasks.push(makeTask(taskId, TaskStatus.RUNNING));
+      opts.messagesByTask[taskId] = [answer(taskId) as Message];
+      if (created) mock.emitServiceEvent('tasks', 'created', makeTask(taskId, TaskStatus.RUNNING));
+      publishSession();
+      if (created) mock.emitServiceEvent('messages', 'created', answer(taskId));
+      opts.tasks[opts.tasks.length - 1] = makeTask(taskId, TaskStatus.COMPLETED);
+      mock.emitServiceEvent('tasks', 'patched', makeTask(taskId, TaskStatus.COMPLETED));
+    };
+    const runTurns = (count: number) => {
+      for (let i = 0; i < count; i++) run(turn(next++));
+    };
+    const taskIds = () => handle.state.tasks.map((task): string => task.task_id);
+    return { ...mock, opts, handle, run, runTurns, taskIds, turn: (n: number) => turn(n) };
+  }
+
+  it('keeps a newest callback whose durable ID sorts before every loaded turn', async () => {
+    const f = await fixture();
+    f.runTurns(36); // 46 loaded: turns 14 … 59
+    const callback = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
+    expect(callback < f.turn(0)).toBe(true);
+    f.run(callback);
+    expect(f.taskIds().at(-1)).toBe(callback);
+    // The reader sees turns 20 … 59 and the callback answer at the bottom.
+    expect(f.handle.trimOlderTasks(f.turn(20))).toBe(true);
+    expect(f.taskIds().at(-1)).toBe(callback);
+    expect(f.taskIds()[0]).toBe(f.turn(20));
+    expect(f.handle.getTaskMessages(callback)).toHaveLength(1);
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toHaveLength(LEAN_TRANSCRIPT_TASK_WINDOW);
+    expect(f.taskIds().at(-1)).toBe(callback);
+
+    // Reconnect and paging back keep it once, at its displayed position.
+    await f.handle.resync();
+    expect(f.taskIds().at(-1)).toBe(callback);
+    while (f.handle.state.hasOlderTasks) await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 60 }, (_, n) => f.turn(n)), callback]);
+
+    // A second callback that is first seen settled is a new turn, not late history.
+    f.handle.trimOlderTasks();
+    const second = completionCallbackTaskId(
+      earlierSource,
+      '0199a000-0000-7000-8000-00000000abcd' as SessionID
+    );
+    f.run(second, { created: false });
+    expect(f.taskIds().at(-1)).toBe(second);
+    // Late traffic for a trimmed turn is still not re-added above a gap.
+    f.emitServiceEvent('tasks', 'patched', makeTask(f.turn(3), TaskStatus.COMPLETED));
+    f.emitServiceEvent('messages', 'created', answer(f.turn(3)));
+    expect(f.taskIds()).not.toContain(f.turn(3));
+    expect(f.handle.state.messagesByTask.has(f.turn(3))).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('keeps trimmed turns out when a reconnect page reaches below the cursor', async () => {
+    const f = await fixture();
+    // Mostly callbacks: few kept turns have IDs at or above the history cursor.
+    const callbacks = Array.from({ length: 25 }, (_, k) =>
+      completionCallbackTaskId(
+        `0199a000-0000-7000-8000-${String(k).padStart(12, '0')}` as TaskID,
+        SESSION_ID as SessionID
+      )
+    );
+    for (const callback of callbacks) f.run(callback);
+    f.runTurns(6); // turns 24 … 29
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    const trimmed = [...Array.from({ length: 10 }, (_, n) => f.turn(14 + n)), callbacks[0]];
+    for (const id of trimmed) expect(f.taskIds()).not.toContain(id);
+    await f.handle.resync();
+    for (const id of trimmed) expect(f.taskIds()).not.toContain(id);
+    expect(f.taskIds()).toHaveLength(LEAN_TRANSCRIPT_TASK_WINDOW);
+    expect(f.taskIds().at(-1)).toBe(f.turn(29));
+    f.handle.dispose();
+  });
+
+  /** A 4-turn Session whose whole history is loaded: the ID cursor is exhausted. */
+  async function shortSession() {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 4; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(handle.state.hasOlderTasks).toBe(false);
+    /** Callback turns completing while the reader is offline; IDs sort below every turn. */
+    const offlineCallbacks = (count: number) => {
+      const ids = Array.from({ length: count }, (_, k) =>
+        completionCallbackTaskId(
+          `0199a000-0000-7000-8000-${String(k).padStart(12, '0')}` as TaskID,
+          SESSION_ID as SessionID
+        )
+      );
+      for (const id of ids) {
+        expect(id < turn(0)).toBe(true);
+        opts.tasks.push(makeTask(id, TaskStatus.COMPLETED));
+        opts.messagesByTask[id] = [answer(id) as Message];
+      }
+      return ids;
+    };
+    const taskIds = () => handle.state.tasks.map((task): string => task.task_id);
+    return { ...mock, opts, handle, offlineCallbacks, taskIds };
+  }
+
+  it('reconciles every turn dispatched while offline, even below an exhausted cursor', async () => {
+    const f = await shortSession();
+    f.fireIo('disconnect');
+    const callbacks = f.offlineCallbacks(15);
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 4 }, (_, n) => turn(n)), ...callbacks]);
+    for (const id of callbacks) expect(f.handle.getTaskMessages(id)).toHaveLength(1);
+    expect(f.handle.state.hasOlderTasks).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('reconciles offline callbacks even when a fresh Session patch lands before the reconnect resync', async () => {
+    const f = await shortSession();
+    f.fireIo('disconnect');
+    const callbacks = f.offlineCallbacks(15);
+    // The reconnect join is acked late; meanwhile realtime delivers the fresh
+    // Session row, which already lists the offline callbacks.
+    f.opts.deferCreate = true;
+    f.fireIo('connect');
+    f.emitServiceEvent('sessions', 'patched', {
+      session_id: SESSION_ID,
+      tasks: f.opts.tasks.map((task) => task.task_id),
+    });
+    f.opts.deferCreate = false;
+    f.releaseCreate();
+    await f.handle.ready();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 4 }, (_, n) => turn(n)), ...callbacks]);
+    expect(f.handle.state.hasOlderTasks).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('keeps pinned and waiting turns, contiguously, through a reconnect past the window', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 12; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    const widget = {
+      ...makeMessage(turn(5), 2),
+      type: 'widget_request',
+      metadata: { widget: { widget_type: 'env_vars', status: 'pending' } },
+    } as unknown as Message;
+    opts.messagesByTask[turn(5)].push(widget);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
+      Array.from({ length: 10 }, (_, i) => turn(2 + i))
+    );
+    const release = handle.retainTaskDetails(turn(3));
+    mock.fireIo('disconnect');
+    for (let n = 12; n < 52; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    mock.fireIo('connect');
+    await handle.ready();
+    // From the earliest protected turn to the latest, with nothing missing.
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
+      Array.from({ length: 49 }, (_, i) => turn(3 + i))
+    );
+    expect(handle.getTaskMessages(turn(5))).toContainEqual(
+      expect.objectContaining({ type: 'widget_request' })
+    );
+    expect(handle.state.hasOlderTasks).toBe(true);
+    // Once released, an ordinary trim brings it back to the window.
+    release();
+    await Promise.resolve();
+    expect(handle.trimOlderTasks()).toBe(true);
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
+      Array.from({ length: 49 }, (_, i) => turn(3 + i)).filter((id) => id >= turn(5))
+    );
+    handle.dispose();
+  });
+
+  it('loads the newest window after more offline turns than it holds, the rest via older history', async () => {
+    const f = await shortSession();
+    f.fireIo('disconnect');
+    const callbacks = f.offlineCallbacks(LEAN_TRANSCRIPT_TASK_WINDOW + 7);
+    f.fireIo('connect');
+    await f.handle.ready();
+    // Never a gap above the newest window: earlier turns become older history.
+    expect(f.taskIds()).toEqual(callbacks.slice(-LEAN_TRANSCRIPT_TASK_WINDOW));
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    // Older history pages back in display order, then reports it is exhausted.
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([turn(1), turn(2), turn(3), ...callbacks]);
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    // Late traffic for still-unloaded history is not placed above the transcript.
+    f.emitServiceEvent('tasks', 'patched', makeTask(turn(0), TaskStatus.COMPLETED));
+    expect(f.taskIds()).not.toContain(turn(0));
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 4 }, (_, n) => turn(n)), ...callbacks]);
+    expect(f.handle.state.hasOlderTasks).toBe(false);
+    // A later trim still follows display order.
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(callbacks.slice(-LEAN_TRANSCRIPT_TASK_WINDOW));
+    await f.handle.resync();
+    expect(f.taskIds()).toEqual(callbacks.slice(-LEAN_TRANSCRIPT_TASK_WINDOW));
+    while (f.handle.state.hasOlderTasks) await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 4 }, (_, n) => turn(n)), ...callbacks]);
+    f.handle.dispose();
+  });
+
+  it('loads a newest callback on open even when it is not among the highest task IDs', async () => {
+    const f = await fixture();
+    const callback = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
+    f.opts.tasks.push(makeTask(callback, TaskStatus.COMPLETED));
+    f.opts.messagesByTask[callback] = [answer(callback) as Message];
+    const reopened = new ReactiveSessionHandle(f.client, SESSION_ID, { taskHydration: 'lean' });
+    await reopened.ready();
+    expect(reopened.state.tasks.at(-1)?.task_id).toBe(callback);
+    expect(reopened.getTaskMessages(callback)).toHaveLength(1);
+    reopened.dispose();
+    f.handle.dispose();
+  });
+
+  it('keeps a queued prompt that runs last after newer prompts were promoted ahead of it', async () => {
+    const f = await fixture();
+    const waiting = f.turn(24);
+    const queued = { ...makeTask(waiting, TaskStatus.QUEUED), queue_position: 1 } as Task;
+    f.opts.tasks.push(queued);
+    f.emitServiceEvent('tasks', 'queued', queued);
+    // Newer prompts are reordered ahead of it and run first.
+    for (let n = 25; n < 61; n++) f.run(f.turn(n));
+    f.run(waiting);
+    expect(f.taskIds().at(-1)).toBe(waiting);
+    expect(f.handle.trimOlderTasks(f.turn(40))).toBe(true);
+    expect(f.taskIds()).toHaveLength(LEAN_TRANSCRIPT_TASK_WINDOW);
+    expect(f.taskIds().at(-1)).toBe(waiting);
+    await f.handle.resync();
+    expect(f.taskIds().at(-1)).toBe(waiting);
+    while (f.handle.state.hasOlderTasks) await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([
+      ...Array.from({ length: 24 }, (_, n) => f.turn(n)),
+      ...Array.from({ length: 36 }, (_, n) => f.turn(25 + n)),
+      waiting,
+    ]);
+    f.handle.dispose();
+  });
+
+  it('does not place a settled event that arrives before the first page', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {}, deferSessionGet: true };
+    for (let n = 0; n < 100; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await vi.waitFor(() => expect(mock.client.service('sessions').get).toHaveBeenCalled());
+    mock.emitServiceEvent('tasks', 'patched', makeTask(turn(0), TaskStatus.COMPLETED));
+    mock.releaseSessionGet();
+    await handle.ready();
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
+      Array.from({ length: 10 }, (_, i) => turn(90 + i))
+    );
+    handle.dispose();
+  });
+  it('reads older history by Session.tasks position in one session-scoped page', async () => {
+    const f = await fixture();
+    const find = vi.mocked(f.client.service('tasks').find);
+    find.mockClear();
+    await f.handle.loadOlderTasks();
+    expect(find.mock.calls.map(([params]) => params?.query)).toEqual([
+      {
+        session_id: SESSION_ID,
+        task_id: { $in: Array.from({ length: 10 }, (_, n) => f.turn(4 + n)) },
+        status: { $ne: TaskStatus.QUEUED },
+        $limit: 10,
+      },
+    ]);
+    expect(f.taskIds()).toEqual(Array.from({ length: 20 }, (_, n) => f.turn(4 + n)));
+    expect(vi.mocked(f.client.service('tasks').get)).not.toHaveBeenCalled();
+    f.handle.dispose();
+  });
+
+  it('keeps a scrolled-up reader’s history through a resync after many live turns', async () => {
+    const f = await fixture();
+    while (f.handle.state.hasOlderTasks) await f.handle.loadOlderTasks();
+    // Never trimmed while the reader is away from the bottom.
+    f.runTurns(LEAN_TRANSCRIPT_TASK_WINDOW + 10);
+    await f.handle.resync();
+    expect(f.taskIds()).toEqual(Array.from({ length: 64 }, (_, n) => f.turn(n)));
+    expect(f.handle.state.hasOlderTasks).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('admits a settled turn whose Session.tasks position arrives after its Task events', async () => {
+    const f = await fixture();
+    f.runTurns(30);
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    const late = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
+    f.opts.tasks.push(makeTask(late, TaskStatus.COMPLETED));
+    f.opts.messagesByTask[late] = [answer(late) as Message];
+    // First seen settled, before the Session patch that lists it.
+    f.emitServiceEvent('tasks', 'patched', makeTask(late, TaskStatus.COMPLETED));
+    f.emitServiceEvent('messages', 'created', answer(late));
+    expect(f.taskIds().at(-1)).toBe(late);
+    expect(f.handle.getTaskMessages(late)).toHaveLength(1);
+    f.emitServiceEvent('sessions', 'patched', {
+      session_id: SESSION_ID,
+      tasks: f.opts.tasks.map((task) => task.task_id),
+    });
+    expect(f.taskIds().at(-1)).toBe(late);
+    expect(f.taskIds()).toHaveLength(LEAN_TRANSCRIPT_TASK_WINDOW + 1);
+    // Traffic for a turn above the transcript's top is still refused.
+    f.emitServiceEvent('tasks', 'patched', makeTask(f.turn(20), TaskStatus.COMPLETED));
+    expect(f.taskIds()).not.toContain(f.turn(20));
+    await f.handle.resync();
+    expect(f.taskIds().at(-1)).toBe(late);
+    expect(f.taskIds()).toHaveLength(LEAN_TRANSCRIPT_TASK_WINDOW + 1);
+    f.handle.dispose();
+  });
+
+  it('pages a legacy Session by task ID, and never trims it, when Session.tasks misses turns', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 45; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    // A pre-atomic append or a whole-array overwrite lost dispatched Tasks.
+    opts.sessionTaskIds = opts.tasks.map((task) => task.task_id).filter((_, n) => n % 7 !== 3);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(Reflect.get(handle, 'leanOrder')).toBe('legacy');
+    while (handle.state.hasOlderTasks) await handle.loadOlderTasks();
+    expect(new Set(handle.state.tasks.map((task) => task.task_id))).toEqual(
+      new Set(opts.tasks.map((task) => task.task_id))
+    );
+    expect(handle.trimOlderTasks()).toBe(false);
+    // No positional read: nothing uses `$in`.
+    const find = vi.mocked(mock.client.service('tasks').find);
+    expect(find.mock.calls.filter(([params]) => '$in' in Object(params?.query?.task_id))).toEqual(
+      []
+    );
+    handle.dispose();
+
+    // A Task created but never run has no position by design: the daemon never
+    // lists it. Still display order, and it is not a placed turn.
+    opts.tasks.push(makeTask(turn(45), TaskStatus.CREATED));
+    opts.sessionTaskIds = opts.tasks.slice(0, 45).map((task) => task.task_id);
+    expect(opts.sessionTaskIds).not.toContain(turn(45));
+    const complete = new ReactiveSessionHandle(createMockClient(opts).client, SESSION_ID, {
+      taskHydration: 'lean',
+    });
+    await complete.ready();
+    expect(Reflect.get(complete, 'leanOrder')).toBe('display');
+    expect(complete.state.tasks.map((task) => task.task_id)).toEqual(
+      Array.from({ length: 10 }, (_, n) => turn(35 + n))
+    );
+    complete.dispose();
+  });
+
+  it('fails closed to task-ID paging when a dispatch lands between the task page and the Session read', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {}, deferSessionGet: true };
+    const add = (n: number) => {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    };
+    for (let n = 0; n < 40; n++) add(n);
+    // A legacy row lost turn 5.
+    opts.sessionTaskIds = opts.tasks.map((task) => task.task_id).filter((id) => id !== turn(5));
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    // The newest task page (40 nonqueued Tasks) is read first …
+    await vi.waitFor(() => expect(mock.client.service('tasks').find).toHaveBeenCalled());
+    // … then another prompt dispatches before the Session row is read.
+    add(40);
+    opts.sessionTaskIds = [...opts.sessionTaskIds, turn(40)];
+    mock.emitServiceEvent('tasks', 'patched', makeTask(turn(40), TaskStatus.RUNNING));
+    mock.releaseSessionGet();
+    await handle.ready();
+    expect(Reflect.get(handle, 'leanOrder')).toBe('legacy');
+    while (handle.state.hasOlderTasks) await handle.loadOlderTasks();
+    expect(handle.state.tasks.map((task) => task.task_id)).toContain(turn(5));
+    expect(handle.state.tasks).toHaveLength(41);
+    expect(handle.trimOlderTasks()).toBe(false);
+    handle.dispose();
+  });
+
+  it('decides display order from one daemon report, whatever the Session size', async () => {
+    const bootstrap = async (turns: number, omitTasksComplete = false) => {
+      const opts: MockClientOptions = { tasks: [], messagesByTask: {}, omitTasksComplete };
+      for (let n = 0; n < turns; n++) {
+        opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+        opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+      }
+      const mock = createMockClient(opts);
+      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+      await handle.ready();
+      const order = Reflect.get(handle, 'leanOrder');
+      const gets = vi.mocked(mock.client.service('sessions').get).mock.calls;
+      const finds = vi.mocked(mock.client.service('tasks').find).mock.calls.length;
+      handle.dispose();
+      return { order, gets, finds };
+    };
+    const small = await bootstrap(30);
+    const large = await bootstrap(3_000);
+    expect(small.order).toBe('display');
+    expect(large.order).toBe('display');
+    // One Session read carries the answer; the Task reads do not grow with history.
+    expect(large.gets).toEqual([[SESSION_ID, { query: { include_tasks_complete: true } }]]);
+    expect(large.finds).toBe(small.finds);
+    // A daemon that does not report it: task-ID paging, still without probes.
+    const older = await bootstrap(3_000, true);
+    expect(older.order).toBe('legacy');
+    expect(older.finds).toBe(small.finds);
+  });
+
+  it('places a turn that settles during the first page once its Session patch arrives after commit', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 12; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    opts.deferTaskMessageFetch = turn(11);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await vi.waitFor(() =>
+      expect(JSON.stringify(mock.messageFindAll.mock.calls)).toContain(turn(11))
+    );
+    // A low-ID callback completes while the first page's messages load; its
+    // Task and Message events arrive, but not yet the Session patch listing it.
+    const callback = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
+    opts.tasks.push(makeTask(callback, TaskStatus.COMPLETED));
+    opts.messagesByTask[callback] = [answer(callback) as Message];
+    mock.emitServiceEvent('tasks', 'patched', makeTask(callback, TaskStatus.COMPLETED));
+    mock.emitServiceEvent('messages', 'created', answer(callback));
+    // Late traffic for history above the first page is deferred alongside it.
+    mock.emitServiceEvent('tasks', 'patched', makeTask(turn(0), TaskStatus.COMPLETED));
+    opts.deferTaskMessageFetch = undefined;
+    mock.releaseMessageFetch();
+    await handle.ready();
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
+      Array.from({ length: 10 }, (_, n) => turn(2 + n))
+    );
+    // Only now does the Session patch list it.
+    mock.emitServiceEvent('sessions', 'patched', {
+      session_id: SESSION_ID,
+      tasks: opts.tasks.map((task) => task.task_id),
+    });
+    await vi.waitFor(() => expect(handle.state.tasks.at(-1)?.task_id).toBe(callback));
+    await handle.ready();
+    expect(handle.getTaskMessages(callback)).toHaveLength(1);
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual([
+      ...Array.from({ length: 10 }, (_, n) => turn(2 + n)),
+      callback,
+    ]);
+    // Only the missing row is read: no resync, and repeated patches read nothing.
+    const suffixReads = () =>
+      vi
+        .mocked(mock.client.service('tasks').find)
+        .mock.calls.filter(
+          ([params]) => params?.query?.$limit !== 0 && '$in' in Object(params?.query?.task_id)
+        ).length;
+    const reads = suffixReads();
+    expect(mock.client.service('sessions').get).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 3; i++)
+      mock.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: opts.tasks.map((task) => task.task_id),
+      });
+    await handle.ready();
+    expect(suffixReads()).toBe(reads);
+    while (handle.state.hasOlderTasks) await handle.loadOlderTasks();
+    expect(handle.state.tasks).toHaveLength(13);
+    handle.dispose();
+  });
+
+  it('still places a deferred turn when history traffic overflows what the first page remembers', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 300; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    opts.deferTaskMessageFetch = turn(299);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await vi.waitFor(() =>
+      expect(JSON.stringify(mock.messageFindAll.mock.calls)).toContain(turn(299))
+    );
+    // A new callback settles first, then 256 distinct history events follow.
+    const callback = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
+    opts.tasks.push(makeTask(callback, TaskStatus.COMPLETED));
+    opts.messagesByTask[callback] = [answer(callback) as Message];
+    mock.emitServiceEvent('tasks', 'patched', makeTask(callback, TaskStatus.COMPLETED));
+    mock.emitServiceEvent('messages', 'created', answer(callback));
+    for (let n = 0; n < 256; n++)
+      mock.emitServiceEvent('tasks', 'patched', makeTask(turn(n), TaskStatus.COMPLETED));
+    opts.deferTaskMessageFetch = undefined;
+    mock.releaseMessageFetch();
+    await handle.ready();
+    expect(handle.state.tasks.at(-1)?.task_id).toBe(turn(299));
+    mock.emitServiceEvent('sessions', 'patched', {
+      session_id: SESSION_ID,
+      tasks: opts.tasks.map((task) => task.task_id),
+    });
+    await vi.waitFor(() => expect(handle.state.tasks.at(-1)?.task_id).toBe(callback));
+    await handle.ready();
+    expect(handle.getTaskMessages(callback)).toHaveLength(1);
+    // History stays where it was: nothing above the first page came back.
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual([
+      ...Array.from({ length: 10 }, (_, n) => turn(290 + n)),
+      callback,
+    ]);
+    handle.dispose();
+  });
+
+  it('stops reading a suffix that keeps failing until a new extension or a reconnect', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 12; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    opts.deferTaskMessageFetch = turn(11);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await vi.waitFor(() =>
+      expect(JSON.stringify(mock.messageFindAll.mock.calls)).toContain(turn(11))
+    );
+    // A turn settles while the first page loads; it can only be placed by a
+    // suffix read, and that read keeps failing (a persistent 500).
+    const add = (taskId: string) => {
+      opts.tasks.push(makeTask(taskId, TaskStatus.COMPLETED));
+      opts.messagesByTask[taskId] = [answer(taskId) as Message];
+      mock.emitServiceEvent('tasks', 'patched', makeTask(taskId, TaskStatus.COMPLETED));
+    };
+    const callback = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
+    add(callback);
+    opts.deferTaskMessageFetch = undefined;
+    mock.releaseMessageFetch();
+    await handle.ready();
+    const find = vi.mocked(mock.client.service('tasks').find);
+    const answerFind = find.getMockImplementation()!;
+    let failing = true;
+    let failures = 0;
+    /** Holds the next suffix read open until the test rejects it. */
+    let hold: { reject?: (error: Error) => void } | undefined;
+    find.mockImplementation(async (params) => {
+      if (
+        hold &&
+        !hold.reject &&
+        '$in' in Object(params?.query?.task_id) &&
+        params?.query?.$limit !== 0
+      ) {
+        const held = hold;
+        return new Promise<never>((_, reject) => {
+          held.reject = reject;
+        });
+      }
+      if (failing && '$in' in Object(params?.query?.task_id) && params?.query?.$limit !== 0) {
+        // Bounded so a retry loop fails this test instead of exhausting memory.
+        if (++failures > 20) return new Promise<never>(() => {});
+        throw Object.assign(new Error('Server error'), { code: 500 });
+      }
+      return answerFind(params);
+    });
+    const suffixReads = () =>
+      find.mock.calls.filter(
+        ([params]) => '$in' in Object(params?.query?.task_id) && params?.query?.$limit !== 0
+      ).length;
+    const before = suffixReads();
+    const publish = () =>
+      mock.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: opts.tasks.map((task) => task.task_id),
+      });
+    publish();
+    await vi.waitFor(() => expect(handle.state.error).toBe('Server error'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // One failed read, then quiet: no immediate retry loop.
+    expect(suffixReads()).toBe(before + 1);
+    expect(handle.getTask(callback)).toBeUndefined();
+
+    // A later real extension retries once, and recovers once reads succeed.
+    publish();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(suffixReads()).toBe(before + 2);
+    failing = false;
+    const next = turn(12);
+    add(next);
+    publish();
+    await vi.waitFor(() => expect(handle.getTask(callback)).toBeDefined());
+    expect(handle.state.tasks.at(-1)?.task_id).toBe(next);
+    expect(handle.state.error).toBeNull();
+
+    // A reconnect recovers a gap whose suffix read failed, too.
+    failing = true;
+    const another = completionCallbackTaskId(earlierSource, turn(5) as unknown as SessionID);
+    opts.tasks.push(makeTask(another, TaskStatus.COMPLETED));
+    opts.messagesByTask[another] = [answer(another) as Message];
+    publish();
+    await vi.waitFor(() => expect(handle.state.error).toBe('Server error'));
+    const settled = suffixReads();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(suffixReads()).toBe(settled);
+    failing = false;
+    mock.fireIo('disconnect');
+    mock.fireIo('connect');
+    await handle.ready();
+    expect(handle.getTask(another)).toBeDefined();
+    expect(handle.getTaskMessages(another)).toHaveLength(1);
+
+    // An extension that lands while a suffix read is in flight is not lost if
+    // that read then fails: it earns exactly one retry.
+    hold = {};
+    const first = completionCallbackTaskId(earlierSource, turn(6) as unknown as SessionID);
+    opts.tasks.push(makeTask(first, TaskStatus.COMPLETED));
+    opts.messagesByTask[first] = [answer(first) as Message];
+    publish();
+    await vi.waitFor(() => expect(hold?.reject).toBeDefined());
+    const second = completionCallbackTaskId(earlierSource, turn(7) as unknown as SessionID);
+    opts.tasks.push(makeTask(second, TaskStatus.COMPLETED));
+    opts.messagesByTask[second] = [answer(second) as Message];
+    publish();
+    const pending = suffixReads();
+    hold.reject!(Object.assign(new Error('Service unavailable'), { code: 503 }));
+    await vi.waitFor(() => expect(handle.getTask(first)).toBeDefined());
+    expect(handle.getTask(second)).toBeDefined();
+    expect(suffixReads()).toBe(pending + 1);
+    handle.dispose();
+  });
+
+  it('keeps a turn that settles, with its Session patch, while the first page hydrates', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    const add = (n: number) => {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    };
+    for (let n = 0; n < 12; n++) add(n);
+    opts.deferTaskMessageFetch = turn(11);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await vi.waitFor(() =>
+      expect(JSON.stringify(mock.messageFindAll.mock.calls)).toContain(turn(11))
+    );
+    // Turn 12 dispatches and settles while the first page's messages load.
+    add(12);
+    mock.emitServiceEvent('tasks', 'patched', makeTask(turn(12), TaskStatus.COMPLETED));
+    mock.emitServiceEvent('sessions', 'patched', {
+      session_id: SESSION_ID,
+      tasks: opts.tasks.map((task) => task.task_id),
+    });
+    mock.emitServiceEvent('messages', 'created', answer(turn(12)));
+    opts.deferTaskMessageFetch = undefined;
+    mock.releaseMessageFetch();
+    await handle.ready();
+    // The first page (the latest ten) commits, then ready() waits while the
+    // suffix read appends the turn listed in flight: only its row, no resync.
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
+      Array.from({ length: 11 }, (_, n) => turn(2 + n))
+    );
+    expect(handle.getTaskMessages(turn(12))).toHaveLength(1);
+    expect(mock.client.service('sessions').get).toHaveBeenCalledTimes(1);
+    expect(
+      vi
+        .mocked(mock.client.service('tasks').find)
+        .mock.calls.map(([params]) => params?.query)
+        .filter((query) => query?.$limit !== 0 && '$in' in Object(query?.task_id))
+        .at(-1)?.task_id
+    ).toEqual({ $in: [turn(12)] });
+    while (handle.state.hasOlderTasks) await handle.loadOlderTasks();
+    expect(handle.state.tasks).toHaveLength(13);
+    handle.dispose();
+  });
+
+  /** 40 turns; the reader opens on turns 30 … 39 (start 30, reconciled 40). */
+  async function fortyTurns() {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    const add = (n: number) => {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    };
+    for (let n = 0; n < 40; n++) add(n);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    const taskIds = () => handle.state.tasks.map((task): string => task.task_id);
+    expect(taskIds()).toEqual(Array.from({ length: 10 }, (_, n) => turn(30 + n)));
+    return { ...mock, opts, add, handle, taskIds };
+  }
+  const replaced = Array.from({ length: 20 }, (_, n) => turn(20 + n));
+
+  it('falls back to task-ID paging when Session.tasks was replaced while offline', async () => {
+    const f = await fortyTurns();
+    f.fireIo('disconnect');
+    // A caller replaced the list (older daemons allowed it), then 5 turns dispatched.
+    for (let n = 40; n < 45; n++) f.add(n);
+    f.opts.sessionTaskIds = [...replaced, ...Array.from({ length: 5 }, (_, n) => turn(40 + n))];
+    f.fireIo('connect');
+    await f.handle.ready();
+    // Nothing shown is lost, the new turns arrive, and history stays reachable.
+    expect(f.taskIds()).toEqual(
+      expect.arrayContaining(Array.from({ length: 15 }, (_, n) => turn(30 + n)))
+    );
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    while (f.handle.state.hasOlderTasks) await f.handle.loadOlderTasks();
+    expect(new Set(f.taskIds())).toEqual(new Set(f.opts.tasks.map((task) => task.task_id)));
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('reopens older history when it falls back from a fully loaded transcript', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    const add = (n: number) => {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    };
+    for (let n = 0; n < 8; n++) add(n);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(handle.state.hasOlderTasks).toBe(false);
+    mock.fireIo('disconnect');
+    // The list was replaced, then 15 turns dispatched: more than one ID page.
+    for (let n = 8; n < 23; n++) add(n);
+    opts.sessionTaskIds = opts.tasks.slice(4).map((task) => task.task_id);
+    mock.fireIo('connect');
+    await handle.ready();
+    expect(handle.state.hasOlderTasks).toBe(true);
+    while (handle.state.hasOlderTasks) await handle.loadOlderTasks();
+    expect(new Set(handle.state.tasks.map((task) => task.task_id))).toEqual(
+      new Set(opts.tasks.map((task) => task.task_id))
+    );
+    handle.dispose();
+  });
+
+  it('falls back to task-ID paging when a live Session patch replaces Session.tasks', async () => {
+    const f = await fortyTurns();
+    f.opts.sessionTaskIds = replaced;
+    f.emitServiceEvent('sessions', 'patched', { session_id: SESSION_ID, tasks: replaced });
+    expect(Reflect.get(f.handle, 'leanOrder')).toBe('legacy');
+    await f.handle.resync();
+    expect(f.taskIds()).toEqual(
+      expect.arrayContaining(Array.from({ length: 10 }, (_, n) => turn(30 + n)))
+    );
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    while (f.handle.state.hasOlderTasks) await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toHaveLength(40);
+    f.handle.dispose();
+  });
+  it('plans a reconnect past the window again when a turn it would drop is pinned meanwhile', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    const add = (n: number) => {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    };
+    for (let n = 0; n < 12; n++) add(n);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    mock.fireIo('disconnect');
+    for (let n = 12; n < 52; n++) add(n);
+    opts.deferTaskMessageFetch = turn(51);
+    mock.fireIo('connect');
+    await vi.waitFor(() =>
+      expect(JSON.stringify(mock.messageFindAll.mock.calls)).toContain(turn(51))
+    );
+    // The reader expands an old turn while the rebased read is in flight.
+    const release = handle.retainTaskDetails(turn(3));
+    opts.deferTaskMessageFetch = undefined;
+    mock.releaseMessageFetch();
+    await handle.ready();
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
+      Array.from({ length: 49 }, (_, i) => turn(3 + i))
+    );
+    release();
+    handle.dispose();
+  });
+
+  it('reads no trimmed turn on reconnect, even one dispatched after the last history read', async () => {
+    const f = await fixture();
+    f.runTurns(36);
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()[0]).toBe(f.turn(30));
+    const find = vi.mocked(f.client.service('tasks').find);
+    find.mockClear();
+    await f.handle.resync();
+    const read = find.mock.calls.flatMap(
+      ([params]) => (params?.query?.task_id as { $in?: string[] } | undefined)?.$in ?? []
+    );
+    expect(read).toEqual(f.taskIds());
+    expect(f.taskIds()).toEqual(Array.from({ length: 30 }, (_, n) => f.turn(30 + n)));
+    f.handle.dispose();
+  });
+});
+
+describe('lean session context-window projection', () => {
+  const turn = (n: number) => `0199d000-0000-7000-8000-${String(n).padStart(12, '0')}` as TaskID;
+  const withSnapshot = (task: Task, used: number) =>
+    ({
+      ...task,
+      model: 'synthetic-model',
+      duration_ms: 1200,
+      computed_context_window: used,
+      normalized_sdk_response: {
+        tokenUsage: { inputTokens: used, outputTokens: 1, totalTokens: used + 1 },
+        contextWindowLimit: 200_000,
+      },
+      raw_sdk_response: { canary: 'RAW_SDK_CANARY' },
+    }) as Task;
+
+  it('keeps the latest snapshot after its turn is trimmed, and never regresses to an older one', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 10; n++)
+      opts.tasks.push(withSnapshot(makeTask(turn(n), TaskStatus.COMPLETED), 1000 + n));
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(handle.state.latestContextWindow).toMatchObject({
+      task_id: turn(9),
+      computed_context_window: 1009,
+      model: 'synthetic-model',
+      duration_ms: 1200,
+    });
+    expect(JSON.stringify(handle.state.latestContextWindow)).not.toContain('RAW_SDK_CANARY');
+    // Forty turns that report no snapshot push turn 9 out of the transcript.
+    for (let n = 10; n < 50; n++) {
+      const task = makeTask(turn(n), TaskStatus.COMPLETED);
+      opts.tasks.push(task);
+      mock.emitServiceEvent('tasks', 'created', makeTask(turn(n), TaskStatus.RUNNING));
+      mock.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: opts.tasks.map((row) => row.task_id),
+      });
+      mock.emitServiceEvent('tasks', 'patched', task);
+    }
+    expect(handle.trimOlderTasks()).toBe(true);
+    expect(handle.getTask(turn(9))).toBeUndefined();
+    expect(handle.state.latestContextWindow?.task_id).toBe(turn(9));
+    // Paging back an older snapshot does not replace the newer one.
+    while (handle.state.hasOlderTasks) await handle.loadOlderTasks();
+    expect(handle.state.latestContextWindow?.task_id).toBe(turn(9));
+    // A newer reported snapshot replaces it.
+    const latest = withSnapshot(makeTask(turn(49), TaskStatus.COMPLETED), 4242);
+    mock.emitServiceEvent('tasks', 'patched', latest);
+    expect(handle.state.latestContextWindow).toMatchObject({
+      task_id: turn(49),
+      computed_context_window: 4242,
+    });
+    // Another Session's handle starts without it; removal and disposal clear it.
+    const other = new ReactiveSessionHandle(
+      createMockClient({ tasks: [], messagesByTask: {} }).client,
+      SESSION_ID,
+      { taskHydration: 'lean' }
+    );
+    await other.ready();
+    expect(other.state.latestContextWindow).toBeUndefined();
+    other.dispose();
+    mock.emitServiceEvent('sessions', 'removed', { session_id: SESSION_ID });
+    expect(handle.state.latestContextWindow).toBeUndefined();
+    handle.dispose();
+    expect(handle.state.latestContextWindow).toBeUndefined();
+  });
 });

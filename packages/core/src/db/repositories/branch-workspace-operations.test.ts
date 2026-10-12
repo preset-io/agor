@@ -184,3 +184,33 @@ test('pre-dispatch failures settle visibly, but cannot release an invocation', a
   await expect(cleanup.failBeforeExecution(next.claim)).rejects.toThrow('must settle');
   await expect(maintenance.release(next.claim)).rejects.toThrow('containment');
 });
+
+test('launch rejects a storage-mode mismatch in the admitted snapshot', async ({ db }) => {
+  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const maintenance = new BranchMaintenanceRepository(db);
+  const operations = new BranchWorkspaceOperationRepository(db);
+  const { claim } = await maintenance.claim(branch.branch_id, 'cleanup', user.user_id);
+  await operations.prepare(
+    claim,
+    {
+      operation_id: claim.operation_id,
+      action: 'archive',
+      filesystem_action: 'deleted',
+      status: 'accepted',
+      requested_by: user.user_id,
+      requested_at: new Date().toISOString(),
+      deadline_at: new Date(Date.now() + 60_000).toISOString(),
+    },
+    {
+      repo_id: branch.repo_id,
+      path: branch.path,
+      repo_path: '/tmp/environment-test',
+      storage_mode: 'clone',
+    }
+  );
+  await expect(
+    maintenance.withClaim(claim, (tx) => operations.validateLaunch(tx, claim))
+  ).rejects.toThrow('location changed');
+  await operations.failBeforeExecution(claim);
+  await expect(maintenance.claim(branch.branch_id, 'cleanup', user.user_id)).resolves.toBeDefined();
+});

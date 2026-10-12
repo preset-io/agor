@@ -96,7 +96,10 @@ describe('MCP Catalog real Chromium flows', () => {
     await waitFor(() => expect(trigger).toHaveFocus());
     await userEvent.keyboard('{Enter}');
     disclosure = screen.getByRole('dialog', { name: 'Session MCP servers' });
-    await userEvent.fill(within(disclosure).getByRole('combobox'), 'missing-server');
+    const selector = within(disclosure).getByRole('combobox');
+    await waitFor(() => expect(selector).toBeEnabled());
+    expect(api.availableRead).toHaveBeenCalledWith({ query: { available: true } });
+    await userEvent.fill(selector, 'missing-server');
     const browse = await screen.findByRole('button', {
       name: 'Browse the MCP Catalog for all available MCPs',
     });

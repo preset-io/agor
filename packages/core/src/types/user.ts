@@ -172,6 +172,8 @@ export interface DefaultAgenticToolConfig {
   codexApprovalPolicy?: CodexApprovalPolicy;
   /** Codex-specific: network access */
   codexNetworkAccess?: CodexNetworkAccess;
+  /** Include native Codex plugins. Default false; true respects native plugin settings. */
+  codexIncludePlugins?: boolean;
 }
 
 /**
@@ -250,7 +252,8 @@ export interface AgenticToolsConfig {
   gemini?: GeminiConfig;
   copilot?: CopilotConfig;
   cursor?: CursorConfig;
-  opencode?: Record<string, never>;
+  /** Hosted OpenCode API keys by provider id; local mode keeps OpenCode's own store. */
+  opencode?: Record<string, string>;
 }
 
 /** Union of all valid env-var-named fields across all tool configs. */
@@ -471,6 +474,11 @@ export interface OnboardingState {
   assistantEmoji?: string;
 }
 
+/** Home "My work" layouts; the first is the default. */
+export const HOME_WORK_VIEWS = ['list', 'board'] as const;
+
+export type HomeWorkView = (typeof HOME_WORK_VIEWS)[number];
+
 /**
  * User preferences structure
  */
@@ -482,6 +490,8 @@ export interface UserPreferences {
   mainBoardId?: string;
   /** Whether to render Slack-synced avatar_url when available. Undefined defaults to true. */
   use_slack_avatar?: boolean;
+  /** Home "My work" layout. Undefined defaults to list. */
+  homeWorkView?: HomeWorkView;
   // Future preferences can be added here
   [key: string]: unknown;
 }
@@ -630,8 +640,6 @@ export function resolveUserPrimaryAgenticTool(user: User | null | undefined): Ag
  * v0.5 only validates 'global' and 'session'. Other values (repo, mcp_server,
  * artifact_feature, executor) are *reserved* — present in the type for forward
  * compatibility but not yet selectable in the UI or resolved by the daemon.
- *
- * See `context/explorations/env-var-access.md`.
  */
 export type EnvVarScope =
   | 'global'
@@ -760,7 +768,7 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
  * Session-scope env var selection (many-to-many row).
  *
  * v0.5: env vars are still keyed by name inside `users.data.env_vars` (no `env_vars.id`
- * yet — see `context/explorations/env-var-access.md`), so selections reference vars by
+ * yet), so selections reference vars by
  * `env_var_name` scoped implicitly via `session.created_by`. When v1 promotes env vars
  * to their own table this becomes `env_var_id`.
  */

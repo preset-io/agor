@@ -1,6 +1,15 @@
 import type { ChildProcess } from 'node:child_process';
 import { ENVIRONMENT_COMMAND_BUDGET } from '@agor/core/types';
 import { type SpawnExecutorOptions, spawnExecutor } from './spawn-executor.js';
+import { classifyExecutorExit } from './task-launch-state.js';
+
+/** The opted-in launcher refused admission before creating anything (exit 75). */
+export class ExecutorLaunchRefusedError extends Error {
+  constructor() {
+    super('Environment launcher refused admission; nothing was created');
+    this.name = 'ExecutorLaunchRefusedError';
+  }
+}
 
 /** Wait only for bounded launcher admission, never for a remote claim/result. */
 export function dispatchEnvironmentCommand(
@@ -26,10 +35,16 @@ export function dispatchEnvironmentCommand(
         onSpawn: (process) => {
           child = process;
         },
-        onExit: (code) => {
+        onExit: (code, context) => {
           clearTimeout(timer);
           if (code === 0) resolve();
-          else reject(new Error('Environment launcher did not confirm admission; outcome unknown'));
+          else if (
+            classifyExecutorExit({ mode: context.mode, code, nonzeroMayHaveDispatched: false }) ===
+            'refused'
+          ) {
+            reject(new ExecutorLaunchRefusedError());
+          } else
+            reject(new Error('Environment launcher did not confirm admission; outcome unknown'));
         },
       });
     } catch (error) {

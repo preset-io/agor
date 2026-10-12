@@ -10,6 +10,23 @@ import type { AuthenticatedAgorClient, User } from '@agor-live/client';
 export const ACCESS_TOKEN_KEY = 'agor-access-token';
 export const REFRESH_TOKEN_KEY = 'agor-refresh-token';
 
+// Bumped when this tab signs in or out; routine rotation keeps in-flight work current.
+let tokenGeneration = 0;
+export class SupersededAuthenticationError extends Error {
+  constructor() {
+    super('Authentication was superseded');
+    this.name = 'SupersededAuthenticationError';
+  }
+}
+export function invalidateTokenAuthority(): void {
+  tokenGeneration += 1;
+}
+/** Returns a check that stays true until this tab next signs in or out. */
+export function captureTokenAuthority(): () => boolean {
+  const generation = tokenGeneration;
+  return () => generation === tokenGeneration;
+}
+
 export interface RefreshResult {
   accessToken: string;
   refreshToken?: string;
@@ -80,9 +97,25 @@ export function clearTokens(): void {
 }
 
 /**
+ * Rejection raised when a refresh POST completed after the refresh token it
+ * was issued with had been replaced or cleared (logout, new sign-in, another
+ * rotation). The result belongs to a superseded identity and is discarded
+ * rather than stored or broadcast.
+ */
+export class RefreshSupersededError extends SupersededAuthenticationError {
+  constructor() {
+    super();
+    this.name = 'RefreshSupersededError';
+  }
+}
+
+/**
  * Refresh and store tokens in one operation
  *
- * Convenience function that combines refreshAccessToken and storeTokens.
+ * Convenience function that combines refreshAccessToken and storeTokens. The
+ * result is stored only while `refreshToken` is still the stored refresh
+ * token; otherwise the in-flight POST outlived its credentials and a
+ * {@link RefreshSupersededError} is thrown without touching storage.
  *
  * @param client - Agor client instance
  * @param refreshToken - Current refresh token
@@ -92,7 +125,10 @@ export async function refreshAndStoreTokens(
   client: AuthenticatedAgorClient,
   refreshToken: string
 ): Promise<RefreshResult> {
+  const isCurrent = captureTokenAuthority();
   const result = await refreshAccessToken(client, refreshToken);
+  if (!isCurrent()) throw new SupersededAuthenticationError();
+  if (getStoredRefreshToken() !== refreshToken) throw new RefreshSupersededError();
   storeTokens(result.accessToken, result.refreshToken);
   return result;
 }

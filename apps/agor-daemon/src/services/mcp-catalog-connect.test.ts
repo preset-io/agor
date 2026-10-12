@@ -46,6 +46,7 @@ function createMCPCatalogConnectService(
     has_row_secret: Boolean(value.auth?.type === 'bearer' && value.auth.token),
   });
   const fallback: MCPCatalogConnectDeps = {
+    authorizeCaller: async (params) => params,
     async runInTenantDatabaseScope(_params, work) {
       return work();
     },
@@ -109,6 +110,7 @@ function installOf(overrides: Record<string, unknown> = {}) {
 function authenticated(overrides: Record<string, unknown> = {}) {
   return {
     mcp_server_id: 'server-signed-in',
+    owner_user_id: ALICE,
     transport: 'http',
     url: 'https://mcp.linear.app/mcp',
     enabled: true,
@@ -355,6 +357,7 @@ function buildApp(
   };
   const deps: {
     readGrantResourceUri: ReturnType<typeof vi.fn>;
+    authorizeCaller: MCPCatalogConnectDeps['authorizeCaller'];
     runInTenantDatabaseScope: MCPCatalogConnectDeps['runInTenantDatabaseScope'];
     listCandidates: (
       userId: UserID,
@@ -374,6 +377,7 @@ function buildApp(
         (server) => server.mcp_server_id === serverId
       )?.url;
     }),
+    authorizeCaller: async (params: AuthenticatedParams) => params,
     runInTenantDatabaseScope: async (_params, work) => work(),
     listCandidates: async () => [],
     getCandidate: async () => undefined,
@@ -1252,7 +1256,7 @@ describe('mcp-catalog/connect — what a caller cannot reach', () => {
     expect(row.scope).toBe('session');
     const createInput = (services['mcp-servers'] as { create: ReturnType<typeof vi.fn> }).create
       .mock.calls[0]![0];
-    expect(createInput).not.toHaveProperty('owner_user_id');
+    expect(createInput.owner_user_id).toBe(ALICE);
     expect(createInput).not.toHaveProperty('catalog_entry_name');
     expect(row).toMatchObject({ owner_user_id: ALICE, catalog_entry_name: LINEAR });
     expect(row.source).toBe('catalog');
@@ -2212,7 +2216,7 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
     expect(created.mcpServers).toHaveLength(0);
   });
 
-  it('leaves the unauthenticated and OAuth paths sharing rows as before', async () => {
+  it('does not silently reuse shared configuration for a private request', async () => {
     // The ownership rule is about what a row carries, not about who installed
     // it: an open server keeps no credential, and an OAuth grant lives in
     // `user_mcp_oauth_tokens` keyed by user, so neither is the row's to lend.
@@ -2221,8 +2225,8 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
 
     const result = await createMCPCatalogConnectService(app).create(request, params);
 
-    expect(result.reused_existing_server).toBe(true);
-    expect(created.mcpServers).toHaveLength(0);
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
   });
 });
 
@@ -2301,7 +2305,7 @@ describe('mcp-catalog/connect — a key request from a caller that is not the ma
     expect(row.source).toBe('catalog');
     const createInput = (services['mcp-servers'] as { create: ReturnType<typeof vi.fn> }).create
       .mock.calls[0]![0];
-    expect(createInput).not.toHaveProperty('owner_user_id');
+    expect(createInput.owner_user_id).toBe(ALICE);
     expect(createInput).not.toHaveProperty('catalog_entry_name');
     expect(row).toMatchObject({ owner_user_id: ALICE, catalog_entry_name: LINEAR });
     expect(row).not.toHaveProperty('enabled');
@@ -2337,5 +2341,84 @@ describe('mcp-catalog/connect — what a failed connect leaves behind', () => {
 
     expect(created.sessions).toEqual([]);
     expect(created.attachments).toEqual([]);
+  });
+});
+
+describe('customer-owned configured OAuth app', () => {
+  const byo: MCPCatalogEntry = {
+    ...CURATED,
+    oauth: {
+      dcr_mode: 'disabled',
+      configured_client: {
+        setup_url: 'https://provider.test/apps',
+        issuer: 'https://provider.test',
+        secret_required: true,
+      },
+    },
+  };
+  it('requires the secure app input, preserves per-user grants, and never returns the secret', async () => {
+    probeRemoteAuthType.mockResolvedValue('oauth');
+    const fixture = buildApp(byo);
+    const service = createMCPCatalogConnectService(fixture.app, fixture.deps);
+    await expect(service.create(request, params)).rejects.toThrow('secure Catalog form');
+    const result = await service.create(
+      { ...request, oauth_client: { client_id: 'customer-app', client_secret: 'customer-secret' } },
+      params
+    );
+    expect(JSON.stringify(result)).not.toContain('customer-secret');
+    expect(fixture.created.mcpServers[0]).toMatchObject({
+      auth: {
+        oauth_client_id: 'customer-app',
+        oauth_client_secret: 'customer-secret',
+        oauth_mode: 'per_user',
+        oauth_dcr_mode: 'disabled',
+      },
+    });
+    expect(fixture.generationFinalizations).toHaveLength(1);
+  });
+  it('never overwrites shared install app credentials from Connect', async () => {
+    probeRemoteAuthType.mockClear();
+    const fixture = buildApp(byo, [
+      {
+        mcp_server_id: 'shared-byo',
+        name: 'shared-byo',
+        transport: 'http',
+        url: CURATED.remote_url,
+        scope: 'session',
+        source: 'catalog',
+        catalog_entry_name: byo.name,
+        enabled: true,
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          oauth_dcr_mode: 'disabled',
+          oauth_client_id: 'installer-app',
+          oauth_client_secret: 'installer-secret',
+        },
+      },
+    ]);
+    await expect(
+      createMCPCatalogConnectService(fixture.app, fixture.deps).create(
+        {
+          ...request,
+          sharing: 'shared',
+          oauth_client: { client_id: 'customer-app', client_secret: 'secret' },
+        },
+        params
+      )
+    ).rejects.toThrow('already has an OAuth app');
+    expect(probeRemoteAuthType).not.toHaveBeenCalled();
+    expect(fixture.created.mcpServers).toHaveLength(0);
+    expect(fixture.patched).toHaveLength(0);
+  });
+  it('refuses app material for entries without a reviewed recipe', async () => {
+    const fixture = buildApp(CURATED);
+    await expect(
+      createMCPCatalogConnectService(fixture.app, fixture.deps).create(
+        { ...request, oauth_client: { client_id: 'customer-app', client_secret: 'secret' } },
+        params
+      )
+    ).rejects.toThrow('does not accept');
+    expect(fixture.created.mcpServers).toHaveLength(0);
   });
 });

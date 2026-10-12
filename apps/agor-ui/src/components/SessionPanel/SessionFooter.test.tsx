@@ -1,18 +1,35 @@
 import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import type {
+  AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
   MCPServer,
   PermissionMode,
   Session,
+  Task,
 } from '@agor-live/client';
-import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
+import { SessionStatus } from '@agor-live/client';
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
-import { SessionFooter } from './SessionFooter';
+import { agorStore } from '../../store/agorStore';
+import { SessionFooter, type SessionFooterProps } from './SessionFooter';
+
+vi.mock('../../hooks/useAuth', () => ({
+  useAuth: () => ({ user: { user_id: 'footer-user', role: 'member' } }),
+}));
 
 // ModelSelector makes async network calls — replace with a stub
 vi.mock('../ModelSelector', () => ({
@@ -36,14 +53,14 @@ const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   </ConfigProvider>
 );
 
-const baseSession: Session = {
+const baseSession: SessionFooterProps['session'] = {
   session_id: 'test-session-123',
   status: 'idle' as Session['status'],
   agentic_tool: 'claude-code',
   model_config: undefined,
-} as unknown as Session;
+} as unknown as SessionFooterProps['session'];
 
-const baseProps = {
+const baseProps: SessionFooterProps = {
   session: baseSession,
   footerTimerTask: null,
   latestContextWindow: null,
@@ -59,8 +76,8 @@ const baseProps = {
   connectionDisabled: false,
   effortLevel: 'high' as EffortLevel,
   permissionMode: 'default' as PermissionMode,
-  codexSandboxMode: 'on' as CodexSandboxMode,
-  codexApprovalPolicy: 'auto' as CodexApprovalPolicy,
+  codexSandboxMode: 'workspace-write' as CodexSandboxMode,
+  codexApprovalPolicy: 'on-request' as CodexApprovalPolicy,
   queuedTasks: [],
   client: null,
   modelLabel: undefined,
@@ -83,6 +100,9 @@ const baseProps = {
 describe('SessionFooter', () => {
   beforeEach(() => {
     localStorage.clear();
+    // The footer's MCP picker edits only a session whose links are loaded.
+    agorStore.getState().reset();
+    agorStore.getState().markSessionMcpLoaded('test-session-123');
   });
   afterEach(() => {
     localStorage.clear();
@@ -122,6 +142,41 @@ describe('SessionFooter', () => {
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
   });
 
+  it('shows named activity only while working and clears it on every non-running state', () => {
+    const session = { ...baseSession, status: SessionStatus.RUNNING };
+    const view = render(<SessionFooter {...baseProps} session={session} isRunning />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.getByRole('status', { name: 'Agent is working' })).toBeVisible();
+
+    for (const status of Object.values(SessionStatus).filter((s) => s !== SessionStatus.RUNNING)) {
+      view.rerender(<SessionFooter {...baseProps} session={{ ...session, status }} />);
+      expect(screen.queryByRole('status', { name: 'Agent is working' })).not.toBeInTheDocument();
+    }
+    view.rerender(<SessionFooter {...baseProps} session={session} isRunning />);
+    expect(screen.getByRole('status', { name: 'Agent is working' })).toBeVisible();
+    view.rerender(<SessionFooter {...baseProps} session={session} isRunning stopRequestInFlight />);
+    expect(screen.queryByRole('status', { name: 'Agent is working' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop' })).toHaveAttribute('aria-busy', 'true');
+    view.rerender(<SessionFooter {...baseProps} session={session} isRunning connectionDisabled />);
+    expect(screen.queryByRole('status', { name: 'Agent is working' })).not.toBeInTheDocument();
+  });
+
+  it('preserves the themed desktop bottom inset on the owning footer', () => {
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1280);
+    try {
+      render(
+        <ConfigProvider theme={{ token: { sizeUnit: 6 } }}>
+          <SessionFooter {...baseProps} />
+        </ConfigProvider>
+      );
+      const footer = screen.getByTestId('prompt-input').closest('[style*="padding-bottom"]')!;
+      expect(footer).toHaveStyle({ paddingBottom: '12px', flexShrink: '0' });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('disables Stop while the daemon connection is unavailable', () => {
     const { container } = render(
       <SessionFooter {...baseProps} isRunning={true} connectionDisabled={true} />,
@@ -151,7 +206,7 @@ describe('SessionFooter', () => {
             ...baseSession,
             agentic_tool: 'opencode',
             model_config: undefined,
-          } as unknown as Session
+          } as unknown as SessionFooterProps['session']
         }
       />,
       { wrapper: Wrapper }
@@ -174,7 +229,7 @@ describe('SessionFooter', () => {
             ...baseSession,
             agentic_tool: 'claude-code',
             model_config: undefined,
-          } as unknown as Session
+          } as unknown as SessionFooterProps['session']
         }
       />,
       { wrapper: Wrapper }
@@ -198,7 +253,7 @@ describe('SessionFooter', () => {
     );
     const chip = screen.getByText('85%');
     expect(chip.querySelector('.anticon-percentage')).toBeNull();
-    expect(chip).toHaveTextContent(/^85%$/);
+    expect(chip.textContent).toMatch(/^85%$/);
     expect(chip).toBeInTheDocument();
     expect(chip.closest('.ant-tag')).toHaveClass('ant-tag-red');
   });
@@ -211,7 +266,7 @@ describe('SessionFooter', () => {
           {
             ...baseSession,
             model_config: { model: 'claude-sonnet-4-6', mode: 'alias' },
-          } as unknown as Session
+          } as unknown as SessionFooterProps['session']
         }
       />,
       { wrapper: Wrapper }
@@ -232,7 +287,7 @@ describe('SessionFooter', () => {
               provider: 'kimi-for-coding',
               mode: 'exact',
             },
-          } as unknown as Session
+          } as unknown as SessionFooterProps['session']
         }
       />,
       { wrapper: Wrapper }
@@ -310,8 +365,25 @@ describe('SessionFooter', () => {
     expect(disclosure).toHaveFocus();
   });
 
-  it('exposes dialog popup state and restores disclosure focus when Escape dismisses it', () => {
-    render(<SessionFooter {...baseProps} client={{} as never} />, { wrapper: Wrapper });
+  it('exposes dialog popup state and restores disclosure focus when Escape dismisses it', async () => {
+    const findAvailable = vi.fn().mockResolvedValue([]);
+    const service = vi.fn(() => ({ find: findAvailable }));
+    const client = { service } as unknown as AgorClient;
+    render(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          authGeneration: 1,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <SessionFooter {...baseProps} client={client} currentUserId="footer-user" />
+      </ConnectionProvider>,
+      { wrapper: Wrapper }
+    );
     const disclosure = screen.getByRole('button', {
       name: 'MCP servers. No MCP servers attached. Open to add or change MCP servers.',
     });
@@ -327,6 +399,9 @@ describe('SessionFooter', () => {
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
 
     const selector = within(popup).getByRole('combobox');
+    await waitFor(() => expect(selector).toBeEnabled());
+    expect(service).toHaveBeenCalledWith(`sessions/${baseSession.session_id}/mcp-servers`);
+    expect(findAvailable).toHaveBeenCalledWith({ query: { available: true } });
     act(() => selector.focus());
     expect(selector).toHaveFocus();
     fireEvent.keyDown(selector, { key: 'Escape' });
@@ -416,8 +491,8 @@ describe('SessionFooter', () => {
     expect(notice).toHaveAttribute('role', 'status');
     expect(notice).toHaveAttribute('aria-live', 'polite');
     expect(notice).toHaveAttribute('aria-atomic', 'true');
-    expect(notice).toHaveTextContent(/2 MCP servers aren.t connected/);
-    expect(notice).toHaveTextContent(/Open the MCP badge/);
+    expect(notice.textContent).toMatch(/2 MCP servers aren.t connected/);
+    expect(notice.textContent).toMatch(/Open the MCP badge/);
     expect(
       screen.getByRole('button', { name: 'Dismiss MCP connection notice' })
     ).toBeInTheDocument();
@@ -443,7 +518,7 @@ describe('SessionFooter', () => {
       { wrapper: Wrapper }
     );
 
-    expect(screen.getByRole('status')).toHaveTextContent(/Open the MCP badge/);
+    expect(screen.getByRole('status').textContent).toMatch(/Open the MCP badge/);
     const disclosure = screen.getByRole('button', {
       name: 'MCP servers. Alpha isn’t connected. Open to connect.',
     });
@@ -487,7 +562,7 @@ describe('SessionFooter', () => {
     render(
       <SessionFooter
         {...baseProps}
-        session={{ ...baseSession, agentic_tool: 'codex' } as Session}
+        session={{ ...baseSession, agentic_tool: 'codex' } as SessionFooterProps['session']}
         toolCaps={AGENTIC_TOOL_CAPABILITIES.codex}
         effortLevel={undefined}
       />,
@@ -603,37 +678,67 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
       />,
       { wrapper: Wrapper }
     );
-    fireEvent.click(screen.getByText('Stop').closest('button')!);
+    fireEvent.click(screen.getByLabelText('Stop'));
     expect(onStop).toHaveBeenCalledOnce();
     expect(onSendPrompt).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText('Queue').closest('button')!);
+    fireEvent.click(screen.getByLabelText('Queue'));
     expect(onSendPrompt).toHaveBeenCalledOnce();
     view.rerender(
       <SessionFooter {...baseProps} isRunning composerAttachmentUploading onStop={onStop} />
     );
-    expect(screen.getByText('Send').closest('button')!).toBeDisabled();
-    expect(screen.getByText('Stop').closest('button')!).toBeEnabled();
+    expect(screen.getByLabelText('Send')).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toBeEnabled();
   });
 
-  it('retains pending feedback, disables duplicate/offline Stop, and allows stopping retries', () => {
+  it('labels Send and Stop on desktop and keeps them icon-only on phones', () => {
+    const view = render(<SessionFooter {...baseProps} isRunning />, { wrapper: Wrapper });
+    for (const name of ['Stop', 'Send']) {
+      expect(screen.getByLabelText(name).tagName).toBe('BUTTON');
+      expect(screen.getByLabelText(name).textContent).toBe(width < 1024 ? '' : name);
+    }
+    view.rerender(<SessionFooter {...baseProps} isRunning hasInput />);
+    expect(screen.getByLabelText('Queue').textContent).toBe(width < 1024 ? '' : 'Queue');
+  });
+
+  it('retains pending feedback and waits for an explicit cleanup failure before offering retry', () => {
     const onStop = vi.fn();
     const view = render(
       <SessionFooter {...baseProps} isRunning stopRequestInFlight onStop={onStop} />,
       { wrapper: Wrapper }
     );
-    fireEvent.click(screen.getByText('Stop').closest('button')!);
+    fireEvent.click(screen.getByLabelText('Stop'));
     expect(onStop).not.toHaveBeenCalled();
-    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
-    expect(screen.getByText('Stop').closest('button')!).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByLabelText('Stop')).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toHaveAttribute('aria-busy', 'true');
     view.rerender(<SessionFooter {...baseProps} stopRequestInFlight onStop={onStop} />);
-    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} isRunning isStopping onStop={onStop} />);
-    fireEvent.click(screen.getByText('Stop').closest('button')!);
-    expect(onStop).toHaveBeenCalledOnce();
+    const recovering = screen.getByRole('button', { name: 'Recovering' });
+    expect(recovering).toBeDisabled();
+    expect(recovering.textContent).toBe(width < 1024 ? '' : 'Recovering…');
+    fireEvent.click(recovering);
+    expect(onStop).not.toHaveBeenCalled();
+    view.rerender(
+      <SessionFooter
+        {...baseProps}
+        isRunning
+        isStopping
+        recoveryTask={
+          {
+            task_id: 'stopping-task',
+            termination_request: { cause: 'user_stop', requested_at: '2026-01-01T00:00:00Z' },
+          } as Task
+        }
+        onStop={onStop}
+      />
+    );
+    const stopping = screen.getByRole('button', { name: 'Stopping' });
+    expect(stopping).toBeDisabled();
+    expect(stopping.textContent).toBe(width < 1024 ? '' : 'Stopping…');
     view.rerender(<SessionFooter {...baseProps} isRunning connectionDisabled onStop={onStop} />);
-    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} />);
-    expect(screen.queryByText('Stop')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Stop')).not.toBeInTheDocument();
   });
 
   if (width < 1024) {
@@ -645,14 +750,27 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
       render(<SessionFooter {...baseProps} isRunning hasInput />, { wrapper: Wrapper });
       expect(screen.queryByLabelText('Fork session')).not.toBeInTheDocument();
       for (const name of ['Stop', 'Queue', 'More options', 'Attach files']) {
-        const button = ['Stop', 'Queue'].includes(name)
-          ? screen.getByText(name).closest('button')!
-          : screen.getByLabelText(name);
+        const button = screen.getByLabelText(name);
         expect(button.style.minHeight).toBe('44px');
+        expect(button.style.minWidth).toBe('44px');
       }
       fireEvent.click(screen.getByLabelText('More options'));
       const sheet = (await screen.findByText('Session controls')).closest('[role=dialog]')!;
       expect(within(sheet as HTMLElement).getByLabelText('Fork session')).toBeInTheDocument();
+      // A tap must not leave any action row's hover hint over the sheet.
+      for (const label of [
+        'Attach files',
+        'Advanced upload',
+        'Fork session',
+        'BTW fork',
+        'Spawn subsession',
+      ]) {
+        fireEvent.mouseEnter(within(sheet as HTMLElement).getByText(label, { exact: true }));
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      });
+      expect(document.querySelector('.ant-tooltip')).toBeNull();
       expect(within(sheet as HTMLElement).getByLabelText('Spawn subsession')).toHaveAttribute(
         'aria-disabled',
         'true'

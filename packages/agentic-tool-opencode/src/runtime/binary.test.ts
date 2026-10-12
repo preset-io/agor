@@ -1,4 +1,4 @@
-import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { resolveManagedAgenticToolPackageDirectory } from '@agor/core/agentic-integrations';
@@ -54,7 +54,8 @@ describe.skipIf(process.platform === 'win32')('OpenCode binary compatibility', (
     expect(resolveManagedAgenticToolPackageDirectory).toHaveBeenCalledWith(
       'opencode',
       '1.2.3',
-      expect.stringMatching(/^opencode-(linux|darwin)-/)
+      expect.stringMatching(/^opencode-(linux|darwin)-/),
+      'opencode-ai'
     );
   });
 
@@ -73,6 +74,22 @@ describe.skipIf(process.platform === 'win32')('OpenCode binary compatibility', (
 
     await expect(readOpenCodeBinaryVersion(binary)).resolves.toBe(OPENCODE_VERSION);
     await expect(assertOpenCodeBinaryCompatibility(binary)).resolves.toBe(OPENCODE_VERSION);
+  });
+
+  it('probes the version without writing into the real home', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agor-opencode-home-'));
+    temporaryDirectories.push(home);
+    vi.stubEnv('HOME', home);
+    const directory = await mkdtemp(join(tmpdir(), 'agor-opencode-version-'));
+    temporaryDirectories.push(directory);
+    const binary = join(directory, 'opencode');
+    await writeFile(
+      binary,
+      `#!/bin/sh\nmkdir -p "$HOME/.config/opencode"\nprintf '%s\\n' '${OPENCODE_VERSION}'\n`
+    );
+    await chmod(binary, 0o755);
+    await expect(assertOpenCodeBinaryCompatibility(binary)).resolves.toBe(OPENCODE_VERSION);
+    await expect(readdir(home)).resolves.toEqual([]);
   });
 
   it('rejects a CLI version that can drift from the pinned SDK', async () => {

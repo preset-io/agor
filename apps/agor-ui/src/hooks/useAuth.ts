@@ -18,6 +18,7 @@ import {
 } from '../utils/launchAuth';
 import { discardPromptDraftSeed } from '../utils/promptDrafts';
 import {
+  AUTH_REVALIDATE_REQUESTED_EVENT,
   dispatchTokensRefreshed,
   RefreshUnrecoverableError,
   refreshTokensSingleFlight,
@@ -26,10 +27,14 @@ import {
   TOKENS_REFRESHED_EVENT,
 } from '../utils/singleFlightRefresh';
 import {
+  captureTokenAuthority,
   clearTokens,
   getStoredAccessToken,
   getStoredRefreshToken,
+  invalidateTokenAuthority,
   type RefreshResult,
+  RefreshSupersededError,
+  SupersededAuthenticationError,
   storeTokens,
 } from '../utils/tokenRefresh';
 import type { AuthorityOperation } from './useAuthorityOperationGuard';
@@ -68,6 +73,24 @@ export interface EstablishedAuthAuthorityReceipt {
   isCurrent: () => boolean;
 }
 
+/**
+ * Outcome of reconciling this tab's identity with the shared stored
+ * credentials (another tab may have rotated, replaced or cleared them).
+ *
+ * - `authenticated`: React auth state now matches the stored access token.
+ *   `authenticationGeneration` identifies the authority it belongs to.
+ * - `signed-out`: no usable credentials remain; auth state settled signed-out.
+ * - `superseded`: this tab's own login/logout replaced the authority first and
+ *   owns the resulting state.
+ * - `unresolved`: the stored credentials could not be confirmed (for example
+ *   the daemon is unreachable); callers retry on their own bounded cadence.
+ */
+export type CredentialReconciliation =
+  | { status: 'authenticated'; accessToken: string; authenticationGeneration: number }
+  | { status: 'signed-out' }
+  | { status: 'superseded' }
+  | { status: 'unresolved' };
+
 export type AuthorityCycleLoginResult =
   | { status: 'signed-in'; authority: EstablishedAuthAuthorityReceipt }
   | { status: 'failed' }
@@ -90,6 +113,11 @@ interface UseAuthReturn extends AuthState {
   logout: () => Promise<void>;
   logoutForAuthorityCycle: (authorityCycle: CapturedAuthAuthorityCycle) => Promise<boolean>;
   reAuthenticate: () => Promise<void>;
+  /**
+   * Single-flight reconciliation of this tab's identity with the stored
+   * credentials. The only path that adopts credentials another tab wrote.
+   */
+  reconcileStoredCredentials: () => Promise<CredentialReconciliation>;
   refreshCurrentUserForAuthorityCycle: (shouldApply: () => boolean) => Promise<boolean>;
 }
 
@@ -133,8 +161,25 @@ export function useAuth(): UseAuthReturn {
   // global loading bit. Other auth establishments explicitly supersede it.
   const localLoginAttemptRef = useRef<object | null>(null);
   const authenticationGenerationRef = useRef(0);
+  // Fences reAuthenticate() continuations. Every explicit credential/identity
+  // writer (logout, login, a newer reAuthenticate) advances it, so a stale
+  // revalidation can neither commit its result nor retry/clear tokens. Unlike
+  // the auth generation it also advances when the same user signs out and back
+  // in, and it is not touched by routine token refresh.
+  const revalidationEpochRef = useRef(0);
   const [authenticationGeneration, setAuthenticationGeneration] = useState(0);
   const activeAuthorityRef = useRef<{ userId: UserID; role: User['role'] } | null>(null);
+  const reconciliationRef = useRef<Promise<CredentialReconciliation> | null>(null);
+  // Bumped to re-arm proactive refresh when reconciliation keeps the same token.
+  const [refreshScheduleNonce, setRefreshScheduleNonce] = useState(0);
+
+  // Publish auth state synchronously to the ref as well as to React, so a
+  // continuation (e.g. credential reconciliation) observes what was committed.
+  const commitAuthState = useCallback((next: AuthState | ((previous: AuthState) => AuthState)) => {
+    const resolved = typeof next === 'function' ? next(authStateRef.current) : next;
+    authStateRef.current = resolved;
+    setState(resolved);
+  }, []);
 
   const advanceAuthenticationGeneration = useCallback(() => {
     authenticationGenerationRef.current += 1;
@@ -142,6 +187,7 @@ export function useAuth(): UseAuthReturn {
   }, []);
 
   const invalidateAuthentication = useCallback(() => {
+    invalidateTokenAuthority();
     activeAuthorityRef.current = null;
     advanceAuthenticationGeneration();
   }, [advanceAuthenticationGeneration]);
@@ -190,122 +236,172 @@ export function useAuth(): UseAuthReturn {
    * Retries up to 3 times to handle daemon restarts gracefully
    */
   // biome-ignore lint/correctness/useExhaustiveDependencies: auth-generation helpers are stable for the hook lifetime; reAuthenticate must remain stable for retry/effect callers
-  const reAuthenticate = useCallback(async (retryCount = 0, pendingLaunchCode?: string) => {
-    const MAX_RETRIES = 5;
-    localLoginAttemptRef.current = null;
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+  const reAuthenticate = useCallback(
+    async (retryCount = 0, pendingLaunchCode?: string, ownEpoch?: number): Promise<void> => {
+      const MAX_RETRIES = 5;
+      const MAX_SUPERSEDED_RETRIES = 3;
+      // A fresh call supersedes any in-flight revalidation; internal retries
+      // keep the epoch of the run that scheduled them.
+      const epoch = ownEpoch ?? ++revalidationEpochRef.current;
+      let isCurrent = captureTokenAuthority();
+      const isStale = () => revalidationEpochRef.current !== epoch || !isCurrent();
+      localLoginAttemptRef.current = null;
+      // Revalidation is not a new login. Keep the authenticated surface mounted
+      // while checking the same credentials; login/authority replacement still
+      // uses its own blocking lifecycle below.
+      commitAuthState((prev) => ({ ...prev, loading: !prev.authenticated, error: null }));
 
-    const storedAccessToken = getStoredAccessToken();
-    const storedRefreshToken = getStoredRefreshToken();
-    const hasStoredTokens = !!storedAccessToken || !!storedRefreshToken;
-    const activeLaunchCode =
-      pendingLaunchCode ||
-      (typeof window !== 'undefined' ? getLaunchCodeFromSearch(window.location.search) : null);
-    let attemptedLaunch = false;
-    let launchFailed = false;
+      const hasStoredTokens = !!getStoredAccessToken() || !!getStoredRefreshToken();
+      const activeLaunchCode =
+        pendingLaunchCode ||
+        (typeof window !== 'undefined' ? getLaunchCodeFromSearch(window.location.search) : null);
+      let attemptedLaunch = false;
+      let launchFailed = false;
 
-    async function authenticateWithStoredTokens(
-      client: Awaited<ReturnType<typeof createRestClient>>
-    ) {
-      if (!storedAccessToken && !storedRefreshToken) return false;
+      async function authenticateWithStoredTokens(
+        client: Awaited<ReturnType<typeof createRestClient>>,
+        supersededRetries = 0
+      ) {
+        // Re-read on every pass: another tab can rotate the shared refresh
+        // token while a refresh is in flight, and the retry must use it.
+        const storedAccessToken = getStoredAccessToken();
+        const storedRefreshToken = getStoredRefreshToken();
+        if (!storedAccessToken && !storedRefreshToken) return false;
 
-      // Try to authenticate with stored access token first
-      if (storedAccessToken) {
-        try {
-          const result = await client.authenticate({
-            strategy: 'jwt',
-            accessToken: storedAccessToken,
-          });
+        // Try to authenticate with stored access token first
+        if (storedAccessToken) {
+          try {
+            const result = await client.authenticate({
+              strategy: 'jwt',
+              accessToken: storedAccessToken,
+            });
+            if (isStale()) return true;
 
-          noteAuthenticatedUser(result.user);
-          setState({
-            user: result.user,
-            accessToken: result.accessToken,
-            authenticated: true,
-            loading: false,
-            error: null,
-          });
+            noteAuthenticatedUser(result.user);
+            commitAuthState({
+              user: result.user,
+              accessToken: result.accessToken,
+              authenticated: true,
+              loading: false,
+              error: null,
+            });
 
-          return true;
-        } catch (accessTokenError) {
-          // Access token expired or invalid, try refresh token
-          if (!isDefiniteAuthFailure(accessTokenError)) throw accessTokenError;
-        }
-      }
-
-      // Access token expired or missing, try refresh token
-      if (storedRefreshToken) {
-        try {
-          const refreshResult = await refreshTokensSingleFlight(client, storedRefreshToken);
-
-          noteAuthenticatedUser(refreshResult.user);
-          setState({
-            user: refreshResult.user,
-            accessToken: refreshResult.accessToken,
-            authenticated: true,
-            loading: false,
-            error: null,
-          });
-
-          return true;
-        } catch (refreshError) {
-          // Refresh token also expired or invalid
-          if (
-            !isDefiniteAuthFailure(refreshError) &&
-            !(refreshError instanceof RefreshUnrecoverableError)
-          ) {
-            throw refreshError;
+            return true;
+          } catch (accessTokenError) {
+            if (isStale()) return true;
+            // Access token expired or invalid, try refresh token
+            if (!isDefiniteAuthFailure(accessTokenError)) throw accessTokenError;
           }
         }
+
+        // Access token expired or missing, try refresh token
+        if (storedRefreshToken) {
+          try {
+            const refreshResult = await refreshTokensSingleFlight(client, storedRefreshToken);
+            if (isStale()) return true;
+
+            noteAuthenticatedUser(refreshResult.user);
+            commitAuthState({
+              user: refreshResult.user,
+              accessToken: refreshResult.accessToken,
+              authenticated: true,
+              loading: false,
+              error: null,
+            });
+
+            return true;
+          } catch (refreshError) {
+            if (isStale()) return true;
+            // The credentials were replaced mid-flight (another tab rotated the
+            // shared refresh token, or this tab's own authority changed). A
+            // local replacement already advanced the epoch (isStale above);
+            // otherwise continue with whatever is stored now rather than
+            // leaving the mount spinner up.
+            if (refreshError instanceof RefreshSupersededError) {
+              if (supersededRetries >= MAX_SUPERSEDED_RETRIES) throw refreshError;
+              return authenticateWithStoredTokens(client, supersededRetries + 1);
+            }
+            // Refresh token also expired or invalid
+            if (
+              !isDefiniteAuthFailure(refreshError) &&
+              !(refreshError instanceof RefreshUnrecoverableError)
+            ) {
+              throw refreshError;
+            }
+          }
+        }
+
+        return false;
       }
 
-      return false;
-    }
+      try {
+        const client = await createRestClient(getDaemonUrl());
+        if (isStale()) return;
 
-    try {
-      const client = await createRestClient(getDaemonUrl());
+        if (activeLaunchCode) {
+          attemptedLaunch = true;
+          // Remove the opaque one-time code before the network round-trip so a
+          // refresh, copy/paste, or dev-mode double effect does not replay it.
+          removeLaunchCodeFromCurrentUrl();
 
-      if (activeLaunchCode) {
-        attemptedLaunch = true;
-        // Remove the opaque one-time code before the network round-trip so a
-        // refresh, copy/paste, or dev-mode double effect does not replay it.
-        removeLaunchCodeFromCurrentUrl();
+          try {
+            const result = await exchangeLaunchCode(client, activeLaunchCode);
+            // Launch exchange intentionally replaces token authority on success.
+            isCurrent = captureTokenAuthority();
+            if (isStale()) return;
+            resetRefreshFailureState();
+            noteAuthenticatedUser(result.user);
 
-        try {
-          const result = await exchangeLaunchCode(client, activeLaunchCode);
-          resetRefreshFailureState();
-          noteAuthenticatedUser(result.user);
+            commitAuthState({
+              user: result.user,
+              accessToken: result.accessToken,
+              authenticated: true,
+              loading: false,
+              error: null,
+            });
+            dispatchTokensRefreshed(result);
 
-          setState({
-            user: result.user,
-            accessToken: result.accessToken,
-            authenticated: true,
+            return;
+          } catch (launchError) {
+            if (isStale()) return;
+            const isConnectionError = isTransientConnectionError(launchError);
+            if (isConnectionError && retryCount < MAX_RETRIES) {
+              const delay = Math.min(2000 * 1.5 ** retryCount, 10000);
+              await new Promise((resolve) => setTimeout(resolve, delay));
+              if (isStale()) return;
+              return reAuthenticate(retryCount + 1, activeLaunchCode, epoch);
+            }
+
+            launchFailed = true;
+            if (!hasStoredTokens) {
+              throw launchError;
+            }
+
+            console.warn('Launch sign-in failed; falling back to stored auth tokens:', launchError);
+          }
+        }
+
+        if (!hasStoredTokens) {
+          noteUnauthenticated();
+          commitAuthState({
+            user: null,
+            accessToken: null,
+            authenticated: false,
             loading: false,
-            error: null,
+            error: launchFailed
+              ? 'Launch sign-in failed. The one-time launch code may have expired or already been used.'
+              : null,
           });
-          dispatchTokensRefreshed(result);
-
           return;
-        } catch (launchError) {
-          const isConnectionError = isTransientConnectionError(launchError);
-          if (isConnectionError && retryCount < MAX_RETRIES) {
-            const delay = Math.min(2000 * 1.5 ** retryCount, 10000);
-            await new Promise((resolve) => setTimeout(resolve, delay));
-            return reAuthenticate(retryCount + 1, activeLaunchCode);
-          }
-
-          launchFailed = true;
-          if (!hasStoredTokens) {
-            throw launchError;
-          }
-
-          console.warn('Launch sign-in failed; falling back to stored auth tokens:', launchError);
         }
-      }
 
-      if (!hasStoredTokens) {
+        if (await authenticateWithStoredTokens(client)) return;
+        if (isStale()) return;
+
+        // Both tokens invalid or expired — expected when refresh token hits its TTL.
+        clearTokens();
         noteUnauthenticated();
-        setState({
+        commitAuthState({
           user: null,
           accessToken: null,
           authenticated: false,
@@ -314,79 +410,147 @@ export function useAuth(): UseAuthReturn {
             ? 'Launch sign-in failed. The one-time launch code may have expired or already been used.'
             : null,
         });
-        return;
-      }
+      } catch (error) {
+        if (error instanceof SupersededAuthenticationError) return;
+        if (isStale()) return;
+        // Connection or authentication error - retry if daemon just restarted
+        const isConnectionError = isTransientConnectionError(error);
 
-      if (await authenticateWithStoredTokens(client)) return;
-
-      // Both tokens invalid or expired — expected when refresh token hits its TTL.
-      clearTokens();
-      noteUnauthenticated();
-      setState({
-        user: null,
-        accessToken: null,
-        authenticated: false,
-        loading: false,
-        error: launchFailed
-          ? 'Launch sign-in failed. The one-time launch code may have expired or already been used.'
-          : null,
-      });
-    } catch (error) {
-      // Connection or authentication error - retry if daemon just restarted
-      const isConnectionError = isTransientConnectionError(error);
-
-      if (isConnectionError && retryCount < MAX_RETRIES) {
-        const delay = Math.min(2000 * 1.5 ** retryCount, 10000); // Exponential backoff: 2s, 3s, 4.5s, 6.75s, 10s (capped)
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        return reAuthenticate(
-          retryCount + 1,
-          attemptedLaunch ? activeLaunchCode || undefined : undefined
-        );
-      }
-
-      // IMPORTANT: Don't clear tokens for connection errors or for failed
-      // launch-code attempts when stored tokens exist. A stale/consumed URL
-      // code must not log out a user with an otherwise valid local session.
-      if (
-        isDefiniteAuthFailure(error) &&
-        !isConnectionError &&
-        !(attemptedLaunch && hasStoredTokens)
-      ) {
-        console.error('Authentication failure, clearing tokens:', error);
-        clearTokens();
-      }
-
-      if (attemptedLaunch && hasStoredTokens) {
-        try {
-          const client = await createRestClient(getDaemonUrl());
-          if (await authenticateWithStoredTokens(client)) return;
-        } catch (fallbackError) {
-          console.warn(
-            'Stored-token fallback after launch sign-in failure also failed:',
-            fallbackError
+        if (isConnectionError && retryCount < MAX_RETRIES) {
+          const delay = Math.min(2000 * 1.5 ** retryCount, 10000); // Exponential backoff: 2s, 3s, 4.5s, 6.75s, 10s (capped)
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          if (isStale()) return;
+          return reAuthenticate(
+            retryCount + 1,
+            attemptedLaunch ? activeLaunchCode || undefined : undefined,
+            epoch
           );
         }
-      }
 
-      noteUnauthenticated();
-      setState({
-        user: null,
-        accessToken: null,
-        authenticated: false,
-        loading: false,
-        error: isConnectionError
-          ? 'Connection lost - waiting for daemon...'
-          : attemptedLaunch
-            ? 'Launch sign-in failed. The one-time launch code may have expired or already been used.'
-            : null,
-      });
-    }
-  }, []);
+        // IMPORTANT: Don't clear tokens for connection errors or for failed
+        // launch-code attempts when stored tokens exist. A stale/consumed URL
+        // code must not log out a user with an otherwise valid local session.
+        if (
+          isDefiniteAuthFailure(error) &&
+          !isConnectionError &&
+          !(attemptedLaunch && hasStoredTokens)
+        ) {
+          console.error('Authentication failure, clearing tokens:', error);
+          clearTokens();
+        }
+
+        if (attemptedLaunch && hasStoredTokens) {
+          try {
+            const client = await createRestClient(getDaemonUrl());
+            if (isStale()) return;
+            if (await authenticateWithStoredTokens(client)) return;
+          } catch (fallbackError) {
+            console.warn(
+              'Stored-token fallback after launch sign-in failure also failed:',
+              fallbackError
+            );
+          }
+        }
+
+        if (isStale()) return;
+
+        // A failed network probe is not proof that the current identity expired.
+        // Preserve usable state; a definitive credential rejection still clears it.
+        if (isConnectionError && authStateRef.current.authenticated && !attemptedLaunch) {
+          commitAuthState((prev) => ({
+            ...prev,
+            loading: false,
+            error: 'Connection lost - waiting for daemon...',
+          }));
+          return;
+        }
+
+        noteUnauthenticated();
+        commitAuthState({
+          user: null,
+          accessToken: null,
+          authenticated: false,
+          loading: false,
+          error: isConnectionError
+            ? 'Connection lost - waiting for daemon...'
+            : attemptedLaunch
+              ? 'Launch sign-in failed. The one-time launch code may have expired or already been used.'
+              : null,
+        });
+      }
+    },
+    []
+  );
 
   // Try to re-authenticate on mount (using stored token)
   useEffect(() => {
     reAuthenticate();
   }, [reAuthenticate]);
+
+  // Another tab can rotate, replace or clear the shared stored credentials
+  // without this tab receiving any event. Every recovery path that discovers
+  // that (handshake recovery, proactive refresh, visibility wake) reconciles
+  // through this one operation, so identity, token and authentication
+  // generation change together through the normal auth lifecycle; nothing
+  // copies a stored token around useAuth. Revalidation is fenced by the
+  // revalidation epoch and tab token authority, so a local logout/login that
+  // lands while it is pending wins.
+  const reconcileStoredCredentials = useCallback((): Promise<CredentialReconciliation> => {
+    if (reconciliationRef.current) return reconciliationRef.current;
+    // A local login (password change) is replacing the credentials and has not
+    // yet invalidated tab authority. Revalidating now would null its attempt
+    // fence and cancel it, so report "not confirmed yet": callers retry on
+    // their bounded cadence once the login has installed or released authority.
+    if (localLoginAttemptRef.current) return Promise.resolve({ status: 'unresolved' });
+    const isTabAuthorityCurrent = captureTokenAuthority();
+    const run = reAuthenticate()
+      .then((): CredentialReconciliation => {
+        const current = authStateRef.current;
+        const storedAccessToken = getStoredAccessToken();
+        if (
+          !current.authenticated &&
+          !current.loading &&
+          !storedAccessToken &&
+          !getStoredRefreshToken()
+        ) {
+          return { status: 'signed-out' };
+        }
+        if (!isTabAuthorityCurrent()) return { status: 'superseded' };
+        if (
+          current.authenticated &&
+          current.accessToken &&
+          current.accessToken === storedAccessToken
+        ) {
+          return {
+            status: 'authenticated',
+            accessToken: current.accessToken,
+            authenticationGeneration: authenticationGenerationRef.current,
+          };
+        }
+        return { status: 'unresolved' };
+      })
+      .finally(() => {
+        if (reconciliationRef.current === run) reconciliationRef.current = null;
+      });
+    reconciliationRef.current = run;
+    return run;
+  }, [reAuthenticate]);
+
+  /**
+   * A refresh this tab started was superseded. If this tab's own login/logout
+   * did that, it already owns state; otherwise another tab changed the stored
+   * credentials, so reconcile and re-arm proactive refresh for the result.
+   */
+  const reconcileAfterSupersededRefresh = useCallback(
+    async (isTabAuthorityCurrent: () => boolean) => {
+      if (!isTabAuthorityCurrent()) return;
+      const outcome = await reconcileStoredCredentials();
+      if (outcome.status === 'authenticated' || outcome.status === 'unresolved') {
+        setRefreshScheduleNonce((nonce) => nonce + 1);
+      }
+    },
+    [reconcileStoredCredentials]
+  );
 
   // Visibility handler: recover from tab wake.
   //
@@ -416,8 +580,13 @@ export function useAuth(): UseAuthReturn {
       const storedAccess = getStoredAccessToken();
       if (!storedAccess || !isExpiringSoon(storedAccess, REFRESH_BUFFER_MS)) return;
 
+      const isTabAuthorityCurrent = captureTokenAuthority();
       const refreshToken = getStoredRefreshToken();
-      if (!refreshToken) return;
+      if (!refreshToken) {
+        // Another tab signed out: settle this tab instead of idling on a token.
+        await reconcileAfterSupersededRefresh(isTabAuthorityCurrent);
+        return;
+      }
 
       try {
         const client = await createRestClient(getDaemonUrl());
@@ -425,6 +594,11 @@ export function useAuth(): UseAuthReturn {
         // State sync happens via TOKENS_REFRESHED_EVENT listener below —
         // no need to setState here.
       } catch (error) {
+        // Covers RefreshSupersededError (another tab won the rotation).
+        if (error instanceof SupersededAuthenticationError) {
+          await reconcileAfterSupersededRefresh(isTabAuthorityCurrent);
+          return;
+        }
         // Unrecoverable failures are handled by the unrecoverable-event
         // listener (clearTokens + unauthenticated). Bail out so we don't
         // kick off a reAuthenticate that will immediately fail again.
@@ -440,7 +614,20 @@ export function useAuth(): UseAuthReturn {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [state.authenticated, reAuthenticate]);
+  }, [state.authenticated, reAuthenticate, reconcileAfterSupersededRefresh]);
+
+  // A socket client that stood down because its credentials disappeared
+  // (e.g. another tab signed out) asks us to revalidate; with no stored
+  // tokens this settles to signed-out. Skipped while unauthenticated, where
+  // the mount/poll paths already own revalidation.
+  useEffect(() => {
+    if (!state.authenticated) return;
+    const handleRevalidate = () => {
+      void reconcileStoredCredentials();
+    };
+    window.addEventListener(AUTH_REVALIDATE_REQUESTED_EVENT, handleRevalidate);
+    return () => window.removeEventListener(AUTH_REVALIDATE_REQUESTED_EVENT, handleRevalidate);
+  }, [state.authenticated, reconcileStoredCredentials]);
 
   // Poll for daemon availability when we have tokens but aren't authenticated.
   // This handles the case where the daemon restarts and we need to reconnect
@@ -467,6 +654,7 @@ export function useAuth(): UseAuthReturn {
   // the state update then re-runs this effect with the new token, which
   // schedules the next tick. This removes the historic drift bug where the
   // refresh interval was hardcoded independently of the server's TTL.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshScheduleNonce re-arms this one-shot timer when reconciliation keeps the same token
   useEffect(() => {
     if (!state.authenticated || !state.accessToken) return;
 
@@ -479,14 +667,26 @@ export function useAuth(): UseAuthReturn {
       untilExp === null ? FALLBACK_DELAY_MS : Math.max(MIN_DELAY_MS, untilExp - REFRESH_BUFFER_MS);
 
     const timer = setTimeout(async () => {
+      const isTabAuthorityCurrent = captureTokenAuthority();
       const refreshToken = getStoredRefreshToken();
-      if (!refreshToken) return;
+      if (!refreshToken) {
+        // Another tab signed out: settle this tab instead of idling on a token.
+        await reconcileAfterSupersededRefresh(isTabAuthorityCurrent);
+        return;
+      }
 
       try {
         const client = await createRestClient(getDaemonUrl());
         await refreshTokensSingleFlight(client, refreshToken);
         // State sync happens via TOKENS_REFRESHED_EVENT listener below.
       } catch (error) {
+        // A superseded refresh is a no-op only when this tab's own
+        // login/logout caused it. A cross-tab rotation (RefreshSupersededError)
+        // must adopt the stored credentials and keep this timer chain alive.
+        if (error instanceof SupersededAuthenticationError) {
+          await reconcileAfterSupersededRefresh(isTabAuthorityCurrent);
+          return;
+        }
         // Unrecoverable: the unrecoverable-event listener already cleared
         // tokens and flipped to unauthenticated. Avoid double-handling.
         if (error instanceof RefreshUnrecoverableError) return;
@@ -513,7 +713,13 @@ export function useAuth(): UseAuthReturn {
     }, delay);
 
     return () => clearTimeout(timer);
-  }, [state.authenticated, state.accessToken, noteUnauthenticated]);
+  }, [
+    state.authenticated,
+    state.accessToken,
+    refreshScheduleNonce,
+    noteUnauthenticated,
+    reconcileAfterSupersededRefresh,
+  ]);
 
   // When the single-flight refresh helper completes from a non-React path
   // (e.g. the socket-client 401-retry hook, or a concurrent refresh in
@@ -553,6 +759,7 @@ export function useAuth(): UseAuthReturn {
   useEffect(() => {
     const handleUnrecoverable = () => {
       localLoginAttemptRef.current = null;
+      revalidationEpochRef.current += 1;
       clearTokens();
       noteUnauthenticated();
       setState({
@@ -678,6 +885,7 @@ export function useAuth(): UseAuthReturn {
       // Store both access and refresh tokens. This is an explicit credential
       // replacement, so advance authority even when user id and role are unchanged.
       localLoginAttemptRef.current = null;
+      revalidationEpochRef.current += 1;
       invalidateAuthentication();
       storeTokens(result.accessToken, result.refreshToken);
       noteAuthenticatedUser(result.user);
@@ -738,6 +946,7 @@ export function useAuth(): UseAuthReturn {
   };
 
   const login = async (email: string, password: string): Promise<boolean> => {
+    revalidationEpochRef.current += 1;
     invalidateAuthentication();
     // Ordinary login begins without an existing authenticated authority. Use a
     // dedicated path rather than fabricating a captured cycle.
@@ -780,6 +989,7 @@ export function useAuth(): UseAuthReturn {
       discardPromptDraftSeed(currentUser.user_id);
     }
     localLoginAttemptRef.current = null;
+    revalidationEpochRef.current += 1;
     invalidateAuthentication();
     clearTokens();
     const nextState: AuthState = {
@@ -797,6 +1007,7 @@ export function useAuth(): UseAuthReturn {
     authorityCycle: CapturedAuthAuthorityCycle
   ): Promise<boolean> => {
     if (!authorityCycle.isCurrent()) return false;
+    revalidationEpochRef.current += 1;
     invalidateAuthentication();
     // Token clearing and the React authority update are synchronous together;
     // no await boundary exists where a replacement identity can slip between
@@ -871,6 +1082,7 @@ export function useAuth(): UseAuthReturn {
     logout,
     logoutForAuthorityCycle,
     reAuthenticate,
+    reconcileStoredCredentials,
     refreshCurrentUserForAuthorityCycle,
   };
 }

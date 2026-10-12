@@ -1,4 +1,8 @@
-import type { OpenCodeCatalogModel, OpenCodeModelPair } from './opencode-models';
+import type {
+  OpenCodeCatalogModel,
+  OpenCodeModelPair,
+  OpenCodeUnsupportedReason,
+} from './opencode-models';
 
 export type OpenCodeProviderAuthPrompt =
   | {
@@ -83,12 +87,26 @@ export interface OpenCodeProviderDiscovery {
   providers: OpenCodeProviderConnection[];
 }
 
-export type OpenCodeCredentialIsolation = {
-  // Delegated mode has no daemon-managed native-state home boundary.
-  mode: 'simple' | 'sandbox';
-  boundary: 'logical';
-};
+export type OpenCodeCredentialIsolation =
+  | {
+      // Local native-file authority in the daemon-owned credential home.
+      mode: 'simple' | 'sandbox';
+      boundary: 'logical';
+    }
+  | {
+      // Hosted keys are stored encrypted per user and delivered only to that user's executor run.
+      mode: 'managed-projection';
+      boundary: 'executor-run';
+    };
 
-export type OpenCodeProviderSettings = OpenCodeProviderDiscovery & {
-  isolation: OpenCodeCredentialIsolation;
-};
+/** Settings response for a deployment that cannot run OpenCode at all. */
+export interface OpenCodeUnsupportedSettings {
+  runtime: 'unsupported';
+  runtimeVersion: string;
+  unsupported: OpenCodeUnsupportedReason;
+  providers: [];
+}
+
+export type OpenCodeProviderSettings =
+  | (OpenCodeProviderDiscovery & { isolation: OpenCodeCredentialIsolation })
+  | OpenCodeUnsupportedSettings;

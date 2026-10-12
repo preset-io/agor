@@ -1,6 +1,11 @@
+import type { MessageID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isTaskFailurePersisted } from '../../terminal-task.js';
-import { markCoordinatorTerminationAbort } from '../../termination-state.js';
+import {
+  isExecutorCleanupUnverified,
+  markCoordinatorTerminationAbort,
+  markExecutorCleanupUnverified,
+} from '../../termination-state.js';
 import {
   createStreamingCallbacks,
   executeToolTask,
@@ -27,9 +32,9 @@ describe('createStreamingCallbacks', () => {
     await callbacks.onStreamChunk('message-1' as never, 'hello');
     await callbacks.onStreamEnd('message-1' as never);
     await callbacks.onStreamError('message-2' as never, new Error('failed'));
-    await callbacks.onThinkingStart('message-3' as never, {});
-    await callbacks.onThinkingChunk('message-3' as never, 'hmm');
-    await callbacks.onThinkingEnd('message-3' as never);
+    await callbacks.onThinkingStart!('message-3' as never, {});
+    await callbacks.onThinkingChunk!('message-3' as never, 'hmm');
+    await callbacks.onThinkingEnd!('message-3' as never);
 
     expect(create).toHaveBeenCalledTimes(7);
     for (const [envelope] of create.mock.calls) {
@@ -266,7 +271,9 @@ describe('executeToolTask credential preflight', () => {
         toolName: 'gemini',
         createTool,
       })
-    ).rejects.toThrow('No scoped gemini credential');
+    ).rejects.toThrow(
+      'Gemini needs an API key. Add one in Settings → Gemini (Google-account sign-in is not supported).'
+    );
 
     expect(createTool).not.toHaveBeenCalled();
     expect(taskPatch).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'failed' }));
@@ -280,6 +287,54 @@ describe('executeToolTask credential preflight', () => {
     );
     expect(order).toEqual(['message', 'task']);
   });
+
+  it.each(['success', 'failure', 'throw', 'missing'])(
+    'preserves stop-hook cleanup evidence after provider settlement (%s)',
+    async (outcome) => {
+      const abortController = new AbortController();
+      const taskPatch = vi.fn();
+      const client = {
+        service(name: string) {
+          if (name === 'config/resolve-api-key')
+            return {
+              create: vi
+                .fn()
+                .mockResolvedValue({ apiKey: 'key', source: 'user', useNativeAuth: false }),
+            };
+          if (name === 'sessions') return { get: vi.fn().mockResolvedValue({}) };
+          if (name === 'tasks') return { patch: taskPatch };
+          return {};
+        },
+      } as never;
+      const stopTask =
+        outcome === 'missing'
+          ? undefined
+          : vi.fn(async () => {
+              if (outcome === 'throw') throw new Error('cleanup failed');
+              return { success: outcome === 'success' };
+            });
+      await executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController,
+        apiKeyEnvVar: 'GEMINI_API_KEY',
+        toolName: 'gemini',
+        createTool: () =>
+          ({
+            stopTask,
+            executePromptWithStreaming: vi.fn(async () => {
+              markCoordinatorTerminationAbort(abortController);
+              abortController.abort();
+              return { userMessageId: 'user-1' as MessageID, assistantMessageIds: [] };
+            }),
+          }) as never,
+      });
+      expect(isExecutorCleanupUnverified(abortController)).toBe(outcome !== 'success');
+      expect(taskPatch).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not launch provider work when cancellation arrives before tool execution', async () => {
     const abortController = new AbortController();
@@ -335,11 +390,13 @@ describe('executeToolTask provider-failure settlement', () => {
     { handoff: false, subtype: 'error_during_execution' },
     { handoff: false, subtype: 'success' },
     { handoff: true, subtype: 'success' },
+    { handoff: 'during_git_capture', subtype: 'success' },
   ])(
     'respects daemon terminal authority after Claude returns ($subtype, handoff=$handoff)',
     async ({ handoff, subtype }) => {
       const secret = 'provider-secret-body';
       const taskPatch = vi.fn().mockResolvedValue(undefined);
+      let sessionReads = 0;
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const safeRawResponse = {
         type: 'result',
@@ -371,7 +428,17 @@ describe('executeToolTask provider-failure settlement', () => {
               }),
             };
           }
-          if (name === 'sessions') return { get: vi.fn().mockResolvedValue({}) };
+          if (name === 'sessions')
+            return {
+              get: vi.fn(async () => {
+                sessionReads += 1;
+                if (handoff === 'during_git_capture' && sessionReads === 2) {
+                  markCoordinatorTerminationAbort(abortController);
+                  abortController.abort();
+                }
+                return {};
+              }),
+            };
           if (name === 'tasks') return { patch: taskPatch };
           if (name === 'messages') return { create: vi.fn(), patch: vi.fn() };
           if (name === '/tasks/streaming') return { create: vi.fn() };
@@ -381,12 +448,12 @@ describe('executeToolTask provider-failure settlement', () => {
       const abortController = new AbortController();
       const createTool = vi.fn(() => ({
         executePromptWithStreaming: vi.fn(async () => {
-          if (handoff) {
+          if (handoff === true) {
             markCoordinatorTerminationAbort(abortController);
             abortController.abort();
           }
           return {
-            userMessageId: 'user-1',
+            userMessageId: 'user-1' as MessageID,
             assistantMessageIds: [],
             hadError: true,
             errorDetails: ['Safe SDK failure'],
@@ -442,6 +509,125 @@ describe('executeToolTask provider-failure settlement', () => {
       expect(JSON.stringify(patch)).not.toContain(secret);
     }
   );
+});
+
+describe('executeToolTask normal completion', () => {
+  it('completes the task even when provider teardown stayed unverified', async () => {
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const abortController = new AbortController();
+    const client = {
+      service(name: string) {
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn().mockResolvedValue({
+              apiKey: 'daemon-key',
+              source: 'user',
+              useNativeAuth: false,
+            }),
+          };
+        }
+        if (name === 'sessions') return { get: vi.fn().mockResolvedValue({}) };
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') return { create: vi.fn(), patch: vi.fn() };
+        if (name === '/tasks/streaming') return { create: vi.fn() };
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await executeToolTask({
+      client,
+      sessionId: 'session-1' as never,
+      taskId: 'task-1' as never,
+      prompt: 'hello',
+      abortController,
+      apiKeyEnvVar: 'OPENAI_API_KEY',
+      toolName: 'codex',
+      createTool: vi.fn(() => ({
+        // Codex returns after turn.completed without awaiting CLI exit.
+        executePromptWithStreaming: vi.fn(async () => {
+          markExecutorCleanupUnverified(abortController);
+          return { userMessageId: 'user-1' as MessageID, assistantMessageIds: [] };
+        }),
+        stopTask: vi.fn().mockResolvedValue({ success: true }),
+      })),
+    });
+
+    expect(isExecutorCleanupUnverified(abortController)).toBe(true);
+    expect(taskPatch).toHaveBeenCalledOnce();
+    expect(taskPatch).toHaveBeenCalledWith(
+      'task-1',
+      expect.objectContaining({ status: 'completed' })
+    );
+  });
+});
+
+describe('executeToolTask failure settlement race', () => {
+  it('does not publish failure when a signal claims terminality during message persistence', async () => {
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const abortController = new AbortController();
+    let releaseMessages!: () => void;
+    const messagesHeld = new Promise<void>((resolve) => {
+      releaseMessages = resolve;
+    });
+    let messagesReached!: () => void;
+    const reachedMessages = new Promise<void>((resolve) => {
+      messagesReached = resolve;
+    });
+    const client = {
+      service(name: string) {
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn().mockResolvedValue({
+              apiKey: 'daemon-key',
+              source: 'user',
+              useNativeAuth: false,
+            }),
+          };
+        }
+        if (name === 'sessions') return { get: vi.fn().mockResolvedValue({}) };
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') {
+          return {
+            find: vi.fn(async () => {
+              messagesReached();
+              await messagesHeld;
+              return { total: 0, data: [] };
+            }),
+            create: vi.fn().mockResolvedValue(undefined),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+    const failure = new Error('provider failed');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const execution = executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController,
+        apiKeyEnvVar: 'ANTHROPIC_API_KEY',
+        toolName: 'claude-code',
+        createTool: vi.fn(() => ({
+          executePromptWithStreaming: vi.fn().mockRejectedValue(failure),
+          stopTask: vi.fn().mockResolvedValue({ success: true }),
+        })),
+      });
+      await reachedMessages;
+      markCoordinatorTerminationAbort(abortController);
+      abortController.abort();
+      releaseMessages();
+      await expect(execution).resolves.toBeUndefined();
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(taskPatch).not.toHaveBeenCalled();
+    expect(isTaskFailurePersisted(failure)).toBe(false);
+  });
 });
 
 describe('installProviderConnection', () => {

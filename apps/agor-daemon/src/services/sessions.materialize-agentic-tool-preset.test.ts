@@ -58,7 +58,7 @@ async function seedPresetSession(
     {
       tool: 'codex',
       name: 'Task start preset',
-      configuration: { modelConfig },
+      configuration: { modelConfig, codexIncludePlugins: true },
     },
     ACTOR_ID
   );
@@ -115,6 +115,7 @@ describe('SessionsService.materializeAgenticToolPreset tenant scope', () => {
     );
 
     expect(materialized.model_config?.model).toBe('gpt-5.4');
+    expect(materialized.permission_config?.codex?.includePlugins).toBe(true);
     expect(seenScopes).toHaveLength(1);
     expect(seenScopes[0]).toMatchObject({ kind: 'tenant', tenantId: 'tenant-x' });
     expect(getCurrentTenantDatabaseScope()).toBeUndefined();

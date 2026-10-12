@@ -16,6 +16,8 @@ SET `primary_owner_user_id` = CASE
           WHERE bo.`board_id` = `boards`.`board_id`
           ORDER BY (bo.`created_at` IS NULL), bo.`created_at`, bo.`user_id` LIMIT 1)
   WHEN EXISTS (SELECT 1 FROM `users` WHERE `users`.`user_id` = `boards`.`created_by`) THEN `created_by`
+  ELSE (SELECT `user_id` FROM `users` WHERE `role` IN ('admin','superadmin')
+        ORDER BY (`created_at` IS NULL), `created_at`, `user_id` COLLATE BINARY LIMIT 1)
 END;
 --> statement-breakpoint
 UPDATE `branches`
@@ -27,9 +29,13 @@ SET `primary_owner_user_id` = CASE
           WHERE bo.`branch_id` = `branches`.`branch_id`
           ORDER BY (bo.`created_at` IS NULL), bo.`created_at`, bo.`user_id` LIMIT 1)
   WHEN EXISTS (SELECT 1 FROM `users` WHERE `users`.`user_id` = `branches`.`created_by`) THEN `created_by`
+  ELSE (SELECT `user_id` FROM `users` WHERE `role` IN ('admin','superadmin')
+        ORDER BY (`created_at` IS NULL), `created_at`, `user_id` COLLATE BINARY LIMIT 1)
 END;
 --> statement-breakpoint
--- Fail closed instead of silently assigning an administrator when attribution is impossible.
+-- SQLite has one tenant per database. Only after existing owners/creators do
+-- we choose its oldest existing admin/superadmin (stable user-id tie-break).
+-- Never delete an unattributable resource or manufacture an identity.
 CREATE TEMP TABLE `_rbac_owner_preflight` (`ok` integer NOT NULL CHECK (`ok` = 1));
 --> statement-breakpoint
 INSERT INTO `_rbac_owner_preflight` (`ok`)

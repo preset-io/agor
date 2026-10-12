@@ -11,6 +11,7 @@ import {
   generateId,
   initializeDatabase,
   isPostgresDatabase,
+  MCPCatalogCandidateRepository,
   MCPServerRepository,
   type RawDatabase,
   runWithTenantDatabaseScope,
@@ -21,11 +22,14 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
+import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { AuthenticatedParams, MCPCatalogEntry, MCPServer, User } from '@agor/core/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { safeMcpServerConfigReadback } from '../mcp/tools/mcp-servers.js';
 import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from '../register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from '../register-services.js';
+import { MCPCatalogReadinessService } from './mcp-catalog-readiness.js';
 import { fingerprintMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
 import { createMCPServersService } from './mcp-servers.js';
 
@@ -34,7 +38,12 @@ const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
   probeRemoteBearerToken: vi.fn(),
 }));
 
-const oauthProviderFixture = vi.hoisted(() => ({ discoveries: 0, registrations: 0 }));
+const oauthProviderFixture = vi.hoisted(() => ({
+  discoveries: 0,
+  registrations: 0,
+  clients: [] as Array<{ clientId?: string; clientSecret?: string }>,
+  exchanges: 0,
+}));
 
 vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
   const original =
@@ -55,6 +64,7 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
         clientId: string | undefined,
         redirectUri: string,
         options: {
+          clientSecret?: string;
           resolveDynamicClientRegistration?: (
             request: Record<string, unknown>,
             register: () => Promise<Record<string, unknown>>
@@ -64,6 +74,7 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
           }>;
         }
       ) => {
+        oauthProviderFixture.clients.push({ clientId, clientSecret: options.clientSecret });
         const resolved = clientId
           ? { registration: { client_id: clientId } }
           : await options.resolveDynamicClientRegistration?.(
@@ -115,9 +126,18 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
         };
       }
     ),
+    completeMCPOAuthFlow: vi.fn(async () => ({
+      access_token: `catalog-access-${++oauthProviderFixture.exchanges}`,
+      refresh_token: 'catalog-refresh',
+      token_type: 'Bearer',
+      expires_in: 3600,
+    })),
   };
 });
-vi.mock('@agor/core/mcp-catalog', () => ({
+vi.mock('@agor/core/mcp-catalog', async (importOriginal) => ({
+  // Preserve the pure recipe lookup now used by configured-app issuer pinning.
+  findCatalogEntry: (await importOriginal<typeof import('@agor/core/mcp-catalog')>())
+    .findCatalogEntry,
   loadCatalog: vi.fn().mockResolvedValue([]),
   probeRemoteAuthType,
   probeRemoteBearerToken,
@@ -148,6 +168,20 @@ const CREDENTIAL_ENTRY = {
   name: 'test/catalog-connect-postgres-credentials',
   auth_type: 'credentials',
   credentials: { scheme: 'bearer' },
+} as unknown as MCPCatalogEntry;
+
+const BYO_ENTRY = {
+  ...ENTRY,
+  name: 'test/catalog-connect-postgres-byo',
+  oauth: {
+    compatibility_mode: 'strict',
+    dcr_mode: 'disabled',
+    configured_client: {
+      setup_url: 'https://provider.example.test/apps',
+      issuer: 'https://provider.example.test',
+      secret_required: true,
+    },
+  },
 } as unknown as MCPCatalogEntry;
 
 function rowsOf(result: unknown): Array<Record<string, unknown>> {
@@ -266,7 +300,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     async function seedPeer(
       tenantId: string,
       user: User,
-      options: { fingerprintDrift?: boolean; compatibilityMode?: 'strict' | 'legacy' } = {}
+      options: {
+        fingerprintDrift?: boolean;
+        compatibilityMode?: 'strict' | 'legacy';
+        shared?: boolean;
+      } = {}
     ) {
       return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         const server = await new MCPServerRepository(scoped).create({
@@ -274,7 +312,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           transport: 'http',
           url: RESOURCE,
           scope: 'session',
-          source: 'user',
+          source: options.shared ? 'catalog' : 'user',
+          owner_user_id: options.shared ? undefined : user.user_id,
+          ...(options.shared ? { catalog_entry_name: ENTRY.name } : {}),
           enabled: true,
           auth: {
             type: 'oauth',
@@ -371,7 +411,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       user: User,
       tenantId: string,
       entry: MCPCatalogEntry = ENTRY,
-      app = connectApp(entry)
+      app = connectApp(entry),
+      sharing: 'private' | 'shared' = 'private'
     ) {
       // Deliberately no ambient database scope here. This is the production
       // long-route shape: authenticated tenant identity is present, while each
@@ -379,7 +420,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       // proxy. Wrapping this whole call would hide the regression this test
       // guards and would hold a PostgreSQL transaction across the remote probe.
       return createRegisteredMCPCatalogConnectService(app, db).create(
-        REQUEST,
+        { ...REQUEST, sharing },
         params(user, tenantId)
       );
     }
@@ -400,6 +441,29 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       );
     }
 
+    it('keeps shared install identities tenant-local and distinct from private requests', async () => {
+      const a = await buildTenant('shared-a');
+      const b = await buildTenant('shared-b');
+      const [sharedA, sharedB] = await Promise.all([
+        connect(a.user, a.tenantId, ENTRY, connectApp(), 'shared'),
+        connect(b.user, b.tenantId, ENTRY, connectApp(), 'shared'),
+      ]);
+      expect(sharedA.mcp_server.mcp_server_id).not.toBe(sharedB.mcp_server.mcp_server_id);
+      for (const result of [sharedA, sharedB]) {
+        expect(result.mcp_server.owner_user_id).toBeUndefined();
+        expect(result.mcp_server.scope).toBe('session');
+        expect(result.mcp_server.auth?.oauth_access_token).toBeUndefined();
+      }
+      const privateA = await connect(a.user, a.tenantId);
+      expect(privateA.mcp_server.owner_user_id).toBe(a.user.user_id);
+      expect(privateA.mcp_server.mcp_server_id).not.toBe(sharedA.mcp_server.mcp_server_id);
+      await runWithTenantDatabaseScope(db, b.tenantId, async (scoped) => {
+        expect(
+          await new MCPServerRepository(scoped).findById(sharedA.mcp_server.mcp_server_id)
+        ).toBeNull();
+      });
+    });
+
     it('reuses the authenticated caller credential peer and obeys probed OAuth policy', async () => {
       const actor = await buildTenant('positive');
       const peer = await seedPeer(actor.tenantId, actor.user);
@@ -413,57 +477,65 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
-    it('does not reuse or re-key a visible same-tenant peer grant for another user', async () => {
-      const actor = await buildTenant('same-tenant-user-a');
-      const otherUser = await runWithTenantDatabaseScope(db, actor.tenantId, (scoped) =>
-        buildUser(scoped, 'same-tenant-user-b')
-      );
-      const peer = await seedPeer(actor.tenantId, actor.user);
-      const app = connectApp();
+    it.each(['allow_crud', 'allow_private_only', 'use_existing_only'] as const)(
+      'never borrows another user grant when reusing shared under %s',
+      async (policy) => {
+        const actor = await buildTenant('same-tenant-user-a');
+        const otherUser = await runWithTenantDatabaseScope(db, actor.tenantId, (scoped) =>
+          buildUser(scoped, 'same-tenant-user-b')
+        );
+        const peer = await seedPeer(actor.tenantId, actor.user, { shared: true });
+        await runWithTenantDatabaseScope(db, actor.tenantId, (scoped) =>
+          setMcpMemberPolicy(scoped, policy, actor.tenantId, null)
+        );
+        const app = connectApp();
 
-      const visibleToOther = await runWithTenantDatabaseScope(db, actor.tenantId, () =>
-        app.service('mcp-servers').find({
-          ...params(otherUser, actor.tenantId),
-          provider: undefined,
-          query: { usableByUserId: otherUser.user_id, $limit: 1000 },
-        })
-      );
-      expect(Array.isArray(visibleToOther) ? visibleToOther : visibleToOther.data).toEqual(
-        expect.arrayContaining([expect.objectContaining({ mcp_server_id: peer.mcp_server_id })])
-      );
+        const visibleToOther = await runWithTenantDatabaseScope(db, actor.tenantId, () =>
+          app.service('mcp-servers').find({
+            ...params(otherUser, actor.tenantId),
+            provider: undefined,
+            query: { usableByUserId: otherUser.user_id, $limit: 1000 },
+          })
+        );
+        expect(Array.isArray(visibleToOther) ? visibleToOther : visibleToOther.data).toEqual(
+          expect.arrayContaining([expect.objectContaining({ mcp_server_id: peer.mcp_server_id })])
+        );
 
-      // Both calls use the same tenant scope, so tenant RLS cannot distinguish
-      // these users. The production grant lookup must enforce the user key.
-      const actorResult = await connect(actor.user, actor.tenantId, ENTRY, app);
-      expect(actorResult).toMatchObject({
-        reused_existing_server: true,
-        reuse_kind: 'credential_peer',
-        mcp_server: { mcp_server_id: peer.mcp_server_id },
-      });
+        // Both calls use the same tenant scope, so tenant RLS cannot distinguish
+        // these users. The production grant lookup must enforce the user key.
+        const actorResult = await connect(actor.user, actor.tenantId, ENTRY, app, 'shared');
+        expect(actorResult).toMatchObject({
+          reused_existing_server: true,
+          reuse_kind: 'catalog_install',
+          mcp_server: { mcp_server_id: peer.mcp_server_id },
+        });
 
-      const otherResult = await connect(otherUser, actor.tenantId, ENTRY, app);
-      expect(otherResult.reused_existing_server).toBe(false);
-      expect(otherResult.mcp_server.mcp_server_id).not.toBe(peer.mcp_server_id);
+        const otherResult = await connect(otherUser, actor.tenantId, ENTRY, app, 'shared');
+        expect(otherResult.reused_existing_server).toBe(true);
+        expect(otherResult.mcp_server.auth?.oauth_access_token).toBeUndefined();
+        expect(otherResult.mcp_server.mcp_server_id).toBe(peer.mcp_server_id);
 
-      await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
-        const grants = new UserMCPOAuthTokenRepository(scoped, SECRET);
-        expect(await grants.listForUser(actor.user.user_id)).toEqual([
-          expect.objectContaining({
-            user_id: actor.user.user_id,
-            mcp_server_id: peer.mcp_server_id,
-          }),
-        ]);
-        expect(await grants.listForUser(otherUser.user_id)).toEqual([]);
-      });
-    });
+        await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
+          const grants = new UserMCPOAuthTokenRepository(scoped, SECRET);
+          expect(await grants.listForUser(actor.user.user_id)).toEqual([
+            expect.objectContaining({
+              user_id: actor.user.user_id,
+              mcp_server_id: peer.mcp_server_id,
+            }),
+          ]);
+          expect(await grants.listForUser(otherUser.user_id)).toEqual([]);
+        });
+      }
+    );
 
     it('denies cross-tenant reuse even with a valid foreign user and server identifier', async () => {
       const foreign = await buildTenant('foreign');
       const local = await buildTenant('local');
       const foreignPeer = await seedPeer(foreign.tenantId, foreign.user);
 
-      const result = await connect(foreign.user, local.tenantId);
-      expect(result.reused_existing_server).toBe(false);
+      await expect(connect(foreign.user, local.tenantId)).rejects.toMatchObject({ code: 401 });
+      // A valid local caller still cannot discover or reuse the foreign row.
+      const result = await connect(local.user, local.tenantId);
       expect(result.mcp_server.mcp_server_id).not.toBe(foreignPeer.mcp_server_id);
     });
 
@@ -689,6 +761,225 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         expect(rows).toHaveLength(1);
         expect(rows[0]?.auth?.token).toBe(NEW_KEY);
       });
+    });
+
+    /**
+     * A second daemon replica running the real OAuth start and callback, so a
+     * test can mint a grant exactly as a user's browser sign-in would.
+     */
+    async function oauthReplica() {
+      const oauthRaw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+      if (!isPostgresDatabase(oauthRaw)) throw new Error('PostgreSQL test requires PostgreSQL');
+      const oauthDb = createTenantScopedDatabaseProxy(oauthRaw, {
+        requireScope: true,
+        label: 'catalog BYO OAuth replica',
+      });
+      const oauthApp = feathers() as ReturnType<typeof feathers> & { io: unknown };
+      oauthApp.io = {
+        local: { to: () => ({ emit() {} }) },
+        to: () => ({ emit() {} }),
+        sockets: { sockets: new Map() },
+      };
+      const originalBaseUrl = process.env.AGOR_BASE_URL;
+      process.env.AGOR_BASE_URL = 'https://public-agor.example.test';
+      const close = async () => {
+        if (originalBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+        else process.env.AGOR_BASE_URL = originalBaseUrl;
+        await (oauthRaw as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end();
+      };
+      try {
+        const { oauthCallbackHandler } = await registerMCPServices({
+          db: oauthDb,
+          app: oauthApp as RegisterServicesContext['app'],
+          config: {} as RegisterServicesContext['config'],
+          jwtSecret: 'test-jwt',
+          daemonUrl: 'https://public-agor.example.test',
+          bundledUiAvailable: false,
+          DAEMON_PORT: 3030,
+          UI_PORT: 5173,
+          allowSuperadmin: false,
+          requireAuth: async (context) => context,
+          deployment: {
+            mode: 'ha',
+            capabilities: { mcpOAuth: true },
+            mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
+          } as RegisterServicesContext['deployment'],
+          mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
+          mcpOAuthFetch: async (_input, _init, assertCurrent) => {
+            assertCurrent?.();
+            return new Response('', {
+              status: 401,
+              headers: {
+                'www-authenticate':
+                  'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"',
+              },
+            });
+          },
+        });
+        const connectGrant = async (user: User, tenantId: string, serverId: string) => {
+          const started = (await oauthApp
+            .service('mcp-servers/oauth-start')
+            .create({ mcp_server_id: serverId }, params(user, tenantId))) as {
+            success: boolean;
+            authorizationUrl: string;
+          };
+          expect(started.success).toBe(true);
+          let status = 0;
+          await (
+            oauthCallbackHandler as unknown as (
+              request: unknown,
+              response: unknown
+            ) => Promise<void>
+          )(
+            {
+              query: {
+                code: 'code',
+                state: new URL(started.authorizationUrl).searchParams.get('state'),
+                iss: 'https://provider.example.test',
+              },
+            },
+            {
+              setHeader() {},
+              status(code: number) {
+                status = code;
+                return this;
+              },
+              send() {
+                return this;
+              },
+            }
+          );
+          expect(status).toBe(200);
+        };
+        return { connectGrant, close };
+      } catch (error) {
+        await close();
+        throw error;
+      }
+    }
+
+    it('shares a configured app install: credentials once, per-user grants, secret never returned', async () => {
+      const BYO = BYO_ENTRY;
+      const installer = await buildTenant('byo-shared');
+      const member = await runWithTenantDatabaseScope(db, installer.tenantId, (scoped) =>
+        buildUser(scoped, 'byo-member')
+      );
+      const app = connectApp(BYO);
+      const service = createRegisteredMCPCatalogConnectService(app, db);
+      const request = { ...REQUEST, catalog_key: BYO.name, sharing: 'shared' as const };
+      const created = await service.create(
+        { ...request, oauth_client: { client_id: 'byo-app', client_secret: 'byo-app-secret' } },
+        params(installer.user, installer.tenantId)
+      );
+      expect(created.mcp_server.owner_user_id).toBeUndefined();
+      expect(JSON.stringify(created)).not.toContain('byo-app-secret');
+      // Another member reuses the shared install without re-entering credentials,
+      // and cannot overwrite them from Connect.
+      const reused = await service.create(request, params(member, installer.tenantId));
+      expect(reused).toMatchObject({ reused_existing_server: true });
+      expect(reused.mcp_server.mcp_server_id).toBe(created.mcp_server.mcp_server_id);
+      await expect(
+        service.create(
+          { ...request, oauth_client: { client_id: 'other-app', client_secret: 'other-secret' } },
+          params(member, installer.tenantId)
+        )
+      ).rejects.toThrow('already has an OAuth app');
+      const serverId = created.mcp_server.mcp_server_id;
+      const external = await runWithTenantDatabaseScope(db, installer.tenantId, () =>
+        app.service('mcp-servers').get(serverId, params(member, installer.tenantId))
+      );
+      expect(JSON.stringify(external)).not.toContain('byo-app-secret');
+      const internal = await runWithTenantDatabaseScope(db, installer.tenantId, (scoped) =>
+        new MCPServerRepository(scoped).findById(serverId)
+      );
+      expect(internal?.auth?.oauth_client_secret).toBe('byo-app-secret');
+      expect(JSON.stringify(safeMcpServerConfigReadback(internal!))).not.toContain(
+        'byo-app-secret'
+      );
+
+      const replica = await oauthReplica();
+      try {
+        oauthProviderFixture.clients = [];
+        for (const user of [installer.user, member]) {
+          await replica.connectGrant(user, installer.tenantId, serverId);
+        }
+        expect(oauthProviderFixture.clients).toEqual([
+          { clientId: 'byo-app', clientSecret: 'byo-app-secret' },
+          { clientId: 'byo-app', clientSecret: 'byo-app-secret' },
+        ]);
+        await runWithTenantDatabaseScope(db, installer.tenantId, async (scoped) => {
+          const tokens = new UserMCPOAuthTokenRepository(scoped, SECRET);
+          const [mine, theirs] = await Promise.all([
+            tokens.getToken(installer.user.user_id, serverId),
+            tokens.getToken(member.user_id, serverId),
+          ]);
+          expect(mine?.oauth_access_token).toBeTruthy();
+          expect(theirs?.oauth_access_token).toBeTruthy();
+          expect(mine?.oauth_access_token).not.toBe(theirs?.oauth_access_token);
+          expect(await tokens.getToken(null, serverId)).toBeNull();
+        });
+      } finally {
+        await replica.close();
+      }
+    });
+
+    it("lets members reuse a Shared-mode app grant, but never another user's per-user grant", async () => {
+      const { tenantId, user: member } = await buildTenant('byo-shared-mode');
+      const admin = await runWithTenantDatabaseScope(
+        db,
+        tenantId,
+        async (scoped) =>
+          (await new UsersRepository(scoped).create({
+            email: `byo-admin-${generateId()}@example.test`,
+            name: 'byo-admin',
+            role: 'admin',
+          })) as User
+      );
+      const app = connectApp(BYO_ENTRY);
+      const service = createRegisteredMCPCatalogConnectService(app, db);
+      const request = { ...REQUEST, catalog_key: BYO_ENTRY.name, sharing: 'shared' as const };
+      const created = await service.create(
+        { ...request, oauth_client: { client_id: 'byo-app', client_secret: 'byo-app-secret' } },
+        params(admin, tenantId)
+      );
+      const serverId = created.mcp_server.mcp_server_id;
+      // Production readiness deps, over the real candidate repository.
+      const readiness = new MCPCatalogReadinessService(app as never, {
+        listCandidates: (userId) =>
+          runWithTenantDatabaseScope(db, tenantId, () =>
+            new MCPCatalogCandidateRepository(db).listForUser(userId)
+          ),
+        isGrantAuthorized: async (candidate) => candidate.grant?.binding_ready === true,
+      });
+      const readFor = (user: User) =>
+        readiness.get(BYO_ENTRY.name, { ...params(user, tenantId), query: { sharing: 'shared' } });
+      const replica = await oauthReplica();
+      try {
+        // Per User: the admin's own grant is not the member's.
+        await replica.connectGrant(admin, tenantId, serverId);
+        expect(await readFor(admin)).toMatchObject({ state: 'installed_ready' });
+        expect(await readFor(member)).toMatchObject({ state: 'oauth_required' });
+
+        // Shared: the admin's shared grant serves every member.
+        await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new MCPServerRepository(scoped).update(serverId, { auth: { oauth_mode: 'shared' } })
+        );
+        await replica.connectGrant(admin, tenantId, serverId);
+        expect(await readFor(member)).toMatchObject({ state: 'installed_ready' });
+        const starts = oauthProviderFixture.clients.length;
+        const reused = await service.create(request, params(member, tenantId));
+        expect(reused).toMatchObject({
+          reused_existing_server: true,
+          reuse_kind: 'catalog_install',
+          mcp_server: {
+            mcp_server_id: serverId,
+            auth: { oauth_mode: 'shared', oauth_access_token: MCP_HEADER_REDACTED_SENTINEL },
+          },
+        });
+        expect(oauthProviderFixture.clients).toHaveLength(starts);
+      } finally {
+        await replica.close();
+      }
     });
   }
 );

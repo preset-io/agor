@@ -6,7 +6,7 @@
  */
 
 import type { Message, MessageID, SessionID, TaskID, UserID, UUID } from '@agor/core/types';
-import { MessageRole, PermissionStatus, TaskStatus } from '@agor/core/types';
+import { leanMessage, MessageRole, PermissionStatus, TaskStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
@@ -892,6 +892,46 @@ describe('MessagesRepository.mutateMetadataLocked', () => {
 });
 
 describe('lean transcript POC', () => {
+  dbTest('browser leanMessage matches the SQL lean projection', async ({ db }) => {
+    const repository = new MessagesRepository(db);
+    const sessionId = await createTestSession(db);
+    const taskId = await createTestTask(db, sessionId);
+    const permission = (status: PermissionStatus) =>
+      createMessageData({
+        type: 'permission_request',
+        content: { request_id: 'request', tool_name: 'Read', tool_input: { path: '/x' }, status },
+      });
+    const sources = [
+      createMessageData({ content: 'plain', metadata: { model: 'keep', raw: 'drop' } }),
+      createMessageData({
+        type: 'assistant',
+        role: MessageRole.ASSISTANT,
+        content: [
+          { type: 'text', text: 'answer' },
+          { type: 'image', source: { type: 'url', url: 'attachment.png' } },
+          { type: 'thinking', text: 'reasoning' },
+          { type: 'tool_use', id: 'tool', name: 'Read', input: { path: '/x' } },
+          { type: 'tool_result', tool_use_id: 'tool', content: 'output' },
+        ],
+        tool_uses: [{ id: 'tool', name: 'Read', input: { path: '/x' } }],
+        // A widget key outside a widget_request is dropped by both projections.
+        metadata: { widget: { leaked: true } as never, is_task_failure: true },
+      }),
+      permission(PermissionStatus.PENDING),
+      permission(PermissionStatus.APPROVED),
+      createMessageData({
+        type: 'widget_request',
+        metadata: { widget: { widget_id: 'widget', status: 'pending' } } as never,
+      }),
+    ];
+    for (const [index, source] of sources.entries())
+      await repository.create({ ...source, session_id: sessionId, task_id: taskId, index });
+    const full = (await repository.findPage({ sessionId, taskId })).data as Message[];
+    const lean = (await repository.findPage({ sessionId, taskId, lean: true })).data as Message[];
+    expect(full.map(leanMessage)).toStrictEqual(lean);
+    expect(lean.map(leanMessage)).toStrictEqual(lean);
+  });
+
   dbTest(
     'keeps reasoning-only history discoverable without transferring reasoning',
     async ({ db }) => {

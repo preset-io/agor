@@ -9,6 +9,25 @@ export interface BlogPost {
 
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
+  // DRAFT: agent-modeling-201 is unapproved; date is a placeholder. Do not merge without sign-off.
+  {
+    slug: 'agent-modeling-201',
+    title: 'Agent Modeling 201: Growing What AI Owns Without Creating Chaos',
+    description:
+      'Why agent modeling is the discipline that decides how much of its potential AI actually delivers, and how to scope, staff, and grow a team of AI teammates without duplicated context, access spillover, and confusion.',
+    author: 'Maxime Beauchemin',
+    date: '2026-10-07',
+    image: '/images/blog/agent-modeling-201.png',
+  },
+  {
+    slug: 'agor-cloud-open-beta',
+    title: 'Announcing Agor Cloud Open Beta',
+    description:
+      'Bring your team and agents together on live spatial boards. Agor Cloud Open Beta gives you shared AI workflows without running the infrastructure yourself.',
+    author: 'Agor team',
+    date: '2026-10-13',
+    image: '/images/blog/agor-cloud-open-beta.webp',
+  },
   {
     slug: 'meet-bug-basher',
     title: 'Meet Bug Basher: the AI agent that hunts bugs in Apache Superset',

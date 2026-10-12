@@ -49,6 +49,7 @@ let initialReactiveState: unknown = null;
 const mockReactiveHandle = {
   loadTaskMessages: async () => {},
   unloadTaskMessages: () => {},
+  retainTaskDetails: () => () => {},
   resync: async () => {},
 };
 

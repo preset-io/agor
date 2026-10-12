@@ -32,8 +32,6 @@
  * non-secret metadata; token material and the PKCE verifier are never returned,
  * logged, or exposed to any agent/LLM context. `state` is verified before
  * exchange. Callers act only on their own credentials.
- *
- * Design + verified-vs-assumed constants: context/explorations/claude-code-oauth-signin.md
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';

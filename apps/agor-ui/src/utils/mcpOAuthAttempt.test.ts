@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mcpServerRemoved } from '@/store/agorRealtimeActions';
 import { agorStore } from '@/store/agorStore';
 import {
   oauthAttemptFailureMessage,
@@ -100,6 +101,21 @@ describe('waitForMCPOAuthAttempt', () => {
     });
   });
 
+  it('does not restore a deleted server or grant from a delayed OAuth refetch', async () => {
+    const held = deferred<{ mcp_server_id: string }>();
+    const client = {
+      service: (path: string) =>
+        path === 'mcp-servers'
+          ? { get: () => held.promise }
+          : { find: async () => ({ authenticated_server_ids: ['server-1'] }) },
+    } as never;
+    const pending = refetchMCPOAuthDurableState(client, 'server-1', () => true);
+    mcpServerRemoved({ mcp_server_id: 'server-1' } as never);
+    held.resolve({ mcp_server_id: 'server-1' });
+    await pending;
+    expect(agorStore.getState().mcpServerById.has('server-1')).toBe(false);
+    expect(agorStore.getState().userAuthenticatedMcpServerIds.has('server-1')).toBe(false);
+  });
   it('refetches deleted durable grant state before returning needs_reauth', async () => {
     const create = vi.fn().mockResolvedValue({ success: false, error: 'needs_reauth' });
     const find = vi.fn().mockResolvedValue({ authenticated_server_ids: [] });

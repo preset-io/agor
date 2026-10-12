@@ -1,8 +1,11 @@
 import { glob } from 'glob';
 import { defineConfig } from 'tsup';
 
-// Find all source files
-const srcFiles = glob.sync('src/**/*.ts', { ignore: ['**/*.test.ts', '**/*.spec.ts'] });
+// Shared test fixtures are not runtime entrypoints either: bundling one can
+// pull the whole service/hook graph into an otherwise unused release file.
+const srcFiles = glob.sync('src/**/*.ts', {
+  ignore: ['**/*.test.ts', '**/*.spec.ts', '**/*.test-fixtures.ts'],
+});
 
 // Create entry points
 const entries = Object.fromEntries(

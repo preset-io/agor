@@ -18,7 +18,7 @@
  * pure `@agor/core` resolver, and returns the `bwrap` command that replaces the
  * bare executor launch.
  *
- * See `context/explorations/executor-sandboxing.md`.
+ * See `context/guides/rbac-and-unix-isolation.md`.
  */
 
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';

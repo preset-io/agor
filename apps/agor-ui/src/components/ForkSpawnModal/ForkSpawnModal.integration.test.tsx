@@ -10,7 +10,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { getDefaultModelForTool } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { buildSpawnPromptContext } from '../SessionPanel/spawn-prompt-context';
 import { ForkSpawnModal } from './ForkSpawnModal';
@@ -82,8 +82,15 @@ async function selectOption(combo: HTMLElement, label: string) {
 }
 async function changeMode(label: string) {
   fireEvent.click(screen.getByTestId('permission-chip'));
-  await waitFor(() => expect(screen.getAllByRole('combobox').length).toBeGreaterThan(3));
-  await selectOption(screen.getAllByRole('combobox').at(-1)!, label);
+  // Query the opened editor, not every Select in the modal and its portals.
+  // Whole-document role queries repeatedly compute JSDOM styles and made the
+  // multi-edit case exceed CI's timeout; the editor also avoids order/count assumptions.
+  const combo = await waitFor(() => {
+    const editor = screen.getByText('Permission mode').closest<HTMLElement>('.ant-popover');
+    expect(editor).not.toBeNull();
+    return within(editor!).getByRole('combobox');
+  });
+  await selectOption(combo, label);
 }
 async function expectAdvanced(sandbox: string, approval: string, network: boolean) {
   await waitFor(() => {
@@ -91,7 +98,10 @@ async function expectAdvanced(sandbox: string, approval: string, network: boolea
     expect(screen.getByLabelText('Approval Policy').closest('.ant-select')).toHaveTextContent(
       approval
     );
-    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', String(network));
+    expect(screen.getByRole('switch', { name: 'Enable Network Access' })).toHaveAttribute(
+      'aria-checked',
+      String(network)
+    );
   });
 }
 async function submitted(submit: ReturnType<typeof mount>['submit']) {
@@ -105,7 +115,7 @@ async function submitted(submit: ReturnType<typeof mount>['submit']) {
 describe('spawn effective configuration through real AgenticConfigChipRow', () => {
   it('shows and transports mapped defaults on initial Custom with no saved user default', async () => {
     const { submit } = mount();
-    await screen.findByRole('switch');
+    await screen.findByRole('switch', { name: 'Enable Network Access' });
     await expectAdvanced('workspace-write', 'never', true);
     expect(await submitted(submit)).toMatchObject({
       codexSandboxMode: 'workspace-write',
@@ -116,7 +126,7 @@ describe('spawn effective configuration through real AgenticConfigChipRow', () =
 
   it('recomputes derived legacy parent fields when the permission chip changes to ask', async () => {
     const { submit } = mount();
-    await screen.findByRole('switch');
+    await screen.findByRole('switch', { name: 'Enable Network Access' });
     await changeMode('Untrusted');
     await expectAdvanced('read-only', 'untrusted', false);
     const payload = await submitted(submit);
@@ -128,7 +138,12 @@ describe('spawn effective configuration through real AgenticConfigChipRow', () =
     });
     expect(
       resolveChildSessionConfig({ parent, overrides: payload }).permission_config.codex
-    ).toEqual({ sandboxMode: 'read-only', approvalPolicy: 'untrusted', networkAccess: false });
+    ).toEqual({
+      sandboxMode: 'read-only',
+      approvalPolicy: 'untrusted',
+      networkAccess: false,
+      includePlugins: false,
+    });
   });
 
   it('preserves genuinely explicit parent fields, including false, across mode changes', async () => {
@@ -139,7 +154,7 @@ describe('spawn effective configuration through real AgenticConfigChipRow', () =
         codex: { sandboxMode: 'workspace-write', approvalPolicy: 'never', networkAccess: false },
       },
     });
-    await screen.findByRole('switch');
+    await screen.findByRole('switch', { name: 'Enable Network Access' });
     await changeMode('Untrusted');
     await expectAdvanced('workspace-write', 'never', false);
     expect(await submitted(submit)).toMatchObject({
@@ -150,11 +165,13 @@ describe('spawn effective configuration through real AgenticConfigChipRow', () =
     });
   });
 
+  // This repeated real Ant Design editor flow exceeds 15s on cold CI runners.
+  // Keep every intermediate and transport assertion, with a bounded budget.
   it('preserves advanced choices made in the form while remaining derived fields follow mode', async () => {
     const { submit } = mount();
-    await screen.findByRole('switch');
+    await screen.findByRole('switch', { name: 'Enable Network Access' });
     await selectOption(screen.getByLabelText('Sandbox Mode'), 'full-access');
-    fireEvent.click(screen.getByRole('switch')); // explicit false, not a missing value
+    fireEvent.click(screen.getByRole('switch', { name: 'Enable Network Access' })); // explicit false, not a missing value
     await changeMode('Untrusted');
     await expectAdvanced('full-access', 'untrusted', false);
     // Explicitly choose the currently-derived approval value, then change mode again.
@@ -167,7 +184,7 @@ describe('spawn effective configuration through real AgenticConfigChipRow', () =
       codexApprovalPolicy: 'untrusted',
       codexNetworkAccess: false,
     });
-  });
+  }, 30_000);
 
   it.each([
     ['My default', '__user_default__'],
@@ -187,7 +204,7 @@ describe('spawn effective configuration through real AgenticConfigChipRow', () =
     await selectOption(await screen.findByLabelText('Configuration'), label);
     await waitFor(() => expect(screen.queryByRole('switch')).not.toBeInTheDocument());
     await selectOption(screen.getByLabelText('Configuration'), 'Custom');
-    await screen.findByRole('switch');
+    await screen.findByRole('switch', { name: 'Enable Network Access' });
     await expectAdvanced('workspace-write', 'on-request', false);
     const payload = await submitted(submit);
     expect(payload).not.toHaveProperty('presetId');
@@ -208,10 +225,8 @@ describe('spawn effective configuration through real AgenticConfigChipRow', () =
   it('detaches a sparse source by editing a chip and derives from the NEW mode', async () => {
     const { submit } = mount(networkParent, sparse);
     await selectOption(await screen.findByLabelText('Configuration'), 'My default');
-    fireEvent.click(screen.getByTestId('permission-chip'));
-    await waitFor(() => expect(screen.getAllByRole('combobox')).toHaveLength(2));
-    await selectOption(screen.getAllByRole('combobox').at(-1)!, 'Untrusted');
-    await screen.findByRole('switch');
+    await changeMode('Untrusted');
+    await screen.findByRole('switch', { name: 'Enable Network Access' });
     await expectAdvanced('read-only', 'untrusted', false);
     expect(await submitted(submit)).toMatchObject({
       permissionMode: 'ask',
@@ -242,9 +257,24 @@ describe('spawn effective configuration through real AgenticConfigChipRow', () =
 
   it('sends no overrides after returning to Same as parent', async () => {
     const { submit } = mount(networkParent, sparse);
-    await screen.findByRole('switch');
+    await screen.findByRole('switch', { name: 'Enable Network Access' });
     fireEvent.click(screen.getByText('Same as parent'));
     fireEvent.click(screen.getByRole('button', { name: 'Spawn Session' }));
     await waitFor(() => expect(submit).toHaveBeenCalledWith({ prompt: 'Delegate' }));
   });
+});
+
+it('carries parent plugin opt-in into custom spawn and preserves an explicit opt-out', async () => {
+  const enabledParent = {
+    ...networkParent,
+    permission_config: {
+      ...networkParent.permission_config,
+      codex: { ...networkParent.permission_config!.codex!, includePlugins: true },
+    },
+  };
+  const { submit } = mount(enabledParent);
+  const toggle = await screen.findByRole('switch', { name: 'Include native Codex plugins' });
+  expect(toggle).toHaveAttribute('aria-checked', 'true');
+  fireEvent.click(toggle);
+  expect(await submitted(submit)).toMatchObject({ codexIncludePlugins: false });
 });

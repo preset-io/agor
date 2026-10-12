@@ -39,6 +39,9 @@ import { MCPClientCredentialsConfigurationError, MCPOAuthRefreshBusyError } from
  */
 export class MCPLinkAdmissionError extends Forbidden {}
 
+/** A hosted-callback (customer-owned app) flow needs the user's bound Agor Cloud account. */
+export class MCPCloudIdentityRequiredError extends Forbidden {}
+
 function target(mcpServerId?: string) {
   return {
     ...(mcpServerId ? { mcp_server_id: mcpServerId as MCPServerID } : {}),
@@ -47,6 +50,7 @@ function target(mcpServerId?: string) {
 
 type TrustedRecoveryErrorConstructor =
   | typeof MCPLinkAdmissionError
+  | typeof MCPCloudIdentityRequiredError
   | typeof MCPClientCredentialsConfigurationError
   | typeof MCPOAuthRefreshBusyError
   | typeof AmbiguousRefreshError
@@ -81,6 +85,9 @@ function safeOwnDataValue(value: unknown, field: string): unknown {
   }
 }
 
+const CLOUD_IDENTITY_REQUIRED_MESSAGE =
+  'This connection needs your Agor Cloud account. Sign in through Agor Cloud and try again.';
+
 const OAUTH_FAILURE_GUIDANCE: Record<MCPOAuthFailureReason, string> = {
   dcr_disabled: 'Dynamic Client Registration is explicitly disabled.',
   registration_endpoint_missing: 'No usable registration endpoint was advertised.',
@@ -96,6 +103,7 @@ const OAUTH_FAILURE_GUIDANCE: Record<MCPOAuthFailureReason, string> = {
     'A saved OAuth endpoint override does not match the provider metadata. Review the saved authorization and token endpoints.',
   redirect_uri_mismatch:
     'The OAuth client is registered under a different Agor callback URL than this authorization request would use. Reconnect so a client is registered for the current callback URL.',
+  cloud_identity_required: CLOUD_IDENTITY_REQUIRED_MESSAGE,
 };
 
 /**
@@ -140,6 +148,15 @@ export function classifyMCPAuthRecovery(
       action: 'request_new_link',
       message:
         'This one-use sign-in link was not accepted — it may have expired, already been used, or been replaced by a newer request. Your access has not changed. Ask the agent for a new link, then open it while signed in as the same Agor user.',
+    };
+  }
+  if (safeInstanceOf(error, MCPCloudIdentityRequiredError)) {
+    return {
+      ...common,
+      category: 'authentication_required',
+      action: 'reauthenticate',
+      failure_reason: 'cloud_identity_required',
+      message: CLOUD_IDENTITY_REQUIRED_MESSAGE,
     };
   }
   if (safeInstanceOf(error, Forbidden)) {

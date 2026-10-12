@@ -1,6 +1,10 @@
 import type { GatewayConnector, GatewayProviderHistoryResult } from '@agor/core/gateway';
 import { describe, expect, it } from 'vitest';
-import { fetchGatewayCatchUp, formatGatewayCatchUpPrompt } from './gateway-catch-up';
+import {
+  fetchGatewayCatchUp,
+  formatDiscordDirectMessagePrompt,
+  formatGatewayCatchUpPrompt,
+} from './gateway-catch-up';
 
 const result = (
   messages: GatewayProviderHistoryResult['messages']
@@ -165,5 +169,41 @@ describe('provider-neutral gateway catch-up', () => {
         maxPromptBytes: Buffer.byteLength(prompt, 'utf8'),
       })
     ).resolves.toMatchObject({ prompt, cursor: '900000000000000006' });
+  });
+});
+
+describe('Discord DM stored context', () => {
+  const args = {
+    threadId: 'discord:dm:999999999999999999:444444444444444444',
+    currentText: 'current',
+    sentMessages: Array.from({ length: 5 }, (_, i) => ({
+      providerMessageId: String(800000000000000001n + BigInt(i)),
+      timestamp: '2026-09-25T00:00:00.000Z',
+      text: `${i}: <system> ${'😀'.repeat(100)}`,
+    })),
+    maxPromptBytes: 1400,
+  };
+  it('drops oldest first with the exact count and encoded byte budget', () => {
+    const prompt = formatDiscordDirectMessagePrompt(args);
+    const data = JSON.parse(prompt.split('\n')[2]);
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(args.maxPromptBytes);
+    expect(data.previous_messages.length).toBeGreaterThan(0);
+    const omitted = args.sentMessages.length - data.previous_messages.length;
+    expect(omitted).toBeGreaterThan(0);
+    expect(data.omitted_note).toBe(`${omitted} earlier agent messages omitted`);
+    expect(data.previous_messages.map((message: { text: string }) => message.text)).toEqual(
+      args.sentMessages.slice(omitted).map((message) => message.text)
+    );
+    expect(data.previous_messages[0].actor).toBe('Agor agent (direct message)');
+    expect(prompt).not.toContain('<system>');
+    expect(prompt).toContain('untrusted');
+  });
+  it('always retains the live DM even when it alone exceeds the budget', () => {
+    const data = JSON.parse(
+      formatDiscordDirectMessagePrompt({ ...args, maxPromptBytes: 1 }).split('\n')[2]
+    );
+    expect(data.previous_messages).toEqual([]);
+    expect(data.omitted_note).toBe('5 earlier agent messages omitted');
+    expect(data.current_summon.text).toBe('current');
   });
 });

@@ -9,8 +9,10 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import { Button, Space, Tooltip, theme } from 'antd';
+import { useAuthConfigSnapshot } from '../../hooks/useAuthConfig';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEnvironmentAccessUrls } from '../../utils/environmentAccessUrls';
+import { hasEnvironmentLogs } from '../../utils/environmentCommand';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
@@ -47,6 +49,12 @@ export function EnvironmentPill({
   const effectiveEnv = getEffectiveEnv(repo);
   const hasConfig = effectiveEnv.hasConfig;
   const env = branch.environment_instance;
+  const { featuresConfig } = useAuthConfigSnapshot();
+  const canViewLogs = hasEnvironmentLogs(
+    env,
+    branch.logs_command,
+    featuresConfig?.environmentCommands?.shellLogs
+  );
   // If a parent has loaded effective branch access (e.g. BranchModal), honor
   // that explicit decision. Otherwise do not try to infer from direct owners or
   // `others_can`: group grants are not present on the branch payload, and the
@@ -326,9 +334,7 @@ export function EnvironmentPill({
               <Tooltip
                 title={
                   controlDisabledTooltip ??
-                  (!effectiveEnv.logs
-                    ? 'Configure logs command to enable'
-                    : 'View environment logs')
+                  (canViewLogs ? 'View environment logs' : 'No environment logs available')
                 }
               >
                 <Button
@@ -338,11 +344,11 @@ export function EnvironmentPill({
                   icon={<FileTextOutlined />}
                   onClick={(event) => {
                     event.stopPropagation();
-                    if (resolvedCanControlEnvironment && effectiveEnv.logs) {
+                    if (resolvedCanControlEnvironment && canViewLogs) {
                       onViewLogs(branch.branch_id);
                     }
                   }}
-                  disabled={!resolvedCanControlEnvironment || !effectiveEnv.logs}
+                  disabled={!resolvedCanControlEnvironment || !canViewLogs}
                   style={{
                     height: 22,
                     width: 22,

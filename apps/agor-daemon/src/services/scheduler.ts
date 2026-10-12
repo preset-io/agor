@@ -2,8 +2,7 @@
  * Scheduler Service
  *
  * Manages cron-based scheduling. Reads from the first-class `schedules`
- * table (see docs/internal/schedules-first-class-design-2026-05-24.md);
- * spawns sessions, and enforces retention.
+ * table, spawns sessions, and enforces retention.
  *
  * **Architecture:**
  * - Runs on a configurable tick interval (default 30s)
@@ -39,7 +38,7 @@
  */
 
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
-import { MCPServerNotUsableError } from '@agor/core';
+import { isMCPServerNotUsableError } from '@agor/core';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type DeploymentAgenticToolPolicy,
@@ -74,6 +73,7 @@ import {
 } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type {
+  AgenticToolName,
   Branch,
   MCPServerID,
   PersistedScheduleAgenticToolConfig,
@@ -273,7 +273,7 @@ function permanentInitializationDiagnosis(
   error: ScheduledInitializationError
 ): PermanentScheduledInitializationError | null {
   if (error.cause instanceof PermanentScheduledInitializationError) return error.cause;
-  if (error.stage === 'mcp_attachment' && error.cause instanceof MCPServerNotUsableError) {
+  if (error.stage === 'mcp_attachment' && isMCPServerNotUsableError(error.cause)) {
     return new PermanentScheduledInitializationError('mcp_server_not_usable', error.stage);
   }
   return null;
@@ -291,6 +291,8 @@ function isInjectedSchedulerCrash(error: unknown): boolean {
 export interface SchedulerConfig {
   /** Immutable deployment configuration captured when the daemon starts. */
   deploymentPolicy?: DeploymentAgenticToolPolicy;
+  /** Same capability gate as interactive session creation, before admitting a row. */
+  deploymentToolUnsupported?: (tool: AgenticToolName) => BadRequest | undefined;
   /** Tick interval in milliseconds (default: 30000 = 30s) */
   tickInterval?: number;
   /** Grace period for missed runs in milliseconds (default: 120000 = 2min) */
@@ -301,6 +303,8 @@ export interface SchedulerConfig {
   sdkHomeMode?: SdkHomeMode;
   /** Local executor can project caller auth with a pinned sandbox file bind. */
   secureLocalCredentialOverlay?: boolean;
+  /** Hosted OpenCode may use a branch SDK home for its sealed checkpoints. */
+  hostedOpenCode?: boolean;
   /** Static/single-tenant id used for request-less cron ticks. Undefined means discover due schedule tenants from schedule rows. */
   tenantId?: TenantID | string;
   /** Maximum due schedules read per scan (default: 25). */
@@ -327,11 +331,13 @@ export interface SchedulerTestHooks {
 
 interface ResolvedSchedulerConfig {
   deploymentPolicy: DeploymentAgenticToolPolicy;
+  deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined;
   tickInterval: number;
   gracePeriod: number;
   unixUserMode: UnixUserMode;
   sdkHomeMode: SdkHomeMode;
   secureLocalCredentialOverlay: boolean;
+  hostedOpenCode: boolean;
   tenantId?: TenantID | string;
   scanBatchSize: number;
   maxIdleInterval: number;
@@ -375,11 +381,13 @@ export class SchedulerService {
     }
     this.config = {
       deploymentPolicy: config.deploymentPolicy ?? { managed: false, installed: new Set() },
+      deploymentToolUnsupported: config.deploymentToolUnsupported ?? (() => undefined),
       tickInterval: config.tickInterval ?? 30000, // 30 seconds
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       unixUserMode: config.unixUserMode ?? 'simple',
       sdkHomeMode: config.sdkHomeMode ?? 'inherit',
       secureLocalCredentialOverlay: config.secureLocalCredentialOverlay ?? false,
+      hostedOpenCode: config.hostedOpenCode ?? false,
       tenantId:
         typeof config.tenantId === 'string' && config.tenantId.trim()
           ? config.tenantId.trim()
@@ -895,6 +903,8 @@ export class SchedulerService {
     ) {
       throw new BadRequest(`${resolvedConfig.activeTool} is not installed for this deployment`);
     }
+    const unsupported = this.config.deploymentToolUnsupported(resolvedConfig.activeTool);
+    if (unsupported) throw unsupported;
     if (
       !(await this.withTenantDatabase(() =>
         isTenantAgenticToolEnabled(resolvedConfig.activeTool, this.db)
@@ -910,6 +920,7 @@ export class SchedulerService {
       resolveBranchSdkHomeIncompatibility({
         tool: resolvedConfig.activeTool,
         delegated: this.config.unixUserMode === 'delegated',
+        hostedOpenCode: this.config.hostedOpenCode,
         secureLocalCredentialOverlay: this.config.secureLocalCredentialOverlay,
         userId: schedule.created_by as import('@agor/core/types').UserID,
         db: this.db,

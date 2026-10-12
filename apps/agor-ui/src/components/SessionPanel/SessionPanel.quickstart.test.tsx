@@ -30,10 +30,6 @@ vi.mock('../MCPServer', () => ({
   MCPServerPill: () => <span>MCP server</span>,
 }));
 
-vi.mock('../metadata', () => ({
-  CreatedByTag: () => <span>Created by test user</span>,
-}));
-
 vi.mock('../Pill', () => ({
   ContextWindowPill: () => <span>Context window</span>,
   TimerPill: () => <span>Timer</span>,

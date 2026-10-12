@@ -15,7 +15,6 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import {
-  App,
   Button,
   Collapse,
   ConfigProvider,
@@ -27,13 +26,13 @@ import {
   theme,
 } from 'antd';
 import type React from 'react';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIdleReady } from '../../hooks/useIdleReady';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
-import { ARCHIVE_REFRESH_WARNING, useSessionActions } from '../../hooks/useSessionActions';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import {
   type BranchSectionKey,
@@ -83,9 +82,7 @@ import {
   type SessionTreeNode,
 } from './buildSessionTree';
 import { PagedSessions } from './PagedSessions';
-
-// Stable theme object so the ConfigProvider context value doesn't churn.
-const NO_MOTION_THEME = { token: { motion: false } };
+import { parentCssVarScopeId, sharedCssVarScope } from './sharedCssVarScope';
 
 const SECTION_KEYS: BranchSectionKey[] = ['sessions', 'scheduled-runs', 'gateway-sessions'];
 /** Revealed rows animate in with a short stagger; later rows share the last delay. */
@@ -392,20 +389,40 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   client,
 }) => {
   const { token } = theme.useToken();
-  const { modal } = App.useApp();
-  const { showSuccess, showError, showWarning } = useThemedMessage();
+  const { showSuccess, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const isMobileViewport = useIsMobileViewport();
   // One idle flag per list mounts every row's hover toolbar in a single commit.
   const rowActionsReady = useIdleReady();
+  const isPanel = mode === 'panel';
+  // A nested theme otherwise gets its own useId cssVar scope, so every card on a board
+  // re-injects the full token and component style set. Keying by the parent's token
+  // hash plus its theme recipe (see sharedCssVarScope) makes cards under the same parent
+  // theme share one scope, while light/dark, custom themes, or different algorithms get
+  // their own. If either is unknown, antd falls back to a per-instance scope.
+  const parentThemeConfig = useContext(ConfigProvider.ConfigContext).theme;
+  const parentScopeId = parentCssVarScopeId(
+    (token as { _tokenKey?: string })._tokenKey,
+    parentThemeConfig
+  );
+  // Card mode disables antd motion: 30 cards animating their collapse/tree
+  // mounts multiplies board-mount commits (#1768). Panel mode keeps motion.
+  const noMotionTheme = useMemo(
+    () =>
+      isPanel
+        ? undefined
+        : { token: { motion: false }, ...sharedCssVarScope('card', parentScopeId) },
+    [isPanel, parentScopeId]
+  );
   // Compact chevron column and nesting step for Tree (its defaults are controlHeightSM).
   const compactTreeTheme = useMemo(
     () => ({
       components: {
         Tree: { switcherSize: token.controlHeightXS, indentSize: token.controlHeightXS },
       },
+      ...sharedCssVarScope(isPanel ? 'session-tree' : 'card-session-tree', parentScopeId),
     }),
-    [token.controlHeightXS]
+    [token.controlHeightXS, isPanel, parentScopeId]
   );
   const prefersReducedMotion = usePrefersReducedMotion();
   const [enteringRows, setEnteringRows] = useState(EMPTY_ENTERING_ROWS);
@@ -424,9 +441,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     }),
     [rowGap]
   );
-  const { archiveSession: archiveSessionUnstable } = useSessionActions(client);
-  // useSessionActions returns a new function per render; keep row handlers memo-stable.
-  const archiveSession = useStableCallback(archiveSessionUnstable);
+  // The confirm helper is recreated per render; keep row handlers memo-stable.
+  const confirmArchive = useStableCallback(useConfirmArchiveSession(client));
 
   const [forkSpawnModal, setForkSpawnModal] = useState<{
     open: boolean;
@@ -441,7 +457,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
 
-  const isPanel = mode === 'panel';
   const animatePanel = isPanel && token.motion !== false && !prefersReducedMotion;
   const fillPanel = isPanel && fillAvailableHeight;
   const manualTreeSection = useTreeSectionHeight();
@@ -650,35 +665,17 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const handleArchiveSession = useCallback(
     (sessionId: string, e: React.MouseEvent) => {
       e.stopPropagation();
-
-      modal.confirm({
-        title: 'Archive session and same-branch children?',
-        content:
-          'This archives the session and its same-branch forked or spawned descendants. Remote-created sessions stay active in their own branch.',
-        okText: 'Archive',
-        cancelText: 'Cancel',
-        onOk: async () => {
-          setArchivingSessionIds((prev) => new Set(prev).add(sessionId));
-          try {
-            const result = await archiveSession(sessionId as SessionID);
-            if (result?.reconciliation === 'refresh-required') {
-              showWarning(ARCHIVE_REFRESH_WARNING);
-            } else if (result) {
-              showSuccess('Session and same-branch children archived');
-            } else {
-              showError('Failed to archive session');
-            }
-          } finally {
-            setArchivingSessionIds((prev) => {
-              const next = new Set(prev);
-              next.delete(sessionId);
-              return next;
-            });
-          }
-        },
+      confirmArchive(sessionId, {
+        onStart: () => setArchivingSessionIds((prev) => new Set(prev).add(sessionId)),
+        onSettled: () =>
+          setArchivingSessionIds((prev) => {
+            const next = new Set(prev);
+            next.delete(sessionId);
+            return next;
+          }),
       });
     },
-    [archiveSession, modal, showSuccess, showError, showWarning]
+    [confirmArchive]
   );
 
   const getGatewaySource = useCallback(
@@ -920,12 +917,10 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     );
   };
 
-  // Section headers use the session panel's uppercase label ("Queued Tasks").
+  // Section headers match the session panel's queue label ("Queued tasks").
   const sectionLabelStyle: React.CSSProperties = {
     fontSize: token.fontSizeSM,
     fontWeight: 500,
-    letterSpacing: '0.5px',
-    textTransform: 'uppercase',
   };
   const renderSectionLabel = (label: string) => (
     <Typography.Text type="secondary" style={sectionLabelStyle}>
@@ -1570,9 +1565,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   }
 
   return (
-    // Card mode disables antd motion: 30 cards animating their collapse/tree
-    // mounts multiplies board-mount commits (#1768). Panel mode keeps motion.
-    <ConfigProvider theme={isPanel ? undefined : NO_MOTION_THEME}>
+    <ConfigProvider theme={noMotionTheme}>
       {sessionSearchBar}
       {activeSessions.length === 0 ? (
         <div

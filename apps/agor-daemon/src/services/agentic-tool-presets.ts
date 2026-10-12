@@ -40,12 +40,20 @@ function validateConfiguration(
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new BadRequest('configuration must be an object');
   }
+  if (
+    'codexIncludePlugins' in value &&
+    value.codexIncludePlugins !== undefined &&
+    typeof value.codexIncludePlugins !== 'boolean'
+  ) {
+    throw new BadRequest('codexIncludePlugins must be a boolean');
+  }
   const allowed = new Set([
     'modelConfig',
     'permissionMode',
     'codexSandboxMode',
     'codexApprovalPolicy',
     'codexNetworkAccess',
+    'codexIncludePlugins',
   ]);
   const unknown = Object.keys(value).filter((key) => !allowed.has(key));
   if (unknown.length > 0)

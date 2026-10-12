@@ -64,7 +64,11 @@ describe('safe MCP server config readback', () => {
       enabled: true,
       headers: { 'X-Api-Key': 'header-secret' },
       env: { API_KEY: 'env-secret' },
-      auth: { type: 'oauth', oauth_client_secret: 'client-secret' },
+      auth: {
+        type: 'oauth',
+        oauth_client_id: 'customer-client-id',
+        oauth_client_secret: 'client-secret',
+      },
       created_at: new Date(),
       updated_at: new Date(),
     } as never);
@@ -73,6 +77,8 @@ describe('safe MCP server config readback', () => {
     expect(serialized).not.toContain('header-secret');
     expect(serialized).not.toContain('env-secret');
     expect(serialized).not.toContain('client-secret');
+    // Client IDs are not secrets.
+    expect(readback.auth?.oauth_client_id).toBe('customer-client-id');
     expect(readback.auth_secret_fields_configured).toEqual(['oauth_client_secret']);
   });
 });
@@ -645,6 +651,68 @@ describe('agor_mcp_servers_create/update/attach', () => {
       transport: 'sse',
     });
     expect(updateParsed?.success).toBe(true);
+  });
+
+  it('rejects literal configured app secrets on model create/patch while accepting client IDs', async () => {
+    const { registerMcpServerTools } = await import('./mcp-servers.js');
+    const schemas: Record<
+      string,
+      { safeParse: (v: unknown) => { success: boolean; error?: unknown } }
+    > = {};
+    registerMcpServerTools(
+      {
+        registerTool: (name: string, cfg: { inputSchema: (typeof schemas)[string] }) => {
+          schemas[name] = cfg.inputSchema;
+        },
+      } as unknown as McpServer,
+      {
+        app: makeFakeApp({}) as any,
+        db: {} as any,
+        userId: 'user-1' as any,
+        sessionId: 'sess-1' as any,
+        authenticatedUser: { user_id: 'user-1', role: 'admin' } as any,
+        baseServiceParams: {},
+      }
+    );
+    for (const operation of ['create', 'update']) {
+      const schema = schemas[`agor_mcp_servers_${operation}`];
+      const base =
+        operation === 'create'
+          ? { name: 'provider', url: 'https://provider.example/mcp' }
+          : { mcpServerId: 'abc12345' };
+      for (const field of ['oauth_client_secret']) {
+        for (const literal of [
+          'raw-customer-value',
+          '{{ user.env.CLIENT_ID }}raw-customer-value',
+          '{{default user.env.CLIENT_ID "raw-customer-value"}}',
+        ]) {
+          const parsed = schema.safeParse({ ...base, auth: { type: 'oauth', [field]: literal } });
+          expect(parsed.success).toBe(false);
+          expect(String(parsed.error)).toContain('secure UI');
+          expect(String(parsed.error)).not.toContain('raw-customer-value');
+        }
+      }
+      expect(
+        schema.safeParse({
+          ...base,
+          auth: {
+            type: 'oauth',
+            oauth_client_id: '{{ user.env.CLIENT_ID }}',
+            oauth_client_secret: '{{ user.env.CLIENT_SECRET }}',
+          },
+        }).success
+      ).toBe(true);
+      expect(
+        schema.safeParse({ ...base, auth: { type: 'oauth', oauth_client_id: 'public-client-id' } })
+          .success
+      ).toBe(true);
+      expect(schema.safeParse({ ...base, auth: { type: 'oauth' } }).success).toBe(true);
+      if (operation === 'update')
+        expect(
+          schema.safeParse({ ...base, auth: { oauth_client_id: null, oauth_client_secret: null } })
+            .success
+        ).toBe(true);
+    }
   });
 
   it('updates only provided fields and resolves short MCP server IDs', async () => {

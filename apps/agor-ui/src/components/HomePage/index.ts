@@ -1,1 +1,1 @@
-export { default, HomePage } from './HomePage';
+export { default, type HomeLocationState, HomePage } from './HomePage';

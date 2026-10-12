@@ -33,6 +33,16 @@ assert.match(workflow, /^name: Build image$/m);
 assert.match(workflow, /^ {2}pull_request:$/m);
 assert.match(workflow, /^ {4}name: Build & push$/m);
 
+// pull_request workflows run from the merge ref: build that same tree, not
+// an older PR head which may lack Docker targets added by the base workflow.
+// workflow_run must still build the exact main commit that passed CI.
+assert.match(
+  workflow,
+  /^ {2}IMAGE_REVISION: \$\{\{ github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}$/m,
+  'image revision must match the PR merge workflow, or the tested main commit on workflow_run'
+);
+assert.match(step('Checkout'), /ref: \$\{\{ env\.IMAGE_REVISION \}\}/);
+
 const validation = step('Validate image publication policy');
 assert.match(validation, /run: node scripts\/check-image-publication-policy\.mjs/);
 
@@ -45,6 +55,7 @@ for (const name of ['Log in to Docker Hub', 'Docker metadata', 'Push image']) {
 }
 
 const build = step('Build image');
+assert.match(build, /AGOR_BUILD_SHA=\$\{\{ env\.IMAGE_REVISION \}\}/);
 assert.match(build, /target: production-source/);
 assert.match(build, /load: true/);
 assert.match(build, /tags: \$\{\{ env\.IMAGE \}\}:smoke/);
@@ -109,8 +120,8 @@ const runnableExtensions = new Set([
 const excludedDirectories = new Set(['.git', 'node_modules']);
 const excludedPaths = new Set([
   workflowPath,
-  'docs/internal/pr-image-publication-audit-2026-08-28.md',
   'scripts/check-image-publication-policy.mjs',
+  'scripts/managed-environments/railway/image.mjs',
 ]);
 const references = [];
 
@@ -129,6 +140,7 @@ async function scan(directory) {
     const extension = path.extname(entry.name);
     const isSpecialName =
       entry.name === 'Dockerfile' ||
+      entry.name.startsWith('Dockerfile.') ||
       entry.name.endsWith('.Dockerfile') ||
       entry.name === 'Makefile';
     if (!isSpecialName && !runnableExtensions.has(extension)) continue;
@@ -160,8 +172,7 @@ const localWorktreeBuildStarts = [
 const codespacesWorktreeBuildStarts = [
   ...managedEnvironments.matchAll(/agor-codespace-launcher\.mjs start\b/g),
 ].length;
-// Reviewed remote-source exception: Railway builds the adopted pushed branch,
-// not the caller's dirty worktree and not a published application image.
+// Reviewed branch-local automatic Railway source builds (app and docs only).
 const railwaySourceBuildStarts = [
   ...managedEnvironments.matchAll(
     /node scripts\/managed-environments\/railway\/launcher\.mjs start\b/g
@@ -174,23 +185,66 @@ assert.equal(
 );
 
 if (railwaySourceBuildStarts > 0) {
-  assert.equal(railwaySourceBuildStarts, 1, 'only one adopted Railway variant is reviewed');
+  assert.equal(
+    railwaySourceBuildStarts,
+    2,
+    'only the SQLite and docs Railway variants are reviewed'
+  );
   assert.match(
     managedEnvironments,
     /railway-sqlite:\s+start: >-\s+node scripts\/managed-environments\/railway\/launcher\.mjs start\s+--repository \{\{shellQuote repo.github_slug\}\} --ref \{\{shellQuote branch.ref\}\}\s+--binding \{\{shellQuote branch.id\}\}/
   );
-  const railway = await readFile(path.join(root, '.railway/railway.ts'), 'utf8');
-  assert.match(railway, /source: github\('preset-io\/agor',/);
-  assert.match(railway, /builder: 'DOCKERFILE', dockerfilePath: 'docker\/Dockerfile'/);
-  assert.match(railway, /AGOR_RUNTIME_TARGET: 'runtime-build'/);
-  assert.doesNotMatch(railway, imageReference);
+  assert.match(
+    managedEnvironments,
+    /railway-docs:\s+extends: railway-sqlite\s+start: >-\s+node scripts\/managed-environments\/railway\/launcher\.mjs start --profile docs\s+--repository \{\{shellQuote repo.github_slug\}\} --ref \{\{shellQuote branch.ref\}\}\s+--binding \{\{shellQuote branch.id\}\}/
+  );
+  const directory = path.join(root, 'scripts/managed-environments/railway');
+  const launcher = await readFile(path.join(directory, 'launcher.mjs'), 'utf8');
+  const preview = await readFile(path.join(directory, 'preview.mjs'), 'utf8');
+  const configuration = await readFile(path.join(directory, 'configuration.mjs'), 'utf8');
+  assert.match(launcher, /api\.github\.com\/repos\/\$\{input.repository\}\/git\/ref\/heads\//);
+  assert.match(launcher, /preview\.start\(owned, sha\)/);
+  assert.match(preview, /serviceInstanceDeployV2\([^)]*commitSha:\$commitSha\)/);
+  assert.match(preview, /source: \{ repo: this.input.repository \}/);
+  assert.match(preview, /this.profile = profileSettings\(input.profile\)/);
+  assert.match(preview, /dockerfilePath: this.profile.dockerfile/);
+  assert.match(configuration, /\['sqlite', 'docs'\]\.includes\(profile\)/);
+  assert.match(
+    configuration,
+    /dockerfile: 'docker\/Dockerfile', appPath: '\/ui\/', healthPath: '\/health'/
+  );
+  assert.match(
+    configuration,
+    /dockerfile: 'docker\/Dockerfile.docs-preview', appPath: '\/', healthPath: '\/'/
+  );
+  assert.match(configuration, /AGOR_RUNTIME_TARGET: 'railway-preview'/);
+  assert.match(configuration, /AGOR_PREVIEW_BASE: previewBase/);
   const checkout = await readFile(path.join(root, 'docker/runtime-checkout.mjs'), 'utf8');
   assert.match(
     checkout,
     /\.clone\(repo, staging, \['--depth=1', '--single-branch', '--branch', branch\]\)/
   );
   assert.match(checkout, /\.fetch\('origin', branch, \['--depth=1', '--no-tags'\]\)/);
+  for (const source of [launcher, preview, configuration])
+    assert.doesNotMatch(source, imageReference);
 }
+
+// The docs image is built from frozen inputs, never from a published PR app
+// image. Its PR smoke must not publish artifacts/caches or use registry secrets.
+const docsWorkflow = await readFile(path.join(root, '.github/workflows/docs-pr-check.yml'), 'utf8');
+const docsImage = docsWorkflow.split('  docs-preview-image:')[1]?.split('  check-docs:')[0] ?? '';
+assert.match(docsImage, /file: docker\/Dockerfile.docs-preview/);
+assert.match(docsImage, /load: true/);
+assert.match(docsImage, /push: false/);
+assert.match(docsImage, /runtime-docs-smoke.mjs/);
+assert.doesNotMatch(docsImage, /cache-to:|login-action|secrets\.|push: true/);
+const docsDockerfile = await readFile(path.join(root, 'docker/Dockerfile.docs-preview'), 'utf8');
+assert.match(docsDockerfile, /COPY --chown=agor:agor patches\/ \.\/patches\//);
+assert.match(
+  docsDockerfile,
+  /pnpm --filter @agor\/docs --filter @agor\/git install --frozen-lockfile/
+);
+assert.doesNotMatch(docsDockerfile, /COPY \. \./);
 
 if (codespacesWorktreeBuildStarts > 0) {
   assert.equal(
@@ -224,6 +278,74 @@ if (codespacesWorktreeBuildStarts > 0) {
   assert.doesNotMatch(codespacesBootstrap, /docker (?:compose )?pull\b/);
 }
 
+// Narrow dependency-only exception: trusted main publication, never a PR image.
+assert.match(step('Select Railway image validation'), /id: railway/);
+assert.match(
+  step('Select Railway image validation'),
+  /shouldBuildRailwayImage\(\{ github, context \}\)/
+);
+assert.match(
+  step('Select Railway image validation'),
+  /core\.setOutput\('build', String\(build\)\)/
+);
+for (const name of [
+  'Build preview runtime',
+  'Smoke test preview runtime',
+  'Test warm preview base',
+]) {
+  assert.match(step(name), /if: steps\.railway\.outputs\.build == 'true'/);
+}
+const previewBuild = step('Build preview runtime');
+assert.match(previewBuild, /target: railway-preview/);
+assert.match(previewBuild, /load: true/);
+assert.match(previewBuild, /cache-to: \$\{\{ github.event_name == 'workflow_run'/);
+assert.match(step('Push preview runtime'), /if: github.event_name == 'workflow_run'/);
+assert.match(step('Push preview runtime'), /tags: .*:preview-runtime-\$\{\{ env.IMAGE_REVISION/);
+assert.match(step('Smoke test preview runtime'), /runtime-checkout.mjs fingerprint/);
+const warm = step('Test warm preview base');
+assert.equal((warm.match(/--builder default --output=type=cacheonly/g) ?? []).length, 2);
+assert.equal((warm.match(/--target railway-preview-checked/g) ?? []).length, 2);
+assert.match(warm, /FROM railway-preview AS railway-preview-checked/);
+assert.match(warm, /RUN test .*runtime-checkout\.mjs fingerprint.*agor-dependency-fingerprint/);
+assert.match(warm, /&& cd \/app\/packages\/git/);
+assert.match(warm, /&& node -e 'require\("simple-git"\)'/);
+assert.match(warm, /--build-arg AGOR_PREVIEW_BASE=/);
+assert.match(warm, /Installing changed preview dependencies/);
+assert.match(warm, /Reusing preview dependencies/);
+assert.match(warm, /trap .*package.json/);
+assert.doesNotMatch(warm, /--push|--load|docker run/);
+assert.match(promotion, /--tag "\$\{IMAGE\}:preview-runtime-main"/);
+assert.match(promotion, /"\$\{IMAGE\}:preview-runtime-\$\{IMAGE_REVISION\}"/);
+const resolver = await readFile(
+  path.join(root, 'scripts/managed-environments/railway/image.mjs'),
+  'utf8'
+);
+assert.match(resolver, /manifests\/preview-runtime-main/);
+assert.match(resolver, /return `preset\/agor@\$\{digest\}`/);
+assert.doesNotMatch(resolver, /process.env/);
+assert.match(dockerfile, /ARG AGOR_PREVIEW_BASE=runtime-build/);
+assert.match(dockerfile, /FROM \$\{AGOR_PREVIEW_BASE\} AS railway-preview/);
+const previewStage = dockerfile
+  .split('AS railway-preview')[1]
+  .split(/FROM \$\{AGOR_RUNTIME_TARGET\}/)[0];
+assert.match(previewStage, /pnpm install --frozen-lockfile/);
+assert.match(previewStage, /agor-dependency-fingerprint/);
+assert.doesNotMatch(previewStage, /COPY \. \./);
+
+// Keep the thin wrapper's dependency inputs in parity with its cold base.
+for (const line of dockerfile.split('AS railway-preview')[0].split('\n')) {
+  if (
+    line.startsWith('COPY ') &&
+    (line.includes('package.json') || line.startsWith('COPY patches/'))
+  ) {
+    assert.ok(
+      previewStage.includes(
+        line.replace(/^COPY (?:--chown=agor:agor )?/, 'COPY --chown=agor:agor ')
+      ),
+      `preview stage missing dependency input: ${line}`
+    );
+  }
+}
 console.log(
-  'Image publication policy valid: PRs build+smoke locally, publish no image/cache, and checked-in consumers do not pull preset/agor.'
+  'Image publication policy valid: PRs publish no image/cache; only the reviewed Railway dependency-base consumer is allowed.'
 );

@@ -15,7 +15,8 @@
 # mutable tags always identify a successfully tested main image; when a newer
 # main commit is red, they remain on the last successful promotion. v* tags
 # and manual runs publish directly, so those trusted commits remain deployable
-# by their own SHA.
+# by their own SHA. The preview dependency image is published only by successful
+# main workflow_run builds, and promoted under the same serialized head check.
 #
 # Pushes to Docker Hub (docker.io/preset/agor). Required repo secrets
 # (Settings → Secrets and variables → Actions):
@@ -40,10 +41,12 @@ permissions:
 # docker.io is docker/login-action's default registry, so no `registry:` needed.
 env:
   IMAGE: preset/agor
-  # The commit we build, stamp, and tag: the PR head on pull_request events;
+  # The commit we build, stamp, and tag: the PR merge on pull_request events;
   # the tested main commit on workflow_run events; otherwise the pushed commit.
+  # PR workflows come from the merge ref. Checking out only the head mixes a
+  # newer workflow with older source (e.g. newly added Docker targets missing).
   # Keeps the checkout, the :<sha> tag, and the in-app build banner in lockstep.
-  IMAGE_REVISION: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}
+  IMAGE_REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   build:
@@ -58,7 +61,10 @@ jobs:
         github.event.workflow_run.conclusion == 'success'
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 45
     concurrency:
       group: build-image-${{ github.event.pull_request.number || github.event.workflow_run.head_sha || github.ref }}
       cancel-in-progress: true
@@ -66,12 +72,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # Build the exact tested/main, PR-head, or tag commit so image
+          # Build the exact tested/main, PR-merge, or tag commit so image
           # contents match the :<sha> tag.
           ref: ${{ env.IMAGE_REVISION }}
 
       - name: Validate image publication policy
         run: node scripts/check-image-publication-policy.mjs
+
+      - name: Select Railway image validation
+        id: railway
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { shouldBuildRailwayImage } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/railway-image-inputs.mjs`);
+            const build = await shouldBuildRailwayImage({ github, context });
+            core.setOutput('build', String(build));
+            core.notice(build ? 'Validating Railway dependency image' : 'Skipping Railway image: no runtime/dependency inputs changed');
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -126,6 +142,76 @@ jobs:
           echo "::error::Daemon did not become healthy within 120s"
           docker logs agor-smoke
           exit 1
+
+      # Only runtime/dependency changes need this additional PR validation.
+      # Main/tag/manual runs keep validating; PRs never publish images/caches.
+      - name: Build preview runtime
+        if: steps.railway.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: railway-preview
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE }}:preview-smoke
+          cache-from: type=gha,scope=agor-preview
+          cache-to: ${{ github.event_name == 'workflow_run' && 'type=gha,mode=max,scope=agor-preview' || '' }}
+
+      - name: Smoke test preview runtime
+        if: steps.railway.outputs.build == 'true'
+        run: |
+          docker run --rm --entrypoint sh ${{ env.IMAGE }}:preview-smoke -ec '
+            test "$(node /usr/local/lib/agor/runtime-checkout.mjs fingerprint)" = "$(cat /opt/agor-dependency-fingerprint)"
+            test -x /usr/local/bin/docker-entrypoint-runtime.sh
+            node --check /usr/local/lib/agor/runtime-watch.mjs
+            cd /app/packages/git
+            node -e "require(\"simple-git\")"
+          '
+
+      # Use the loaded image via Docker's local builder; no registry push/pull.
+      # These are build checks, not deliverables. Validate inside the final
+      # stage instead of exporting/loading two more large dependency images.
+      - name: Test warm preview base
+        if: steps.railway.outputs.build == 'true'
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          backup="$(mktemp)"
+          dockerfile="$(mktemp)"
+          cp package.json "$backup"
+          trap 'cp "$backup" package.json; rm -f "$backup" "$dockerfile"' EXIT
+          cp docker/Dockerfile "$dockerfile"
+          cat >> "$dockerfile" <<'DOCKERFILE'
+
+          FROM railway-preview AS railway-preview-checked
+          RUN test "$(node /usr/local/lib/agor/runtime-checkout.mjs fingerprint)" = "$(cat /opt/agor-dependency-fingerprint)" \
+            && cd /app/packages/git \
+            && node -e 'require("simple-git")'
+          DOCKERFILE
+          docker buildx build --builder default --output=type=cacheonly --progress=plain \
+            --build-arg AGOR_PREVIEW_BASE=${{ env.IMAGE }}:preview-smoke \
+            --target railway-preview-checked -f "$dockerfile" . 2>&1 | tee /tmp/preview-warm.log
+          grep -E '^#[0-9]+ [0-9.]+ Reusing preview dependencies$' /tmp/preview-warm.log
+          # A manifest-only metadata change invalidates the fingerprint without
+          # changing the lockfile resolution. This must run the frozen install.
+          node -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync("package.json")); p.description = "preview dependency fingerprint test"; fs.writeFileSync("package.json", JSON.stringify(p));'
+          docker buildx build --builder default --output=type=cacheonly --progress=plain \
+            --build-arg AGOR_PREVIEW_BASE=${{ env.IMAGE }}:preview-smoke \
+            --target railway-preview-checked -f "$dockerfile" . 2>&1 | tee /tmp/preview-changed.log
+          grep -E '^#[0-9]+ [0-9.]+ Installing changed preview dependencies$' /tmp/preview-changed.log
+
+      - name: Push preview runtime
+        if: github.event_name == 'workflow_run'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: railway-preview
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:preview-runtime-${{ env.IMAGE_REVISION }}
+          cache-from: type=gha,scope=agor-preview
 
       - name: Docker metadata
         if: github.event_name != 'pull_request'
@@ -215,3 +301,7 @@ jobs:
             --tag "${IMAGE}:main" \
             --tag "${IMAGE}:latest" \
             "${IMAGE}:${IMAGE_REVISION}"
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:preview-runtime-main" \
+            "${IMAGE}:preview-runtime-${IMAGE_REVISION}"

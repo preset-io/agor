@@ -26,7 +26,7 @@ const faqItems: Array<{ question: string; answer: string }> = [
   {
     question: 'Why a spatial layout for AI coding sessions?',
     answer:
-      'Because your brain thinks spatially and complex work is inherently non-linear. A 2D board gives every branch and session a "place" (location-based memory), lets workflows organize organically, supports zones as visual workflow stages, and makes real-time multiplayer collaboration natural — like Figma for AI coding.',
+      'Because your brain thinks spatially and complex work is inherently non-linear. A 2D board gives every branch and session a "place" (location-based memory), lets workflows organize organically, supports zones as visual workflow stages, and makes real-time collaboration between people and agents natural.',
   },
   {
     question: 'Zones? Zone "triggers"?',

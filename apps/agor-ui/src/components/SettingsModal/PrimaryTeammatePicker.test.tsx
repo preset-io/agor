@@ -71,6 +71,31 @@ describe('PrimaryTeammatePicker', () => {
     const currently = await screen.findByText(/Currently/);
     expect(currently).toHaveTextContent('Ada');
     expect(currently).toHaveTextContent('Ambient');
+    expect(currently).toHaveTextContent(/\.$/);
+  });
+
+  it("omits the board from the current primary when it is just the teammate's name", async () => {
+    const current = teammate('branch-1', 'Ambient!');
+    seedStore([current]);
+    renderPicker(createClient(current).client);
+
+    const currently = await screen.findByText(/Currently/);
+    expect(currently).toHaveTextContent(/^Currently Ambient!$/);
+  });
+
+  it('labels each option with its emoji, name and board', async () => {
+    seedStore([
+      teammate('branch-1', 'Ada', {
+        custom_context: { teammate: { kind: 'teammate', displayName: 'Ada', emoji: '🎨' } },
+      } as Partial<Branch>),
+    ]);
+    renderPicker(createClient(null).client);
+
+    await screen.findByText(/No primary assistant set/);
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    const name = await screen.findByText('Ada');
+    const row = name.parentElement as HTMLElement;
+    expect(row).toHaveTextContent('🎨Ada📋 Ambient');
   });
 
   it('renders a primary that lives outside the listed teammates', async () => {
@@ -236,14 +261,24 @@ describe('PrimaryTeammatePicker', () => {
   });
 });
 
-it('can clear an inaccessible stored preference without selecting a replacement', async () => {
-  seedStore([]);
-  const { client, setPrimaryTeammate } = createClient(null);
-  setPrimaryTeammate.mockResolvedValueOnce(null);
-  renderPicker(client);
-  await screen.findByText(/No primary assistant set/);
-  fireEvent.click(screen.getByRole('button', { name: 'Clear primary assistant' }));
-  await waitFor(() =>
-    expect(setPrimaryTeammate).toHaveBeenCalledWith({ branchId: null, expectedUserId: USER_ID })
-  );
+it('never offers to clear the primary assistant, in Settings or the compact Ask flows', async () => {
+  const ada = teammate('branch-1', 'Ada');
+  seedStore([ada]);
+  for (const [current, compact] of [
+    [null, true],
+    [ada, true],
+    [null, false],
+    [ada, false],
+  ] as const) {
+    const { client, getPrimaryTeammate } = createClient(current);
+    const view = render(
+      <AntApp>
+        <PrimaryTeammatePicker client={client} currentUserId={USER_ID} compact={compact} />
+      </AntApp>
+    );
+    await waitFor(() => expect(getPrimaryTeammate).toHaveBeenCalled());
+    if (current) await screen.findByText(/Currently/);
+    expect(screen.queryByRole('button', { name: /clear/i })).not.toBeInTheDocument();
+    view.unmount();
+  }
 });

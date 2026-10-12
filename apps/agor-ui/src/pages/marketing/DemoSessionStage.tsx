@@ -103,6 +103,9 @@ interface StageVariantConfig {
   /** Follow-up prompt shown in the queued-tasks drawer when the scene's
    * `queuedVisible` uiFlag is on (collab only). */
   queuedPrompt?: string;
+  /** A second live exchange, by another teammate, driven by the scene's
+   * `followPhase` flag (1 running, 2 done) and `followResponse` text. */
+  followUp?: { prompt: string; createdBy: string };
 }
 
 const STAGE_VARIANTS: Record<StageVariant, StageVariantConfig> = {
@@ -113,6 +116,10 @@ const STAGE_VARIANTS: Record<StageVariant, StageVariantConfig> = {
     priorPrompt: 'Tighten the hero copy and bump the CTA contrast for the landing crop.',
     priorResponse:
       'Done — hero headline tightened and the CTA contrast now passes AA. Preview redeployed with the new crop.',
+    followUp: {
+      prompt: 'Nice. Can you add a light/dark toggle to the header too?',
+      createdBy: demoUsers[1].user_id, // Ari
+    },
     readInput: { file_path: 'apps/web/src/pages/SettingsPage.tsx' },
     editInput: {
       file_path: 'apps/web/src/theme/tokens.ts',
@@ -123,6 +130,12 @@ const STAGE_VARIANTS: Record<StageVariant, StageVariantConfig> = {
   },
   gateway: {
     headerTitle: 'OAuth redirect loop — via Slack',
+    // A teammate in Agor follows up on the Slack-started session; the agent's
+    // answer goes back to the thread (see DemoSlackStage phase 3).
+    followUp: {
+      prompt: 'Post the before/after redirect URLs to the thread for Sam.',
+      createdBy: demoUsers[1].user_id, // Ari
+    },
     prompt: GATEWAY_PROMPT,
     promptCreatedBy: demoUsers[6].user_id, // Sam ⚡ pinged from #eng-support
     priorPrompt: '@Agor can you summarize yesterday’s deploy failures for the standup thread?',
@@ -226,9 +239,14 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
   // reset back to the establish beat (see scenes/sessionsLoop.ts).
   const veil = scene.uiFlags.resetVeil ? scene.uiFlags.resetVeil.sample(t) : 0;
 
-  const isRunning = phase >= 1 && phase < 5;
-  const sessionStatus =
-    phase >= 5 ? SessionStatus.COMPLETED : isRunning ? SessionStatus.RUNNING : SessionStatus.IDLE;
+  const followPhase = Math.round(scene.uiFlags.followPhase?.sample(t) ?? 0);
+  const followText = scene.textTracks?.followResponse?.sample(t) ?? '';
+  const isRunning = (phase >= 1 && phase < 5) || followPhase === 1;
+  const sessionStatus = isRunning
+    ? SessionStatus.RUNNING
+    : phase >= 5
+      ? SessionStatus.COMPLETED
+      : SessionStatus.IDLE;
 
   // Collab variant: Jules's follow-up prompt lands as a QUEUED TASK (tasks —
   // not messages — are the queueable unit) once the scene's `queuedVisible`
@@ -322,6 +340,45 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
     }
     return messages;
   }, [phase, responseText, config]);
+
+  // Second exchange (another teammate follows up once the first lands).
+  const followTask = useMemo(() => {
+    if (!config.followUp || followPhase < 1) return null;
+    return {
+      task_id: 'demo-session-task-follow',
+      session_id: STAGE_SESSION_ID,
+      created_by: config.followUp.createdBy,
+      full_prompt: config.followUp.prompt,
+      status: followPhase >= 2 ? TaskStatus.COMPLETED : TaskStatus.RUNNING,
+      message_range: { start_index: 11, end_index: 11, start_timestamp: '' },
+      git_state: { ref_at_start: STAGE_BRANCH.ref, sha_at_start: 'unknown' },
+      ...(followPhase >= 2 ? { duration_ms: 2_100 } : {}),
+    } as unknown as Task;
+  }, [followPhase, config]);
+  const followMessages = useMemo(() => {
+    if (!config.followUp || followPhase < 1) return EMPTY_MESSAGES;
+    const messages: Message[] = [
+      stagedMessage(
+        'demo-session-task-follow',
+        'follow-prompt',
+        0,
+        MessageRole.USER,
+        config.followUp.prompt
+      ),
+    ];
+    if (followText) {
+      messages.push(
+        stagedMessage(
+          'demo-session-task-follow',
+          'follow-response',
+          1,
+          MessageRole.ASSISTANT,
+          followText
+        )
+      );
+    }
+    return messages;
+  }, [followPhase, followText, config]);
 
   const latestContextWindow = useMemo(
     () => ({ used: 38_400, limit: 200_000, taskMetadata: null as unknown }),
@@ -484,6 +541,21 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
               currentUserId={CURRENT_USER_ID}
               sessionId={STAGE_SESSION_ID}
               taskMessages={liveMessages}
+              taskMessagesLoaded
+              onLoadTaskMessages={NOOP}
+              branchName={STAGE_BRANCH.name}
+              isLatestTask={!followTask}
+            />
+          )}
+          {followTask && (
+            <TaskBlock
+              task={followTask}
+              agentic_tool="claude-code"
+              sessionModel={STAGE_MODEL}
+              userById={USER_BY_ID}
+              currentUserId={CURRENT_USER_ID}
+              sessionId={STAGE_SESSION_ID}
+              taskMessages={followMessages}
               taskMessagesLoaded
               onLoadTaskMessages={NOOP}
               branchName={STAGE_BRANCH.name}

@@ -1,226 +1,162 @@
-import type { Board, Session } from '@agor-live/client';
-import { act, render, waitFor } from '@testing-library/react';
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import type { Branch } from '@agor-live/client';
+import { act, render, screen } from '@testing-library/react';
+import { useLayoutEffect, useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { EMPTY_MAPS } from '../../store/agorMaps';
+import { buildSessionMaps } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { HomePage } from './HomePage';
+import {
+  asDesktop,
+  comment,
+  ME,
+  recent,
+  renderHome,
+  resetHome,
+  seed,
+  session,
+  stableProps,
+  teammate,
+  wrap,
+} from './testUtils';
 
-// HomePage renders its sections unconditionally. HomeBoardsSection is mocked to a
-// bare render counter so its invocation count is a faithful proxy for how many
-// times HomePage itself rendered.
-let homeRenders = 0;
-
-vi.mock('./HomeBoardsSection', () => ({
-  HomeBoardsSection: () => {
-    homeRenders += 1;
-    return null;
-  },
-}));
-vi.mock('./HomeSessionsSection', () => ({
-  HomeSessionsSection: () => null,
-}));
-vi.mock('./HomeActivitySection', () => ({
-  HomeActivitySection: () => null,
-}));
-vi.mock('./HomeKnowledgeSection', () => ({
-  HomeKnowledgeSection: () => null,
-}));
-
-const board = { board_id: 'board-1', name: 'Board', slug: 'board' } as unknown as Board;
-
-const session = {
-  session_id: 'session-1',
-  status: 'completed',
-  archived: false,
-  genealogy: {},
-  agentic_tool: 'claude',
-  last_updated: '2026-07-01T10:00:00.000Z',
-} as unknown as Session;
-
-function renderHome() {
-  return render(
-    <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
-      <HomePage
-        client={null}
-        onBoardClick={() => {}}
-        onBranchClick={() => {}}
-        onSessionClick={() => {}}
-        onOpenCreateDialog={() => {}}
-        onOpenSettings={() => {}}
-      />
-    </MemoryRouter>
-  );
-}
-
-describe('HomePage store-selector re-render isolation', () => {
-  beforeEach(() => {
-    homeRenders = 0;
-    agorStore.setState({ ...EMPTY_MAPS });
-  });
-
-  it('a patch to a slice HomePage does not select leaves it un-rendered', async () => {
-    renderHome();
-
-    await waitFor(() => {
-      expect(homeRenders).toBeGreaterThanOrEqual(1);
-    });
-    const baseline = homeRenders;
-
-    // Patch a slice HomePage never selects (comments). zustand notifies every
-    // subscriber, but each of HomePage's selected slices keeps its reference, so
-    // its subscriptions stay quiet and it does not re-render.
-    act(() => {
-      agorStore.setState({ commentById: new Map([['c-1', { board_id: 'board-1' } as never]]) });
-    });
-
-    expect(homeRenders).toBe(baseline);
-  });
-
-  it('a session patch does not re-render HomePage', async () => {
-    // Seed BEFORE the baseline so the patch below flips nothing derived
-    // anywhere in the subtree (e.g. the onboarding gate's "hasSessions").
-    agorStore.setState({ sessionById: new Map([[session.session_id, session]]) });
-    renderHome();
-
-    await waitFor(() => {
-      expect(homeRenders).toBeGreaterThanOrEqual(1);
-    });
-    const baseline = homeRenders;
-
-    // A streaming-style patch: same session, new object identity. HomePage
-    // selects no session-shaped slice (sections subscribe themselves), so the
-    // page must stay quiet.
-    act(() => {
-      agorStore.setState({
-        sessionById: new Map([
-          [session.session_id, { ...session, description: 'streamed token' } as Session],
-        ]),
-      });
-    });
-
-    expect(homeRenders).toBe(baseline);
-  });
-
-  it('a patch to a selected slice (boards) re-renders HomePage', async () => {
-    renderHome();
-
-    await waitFor(() => {
-      expect(homeRenders).toBeGreaterThanOrEqual(1);
-    });
-    const baseline = homeRenders;
-
-    // Contrast: HomePage subscribes to boardById (it derives the boards section
-    // from it), so a boards patch MUST wake it — proving the subscription is
-    // live and the isolation above is meaningful.
-    act(() => {
-      agorStore.setState({ boardById: new Map([[board.board_id, board]]) });
-    });
-
-    await waitFor(() => {
-      expect(homeRenders).toBeGreaterThan(baseline);
-    });
-  });
+// HomePage's body is the only caller; counting it counts HomePage renders.
+// Its effect counts HomePage mounts.
+const homeRenders = vi.hoisted(() => ({ count: 0, mounts: 0 }));
+vi.mock('../../hooks/useIdleReady', async () => {
+  const { useEffect } = await import('react');
+  return {
+    useIdleReady: () => {
+      homeRenders.count += 1;
+      useEffect(() => {
+        homeRenders.mounts += 1;
+      }, []);
+      return true;
+    },
+  };
 });
 
-// Mirror of App's `useStableCallback`: freeze a handler's identity across renders
-// while delegating to the latest impl via a ref. App stabilizes HomePage's
-// callbacks the same way, so reproducing it exercises the real contract.
-function useStableCallback<TFn extends (...args: never[]) => unknown>(
-  callback: TFn | undefined
-): TFn | undefined {
-  const callbackRef = useRef(callback);
-  useLayoutEffect(() => {
-    callbackRef.current = callback;
-  });
-  const stable = useCallback(((...args: never[]) => callbackRef.current?.(...args)) as TFn, []);
-  return callback ? stable : undefined;
-}
+// Counts title reads per session: every session row render reads its title once.
+const titleReads = vi.hoisted(() => new Map<string, number>());
+vi.mock('../../utils/sessionTitle', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/sessionTitle')>();
+  return {
+    ...actual,
+    getSessionDisplayTitle: (...args: Parameters<typeof actual.getSessionDisplayTitle>) => {
+      const id = args[0].session_id;
+      titleReads.set(id, (titleReads.get(id) ?? 0) + 1);
+      return actual.getSessionDisplayTitle(...args);
+    },
+  };
+});
 
-// Lets a test trigger a parent re-render without touching HomePage's props.
-let triggerParentRerender: () => void = () => {};
+beforeEach(() => {
+  resetHome();
+  homeRenders.count = 0;
+  homeRenders.mounts = 0;
+});
 
-// The complete prop set App passes, minus the one callback the harness flips.
-// Module-level so the identities stay stable across parent re-renders — the
-// whole point of the guard is that NOTHING HomePage receives churns, so
-// React.memo can bail out. A reintroduced unstable prop here (e.g. a fresh
-// array) would start failing the stable-props bailout below.
-const noop = () => {};
-const EMPTY_RECENT: string[] = [];
-const STABLE_HOME_PROPS = {
-  client: null,
-  connected: true,
-  recentBoardIds: EMPTY_RECENT,
-  currentUserId: 'u1',
-  onBoardClick: noop,
-  onBranchClick: noop,
-  onOpenCreateDialog: noop,
-  onOpenSettings: noop,
-} as const;
+describe('HomePage re-render isolation', () => {
+  const mine = session('mine');
+  const theirs = session('theirs', { created_by: 'someone-else' });
 
-// Parent harness rendering the REAL memo'd HomePage the way App does. The
-// flipped `onSessionClick` flows through `useStableCallback` when `stabilize` is
-// true and is a fresh arrow otherwise, so the same harness proves both halves of
-// the guard while every other prop stays referentially stable. A `useState` bump
-// re-renders THIS parent without touching any prop value.
-function ParentHarness({ stabilize }: { stabilize: boolean }) {
-  const [, setTick] = useState(0);
-  triggerParentRerender = () => setTick((tick) => tick + 1);
-
-  const sessionImpl = () => {};
-  const stableSession = useStableCallback(sessionImpl);
-  const onSessionClick = stabilize ? stableSession : sessionImpl;
-
-  return (
-    <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
-      <HomePage {...STABLE_HOME_PROPS} onSessionClick={onSessionClick} />
-    </MemoryRouter>
-  );
-}
-
-describe('HomePage memo + prop-stabilization re-render bailout', () => {
-  beforeEach(() => {
-    homeRenders = 0;
-    triggerParentRerender = () => {};
-    agorStore.setState({ ...EMPTY_MAPS });
-  });
-
-  it('a parent re-render does not re-render the memo’d HomePage when props are stable', async () => {
-    render(<ParentHarness stabilize={true} />);
-
-    await waitFor(() => {
-      expect(homeRenders).toBeGreaterThanOrEqual(1);
+  function renderCounting() {
+    seed({ sessions: [mine, theirs], comments: [comment('c1')], branches: [teammate('t', 'b')] });
+    const commits = { count: 0 };
+    renderHome({}, () => {
+      commits.count += 1;
     });
-    const baseline = homeRenders;
+    commits.count = 0;
+    return commits;
+  }
 
-    // Parent re-renders without changing any prop value or touching the store.
-    // The memo bailout must keep HomePage at its baseline render count; if
-    // `React.memo` were removed this assertion would fail (count would climb).
+  it('mounts once on desktop, so its effects fire once', async () => {
+    asDesktop();
+    seed({ sessions: [session('idle')] });
+    renderHome();
+    await screen.findByText('Session idle');
+    expect(homeRenders.mounts).toBe(1);
+  });
+
+  it('re-renders nothing for a session patch outside its previews', () => {
+    const commits = renderCounting();
     act(() => {
-      triggerParentRerender();
+      agorStore.setState(buildSessionMaps([mine, { ...theirs, title: 'streamed token' }]));
     });
-
-    expect(homeRenders).toBe(baseline);
+    expect(commits.count).toBe(0);
+    act(() => {
+      agorStore.setState(buildSessionMaps([{ ...mine, title: 'Renamed' }, theirs]));
+    });
+    expect(commits.count).toBeGreaterThan(0);
+    expect(screen.getByText('Renamed')).toBeInTheDocument();
   });
 
-  it('a parent re-render DOES re-render HomePage when a prop identity churns', async () => {
-    render(<ParentHarness stabilize={false} />);
-
-    await waitFor(() => {
-      expect(homeRenders).toBeGreaterThanOrEqual(1);
-    });
-    const baseline = homeRenders;
-
-    // Contrast: a fresh `onSessionClick` each parent render defeats the memo, so
-    // HomePage must re-render — proving the bailout above is meaningful and not
-    // just an artifact of the parent never re-rendering.
+  it('re-renders nothing for comment or branch patches that change nothing shown', () => {
+    const commits = renderCounting();
     act(() => {
-      triggerParentRerender();
+      const commentById = new Map(agorStore.getState().commentById);
+      commentById.set('other', comment('other', { content: 'unrelated', created_by: 'x' }));
+      agorStore.setState({ commentById });
     });
+    act(() => {
+      const branchById = new Map(agorStore.getState().branchById);
+      branchById.set('unrelated', { branch_id: 'unrelated', name: 'u' } as Branch);
+      agorStore.setState({ branchById });
+    });
+    expect(commits.count).toBe(0);
+  });
 
-    await waitFor(() => {
-      expect(homeRenders).toBeGreaterThan(baseline);
+  it('re-renders only the preview row whose session changed', () => {
+    const others = ['b', 'c'].map((id) => session(id, { last_updated: recent(10) }));
+    seed({ sessions: [mine, ...others] });
+    renderHome();
+    titleReads.clear();
+    act(() => {
+      agorStore.setState(buildSessionMaps([{ ...mine, title: 'Renamed' }, ...others]));
     });
+    expect(screen.getByText('Renamed')).toBeInTheDocument();
+    expect(titleReads.get('mine')).toBeGreaterThan(0);
+    expect(titleReads.get('b')).toBeUndefined();
+    expect(titleReads.get('c')).toBeUndefined();
+  });
+
+  it('bails out of a parent re-render when its props are stable', () => {
+    seed({ sessions: [mine] });
+    let bump = () => {};
+    function Parent() {
+      const [, setTick] = useState(0);
+      useLayoutEffect(() => {
+        bump = () => setTick((t) => t + 1);
+      });
+      return <HomePage {...stableProps} />;
+    }
+    render(wrap(<Parent />));
+    const baseline = homeRenders.count;
+    act(() => bump());
+    expect(homeRenders.count).toBe(baseline);
+  });
+
+  it('stays quiet on a 7k-session tenant when someone else streams', () => {
+    const sessions = Array.from({ length: 7000 }, (_, i) =>
+      session(`s${i}`, {
+        created_by: i % 10 ? `user-${i % 20}` : ME,
+        branch_id: `b-${i % 400}`,
+        status: i % 9 === 0 ? 'running' : 'idle',
+        last_updated: recent(i),
+      })
+    );
+    seed({ sessions });
+    const commits = { count: 0 };
+    renderHome({}, () => {
+      commits.count += 1;
+    });
+    commits.count = 0;
+    const patched = buildSessionMaps(
+      sessions.map((s, i) => (i === 3 ? { ...s, title: 'streamed token' } : s))
+    );
+    const started = performance.now();
+    act(() => agorStore.setState(patched));
+    const elapsed = performance.now() - started;
+    console.info(`[home-perf] 7k-session store patch → Home commit: ${elapsed.toFixed(1)}ms`);
+    expect(commits.count).toBe(0);
   });
 });

@@ -1,56 +1,68 @@
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, KnowledgeNamespace } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import { HOME_KNOWLEDGE_LIMIT, HomeKnowledgeSection } from './HomeKnowledgeSection';
+import { HomeKnowledgeSection, pickSpaces } from './HomeKnowledgeSection';
 
-const doc = (id: string) => ({
-  document_id: id,
-  namespace_id: 'ns-1',
-  uri: `agor://kb/team/${id}.md`,
-  path: `${id}.md`,
-  title: `Doc ${id}`,
-  updated_at: '2026-09-01T00:00:00.000Z',
-});
+const space = (slug: string, kind: KnowledgeNamespace['kind'], updated: string) =>
+  ({
+    namespace_id: slug,
+    slug,
+    display_name: `Space ${slug}`,
+    kind,
+    updated_at: updated,
+  }) as unknown as KnowledgeNamespace;
 
-function renderSection(find: ReturnType<typeof vi.fn>) {
-  const client = { service: vi.fn(() => ({ find })) } as unknown as AgorClient;
-  render(
-    <MemoryRouter initialEntries={['/']}>
-      <Routes>
-        <Route path="/" element={<HomeKnowledgeSection client={client} connected />} />
-        <Route path="/knowledge" element={<div>Knowledge page</div>} />
-      </Routes>
-    </MemoryRouter>
-  );
-  return client;
+function Where() {
+  const { pathname, search } = useLocation();
+  return <output data-testid="where">{`${pathname}${search}`}</output>;
 }
 
 describe('HomeKnowledgeSection', () => {
-  it('requests only the most recent page and links to the full Knowledge page', async () => {
-    const find = vi.fn().mockResolvedValue({
-      total: 240,
-      limit: HOME_KNOWLEDGE_LIMIT,
-      skip: 0,
-      data: [doc('a'), doc('b')],
-    });
-    const client = renderSection(find);
-
-    expect(await screen.findByText('Doc a')).toBeTruthy();
-    expect(client.service).toHaveBeenCalledWith('kb/documents');
-    expect(find).toHaveBeenCalledTimes(1);
-    expect(find).toHaveBeenCalledWith({
-      query: { archived: false, $limit: HOME_KNOWLEDGE_LIMIT, $sort: { updated_at: -1 } },
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'View all 240' }));
-    expect(await screen.findByText('Knowledge page')).toBeTruthy();
+  it('keeps shared spaces only, newest first, five at most', () => {
+    const spaces = [
+      space('old', 'global', '2026-01-01'),
+      space('memory', 'branch', '2026-09-01'),
+      space('mine', 'user', '2026-09-02'),
+      ...['a', 'b', 'c', 'd', 'e'].map((s, i) => space(s, 'team', `2026-08-0${i + 1}`)),
+    ];
+    expect(pickSpaces(spaces).map((s) => s.slug)).toEqual(['e', 'd', 'c', 'b', 'a']);
   });
 
-  it('omits the count when every doc is already shown', async () => {
-    renderSection(vi.fn().mockResolvedValue({ total: 1, limit: 50, skip: 0, data: [doc('a')] }));
+  it('links to spaces and hands searches to the Knowledge page', async () => {
+    const client = {
+      service: () => ({ find: async () => [space('eng', 'team', '2026-09-01')] }),
+    } as unknown as AgorClient;
+    render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="*" element={<Where />} />
+        </Routes>
+        <HomeKnowledgeSection client={client} connected />
+      </MemoryRouter>
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /Space eng/ }));
+    expect(screen.getByTestId('where')).toHaveTextContent('/knowledge/eng');
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search knowledge' }), {
+      target: { value: 'runbook' },
+    });
+    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Search knowledge' }), {
+      key: 'Enter',
+    });
+    expect(screen.getByTestId('where')).toHaveTextContent('/knowledge?q=runbook');
+  });
 
-    expect(await screen.findByText('Doc a')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'View all' })).toBeTruthy();
+  it('offers a retry when spaces fail to load', async () => {
+    const find = vi.fn().mockRejectedValueOnce(new Error('down')).mockResolvedValue([]);
+    render(
+      <MemoryRouter>
+        <HomeKnowledgeSection
+          client={{ service: () => ({ find }) } as unknown as AgorClient}
+          connected
+        />
+      </MemoryRouter>
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(find).toHaveBeenCalledTimes(2);
   });
 });

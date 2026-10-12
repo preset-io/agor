@@ -6,8 +6,6 @@
  * fallback renders an "Unknown widget type" placeholder so newer servers
  * that ship widget types unknown to an older client degrade gracefully
  * instead of crashing.
- *
- * See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
 import type { AgorClient, Message, WidgetMessageMetadata, WidgetType } from '@agor-live/client';

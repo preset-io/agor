@@ -16,6 +16,7 @@ import { SessionsService } from '../src/services/sessions.js';
 import { createUsersService } from '../src/services/users.js';
 import { requireMinimumRole } from '../src/utils/authorization.js';
 import { authorizeBranchArchiveDelete } from '../src/utils/branch-archive-delete-authorization.js';
+import { loadBranch } from '../src/utils/branch-authorization.js';
 import {
   createTenantDatabaseScopeAroundHook,
   createTenantWriteAdmissionAroundHook,
@@ -46,10 +47,13 @@ export async function archiveMcpFixture(db: Database, hosted = false) {
   for (const path of ['branches', 'sessions', 'users']) {
     app.service(path).hooks({ around: { all: [tenantHook()] } });
   }
+  // Production's branch get hook, so service re-reads see the request's prefetched branch.
+  app.service('branches').hooks({ before: { get: [loadBranch(new BranchRepository(guarded))] } });
   // Compose the thin route adapter with production tenant/role/archive-authorization hooks.
-  // Unlike register-routes.ts, this duplicates registration, substitutes a minimal
-  // authenticated-user assertion for requireAuth, and omits ordinary service hooks
-  // from register-hooks.ts. It tests MCP-to-service behavior, not production wiring;
+  // Like register-routes.ts, it calls the registered (hooked) branches service. Unlike
+  // it, this duplicates registration, substitutes a minimal authenticated-user assertion
+  // for requireAuth, and omits ordinary service hooks from register-hooks.ts other than
+  // the branch get loader. It tests MCP-to-service behavior, not production wiring;
   // registration/hook changes can therefore regress independently of this fixture.
   // MCP authentication is real (a persisted, hashed personal key), not a params stub.
   const route = '/branches/:id/archive-or-delete';
@@ -57,7 +61,11 @@ export async function archiveMcpFixture(db: Database, hosted = false) {
     async create(data: unknown, params: Params) {
       if (!isBranchArchiveOrDeleteOptions(data))
         throw new BadRequest('Invalid branch archive/delete options');
-      return service.archiveOrDelete(params.route!.id as BranchID, data, params);
+      return (app.service('branches') as unknown as BranchesService).archiveOrDelete(
+        params.route!.id as BranchID,
+        data,
+        params
+      );
     },
   });
   app.service(route).hooks({

@@ -7,6 +7,7 @@ import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { REACT_FLOW_NO_WHEEL_CLASS } from '../../utils/reactFlowDragClasses';
+import { canSessionStartTurn } from '../../utils/sessionTurn';
 import { TaskBlock } from '../TaskBlock';
 import { chooseLatestSessionTask } from './latestSessionTask';
 
@@ -275,6 +276,10 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               onLoadTaskMessages={handleLoadTaskMessages}
               teammateEmoji={undefined}
               isLatestTask={true}
+              canStartTurn={canSessionStartTurn(
+                currentSession,
+                currentReactiveState?.queuedTasks.length ?? 0
+              )}
               client={client}
             />
           )}

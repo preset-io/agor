@@ -111,10 +111,17 @@ export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
     contextWindow: CLAUDE_EXTENDED_CONTEXT_WINDOW,
   },
   {
+    id: 'claude-sonnet-5-5',
+    displayName: 'Claude Sonnet 5.5 · 1M',
+    family: 'claude-5',
+    description: 'Best combination of speed and intelligence; native 1M context window',
+    contextWindow: CLAUDE_EXTENDED_CONTEXT_WINDOW,
+  },
+  {
     id: 'claude-sonnet-5',
     displayName: 'Claude Sonnet 5 · 1M',
     family: 'claude-5',
-    description: 'Best combination of speed and intelligence; native 1M context window',
+    description: 'Previous Sonnet model; native 1M context window',
     contextWindow: CLAUDE_EXTENDED_CONTEXT_WINDOW,
   },
   {
@@ -197,6 +204,6 @@ export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
 ];
 
 /**
- * Default Claude model for new sessions (uses Sonnet 5 for best speed/intelligence balance)
+ * Default Claude model for new sessions (uses Sonnet 5.5 for best speed/intelligence balance)
  */
-export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5';
+export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-5-5';

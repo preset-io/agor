@@ -33,6 +33,7 @@ export function isMCPServerUsableInSession(
 }
 
 export class MCPServerNotUsableError extends Error {
+  readonly code = 'MCP_SERVER_NOT_USABLE';
   constructor(
     public readonly serverId: string,
     public readonly sessionId: string
@@ -42,6 +43,20 @@ export class MCPServerNotUsableError extends Error {
     );
     this.name = 'MCPServerNotUsableError';
   }
+}
+
+/** Core's db and mcp entry points are separately bundled. Class identity is
+ * not stable across those entry points; transport mapping uses this closed
+ * domain tag instead. Do not match arbitrary provider error messages. */
+export function isMCPServerNotUsableError(error: unknown): error is MCPServerNotUsableError {
+  if (!error || typeof error !== 'object') return false;
+  const value = error as Partial<MCPServerNotUsableError>;
+  return (
+    value.code === 'MCP_SERVER_NOT_USABLE' &&
+    value.name === 'MCPServerNotUsableError' &&
+    typeof value.serverId === 'string' &&
+    typeof value.sessionId === 'string'
+  );
 }
 
 export function filterMCPServersForSession<T extends MCPServerOwnership>(

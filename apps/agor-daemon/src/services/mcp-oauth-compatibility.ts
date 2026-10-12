@@ -127,3 +127,26 @@ export function logMCPOAuthCompatibilityPolicy(
       `server=${serverId ?? '<unsaved>'} catalog_entry=${policy.catalogEntryName ?? '<none>'}`
   );
 }
+
+/** A reviewed BYO recipe pins its issuer as well as its protected resource. */
+export async function configuredCatalogIssuer(
+  server: MCPServer,
+  catalogEntries?: readonly MCPCatalogEntry[]
+): Promise<string | undefined> {
+  if (server.source !== 'catalog' || !server.catalog_entry_name) return undefined;
+  const entry = findCatalogEntry(
+    catalogEntries ?? (await loadCatalog()),
+    server.catalog_entry_name
+  );
+  if (!entry?.remote_url || !entry.oauth?.configured_client) return undefined;
+  if (
+    !isCurrentCatalogInstall(
+      server,
+      entry as MCPCatalogEntry & { remote_url: string },
+      catalogOAuthConfig(entry),
+      { reconcileMissingCompatibilityMode: true }
+    )
+  )
+    throw new Error('Configured catalog app no longer matches its reviewed recipe');
+  return entry.oauth.configured_client.issuer;
+}

@@ -22,7 +22,7 @@
  *
  * Ordering matters: bubblewrap applies binds left-to-right, and a later bind on
  * an overlapping path wins. We emit base → writable → denials so masks win.
- * See `context/explorations/executor-sandboxing.md`.
+ * See `context/guides/rbac-and-unix-isolation.md`.
  */
 
 import { dirname, isAbsolute, join, relative } from 'node:path';

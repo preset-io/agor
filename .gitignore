@@ -51,6 +51,8 @@ yarn-error.log*
 .turbo/
 .pnpm-store/
 *.tsbuildinfo
+# tsup's temporary bundled config (left behind when a build is interrupted)
+tsup.config.bundled_*
 
 # Agor specific
 .agor/

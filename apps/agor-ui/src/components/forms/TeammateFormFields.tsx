@@ -1,4 +1,8 @@
-import { isCanonicalTeammateFrameworkRepo, type Repo } from '@agor-live/client';
+import {
+  defaultsToPublicTeammateTemplate,
+  isCanonicalTeammateFrameworkRepo,
+  type Repo,
+} from '@agor-live/client';
 import { DownOutlined, InfoCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography, theme } from 'antd';
@@ -17,6 +21,8 @@ export interface TeammateFormFieldsProps {
   onCustomRepoChange: (selected: boolean) => void;
   /** Optional section inserted before the repo/branch advanced settings collapse. */
   extraBeforeAdvanced?: React.ReactNode;
+  /** Board the teammate joins as primary; undefined creates a fresh board. */
+  targetBoardName?: string;
 }
 
 /**
@@ -36,6 +42,7 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
   customRepoSelected,
   onCustomRepoChange,
   extraBeforeAdvanced,
+  targetBoardName,
 }) => {
   const { token } = theme.useToken();
   const repoId = Form.useWatch('repoId', form);
@@ -95,7 +102,9 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
         style={{ marginBottom: 16 }}
         title={
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Each AI teammate gets a fresh board and becomes that board&apos;s primary teammate.
+            {targetBoardName !== undefined
+              ? `This AI teammate becomes the primary teammate of ${targetBoardName || 'this board'}.`
+              : "Each AI teammate gets a fresh board and becomes that board's primary teammate."}
           </Typography.Text>
         }
       />
@@ -193,7 +202,11 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
 
                 <Form.Item name="sourceBranch" label="Source Branch">
                   <Input
-                    placeholder={selectedRepo?.default_branch || 'Repository default'}
+                    placeholder={
+                      selectedRepo && defaultsToPublicTeammateTemplate(selectedRepo)
+                        ? 'Public template default'
+                        : selectedRepo?.default_branch || 'Repository default'
+                    }
                     onChange={() => {
                       form.setFieldsValue({ templateId: null, sourceRemoteUrl: undefined });
                     }}

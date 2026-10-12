@@ -43,6 +43,7 @@ type CandidateRow = {
   oauth_grant_type: unknown;
   insecure: unknown;
   has_headers: unknown;
+  has_env: unknown;
   has_row_secret: unknown;
   has_oauth_client_secret: unknown;
   has_access_token: unknown;
@@ -127,6 +128,10 @@ export class MCPCatalogCandidateRepository {
       const hasHeaders = isPostgresDatabase(this.db)
         ? sql<boolean>`coalesce(${mcpServers.data}->'headers', '{}'::jsonb) <> '{}'::jsonb`
         : sql<boolean>`exists(select 1 from json_each(coalesce(${headerJson}, '{}')) limit 1)`;
+      const envJson = jsonExtract(this.db, mcpServers.data, 'env');
+      const hasEnv = isPostgresDatabase(this.db)
+        ? sql<boolean>`coalesce(${mcpServers.data}->'env', '{}'::jsonb) <> '{}'::jsonb`
+        : sql<boolean>`exists(select 1 from json_each(coalesce(${envJson}, '{}')) limit 1)`;
       const hasRowSecret = sql<boolean>`case
         when ${authType} = 'bearer' then ${jsonExtract(this.db, mcpServers.data, 'auth.token')} is not null
         when ${authType} = 'jwt' then ${jsonExtract(this.db, mcpServers.data, 'auth.jwt_config.api_secret')} is not null
@@ -135,6 +140,7 @@ export class MCPCatalogCandidateRepository {
           ${jsonExtract(this.db, mcpServers.data, 'auth.oauth_access_token')} is not null or
           ${jsonExtract(this.db, mcpServers.data, 'auth.oauth_refresh_token')} is not null
         else false end`;
+      const oauthMode = sql`coalesce(${jsonExtract(this.db, mcpServers.data, 'auth.oauth_mode')}, 'per_user')`;
       const rows = (await select(this.db, {
         mcp_server_id: mcpServers.mcp_server_id,
         name: mcpServers.name,
@@ -172,6 +178,7 @@ export class MCPCatalogCandidateRepository {
         oauth_grant_type: jsonExtract(this.db, mcpServers.data, 'auth.oauth_grant_type'),
         insecure: jsonExtract(this.db, mcpServers.data, 'auth.insecure'),
         has_headers: hasHeaders,
+        has_env: hasEnv,
         has_row_secret: hasRowSecret,
         has_oauth_client_secret: sql<boolean>`${jsonExtract(this.db, mcpServers.data, 'auth.oauth_client_secret')} is not null`,
         has_access_token: sql<boolean>`${userMcpOauthTokens.oauth_access_token} is not null`,
@@ -186,7 +193,13 @@ export class MCPCatalogCandidateRepository {
           userMcpOauthTokens,
           and(
             eq(userMcpOauthTokens.mcp_server_id, mcpServers.mcp_server_id),
-            eq(userMcpOauthTokens.user_id, userId)
+            // The grant subject follows the server's saved mode, as execution
+            // does: the shared grant for a Shared server, otherwise only the
+            // caller's own grant (never another user's per-user grant).
+            or(
+              and(sql`${oauthMode} = 'shared'`, isNull(userMcpOauthTokens.user_id)),
+              and(sql`${oauthMode} <> 'shared'`, eq(userMcpOauthTokens.user_id, userId))
+            )
           )
         )
         .where(or(eq(mcpServers.owner_user_id, userId), isNull(mcpServers.owner_user_id)))
@@ -205,6 +218,7 @@ export class MCPCatalogCandidateRepository {
           ...(row.owner_user_id ? { owner_user_id: row.owner_user_id as UserID } : {}),
           ...(row.catalog_entry_name ? { catalog_entry_name: row.catalog_entry_name } : {}),
           ...(stringValue(row.url) ? { url: stringValue(row.url) } : {}),
+          ...(row.has_env ? { env: { __configured__: MCP_HEADER_REDACTED_SENTINEL } } : {}),
           headers: row.has_headers ? { __configured__: MCP_HEADER_REDACTED_SENTINEL } : {},
           ...(authFrom(row) ? { auth: authFrom(row) } : {}),
           ...(parseJson<MCPServer['tools']>(row.tools) ? { tools: parseJson(row.tools) } : {}),

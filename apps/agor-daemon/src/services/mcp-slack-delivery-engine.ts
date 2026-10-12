@@ -38,8 +38,6 @@
  *
  * The contract both lanes are held to is stated once, over both of them, in
  * `gateway-mcp-slack-delivery-contract.test.ts`.
- *
- * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.1.6.
  */
 
 import { getCurrentTenantId } from '@agor/core/db';

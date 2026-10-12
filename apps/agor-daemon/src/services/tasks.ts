@@ -5,6 +5,10 @@
  * Uses DrizzleService adapter with TaskRepository.
  */
 
+import {
+  isHostedOpenCodeProvider,
+  resolveOpenCodeCapabilities,
+} from '@agor/agentic-tool-opencode/daemon';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type ChildCompletionContext,
@@ -14,6 +18,7 @@ import {
   PAGINATION,
   resolveExecutorHeartbeatConfig,
   resolveSdkWatchdogConfig,
+  TASK_PAGINATION,
 } from '@agor/core/config';
 import {
   assertTenantWritable,
@@ -24,12 +29,15 @@ import {
   getCurrentTenantId,
   getPostgresSqlState,
   isPostgresDatabaseHandle,
+  MAX_OPENCODE_CLEANUP_OBJECTS,
+  OpenCodeCheckpointRepository,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
   type TaskDispatchClaimResult,
   TaskRepository,
+  type TaskRuntimeAuthorityScope,
   type TaskTerminationCoordinationClaimInput,
   type TaskTerminationCoordinationClaimResult,
   type TenantScopeAwareDatabase,
@@ -37,6 +45,7 @@ import {
   type TerminationClaimResult,
   type TerminationSettlementInput,
   type TerminationSettlementResult,
+  UsersRepository,
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { isValidUUID } from '@agor/core/ids';
@@ -46,8 +55,13 @@ import type {
   BranchID,
   CancelQueuedTasksInput,
   ContentBlock,
+  ExecutorInterruptionInput,
   ExecutorTerminationCompleteInput,
   MessageID,
+  OpenCodeCheckpointAdmission,
+  OpenCodeCheckpointBeginInput,
+  OpenCodeCheckpointCleanupInput,
+  OpenCodeCheckpointCompletion,
   Paginated,
   QueryParams,
   ReorderQueuedTasksInput,
@@ -67,7 +81,6 @@ import {
   ExecutorPulseKind,
   isTerminalTaskStatus,
   SDK_WATCHDOG_FAILURE_REASONS,
-  SessionStatus,
   type TaskMetadata,
   TaskStatus,
 } from '@agor/core/types';
@@ -174,8 +187,11 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
   'reorderQueued',
   'connectExecutor',
   'reportTerminationComplete',
+  'reportExecutorInterruption',
   'reportRuntimeTelemetry',
   'reportSdkHealthFailure',
+  'beginOpenCodeCheckpoint',
+  'acknowledgeOpenCodeCleanup',
 ] as const;
 
 export type TaskParams = QueryParams<{
@@ -382,6 +398,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
     if (typeof query.task_id === 'string') {
       pageOptions.taskId = query.task_id as TaskID;
+    } else if (query.task_id && typeof query.task_id === 'object' && '$in' in query.task_id) {
+      // A page of one Session's dispatch order (the lean transcript).
+      const ids = query.task_id.$in;
+      if (
+        typeof sessionId !== 'string' ||
+        !Array.isArray(ids) ||
+        ids.length > TASK_PAGINATION.MAX_TASK_IDS ||
+        !ids.every((id: unknown) => typeof id === 'string')
+      ) {
+        throw new BadRequest('task_id $in requires an exact session_id and a bounded ID list');
+      }
+      pageOptions.taskIds = ids as TaskID[];
     } else if (query.task_id && typeof query.task_id === 'object') {
       if (typeof sessionId !== 'string') {
         throw new BadRequest('Task hydration cursors require an exact session_id filter');
@@ -640,6 +668,40 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return result;
   }
 
+  /** Internal only; the authenticated Stop route owns retry authorization. */
+  async retryTermination(
+    taskId: string,
+    requestedAt: string,
+    revision: string,
+    params?: TaskParams
+  ): Promise<Task | null> {
+    const task = await this.taskRepo.retryTermination(taskId, requestedAt, revision);
+    if (task) await this.publishRecoveryTask(task, params);
+    return task;
+  }
+
+  async beginCleanupAttempt(
+    taskId: string,
+    claimToken: string,
+    params?: TaskParams
+  ): Promise<Task | null> {
+    const task = await this.taskRepo.beginCleanupAttempt(taskId, claimToken);
+    if (task) await this.publishRecoveryTask(task, params);
+    return task;
+  }
+
+  private async publishRecoveryTask(task: Task, params?: TaskParams): Promise<void> {
+    await this.runAfterTenantDatabaseCommit('publish cleanup progress', async () => {
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: task,
+        id: task.task_id,
+        params,
+      });
+    });
+  }
+
   async settleTermination(
     input: TerminationSettlementInput,
     params?: TaskParams
@@ -653,6 +715,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     await this.runAfterTenantDatabaseCommit('publish termination settlement', async () => {
       if (result.outcome === 'unverified') {
+        getDaemonMetrics(this.app).increment('executor.cleanup_failures', 1, {
+          mode: result.task.executor_mode ?? 'local',
+          helper_configured: !!this.app.get('config')?.execution?.executor_cleanup_command_template,
+          helper_attempted: !!result.task.termination_request?.cleanup_attempt,
+        });
         console.warn(
           `[task.termination] event=settled task_id=${shortId(result.task.task_id)} ` +
             `outcome=unverified mode=${result.task.executor_mode ?? 'local'} ` +
@@ -691,12 +758,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // patch that projection again: a new Task may already have claimed the
       // Session, and an unconditional retry here would clobber
       // RUNNING/ready=false.
-      await this.processCompletionSideEffects(
-        result.task,
-        result.task.status,
-        completionParams,
-        true
-      );
+      await this.processTerminalTaskTransition(result.task, result.task.status, completionParams);
     });
     return result;
   }
@@ -792,28 +854,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
   }
 
-  private projectTerminalSession(
+  private async processTerminalTaskTransition(
     task: Task,
     status: Task['status'],
     params?: TaskParams
-  ): Promise<Session> {
-    return this.app.service('sessions').patch(
-      task.session_id,
-      {
-        status: status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
-        ready_for_prompt: true,
-      },
-      params
-    ) as Promise<Session>;
-  }
-
-  private async processCompletionSideEffects(
-    task: Task,
-    status: Task['status'],
-    params?: TaskParams,
-    sessionProjectionAlreadyCommitted = false
   ): Promise<boolean> {
     if (!task.session_id || !this.app) return false;
+    const runCompletionSideEffects = isCompletionSideEffectTaskStatus(status);
     try {
       const session = await this.app.service('sessions').get(task.session_id, params);
 
@@ -844,27 +891,32 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         console.log(
           `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
         );
-        if (!isStop) {
+        if (runCompletionSideEffects && !isStop) {
           await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
         }
         return false;
       }
 
-      if (sessionProjectionAlreadyCommitted) {
-        // Publish the latest Session fact rather than rewriting it. It may
-        // already reflect a newer Task admitted after the settlement commit.
-        emitServiceEvent(this.app, {
-          path: 'sessions',
-          event: 'patched',
-          data: session,
-          id: session.session_id,
-          params,
-        });
-      } else {
-        await this.projectTerminalSession(task, status, params);
-        console.log(
-          `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
-        );
+      // The repository committed the Task terminal state and its minimal
+      // Session projection in one transaction. Publish the latest Session fact
+      // rather than rewriting it: another Task may already have claimed it.
+      emitServiceEvent(this.app, {
+        path: 'sessions',
+        event: 'patched',
+        data: session,
+        id: session.session_id,
+        params,
+      });
+
+      // Timeouts are terminal lifecycle results, but they are not successful,
+      // failed, or stopped provider completions. Publish the projection and
+      // drain queued work without dispatching completion callbacks or cleaning
+      // up ephemeral forks as though the provider had completed its turn.
+      if (!runCompletionSideEffects) {
+        if (!params?.suppressTerminalQueueProcessing) {
+          await this.triggerQueueProcessingAfterCommit(task.session_id, params);
+        }
+        return true;
       }
 
       // Defensive fallback for tasks created before create-time auto-title
@@ -940,13 +992,21 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
   /**
    * Override patch to detect task completion and:
-   * 1. Atomically update session status to IDLE when task reaches terminal state
+   * 1. Publish the Session status projected atomically by the repository
    * 2. Set ready_for_prompt flag
    * 3. Queue callback to parent session (if exists)
    *
    * NOTE: Tasks are only ever patched one at a time (never in bulk), so we don't need to loop.
    */
-  async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
+  async patch(
+    id: string,
+    patch: Partial<Task> & { opencode_checkpoint?: OpenCodeCheckpointCompletion },
+    params?: TaskParams
+  ): Promise<Task | Task[]> {
+    const { opencode_checkpoint: checkpoint, ...data } = patch;
+    if (checkpoint && !params?.provider) {
+      throw new BadRequest('opencode_checkpoint is accepted only from the task executor');
+    }
     const nextStatus = data.status;
     const currentTask = nextStatus !== undefined ? await this.get(id, params) : undefined;
     if (
@@ -971,23 +1031,25 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
       return currentTask;
     }
-    const isAnalyticsTerminalTransition =
+    const isTerminalTransition =
       isAnalyticsTerminalTaskStatus(nextStatus) &&
       !isAnalyticsTerminalTaskStatus(currentTask?.status);
-    const isCompletionSideEffectTransition =
-      isCompletionSideEffectTaskStatus(nextStatus) &&
-      !isCompletionSideEffectTaskStatus(currentTask?.status);
     const isRunningTransition =
       nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
 
-    const result = params?.provider
-      ? await this.taskRepo.updateFromExecutor(id, data)
-      : await super.patch(id, data, params);
+    const result = checkpoint
+      ? await this.taskRepo.updateFromExecutor(id, data, {
+          holderId: checkpoint.holder_instance_id,
+          manifest: checkpoint.manifest,
+        })
+      : params?.provider
+        ? await this.taskRepo.updateFromExecutor(id, data)
+        : await super.patch(id, data, params);
 
     // Task terminality is the one lifecycle boundary shared by local and
     // off-host executors. Retire every bearer for this exact task before any
     // completion orchestration can advertise it as finished.
-    if (isAnalyticsTerminalTransition && !Array.isArray(result)) {
+    if (isTerminalTransition && !Array.isArray(result)) {
       await this.retireTaskExecutorCredentials(result);
     }
 
@@ -997,16 +1059,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     // Emit analytics for terminal task transitions, including timeouts that do not
     // run the broader task-completion side effects below.
-    if (isAnalyticsTerminalTransition) {
+    if (isTerminalTransition) {
       const task = result as Task;
       this.trackTaskCompleted(task);
     }
 
-    // Run completion side effects only for statuses that historically completed
-    // executor turns. Timeout paths patch session state separately and should not
-    // enqueue callbacks, mark sessions promptable, archive forks, or drain queues here.
-    if (isCompletionSideEffectTransition) {
-      await this.processCompletionSideEffects(result as Task, data.status!, params);
+    // Task terminality is the authoritative lifecycle boundary. Project every
+    // terminal result onto the Session inside this daemon request; an executor
+    // cannot safely make a second request after this transition because the
+    // terminal Task patch revokes its task-scoped credential.
+    if (isTerminalTransition) {
+      await this.processTerminalTaskTransition(result as Task, data.status!, params);
     }
 
     return result;
@@ -1471,17 +1534,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // re-stamps `is_agor_callback` and `source` onto the synthesized
       // user-message row so the UI's callback styling (MessageBlock.tsx) holds.
       //
-      // IMPORTANT: queued_by_user_id = the person who set up the callback
-      // (task attribution), NOT the target session owner. Execution still runs
-      // in the target session's immutable execution context. Falls back to its creator
-      // for backward compat (legacy sessions without callback_created_by).
+      // IMPORTANT: created_by is the executor principal (identity, env, and
+      // credentials), so it is the server-stamped callback setter — never the
+      // target session owner, who did not ask for this work. Callbacks without a
+      // stored setter (legacy rows, internal writes) run as the user whose task
+      // completed; queue admission rechecks that principal's authority on the target.
       const taskCallback = task.metadata?.completion_callback;
       const callbackCreator =
         (taskCallback?.target_session_id === targetSessionId
           ? taskCallback.requested_by_user_id
           : undefined) ??
         childSession.callback_config?.callback_created_by ??
-        targetSession.created_by;
+        task.created_by;
       const callbackTaskId = completionCallbackTaskId(task.task_id, targetSessionId);
       const createCallbackTask = () =>
         this.taskRepo.createPending({
@@ -1577,6 +1641,37 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       });
     }
     return connection.task;
+  }
+
+  async reportExecutorInterruption(
+    data: ExecutorInterruptionInput,
+    params?: TaskParams
+  ): Promise<Task> {
+    if (data.signal !== 'SIGTERM' && data.signal !== 'SIGINT') {
+      throw new BadRequest('invalid executor interruption signal');
+    }
+    const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+    const current = await this.get(data.task_id, params);
+    if (isTerminalTaskStatus(current.status)) return current;
+    const session = await this.app.service('sessions').get(current.session_id, params);
+    // The task-scoped runtime hook authenticates this report. The existing
+    // row-locked claim preserves a winning Stop/completion and owns all release;
+    // receiving a signal itself never proves that the provider has stopped.
+    return beginExecutorTermination({
+      app: this.app,
+      taskId: data.task_id,
+      cause: 'executor_interrupted',
+      errorMessage: `Executor received ${data.signal}; execution was interrupted.`,
+      sdkFailure: {
+        reason: 'executor_interrupted',
+        detected_at: new Date().toISOString(),
+        tool: session.agentic_tool,
+        last_pulse: current.latest_executor_pulse,
+        termination: 'requested',
+      },
+      params,
+      runInFreshTenantWriteDatabase: (work) => withFreshTenantWrite(this.db, tenantId, work),
+    });
   }
 
   async reportTerminationComplete(
@@ -1680,39 +1775,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (!authority || authority.taskId !== data.task_id) {
       throw new Forbidden('A token scoped to this executor task is required');
     }
-
-    // PostgreSQL validates the durable credential row in the same transaction
-    // as the Task heartbeat write. Standalone SQLite has no durable authority
-    // table, so its existing process-local fingerprint map supplies the exact
-    // O(1) decision. Store errors propagate and no heartbeat is refreshed.
-    let standaloneTokenCurrent: boolean | undefined;
-    if (!isPostgresDatabaseHandle(this.db)) {
-      const check = this.executorCredentialRevoker?.isTaskTokenAuthorityCurrent;
-      if (!check) throw new Error('Executor task token authority is unavailable');
-      standaloneTokenCurrent = await check.call(this.executorCredentialRevoker, {
-        tenantId: authority.tenantId,
-        tokenFingerprint: authority.tokenFingerprint,
-        sessionId: authority.sessionId,
-        taskId: authority.taskId,
-        branchId: authority.branchId,
-        userId: authority.userId,
-      });
-    }
+    const scope = await this.runtimeAuthorityScope(authority);
 
     const persistTelemetry = () =>
-      this.taskRepo.reportRuntimeTelemetry(
-        data.task_id,
-        {
-          token_fingerprint: authority.tokenFingerprint,
-          principal_user_id: authority.userId,
-          session_id: authority.sessionId,
-          branch_id: authority.branchId,
-          ...(standaloneTokenCurrent === undefined
-            ? {}
-            : { standalone_token_current: standaloneTokenCurrent }),
-        },
-        data.pulse
-      );
+      this.taskRepo.reportRuntimeTelemetry(data.task_id, scope, data.pulse);
 
     // PostgreSQL tenant-owned services run inside a request transaction. The
     // repository takes the Task row lock while deciding whether this heartbeat
@@ -1782,6 +1848,99 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       params,
     });
     return task;
+  }
+
+  /** PostgreSQL checks the durable token row in-transaction; SQLite uses the in-process map. */
+  private async runtimeAuthorityScope(
+    authority: NonNullable<ReturnType<typeof authenticatedTaskExecutorRuntimeAuthority>>
+  ): Promise<TaskRuntimeAuthorityScope> {
+    const scope: TaskRuntimeAuthorityScope = {
+      token_fingerprint: authority.tokenFingerprint,
+      principal_user_id: authority.userId,
+      session_id: authority.sessionId,
+      branch_id: authority.branchId,
+    };
+    if (isPostgresDatabaseHandle(this.db)) return scope;
+    const check = this.executorCredentialRevoker?.isTaskTokenAuthorityCurrent;
+    if (!check) throw new Error('Executor task token authority is unavailable');
+    scope.standalone_token_current = await check.call(this.executorCredentialRevoker, {
+      tenantId: authority.tenantId,
+      tokenFingerprint: authority.tokenFingerprint,
+      sessionId: authority.sessionId,
+      taskId: authority.taskId,
+      branchId: authority.branchId,
+      userId: authority.userId,
+    });
+    return scope;
+  }
+
+  /** Require the live executor of a hosted OpenCode Task and its checkpoint holder id. */
+  private async openCodeCheckpointAuthority(
+    taskId: string,
+    holderId: unknown,
+    params?: TaskParams
+  ): Promise<{ userId: string; sessionId: string }> {
+    if (typeof holderId !== 'string' || !isValidUUID(holderId)) {
+      throw new BadRequest('holder_instance_id must be a UUID');
+    }
+    const authority = authenticatedTaskExecutorRuntimeAuthority(params);
+    if (!authority || authority.taskId !== taskId) {
+      throw new Forbidden('A token scoped to this executor task is required');
+    }
+    if (resolveOpenCodeCapabilities(this.app.get('config')).mode !== 'managed-projection') {
+      throw new BadRequest('Hosted OpenCode checkpoints are not enabled for this deployment');
+    }
+    await this.taskRepo.assertRuntimeCredentialAuthority(
+      taskId as TaskID,
+      await this.runtimeAuthorityScope(authority)
+    );
+    return { userId: authority.userId, sessionId: authority.sessionId };
+  }
+
+  async beginOpenCodeCheckpoint(
+    data: OpenCodeCheckpointBeginInput,
+    params?: TaskParams
+  ): Promise<OpenCodeCheckpointAdmission> {
+    const { userId, sessionId } = await this.openCodeCheckpointAuthority(
+      data.task_id,
+      data.holder_instance_id,
+      params
+    );
+    const admission = await new OpenCodeCheckpointRepository(this.db).begin(
+      data.task_id,
+      data.holder_instance_id,
+      userId
+    );
+    if (admission.outcome !== 'admitted') return admission;
+    // Only the selected provider's key is decrypted, and only for the prompter's admitted executor.
+    const session = await new SessionRepository(this.db).findById(sessionId);
+    const provider = session?.model_config?.provider?.trim();
+    const key =
+      provider && isHostedOpenCodeProvider(provider)
+        ? (
+            await new UsersRepository(this.db).getToolConfigField(userId, 'opencode', provider)
+          )?.trim()
+        : undefined;
+    return { ...admission, providerKey: provider && key ? { providerId: provider, key } : null };
+  }
+
+  async acknowledgeOpenCodeCleanup(
+    data: OpenCodeCheckpointCleanupInput,
+    params?: TaskParams
+  ): Promise<void> {
+    await this.openCodeCheckpointAuthority(data.task_id, data.holder_instance_id, params);
+    if (
+      !Array.isArray(data.deleted) ||
+      data.deleted.length > MAX_OPENCODE_CLEANUP_OBJECTS ||
+      !data.deleted.every((object) => isValidUUID(object?.sessionId) && isValidUUID(object?.taskId))
+    ) {
+      throw new BadRequest('deleted must list canonical checkpoint objects within the limit');
+    }
+    await new OpenCodeCheckpointRepository(this.db).acknowledgeCleanup(
+      data.task_id,
+      data.holder_instance_id,
+      data.deleted
+    );
   }
 
   async reportSdkHealthFailure(data: SdkHealthFailureInput, params?: TaskParams): Promise<Task> {

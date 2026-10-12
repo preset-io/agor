@@ -174,7 +174,7 @@ services:
       - AGOR_UNIX_USER_MODE=${AGOR_UNIX_USER_MODE:-}
       # OS-level executor filesystem sandbox (bubblewrap). AGOR_SANDBOX_ENABLED=true
       # → execution.sandbox.enabled: true (resolved in memory). Used by the
-      # `sandbox` .agor.yml env variant. See context/explorations/executor-sandboxing.md.
+      # `sandbox` .agor.yml env variant. See context/guides/rbac-and-unix-isolation.md.
       - AGOR_SANDBOX_ENABLED=${AGOR_SANDBOX_ENABLED:-}
       # AGOR_SANDBOX_HOME_MODE=per_user overlays a private, persistent per-owner
       # persistent private home inside the sandbox. Default (unset/shared) uses

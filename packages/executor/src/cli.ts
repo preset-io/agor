@@ -15,7 +15,7 @@
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import type { ExecutorCommandResult } from '@agor/core/executor-protocol';
-
+import { checkAdmittedClass, EXECUTOR_ADMISSION_CLASS_ENV } from './admission-check.js';
 import {
   executeCommand,
   executeInteractiveCommand,
@@ -106,6 +106,15 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
       ? new ExecutorResponsePublisher(payload.executorResponse)
       : undefined;
 
+  // Before any dispatch and before payload env is applied (prompt path only).
+  const mismatch = checkAdmittedClass(payload.command, process.env[EXECUTOR_ADMISSION_CLASS_ENV]);
+  if (mismatch) {
+    console.error(
+      `[executor] admission class mismatch: admitted=${mismatch.admitted} command_class=agent`
+    );
+    await finishExecutorCommand(mismatch.result, publisher);
+  }
+
   // Special handling for prompt command - needs long-running WebSocket connection
   if (isPromptPayload(payload)) {
     if (publisher) {
@@ -172,6 +181,14 @@ async function handleInteractiveCommandMode(options: { dryRun: boolean }): Promi
       throw new Error('interactive commands require request mode');
     }
     publisher = new ExecutorResponsePublisher(payload.executorResponse);
+    // Before any dispatch, as in stdin mode.
+    const mismatch = checkAdmittedClass(payload.command, process.env[EXECUTOR_ADMISSION_CLASS_ENV]);
+    if (mismatch) {
+      console.error(
+        `[executor] admission class mismatch: admitted=${mismatch.admitted} command_class=agent`
+      );
+      await finishExecutorCommand(mismatch.result, publisher);
+    }
     const result = await executeInteractiveCommand(
       payload,
       { dryRun: options.dryRun },

@@ -1,7 +1,11 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: persisted zone color fixtures
 import type { ZoneBoardObject } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
-import { applyZoneConfigDraft, createZoneConfigDraft } from './zoneConfigDraft';
+import {
+  applyZoneConfigDraft,
+  createZoneConfigDraft,
+  formatZoneConfigDraft,
+} from './zoneConfigDraft';
 
 const zone: ZoneBoardObject = {
   type: 'zone',
@@ -121,5 +125,27 @@ describe('zone configuration draft merge', () => {
         triggerAgent: 'claude-code',
       })?.trigger
     ).toBeUndefined();
+  });
+});
+
+describe('zone configuration draft copy', () => {
+  it('formats every field a refused draft carries', () => {
+    expect(formatZoneConfigDraft(createZoneConfigDraft(zone, zone.label))).toBe(
+      [
+        'Name: Review',
+        'When a branch enters: always_new',
+        'Agent: codex',
+        'Prompt template:',
+        'Old prompt',
+        'Locked: yes',
+        'Border color: #123456',
+        'Fill color: #abcdef',
+        'Label size: 22',
+      ].join('\n')
+    );
+    const plain = { ...zone, trigger: undefined, borderColor: undefined, fontSize: undefined };
+    expect(formatZoneConfigDraft(createZoneConfigDraft(plain, 'Plain'))).toBe(
+      ['Name: Plain', 'Prompt template: (none)', 'Locked: yes', 'Fill color: #abcdef'].join('\n')
+    );
   });
 });

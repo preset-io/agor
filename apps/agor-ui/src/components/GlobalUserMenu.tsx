@@ -1,9 +1,10 @@
 import type { User } from '@agor-live/client';
-import { LogoutOutlined, SoundOutlined, UserOutlined } from '@ant-design/icons';
+import { ExportOutlined, LogoutOutlined, SoundOutlined, UserOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Dropdown, Space, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
+import { resolveExternalAppLink } from '../utils/externalAppLink';
 import { UserIdentityAvatar } from './UserIdentityAvatar';
 
 export interface GlobalUserMenuProps {
@@ -11,6 +12,9 @@ export interface GlobalUserMenuProps {
   disabled?: boolean;
   onUserSettingsClick?: () => void;
   onLogout?: () => void;
+  /** External app link for surfaces without the settings menu (e.g. Knowledge), opened in a new tab */
+  externalAppLink?: string;
+  externalAppLabel?: string;
 }
 
 /**
@@ -26,7 +30,10 @@ export const GlobalUserMenu: React.FC<GlobalUserMenuProps> = ({
   disabled = false,
   onUserSettingsClick,
   onLogout,
+  externalAppLink,
+  externalAppLabel,
 }) => {
+  const externalApp = resolveExternalAppLink(externalAppLink, externalAppLabel);
   const { token } = theme.useToken();
   const [open, setOpen] = useState(false);
   const audioEnabled = user?.preferences?.audio?.enabled ?? false;
@@ -64,6 +71,19 @@ export const GlobalUserMenu: React.FC<GlobalUserMenuProps> = ({
         onUserSettingsClick?.();
       },
     },
+    ...(externalApp
+      ? [
+          {
+            key: 'external-app',
+            icon: <ExportOutlined />,
+            label: (
+              <a href={externalApp.href} target="_blank" rel="noopener noreferrer">
+                {externalApp.label}
+              </a>
+            ),
+          },
+        ]
+      : []),
     {
       key: 'logout',
       label: 'Logout',

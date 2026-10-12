@@ -101,6 +101,50 @@ async function createTask(db: any, sessionId: UUID, overrides: Partial<Task> = {
 }
 
 describe('SessionsService.patch — agentic_tool immutability guard', () => {
+  for (const status of [SessionStatus.IDLE, SessionStatus.RUNNING]) {
+    dbTest(
+      `allows a model-only patch on a ${status} teammate session with tasks`,
+      async ({ db }) => {
+        const service = new SessionsService(db, STUB_APP);
+        const branchId = await createBranch(db);
+        await new BranchRepository(db).update(branchId, {
+          custom_context: { teammate: { kind: 'teammate', displayName: 'Model change fixture' } },
+        });
+        const sessionId = await createSession(db, branchId, {
+          status,
+          model_config: {
+            mode: 'exact',
+            model: 'claude-fable-5',
+            updated_at: new Date().toISOString(),
+          },
+        });
+        const taskId = await createTask(db, sessionId, {
+          status: status === SessionStatus.RUNNING ? TaskStatus.RUNNING : TaskStatus.COMPLETED,
+        });
+        const model_config = {
+          mode: 'alias' as const,
+          model: 'sonnet',
+          updated_at: new Date().toISOString(),
+        };
+
+        const updated = await service.patch(sessionId, { model_config });
+
+        expect(updated).toMatchObject({
+          status,
+          agentic_tool: 'claude-code',
+          model_config: { mode: model_config.mode, model: model_config.model },
+        });
+        expect(await new SessionRepository(db).findById(sessionId)).toMatchObject({
+          status,
+          model_config: { mode: model_config.mode, model: model_config.model },
+        });
+        expect(await new TaskRepository(db).findById(taskId)).toMatchObject({
+          status: status === SessionStatus.RUNNING ? TaskStatus.RUNNING : TaskStatus.COMPLETED,
+        });
+      }
+    );
+  }
+
   dbTest(
     'keeps historical metadata readable but rejects creation and runtime reinterpretation',
     async ({ db }) => {

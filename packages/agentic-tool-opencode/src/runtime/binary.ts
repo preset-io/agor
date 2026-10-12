@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
-import { access } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { resolveManagedAgenticToolPackageDirectory } from '@agor/core/agentic-integrations';
 import { OPENCODE_VERSION } from '../shared/known-models.js';
@@ -21,8 +22,26 @@ export async function readOpenCodeBinaryVersion(binary: string): Promise<string>
 export type OpenCodeCommand = { executable: string; argsPrefix: readonly string[] };
 
 async function readOpenCodeCommandVersion(command: OpenCodeCommand): Promise<string> {
+  // OpenCode creates its global dirs on load; keep the probe out of the (possibly persistent) home.
+  const probeHome = await mkdtemp(join(tmpdir(), 'agor-opencode-version-'));
+  try {
+    return await probeOpenCodeVersion(command, {
+      ...process.env,
+      HOME: probeHome,
+      XDG_DATA_HOME: join(probeHome, 'data'),
+      XDG_CONFIG_HOME: join(probeHome, 'config'),
+      XDG_CACHE_HOME: join(probeHome, 'cache'),
+      XDG_STATE_HOME: join(probeHome, 'state'),
+    });
+  } finally {
+    await rm(probeHome, { recursive: true, force: true });
+  }
+}
+
+function probeOpenCodeVersion(command: OpenCodeCommand, env: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(command.executable, [...command.argsPrefix, '--version'], {
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -104,7 +123,8 @@ export async function resolvePackagedOpenCodeBinary(): Promise<OpenCodeCommand> 
       const packageDirectory = await resolveManagedAgenticToolPackageDirectory(
         'opencode',
         agorVersion,
-        nativePackage
+        nativePackage,
+        'opencode-ai'
       );
       const binary = join(
         packageDirectory,

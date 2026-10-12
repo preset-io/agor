@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { sanitizeMCPExternalError } from '@agor/core/mcp';
 import type { SessionID, TaskID } from '@agor/core/types';
 
-// Codex SDK 0.156.1 forwards native spawn/filesystem errors. Do not log their
+// Codex SDK 0.160.0 forwards native spawn/filesystem errors. Do not log their
 // path, syscall, spawnargs, or message. These codes describe a runtime failure,
 // not its root cause (ENOENT, for example, does not prove an auth-file problem).
 const RUNTIME_CODES = new Set([

@@ -19,6 +19,7 @@ import { BadRequest } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
   buildKnowledgeUnitUri,
+  KNOWLEDGE_ARCHIVE_FILTERS,
   type KnowledgeSearchResult,
   normalizeKnowledgeFolderPath,
   type QueryParams,
@@ -93,12 +94,27 @@ export class KnowledgeSearchService {
       includeMyDrafts?: boolean;
       includeOtherUserDrafts?: boolean;
     };
+    if (
+      rawQuery.archive_filter !== undefined &&
+      !KNOWLEDGE_ARCHIVE_FILTERS.includes(rawQuery.archive_filter)
+    ) {
+      throw new BadRequest('archive_filter must be active, archived, or all');
+    }
+    const includeArchived: unknown = rawQuery.include_archived;
+    if (
+      includeArchived !== undefined &&
+      ![true, false, 'true', 'false'].includes(includeArchived as boolean | string)
+    ) {
+      throw new BadRequest('include_archived must be a boolean');
+    }
     const readableNamespaceIds = isAdmin
       ? undefined
       : await this.namespaces.findReadableNamespaceIds(String(user?.user_id ?? ''));
     return {
       ...(query ?? {}),
-      include_archived: isAdmin && rawQuery.include_archived === true,
+      archive_filter:
+        rawQuery.archive_filter ??
+        (includeArchived === true || includeArchived === 'true' ? 'all' : 'active'),
       include_my_drafts: rawQuery.include_my_drafts ?? rawQuery.includeMyDrafts ?? true,
       include_other_user_drafts:
         rawQuery.include_other_user_drafts ?? rawQuery.includeOtherUserDrafts ?? false,
@@ -263,6 +279,8 @@ export class KnowledgeSearchService {
           d.updated_by_agentic_tool,
           d.updated_by_teammate_name,
           d.updated_at,
+          d.archived,
+          d.archived_at,
           ns.slug AS namespace_slug,
           ns.display_name AS namespace_display_name,
           ns.description AS namespace_description,
@@ -288,7 +306,7 @@ export class KnowledgeSearchService {
         JOIN kb_documents d ON d.document_id = u.document_id AND d.current_version_id = u.version_id
         JOIN kb_namespaces ns ON ns.namespace_id = d.namespace_id
         JOIN kb_embedding_spaces sp ON sp.embedding_space_id = e.embedding_space_id
-        WHERE d.archived = false
+        WHERE (${rawQuery.archive_filter === 'all'}::boolean OR d.archived = ${rawQuery.archive_filter === 'archived'})
           AND ns.archived = false
           AND sp.provider = ${provider}
           AND sp.model = ${model}
@@ -360,8 +378,8 @@ export class KnowledgeSearchService {
           updated_by_agentic_tool: (row.updated_by_agentic_tool as never) ?? null,
           updated_by_teammate_name: (row.updated_by_teammate_name as string | null) ?? null,
           updated_at: row.updated_at ? new Date(row.updated_at as string | number | Date) : null,
-          archived: false,
-          archived_at: null,
+          archived: Boolean(row.archived),
+          archived_at: row.archived_at ? new Date(row.archived_at as string | number | Date) : null,
         },
         namespace: {
           namespace_id: String(row.namespace_id) as never,

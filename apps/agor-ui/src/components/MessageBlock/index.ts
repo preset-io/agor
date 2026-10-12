@@ -1,1 +1,1 @@
-export { getMessageSpeaker, MessageBlock } from './MessageBlock';
+export { getMessageSpeaker, hasRevealableInlineDetail, MessageBlock } from './MessageBlock';

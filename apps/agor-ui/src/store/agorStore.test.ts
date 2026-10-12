@@ -5,6 +5,7 @@ import type {
   BoardEntityObject,
   Branch,
   GatewayChannel,
+  MCPServer,
   Session,
   SessionRelationship,
   TenantAgenticToolSettings,
@@ -17,6 +18,7 @@ import {
   runHydration,
 } from './agorHydration';
 import { EMPTY_MAPS } from './agorMaps';
+import { mcpServerRemoved } from './agorRealtimeActions';
 import { agorStore } from './agorStore';
 
 // Reset the singleton before each test so cases don't bleed into each other.
@@ -153,7 +155,6 @@ describe('agorStore branch hard-delete cascade', () => {
       ]),
       boardById: new Map([[board.board_id, board]]),
       boardObjectById: new Map([[boardObject.object_id, boardObject]]),
-      boardObjectByBranchId: new Map([[branch.branch_id, boardObject]]),
       boardObjectsByBoardId: new Map([[board.board_id, [boardObject]]]),
       commentById: new Map([
         [branchComment.comment_id, branchComment],
@@ -176,7 +177,6 @@ describe('agorStore branch hard-delete cascade', () => {
     expect(state.sessionById.get(retainedSession.session_id)).toEqual(retainedSession);
     expect(state.sessionsByBranch.has(branch.branch_id)).toBe(false);
     expect(state.boardObjectById.has(boardObject.object_id)).toBe(false);
-    expect(state.boardObjectByBranchId.has(branch.branch_id)).toBe(false);
     expect(state.boardObjectsByBoardId.has(board.board_id)).toBe(false);
     expect(state.sessionMcpServerIds.has(deletedSession.session_id)).toBe(false);
     expect(state.sessionMcpServerIds.get(retainedSession.session_id)).toEqual(['mcp-2']);
@@ -412,4 +412,19 @@ describe('agorStore agentic tool-settings fetch lifecycle races', () => {
     expect(agorStore.getState().agenticToolSettingsByName.size).toBe(0);
     expect(agorStore.getState().agenticToolSettingsHydrated).toBe(false);
   });
+});
+
+it('server removal evicts picker inventory and cascaded session references immediately', () => {
+  const server = { mcp_server_id: 'deleted' } as MCPServer;
+  agorStore.setState({
+    mcpServerById: new Map([['deleted', server]]),
+    sessionMcpServerIds: new Map([
+      ['one', ['deleted']],
+      ['two', ['deleted', 'retained']],
+    ]),
+  });
+  mcpServerRemoved(server);
+  mcpServerRemoved(server); // socket echo is harmless
+  expect(agorStore.getState().mcpServerById.size).toBe(0);
+  expect(agorStore.getState().sessionMcpServerIds).toEqual(new Map([['two', ['retained']]]));
 });

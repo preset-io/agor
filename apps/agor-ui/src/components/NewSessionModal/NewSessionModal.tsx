@@ -160,6 +160,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           codexSandboxMode: values.codexSandboxMode,
           codexApprovalPolicy: values.codexApprovalPolicy,
           codexNetworkAccess: values.codexNetworkAccess,
+          codexIncludePlugins: values.codexIncludePlugins,
         };
         void persistUserDefaultFromForm(
           client,

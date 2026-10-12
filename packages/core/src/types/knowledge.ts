@@ -72,6 +72,18 @@ export type KnowledgeDocumentKind = (typeof KNOWLEDGE_DOCUMENT_KINDS)[number];
 export const KNOWLEDGE_VISIBILITIES = ['public', 'private'] as const;
 export type KnowledgeVisibility = (typeof KNOWLEDGE_VISIBILITIES)[number];
 
+/** Discovery only; never changes namespace/document authorization. */
+export const KNOWLEDGE_ARCHIVE_FILTERS = ['active', 'archived', 'all'] as const;
+export type KnowledgeArchiveFilter = (typeof KNOWLEDGE_ARCHIVE_FILTERS)[number];
+export const KNOWLEDGE_ARCHIVE_BULK_LIMIT = 50;
+
+/** Metadata-only PATCH. Content versions and grants are not changed. */
+export interface KnowledgeDocumentArchivePatch {
+  archived: boolean;
+  expected_version?: string | number;
+  expected_archived?: boolean;
+}
+
 export const KNOWLEDGE_DOCUMENT_STATUSES = ['draft', 'published'] as const;
 export type KnowledgeDocumentStatus = (typeof KNOWLEDGE_DOCUMENT_STATUSES)[number];
 

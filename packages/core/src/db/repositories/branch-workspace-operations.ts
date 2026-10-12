@@ -1,21 +1,72 @@
 import { eq } from 'drizzle-orm';
 import type {
+  Branch,
+  BranchID,
   BranchMaintenanceClaim,
   BranchWorkspaceOperation,
   BranchWorkspaceSnapshot,
   UUID,
 } from '../../types';
-import { getBranchCleanupBlockReason, resolveRepoCleanupPolicy } from '../../types/branch-cleanup';
+import {
+  canDismissBranchWorkspaceNotification,
+  getBranchCleanupBlockReason,
+  resolveRepoCleanupPolicy,
+} from '../../types/branch-cleanup';
 import type { Database } from '../client';
-import { select, update } from '../database-wrapper';
+import { lockRowForUpdate, runDatabaseTransaction, select, update } from '../database-wrapper';
 import { branches } from '../schema';
-import { RepositoryError } from './base';
+import { EntityNotFoundError, RepositoryError } from './base';
 import { BranchMaintenanceRepository } from './branch-maintenance';
+import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 
 /** Cleanup/archive data only. The shared maintenance repository owns admission and invocation identity. */
 export class BranchWorkspaceOperationRepository {
   constructor(private readonly db: Database) {}
+
+  /** Forget only the requested settled notification, never runtime ownership.
+   * Shares the Branch row lock with admission/completion; a stale close cannot
+   * erase a replacement operation. Authorization is rechecked under that lock.
+   */
+  async dismissNotification(
+    branchId: BranchID,
+    operationId: UUID,
+    authorize: (db: Database, branch: Branch) => Promise<void>
+  ): Promise<Branch> {
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, branchId));
+        const repository = new BranchRepository(tx);
+        const branch = await repository.findById(branchId);
+        if (!branch) throw new EntityNotFoundError('Branch', branchId);
+        await authorize(tx, branch);
+        const row = await select(tx).from(branches).where(eq(branches.branch_id, branchId)).one();
+        if (!row) throw new EntityNotFoundError('Branch', branchId);
+        if (!branch.workspace_operation) return branch; // Repeated acknowledgement is harmless.
+        if (branch.workspace_operation.operation_id !== operationId)
+          throw new RepositoryError(
+            'The workspace notification has changed. Refresh and try again.'
+          );
+        if (row.data.maintenance || !canDismissBranchWorkspaceNotification(branch))
+          throw new RepositoryError(
+            'Resolve the branch operation or recover its workspace before dismissing this notification.'
+          );
+        const {
+          workspace_operation: _operation,
+          workspace_snapshot: _snapshot,
+          cleanup_last_error: _error,
+          ...data
+        } = row.data;
+        await update(tx, branches)
+          .set({ data, updated_at: new Date() })
+          .where(eq(branches.branch_id, branchId))
+          .run();
+        return (await repository.findById(branchId))!;
+      },
+      { sqliteImmediate: true, sqliteBusyRetries: 9 }
+    );
+  }
 
   async prepare(
     claim: BranchMaintenanceClaim,
@@ -79,6 +130,7 @@ export class BranchWorkspaceOperationRepository {
       !repo ||
       row.repo_id !== snapshot.repo_id ||
       row.data.path !== snapshot.path ||
+      (snapshot.storage_mode !== undefined && row.storage_mode !== snapshot.storage_mode) ||
       repo.local_path !== snapshot.repo_path
     )
       throw new RepositoryError('Workspace location changed before execution');
@@ -176,7 +228,7 @@ export class BranchWorkspaceOperationRepository {
             ? undefined
             : outcome === 'unknown'
               ? 'Workspace command outcome is unknown. The branch remains fenced pending reconciliation.'
-              : 'Workspace command failed. Files may already have changed; there is no undo.';
+              : 'Workspace command failed. Check executor storage mounts, checkout type and cleanup policy before retrying. Files may already have changed; there is no undo.';
         const cleanup = operation.filesystem_action === 'cleaned';
         await update(tx, branches)
           .set({

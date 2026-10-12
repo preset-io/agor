@@ -120,7 +120,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       db: Database,
       tenantId: TenantID,
       user: { user_id: string },
-      sessionId?: string
+      sessionId?: string,
+      toolName = 'agor_gateway_discord_channel_history_get'
     ): Handler {
       const app = feathers();
       app.set('config', {});
@@ -144,7 +145,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         },
       } as unknown as McpServer;
       registerGatewayChannelTools(tenantScopedToolProxy(server, ctx), ctx);
-      return handlers.agor_gateway_discord_channel_history_get!;
+      return handlers[toolName]!;
     }
 
     it("reads through the caller's own tenant and cannot reach another tenant's channel", async () => {
@@ -182,6 +183,48 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ).rejects.toThrow(/Gateway channel not found/);
       // Replaying tenant A's session ID from tenant B fails closed.
       const replay = toolFor(db, tenantB, b.user, a.session.session_id);
+      await expect(
+        replay({ gatewayChannelId: a.channel.id, discordChannelId: a.parentChannelId })
+      ).rejects.toThrow(/calling session not found/);
+      expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it("lists forum posts only through the caller's own tenant", async () => {
+      const db = createTenantScopedDatabaseProxy(rawDb, { label: 'daemon database' });
+      const tenantA = `discord-forum-a-${generateId()}` as TenantID;
+      const tenantB = `discord-forum-b-${generateId()}` as TenantID;
+      const a = await seedTenant(tenantA, db);
+      const b = await seedTenant(tenantB, db);
+      const listForumPosts = vi.fn(async (req: { channelId?: string }) => ({
+        channelId: req.channelId,
+        archived: false,
+        posts: [],
+        has_more: false,
+        next_cursor: null,
+      }));
+      vi.mocked(getConnector).mockClear();
+      vi.mocked(getConnector).mockReturnValue({ listForumPosts } as never);
+      const forumTool = 'agor_gateway_discord_forum_posts_list';
+
+      const own = toolFor(db, tenantA, a.user, a.session.session_id, forumTool);
+      const result = await own({
+        gatewayChannelId: a.channel.id,
+        discordChannelId: a.parentChannelId,
+      });
+      expect(JSON.parse(result.content[0]!.text).forum).toEqual({
+        discord_channel_id: a.parentChannelId,
+        archived: false,
+      });
+      expect(vi.mocked(getConnector).mock.calls[0]![1]).toMatchObject({
+        bot_token: `bot-token-${tenantA}`,
+      });
+
+      vi.mocked(getConnector).mockClear();
+      const foreign = toolFor(db, tenantB, b.user, undefined, forumTool);
+      await expect(
+        foreign({ gatewayChannelId: a.channel.id, discordChannelId: a.parentChannelId })
+      ).rejects.toThrow(/Gateway channel not found/);
+      const replay = toolFor(db, tenantB, b.user, a.session.session_id, forumTool);
       await expect(
         replay({ gatewayChannelId: a.channel.id, discordChannelId: a.parentChannelId })
       ).rejects.toThrow(/calling session not found/);

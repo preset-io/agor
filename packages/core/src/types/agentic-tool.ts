@@ -394,7 +394,6 @@ export interface CodexDeviceAuthStatus {
  * daemon cannot poll for approval: the user approves in the browser and copies
  * a `CODE#STATE` string back to Agor. The code travels user→Agor (the reverse
  * of Codex), which is why there is an `awaiting_code` phase and no poll loop.
- * See `context/explorations/claude-code-oauth-signin.md`.
  *
  * - `idle`: no attempt exists for this user.
  * - `awaiting_code`: an authorize URL was issued; the daemon is waiting for the

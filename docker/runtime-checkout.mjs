@@ -5,26 +5,27 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // Match the dependency inputs copied by development plus runtime-build.
-export async function dependencyFingerprint(root) {
+const runtimeWorkspaces = [
+  'apps/agor-daemon',
+  'apps/agor-cli',
+  'apps/agor-ui',
+  'packages/git',
+  'packages/core',
+  'packages/agentic-tool-opencode',
+  'packages/agentic-tools',
+  'packages/executor',
+  'packages/client',
+  'packages/agor-live',
+  'packages/agor-claude',
+  'packages/agor-codex',
+  'packages/agor-copilot',
+  'packages/agor-gemini',
+  'packages/agor-opencode',
+  'packages/agor-cursor',
+];
+export async function dependencyFingerprint(root, workspaces = runtimeWorkspaces) {
   const files = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'];
-  for (const workspace of [
-    'apps/agor-daemon',
-    'apps/agor-cli',
-    'apps/agor-ui',
-    'packages/git',
-    'packages/core',
-    'packages/agentic-tool-opencode',
-    'packages/agentic-tools',
-    'packages/executor',
-    'packages/client',
-    'packages/agor-live',
-    'packages/agor-claude',
-    'packages/agor-codex',
-    'packages/agor-copilot',
-    'packages/agor-gemini',
-    'packages/agor-opencode',
-    'packages/agor-cursor',
-  ]) {
+  for (const workspace of workspaces) {
     files.push(`${workspace}/package.json`);
   }
   for (const name of (await readdir(join(root, 'patches'))).sort()) files.push(`patches/${name}`);
@@ -55,7 +56,14 @@ export function validateSource(repo, branch) {
   }
 }
 
-export async function prepareCheckout({ state, repo, branch, git, expectedFingerprint }) {
+export async function prepareCheckout({
+  state,
+  repo,
+  branch,
+  git,
+  expectedFingerprint,
+  fingerprint = dependencyFingerprint,
+}) {
   validateSource(repo, branch);
   await mkdir(state, { recursive: true, mode: 0o700 });
   const checkout = join(state, 'checkout');
@@ -89,7 +97,7 @@ export async function prepareCheckout({ state, repo, branch, git, expectedFinger
       await rm(staging, { recursive: true, force: true });
     }
   }
-  if ((await dependencyFingerprint(checkout)) !== expectedFingerprint) {
+  if ((await fingerprint(checkout)) !== expectedFingerprint) {
     throw new Error(
       'Source dependencies differ from the image; rebuild the dependency image before starting'
     );

@@ -51,6 +51,7 @@ export function getNewSessionToolSwitchValues(
       codexSandboxMode: undefined,
       codexApprovalPolicy: undefined,
       codexNetworkAccess: undefined,
+      codexIncludePlugins: undefined,
     }),
   };
 }
@@ -126,6 +127,9 @@ export function buildNewSessionConfig({
       (values.codexApprovalPolicy as CodexApprovalPolicy | undefined) ??
       agentDefaults?.codexApprovalPolicy ??
       codexDefaults.approvalPolicy;
+    config.codexIncludePlugins =
+      values.codexIncludePlugins ??
+      (isInline ? false : (agentDefaults?.codexIncludePlugins ?? false));
     config.codexNetworkAccess =
       values.codexNetworkAccess ?? agentDefaults?.codexNetworkAccess ?? codexDefaults.networkAccess;
   }

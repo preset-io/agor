@@ -95,7 +95,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
         'clone will fail with `clone_error.category: "auth_failed"`. If it is missing, PREFER calling ' +
         "`agor_widgets_request_env_vars({ names: ['GITHUB_TOKEN'], reason: ... })` to collect it inline " +
         'over pointing the user at Settings → Env Vars, then retry. Retrying after a failed clone is ' +
-        'supported — the previous failed row is replaced.',
+        'supported in place — the repository ID, configuration, and existing branches are preserved.',
       inputSchema: z.object({
         url: mcpRequiredString(
           'url',
@@ -135,11 +135,9 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       const name = coerceString(args.name);
       const defaultBranch = coerceString(args.default_branch);
       const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
-      // `cloneRepository` is a custom (non-transport) service method, so this
-      // direct call bypasses the around hooks that enter the tenant database
-      // scope for HTTP callers. Re-enter it here so its `this.db` reads/writes
-      // join one short tenant unit — the executor clone itself is fire-and-forget
-      // and runs outside this scope. See mcp/tenant-scope.ts.
+      // Keep MCP's trusted identity/write gate at the transport boundary. The
+      // service joins this short tenant unit (or opens its own for direct
+      // callers); the executor is dispatched only after it commits.
       const result = await runWithMcpTenantDatabaseWrite(ctx, () =>
         reposService.cloneRepository(
           { url, slug, name, ...(defaultBranch ? { default_branch: defaultBranch } : {}) },
@@ -237,6 +235,38 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       // match the HTTP route's around hook.
       const updated = await runWithMcpTenantDatabaseWrite(ctx, () =>
         reposService.updateMetadata(repoId, patch, ctx.baseServiceParams)
+      );
+      return textResult(updated);
+    }
+  );
+
+  server.registerTool(
+    'agor_repos_import_environment',
+    {
+      description:
+        "Import the source branch's .agor.yml into its repository's environment configuration (admin-only). " +
+        'Replaces all repo-wide variants and the default, removing definitions absent from the file; ' +
+        'preserves deployment-local template_overrides. Review the complete replacement before calling. ' +
+        'The branch must belong to the repo and the caller must have branch filesystem read access. ' +
+        'Does not render or start any branch. Call agor_environment_set afterward to select or re-render ' +
+        'the target branch variant, then agor_environment_start when ready. ' +
+        'See https://agor.live/guide/environment-configuration for the configuration and remote-provider workflow.',
+      annotations: { destructiveHint: true, idempotentHint: true },
+      inputSchema: z.object({
+        repoId: mcpRequiredId('repoId', 'Repository'),
+        branchId: mcpRequiredId('branchId', 'Source branch containing .agor.yml'),
+      }),
+    },
+    async (args) => {
+      const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
+      // Match the HTTP long route's write admission in a short unit. The service
+      // owns its read/write units and rechecks the gate after executor file I/O;
+      // never hold a database transaction across that executor round-trip.
+      await runWithMcpTenantDatabaseWrite(ctx, async () => undefined);
+      const updated = await reposService.importFromAgorYml(
+        args.repoId,
+        { branch_id: args.branchId },
+        ctx.baseServiceParams
       );
       return textResult(updated);
     }

@@ -17,6 +17,7 @@ import {
   runMigrations,
   runWithTenantContext,
 } from '@agor/core/db';
+import type { GatewayConnector } from '@agor/core/gateway';
 import type {
   GatewayChannel,
   MCPServer,
@@ -36,6 +37,7 @@ import {
   mcpOAuthConnectClaimsMatchDelivery,
   verifyMCPOAuthConnectToken,
 } from '../utils/mcp-oauth-connect-token.js';
+import type { SlackConnectCoordinates } from './mcp-oauth-connect-delivery.js';
 
 // A channel whose `provider_config_generation` moved is deliberately delivered
 // through a freshly constructed connector rather than the process-local
@@ -460,6 +462,7 @@ interface HarnessOptions {
   slackChannelId?: string;
   /** `'none'` stands in for a canvas (or non-Slack gateway) host task. */
   taskSource?: 'slack' | 'none';
+  mappingSessionId?: SessionID;
   /**
    * Real, scope-guarded database handle for `this.db`.
    *
@@ -582,7 +585,12 @@ function deliveryHarness(options: HarnessOptions = {}) {
         }) as MCPServer,
     },
     threadMapRepo: {
-      findBySession: async () => ({ id: 'map-1', channel_id: 'gateway-1', thread_id: THREAD }),
+      findByChannelAndThread: async () => ({
+        id: 'map-1',
+        session_id: options.mappingSessionId ?? SESSION_ID,
+        channel_id: 'gateway-1',
+        thread_id: THREAD,
+      }),
       claimMetadataFlag,
     },
     activeListeners: new Map([['tenant-a\0gateway-1', connector]]),
@@ -1227,6 +1235,36 @@ describe('Slack MCP connect durable delivery', () => {
     await withSecret(() => dm.deliver());
     expect(dm.claimMetadataFlag).not.toHaveBeenCalled();
     expect(dm.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it('does not claim or post a shared-thread warning for another session’s mapping', async () => {
+    const harness = deliveryHarness({ mappingSessionId: 'session-other' as SessionID });
+    // Exercise the notice's own guard, independently of the card authority
+    // read (which also rejects this row before a full delivery reaches it).
+    await runWithTenantContext('tenant-a', () =>
+      (
+        harness.service as unknown as {
+          postMcpSlackSharedThreadWarning(
+            connector: GatewayConnector,
+            slack: SlackConnectCoordinates,
+            sessionId: string
+          ): Promise<void>;
+        }
+      ).postMcpSlackSharedThreadWarning(
+        { sendMessage: harness.sendMessage } as unknown as GatewayConnector,
+        {
+          gatewayChannelId: 'gateway-1',
+          teamId: 'T1',
+          channelId: 'C123',
+          threadId: THREAD,
+          userId: 'U1',
+          conversationType: 'channel',
+        },
+        SESSION_ID
+      )
+    );
+    expect(harness.claimMetadataFlag).not.toHaveBeenCalled();
+    expect(harness.sendMessage).not.toHaveBeenCalled();
   });
 
   it('does not repeat the shared-thread warning when the claim was already taken', async () => {

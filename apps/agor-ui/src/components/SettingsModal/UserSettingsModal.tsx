@@ -94,6 +94,7 @@ import { EnvVarEditor } from '../EnvVarEditor';
 import { HighlightMatch } from '../HighlightMatch';
 import { SessionMcpServersField } from '../MCPServerSelect';
 import { ToolIcon } from '../ToolIcon';
+import { ToolBetaBadge } from '../ToolIcon/ToolBetaBadge';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
@@ -1342,6 +1343,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
                 <Space size={8}>
                   <Badge color={statusDotColor[status.tone]} />
                   <span>{child.title}</span>
+                  {child.provider && <ToolBetaBadge tool={child.provider.tool} />}
                   <span style={SR_ONLY_STYLE}>{status.label}</span>
                 </Space>
               )}
@@ -1932,13 +1934,13 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
               label="Primary coding agent"
               help={
                 user?.primary_agentic_tool
-                  ? 'Preselected for new sessions. Choosing another agent while composing affects only that session.'
-                  : 'Once you successfully use a coding agent, Agor will remember it here. You can choose one now instead.'
+                  ? 'Used to quick-start “Ask your primary assistant” and when an agent creates a session via MCP without specifying a coding agent.'
+                  : 'Used to quick-start “Ask your primary assistant” and when an agent creates a session via MCP without specifying a coding agent. Once you successfully use a coding agent, Agor will remember it here. You can choose one now instead.'
               }
               style={{ maxWidth: 560, marginBottom: 0 }}
             >
               <Select
-                placeholder="Not set (Claude Code is used initially)"
+                placeholder="Not set"
                 loading={!tenantToolSettingsHydrated}
                 disabled={!tenantToolSettingsHydrated || saving}
                 options={AGENTIC_TOOL_TABS.map((tool) => ({
@@ -1949,6 +1951,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
                     <Space size={8}>
                       <ToolIcon tool={tool} size={16} />
                       <span>{AGENTIC_TOOL_DISPLAY_NAMES[tool]}</span>
+                      <ToolBetaBadge tool={tool} />
                       {tenantToolSettings.get(tool as TenantAgenticToolName)?.enabled === false && (
                         <Typography.Text type="secondary">Disabled</Typography.Text>
                       )}
@@ -2089,7 +2092,12 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       <PanelHeader
         title={displayName}
         icon={<ToolIcon tool={tool} size={32} />}
-        extra={statusTag}
+        extra={
+          <Space>
+            <ToolBetaBadge tool={tool} />
+            {statusTag}
+          </Space>
+        }
       />
     );
 

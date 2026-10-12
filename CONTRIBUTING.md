@@ -4,6 +4,9 @@ Thank you for your interest in contributing to Agor! 🚀
 
 **📚 Complete contribution guide:** https://agor.live/guide/development
 
+**Maintainers:** see [Publishing Agor](PUBLISH.md) for SDK/model changes, release
+tags, publishing approval, npm verification, and installation order.
+
 The documentation covers everything you need:
 
 - Setup instructions (Docker or local pnpm)
@@ -265,7 +268,7 @@ someone closes it after the run goes green.
 - **[Discord](https://discord.gg/Qh4TrFQZpd)** - Join our Discord community for support and discussion
 - **[GitHub Discussions](https://github.com/preset-io/agor/discussions)** - Ask questions, share ideas, get help
 - **[GitHub Issues](https://github.com/preset-io/agor/issues)** - Report bugs, request features
-- **Read the docs** - [CLAUDE.md](CLAUDE.md) and [context/](context/) have extensive documentation
+- **Read the docs** - [AGENTS.md](AGENTS.md) and [context/](context/)
 
 **Response time:**
 

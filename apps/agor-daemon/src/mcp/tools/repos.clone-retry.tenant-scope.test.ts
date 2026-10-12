@@ -24,10 +24,13 @@ vi.mock('../../services/session-token-service.js', () => ({
   issueExecutorCommandToken: vi.fn(async () => 'test-command-token'),
 }));
 
-dbTest('MCP replaces failed clones under a real guarded DB scope (#2643)', async ({ db }) => {
+dbTest('MCP retries failed clones in the guarded DB scope (#2643)', async ({ db }) => {
   executor.spawn.mockClear();
   executor.request.mockClear();
-  const guardedDb = createTenantScopedDatabaseProxy(db, { label: 'daemon database' });
+  const guardedDb = createTenantScopedDatabaseProxy(db, {
+    label: 'daemon database',
+    requireScope: true,
+  });
   const app = {
     get: () => ({ execution: { unix_user_mode: 'simple' } }),
     service: (name: string) => {
@@ -59,9 +62,10 @@ dbTest('MCP replaces failed clones under a real guarded DB scope (#2643)', async
     })
   );
 
-  // Same real custom service call as pre-#2612: identity alone is insufficient.
+  // The guarded repository still requires a DB scope; the service now opens it
+  // for direct callers as well as joining the MCP transport's unit of work.
   await expect(
-    runWithTenantContext('tenant-a', () => service.cloneRepository(args, params))
+    runWithTenantContext('tenant-a', () => repository.findBySlug(args.slug))
   ).rejects.toThrow(
     'Failed to find repo by slug: Missing tenant database scope for daemon database access'
   );
@@ -80,37 +84,50 @@ dbTest('MCP replaces failed clones under a real guarded DB scope (#2643)', async
   if (!handler) throw new Error('Missing create-remote tool');
   const invoke = handler;
 
-  // Conflicting trusted identity cannot switch to tenant A and remove its tombstone.
+  // Neither entry point may switch from conflicting trusted identity to tenant A.
+  await expect(
+    runWithTenantContext('tenant-b', () => service.cloneRepository(args, params))
+  ).rejects.toThrow();
   await expect(runWithTenantContext('tenant-b', () => invoke(args))).rejects.toThrow();
   expect(await inScope(() => repository.findById(failed.repo_id))).toEqual(failed);
   expect(executor.spawn).not.toHaveBeenCalled();
 
-  let previousId = failed.repo_id;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
     const result = await runWithTenantContext('tenant-a', () => invoke(args));
     const pending = JSON.parse(result.content[0].text) as { status: string; repo_id: string };
     expect(pending.status).toBe('pending');
     expect(getCurrentTenantDatabaseScope()).toBeUndefined();
-    expect(pending.repo_id).not.toBe(previousId);
-    expect(await inScope(() => repository.findById(previousId))).toBeNull();
-    const replacement = await inScope(() => repository.findBySlug(args.slug));
-    expect(replacement).toMatchObject({ repo_id: pending.repo_id, clone_status: 'cloning' });
-    expect(replacement?.clone_error).toBeUndefined();
+    expect(pending.repo_id).toBe(failed.repo_id);
+    const retried = await inScope(() => repository.findBySlug(args.slug));
+    expect(retried).toMatchObject({
+      repo_id: failed.repo_id,
+      local_path: failed.local_path,
+      clone_status: 'cloning',
+      clone_generation: attempt,
+    });
+    expect(retried?.clone_error).toBeUndefined();
     // An in-flight clone must not be removed or launched a second time.
     const existing = await invoke(args);
     expect(JSON.parse(existing.content[0].text)).toMatchObject({
       status: 'exists',
       repo_id: pending.repo_id,
     });
-    if (!replacement) throw new Error('Missing replacement clone');
-    previousId = replacement.repo_id;
-    await inScope(() => repository.update(previousId, { clone_status: 'failed' }));
+    await expect(service.cloneRepository(args, params)).resolves.toMatchObject({
+      status: 'exists',
+      repo_id: failed.repo_id,
+    });
+    expect(executor.spawn).toHaveBeenCalledTimes(attempt);
+    await inScope(() =>
+      repository.update(failed.repo_id, {
+        clone_status: attempt === 1 ? 'failed' : 'ready',
+        clone_generation: attempt,
+      })
+    );
   }
-  await inScope(() => repository.update(previousId, { clone_status: 'ready' }));
   const ready = await invoke(args);
   expect(JSON.parse(ready.content[0].text)).toMatchObject({
     status: 'exists',
-    repo_id: previousId,
+    repo_id: failed.repo_id,
   });
   expect(executor.spawn).toHaveBeenCalledTimes(2);
   // Even a caller's cleanup=true must not turn retry into filesystem deletion.

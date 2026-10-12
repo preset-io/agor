@@ -57,6 +57,8 @@ const ALLOWED_UNWRAPPED: Record<string, string> = {
   // Rejected with BadRequest in required_from_auth BEFORE any DB touch, and it
   // awaits a git.repo.inspect executor round-trip before its writes — wrapping
   // would risk a transaction across network I/O. See repos.ts.
+  // Import owns short read/write units and rechecks the write gate after executor I/O.
+  'reposService.importFromAgorYml': 'withTenantDatabase + withFreshTenantWrite (short units)',
   'reposService.addLocalRepository': 'HA-forbidden before any DB touch; intentional',
 };
 
@@ -79,7 +81,7 @@ const CALL_SITE_SCOPED_SERVICES = ['repos', 'boards', 'cards', 'sessions', 'boar
  * Other pre-existing MCP mutations (cards/board-object custom methods, and
  * non-`Service.method` writes such as direct repositories / `appendSystemMessage`)
  * still use the read helper and are the subject of the documented service-side
- * write-gate follow-up — see docs/internal/mcp-tenant-db-scope-createbranch-2026-08-29.md.
+ * write-gate follow-up.
  */
 const MUTATION_TOKENS = new Set([
   'reposService.createBranch',

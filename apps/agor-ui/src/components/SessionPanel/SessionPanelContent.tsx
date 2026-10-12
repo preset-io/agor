@@ -14,6 +14,7 @@ import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectRepoById, selectUserById } from '../../store/selectors';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
+import { canSessionStartTurn } from '../../utils/sessionTurn';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BranchMetadataRow } from '../BranchMetadataRow';
 import { ConversationView } from '../ConversationView';
@@ -179,11 +180,9 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                 display: 'block',
                 marginBottom: token.sizeUnit,
                 fontWeight: 500,
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px',
               }}
             >
-              Queued Tasks ({queuedTasks.length})
+              Queued tasks ({queuedTasks.length})
             </Typography.Text>
           }
           queue={
@@ -307,6 +306,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
             }
             onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+            canStartTurn={canSessionStartTurn(session, queuedTasks.length)}
           />
         </SessionConversationLayout>
 

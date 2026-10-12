@@ -34,9 +34,6 @@ vi.mock('../SessionPanel', () => ({
 vi.mock('../EventStreamPanel', () => ({
   EventStreamPanel: () => null,
 }));
-vi.mock('../NewSessionButton', () => ({
-  NewSessionButton: () => null,
-}));
 vi.mock('../SettingsModal', () => ({
   SettingsModal: () => null,
   UserSettingsModal: () => null,
@@ -44,8 +41,8 @@ vi.mock('../SettingsModal', () => ({
 vi.mock('../BranchModal', () => ({
   BranchModal: () => null,
 }));
-vi.mock('../CreateDialog', () => ({
-  CreateDialog: () => null,
+vi.mock('../CreateModals', () => ({
+  CreateModals: () => null,
 }));
 vi.mock('../NewSessionModal', () => ({
   NewSessionModal: () => null,

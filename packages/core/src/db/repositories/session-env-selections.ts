@@ -3,8 +3,6 @@
  *
  * Manages the many-to-many relationship between sessions and user-owned
  * session-scope env vars (v0.5 env-var-access).
- *
- * See `context/explorations/env-var-access.md`.
  */
 
 import type { SessionEnvSelection, SessionID, UserID } from '@agor/core/types';

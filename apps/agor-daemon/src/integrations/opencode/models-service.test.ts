@@ -91,6 +91,15 @@ describe('OpenCode model catalog service', () => {
     expect(runCommand).not.toHaveBeenCalled();
   });
 
+  it('reports an unsupported deployment as data without starting an executor', async () => {
+    loadConfig.mockReturnValue({ multi_tenancy: { mode: 'required_from_auth' } } as never);
+
+    const result = await runWithTenantContext('tenant-a', () => service().find(params));
+
+    expect(result).toMatchObject({ providers: [], unsupported: { code: 'hosted_tenancy' } });
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
   it('requests the user-scoped known catalog without branch or credential data', async () => {
     const result = await runWithTenantContext('tenant-a', () => service().find(params));
 
@@ -214,5 +223,35 @@ describe('OpenCode model catalog service', () => {
       if (original === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = original;
     }
+  });
+});
+
+describe('OpenCode model catalog service (hosted)', () => {
+  it('derives availability from saved keys without any executor', async () => {
+    loadConfig.mockReturnValue({
+      multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      execution: {
+        unix_user_mode: 'delegated',
+        executor_command_template: 'launch',
+        executor_storage: { user_home: 'persistent-per-user' },
+      },
+      agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
+    } as never);
+    usersRepository.mockImplementation(function repository() {
+      return {
+        findById: vi.fn(async () => ({
+          user_id: 'same-user',
+          agentic_tools: { opencode: { anthropic: true } },
+        })),
+      };
+    } as never);
+
+    const result = await runWithTenantContext('tenant-a', () => service().find(params));
+
+    expect(result.unsupported).toBeUndefined();
+    expect(result.suggestedSelection).toMatchObject({ providerId: 'anthropic' });
+    expect(result.providers.find((p) => p.id === 'anthropic')?.availableForSelection).toBe(true);
+    expect(result.providers.find((p) => p.id === 'openai')?.availableForSelection).toBe(false);
+    expect(runCommand).not.toHaveBeenCalled();
   });
 });

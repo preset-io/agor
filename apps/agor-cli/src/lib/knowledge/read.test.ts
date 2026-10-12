@@ -176,7 +176,14 @@ describe('Knowledge discovery', () => {
       expect((await getDocument(client, 'synthetic', 'nested/draft.md')).content).toBe(
         '# Café\r\nこんにちは\n'
       );
-      await expect(getDocument(client, 'synthetic', 'old.md')).rejects.toThrow('not found');
+      expect(await getDocument(client, 'synthetic', 'old.md')).toMatchObject({
+        archived: true,
+        content: 'old',
+      });
+      expect(
+        await listDocuments(client, 'synthetic', undefined, undefined, 'archived')
+      ).toHaveLength(1);
+      expect(await listDocuments(client, 'synthetic', undefined, undefined, 'all')).toHaveLength(3);
       await expect(getDocument(client, 'synthetic', 'missing.md')).rejects.toThrow('not found');
       await expect(namespaceBySlug(client, 'hidden')).rejects.toThrow('not accessible');
       await expect(getDocument(clientFor(other), 'synthetic', 'nested/draft.md')).rejects.toThrow(

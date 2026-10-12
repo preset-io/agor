@@ -44,12 +44,18 @@ import type {
   MCPCatalogEntry,
   MCPCatalogProbedAuthType,
   MCPCatalogServerCandidate,
+  MCPCatalogSharing,
   MCPServer,
   MCPServerID,
   UserID,
 } from '@agor/core/types';
 import { catalogDisplayName, catalogServerSlug, isCanonicalFullUuid } from '@agor/core/types';
-import { hasLiveCallerOAuthGrant, selectCatalogCandidate } from './mcp-catalog-credential-match.js';
+import { readCatalogSharing } from './mcp-catalog-access.js';
+import {
+  hasLiveCallerOAuthGrant,
+  isUsableSharedCatalogCandidate,
+  selectCatalogCandidate,
+} from './mcp-catalog-credential-match.js';
 import {
   catalogOAuthConfig,
   catalogServerTransport,
@@ -341,10 +347,21 @@ function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAu
  */
 async function resolveAuthRequirement(
   entry: MCPCatalogEntry & { remote_url: string },
-  bearerToken: string | undefined
+  bearerToken: string | undefined,
+  sharing: MCPCatalogSharing
 ): Promise<MCPAuth> {
   const probed = await probeRemoteAuthType(entry.remote_url);
   logProbeDisagreement(entry, probed);
+  if (
+    sharing === 'shared' &&
+    (bearerToken !== undefined ||
+      probed === 'credentials' ||
+      (probed === 'oauth' && entry.credentials?.oauth_challenge_compatible))
+  ) {
+    throw new CatalogConnectControlError(
+      'Credential-based Catalog installs must remain private. Shared installs support open access or per-user OAuth only.'
+    );
+  }
 
   // Some vendors publish a first-class bearer route while their unauthenticated
   // endpoint advertises an OAuth flow that Agor cannot safely enter (for
@@ -538,6 +555,10 @@ export interface MCPCatalogConnectService {
  * to catch that than a bug report about consenting twice.
  */
 export interface MCPCatalogConnectDeps {
+  authorizeCaller(
+    params: AuthenticatedParams,
+    sharing: MCPCatalogSharing
+  ): Promise<AuthenticatedParams>;
   /**
    * Opens one short tenant database unit for direct, internal service methods.
    * Connect is a long route and must not retain this scope across its remote
@@ -649,56 +670,17 @@ export function createMCPCatalogConnectService(
   const service = (path: string) => app.service(path);
 
   /**
-   * An install of this entry the caller can already use, if there is one.
-   *
-   * Matched on the catalog name. Both sides carry it verbatim, and it is what
-   * the entry is unique on, so there is no second normalisation to keep in
-   * step and an install survives every edit to the entry except a rename.
-   *
-   * The name alone does not settle it, though: see
-   * {@link isCurrentCatalogInstall}. A row
-   * that no longer carries the entry's configuration is passed over rather
-   * than handed back, so a caller who has one of those and a real install gets
-   * the real one.
-   *
-   * A disabled row is passed over too, which is a different question with the
-   * same answer. Reusing one would attach a server the session resolves away
-   * (`enabledOnly`), reporting success while handing back an agent that never
-   * sees it; re-enabling it would let a connect flip a decision somebody else
-   * made deliberately about a possibly-shared row. Creating a fresh one grants
-   * nothing the caller's `mcp_member_policy` did not already grant, and leaves
-   * the disabled row exactly as its owner left it.
-   *
-   * And a row that keeps a credential in its own columns is reusable only by
-   * the user who owns it. This is the one rule the API-key install adds, and it
-   * is the whole of what stops the feature from being a credential leak between
-   * colleagues.
-   *
-   * The search is already narrowed by `usableByUserId`, which resolves to
-   * "shared rows, plus private rows owned by this user" — and every marketplace
-   * install is stamped private to its installer under every policy and at every
-   * role (`resolveCatalogInstall`), so on today's data a second user genuinely
-   * cannot see the first one's row. That is a conclusion drawn from three
-   * separate mechanisms holding at once, though, and the failure it prevents is
-   * silent: reuse handing B a row carrying A's key looks exactly like the
-   * feature working. `usableByUserId` widening, one internally-created unowned
-   * row carrying a `catalog_entry_name`, or a later policy that publishes an
-   * install would each turn a working marketplace into one that lends out
-   * credentials, with nothing failing to mark the moment.
-   *
-   * So the property is asserted here rather than inferred from over there. It
-   * costs an ownership comparison, it is expressed in terms of what the row
-   * carries rather than which entry it came from, and it applies to any future
-   * auth type that puts a secret in a column. Sharing stays available for the
-   * cases where it is sound — an unauthenticated server, or an OAuth one, whose
-   * grants are per-user in `user_mcp_oauth_tokens` and so are not the row's to
-   * lend.
+   * Match the explicitly selected owner/catalog identity. Private selection
+   * never borrows shared configuration or a foreign private credential. Shared
+   * selection accepts only the current canonical, secret-free session row;
+   * drifted identities are retained for a Settings-required refusal, not repair.
    */
   const findExistingInstall = async (
     entry: MCPCatalogEntry & { remote_url: string },
     prescribed: MCPAuth,
     userId: UserID,
-    params: AuthenticatedParams
+    params: AuthenticatedParams,
+    sharing: MCPCatalogSharing
   ): Promise<ExistingSelection | undefined> => {
     const candidates = await deps.listCandidates(userId, params);
     const selected = await selectCatalogCandidate(
@@ -707,7 +689,8 @@ export function createMCPCatalogConnectService(
       candidates,
       userId,
       Date.now(),
-      { isGrantAuthorized: (candidate) => deps.isGrantAuthorized(candidate, params) }
+      { isGrantAuthorized: (candidate) => deps.isGrantAuthorized(candidate, params) },
+      sharing
     );
     if (selected.live) {
       return {
@@ -717,7 +700,9 @@ export function createMCPCatalogConnectService(
       };
     }
     const revived = await findReusableCredential(entry, selected.compatibleOAuth, userId, params);
-    if (revived) return revived;
+    if (revived) {
+      return sharing === 'shared' ? { ...revived, kind: 'catalog_install' } : revived;
+    }
     if (selected.ownedCatalog) {
       return {
         server: selected.ownedCatalog.server,
@@ -733,15 +718,12 @@ export function createMCPCatalogConnectService(
    * there is one — the answer to "I signed into this vendor last week, why am I
    * signing in again".
    *
-   * Runs only when {@link findExistingInstall} found no install of the entry
-   * itself, so nothing above this changes. Where that predicate asks "is this
-   * row still what the catalog described", this one asks the different and
-   * looser question "is this row somewhere my existing credential already
-   * works" — looser because it must match a row nobody installed from this
-   * entry, or from any entry, which is exactly the case the requirement is
-   * about. `catalog_entry_name` is therefore not compared, on purpose: a
-   * hand-configured row in Settings holds a perfectly good Linear grant, and
-   * refusing to see it is how the user ends up consenting twice.
+   * Private requests may reuse only caller-owned credential peers, including
+   * hand-configured Settings rows matching the catalog's endpoint and credential
+   * policy. Merely being visible/attachable is not enough: shared manual rows
+   * and foreign private rows are excluded to preserve the requested identity.
+   * Shared requests consider only the exact canonical shared Catalog row.
+   * This also runs for an existing install whose caller grant needs refreshing.
    *
    * Nothing is copied. The grant stays on its own row under its own
    * `(user_id, mcp_server_id)` key, and reuse means the session is pointed at
@@ -943,26 +925,99 @@ export function createMCPCatalogConnectService(
         throw new NotAuthenticated('Authenticated user identity must be a canonical full UUID');
       }
       const userId = authenticatedUserId as UserID;
+      const sharing = readCatalogSharing(data.sharing);
+      params = await deps.authorizeCaller(params, sharing);
       const bearerToken = readBearerToken(data.bearer_token, entry);
+      // Pin a pre-existing shared identity across the external probe. A deleted
+      // or replaced row is not permission to publish a replacement (even for
+      // a publisher), nor to adopt a different installation mid-request.
+      const initialShared =
+        sharing === 'shared'
+          ? (await deps.listCandidates(userId, params)).find(
+              ({ server }) =>
+                !server.owner_user_id &&
+                server.source === 'catalog' &&
+                server.catalog_entry_name === entry.name
+            )
+          : undefined;
+      const configuredClient = data.oauth_client;
+      if (
+        configuredClient !== undefined &&
+        (!configuredClient ||
+          typeof configuredClient !== 'object' ||
+          Array.isArray(configuredClient) ||
+          Object.keys(configuredClient).some(
+            (key) => key !== 'client_id' && key !== 'client_secret'
+          ))
+      ) {
+        throw new BadRequest('Invalid configured OAuth app input');
+      }
+      if (
+        configuredClient !== undefined &&
+        (!entry.oauth?.configured_client || bearerToken !== undefined)
+      ) {
+        throw new BadRequest('This entry does not accept configured OAuth app credentials');
+      }
+      // A configured app's credentials are entered once, by whoever creates
+      // the install. Using an existing shared install reuses them as-is and
+      // never overwrites them from Connect; changing them is a Settings edit.
+      const reusesSharedConfiguredApp = Boolean(entry.oauth?.configured_client && initialShared);
+      if (reusesSharedConfiguredApp && configuredClient !== undefined) {
+        throw new BadRequest(
+          'This shared installation already has an OAuth app. Connect without app credentials, or ask an admin to change it in Settings.'
+        );
+      }
+      if (
+        entry.oauth?.configured_client &&
+        !reusesSharedConfiguredApp &&
+        (!configuredClient ||
+          typeof configuredClient.client_id !== 'string' ||
+          !configuredClient.client_id.trim() ||
+          configuredClient.client_id.length > 4096 ||
+          (configuredClient.client_secret !== undefined &&
+            (typeof configuredClient.client_secret !== 'string' ||
+              configuredClient.client_secret.length > 16384)) ||
+          (entry.oauth.configured_client.secret_required && !configuredClient.client_secret))
+      ) {
+        throw new BadRequest(
+          'Configure your own OAuth app in the secure Catalog form before connecting'
+        );
+      }
       // Every connect claims an operation generation, not only bearer
       // rotation. Compensation must not delete a just-created row after a
       // newer concurrent connect has selected it but before that request has
       // attached it. The same generation lock used for bearer fencing makes
       // that adoption authoritative without hydrating the row.
-      const operationGeneration = {
-        ownerUserId: userId,
-        catalogEntryName: entry.name,
-        value: await deps.runInTenantDatabaseScope(params, () =>
-          (service('mcp-servers') as unknown as MCPServersService).claimCatalogConnectGeneration(
-            userId,
-            entry.name
-          )
-        ),
-      };
-      const connectGeneration = bearerToken === undefined ? undefined : operationGeneration;
+      const operationGeneration =
+        sharing === 'shared'
+          ? undefined
+          : {
+              ownerUserId: userId,
+              catalogEntryName: entry.name,
+              value: await deps.runInTenantDatabaseScope(params, () =>
+                (
+                  service('mcp-servers') as unknown as MCPServersService
+                ).claimCatalogConnectGeneration(userId, entry.name)
+              ),
+            };
+      const connectGeneration =
+        bearerToken === undefined && !configuredClient ? undefined : operationGeneration;
       let auth: MCPAuth;
       try {
-        auth = await resolveAuthRequirement(entry, bearerToken);
+        auth = await resolveAuthRequirement(entry, bearerToken, sharing);
+        if (configuredClient) {
+          if (auth.type !== 'oauth')
+            throw new BadRequest(
+              'The endpoint no longer requires OAuth; no app credentials were saved'
+            );
+          auth = {
+            ...auth,
+            oauth_client_id: configuredClient.client_id,
+            ...(configuredClient.client_secret
+              ? { oauth_client_secret: configuredClient.client_secret }
+              : {}),
+          };
+        }
       } catch (error) {
         if (isCatalogConnectControlError(error)) throw error;
         const safe = sanitizeMCPExternalError(error, { stage: 'discovery' });
@@ -973,7 +1028,13 @@ export function createMCPCatalogConnectService(
         throw new BadRequest(safe.message, { category: safe.category });
       }
 
-      const existing = await findExistingInstall(entry, auth, userId, params);
+      params = await deps.authorizeCaller(params, sharing);
+      const existing = await findExistingInstall(entry, auth, userId, params, sharing);
+      if (initialShared && existing?.server.mcp_server_id !== initialShared.server.mcp_server_id) {
+        throw new BadRequest(
+          'The shared installation changed or is no longer available. Reopen Catalog before connecting.'
+        );
+      }
 
       const createInput: CreateMCPServerInput = {
         name: catalogServerSlug(entry.name),
@@ -986,6 +1047,7 @@ export function createMCPCatalogConnectService(
         // defaults. It remains unattached until the caller explicitly starts
         // or configures a session with it.
         scope: 'session',
+        owner_user_id: sharing === 'shared' ? null : userId,
         // Not `user`: nobody typed this configuration. It came from the
         // catalog, and `catalog_entry_name` below records which entry — the
         // same pairing `imported` has with `import_path`.
@@ -994,9 +1056,8 @@ export function createMCPCatalogConnectService(
 
       // Provenance is named on params rather than in the payload: the write
       // authorizer refuses a stamp that arrived from a request, so this is the
-      // one path that can produce one. Saying so is also what makes the row
-      // private to the caller — an install is theirs whatever the tenant's
-      // `mcp_member_policy` says. See `McpCatalogInstallParams`.
+      // one path that can produce one. Explicit shared ownership is separately
+      // authorized; omission remains private. See `McpCatalogInstallParams`.
       let selection = existing;
       let mcpServer = selection?.server;
       let createdServer = false;
@@ -1012,7 +1073,7 @@ export function createMCPCatalogConnectService(
           // concurrent connect may win between our targeted read and create;
           // recover its row rather than creating a second credential copy.
           if (!isDatabaseUniqueConstraintError(error)) throw error;
-          selection = await findExistingInstall(entry, auth, userId, params);
+          selection = await findExistingInstall(entry, auth, userId, params, sharing);
           if (!selection) throw error;
           mcpServer = selection.server;
         }
@@ -1025,6 +1086,19 @@ export function createMCPCatalogConnectService(
           !isCurrentCatalogInstall(mcpServer, entry, auth, {
             reconcileMissingCompatibilityMode: true,
           }));
+      // Shared Connect is create-or-read, never repair. No caller may reconcile
+      // auth drift, re-enable, or erase an installation another user adopted.
+      if (
+        sharing === 'shared' &&
+        (needsReconciliation ||
+          mcpServer.scope !== 'session' ||
+          (selection?.candidate.has_row_secret && !entry.oauth?.configured_client) ||
+          Object.keys(mcpServer.env ?? {}).length > 0)
+      ) {
+        throw new BadRequest(
+          'This shared installation has changed or is disabled. Review it in Settings before connecting.'
+        );
+      }
       const preservedCompatibilityOverride =
         selection?.kind === 'catalog_install' &&
         mcpServer.auth?.type === 'oauth' &&
@@ -1053,13 +1127,26 @@ export function createMCPCatalogConnectService(
             connectGeneration
           );
         }
-        const finalCandidate = createdServer
-          ? candidateFromExternalServer(mcpServer)
-          : !finalized && selection?.candidate
-            ? selection.candidate
-            : await deps.getCandidate(userId, mcpServer.mcp_server_id, params);
+        if (sharing === 'shared') params = await deps.authorizeCaller(params, sharing);
+        const finalCandidate =
+          sharing === 'shared'
+            ? await deps.getCandidate(userId, mcpServer.mcp_server_id, params)
+            : createdServer
+              ? candidateFromExternalServer(mcpServer)
+              : !finalized && selection?.candidate
+                ? selection.candidate
+                : await deps.getCandidate(userId, mcpServer.mcp_server_id, params);
         if (!finalCandidate) {
           throw new Error('Connected MCP server is no longer available');
+        }
+        if (sharing === 'shared') {
+          // Selection/refresh/create may yield. Re-read this exact row, never
+          // its cached projection, before reporting an authoritative reuse.
+          if (!isUsableSharedCatalogCandidate(finalCandidate, entry, auth)) {
+            throw new BadRequest(
+              'This shared installation has changed or is disabled. Review it in Settings before connecting.'
+            );
+          }
         }
         const installed = await presentConnectServer(finalCandidate, params, deps);
 
@@ -1082,7 +1169,7 @@ export function createMCPCatalogConnectService(
               : undefined,
         };
       } catch (error) {
-        if (createdServer) {
+        if (createdServer && sharing === 'private') {
           try {
             // Atomic liveness/adoption check. A concurrent unique-conflict
             // loser may now be using this row; in that case compensation must

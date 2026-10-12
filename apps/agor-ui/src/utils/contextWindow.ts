@@ -4,7 +4,8 @@
  * Helpers for calculating and rendering context window progress indicators.
  */
 
-import type { ContextUsageSnapshot } from '@agor/core/types';
+import type { ContextUsageSnapshot, Task } from '@agor/core/types';
+import type { ReactiveContextWindow } from '@agor-live/client';
 
 export interface ContextWindowColors {
   normal: string;
@@ -88,4 +89,32 @@ export function getContextWindowPercentage(
   limit: number | undefined
 ): number {
   return resolveContextWindowPercentage(used, limit, null);
+}
+
+/**
+ * The footer's context-window indicator. Reads the session handle's projection,
+ * which outlives the lean transcript trimming the turn it came from; the raw SDK
+ * response (per-model breakdown) is only offered while that turn is loaded.
+ */
+export function selectLatestContextWindow(
+  projection: ReactiveContextWindow | undefined,
+  tasks: readonly Task[],
+  agenticTool: string | undefined
+) {
+  if (!agenticTool || !projection) return null;
+  const { contextWindowLimit, contextUsageSnapshot } = projection.normalized_sdk_response;
+  return {
+    used: projection.computed_context_window,
+    limit: contextUsageSnapshot?.maxTokens ?? contextWindowLimit ?? 0,
+    // Forward the full normalized response so ContextWindowPill can honor
+    // `contextUsageSnapshot.percentage` instead of recomputing from raw
+    // used/limit (which is wrong for Codex's baseline-adjusted display).
+    taskMetadata: {
+      model: projection.model,
+      duration_ms: projection.duration_ms,
+      agentic_tool: agenticTool,
+      raw_sdk_response: tasks.find((task) => task.task_id === projection.task_id)?.raw_sdk_response,
+      normalized_sdk_response: projection.normalized_sdk_response,
+    },
+  };
 }

@@ -48,9 +48,6 @@
  * same code for both kinds (`submissions.ts`), which is the point of the
  * split living here rather than in a second resolver.
  *
- * See §6.2 of `docs/internal/in-conversation-widgets-design-2026-05-19.md`
- * and `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
- *
  * The registry is intentionally module-local rather than a runtime
  * singleton — widget types register themselves via `registerWidget()` at
  * daemon boot (called from each widget type's index file) and the submit

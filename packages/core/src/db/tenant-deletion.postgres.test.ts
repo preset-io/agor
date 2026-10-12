@@ -431,11 +431,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
   });
 
   it.each(
-    ['user_provider_oauth_grants', 'kb_import_receipts'].flatMap((tableName) =>
-      [
-        "tenant_id = NULLIF(current_setting('agor.tenant_id', true), '')",
-        "COALESCE(current_setting('agor.system_scope', true), '') = '' AND tenant_id = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')",
-      ].map((predicate) => ({ tableName, predicate }))
+    ['user_provider_oauth_grants', 'kb_import_receipts', 'opencode_checkpoint_attempts'].flatMap(
+      (tableName) =>
+        [
+          "tenant_id = NULLIF(current_setting('agor.tenant_id', true), '')",
+          "COALESCE(current_setting('agor.system_scope', true), '') = '' AND tenant_id = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')",
+        ].map((predicate) => ({ tableName, predicate }))
     )
   )('rejects a weakened $tableName policy: $predicate', async ({ tableName, predicate }) => {
     const policy = sql.identifier(`tenant_isolation_${tableName}`);

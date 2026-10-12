@@ -1,13 +1,20 @@
 import { RateLimitError } from '@discordjs/rest';
-import { Routes } from 'discord-api-types/v10';
+import { ChannelType as DiscordChannelType, Routes } from 'discord-api-types/v10';
 import type {
   DiscordCatchUpConfig,
   DiscordChannelHistoryMessage,
   DiscordChannelHistoryRequest,
   DiscordChannelHistoryResult,
+  DiscordForumPost,
+  DiscordForumPostsRequest,
+  DiscordForumPostsResult,
   DiscordGatewayConfig,
 } from '../../types/gateway';
-import { compareDiscordSnowflakes, isDiscordSnowflake } from '../../types/gateway';
+import {
+  compareDiscordSnowflakes,
+  discordSnowflakeTimestampMs,
+  isDiscordSnowflake,
+} from '../../types/gateway';
 import type {
   GatewayProviderHistoryMessage,
   GatewayProviderHistoryRequest,
@@ -613,5 +620,167 @@ export async function fetchDiscordChannelHistory(
     has_more: hasMore,
     next_cursor:
       hasMore && lastScanned ? (forward ? { after: lastScanned } : { before: lastScanned }) : null,
+  };
+}
+
+export const DISCORD_FORUM_POSTS_DEFAULT_LIMIT = 25;
+export const DISCORD_FORUM_POSTS_MAX_LIMIT = 100;
+/** Discord's archived-threads route rejects page sizes below this. */
+const DISCORD_ARCHIVED_THREADS_MIN_LIMIT = 2;
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+function isoTimestamp(value: unknown): string | undefined {
+  return typeof value === 'string' && ISO_TIMESTAMP.test(value) && !Number.isNaN(Date.parse(value))
+    ? value
+    : undefined;
+}
+
+function toForumPost(
+  raw: Record<string, unknown>,
+  forumId: string,
+  tagNames: Map<string, string>
+): DiscordForumPost {
+  const id = nonEmptyString(raw.id);
+  const metadata = asRecord(raw.thread_metadata);
+  if (
+    !id ||
+    !isDiscordSnowflake(id) ||
+    raw.parent_id !== forumId ||
+    raw.type !== DiscordChannelType.PublicThread ||
+    !metadata
+  ) {
+    throw makeError('malformed_response', 'Discord forum post was malformed');
+  }
+  const appliedTags = Array.isArray(raw.applied_tags) ? raw.applied_tags : [];
+  const ownerId = nonEmptyString(raw.owner_id);
+  const lastMessageId = nonEmptyString(raw.last_message_id);
+  const archivedAt = isoTimestamp(metadata.archive_timestamp);
+  return {
+    id,
+    title: typeof raw.name === 'string' ? raw.name : '',
+    tags: appliedTags
+      .filter((tagId): tagId is string => typeof tagId === 'string' && isDiscordSnowflake(tagId))
+      .map((tagId) => ({ id: tagId, name: tagNames.get(tagId) ?? '' })),
+    ...(ownerId && isDiscordSnowflake(ownerId) ? { author_id: ownerId } : {}),
+    created_at:
+      isoTimestamp(metadata.create_timestamp) ??
+      new Date(discordSnowflakeTimestampMs(id)).toISOString(),
+    // Discord's message_count excludes the opening message.
+    ...(typeof raw.message_count === 'number' ? { reply_count: raw.message_count } : {}),
+    ...(lastMessageId && isDiscordSnowflake(lastMessageId)
+      ? { last_message_id: lastMessageId }
+      : {}),
+    archived: metadata.archived === true,
+    locked: metadata.locked === true,
+    ...(metadata.archived === true && archivedAt ? { archived_at: archivedAt } : {}),
+  };
+}
+
+/**
+ * List the posts of one forum channel, newest first, inside the read
+ * budget. Active posts come from the guild's active-thread list (cursor: post
+ * ID); archived posts page through Discord's public archive (cursor: archive
+ * timestamp, exclusive as in Discord's API, so posts archived at the exact same
+ * instant across a page boundary can be skipped). Titles are untrusted user
+ * content. Access and allowlist checks belong to the caller, which passes the
+ * already-fetched forum record.
+ */
+export async function fetchDiscordForumPosts(
+  rest: DiscordHistoryRestTransport,
+  config: DiscordGatewayConfig,
+  forum: Record<string, unknown>,
+  request: DiscordForumPostsRequest,
+  budget: DiscordReadBudget = createDiscordReadBudget(config)
+): Promise<DiscordForumPostsResult> {
+  const limit = request.limit ?? DISCORD_FORUM_POSTS_DEFAULT_LIMIT;
+  const archived = request.archived === true;
+  const guildId = nonEmptyString(forum.guild_id);
+  if (
+    request.before !== undefined &&
+    (archived ? !isoTimestamp(request.before) : !isDiscordSnowflake(request.before))
+  ) {
+    throw makeError(
+      'invalid_request',
+      archived
+        ? 'Archived forum posts page by an ISO archive timestamp cursor'
+        : 'Active forum posts page by a post ID cursor'
+    );
+  }
+  if (
+    !isDiscordSnowflake(request.channelId) ||
+    forum.id !== request.channelId ||
+    !guildId ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > DISCORD_FORUM_POSTS_MAX_LIMIT
+  ) {
+    throw makeError('invalid_request', 'Discord forum posts request was invalid');
+  }
+
+  const tagNames = new Map<string, string>();
+  for (const tag of Array.isArray(forum.available_tags) ? forum.available_tags : []) {
+    const record = asRecord(tag);
+    const tagId = nonEmptyString(record?.id);
+    if (tagId && typeof record?.name === 'string') tagNames.set(tagId, record.name);
+  }
+
+  if (archived) {
+    const pageSize = Math.max(limit, DISCORD_ARCHIVED_THREADS_MIN_LIMIT);
+    const params = new URLSearchParams({ limit: String(pageSize) });
+    if (request.before) params.set('before', request.before);
+    const page = asRecord(
+      await getWithBudget(
+        rest,
+        `${Routes.channelThreads(request.channelId, 'public')}?${params.toString()}`,
+        budget
+      )
+    );
+    if (!page || !Array.isArray(page.threads) || page.threads.length > pageSize) {
+      throw makeError('malformed_response', 'Discord archived forum page was malformed');
+    }
+    const posts = page.threads.map((raw) => {
+      const record = asRecord(raw);
+      const post = record && toForumPost(record, request.channelId, tagNames);
+      // The archive cursor is the archive timestamp, so every archived post needs one.
+      if (!post?.archived_at) {
+        throw makeError('malformed_response', 'Discord archived forum post was malformed');
+      }
+      return post as DiscordForumPost & { archived_at: string };
+    });
+    posts.sort((a, b) => Date.parse(b.archived_at) - Date.parse(a.archived_at));
+    const returned = posts.slice(0, limit);
+    const last = returned[returned.length - 1];
+    const hasMore = (page.has_more === true || posts.length > limit) && last !== undefined;
+    return {
+      channelId: request.channelId,
+      archived,
+      posts: returned,
+      has_more: hasMore,
+      next_cursor: hasMore ? { before: last.archived_at } : null,
+    };
+  }
+
+  const active = asRecord(await getWithBudget(rest, Routes.guildActiveThreads(guildId), budget));
+  if (!active || !Array.isArray(active.threads)) {
+    throw makeError('malformed_response', 'Discord active thread list was malformed');
+  }
+  const posts = active.threads
+    .map((raw) => {
+      const record = asRecord(raw);
+      if (!record) throw makeError('malformed_response', 'Discord active thread was malformed');
+      return record;
+    })
+    .filter((record) => record.parent_id === request.channelId)
+    .map((record) => toForumPost(record, request.channelId, tagNames))
+    .filter((post) => !request.before || compareDiscordSnowflakes(post.id, request.before) < 0)
+    .sort((a, b) => compareDiscordSnowflakes(b.id, a.id));
+  const page = posts.slice(0, limit);
+  const hasMore = posts.length > limit;
+  return {
+    channelId: request.channelId,
+    archived,
+    posts: page,
+    has_more: hasMore,
+    next_cursor: hasMore ? { before: page[page.length - 1]!.id } : null,
   };
 }

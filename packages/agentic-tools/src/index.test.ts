@@ -9,6 +9,14 @@ import {
 } from './index.js';
 
 describe('agentic-tool integrations', () => {
+  it('owns Beta status for every tool surface', () => {
+    expect(
+      Object.values(AGENTIC_TOOL_INTEGRATIONS)
+        .filter((tool) => tool.beta)
+        .map((tool) => tool.name)
+        .sort()
+    ).toEqual(['copilot', 'cursor', 'gemini']);
+  });
   it.each(['codex', 'opencode'] as const)(
     'exposes every Agor reasoning effort level for %s',
     (tool) => {

@@ -95,6 +95,15 @@ export const SOCKET_IO_MAX_BUFFER_SIZE_BYTES = 1_000_000;
 /** Executor Feathers RPC acknowledgement deadline. */
 export const EXECUTOR_FEATHERS_ACK_TIMEOUT_MS = 60_000;
 
+/**
+ * Browser Feathers RPC acknowledgement deadline. Any deadline makes Socket.IO
+ * reject calls in flight at disconnect instead of silently dropping them; the
+ * value only bounds a connected daemon that never replies. It must exceed the
+ * slowest awaited browser call (an environment restart waits on its stop
+ * command for up to ~29 minutes).
+ */
+export const BROWSER_FEATHERS_ACK_TIMEOUT_MS = 60 * 60_000;
+
 /** Extra time for bounded transport cleanup after the executor RPC deadline. */
 export const EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_MARGIN_MS = 5_000;
 
@@ -125,6 +134,15 @@ export const PAGINATION = {
    * Default limit for CLI list commands - reasonable for terminal display
    */
   CLI_DEFAULT_LIMIT: 50,
+
+  /**
+   * Maximum ids in one `{ $in: [...] }` id-list read (`session_id`,
+   * `branch_id`). Larger sets are split into chunks by the caller.
+   */
+  MAX_ID_LIST: 200,
+
+  /** Maximum rows returned by one `branches.find({ teammate: true })` read. */
+  MAX_TEAMMATE_BRANCHES: 1_000,
 } as const;
 
 /**
@@ -149,6 +167,15 @@ export const MESSAGE_PAGINATION = {
   MAX_TASK_IDS: 100,
   DEFAULT_LIMIT: 100,
   MAX_LIMIT: 1_000,
+} as const;
+
+/**
+ * Tasks loaded by ID: the lean transcript reads a page of its Session's
+ * dispatch order (`Session.tasks`) in one session-scoped `task_id: { $in }`.
+ */
+export const TASK_PAGINATION = {
+  /** Maximum task IDs in one session-scoped Task query. */
+  MAX_TASK_IDS: 100,
 } as const;
 
 /**

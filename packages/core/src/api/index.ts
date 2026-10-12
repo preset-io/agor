@@ -16,6 +16,7 @@ import type {
   AgenticToolPreset,
   Artifact,
   Board,
+  BoardBranchCount,
   BoardCapabilityPolicies,
   BoardComment,
   BoardCommentCreate,
@@ -39,6 +40,7 @@ import type {
   Group,
   GroupMembership,
   KnowledgeDocument,
+  KnowledgeDocumentArchivePatch,
   KnowledgeDocumentVersion,
   KnowledgeEmbeddingStatus,
   KnowledgeIndexingStatus,
@@ -80,6 +82,7 @@ import type {
   SchedulePatchData,
   SdkHealthFailureInput,
   Session,
+  SessionCount,
   SessionID,
   SessionUpdate,
   Task,
@@ -102,7 +105,12 @@ import type { Application, Paginated, Params } from '@feathersjs/feathers';
 import { feathers } from '@feathersjs/feathers';
 import socketio from '@feathersjs/socketio-client';
 import io, { type Socket } from 'socket.io-client';
-import { DAEMON, MESSAGE_PAGINATION, PAGINATION } from '../config/constants';
+import {
+  BROWSER_FEATHERS_ACK_TIMEOUT_MS,
+  DAEMON,
+  MESSAGE_PAGINATION,
+  PAGINATION,
+} from '../config/constants';
 
 /**
  * Default daemon URL for client connections
@@ -268,6 +276,16 @@ export interface BranchPermissionsService {
   ): Promise<BranchCapabilityPolicy>;
 }
 
+/** Per-board active branch counts (find only; RBAC-scoped, never published). */
+export interface BranchCountsService {
+  find(params?: Params): Promise<BoardBranchCount[]>;
+}
+
+/** Active session counts per branch or board (find only; RBAC-scoped, never published). */
+export interface SessionCountsService {
+  find(params: { query: { group_by: 'branch_id' | 'board_id' } }): Promise<SessionCount[]>;
+}
+
 export interface WorkspacePreferencesService {
   find(params?: Params): Promise<CapabilityPolicyWorkspacePreferences>;
   patch(
@@ -289,6 +307,8 @@ export interface ServiceTypes {
   'repos/clone': Repo;
   'repos/local': Repo;
   branches: Branch;
+  'branch-counts': BoardBranchCount;
+  'session-counts': SessionCount;
   schedules: Schedule;
   'gateway-channels': GatewayChannel;
   users: User;
@@ -542,6 +562,11 @@ export interface SessionsService
 export interface TasksService extends AgorService<Task> {
   /** Claim a daemon-dispatched task after executor authentication. */
   connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
+  /** Request fenced containment after an unexpected executor signal. */
+  reportExecutorInterruption(
+    data: import('../types/task').ExecutorInterruptionInput,
+    params?: Params
+  ): Promise<Task>;
   /** Report that a requested cooperative stop has fully quiesced SDK work. */
   reportTerminationComplete(
     data: import('../types/task').ExecutorTerminationCompleteInput,
@@ -551,6 +576,16 @@ export interface TasksService extends AgorService<Task> {
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: Params): Promise<Task>;
+  /** Admit this executor as the one checkpoint writer of a hosted OpenCode Task. */
+  beginOpenCodeCheckpoint(
+    data: import('../types/opencode-native-state').OpenCodeCheckpointBeginInput,
+    params?: Params
+  ): Promise<import('../types/opencode-native-state').OpenCodeCheckpointAdmission>;
+  /** Forget checkpoint attempts whose files the admitted executor removed. */
+  acknowledgeOpenCodeCleanup(
+    data: import('../types/opencode-native-state').OpenCodeCheckpointCleanupInput,
+    params?: Params
+  ): Promise<void>;
   cancelQueued(data: CancelQueuedTasksInput, params?: Params): Promise<TaskQueueMutationResult>;
   reorderQueued(data: ReorderQueuedTasksInput, params?: Params): Promise<TaskQueueMutationResult>;
   /**
@@ -616,8 +651,7 @@ export interface ReposService extends AgorService<Repo> {
       zoneId?: string;
       environment_variant?: string;
       /**
-       * Branch storage model — see
-       * context/explorations/clone-redesign.md.
+       * Branch storage model.
        * 'worktree' (default) = native `git worktree add`.
        * 'clone' = self-standing `git clone` with its own `.git/`.
        */
@@ -854,6 +888,8 @@ export interface AgorClient
   service(path: 'repos/clone'): ReposCloneService;
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
+  service(path: 'branch-counts'): BranchCountsService;
+  service(path: 'session-counts'): SessionCountsService;
   service(path: 'boards'): BoardsService;
   service(path: 'boards/:id/ownership' | 'branches/:id/ownership'): OwnershipTransferService;
   service(path: 'boards/:id/permissions'): BoardPermissionsService;
@@ -861,6 +897,15 @@ export interface AgorClient
   service(path: 'workspace-preferences'): WorkspacePreferencesService;
   service(path: 'schedules'): SchedulesService;
   service(path: 'gateway-channels'): GatewayChannelsService;
+  service(
+    path: 'kb/documents'
+  ): AgorService<
+    KnowledgeDocument,
+    CreatePayload<Omit<KnowledgeDocument, 'archived' | 'archived_at'>>,
+    UpdatePayload<Omit<KnowledgeDocument, 'archived' | 'archived_at'>>,
+    | PatchPayload<Omit<KnowledgeDocument, 'archived' | 'archived_at'>>
+    | KnowledgeDocumentArchivePatch
+  >;
   service(path: 'kb/settings'): KnowledgeSettingsService;
   service(path: 'kb/indexing/status'): KnowledgeIndexingStatusService;
   service(path: 'kb/indexing/reindex'): KnowledgeReindexService;
@@ -1376,8 +1421,11 @@ function extendTasksService(client: AgorClient): void {
     tasksService.methods(
       'connectExecutor',
       'reportTerminationComplete',
+      'reportExecutorInterruption',
       'reportRuntimeTelemetry',
       'reportSdkHealthFailure',
+      'beginOpenCodeCheckpoint',
+      'acknowledgeOpenCodeCleanup',
       'cancelQueued',
       'reorderQueued'
     );
@@ -1594,7 +1642,10 @@ export function createClient(
     verbose?: boolean;
     /** Limit reconnection attempts (useful for CLI to avoid hanging) */
     reconnectionAttempts?: number;
-    /** Reject acknowledged service calls when Socket.IO does not receive an acknowledgement. */
+    /**
+     * Reject acknowledged service calls when Socket.IO does not receive an
+     * acknowledgement. Browsers default to BROWSER_FEATHERS_ACK_TIMEOUT_MS.
+     */
     ackTimeout?: number;
     /** Authenticate each Socket.IO connection before the server accepts it. */
     socketAuthentication?: SocketConnectionAuthentication;
@@ -1603,6 +1654,12 @@ export function createClient(
   // Detect if running in browser vs Node.js (CLI)
   // Use 'in' operator to avoid TypeScript index signature errors during DTS build
   const isBrowser = typeof globalThis !== 'undefined' && 'window' in globalThis;
+
+  // Without an ack deadline Socket.IO discards, rather than rejects, the
+  // callback of a call in flight at disconnect, so the caller's promise never
+  // settles. Browser tabs drop sockets routinely (sleep, backgrounding).
+  const ackTimeout =
+    options?.ackTimeout ?? (isBrowser ? BROWSER_FEATHERS_ACK_TIMEOUT_MS : undefined);
 
   // Configure socket.io with better defaults for React StrictMode and reconnection
   const socketAuthentication = options?.socketAuthentication;
@@ -1618,7 +1675,7 @@ export function createClient(
       options?.reconnectionAttempts ?? (isBrowser ? Number.POSITIVE_INFINITY : 2),
     // Timeout settings
     timeout: 20000, // 20s timeout for initial connection
-    ...(options?.ackTimeout === undefined ? {} : { ackTimeout: options.ackTimeout }),
+    ...(ackTimeout === undefined ? {} : { ackTimeout }),
     // Transports (WebSocket preferred, fallback to polling)
     transports: ['websocket', 'polling'],
     // Connection lifecycle settings

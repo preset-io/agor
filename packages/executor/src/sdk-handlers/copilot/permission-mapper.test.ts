@@ -111,6 +111,51 @@ describe('createPermissionHandler', () => {
       })
     );
   });
+
+  it('records the elapsed approval timeout without a post-revocation session patch', async () => {
+    const sessionId = 'test-session' as SessionID;
+    const taskId = 'test-task' as TaskID;
+    const tasksService = { patch: vi.fn().mockResolvedValue(undefined) };
+    const sessionsService = { patch: vi.fn().mockResolvedValue(undefined) };
+    const handler = createPermissionHandler(sessionId, taskId, 'ask', {
+      permissionService: {
+        emitRequest: vi.fn(),
+        waitForDecision: vi.fn().mockResolvedValue({
+          allow: false,
+          timedOut: true,
+          timeoutMs: 600_000,
+          remember: false,
+          decidedBy: 'system',
+        }),
+        cancelPendingRequests: vi.fn(),
+      },
+      tasksService,
+      sessionsRepo: {},
+      messagesRepo: { getNextIndexBySessionId: vi.fn().mockResolvedValue(0) },
+      messagesService: {
+        create: vi.fn().mockResolvedValue(undefined),
+        patch: vi.fn().mockResolvedValue(undefined),
+      },
+      sessionsService,
+      permissionLocks: new Map(),
+    } as never);
+
+    const result = await handler({ kind: 'shell', command: 'ls', toolCallId: 'call-1' } as never);
+
+    expect(result).toEqual({
+      kind: 'denied-interactively-by-user',
+      feedback: 'Permission request timed out for: Shell: ls',
+    });
+    expect(tasksService.patch).toHaveBeenNthCalledWith(2, taskId, {
+      status: 'timed_out',
+      completed_at: expect.any(String),
+      error_message: 'Permission request timed out after 600000ms.',
+    });
+    expect(sessionsService.patch).toHaveBeenCalledTimes(1);
+    expect(sessionsService.patch).toHaveBeenNthCalledWith(1, sessionId, {
+      status: 'awaiting_permission',
+    });
+  });
 });
 
 /**

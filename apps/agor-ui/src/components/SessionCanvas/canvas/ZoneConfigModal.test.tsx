@@ -5,6 +5,12 @@ import { App as AntdApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { ZoneConfigModal } from './ZoneConfigModal';
 
+const { copySpy } = vi.hoisted(() => ({ copySpy: vi.fn(async (_text: string) => true) }));
+vi.mock('../../../utils/clipboard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../utils/clipboard')>()),
+  copyToClipboard: copySpy,
+}));
+
 vi.mock('antd', async (importOriginal) => {
   const actual = await importOriginal<typeof import('antd')>();
   const React = await import('react');
@@ -427,6 +433,71 @@ describe('ZoneConfigModal draft and save lifecycle', () => {
       }
     }
   );
+
+  it('keeps a draft rejected by a board reload to copy or discard, and never saves it', async () => {
+    copySpy.mockClear();
+    const onCancel = vi.fn();
+    const onUpdate = vi.fn().mockResolvedValue('stale');
+    render(
+      <AntdApp>
+        <ZoneConfigModal
+          open
+          objectId="zone-1"
+          zoneName={zone.label}
+          zoneData={zone}
+          onUpdate={onUpdate}
+          onCancel={onCancel}
+        />
+      </AntdApp>
+    );
+    fireEvent.change(screen.getByLabelText('Prompt template'), {
+      target: { value: 'Kept draft' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Prompt template')).toHaveValue('Kept draft');
+    expect(await screen.findByText(/Board reloaded — changes not saved/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Re-apply to reloaded board' })).toBeNull();
+    // Save stays refused under the open-time ticket.
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy draft' }));
+    await waitFor(() => expect(copySpy).toHaveBeenCalledTimes(1));
+    expect(copySpy.mock.calls[0][0]).toContain('Prompt template:\nKept draft');
+    expect(copySpy.mock.calls[0][0]).toContain(`Name: ${zone.label}`);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes its unsaved draft to the zone node through draftReaderRef', async () => {
+    const draftReaderRef: { current: (() => string | null) | null } = { current: null };
+    const view = render(
+      <AntdApp>
+        <ZoneConfigModal
+          open
+          objectId="zone-1"
+          zoneName={zone.label}
+          zoneData={zone}
+          onUpdate={vi.fn()}
+          onCancel={vi.fn()}
+          draftReaderRef={draftReaderRef}
+        />
+      </AntdApp>
+    );
+    await waitFor(() => expect(draftReaderRef.current?.()).toBeNull());
+    fireEvent.change(screen.getByLabelText('Prompt template'), {
+      target: { value: 'Unsaved template' },
+    });
+    await waitFor(() =>
+      expect(draftReaderRef.current?.()).toContain('Prompt template:\nUnsaved template')
+    );
+    view.unmount();
+    expect(draftReaderRef.current).toBeNull();
+  });
 
   it('does not close a replacement zone when an old request completes', async () => {
     let resolve!: (value: boolean) => void;

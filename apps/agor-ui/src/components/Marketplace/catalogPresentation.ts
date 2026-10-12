@@ -28,6 +28,8 @@ export const ALL_CATEGORIES = 'all' as const;
 
 export type CategoryFilter = MCPCatalogCategory | typeof ALL_CATEGORIES;
 
+export const ANY_CAPABILITY = 'any' as const;
+
 export const CATEGORY_OPTIONS: Array<{ label: string; value: CategoryFilter }> = [
   { label: 'All', value: ALL_CATEGORIES },
   ...MCP_CATALOG_CATEGORIES.map((category) => ({
@@ -100,8 +102,8 @@ export function capabilityLabel(capability: string): string {
  * the default and is labelled for what it actually is.
  */
 export const SORT_OPTIONS: Array<{ label: string; value: MCPCatalogSort }> = [
-  { label: 'Sort: Curated', value: 'popularity' },
-  { label: 'Sort: A–Z', value: 'name' },
+  { label: 'Curated', value: 'popularity' },
+  { label: 'A–Z', value: 'name' },
 ];
 
 export const DEFAULT_SORT: MCPCatalogSort = 'popularity';

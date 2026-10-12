@@ -14,8 +14,7 @@
  *
  * So this file wires a real migrated database, real repositories, and the
  * daemon's own scope guard into `GatewayService`, and replaces Slack's
- * connector and nothing else. See
- * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.1.5.
+ * connector and nothing else.
  */
 
 import {

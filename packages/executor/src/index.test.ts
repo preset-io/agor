@@ -24,6 +24,7 @@ vi.mock('./mcp-runtime-refresh.js', () => ({
 import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE } from '@agor/core/types';
 import { AgorExecutor } from './index.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
+import { markExecutorCleanupUnverified } from './termination-state.js';
 
 const evidence = {
   reason: 'no_first_progress' as const,
@@ -483,5 +484,138 @@ describe('AgorExecutor watchdog handoff', () => {
       scope: 'once',
       decidedBy: 'user-a',
     });
+  });
+});
+
+describe('AgorExecutor signal containment handoff', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function signalHarness() {
+    const requestedAt = '2026-10-05T00:00:00.000Z';
+    const task = {
+      task_id: 'task-1',
+      session_id: 'session-1',
+      status: 'stopping',
+      termination_request: { cause: 'executor_interrupted', requested_at: requestedAt },
+    };
+    const reportExecutorInterruption = vi.fn().mockResolvedValue(task);
+    const reportTerminationComplete = vi.fn().mockResolvedValue(task);
+    const get = vi.fn().mockResolvedValue(task);
+    const patch = vi.fn();
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: object;
+      execution: Promise<void> | null;
+      abortController: AbortController;
+      shutdownForSignal(signal: 'SIGTERM' | 'SIGINT', deadline: AbortSignal): Promise<void>;
+      recoverTerminationAfterExecutionError(): Promise<boolean>;
+    };
+    executor.client = {
+      service: () => ({ reportExecutorInterruption, reportTerminationComplete, get, patch }),
+    };
+    return { executor, reportExecutorInterruption, reportTerminationComplete, get, patch, task };
+  }
+
+  it('aborts immediately but reports quiescence only after the SDK and cleanup return', async () => {
+    const h = signalHarness();
+    let finish!: () => void;
+    h.executor.execution = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const shutdown = h.executor.shutdownForSignal('SIGTERM', new AbortController().signal);
+    expect(h.executor.abortController.signal.aborted).toBe(true);
+    await Promise.resolve();
+    expect(h.reportExecutorInterruption).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      signal: 'SIGTERM',
+    });
+    expect(h.reportTerminationComplete).not.toHaveBeenCalled();
+    expect(h.patch).not.toHaveBeenCalled();
+    finish();
+    await shutdown;
+    expect(h.reportTerminationComplete).toHaveBeenCalledExactlyOnceWith({
+      task_id: 'task-1',
+      requested_at: h.task.termination_request.requested_at,
+    });
+  });
+
+  it('preserves a user Stop that won the signal race and deduplicates its report', async () => {
+    const h = signalHarness();
+    h.task.termination_request.cause = 'user_stop';
+    await h.executor.shutdownForSignal('SIGTERM', new AbortController().signal);
+    await h.executor.shutdownForSignal('SIGINT', new AbortController().signal);
+    expect(h.reportTerminationComplete).toHaveBeenCalledOnce();
+    expect(h.patch).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    'never reports unverified provider cleanup (rejected=%s)',
+    async (reject) => {
+      const h = signalHarness();
+      h.executor.execution = Promise.resolve().then(() => {
+        markExecutorCleanupUnverified(h.executor.abortController);
+        if (reject) throw new Error('provider cleanup failed');
+      });
+      await expect(
+        h.executor.shutdownForSignal('SIGTERM', new AbortController().signal)
+      ).rejects.toThrow('Executor cleanup remains unverified');
+      // Reconnect/error recovery must not reinterpret the settled execution either.
+      expect(await h.executor.recoverTerminationAfterExecutionError()).toBe(false);
+      expect(h.reportTerminationComplete).not.toHaveBeenCalled();
+      expect(h.patch).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not invent quiescence after the shutdown deadline', async () => {
+    const h = signalHarness();
+    let finish!: () => void;
+    h.executor.execution = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const deadline = new AbortController();
+    const shutdown = h.executor.shutdownForSignal('SIGTERM', deadline.signal);
+    await Promise.resolve();
+    deadline.abort();
+    finish();
+    await shutdown;
+    expect(h.reportTerminationComplete).not.toHaveBeenCalled();
+    expect(h.patch).not.toHaveBeenCalled();
+  });
+
+  it('waits for cleanup even if the report fails, then recovers a committed request by read', async () => {
+    const h = signalHarness();
+    h.reportExecutorInterruption.mockRejectedValue(new Error('response lost'));
+    let finish!: () => void;
+    h.executor.execution = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const shutdown = h.executor.shutdownForSignal('SIGTERM', new AbortController().signal);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.get).not.toHaveBeenCalled();
+    finish();
+    await shutdown;
+    expect(h.get).toHaveBeenCalledOnce();
+    expect(h.reportTerminationComplete).toHaveBeenCalledOnce();
+  });
+
+  it('never rewrites normal completion that won before the signal report', async () => {
+    const h = signalHarness();
+    h.reportExecutorInterruption.mockResolvedValue({
+      ...h.task,
+      status: 'completed',
+      termination_request: undefined,
+    });
+    await h.executor.shutdownForSignal('SIGTERM', new AbortController().signal);
+    expect(h.reportTerminationComplete).not.toHaveBeenCalled();
+    expect(h.patch).not.toHaveBeenCalled();
   });
 });

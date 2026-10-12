@@ -7,6 +7,15 @@ import { usePresence } from '../../../hooks/usePresence';
 import { getContrastingTextColor } from '../../../utils/theme';
 import { UserIdentityAvatar } from '../../UserIdentityAvatar';
 
+/** The arrow's tip in its 24px box (path starts at 5.5, 3.5). */
+export const DEMO_TIP_STYLE = {
+  position: 'absolute',
+  left: 5.5,
+  top: 3.5,
+  width: 0,
+  height: 0,
+} as const;
+
 export interface StaticRemoteCursor {
   userId: string;
   x: number;
@@ -80,6 +89,11 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
         return (
           <div
             key={userId}
+            // Static (demo/marketing) cursors are tagged so the video capture
+            // can record where each one points; see demo-videos/capture.mjs.
+            data-demo-cursor={staticCursors ? userId : undefined}
+            data-demo-color={staticCursors ? color : undefined}
+            data-demo-ripple={staticCursors ? ripple : undefined}
             style={{
               position: 'absolute',
               transform: `translate3d(${screenX}px, ${screenY}px, 0) scale(${staticCursorScale})`,
@@ -95,6 +109,7 @@ export const RemoteCursorLayer: React.FC<RemoteCursorLayerProps> = ({
                 height: '24px',
               }}
             >
+              {staticCursors && <i data-demo-cursor-tip style={DEMO_TIP_STYLE} />}
               {ripple > 0 && ripple <= 1 && (
                 <span
                   style={{

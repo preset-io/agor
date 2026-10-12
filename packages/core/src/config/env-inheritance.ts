@@ -1,6 +1,9 @@
 /** Reserved ambient credential namespace for trusted operator launcher helpers only. */
 export const TRUSTED_LAUNCHER_ENV_PREFIX = 'AGOR_CLOUD_';
 
+/** Job-local scratch supplied by a delegated launcher, never by user environment settings. */
+export const EXECUTOR_SCRATCH_ROOT_ENV = 'AGOR_EXECUTOR_SCRATCH_ROOT';
+
 /**
  * SECURITY: Allowlisted environment variable names that are safe to pass
  * to user/agent processes. Any variable NOT in this list (or matching a

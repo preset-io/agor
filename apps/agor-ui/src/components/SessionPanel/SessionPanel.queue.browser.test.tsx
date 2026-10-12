@@ -56,7 +56,14 @@ function fixture(status: Session['status'] = 'running') {
   const services = {
     sessions: {
       ...events('sessions'),
-      get: async (id: string) => ({ ...session, session_id: id, status }),
+      // Session.tasks lists dispatched Tasks only; the queue lives on the Tasks.
+      get: async (id: string) => ({
+        ...session,
+        session_id: id,
+        status,
+        tasks: [active.task_id],
+        tasks_complete: true,
+      }),
       patch,
     },
     tasks: {
@@ -126,7 +133,7 @@ it.each(['running', 'failed'] as const)(
   async (status) => {
     const f = fixture(status);
     const { unmount } = render(f.panel());
-    await screen.findByText('Queued Tasks (2)');
+    await screen.findByText('Queued tasks (2)');
     expect(order()).toEqual([
       expect.stringContaining('Queue A'),
       expect.stringContaining('Queue B'),
@@ -187,7 +194,7 @@ it.each(['running', 'failed'] as const)(
 it('does not resurrect a removed task when an older reorder patch arrives', async () => {
   const f = fixture();
   render(f.panel());
-  await screen.findByText('Queued Tasks (2)');
+  await screen.findByText('Queued tasks (2)');
   f.setRows([a]);
   f.emit('removed', b);
   expect(order()).toEqual([expect.stringContaining('Queue A')]);
@@ -198,7 +205,7 @@ it('does not resurrect a removed task when an older reorder patch arrives', asyn
 it('does not roll back a newer reorder when older patches arrive last', async () => {
   const f = fixture('failed');
   render(f.panel());
-  await screen.findByText('Queued Tasks (2)');
+  await screen.findByText('Queued tasks (2)');
   f.setRows([{ ...b, queue_position: 0 }, a]);
   await act(async () => f.emit('patched', { ...b, queue_position: 0 }));
   await waitFor(() => expect(order()[0]).toContain('Queue B'));
@@ -222,7 +229,7 @@ it.each(['removed', 'patched'] as const)(
   async (event) => {
     const f = fixture();
     render(f.panel());
-    await screen.findByText('Queued Tasks (2)');
+    await screen.findByText('Queued tasks (2)');
     const old = deferredQueue();
     const fresh = deferredQueue();
     const before = f.queueFind.mock.calls.length;
@@ -258,7 +265,7 @@ it.each(['removed', 'patched'] as const)(
 it('never resurrects a started task from delayed admission or reorder events', async () => {
   const f = fixture();
   render(f.panel());
-  await screen.findByText('Queued Tasks (2)');
+  await screen.findByText('Queued tasks (2)');
   const running = { ...b, status: 'running' as const, queue_position: undefined };
   f.setRows([a, running]);
   f.emit('patched', running);
@@ -272,7 +279,7 @@ it('never resurrects a started task from delayed admission or reorder events', a
 it('fences session replacement and unmount while queue reads are pending', async () => {
   const f = fixture();
   const view = render(f.panel());
-  await screen.findByText('Queued Tasks (2)');
+  await screen.findByText('Queued tasks (2)');
   const old = deferredQueue();
   const before = f.queueFind.mock.calls.length;
   f.queueFind.mockImplementationOnce(() => old.promise);
@@ -307,7 +314,7 @@ it('fences session replacement and unmount while queue reads are pending', async
 it('refreshes missed admission/removal/reorder on reconnect and fences the pre-disconnect read', async () => {
   const f = fixture();
   render(f.panel());
-  await screen.findByText('Queued Tasks (2)');
+  await screen.findByText('Queued tasks (2)');
   const old = deferredQueue();
   const before = f.queueFind.mock.calls.length;
   f.queueFind.mockImplementationOnce(() => old.promise);
@@ -328,7 +335,7 @@ it('refreshes missed admission/removal/reorder on reconnect and fences the pre-d
 it('keeps confirmed rows on a failed reconciliation and recovers on a later invalidation', async () => {
   const f = fixture();
   render(f.panel());
-  await screen.findByText('Queued Tasks (2)');
+  await screen.findByText('Queued tasks (2)');
   f.queueFind.mockRejectedValueOnce(new Error('temporary queue outage'));
   await act(async () => f.emit('patched', a));
   expect(order()).toEqual([expect.stringContaining('Queue A'), expect.stringContaining('Queue B')]);

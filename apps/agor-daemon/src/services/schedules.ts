@@ -10,8 +10,6 @@
  *   - patch:   session for own / all for others
  *   - remove:  all
  *   - run-now: all (custom REST verb in register-routes.ts)
- *
- * See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
  */
 
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
@@ -21,8 +19,13 @@ import {
   normalizeScheduleAgenticToolConfig,
   PAGINATION,
 } from '@agor/core/config';
-import { ScheduleRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
-import { BadRequest } from '@agor/core/feathers';
+import {
+  MCPServerRepository,
+  ScheduleRepository,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
+import { BadRequest, Forbidden } from '@agor/core/feathers';
+import { isMCPServerUsableBy } from '@agor/core/mcp';
 import { isInvalidModelConfigError } from '@agor/core/models';
 import type {
   AuthenticatedParams,
@@ -116,6 +119,19 @@ export class SchedulesService extends DrizzleService<
     }
   }
 
+  /** Runs attach servers as the creator: reject unusable ones on save; missing ones are skipped at run time. */
+  private async validateMcpServers(serverIds: string[], runAsUserId?: UserID): Promise<void> {
+    const repo = new MCPServerRepository(this.db);
+    for (const serverId of serverIds) {
+      const server = await repo.getWriteAuthorityProjection(serverId);
+      if (server && !isMCPServerUsableBy(server, runAsUserId)) {
+        throw new Forbidden(
+          `MCP server ${serverId} is private to another user. Schedules run as their creator, so only shared servers or servers the creator owns can be attached.`
+        );
+      }
+    }
+  }
+
   private normalizeConfig(config: PersistedScheduleAgenticToolConfig): ScheduleAgenticToolConfig {
     try {
       return normalizeScheduleAgenticToolConfig(config);
@@ -144,6 +160,9 @@ export class SchedulesService extends DrizzleService<
       : undefined;
     const trustedCreatedBy =
       creatorId ?? (prepared ? (rawData.created_by as UserID | undefined) : undefined);
+    if (data.mcp_server_ids?.length) {
+      await this.validateMcpServers(data.mcp_server_ids, trustedCreatedBy);
+    }
     const trustedData: PersistedScheduleCreateData = {
       ...data,
       ...(agenticToolConfig ? { agentic_tool_config: agenticToolConfig } : {}),
@@ -167,13 +186,18 @@ export class SchedulesService extends DrizzleService<
     data = pickWriteFields<SchedulePatchData>(rawData, SCHEDULE_PATCH_WRITE_FIELDS);
 
     let agenticToolConfig: PersistedScheduleAgenticToolConfig | undefined;
-    if (data.agentic_tool_config) {
+    if (data.agentic_tool_config || data.mcp_server_ids?.length) {
       if (id === null) throw new BadRequest('Schedule configuration cannot be multi-patched');
       const current = params?.schedule ?? (await this.get(id, params));
-      agenticToolConfig = await this.validateConfig(
-        this.normalizeConfig(data.agentic_tool_config),
-        current.created_by as UserID
-      );
+      if (data.agentic_tool_config) {
+        agenticToolConfig = await this.validateConfig(
+          this.normalizeConfig(data.agentic_tool_config),
+          current.created_by as UserID
+        );
+      }
+      if (data.mcp_server_ids?.length) {
+        await this.validateMcpServers(data.mcp_server_ids, current.created_by as UserID);
+      }
     }
     const trustedData: PersistedSchedulePatchData = {
       ...data,

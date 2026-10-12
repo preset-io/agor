@@ -1,7 +1,6 @@
 /**
  * Tests for the capability-driven secret resolver shared by JWT secret and
- * AGOR_MASTER_SECRET bootstrap. See `setup/persisted-secret.ts` and
- * context/explorations/daemon-fs-decoupling.md §1.5 (H3).
+ * AGOR_MASTER_SECRET bootstrap. See `setup/persisted-secret.ts`.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

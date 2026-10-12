@@ -1,7 +1,8 @@
 import type { Repo } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { ReposTable } from './ReposTable';
+import { renderWithSettingsShell } from './settingsDrillTestUtils';
 
 function makeRepo(overrides: Partial<Repo>): Repo {
   return {
@@ -59,8 +60,141 @@ describe('ReposTable search', () => {
   });
 });
 
-// NOTE: main's "ReposTable authority fencing" test (operation-guard reconnect
-// draft) was removed in the settings-redesign merge: this branch renders Repos
-// as an in-place drill-in rather than main's authority-fenced modal, so the
-// #2480 client-side operation guard is not threaded through it (backend
-// authority enforcement is unchanged). Flagged as a follow-up in the PR.
+describe('ReposTable authority fencing', () => {
+  it('preserves a same-user reconnect draft but does not close from the obsolete create', async () => {
+    let resolve!: () => void;
+    const pending = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const onCreate = vi.fn(() => pending);
+    const view = (generation: number) => (
+      <ReposTable
+        repoById={new Map()}
+        identityKey="admin-a:admin"
+        operationScope={['admin-a:admin', generation]}
+        onCreate={onCreate}
+      />
+    );
+    const rendered = renderWithSettingsShell(view(1));
+    fireEvent.click(screen.getByRole('button', { name: /new repository/i }));
+    const url = screen.getByPlaceholderText('https://github.com/apache/superset.git');
+    fireEvent.change(url, { target: { value: 'https://github.com/preset-io/agor.git' } });
+    fireEvent.change(screen.getByPlaceholderText('apache/superset'), {
+      target: { value: 'preset-io/agor' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^clone$/i }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+
+    rendered.rerender(view(2));
+    await act(async () => {
+      resolve();
+      await pending;
+    });
+
+    expect(screen.getByText('Clone Repository')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('https://github.com/apache/superset.git')).toHaveValue(
+      'https://github.com/preset-io/agor.git'
+    );
+  });
+});
+
+describe('ReposTable cleanup configuration authority', () => {
+  it.each([false, true])('omits unchanged policy from metadata saves (admin=%s)', async (admin) => {
+    const repo = makeRepo({
+      cleanup_policy: { enabled: true, command: './cleanup.sh', allow_branch_protection: true },
+    });
+    const onUpdate = vi.fn();
+    const view = (row: Repo) => (
+      <ReposTable
+        repoById={new Map([[row.repo_id, row]])}
+        identityKey={admin ? 'admin:admin' : 'member:member'}
+        operationScope={[admin ? 'admin:admin' : 'member:member', 1]}
+        canConfigureCleanup={admin}
+        onUpdate={onUpdate}
+      />
+    );
+    const rendered = renderWithSettingsShell(view(repo));
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    if (!admin)
+      expect(screen.queryByRole('button', { name: /Branch cleanup/ })).not.toBeInTheDocument();
+    // A concurrent policy update must not be replaced by this metadata-only draft.
+    rendered.rerender(
+      view({
+        ...repo,
+        cleanup_policy: { ...repo.cleanup_policy!, command: './new-policy.sh' },
+      })
+    );
+    fireEvent.change(screen.getByLabelText('Default Branch'), { target: { value: 'develop' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+    expect(onUpdate.mock.calls[0][1]).toEqual({ slug: repo.slug, default_branch: 'develop' });
+  });
+
+  it('saves a deliberately changed administrator policy even when collapsed', async () => {
+    const repo = makeRepo({
+      cleanup_policy: { enabled: true, command: './cleanup.sh', allow_branch_protection: true },
+    });
+    const onUpdate = vi.fn();
+    renderWithSettingsShell(
+      <ReposTable
+        repoById={new Map([[repo.repo_id, repo]])}
+        identityKey="admin:admin"
+        operationScope={['admin:admin', 1]}
+        canConfigureCleanup
+        onUpdate={onUpdate}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Branch cleanup/ }));
+    fireEvent.change(screen.getByLabelText('Cleanup command'), {
+      target: { value: './changed.sh' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Branch cleanup/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+    expect(onUpdate.mock.calls[0][1].cleanup_policy).toEqual({
+      ...repo.cleanup_policy,
+      command: './changed.sh',
+    });
+  });
+});
+
+describe('repository setup status', () => {
+  it('shows failed diagnostics on demand and retries the same source without deletion', async () => {
+    const repo = makeRepo({
+      clone_status: 'failed',
+      clone_generation: 2,
+      clone_error: {
+        category: 'network',
+        exit_code: 1,
+        message: 'credential-redacted synthetic diagnostic',
+      },
+    });
+    const onCreate = vi.fn(async () => {});
+    const onDelete = vi.fn();
+    renderWithSettingsShell(
+      <ReposTable
+        repoById={new Map([[repo.repo_id, repo]])}
+        identityKey="member:member"
+        operationScope={['member:member', 1]}
+        onCreate={onCreate}
+        onDelete={onDelete}
+      />
+    );
+    // The list flags the row; the edit drill-in carries the detail and retry.
+    expect(screen.getByText('Setup failed')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    expect(screen.getByText('Repository setup failed')).toBeVisible();
+    expect(screen.queryByText('credential-redacted synthetic diagnostic')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Setup diagnostics'));
+    expect(await screen.findByText('credential-redacted synthetic diagnostic')).toBeVisible();
+    fireEvent.click(screen.getByText('Retry setup'));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        { url: repo.remote_url, slug: repo.slug, default_branch: 'main' },
+        expect.any(Function)
+      )
+    );
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+});

@@ -13,6 +13,8 @@ export default defineConfig({
   splitting: false,
   clean: process.env.TSUP_CLEAN !== 'false',
   shims: true,
+  // `node:sqlite` exists only under its prefix; stripping it breaks hosted OpenCode checkpoints.
+  removeNodeProtocol: false,
   external: [
     '@agor/core',
     '@agor/core/client',

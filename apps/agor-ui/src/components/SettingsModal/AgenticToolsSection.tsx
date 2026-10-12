@@ -17,6 +17,7 @@ import {
   TOOL_FIELD_CONFIGS,
 } from '../ApiKeyFields';
 import { ToolIcon } from '../ToolIcon';
+import { ToolBetaBadge } from '../ToolIcon/ToolBetaBadge';
 import { AgenticToolPresetsManager } from './AgenticToolPresetsManager';
 
 export interface AgenticToolsSectionProps {
@@ -199,6 +200,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({
               <Space size={6}>
                 <ToolIcon tool={tool} size={18} />
                 <span>{TOOL_LABELS[tool]}</span>
+                <ToolBetaBadge tool={tool} />
               </Space>
             ),
             children: (

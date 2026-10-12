@@ -1,6 +1,6 @@
 import { generateId, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
 import type { Message, SessionID, TaskID } from '@agor/core/types';
-import { MessageRole } from '@agor/core/types';
+import { MessageRole, withProviderDetail } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MessagesService } from '../base/index.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
@@ -302,7 +302,9 @@ describe('ClaudeTool provider-failure settlement', () => {
           total_cost_usd: raw.total_cost_usd,
         });
         expect(result.rawSdkResponse).not.toHaveProperty('modelUsage');
-        expect(result.errorDetails).toEqual([SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE]);
+        expect(result.errorDetails).toEqual([
+          withProviderDetail(SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE, 'error_during_execution'),
+        ]);
         expect(
           JSON.stringify({ outgoing: harness.outgoing, persisted: harness.persisted, result })
         ).not.toContain(RAW_PROVIDER_BODY);
@@ -334,7 +336,9 @@ describe('ClaudeTool provider-failure settlement', () => {
           total_cost_usd: raw.total_cost_usd,
         });
         expect(result.rawSdkResponse).not.toHaveProperty('modelUsage');
-        expect(result.errorDetails).toEqual([SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE]);
+        expect(result.errorDetails).toEqual([
+          withProviderDetail(SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE, 'error_during_execution'),
+        ]);
         expect(
           JSON.stringify({ outgoing: harness.outgoing, persisted: harness.persisted, result })
         ).not.toContain(RAW_PROVIDER_BODY);

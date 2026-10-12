@@ -5,7 +5,12 @@
 import type { AgorClient, Board, BoardEntityObject, BoardObject } from '@agor-live/client';
 import { useCallback, useRef } from 'react';
 import type { Node } from 'reactflow';
-import { useMutationGate } from '../../../contexts/ConnectionContext';
+import {
+  type BoardMutationGuard,
+  type BoardWriteResult,
+  useBoardMutationGuard,
+} from '../../../hooks/useBoardMutationGuard';
+import type { BoardWriteTicket } from '../../../store/boardMutationGuard';
 import { useThemedMessage } from '../../../utils/message';
 import {
   computeLayerChanges,
@@ -26,8 +31,21 @@ interface UseBoardObjectsProps {
    *  "selected" outline. */
   activeUrlTargetArtifactId?: string | null;
   onEditMarkdown?: (objectId: string, content: string, width: number) => void;
-  /** Effective board.edit permission, resolved by the canvas. */
-  canEdit?: boolean;
+  /** A zone node unmounted with an unsaved draft (see `ZoneNodeData.onDraftLost`). */
+  onZoneDraftLost?: (draft: { objectId: string; zoneName: string; text: string }) => void;
+  /**
+   * The canvas's board.edit write guard. Every board-object write passes it
+   * under an explicit ticket: immediate actions capture one when they run,
+   * dialogs and editors pass the one captured when they opened, and batches
+   * pass the one of their queue. A write without a current ticket is refused.
+   */
+  guard: BoardMutationGuard;
+}
+
+type ZoneEntry = [string, Extract<BoardObject, { type: 'zone' }>];
+
+function zoneEntriesOf(objects: Record<string, BoardObject>): ZoneEntry[] {
+  return Object.entries(objects).filter((entry): entry is ZoneEntry => entry[1].type === 'zone');
 }
 
 function zonesOverlap(
@@ -46,16 +64,21 @@ export const useBoardObjects = ({
   eraserMode = false,
   activeUrlTargetArtifactId,
   onEditMarkdown,
-  canEdit = true,
+  onZoneDraftLost,
+  guard,
 }: UseBoardObjectsProps) => {
   // Use ref to avoid recreating callbacks when board changes
   const boardRef = useRef(board);
   boardRef.current = board;
-  const canEditRef = useRef(canEdit);
-  canEditRef.current = canEdit;
-  const mutationGate = useMutationGate();
-  const canMutateRef = useRef(mutationGate.canMutate);
-  canMutateRef.current = mutationGate.canMutate;
+  const guardRef = useRef(guard);
+  guardRef.current = guard;
+  const canEdit = guard.canMutate;
+  // Artifact lifecycle authorization is creator/admin based rather than
+  // board.edit based, but its board object is still board data: it needs the
+  // partition loaded and the connection usable like every other write.
+  const artifactGuard = useBoardMutationGuard(board?.board_id, true);
+  const artifactGuardRef = useRef(artifactGuard);
+  artifactGuardRef.current = artifactGuard;
 
   const { showError } = useThemedMessage();
 
@@ -65,15 +88,25 @@ export const useBoardObjects = ({
   const boardObjects = board?.objects;
 
   /**
-   * Update an existing board object
+   * Update an existing board object under `ticket`. Resolves `true` once
+   * saved, `false` when the request failed (a dialog stays open to retry), or
+   * `'stale'` when the ticket no longer holds: nothing is sent, and a dialog
+   * keeps its draft to copy or discard (only reopening captures a new ticket).
    */
   const handleUpdateObject = useCallback(
-    async (objectId: string, objectData: BoardObject) => {
-      const currentBoard = boardRef.current;
-      if (!canEditRef.current || !currentBoard || !client) return false;
-
+    async (
+      objectId: string,
+      objectData: BoardObject,
+      ticket: BoardWriteTicket | null
+    ): Promise<BoardWriteResult> => {
+      if (!client) return false;
+      if (!guardRef.current.isCurrent(ticket)) {
+        guardRef.current.warnDropped();
+        return 'stale';
+      }
       try {
-        await client.service('boards').patch(currentBoard.board_id, {
+        // No await between the check above and this request.
+        await client.service('boards').patch(ticket.boardId, {
           _action: 'upsertObject',
           objectId,
           objectData,
@@ -86,6 +119,13 @@ export const useBoardObjects = ({
       }
     },
     [client, showError] // Only depend on stable services, not board
+  );
+
+  /** An immediate update: its ticket is captured now, and checked at once. */
+  const updateObjectNow = useCallback(
+    (objectId: string, objectData: BoardObject) =>
+      handleUpdateObject(objectId, objectData, guardRef.current.capture()),
+    [handleUpdateObject]
   );
 
   /**
@@ -113,7 +153,8 @@ export const useBoardObjects = ({
   const reorderObject = useCallback(
     async (objectId: string, op: LayerOp) => {
       const currentBoard = boardRef.current;
-      if (!canEditRef.current || !currentBoard || !client) return;
+      const ticket = guardRef.current.capture();
+      if (!ticket || !currentBoard || !client) return;
 
       const objects = currentBoard.objects ?? {};
       const target = objects[objectId];
@@ -137,10 +178,12 @@ export const useBoardObjects = ({
       if (Object.keys(patches).length === 0) return;
 
       try {
-        await client.service('boards').patch(currentBoard.board_id, {
-          _action: 'mergeObjectFields',
-          objects: patches,
-        } as unknown as Partial<Board>);
+        await guardRef.current.write(ticket, () =>
+          client.service('boards').patch(ticket.boardId, {
+            _action: 'mergeObjectFields',
+            objects: patches,
+          } as unknown as Partial<Board>)
+        );
       } catch (error) {
         console.error('Failed to reorder object:', error);
         showError('Failed to reorder zone');
@@ -153,8 +196,16 @@ export const useBoardObjects = ({
    * Delete a zone (branch-centric: zones can pin branches)
    */
   const deleteZone = useCallback(
-    async (objectId: string, _deleteAssociatedSessions: boolean) => {
-      if (!canEditRef.current || !board || !client) return;
+    async (
+      objectId: string,
+      _deleteAssociatedSessions: boolean,
+      ticket: BoardWriteTicket | null
+    ) => {
+      if (!client) return;
+      if (!guardRef.current.isCurrent(ticket)) {
+        guardRef.current.warnDropped();
+        return;
+      }
 
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
@@ -165,7 +216,7 @@ export const useBoardObjects = ({
       setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
 
       try {
-        await client.service('boards').patch(board.board_id, {
+        await client.service('boards').patch(ticket.boardId, {
           _action: 'deleteZone',
           objectId,
         } as unknown as Partial<Board>);
@@ -181,16 +232,20 @@ export const useBoardObjects = ({
         // Note: WebSocket update should restore the actual state
       }
     },
-    [board, client, setNodes, deletedObjectsRef]
+    [client, setNodes, deletedObjectsRef]
   );
 
   /**
-   * Delete a board object
+   * Delete a board object under `ticket` (an immediate delete captures one
+   * when it runs; a confirmation passes the one captured when it opened).
    */
   const deleteObject = useCallback(
-    async (objectId: string) => {
-      const currentBoard = boardRef.current;
-      if (!canEditRef.current || !currentBoard || !client) return;
+    async (objectId: string, ticket: BoardWriteTicket | null) => {
+      if (!client) return;
+      if (!guardRef.current.isCurrent(ticket)) {
+        guardRef.current.warnDropped();
+        return;
+      }
 
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
@@ -199,7 +254,7 @@ export const useBoardObjects = ({
       setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
 
       try {
-        await client.service('boards').patch(currentBoard.board_id, {
+        await client.service('boards').patch(ticket.boardId, {
           _action: 'removeObject',
           objectId,
         } as unknown as Partial<Board>);
@@ -223,11 +278,14 @@ export const useBoardObjects = ({
    * Uses the artifacts service's lifecycle-safe remove method.
    */
   const deleteArtifact = useCallback(
-    async (objectId: string, artifactId: string) => {
-      // Artifact lifecycle authorization is creator/admin based rather than
-      // board.edit based, but it still obeys the global connection/version
-      // mutation gate. The ref protects callbacks captured before reconnect.
-      if (!canMutateRef.current || !client) return;
+    async (objectId: string, artifactId: string, ticket: BoardWriteTicket | null) => {
+      // Lifecycle-guarded (see `artifactGuard`); the confirmation passes the
+      // ticket it captured when it opened.
+      if (!client) return;
+      if (!artifactGuardRef.current.isCurrent(ticket)) {
+        artifactGuardRef.current.warnDropped();
+        return;
+      }
 
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
@@ -251,18 +309,200 @@ export const useBoardObjects = ({
   );
 
   /**
+   * The one constructor for every board-object node, hydrated or optimistic:
+   * a node created locally before its first realtime ack carries the same
+   * ticket plumbing (`beginBoardWrite`, ticket-taking callbacks) as one built
+   * from the board record, so an editor or confirmation opened on it captures
+   * its ticket when it opens.
+   */
+  const buildNode = useCallback(
+    (objectId: string, objectData: BoardObject, zoneEntries: readonly ZoneEntry[]): Node => {
+      // App node (live Sandpack preview)
+      if (objectData.type === 'app') {
+        return {
+          id: objectId,
+          type: 'appNode',
+          position: { x: objectData.x, y: objectData.y },
+          draggable: canEdit,
+          selectable: true,
+          // Above markdown (300), below branches (500) by default.
+          zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.app),
+          className: eraserMode ? 'eraser-mode' : undefined,
+          data: {
+            objectId,
+            title: objectData.title,
+            description: objectData.description,
+            template: objectData.template,
+            files: objectData.files,
+            dependencies: objectData.dependencies,
+            entryFile: objectData.entryFile,
+            showEditor: objectData.showEditor,
+            showConsole: objectData.showConsole,
+            width: objectData.width,
+            height: objectData.height,
+            canEdit,
+            onUpdate: updateObjectNow,
+            onDelete: (id: string) => deleteObject(id, guardRef.current.capture()),
+          },
+        };
+      }
+
+      // Artifact node (filesystem-backed Sandpack preview)
+      if (objectData.type === 'artifact') {
+        const isLocked = objectData.locked ?? false;
+        return {
+          id: objectId,
+          type: 'artifactNode',
+          position: { x: objectData.x, y: objectData.y },
+          draggable: canEdit && !isLocked,
+          selectable: true,
+          zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.artifact),
+          className: eraserMode ? 'eraser-mode' : undefined,
+          data: {
+            objectId,
+            artifactId: objectData.artifact_id,
+            width: objectData.width,
+            height: objectData.height,
+            locked: isLocked,
+            x: objectData.x,
+            y: objectData.y,
+            canEdit,
+            isActiveUrlTarget: objectData.artifact_id === activeUrlTargetArtifactId,
+            onUpdate: updateObjectNow,
+            onDeleteArtifact: deleteArtifact,
+            beginArtifactDelete: artifactGuard.capture,
+          },
+        };
+      }
+
+      // Markdown note node
+      if (objectData.type === 'markdown') {
+        return {
+          id: objectId,
+          type: 'markdown',
+          position: { x: objectData.x, y: objectData.y },
+          draggable: canEdit,
+          selectable: true,
+          // Above zones (100), below branches (500) by default.
+          zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.markdown),
+          className: eraserMode ? 'eraser-mode' : undefined,
+          data: {
+            objectId,
+            content: objectData.content,
+            width: objectData.width,
+            canEdit,
+            onUpdate: updateObjectNow,
+            onEdit: onEditMarkdown,
+            onDelete: deleteObject,
+            beginBoardWrite: guard.capture,
+          },
+        };
+      }
+
+      // Count entities pinned to this zone via board_objects.zone_id.
+      // Deliberately avoid subscribing the whole canvas to sessionsByBranch:
+      // streaming session patches are high-frequency and should only update
+      // the affected BranchCard's per-branch selector, not rebuild every
+      // React Flow node on the board.
+      let pinnedItemCount = 0;
+      if (objectData.type === 'zone') {
+        for (const boardObj of boardObjectsForBoard) {
+          if (boardObj.zone_id === objectId && (boardObj.branch_id || boardObj.card_id)) {
+            pinnedItemCount += 1;
+          }
+        }
+      }
+      const zonePeers = zoneEntries.map(([id, zone]) => ({
+        id,
+        zIndex: sanitizeZIndex(zone.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
+      }));
+
+      // Zone node
+      const isLocked = objectData.type === 'zone' ? objectData.locked : false;
+      return {
+        id: objectId,
+        type: 'zone',
+        position: { x: objectData.x, y: objectData.y },
+        draggable: canEdit && !isLocked,
+        // Zones behind branches and comments by default; honor explicit order.
+        zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
+        className: eraserMode ? 'eraser-mode' : undefined,
+        // Set dimensions both as direct props (for collision detection) and style (for rendering)
+        width: objectData.width,
+        height: objectData.height,
+        style: {
+          width: objectData.width,
+          height: objectData.height,
+        },
+        data: {
+          objectId,
+          label: objectData.type === 'zone' ? objectData.label : '',
+          width: objectData.width,
+          height: objectData.height,
+          borderColor: objectData.type === 'zone' ? objectData.borderColor : undefined,
+          backgroundColor: objectData.type === 'zone' ? objectData.backgroundColor : undefined,
+          color: objectData.color, // Backwards compatibility
+          status: objectData.type === 'zone' ? objectData.status : undefined,
+          locked: isLocked,
+          fontSize: objectData.type === 'zone' ? objectData.fontSize : undefined,
+          // Effective base zIndex (persisted or per-type default). Consumed by
+          // the selection-bump logic in SessionCanvas so a selected zone
+          // restores to its own order on deselect.
+          zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
+          x: objectData.x, // Include position in data for updates
+          y: objectData.y,
+          trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
+          pinnedItemCount,
+          canEdit,
+          overlappingZoneCount:
+            objectData.type === 'zone'
+              ? zoneEntries.filter(
+                  ([peerId, peer]) => peerId !== objectId && zonesOverlap(objectData, peer)
+                ).length
+              : 0,
+          layerAvailability:
+            objectData.type === 'zone'
+              ? (['front', 'forward', 'backward', 'back'] as const).reduce(
+                  (availability, op) => {
+                    availability[op] = computeLayerChanges(op, objectId, zonePeers).length > 0;
+                    return availability;
+                  },
+                  {} as Record<LayerOp, boolean>
+                )
+              : undefined,
+          onUpdate: handleUpdateObject,
+          onDelete: deleteZone,
+          onReorder: reorderObject,
+          beginBoardWrite: guard.capture,
+          onDraftLost: onZoneDraftLost,
+        },
+      };
+    },
+    [
+      boardObjectsForBoard,
+      handleUpdateObject,
+      updateObjectNow,
+      deleteZone,
+      deleteObject,
+      deleteArtifact,
+      reorderObject,
+      eraserMode,
+      activeUrlTargetArtifactId,
+      onEditMarkdown,
+      onZoneDraftLost,
+      canEdit,
+      guard.capture,
+      artifactGuard.capture,
+    ]
+  );
+
+  /**
    * Convert board.objects to React Flow nodes
    */
   const getBoardObjectNodes = useCallback((): Node[] => {
     if (!boardObjects) return [];
 
-    const zoneEntries = Object.entries(boardObjects).filter(
-      (entry): entry is [string, Extract<BoardObject, { type: 'zone' }>] => entry[1].type === 'zone'
-    );
-    const zonePeers = zoneEntries.map(([id, zone]) => ({
-      id,
-      zIndex: sanitizeZIndex(zone.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
-    }));
+    const zoneEntries = zoneEntriesOf(boardObjects);
 
     return Object.entries(boardObjects)
       .filter(([, objectData]) => {
@@ -279,225 +519,51 @@ export const useBoardObjects = ({
 
         return hasValidPosition;
       })
-      .map(([objectId, objectData]) => {
-        // App node (live Sandpack preview)
-        if (objectData.type === 'app') {
-          return {
-            id: objectId,
-            type: 'appNode',
-            position: { x: objectData.x, y: objectData.y },
-            draggable: canEdit,
-            selectable: true,
-            // Above markdown (300), below branches (500) by default.
-            zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.app),
-            className: eraserMode ? 'eraser-mode' : undefined,
-            data: {
-              objectId,
-              title: objectData.title,
-              description: objectData.description,
-              template: objectData.template,
-              files: objectData.files,
-              dependencies: objectData.dependencies,
-              entryFile: objectData.entryFile,
-              showEditor: objectData.showEditor,
-              showConsole: objectData.showConsole,
-              width: objectData.width,
-              height: objectData.height,
-              canEdit,
-              onUpdate: handleUpdateObject,
-              onDelete: deleteObject,
-            },
-          };
-        }
+      .map(([objectId, objectData]) => buildNode(objectId, objectData, zoneEntries));
+  }, [boardObjects, buildNode]);
 
-        // Artifact node (filesystem-backed Sandpack preview)
-        if (objectData.type === 'artifact') {
-          const isLocked = objectData.locked ?? false;
-          return {
-            id: objectId,
-            type: 'artifactNode',
-            position: { x: objectData.x, y: objectData.y },
-            draggable: canEdit && !isLocked,
-            selectable: true,
-            zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.artifact),
-            className: eraserMode ? 'eraser-mode' : undefined,
-            data: {
-              objectId,
-              artifactId: objectData.artifact_id,
-              width: objectData.width,
-              height: objectData.height,
-              locked: isLocked,
-              x: objectData.x,
-              y: objectData.y,
-              canEdit,
-              isActiveUrlTarget: objectData.artifact_id === activeUrlTargetArtifactId,
-              onUpdate: handleUpdateObject,
-              onDeleteArtifact: deleteArtifact,
-            },
-          };
-        }
-
-        // Markdown note node
-        if (objectData.type === 'markdown') {
-          return {
-            id: objectId,
-            type: 'markdown',
-            position: { x: objectData.x, y: objectData.y },
-            draggable: canEdit,
-            selectable: true,
-            // Above zones (100), below branches (500) by default.
-            zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.markdown),
-            className: eraserMode ? 'eraser-mode' : undefined,
-            data: {
-              objectId,
-              content: objectData.content,
-              width: objectData.width,
-              canEdit,
-              onUpdate: handleUpdateObject,
-              onEdit: onEditMarkdown,
-              onDelete: deleteObject,
-            },
-          };
-        }
-
-        // Count entities pinned to this zone via board_objects.zone_id.
-        // Deliberately avoid subscribing the whole canvas to sessionsByBranch:
-        // streaming session patches are high-frequency and should only update
-        // the affected BranchCard's per-branch selector, not rebuild every
-        // React Flow node on the board.
-        let pinnedItemCount = 0;
-        if (objectData.type === 'zone') {
-          for (const boardObj of boardObjectsForBoard) {
-            if (boardObj.zone_id === objectId && (boardObj.branch_id || boardObj.card_id)) {
-              pinnedItemCount += 1;
-            }
-          }
-        }
-
-        // Zone node
-        const isLocked = objectData.type === 'zone' ? objectData.locked : false;
-        return {
-          id: objectId,
-          type: 'zone',
-          position: { x: objectData.x, y: objectData.y },
-          draggable: canEdit && !isLocked,
-          // Zones behind branches and comments by default; honor explicit order.
-          zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
-          className: eraserMode ? 'eraser-mode' : undefined,
-          // Set dimensions both as direct props (for collision detection) and style (for rendering)
-          width: objectData.width,
-          height: objectData.height,
-          style: {
-            width: objectData.width,
-            height: objectData.height,
-          },
-          data: {
-            objectId,
-            label: objectData.type === 'zone' ? objectData.label : '',
-            width: objectData.width,
-            height: objectData.height,
-            borderColor: objectData.type === 'zone' ? objectData.borderColor : undefined,
-            backgroundColor: objectData.type === 'zone' ? objectData.backgroundColor : undefined,
-            color: objectData.color, // Backwards compatibility
-            status: objectData.type === 'zone' ? objectData.status : undefined,
-            locked: isLocked,
-            fontSize: objectData.type === 'zone' ? objectData.fontSize : undefined,
-            // Effective base zIndex (persisted or per-type default). Consumed by
-            // the selection-bump logic in SessionCanvas so a selected zone
-            // restores to its own order on deselect.
-            zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
-            x: objectData.x, // Include position in data for updates
-            y: objectData.y,
-            trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
-            pinnedItemCount,
-            canEdit,
-            overlappingZoneCount:
-              objectData.type === 'zone'
-                ? zoneEntries.filter(
-                    ([peerId, peer]) => peerId !== objectId && zonesOverlap(objectData, peer)
-                  ).length
-                : 0,
-            layerAvailability:
-              objectData.type === 'zone'
-                ? (['front', 'forward', 'backward', 'back'] as const).reduce(
-                    (availability, op) => {
-                      availability[op] = computeLayerChanges(op, objectId, zonePeers).length > 0;
-                      return availability;
-                    },
-                    {} as Record<LayerOp, boolean>
-                  )
-                : undefined,
-            onUpdate: handleUpdateObject,
-            onDelete: deleteZone,
-            onReorder: reorderObject,
-          },
-        };
-      });
-  }, [
-    boardObjects,
-    boardObjectsForBoard,
-    handleUpdateObject,
-    deleteZone,
-    deleteObject,
-    deleteArtifact,
-    reorderObject,
-    eraserMode,
-    activeUrlTargetArtifactId,
-    onEditMarkdown,
-    canEdit,
-  ]);
+  /**
+   * The node for an object created locally and not yet in the board record
+   * (an optimistic create): built exactly like a hydrated one.
+   */
+  const buildObjectNode = useCallback(
+    (objectId: string, objectData: BoardObject): Node =>
+      buildNode(
+        objectId,
+        objectData,
+        zoneEntriesOf({ ...boardRef.current?.objects, [objectId]: objectData })
+      ),
+    [buildNode]
+  );
 
   /**
    * Add a zone node at the specified position
    */
   const addZoneNode = useCallback(
     async (x: number, y: number) => {
-      const currentBoard = boardRef.current;
-      if (!canEditRef.current || !currentBoard || !client) return;
+      const ticket = guardRef.current.capture();
+      if (!ticket || !client) return;
 
       const objectId = `zone-${Date.now()}`;
-      const width = 400;
-      const height = 600;
+      const objectData: BoardObject = {
+        type: 'zone',
+        x,
+        y,
+        width: 400,
+        height: 600,
+        label: 'New Zone',
+        // No color specified - will use theme default
+      };
 
       // Optimistic update
-      setNodes((nodes) => [
-        ...nodes,
-        {
-          id: objectId,
-          type: 'zone',
-          position: { x, y },
-          draggable: canEdit,
-          zIndex: DEFAULT_BOARD_OBJECT_Z_INDEX.zone, // Zones behind branches and comments
-          style: {
-            width,
-            height,
-          },
-          data: {
-            objectId,
-            label: 'New Zone',
-            width,
-            height,
-            color: undefined, // Will use theme default (colorBorder)
-            canEdit,
-            onUpdate: handleUpdateObject,
-          },
-        },
-      ]);
+      setNodes((nodes) => [...nodes, buildObjectNode(objectId, objectData)]);
 
       // Persist atomically
       try {
-        await client.service('boards').patch(currentBoard.board_id, {
+        await client.service('boards').patch(ticket.boardId, {
           _action: 'upsertObject',
           objectId,
-          objectData: {
-            type: 'zone',
-            x,
-            y,
-            width,
-            height,
-            label: 'New Zone',
-            // No color specified - will use theme default
-          },
+          objectData,
         } as unknown as Partial<Board>);
       } catch (error) {
         console.error('Failed to add zone node:', error);
@@ -505,17 +571,24 @@ export const useBoardObjects = ({
         setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
       }
     },
-    [canEdit, client, setNodes, handleUpdateObject] // Removed board dependency
+    [client, setNodes, buildObjectNode] // Removed board dependency
   );
 
   /**
    * Batch update positions for board objects after drag
    */
   const batchUpdateObjectPositions = useCallback(
-    async (updates: Record<string, { x: number; y: number }>) => {
+    async (
+      updates: Record<string, { x: number; y: number }>,
+      ticket: BoardWriteTicket | null
+    ): Promise<boolean> => {
       const currentBoard = boardRef.current;
-      if (!canEditRef.current || !currentBoard || !client || Object.keys(updates).length === 0)
-        return;
+      if (!currentBoard || !client || Object.keys(updates).length === 0) return true;
+      // The batch's queue ticket, checked right before the request (a batch
+      // resumes here after awaiting earlier writes). Resolves false if dropped.
+      if (!guardRef.current.isCurrent(ticket) || currentBoard.board_id !== ticket.boardId) {
+        return false;
+      }
 
       try {
         // Build objects payload with full object data + new positions
@@ -538,22 +611,24 @@ export const useBoardObjects = ({
         }
 
         if (Object.keys(objects).length === 0) {
-          return;
+          return true;
         }
 
-        await client.service('boards').patch(currentBoard.board_id, {
+        await client.service('boards').patch(ticket.boardId, {
           _action: 'batchUpsertObjects',
           objects,
         } as unknown as Partial<Board>);
       } catch (error) {
         console.error('Failed to persist object positions:', error);
       }
+      return true;
     },
     [client, deletedObjectsRef] // Removed board dependency
   );
 
   return {
     getBoardObjectNodes,
+    buildObjectNode,
     addZoneNode,
     deleteObject,
     deleteZone,

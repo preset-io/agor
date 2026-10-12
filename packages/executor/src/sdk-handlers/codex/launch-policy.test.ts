@@ -25,6 +25,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
         goals: false,
         memories: true,
         multi_agent: false,
+        plugins: false,
       },
       tools: {
         update_plan: { enabled: true },
@@ -45,7 +46,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
 
   it('creates the required per-process overrides when no other config exists', () => {
     expect(applyAgorCodexLaunchPolicy(undefined)).toEqual({
-      features: { multi_agent: false },
+      features: { multi_agent: false, plugins: false },
       tools: { update_plan: { enabled: true } },
     });
   });
@@ -59,7 +60,7 @@ describe('applyAgorCodexLaunchPolicy', () => {
     };
 
     expect(applyAgorCodexLaunchPolicy(config)).toEqual({
-      features: { multi_agent: false },
+      features: { multi_agent: false, plugins: false },
       tools: {
         web_search: true,
         update_plan: { enabled: true, some_future_field: 'keep' },
@@ -71,6 +72,25 @@ describe('applyAgorCodexLaunchPolicy', () => {
       some_future_field: 'keep',
     });
   });
+
+  it.each([undefined, false])('vetoes enabled plugins when the opt-in is %s', (includePlugins) => {
+    const config = { features: { plugins: true, apps: true }, skills: { config: [] } };
+    expect(applyAgorCodexLaunchPolicy(config, includePlugins)).toMatchObject({
+      features: { plugins: false, apps: true },
+      skills: { config: [] },
+    });
+    expect(config.features.plugins).toBe(true);
+  });
+
+  it.each([undefined, false, true])(
+    'opt-in preserves native plugin setting %s instead of forcing on',
+    (plugins) => {
+      const features: CodexConfigObject = plugins === undefined ? {} : { plugins };
+      const result = applyAgorCodexLaunchPolicy({ features }, true);
+      expect(result.features).toEqual({ ...features, multi_agent: false });
+      if (plugins === undefined) expect(result.features).not.toHaveProperty('plugins');
+    }
+  );
 
   it('fails clearly instead of dropping the policy when features cannot be merged', () => {
     expect(() => applyAgorCodexLaunchPolicy({ features: true } as CodexConfigObject)).toThrow(

@@ -1,0 +1,97 @@
+/* Optional CRT intro (see CrtIntro.tsx). Sits above everything, including
+ * the pre-paint cover in app/styles.css, then fades to hand over the page. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483001;
+  background: #050403;
+  opacity: 1;
+  transition: opacity var(--crt-fade, 700ms) ease-out;
+}
+
+.leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.screen {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Covers the whole screen: a click or tap anywhere enables it. */
+.enter {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.enter:focus-visible {
+  outline: none;
+}
+
+/* No WebGL: the same words as styled phosphor text with CSS scanlines. */
+.plain {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.9em;
+  padding: max(28px, 8vw);
+  color: #ffb347;
+  font:
+    500 clamp(15px, 2.1vw, 28px) / 1.6 var(--font-mono-label),
+    ui-monospace,
+    monospace;
+  text-shadow:
+    0 0 6px rgba(255, 179, 71, 0.55),
+    0 0 18px rgba(255, 140, 40, 0.25);
+}
+
+.plain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(180deg, rgba(0, 0, 0, 0.28) 0 1px, transparent 1px 3px);
+  pointer-events: none;
+}
+
+.plain p {
+  max-width: 64ch;
+  margin: 0;
+  animation: lineIn 0.2s steps(4) both;
+}
+
+.plain p:first-child {
+  color: #9a6a2c;
+}
+
+@keyframes lineIn {
+  from {
+    opacity: 0;
+  }
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay {
+    transition-duration: 200ms;
+  }
+
+  .plain p {
+    animation: none;
+  }
+}

@@ -20,8 +20,6 @@
  * Delivery is fragment-only (`#token=…`): the value never enters an HTTP path,
  * query string, or `Referer`. The SPA reads it from the fragment, clears it,
  * and POSTs it in a request body.
- *
- * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.
  */
 
 import { openBoundSecret, sealBoundSecret } from '@agor/core/db';

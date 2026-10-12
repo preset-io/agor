@@ -132,7 +132,7 @@ conversation and branch-owned SDK state are shared.
 Execution-home Sessions are never shareable. This immutable compatibility
 boundary prevents a resumable conversation from changing mount identity after
 creation. See
-[`context/explorations/session-sharing.md`](../explorations/session-sharing.md).
+[`context/concepts/session-sharing.md`](../concepts/session-sharing.md).
 
 ## Listing and point checks
 

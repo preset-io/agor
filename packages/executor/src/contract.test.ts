@@ -4,8 +4,7 @@
  * The executor MUST NOT read `~/.agor/config.yaml` directly. Everything it
  * needs comes from (a) env vars set by the daemon at spawn time, or
  * (b) the `resolvedConfig` slice on the payload. See
- * context/explorations/daemon-fs-decoupling.md §1.5 (H1) for the rationale,
- * and `packages/executor/src/config.ts` for the local getDaemonUrl() that
+ * `packages/executor/src/config.ts` for the local getDaemonUrl() that
  * replaces the previous core re-export.
  *
  * Source scans (rather than runtime asserts) catch regressions before they

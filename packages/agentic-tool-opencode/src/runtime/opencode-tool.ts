@@ -22,6 +22,7 @@ import {
   MCP_CLIENT_HINTS,
   type MCPServer,
   type MessageID,
+  type OpenCodeCheckpointManifest,
   type PermissionMode,
   type SessionID,
   shortId,
@@ -37,6 +38,7 @@ import {
   type OpenCodeEventEffect,
   reconcileOpenCodeMessages,
 } from './event-translator.js';
+import { hostedOpenCodeInvocationConfig, writeHostedOpenCodeAuth } from './hosted-config.js';
 import {
   createOpenCodeSanitizer,
   type ManagedChild,
@@ -46,6 +48,7 @@ import {
   resolvePackagedOpenCodeBinary,
   startManagedOpenCodeServer,
 } from './managed-server.js';
+import { type OpenCodeNativeStateLayout, sealOpenCodeCheckpoint } from './native-state.js';
 import { loadOpenCodeSdk } from './sdk-loader.js';
 
 export { resolvePackagedOpenCodeBinary };
@@ -96,6 +99,12 @@ export type RunOpenCodeTurnInput = {
   mcpToken?: string;
   permissionMode?: PermissionMode;
   dataHome?: string;
+  /** Hosted turn: Job-local layout plus the prompter's selected provider auth entry. */
+  managed?: {
+    layout: OpenCodeNativeStateLayout;
+    authContent: string;
+    authSecrets: readonly string[];
+  };
   signal: AbortSignal;
   persistOpenCodeSessionId: (sessionId: string) => Promise<void>;
 };
@@ -103,6 +112,8 @@ export type RunOpenCodeTurnInput = {
 export type OpenCodeTurnResult = {
   openCodeSessionId: string;
   sessionWasCreated: boolean;
+  /** Hosted turns only: the sealed checkpoint reported with completion. */
+  checkpoint?: OpenCodeCheckpointManifest;
   finalMessage: {
     content: string;
     contentBlocks: ContentBlock[];
@@ -179,6 +190,7 @@ export type OpenCodeToolDependencies = {
   readinessTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   eventDrainMs?: number;
+  retryBudget?: OpenCodeRetryBudget;
 };
 
 function automaticallyAllowsOpenCodePermission(
@@ -377,6 +389,24 @@ async function applyPermissionEffect(input: {
   }
 }
 
+/** How long a turn waits out provider retries before failing with the provider's reason. */
+export type OpenCodeRetryBudget = { maxRetries: number; maxWaitMs: number };
+const DEFAULT_RETRY_BUDGET: OpenCodeRetryBudget = { maxRetries: 2, maxWaitMs: 30_000 };
+const RETRY_WINDOW_ENDERS = new Set<OpenCodeEventEffect['type']>([
+  'text-delta',
+  'reasoning-delta',
+  'tool-activity',
+  'permission',
+  'idle',
+  'error',
+]);
+
+function openCodeErrorMessage(error: unknown): string | undefined {
+  const value = error as { data?: { message?: unknown }; message?: unknown } | undefined;
+  const message = value?.data?.message ?? value?.message;
+  return typeof message === 'string' ? message : undefined;
+}
+
 function createOpenCodeEffectConsumer(input: {
   client: OpenCodeClient;
   turn: RunOpenCodeTurnInput;
@@ -384,13 +414,28 @@ function createOpenCodeEffectConsumer(input: {
   streamingCallbacks?: OpenCodeStreamingCallbacks;
   canUseTool?: OpenCodeCanUseToolCallback;
   settle: (error?: Error) => void;
-  promptFailure: () => Error;
+  promptFailure: (detail?: string) => Error;
+  retryBudget: OpenCodeRetryBudget;
 }) {
   let textStarted = false;
+  let firstRetryAt: number | undefined;
+  let lastRetryMessage = '';
+  let retryDeadline: ReturnType<typeof setTimeout> | undefined;
   let thinkingStarted = false;
   let sequence = 0;
+  // Model output ends a retry window; OpenCode reports `busy` before each retry, so that does not.
+  const endRetryWindow = () => {
+    clearTimeout(retryDeadline);
+    retryDeadline = undefined;
+    firstRetryAt = undefined;
+  };
+  const giveUp = (attempts: string) =>
+    input.settle(
+      input.promptFailure(`gave up after ${attempts}: ${lastRetryMessage || 'no reason given'}`)
+    );
 
   return {
+    dispose: endRetryWindow,
     get textStarted() {
       return textStarted;
     },
@@ -399,6 +444,7 @@ function createOpenCodeEffectConsumer(input: {
     },
     async apply(effects: OpenCodeEventEffect[]): Promise<void> {
       for (const effect of effects) {
+        if (RETRY_WINDOW_ENDERS.has(effect.type)) endRetryWindow();
         switch (effect.type) {
           case 'text-delta':
             input.streamingCallbacks?.onPulse?.('progress', 'message.text_delta');
@@ -462,8 +508,33 @@ function createOpenCodeEffectConsumer(input: {
           case 'idle':
             input.settle();
             break;
+          case 'provider-retry': {
+            input.streamingCallbacks?.onPulse?.('progress', 'session.status.retry');
+            const now = Date.now();
+            firstRetryAt ??= now;
+            lastRetryMessage = effect.message;
+            const nextAt = effect.next > now ? effect.next : now;
+            // Provider-agnostic: a turn waits out at most a few retries, then fails with the provider's reason.
+            if (
+              effect.attempt > input.retryBudget.maxRetries ||
+              nextAt - firstRetryAt > input.retryBudget.maxWaitMs
+            ) {
+              endRetryWindow();
+              giveUp(`${effect.attempt} provider retries`);
+              break;
+            }
+            // Enforce the wait budget even if no further event arrives.
+            retryDeadline ??= setTimeout(
+              () => {
+                retryDeadline = undefined;
+                giveUp(`${input.retryBudget.maxWaitMs / 1000}s of provider retries`);
+              },
+              firstRetryAt + input.retryBudget.maxWaitMs - now
+            );
+            break;
+          }
           case 'error':
-            input.settle(input.promptFailure());
+            input.settle(input.promptFailure(effect.message));
             break;
         }
       }
@@ -561,6 +632,7 @@ export class OpenCodeTool {
     readinessTimeoutMs: number;
     shutdownTimeoutMs: number;
     eventDrainMs: number;
+    retryBudget: OpenCodeRetryBudget;
   };
 
   constructor(dependencies: OpenCodeToolDependencies) {
@@ -590,6 +662,7 @@ export class OpenCodeTool {
       readinessTimeoutMs: dependencies.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
       shutdownTimeoutMs: dependencies.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
       eventDrainMs: dependencies.eventDrainMs ?? DEFAULT_EVENT_DRAIN_MS,
+      retryBudget: dependencies.retryBudget ?? DEFAULT_RETRY_BUDGET,
     };
   }
 
@@ -669,9 +742,17 @@ export class OpenCodeTool {
     if (!provider?.trim() || !model?.trim()) {
       throw new Error(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
     }
+    const managedSecrets = input.managed
+      ? [
+          ...input.managed.authSecrets,
+          input.managed.layout.scratchRoot,
+          input.managed.layout.sessionsDir,
+        ]
+      : [];
     const preliminarySanitizer = createOpenCodeSanitizer([
       input.mcpToken ?? '',
       input.dataHome ?? '',
+      ...managedSecrets,
     ]);
     let resolvedInvocationConfig: OpenCodeInvocationConfig;
     try {
@@ -682,14 +763,21 @@ export class OpenCodeTool {
     // OPENCODE_CONFIG_CONTENT is the highest-precedence, invocation-scoped
     // configuration. Force every interceptable permission through Agor even if
     // the repository's opencode.json contains permissive rules.
-    const invocationConfig = this.protectedInvocationConfig(resolvedInvocationConfig);
+    const protectedConfig = this.protectedInvocationConfig(resolvedInvocationConfig);
+    const invocationConfig = input.managed
+      ? hostedOpenCodeInvocationConfig(protectedConfig)
+      : protectedConfig;
     const configContent = JSON.stringify(invocationConfig);
     let managedServer: ManagedOpenCodeServer;
     try {
+      if (input.managed) {
+        await writeHostedOpenCodeAuth(input.managed.layout, input.managed.authContent);
+      }
       managedServer = await startManagedOpenCodeServer(
         {
           directory: input.directory,
           dataHome: input.dataHome,
+          hostedLayout: input.managed?.layout,
           environment: {
             OPENCODE_CONFIG_CONTENT: configContent,
             // OpenCode resolves this dedicated runtime override when creating
@@ -697,7 +785,7 @@ export class OpenCodeTool {
             // permissive project/agent rules cannot bypass Agor interception.
             OPENCODE_PERMISSION: JSON.stringify(AGOR_PERMISSION_INTERCEPTION),
           },
-          secrets: [input.mcpToken ?? '', configContent, invocationConfig],
+          secrets: [input.mcpToken ?? '', configContent, invocationConfig, ...managedSecrets],
         },
         {
           resolveBinary: this.dependencies.resolveBinary,
@@ -800,6 +888,17 @@ export class OpenCodeTool {
 
     if (turnFailure) throw turnFailure;
     if (!outcome) throw new Error('OpenCode turn ended without a result');
+    if (input.managed) {
+      // The server has exited; a checkpoint that cannot be sealed fails the turn.
+      try {
+        outcome.checkpoint = await sealOpenCodeCheckpoint(
+          input.managed.layout,
+          outcome.openCodeSessionId
+        );
+      } catch (error) {
+        throw sanitizer.error(error);
+      }
+    }
     return outcome;
   }
 
@@ -909,12 +1008,12 @@ export class OpenCodeTool {
     }
     if (!modelAvailable) {
       throw new Error(
-        'The selected OpenCode provider/model is not available for this session owner and branch configuration; retry discovery or enter an available exact pair'
+        'The selected OpenCode provider/model is not available for this prompter and branch configuration; retry discovery or enter an available exact pair'
       );
     }
     if (!effortAvailable) {
       throw new Error(
-        "The selected OpenCode reasoning effort is not available for this session owner's provider/model and branch configuration; choose a supported effort or leave it unset"
+        "The selected OpenCode reasoning effort is not available for this prompter's provider/model and branch configuration; choose a supported effort or leave it unset"
       );
     }
   }
@@ -1017,9 +1116,11 @@ export class OpenCodeTool {
     registerStopEventCollector: (stop: () => Promise<void>) => void,
     sanitizer: OpenCodeSanitizer
   ): Promise<OpenCodeTurnResult['finalMessage']> {
-    const promptFailure = (): Error =>
+    const promptFailure = (detail?: string): Error =>
       new Error(
-        `OpenCode prompt failed for ${context.provider}/${context.model}. Reconnect ${context.provider} in OpenCode settings or choose another provider/model.`
+        detail?.trim()
+          ? `OpenCode prompt failed for ${context.provider}/${context.model}: ${detail.trim().slice(0, 500)}`
+          : `OpenCode prompt failed for ${context.provider}/${context.model}. Reconnect ${context.provider} in OpenCode settings or choose another provider/model.`
       );
     // Carry the shared Agor orientation on every turn. `system` appends to
     // OpenCode's provider baseline; the managed agent's own prompt would
@@ -1079,6 +1180,7 @@ export class OpenCodeTool {
         settle(error);
       },
       promptFailure,
+      retryBudget: this.dependencies.retryBudget,
     });
     const eventCollector = createOpenCodeEventCollector({
       client,
@@ -1097,8 +1199,13 @@ export class OpenCodeTool {
     try {
       await eventCollector.start();
 
-      const promptResponse = await client.session.prompt(request);
-      if (promptResponse.error) throw promptFailure();
+      // The prompt call blocks through provider retries; a terminal error (e.g. exhausted retry budget) ends the turn first.
+      const terminalFailure = terminal.then((result) =>
+        result.error ? Promise.reject(result.error) : new Promise<never>(() => undefined)
+      );
+      terminalFailure.catch(() => undefined);
+      const promptResponse = await Promise.race([client.session.prompt(request), terminalFailure]);
+      if (promptResponse.error) throw promptFailure(openCodeErrorMessage(promptResponse.error));
 
       const terminalResult = await terminal;
       if (terminalResult.error) throw terminalResult.error;
@@ -1133,6 +1240,7 @@ export class OpenCodeTool {
       }
       throw failure;
     } finally {
+      effects.dispose();
       input.signal.removeEventListener('abort', settleAbort);
       // The runTurn cleanup route owns collector, permission, session, and child shutdown.
     }

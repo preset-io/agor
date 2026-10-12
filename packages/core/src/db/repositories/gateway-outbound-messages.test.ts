@@ -74,6 +74,47 @@ async function seedSession(db: Database, branchId: string, userId: string, sessi
 }
 
 describe('GatewayOutboundMessageRepository', () => {
+  dbTest(
+    'reads only Discord sends to the selected channel and recipient since the floor',
+    async ({ db }) => {
+      const { user, branch, channel } = await seedGateway(db);
+      const repo = new GatewayOutboundMessageRepository(db);
+      for (const [i, platform, recipient, date] of [
+        [1, 'discord', 'dm', '2026-09-25T00:00:02Z'],
+        [2, 'discord', 'dm', '2026-09-25T00:00:01Z'],
+        [3, 'discord', 'other', '2026-09-25T00:00:03Z'],
+        [4, 'slack', 'dm', '2026-09-25T00:00:04Z'],
+      ] as const) {
+        await repo.create({
+          gateway_channel_id: channel.id,
+          channel_type: platform,
+          platform_channel_id: recipient,
+          platform_message_id: String(i),
+          platform_thread_id: `message-${i}`,
+          target_branch_id: branch.branch_id,
+          emitted_by_user_id: user.user_id,
+          message_text: `text-${i}`,
+          created_at: date,
+        });
+      }
+      expect(
+        (await repo.listDiscordDirectMessageSends(channel.id, 'dm', null)).map(
+          (row) => row.message_text
+        )
+      ).toEqual(['text-2', 'text-1']);
+      expect(
+        (
+          await repo.listDiscordDirectMessageSends(
+            channel.id,
+            'dm',
+            new Date('2026-09-25T00:00:02Z')
+          )
+        ).map((row) => row.message_text)
+      ).toEqual(['text-1']);
+      expect(await repo.listDiscordDirectMessageSends(generateId(), 'dm', null)).toEqual([]);
+    }
+  );
+
   dbTest('admits a seed by canonical thread or provider alias', async ({ db }) => {
     const { user, branch, channel } = await seedGateway(db);
     const repo = new GatewayOutboundMessageRepository(db);

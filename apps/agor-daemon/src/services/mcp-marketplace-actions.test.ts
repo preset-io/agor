@@ -1,12 +1,32 @@
-import { MCPServerRepository, setMcpMemberPolicy, UsersRepository } from '@agor/core/db';
+import {
+  BranchRepository,
+  generateId,
+  insert,
+  MCPMarketplaceRepository,
+  MCPServerRepository,
+  RepoRepository,
+  SessionMCPServerRepository,
+  SessionRepository,
+  sessionMcpServers,
+  setMcpMemberPolicy,
+  UsersRepository,
+} from '@agor/core/db';
 import { Conflict, Forbidden } from '@agor/core/feathers';
-import type { AuthenticatedParams, MCPMemberPolicy, UserID } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  BranchID,
+  MCPMemberPolicy,
+  SessionID,
+  UserID,
+} from '@agor/core/types';
+import { SessionStatus } from '@agor/core/types';
 import { expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   MCPMarketplaceRemoveServerService,
   MCPMarketplaceToolPermissionService,
 } from './mcp-marketplace-actions';
+import { SessionMCPServersService } from './session-mcp-servers';
 
 const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
 const BOB = '00000000-0000-7000-8000-000000000b0b' as UserID;
@@ -153,25 +173,6 @@ dbTest('Marketplace actions preserve the existing admin/non-owner semantics', as
   expect(invalidate).toHaveBeenCalledWith([BOB, ALICE], expect.anything(), server.mcp_server_id);
 });
 
-dbTest('remove reports when an attachment wins without ordinary remove', async ({ db }) => {
-  await seedUser(db, ALICE, 'admin');
-  const repo = new MCPServerRepository(db);
-  const server = await seed(repo);
-  const deleteIfUnattached = vi
-    .spyOn(MCPServerRepository.prototype, 'deleteIfUnattachedInCurrentTransaction')
-    .mockResolvedValue(false);
-  const ordinaryRemove = vi.spyOn(MCPServerRepository.prototype, 'delete');
-
-  await expect(
-    new MCPMarketplaceRemoveServerService(db).create(
-      { mcp_server_id: server.mcp_server_id },
-      params(ALICE, 'admin')
-    )
-  ).rejects.toBeInstanceOf(Conflict);
-  expect(deleteIfUnattached).toHaveBeenCalled();
-  expect(ordinaryRemove).not.toHaveBeenCalled();
-});
-
 dbTest('Marketplace tool action reloads a demoted role inside its transaction', async ({ db }) => {
   await seedUser(db, ALICE, 'member');
   await setPolicy(db, 'allow_private_only');
@@ -229,3 +230,127 @@ dbTest('Marketplace tool action reloads transport under the mutation lock', asyn
     tool_permissions: undefined,
   });
 });
+
+async function sessionFor(db: Parameters<typeof dbTest>[0]['db'], owner = ALICE) {
+  const repo = await new RepoRepository(db).create({
+    slug: `delete-${generateId()}`,
+    name: 'Delete fixture',
+    repo_type: 'remote',
+    remote_url: 'https://example.test/repo.git',
+    local_path: '/tmp/mcp-delete',
+    default_branch: 'main',
+  });
+  const branch = await new BranchRepository(db).create({
+    branch_id: generateId() as BranchID,
+    repo_id: repo.repo_id,
+    name: 'fixture',
+    ref: 'main',
+    branch_unique_id: Math.floor(Math.random() * 1000000),
+    path: '/tmp/mcp-delete',
+    created_by: owner,
+  });
+  return new SessionRepository(db).create({
+    session_id: generateId() as SessionID,
+    branch_id: branch.branch_id,
+    created_by: owner,
+    status: SessionStatus.IDLE,
+    agentic_tool: 'claude-code',
+  });
+}
+
+dbTest(
+  'session choices intersect caller and owner eligibility, never admin inventory',
+  async ({ db }) => {
+    await seedUser(db, ALICE, 'admin');
+    await seedUser(db, BOB, 'member');
+    const repo = new MCPServerRepository(db);
+    const own = await seed(repo);
+    const other = await seed(repo, BOB);
+    const shared = await repo.create({
+      name: 'shared',
+      transport: 'http',
+      url: 'https://example.test',
+      scope: 'session',
+      source: 'user',
+    });
+    const session = await sessionFor(db);
+    const service = new SessionMCPServersService(db);
+    expect(
+      (await service.listAvailableServers(session, ALICE)).map((s) => s.mcp_server_id).sort()
+    ).toEqual([own.mcp_server_id, shared.mcp_server_id].sort());
+    expect((await service.listAvailableServers(session, BOB)).map((s) => s.mcp_server_id)).toEqual([
+      shared.mcp_server_id,
+    ]);
+    expect((await repo.findAll()).map((s) => s.mcp_server_id)).toContain(other.mcp_server_id);
+    await expect(service.addServer(session.session_id, other.mcp_server_id)).rejects.toThrow(
+      'private to another user'
+    );
+  }
+);
+
+dbTest(
+  'delete confirms the total count without revealing hidden sessions, then cascades atomically',
+  async ({ db }) => {
+    await seedUser(db, ALICE, 'member');
+    await seedUser(db, BOB, 'member');
+    await setPolicy(db, 'allow_private_only');
+    const repo = new MCPServerRepository(db);
+    const server = await seed(repo);
+    const retained = await seed(repo);
+    const session = await sessionFor(db);
+    const hidden = await sessionFor(db, BOB);
+    const links = new SessionMCPServerRepository(db);
+    await links.addServer(session.session_id, server.mcp_server_id);
+    await links.addServer(session.session_id, retained.mcp_server_id);
+    // Legacy link: count it, never disclose Bob's session metadata.
+    await insert(db, sessionMcpServers)
+      .values({
+        session_id: hidden.session_id,
+        mcp_server_id: server.mcp_server_id,
+        enabled: false,
+        added_at: new Date(),
+      })
+      .run();
+    const overview = await new MCPMarketplaceRepository(db).overviewForUser(ALICE);
+    expect(
+      overview.servers.find((s) => s.mcp_server_id === server.mcp_server_id)?.session_count
+    ).toBe(2);
+    expect(JSON.stringify(overview)).not.toContain(hidden.session_id);
+    const invalidate = vi.fn();
+    const action = new MCPMarketplaceRemoveServerService(db, invalidate);
+    const confirmed = {
+      mcp_server_id: server.mcp_server_id,
+      detach: true,
+      expected_session_count: 2,
+    };
+    await expect(action.create(confirmed, params(BOB, 'member'))).rejects.toBeInstanceOf(Forbidden);
+    await expect(
+      action.create({ mcp_server_id: server.mcp_server_id }, params(ALICE, 'member'))
+    ).rejects.toBeInstanceOf(Conflict);
+    await expect(
+      action.create({ ...confirmed, expected_session_count: 1 }, params(ALICE, 'member'))
+    ).rejects.toBeInstanceOf(Conflict);
+    expect(await links.getRelationship(hidden.session_id, server.mcp_server_id)).not.toBeNull();
+    expect(invalidate).not.toHaveBeenCalled();
+    // Failure after deleting must roll back the parent AND cascaded links.
+    const failing = new MCPMarketplaceRemoveServerService(db, invalidate, async (tx, id) => {
+      await new MCPServerRepository(tx).delete(id);
+      throw new Error('injected failure');
+    });
+    await expect(failing.create(confirmed, params(ALICE, 'member'))).rejects.toThrow(
+      'injected failure'
+    );
+    expect(await links.getRelationship(hidden.session_id, server.mcp_server_id)).not.toBeNull();
+    expect(await repo.findById(server.mcp_server_id)).not.toBeNull();
+    expect(invalidate).not.toHaveBeenCalled();
+    await expect(action.create(confirmed, params(ALICE, 'member'))).resolves.toMatchObject({
+      removed: true,
+    });
+    expect(await repo.findById(server.mcp_server_id)).toBeNull();
+    expect(await links.getRelationship(hidden.session_id, server.mcp_server_id)).toBeNull();
+    expect(await links.listServers(session.session_id)).toMatchObject([
+      { mcp_server_id: retained.mcp_server_id },
+    ]);
+    expect(invalidate).toHaveBeenCalledOnce();
+  }
+);

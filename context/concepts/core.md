@@ -21,7 +21,7 @@ A 2D canvas where branches are arranged as cards. Boards have **zones** (rectang
 
 **Branches are the primary card on a board, not Sessions.** Sessions appear _inside_ a branch card as a genealogy tree.
 
-User-facing reference: [`apps/agor-docs/pages/guide/boards.mdx`](../../apps/agor-docs/pages/guide/boards.mdx).
+User-facing reference: [`apps/agor-docs/content/guide/boards.mdx`](../../apps/agor-docs/content/guide/boards.mdx).
 
 ## 3. Session — agent conversations with genealogy
 
@@ -34,7 +34,7 @@ Two relationship types:
 
 Status: `idle | running | completed | failed`. Tasks within a session can queue (see [`task-queueing.md`](task-queueing.md)).
 
-User-facing reference: [`apps/agor-docs/pages/guide/sessions.mdx`](../../apps/agor-docs/pages/guide/sessions.mdx).
+User-facing reference: [`apps/agor-docs/content/guide/sessions.mdx`](../../apps/agor-docs/content/guide/sessions.mdx).
 
 ## 4. Task — the queueable unit of work
 
@@ -51,10 +51,9 @@ Markdown summaries written by agents at task completion. Surfaces in board cards
 - Sessions reference branches, not the other way around. Cascading from branch → sessions, never the inverse.
 - Boards display branches. UIs that show "session list on board" are wrong shapes.
 - Fork/spawn happen on the same branch. They diverge in conversation, not in filesystem.
-- Tasks are inside sessions. Messages are inside tasks (after the never-lose-prompt redesign — see `docs/never-lose-prompt-design.md`).
+- Tasks are inside sessions. Messages are inside tasks.
 
 ## Related
 
 - [`architecture.md`](architecture.md) — system shape
 - [`branches.md`](branches.md) — branch details
-- [`ts-types.md`](ts-types.md) — type catalog

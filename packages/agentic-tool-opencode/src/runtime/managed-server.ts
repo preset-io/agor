@@ -4,6 +4,8 @@ import { chmod, lstat, mkdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { OPENCODE_VERSION } from '../shared/known-models.js';
 import { type OpenCodeCommand, resolvePackagedOpenCodeBinary } from './binary.js';
+import { hostedOpenCodeEnvironment } from './hosted-config.js';
+import type { OpenCodeNativeStateLayout } from './native-state.js';
 
 export {
   assertOpenCodeBinaryCompatibility,
@@ -401,6 +403,8 @@ export async function startManagedOpenCodeServer(
     dataHome?: string;
     environment?: NodeJS.ProcessEnv;
     secrets?: readonly unknown[];
+    /** Hosted mode: every native root lives on this Job-local layout. */
+    hostedLayout?: OpenCodeNativeStateLayout;
   },
   dependencies: ManagedOpenCodeServerDependencies = {}
 ): Promise<ManagedOpenCodeServer> {
@@ -427,7 +431,9 @@ export async function startManagedOpenCodeServer(
   const username = 'agor';
   const authorization = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
   const environment = {
-    ...process.env,
+    ...(input.hostedLayout
+      ? hostedOpenCodeEnvironment(input.hostedLayout, process.env)
+      : process.env),
     ...input.environment,
     ...nativeEnvironment,
     OPENCODE_SERVER_USERNAME: username,

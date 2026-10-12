@@ -11,6 +11,11 @@ vi.mock('./spawn-executor.js', () => ({
   spawnExecutorFireAndForget: vi.fn(),
 }));
 
+vi.mock('@agor/core/config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/config')>()),
+  getReposDir: vi.fn((tenantId?: string) => `/tenants/${tenantId ?? 'default'}/repos`),
+}));
+
 type RepoStub = {
   repo_id: string;
   slug: string;
@@ -91,6 +96,28 @@ describe('ensureRepoOriginAligned', () => {
         repoPath: '/tmp/repo',
         remoteUrl: 'https://github.com/owner/repo.git',
         repoSlug: 'owner/repo',
+        reposRoot: '/tenants/default/repos',
+      },
+    });
+  });
+
+  it("bounds the executor to the caller tenant's repos root", async () => {
+    await ensureRepoOriginAlignedForRepo(
+      makeApp(undefined),
+      {
+        repo_id: '550e8400-e29b-41d4-a716-446655440002',
+        slug: 'attacker/copy',
+        repo_type: 'remote',
+        remote_url: 'https://attacker.example/drop.git',
+        local_path: '/tenants/victim/repos/acme/private',
+      } as never,
+      { tenant: { tenant_id: 'attacker' } } as never
+    );
+
+    expect(spawnMock.mock.calls[0]?.[0]).toMatchObject({
+      params: {
+        repoPath: '/tenants/victim/repos/acme/private',
+        reposRoot: '/tenants/attacker/repos',
       },
     });
   });

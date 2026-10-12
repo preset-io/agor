@@ -37,15 +37,6 @@
  *     authority discards the old queue before map reset, and an old listener
  *     or passive cleanup cannot enqueue/flush after that move.
  *
- *  4. Hydration ordering. Each queued entry is stamped with the sessions
- *     revision at enqueue time. A background hydration records the revision its
- *     last quiet-window apply was proven against (`getLastAppliedRevision`); the
- *     flush DROPS any queued entry stamped at-or-below it, because the applied
- *     server snapshot already contains that patch's effect and is strictly
- *     fresher. A patch enqueued after the hydration snapshotted would have
- *     bumped the revision mid-fetch and forced that hydration to discard — so a
- *     queued patch can only be stale relative to, never ahead of, an apply.
- *
  * Scheduling. `requestAnimationFrame` pauses in background tabs. A backgrounded
  * tab would otherwise accumulate patches for minutes and burst on refocus, so
  * when the document is hidden (or rAF is unavailable — SSR/tests) the flush is
@@ -53,9 +44,12 @@
  * flush onto the scheduler that matches the new visibility state.
  */
 import type { Session } from '@agor-live/client';
-import { bumpRevision, getLastAppliedRevision, getRevision } from './agorHydration';
+import { bumpRevision, getRevision, markTouched } from './agorHydration';
 import { applySessionPatchToMaps } from './agorMaps';
 import { agorStore } from './agorStore';
+import { isLoadLifetimeCurrent } from './loadLifetime';
+import { admitHeld, forgetAbsentSessions } from './retention';
+import { liveMembership } from './scopeMerge';
 
 interface PendingPatch {
   session: Session;
@@ -64,9 +58,6 @@ interface PendingPatch {
   // role changes, and reconnects, so a sessions revision alone cannot prove
   // that a deferred patch still belongs to the current caller.
   authorityScope: string;
-  // Sessions revision captured right after the synchronous bump at enqueue —
-  // used by the flush to discard entries a fresher hydration already subsumed.
-  revision: number;
 }
 
 // Latest queued payload per session id, and the ids removed since the last
@@ -209,22 +200,35 @@ function flush(): void {
   const flushAuthorityScope = activeAuthorityScope;
   if (!flushAuthorityScope || batch.size === 0) return;
 
-  const lastApplied = getLastAppliedRevision('sessions');
   const sessions: Session[] = [];
   for (const [id, entry] of batch) {
     if (entry.authorityScope !== flushAuthorityScope) continue;
     if (graves.get(id) === flushAuthorityScope) continue; // removed synchronously this frame
-    if (entry.revision <= lastApplied) continue; // subsumed by a fresher hydration apply
     sessions.push(entry.session);
   }
   if (sessions.length === 0) return;
 
   // One store write for the whole frame: compose every surviving payload into a
   // single `applyMaps` pass (one subscriber notify) instead of N `sessionPatched`
-  // calls each doing two `set()`s.
-  agorStore
-    .getState()
-    .applyMaps((prev) => sessions.reduce((maps, s) => applySessionPatchToMaps(maps, s), prev));
+  // calls each doing two `set()`s. Load-scope membership follows in the same
+  // write (a patch can insert, archive or move a session); value-only patches
+  // leave coverage untouched.
+  // A patch inserts a missing row or moves one: one nothing holds stays out
+  // (`admitHeld`), with its MCP state.
+  const written = { sessions: sessions.map((session) => session.session_id) };
+  agorStore.getState().applyMaps(
+    (prev) =>
+      admitHeld(
+        prev,
+        sessions.reduce((maps, s) => applySessionPatchToMaps(maps, s), prev),
+        written
+      ),
+    (maps, coverage) =>
+      liveMembership(coverage, maps, written, (entry) =>
+        isLoadLifetimeCurrent(entry, flushAuthorityScope)
+      )
+  );
+  forgetAbsentSessions(written.sessions);
 }
 
 function handleVisibilityChange(): void {
@@ -242,20 +246,17 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 
 /**
  * Queue a streaming `session:patched`/`updated`. Keeps only the latest payload
- * per session id and stamps it with the current sessions revision (the caller
- * bumps synchronously first, so the stamp reflects this event). Applied on the
- * next coalesced flush.
+ * per session id. Applied on the next coalesced flush.
  */
 export function enqueueSessionPatch(authorityScope: string, session: Session): void {
   // A listener from the previous subscription can remain attached until its
   // passive cleanup runs. Reject it synchronously once the layout phase has
   // moved the queue to a replacement authority.
   if (authorityScope !== activeAuthorityScope) return;
-  pending.set(session.session_id, {
-    session,
-    authorityScope,
-    revision: getRevision('sessions'),
-  });
+  pending.set(session.session_id, { session, authorityScope });
+  // Stamp at ENQUEUE, not flush: an in-flight board partition load must skip
+  // this id even though the queued patch has not reached the maps yet.
+  markTouched('sessions', session.session_id);
   scheduleFlush();
 }
 
@@ -266,8 +267,8 @@ export function enqueueSessionPatch(authorityScope: string, session: Session): v
  * decide between an archive and a competing restore.
  *
  * Use hydration's skip-on-race discipline, but not runHydration itself: this is
- * a partial read and must neither cancel a full backfill nor advance its global
- * high-water mark/drop unrelated queued patches. Failures propagate to the
+ * a partial read and must neither cancel a full backfill nor drop unrelated
+ * queued patches. Failures propagate to the
  * caller without applying any response rows; races have a finite retry budget.
  */
 export function captureSessionPatchCommit(): (
@@ -306,17 +307,12 @@ export function captureSessionPatchCommit(): (
         }
         const before = getRevision('sessions');
         const current = agorStore.getState().sessionById;
-        const lastApplied = getLastAppliedRevision('sessions');
         const present = ids.filter((id) => {
           if (tombstones.get(id) === authorityScope) return false;
           const entry = pending.get(id);
           // Reconcile patches, not creates: removal/branch eviction stays
-          // authoritative even after frame tombstones drain. Hydration-subsumed
-          // queue entries cannot resurrect an absent row either.
-          return (
-            current.has(id) ||
-            (entry?.authorityScope === authorityScope && entry.revision > lastApplied)
-          );
+          // authoritative even after frame tombstones drain.
+          return current.has(id) || entry?.authorityScope === authorityScope;
         });
         if (present.length === 0) return;
         const fresh: Session[] = [];
@@ -333,13 +329,8 @@ export function captureSessionPatchCommit(): (
         );
         signal.throwIfAborted();
         // Events bump revisions before enqueue; map identity also catches a
-        // wholesale hydration apply (which need not bump the live revision). Its
-        // watermark can subsume a queued-only row even if the maps stay empty.
-        if (
-          getRevision('sessions') !== before ||
-          getLastAppliedRevision('sessions') !== lastApplied ||
-          agorStore.getState().sessionById !== current
-        )
+        // wholesale apply (which need not bump the live revision).
+        if (getRevision('sessions') !== before || agorStore.getState().sessionById !== current)
           continue;
         const requested = new Set(present);
         bumpRevision('sessions');
@@ -392,11 +383,18 @@ export function untombstoneSession(authorityScope: string, sessionId: string): v
  * before its map reset and before the previous subscription's passive cleanup.
  */
 export function setRealtimeAuthorityScope(authorityScope: string | null): void {
+  // Before the early return: a store reset (remount) clears the mirror.
+  agorStore.getState().setDataAuthority(authorityScope);
   if (activeAuthorityScope === authorityScope) return;
   authorityCancellation.abort();
   authorityCancellation = new AbortController();
   activeAuthorityScope = authorityScope;
   discardRealtimeNow();
+}
+
+/** The authority scope realtime writes currently apply under (null = none). */
+export function getRealtimeAuthorityScope(): string | null {
+  return activeAuthorityScope;
 }
 
 /**

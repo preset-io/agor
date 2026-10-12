@@ -1,19 +1,28 @@
-import { GatewayCloseCodes } from 'discord-api-types/v10';
+import type { ResponseLike } from '@discordjs/rest';
+import { GatewayCloseCodes, GatewayIntentBits, PermissionFlagsBits } from 'discord-api-types/v10';
 import { describe, expect, it, vi } from 'vitest';
 import {
   type DiscordMessageDeliveryID,
+  discordOutboundChannelTarget,
+  discordResponseModeAdmits,
+  isDiscordNoReply,
+  previousDiscordSnowflake,
   resolveDiscordAgentTools,
   validateDiscordConfig,
 } from '../../types/gateway';
 import type { GatewayListenerOptions } from '../connector';
 import { buildDiscordDeliveryMetadata, buildDiscordDeliveryNonce } from '../discord-identifiers';
+import { isPermanentProviderRefusal } from '../provider-error';
 import {
   chunkDiscordMessage,
+  createDiscordRest,
   DiscordConnector,
-  extractDiscordInboundFiles,
+  DiscordDirectMessageError,
   hasStructuredDiscordBotMention,
+  partitionDiscordInboundFiles,
   stripDiscordBotMention,
 } from './discord';
+import { buildDiscordSetupArtifact } from './discord-setup';
 
 const config = {
   bot_token: 'discord-secret',
@@ -44,33 +53,35 @@ function makeTransport() {
   const listeners = new Map<string, (...args: unknown[]) => void | Promise<void>>();
   let onSessionInfo: ((sessionInfo: unknown) => Promise<void>) | undefined;
   const rest = {
-    get: vi.fn<(route: string) => Promise<unknown>>(async (route: string) => {
-      if (route.startsWith('/users/')) return { id: config.application_id, username: 'Agor' };
-      if (route.includes('/gateway/bot')) return { shards: 1 };
-      if (route.includes('/oauth2/applications/@me')) return { flags: '524288' };
-      if (route.includes('/members/'))
-        return { user: { id: config.application_id }, roles: [], permissions: '309237713920' };
-      if (route.startsWith('/guilds/'))
+    get: vi.fn<(route: string, options?: { signal?: AbortSignal }) => Promise<unknown>>(
+      async (route: string) => {
+        if (route.startsWith('/users/')) return { id: config.application_id, username: 'Agor' };
+        if (route.includes('/gateway/bot')) return { shards: 1 };
+        if (route.includes('/oauth2/applications/@me')) return { flags: '524288' };
+        if (route.includes('/members/'))
+          return { user: { id: config.application_id }, roles: [], permissions: '309237713920' };
+        if (route.startsWith('/guilds/'))
+          return {
+            id: config.guild_id,
+            name: 'Guild',
+            roles: [{ id: config.guild_id, permissions: '0' }],
+          };
+        if (route.startsWith('/channels/')) {
+          return {
+            id: config.allowed_channel_ids[0],
+            guild_id: config.guild_id,
+            name: 'general',
+            type: 0,
+          };
+        }
         return {
           id: config.guild_id,
           name: 'Guild',
           roles: [{ id: config.guild_id, permissions: '0' }],
-        };
-      if (route.startsWith('/channels/')) {
-        return {
-          id: config.allowed_channel_ids[0],
-          guild_id: config.guild_id,
-          name: 'general',
           type: 0,
         };
       }
-      return {
-        id: config.guild_id,
-        name: 'Guild',
-        roles: [{ id: config.guild_id, permissions: '0' }],
-        type: 0,
-      };
-    }),
+    ),
     post: vi.fn<(route: string, options?: { body?: unknown }) => Promise<unknown>>(async () => ({
       id: '777777777777777777',
     })),
@@ -84,8 +95,10 @@ function makeTransport() {
   };
   const transport = {
     rest,
+    historyRest: rest,
     createGateway: vi.fn(
       (options: {
+        intents: number;
         checkpoint?: Record<string, unknown> | null;
         onSessionInfo: (sessionInfo: unknown) => Promise<void>;
       }) => {
@@ -111,82 +124,46 @@ describe('Discord connector beta', () => {
   const signedAttachmentUrl =
     'https://cdn.discordapp.com/attachments/333333333333333333/777777777777777777/screenshot.png?ex=66aabbcc&is=66995a11&hm=signature';
 
-  it('normalizes only signed PNG/JPEG attachment records', () => {
+  it('partitions attachments into readable files and skipped files with a reason', () => {
+    const attachment = (filename: string, contentType?: string, url = signedAttachmentUrl) => ({
+      id: '777777777777777777',
+      filename,
+      size: 2048,
+      ...(contentType ? { content_type: contentType } : {}),
+      url: url.replace('screenshot.png', filename),
+    });
     expect(
-      extractDiscordInboundFiles([
-        {
-          id: '777777777777777777',
-          filename: 'screenshot.png',
-          size: 2048,
-          content_type: 'image/png',
-          url: signedAttachmentUrl,
-        },
-        {
-          id: '888888888888888888',
-          filename: 'photo.jpeg',
-          size: 4096,
-          url: signedAttachmentUrl.replace('screenshot.png', 'photo.jpeg'),
-        },
-      ])
-    ).toEqual([
-      {
-        id: '777777777777777777',
-        name: 'screenshot.png',
-        mimetype: 'image/png',
-        size: 2048,
-        url_private_download: signedAttachmentUrl,
-      },
-      {
-        id: '888888888888888888',
-        name: 'photo.jpeg',
-        mimetype: 'image/jpeg',
-        size: 4096,
-        url_private_download: signedAttachmentUrl.replace('screenshot.png', 'photo.jpeg'),
-      },
-    ]);
+      partitionDiscordInboundFiles(
+        [
+          attachment('screenshot.png', 'image/png'),
+          attachment('photo.jpeg'),
+          attachment('demo.gif', 'image/gif'),
+          attachment('error.log'),
+          attachment('data.json', 'application/json; charset=utf-8'),
+          attachment('report.pdf', 'application/pdf'),
+          attachment('clip.mov'),
+          attachment('hosted.png', 'image/png', 'https://evil.example/screenshot.png'),
+        ],
+        true
+      )
+    ).toEqual({
+      files: [
+        expect.objectContaining({ name: 'screenshot.png', mimetype: 'image/png' }),
+        expect.objectContaining({ name: 'photo.jpeg', mimetype: 'image/jpeg' }),
+        expect.objectContaining({ name: 'demo.gif', mimetype: 'image/gif' }),
+        expect.objectContaining({ name: 'error.log', mimetype: 'text/plain' }),
+        expect.objectContaining({ name: 'data.json', mimetype: 'application/json' }),
+      ],
+      skipped: [
+        { name: 'report.pdf', reason: 'unsupported_type' },
+        { name: 'clip.mov', reason: 'unsupported_type' },
+        { name: 'hosted.png', reason: 'invalid' },
+      ],
+    });
     expect(
-      extractDiscordInboundFiles([
-        {
-          id: '777777777777777777',
-          filename: 'document.pdf',
-          size: 2048,
-          content_type: 'application/pdf',
-          url: signedAttachmentUrl.replace('screenshot.png', 'document.pdf'),
-        },
-      ])
-    ).toBeUndefined();
-    expect(
-      extractDiscordInboundFiles([
-        {
-          id: '777777777777777777',
-          filename: 'screenshot.png',
-          size: 2048,
-          content_type: 'image/png',
-          url: 'https://evil.example/screenshot.png',
-        },
-      ])
-    ).toBeUndefined();
-  });
-
-  it('rejects a mixed supported/unsupported attachment payload instead of dropping the unsupported item', () => {
-    expect(
-      extractDiscordInboundFiles([
-        {
-          id: '777777777777777777',
-          filename: 'screenshot.png',
-          size: 2048,
-          content_type: 'image/png',
-          url: signedAttachmentUrl,
-        },
-        {
-          id: '888888888888888888',
-          filename: 'document.pdf',
-          size: 2048,
-          content_type: 'application/pdf',
-          url: signedAttachmentUrl.replace('screenshot.png', 'document.pdf'),
-        },
-      ])
-    ).toBeUndefined();
+      partitionDiscordInboundFiles([attachment('screenshot.png', 'image/png')], false)
+    ).toEqual({ files: [], skipped: [{ name: 'screenshot.png', reason: 'files_disabled' }] });
+    expect(partitionDiscordInboundFiles('not-a-list', true)).toBeUndefined();
   });
 
   it('chunks at Discord’s hard limit and avoids empty trailing chunks', () => {
@@ -277,6 +254,20 @@ describe('Discord connector beta', () => {
         allowed_role_ids: ['555555555555555555'],
       }).errors
     ).toContain('allowed_user_ids must contain only Discord snowflakes');
+  });
+
+  it('parses proactive channel targets and decrements Snowflakes exactly', () => {
+    expect(discordOutboundChannelTarget(' channel:333333333333333333 ')).toBe('333333333333333333');
+    for (const target of [
+      'user:333333333333333333',
+      'channel:123',
+      'channel:333333333333333333x',
+    ]) {
+      expect(discordOutboundChannelTarget(target)).toBeUndefined();
+    }
+    expect(previousDiscordSnowflake('9223372036854775807')).toBe('9223372036854775806');
+    expect(previousDiscordSnowflake('100000000000000000')).toBe('99999999999999999');
+    expect(() => previousDiscordSnowflake('01')).toThrow('canonical Snowflake');
   });
 
   it('accepts the legacy empty agent_tools and the channel_history toggle only', () => {
@@ -446,6 +437,67 @@ describe('Discord connector beta', () => {
     expect(gateway.destroy).toHaveBeenCalledOnce();
   });
 
+  it('admits any guild member only when the guild ID (@everyone) is an allowed role', async () => {
+    const unlisted = {
+      id: '888888888888888888',
+      guild_id: config.guild_id,
+      channel_id: config.allowed_channel_ids[0],
+      type: 0,
+      content: `<@${config.application_id}> hello`,
+      author: { id: '101010101010101010', bot: false },
+      member: { roles: [] },
+      mentions: [{ id: config.application_id }],
+    };
+    for (const [allowedRoles, expected] of [
+      [config.allowed_role_ids, []],
+      [[config.guild_id], ['888888888888888888', '888888888888888889']],
+    ] as const) {
+      const { transport, dispatch } = makeTransport();
+      const connector = new DiscordConnector(
+        { ...config, allowed_user_ids: [], allowed_role_ids: [...allowedRoles] },
+        transport as never
+      );
+      const received: unknown[] = [];
+      await connector.startListening(async (message) => {
+        received.push(message);
+      });
+      const emit = dispatch();
+      emit?.({ t: 'MESSAGE_CREATE', s: 1, d: unlisted }, 0);
+      emit?.(
+        {
+          t: 'MESSAGE_CREATE',
+          s: 2,
+          d: { ...unlisted, id: '888888888888888889', member: { roles: ['121212121212121212'] } },
+        },
+        0
+      );
+      emit?.(
+        {
+          t: 'MESSAGE_CREATE',
+          s: 3,
+          d: { ...unlisted, id: '888888888888888890', member: undefined },
+        },
+        0
+      );
+      emit?.(
+        {
+          t: 'MESSAGE_CREATE',
+          s: 4,
+          d: { ...unlisted, id: '888888888888888891', guild_id: '131313131313131313' },
+        },
+        0
+      );
+      await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
+      expect(
+        received.map(
+          (message) =>
+            (message as { metadata: { discord_message_id: string } }).metadata.discord_message_id
+        )
+      ).toEqual(expected);
+      await connector.stopListening();
+    }
+  });
+
   it('accepts text plus a signed PNG when inbound files are explicitly enabled', async () => {
     const { transport, gateway, dispatch } = makeTransport();
     const connector = new DiscordConnector({ ...config, files: true }, transport as never);
@@ -503,7 +555,7 @@ describe('Discord connector beta', () => {
     expect(gateway.destroy).toHaveBeenCalledOnce();
   });
 
-  it('keeps attachment messages rejected when the capability is disabled', async () => {
+  it('admits a message with attachments when files are off, reporting them as skipped', async () => {
     const { transport, gateway, dispatch } = makeTransport();
     const connector = new DiscordConnector(config, transport as never);
     const received: unknown[] = [];
@@ -519,7 +571,7 @@ describe('Discord connector beta', () => {
           guild_id: config.guild_id,
           channel_id: config.allowed_channel_ids[0],
           type: 0,
-          content: '<@666666666666666666> do not admit this file',
+          content: '<@666666666666666666> can you see this file?',
           author: { id: '444444444444444444', bot: false },
           member: { roles: [] },
           mentions: [{ id: '666666666666666666' }],
@@ -538,9 +590,54 @@ describe('Discord connector beta', () => {
     );
     await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
 
-    expect(received).toHaveLength(0);
+    expect(received).toEqual([
+      expect.objectContaining({
+        text: 'can you see this file?',
+        skippedFiles: [{ name: 'screenshot.png', reason: 'files_disabled' }],
+      }),
+    ]);
+    expect((received[0] as { files?: unknown }).files).toBeUndefined();
     await connector.stopListening();
     expect(gateway.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('admits an attachment-only message with a placeholder text', async () => {
+    const { transport, dispatch } = makeTransport();
+    const connector = new DiscordConnector({ ...config, files: true }, transport as never);
+    const received: Array<{ text: string; files?: unknown[]; skippedFiles?: unknown[] }> = [];
+    await connector.startListening(async (message) => {
+      received.push(message as never);
+    });
+    dispatch()?.(
+      {
+        t: 'MESSAGE_CREATE',
+        s: 13,
+        d: {
+          id: '888888888888888888',
+          guild_id: config.guild_id,
+          channel_id: config.allowed_channel_ids[0],
+          type: 0,
+          content: '<@666666666666666666>',
+          author: { id: '444444444444444444', bot: false },
+          member: { roles: [] },
+          mentions: [{ id: '666666666666666666' }],
+          attachments: [
+            {
+              id: '777777777777777777',
+              filename: 'screenshot.png',
+              size: 2048,
+              content_type: 'image/png',
+              url: signedAttachmentUrl,
+            },
+          ],
+        },
+      },
+      0
+    );
+    await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
+    expect(received[0]).toMatchObject({ text: '(attachments only, no text)' });
+    expect(received[0]?.files).toHaveLength(1);
+    await connector.stopListening();
   });
 
   it('accepts ordinary text messages in existing public threads and routes replies to that thread', async () => {
@@ -1038,6 +1135,446 @@ describe('Discord connector beta', () => {
   });
 });
 
+describe('Discord direct messages', () => {
+  const dmChannel = '999999999999999999';
+  const userId = config.allowed_user_ids[0];
+  const dmKey = `discord:dm:${dmChannel}:${userId}`;
+  const dm = {
+    id: '777777777777777777',
+    channel_id: dmChannel,
+    channel_type: 1,
+    type: 0,
+    content: 'private question',
+    author: { id: userId },
+    mentions: [],
+  };
+
+  async function deliver(
+    harness: ReturnType<typeof makeTransport>,
+    connector: DiscordConnector,
+    data: Record<string, unknown>,
+    sequence = 1
+  ) {
+    harness.dispatch()?.({ t: 'MESSAGE_CREATE', s: sequence, d: data }, 0);
+    await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
+  }
+
+  it('opts into the non-privileged intent and admits one stable conversation without preparation', async () => {
+    for (const enabled of [false, true]) {
+      const h = makeTransport();
+      const connector = new DiscordConnector(
+        { ...config, direct_messages_enabled: enabled },
+        h.transport
+      );
+      const receive = vi.fn();
+      await connector.startListening(receive);
+      expect(h.transport.createGateway.mock.calls[0][0].intents).toBe(
+        GatewayIntentBits.Guilds |
+          GatewayIntentBits.GuildMessages |
+          GatewayIntentBits.MessageContent |
+          (enabled ? GatewayIntentBits.DirectMessages : 0)
+      );
+      h.rest.get.mockClear();
+      await deliver(h, connector, dm);
+      await deliver(
+        h,
+        connector,
+        { ...dm, id: '777777777777777778', content: `<@${config.application_id}> follow up` },
+        2
+      );
+      expect(receive).toHaveBeenCalledTimes(enabled ? 2 : 0);
+      if (enabled) {
+        expect(receive.mock.calls[1][0]).toMatchObject({
+          threadId: dmKey,
+          text: 'follow up',
+          metadata: {
+            discord_direct_message: true,
+            discord_is_thread: false,
+            discord_author_id: userId,
+          },
+        });
+        expect(receive.mock.calls[0][0].prepareDelivery).toBeUndefined();
+        expect(receive.mock.calls[0][0].metadata.discord_guild_id).toBeUndefined();
+        expect(h.rest.get).toHaveBeenCalledTimes(2);
+        expect(h.rest.get).toHaveBeenCalledWith(`/guilds/${config.guild_id}/members/${userId}`, {
+          signal: expect.any(AbortSignal),
+        });
+      } else expect(h.rest.get).not.toHaveBeenCalled();
+      expect(h.rest.post).not.toHaveBeenCalled();
+      await connector.stopListening();
+    }
+  });
+
+  it('rejects unsupported DM shapes and authors before any membership request', async () => {
+    const h = makeTransport();
+    const connector = new DiscordConnector(
+      { ...config, direct_messages_enabled: true },
+      h.transport
+    );
+    const receive = vi.fn();
+    await connector.startListening(receive);
+    h.rest.get.mockClear();
+    const rejected = [
+      { channel_type: undefined },
+      { channel_type: 3 },
+      { author: { id: userId, bot: true } },
+      { author: { id: userId, system: true } },
+      { webhook_id: userId },
+      { type: 7 },
+      { content: '' },
+    ];
+    for (const [i, change] of rejected.entries())
+      await deliver(h, connector, { ...dm, ...change }, i + 1);
+    expect(receive).not.toHaveBeenCalled();
+    expect(h.rest.get).not.toHaveBeenCalled();
+    await connector.stopListening();
+  });
+
+  it('rejects unlisted DM authors without a membership request when no role can admit them', async () => {
+    const h = makeTransport();
+    const connector = new DiscordConnector(
+      { ...config, allowed_role_ids: [], direct_messages_enabled: true },
+      h.transport
+    );
+    const receive = vi.fn();
+    await connector.startListening(receive);
+    h.rest.get.mockClear();
+    await deliver(h, connector, { ...dm, author: { id: '888888888888888888' } });
+    expect(receive).not.toHaveBeenCalled();
+    expect(h.rest.get).not.toHaveBeenCalled();
+    h.rest.get.mockResolvedValueOnce({ roles: [] });
+    await deliver(h, connector, dm, 2);
+    expect(receive).toHaveBeenCalledOnce();
+    expect(h.rest.get).toHaveBeenCalledOnce();
+    await connector.stopListening();
+  });
+
+  it('fails closed on missing membership, roles and lookup errors without stopping the listener', async () => {
+    const h = makeTransport();
+    const connector = new DiscordConnector(
+      { ...config, allowed_user_ids: [], direct_messages_enabled: true },
+      h.transport
+    );
+    const receive = vi.fn();
+    const onError = vi.fn();
+    await connector.startListening(receive, { onError });
+    h.rest.get
+      .mockRejectedValueOnce({ status: 404 })
+      .mockResolvedValueOnce({ roles: [] })
+      .mockRejectedValueOnce({ status: 500 })
+      .mockResolvedValueOnce({ roles: config.allowed_role_ids });
+    for (let i = 1; i <= 4; i++) await deliver(h, connector, dm, i);
+    expect(receive).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+    expect(h.gateway.destroy).not.toHaveBeenCalled();
+    await connector.stopListening();
+  });
+
+  it('admits roleless current members when @everyone is allowed, but never nonmembers', async () => {
+    const h = makeTransport();
+    const connector = new DiscordConnector(
+      {
+        ...config,
+        allowed_user_ids: [],
+        allowed_role_ids: [config.guild_id],
+        direct_messages_enabled: true,
+      },
+      h.transport
+    );
+    const receive = vi.fn();
+    await connector.startListening(receive);
+    h.rest.get.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({ roles: [] });
+    await deliver(h, connector, dm, 1);
+    await deliver(h, connector, dm, 2);
+    expect(receive).toHaveBeenCalledOnce();
+    await connector.stopListening();
+  });
+
+  it('aborts a stalled membership lookup after three seconds and admits the next event', async () => {
+    const h = makeTransport();
+    const connector = new DiscordConnector(
+      { ...config, direct_messages_enabled: true },
+      h.transport
+    );
+    const receive = vi.fn();
+    const onError = vi.fn();
+    await connector.startListening(receive, { onError });
+    vi.useFakeTimers();
+    try {
+      h.rest.get.mockImplementationOnce(
+        (_route, options) =>
+          new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener('abort', () => reject(new Error('aborted')), {
+              once: true,
+            });
+          })
+      );
+      const pending = deliver(h, connector, dm);
+      await vi.advanceTimersByTimeAsync(3000);
+      await pending;
+      await deliver(h, connector, dm, 2);
+      expect(receive).toHaveBeenCalledOnce();
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      await connector.stopListening();
+    }
+  });
+
+  it('uses real REST rate-limit rejection rather than waiting or stopping the listener', async () => {
+    const h = makeTransport();
+    const makeRequest = vi.fn(async (url: string): Promise<ResponseLike> => {
+      const path = new URL(url).pathname.replace('/api/v10', '');
+      if (path.endsWith(`/members/${userId}`))
+        return new Response(
+          JSON.stringify({ message: 'limited', retry_after: 30, global: false }),
+          {
+            status: 429,
+            headers: {
+              'content-type': 'application/json',
+              'retry-after': '30',
+              'x-ratelimit-scope': 'user',
+            },
+          }
+        ) as unknown as ResponseLike;
+      return new Response(JSON.stringify(await h.rest.get(path)), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }) as unknown as ResponseLike;
+    });
+    const rest = createDiscordRest('test-token', makeRequest);
+    const connector = new DiscordConnector(
+      { ...config, direct_messages_enabled: true },
+      { ...h.transport, rest }
+    );
+    const receive = vi.fn();
+    const onError = vi.fn();
+    try {
+      await connector.startListening(receive, { onError });
+      await deliver(h, connector, dm);
+      await deliver(
+        h,
+        connector,
+        {
+          ...dm,
+          guild_id: config.guild_id,
+          channel_id: config.allowed_channel_ids[0],
+          content: `<@${config.application_id}> public`,
+          mentions: [{ id: config.application_id }],
+          member: { roles: [] },
+        },
+        2
+      );
+      expect(receive).toHaveBeenCalledOnce();
+      expect(onError).not.toHaveBeenCalled();
+      expect(
+        makeRequest.mock.calls.filter(([url]) => url.endsWith(`/members/${userId}`))
+      ).toHaveLength(1);
+    } finally {
+      await connector.stopListening();
+      rest.clearHashSweeper();
+      rest.clearHandlerSweeper();
+    }
+  }, 2000);
+
+  it('applies the existing attachment policy to DMs', async () => {
+    for (const files of [false, true]) {
+      const h = makeTransport();
+      const connector = new DiscordConnector(
+        { ...config, files, direct_messages_enabled: true },
+        h.transport
+      );
+      const receive = vi.fn();
+      await connector.startListening(receive);
+      await deliver(h, connector, {
+        ...dm,
+        attachments: [
+          {
+            id: dm.id,
+            filename: 'picture.png',
+            size: 100,
+            content_type: 'image/png',
+            url: `https://cdn.discordapp.com/attachments/${dmChannel}/${dm.id}/picture.png?ex=aa&is=bb&hm=cc`,
+          },
+        ],
+      });
+      // The DM is answered either way; a disabled capability reports the file as skipped.
+      expect(receive).toHaveBeenCalledOnce();
+      if (files) expect(receive.mock.calls[0][0].files).toHaveLength(1);
+      else {
+        expect(receive.mock.calls[0][0].skippedFiles).toEqual([
+          { name: 'picture.png', reason: 'files_disabled' },
+        ]);
+      }
+      await connector.stopListening();
+    }
+  });
+
+  it('verifies the exact DM recipient before sending and returns DM receipts on send and recovery', async () => {
+    const h = makeTransport();
+    const connector = new DiscordConnector(
+      { ...config, direct_messages_enabled: true },
+      h.transport
+    );
+    h.rest.get.mockResolvedValue({ id: dmChannel, type: 1, recipients: [{ id: userId }] });
+    const receipt = await connector.sendMessage({ threadId: dmKey, text: 'answer' });
+    expect(receipt).toMatchObject({
+      replyAliases: [],
+      permalink: `https://discord.com/channels/@me/${dmChannel}/777777777777777777`,
+    });
+    expect(h.rest.post.mock.calls[0][1]?.body).not.toHaveProperty('message_reference');
+    h.rest.post.mockClear();
+    for (const channel of [
+      { id: dmChannel, type: 0 },
+      { id: dmChannel, type: 1, recipients: [{ id: config.application_id }] },
+    ]) {
+      h.rest.get.mockResolvedValue(channel);
+      await expect(connector.sendMessage({ threadId: dmKey, text: 'no' })).rejects.toMatchObject({
+        code: 'discord_dm_channel_mismatch',
+      });
+    }
+    const disabled = new DiscordConnector(config, h.transport);
+    await expect(disabled.sendMessage({ threadId: dmKey, text: 'no' })).rejects.toMatchObject({
+      code: 'discord_direct_messages_disabled',
+    });
+    expect(h.rest.post).not.toHaveBeenCalled();
+    h.rest.get.mockResolvedValue([
+      { id: dm.id, channel_id: dmChannel, nonce: 'known', timestamp: new Date().toISOString() },
+    ]);
+    expect(
+      await connector.recoverMessageByNonce({ threadId: dmKey, nonce: 'known' })
+    ).toMatchObject({
+      replyAliases: [],
+      permalink: `https://discord.com/channels/@me/${dmChannel}/${dm.id}`,
+    });
+  });
+
+  it('marks transient DM recipient-check failures retryable and definitive refusals terminal', async () => {
+    const h = makeTransport();
+    const connector = new DiscordConnector(
+      { ...config, direct_messages_enabled: true },
+      h.transport
+    );
+    for (const failure of [{ status: 503 }, { status: 429 }, new Error('socket hang up')]) {
+      h.rest.get.mockRejectedValueOnce(failure);
+      const promise = connector.sendMessage({ threadId: dmKey, text: 'answer' });
+      await expect(promise).rejects.toMatchObject({
+        code: 'discord_dm_verification_unavailable',
+        retryable: true,
+      });
+    }
+    h.rest.get.mockRejectedValueOnce({ status: 403 });
+    await expect(connector.sendMessage({ threadId: dmKey, text: 'answer' })).rejects.toMatchObject({
+      code: 'discord_dm_channel_mismatch',
+      retryable: false,
+    });
+    expect(h.rest.post).not.toHaveBeenCalled();
+  });
+
+  it('reports the switch and rejects non-boolean config', async () => {
+    expect(validateDiscordConfig({ ...config, direct_messages_enabled: 'true' }).ok).toBe(false);
+    for (const enabled of [false, true]) {
+      const h = makeTransport();
+      const result = await new DiscordConnector(
+        { ...config, direct_messages_enabled: enabled },
+        h.transport
+      ).testConnection();
+      expect(result.directMessages).toEqual({ enabled });
+      expect(result.notVerifiable.some((line) => line.includes('DM delivery'))).toBe(enabled);
+    }
+  });
+});
+
+describe('Discord proactive DMs', () => {
+  const target = 'user:444444444444444444';
+  const dm = '999999999999999999';
+
+  it('checks live membership, opens the DM, and sends chunks with a per-message receipt', async () => {
+    const { transport, rest } = makeTransport();
+    rest.post.mockImplementation(async (route) =>
+      route === '/users/@me/channels'
+        ? { id: dm, type: 1 }
+        : { id: String(777777777777777777n + BigInt(rest.post.mock.calls.length)) }
+    );
+    const connector = new DiscordConnector({ ...config, direct_messages_enabled: true }, transport);
+    const receipt = await connector.sendDirectMessage({ target, text: 'x'.repeat(2100) });
+    expect(rest.get).toHaveBeenCalledOnce();
+    expect(rest.get).toHaveBeenCalledWith(`/guilds/${config.guild_id}/members/444444444444444444`, {
+      signal: expect.any(AbortSignal),
+    });
+    expect(rest.get.mock.invocationCallOrder[0]).toBeLessThan(
+      rest.post.mock.invocationCallOrder[0]
+    );
+    expect(rest.post.mock.calls.map(([route]) => route)).toEqual([
+      '/users/@me/channels',
+      `/channels/${dm}/messages`,
+      `/channels/${dm}/messages`,
+    ]);
+    expect(rest.post.mock.calls[0][1]).toEqual({ body: { recipient_id: '444444444444444444' } });
+    expect(receipt).toMatchObject({
+      platformChannelId: dm,
+      threadId: `discord:message:${dm}:777777777777777779`,
+      messageId: '777777777777777780',
+      replyAliases: [],
+      permalink: `https://discord.com/channels/@me/${dm}/777777777777777779`,
+    });
+    expect(rest.post.mock.calls[1][1]?.body).not.toHaveProperty('message_reference');
+  });
+
+  it('refuses disabled DMs without REST and nonmembers before opening a DM', async () => {
+    const { transport, rest } = makeTransport();
+    await expect(
+      new DiscordConnector(config, transport).sendDirectMessage({ target, text: 'hi' })
+    ).rejects.toMatchObject({ code: 'discord_direct_messages_disabled' });
+    expect(rest.get).not.toHaveBeenCalled();
+    expect(rest.post).not.toHaveBeenCalled();
+    rest.get.mockRejectedValue({ status: 404 });
+    await expect(
+      new DiscordConnector(
+        { ...config, direct_messages_enabled: true },
+        transport
+      ).sendDirectMessage({ target, text: 'hi' })
+    ).rejects.toMatchObject({ code: 'discord_dm_target_not_member' });
+    expect(rest.post).not.toHaveBeenCalled();
+  });
+
+  it.each([50007, 50278])('preserves refusal %s on open and send without retry', async (code) => {
+    for (const failOnOpen of [true, false]) {
+      const { transport, rest } = makeTransport();
+      rest.post.mockImplementation(async (route) => {
+        if (!failOnOpen && route === '/users/@me/channels') return { id: dm, type: 1 };
+        throw { code, status: 403, message: 'private provider details' };
+      });
+      const promise = new DiscordConnector(
+        { ...config, direct_messages_enabled: true },
+        transport
+      ).sendDirectMessage({ target, text: 'hi' });
+      await expect(promise).rejects.toBeInstanceOf(DiscordDirectMessageError);
+      await expect(promise).rejects.toMatchObject({
+        code: 'discord_dm_unreachable',
+        status: 403,
+        message: 'discord_dm_unreachable',
+      });
+      expect(rest.post).toHaveBeenCalledTimes(failOnOpen ? 1 : 2);
+    }
+  });
+
+  it('does not open a DM after a membership outage, or send to a malformed DM response', async () => {
+    const { transport, rest } = makeTransport();
+    const connector = new DiscordConnector({ ...config, direct_messages_enabled: true }, transport);
+    rest.get.mockRejectedValueOnce({ status: 429 });
+    await expect(connector.sendDirectMessage({ target, text: 'hi' })).rejects.toMatchObject({
+      status: 429,
+    });
+    expect(rest.post).not.toHaveBeenCalled();
+    rest.post.mockResolvedValue({ id: dm, type: 3 });
+    await expect(connector.sendDirectMessage({ target, text: 'hi' })).rejects.toMatchObject({
+      code: 'discord_dm_channel_mismatch',
+    });
+    expect(rest.post).toHaveBeenCalledOnce();
+  });
+});
+
 describe('Discord agent channel history', () => {
   const parentId = config.allowed_channel_ids[0]!;
   const otherParentId = '999999999999999990';
@@ -1153,6 +1690,39 @@ describe('Discord agent channel history', () => {
       );
       expect(messageCalls(get)).toHaveLength(0);
     }
+  });
+
+  it('never reads DM history even when both capabilities are enabled', async () => {
+    const dmChannelId = '999999999999999996';
+    const { transport, get } = historyTransport();
+    const connector = new DiscordConnector(
+      {
+        ...config,
+        direct_messages_enabled: true,
+        agent_tools: { channel_history: true },
+        allowed_channel_ids: [parentId, dmChannelId],
+      },
+      transport as never
+    );
+    await expect(
+      connector.fetchChannelHistory({
+        sessionThreadKey: `discord:dm:${dmChannelId}:${config.allowed_user_ids[0]}`,
+      })
+    ).rejects.toThrow(/pass discordChannelId/);
+    expect(get).not.toHaveBeenCalled();
+    get.mockResolvedValueOnce({
+      id: dmChannelId,
+      type: 1,
+      recipients: [{ id: config.allowed_user_ids[0] }],
+    });
+    await expect(connector.fetchChannelHistory({ channelId: dmChannelId })).rejects.toThrow(
+      /not an allowed channel/
+    );
+    expect(messageCalls(get)).toHaveLength(0);
+    await expect(connector.fetchChannelHistory({ channelId: parentId })).resolves.toMatchObject({
+      channelId: parentId,
+      messages: [],
+    });
   });
 
   it('reports missing Read Message History instead of an empty channel', async () => {
@@ -1297,5 +1867,555 @@ describe('Discord agent channel history', () => {
         channelId: parentId,
       })
     ).rejects.toMatchObject({ kind: 'rate_limit' });
+  });
+});
+
+describe('Discord forum channels', () => {
+  const forumId = config.allowed_channel_ids[0];
+  // A forum cannot be the default proactive target, so the listener tests drop it.
+  const forumConfig = { ...config, default_outbound_target: undefined };
+  const postId = '888888888888888888';
+  const tagId = '121212121212121212';
+  const replyPermissions = String(
+    PermissionFlagsBits.ViewChannel |
+      PermissionFlagsBits.ReadMessageHistory |
+      PermissionFlagsBits.SendMessagesInThreads
+  );
+  const post = (id: string, parentId = forumId) => ({
+    id,
+    guild_id: config.guild_id,
+    parent_id: parentId,
+    type: 11,
+    name: `Post ${id.slice(-2)}`,
+    owner_id: '444444444444444444',
+    applied_tags: [tagId],
+    message_count: 3,
+    last_message_id: '999999999999999999',
+    thread_metadata: {
+      archived: false,
+      locked: false,
+      create_timestamp: '2026-10-03T12:00:00.000Z',
+    },
+  });
+
+  function forumTransport(forum: Record<string, unknown> = {}) {
+    const harness = makeTransport();
+    harness.rest.get.mockImplementation(async (route: string) => {
+      if (route.startsWith('/users/')) return { id: config.application_id, username: 'Agor' };
+      if (route.includes('/gateway/bot')) return { shards: 1 };
+      if (route.includes('/oauth2/applications/@me')) return { flags: '524288' };
+      if (route.includes('/members/'))
+        return { user: { id: config.application_id }, roles: [], permissions: replyPermissions };
+      if (route === `/guilds/${config.guild_id}/threads/active`) {
+        return {
+          threads: [
+            post('777777777777777771'),
+            post(postId),
+            post('777777777777777772', '313131313131313131'),
+          ],
+        };
+      }
+      if (route.startsWith(`/channels/${forumId}/threads/archived/public`)) {
+        return {
+          has_more: true,
+          threads: [
+            {
+              ...post('777777777777777773'),
+              thread_metadata: {
+                archived: true,
+                locked: true,
+                archive_timestamp: '2026-10-01T00:00:00.000Z',
+              },
+            },
+          ],
+        };
+      }
+      if (route === `/channels/${postId}/messages/${postId}`) {
+        return { id: postId, channel_id: postId };
+      }
+      if (route.startsWith(`/channels/${postId}/messages`)) return [];
+      if (route === `/channels/${postId}`) return post(postId);
+      if (route === `/channels/${forumId}`) {
+        return {
+          id: forumId,
+          guild_id: config.guild_id,
+          type: 15,
+          available_tags: [{ id: tagId, name: 'bug' }],
+          ...forum,
+        };
+      }
+      return {
+        id: config.guild_id,
+        name: 'Guild',
+        roles: [{ id: config.guild_id, permissions: '0' }],
+      };
+    });
+    return harness;
+  }
+
+  it('admits a mention in a forum post, verifies its starter inside the post, and replies there', async () => {
+    const { transport, rest, dispatch } = forumTransport();
+    const connector = new DiscordConnector(forumConfig, transport as never);
+    const received: unknown[] = [];
+    await connector.startListening(async (message) => {
+      received.push(message);
+    });
+    dispatch()?.(
+      {
+        t: 'MESSAGE_CREATE',
+        s: 1,
+        d: {
+          id: '999999999999999999',
+          guild_id: config.guild_id,
+          channel_id: postId,
+          type: 0,
+          content: `<@${config.application_id}> any ideas?`,
+          author: { id: '444444444444444444', bot: false },
+          member: { roles: [] },
+          mentions: [{ id: config.application_id }],
+        },
+      },
+      0
+    );
+    await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
+
+    expect(received[0]).toMatchObject({
+      text: 'any ideas?',
+      threadId: `discord:thread:${forumId}:${postId}`,
+    });
+    const prepared = await (
+      received[0] as { prepareDelivery: () => Promise<Record<string, unknown>> }
+    ).prepareDelivery();
+    expect(prepared).toMatchObject({
+      discord_thread_id: postId,
+      discord_thread: {
+        parent_channel_id: forumId,
+        thread_channel_id: postId,
+        starter_message_id: postId,
+      },
+    });
+    expect(rest.get).toHaveBeenCalledWith(`/channels/${postId}/messages/${postId}`);
+    expect(rest.get).not.toHaveBeenCalledWith(`/channels/${forumId}/messages/${postId}`);
+
+    await connector.sendMessage({
+      threadId: `discord:thread:${forumId}:${postId}`,
+      text: 'try this',
+    });
+    expect(rest.post).toHaveBeenCalledWith(
+      `/channels/${postId}/messages`,
+      expect.objectContaining({ body: expect.objectContaining({ content: 'try this' }) })
+    );
+    await connector.stopListening();
+  });
+
+  it('admits a mention in the opening message of a forum post', async () => {
+    const { transport, rest, dispatch } = forumTransport();
+    const connector = new DiscordConnector(forumConfig, transport as never);
+    const received: unknown[] = [];
+    await connector.startListening(async (message) => {
+      received.push(message);
+    });
+    dispatch()?.(
+      {
+        t: 'MESSAGE_CREATE',
+        s: 1,
+        d: {
+          id: postId,
+          guild_id: config.guild_id,
+          channel_id: postId,
+          type: 0,
+          content: `<@${config.application_id}> the build fails`,
+          author: { id: '444444444444444444', bot: false },
+          member: { roles: [] },
+          mentions: [{ id: config.application_id }],
+        },
+      },
+      0
+    );
+    await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
+
+    expect(received[0]).toMatchObject({ threadId: `discord:thread:${forumId}:${postId}` });
+    await expect(
+      (received[0] as { prepareDelivery: () => Promise<Record<string, unknown>> }).prepareDelivery()
+    ).resolves.toMatchObject({
+      discord_thread: { thread_channel_id: postId, starter_message_id: postId },
+    });
+    expect(rest.get).toHaveBeenCalledWith(`/channels/${postId}/messages/${postId}`);
+    await connector.stopListening();
+  });
+
+  it('still refuses a forum that @everyone cannot view', async () => {
+    const { transport } = forumTransport({
+      permission_overwrites: [
+        { id: config.guild_id, type: 0, deny: String(PermissionFlagsBits.ViewChannel) },
+      ],
+    });
+    const connector = new DiscordConnector(forumConfig, transport as never);
+    await expect(connector.startListening(vi.fn())).rejects.toMatchObject({
+      code: 'discord_channel_invalid',
+      remediation: expect.stringContaining('public text or forum channel'),
+    });
+  });
+
+  it('refuses to listen when the default proactive target is a forum', async () => {
+    const { transport } = forumTransport();
+    await expect(
+      new DiscordConnector(config, transport as never).startListening(vi.fn())
+    ).rejects.toMatchObject({ code: 'discord_outbound_target_invalid' });
+  });
+
+  it('ignores a leftover forum default target while outbound is off', async () => {
+    const { transport } = forumTransport();
+    const outboundOff = { ...config, outbound_enabled: false };
+    await expect(
+      new DiscordConnector(outboundOff, transport as never).testConnection()
+    ).resolves.toMatchObject({ ok: true, failures: [] });
+    const connector = new DiscordConnector(outboundOff, transport as never);
+    await expect(connector.startListening(vi.fn())).resolves.toBeUndefined();
+    await connector.stopListening();
+  });
+
+  it('refuses an explicit proactive send to a forum before calling Discord', async () => {
+    const { transport, rest } = forumTransport();
+    await expect(
+      new DiscordConnector(forumConfig, transport as never).sendDirectMessage({
+        target: `channel:${forumId}`,
+        text: 'hello',
+      })
+    ).rejects.toThrow('forum channels cannot receive proactive messages');
+    expect(rest.post).not.toHaveBeenCalled();
+  });
+
+  it('probes a forum with reply permissions and flags a forum proactive target', async () => {
+    const { transport } = forumTransport();
+    const result = await new DiscordConnector(config, transport as never).testConnection();
+
+    expect(result.channelAccess).toEqual([
+      expect.objectContaining({ channelId: forumId, kind: 'forum', ok: true }),
+    ]);
+    expect(result.failures).toEqual([expect.objectContaining({ capability: 'outbound_target' })]);
+    const textOnly = await new DiscordConnector(forumConfig, transport as never).testConnection();
+    expect(textOnly.ok).toBe(true);
+  });
+
+  it('reads a post (also by default from its session), refuses the forum itself, and lists posts', async () => {
+    const { transport, rest } = forumTransport();
+    const connector = new DiscordConnector(config, transport as never);
+
+    await expect(connector.fetchChannelHistory({ channelId: postId })).resolves.toMatchObject({
+      channelId: postId,
+      messages: [],
+    });
+    await expect(
+      connector.fetchChannelHistory({ sessionThreadKey: `discord:thread:${forumId}:${postId}` })
+    ).resolves.toMatchObject({ channelId: postId });
+    // Production sessions key a thread by its bare provider snowflake.
+    await expect(
+      connector.fetchChannelHistory({ sessionThreadKey: postId })
+    ).resolves.toMatchObject({ channelId: postId });
+    await expect(connector.listForumPosts({ sessionThreadKey: postId })).resolves.toMatchObject({
+      channelId: forumId,
+    });
+    await expect(connector.fetchChannelHistory({ channelId: forumId })).rejects.toThrow(
+      'is a forum, which has no messages of its own'
+    );
+    expect(rest.get).not.toHaveBeenCalledWith(
+      expect.stringMatching(`^/channels/${forumId}/messages`)
+    );
+
+    const active = await connector.listForumPosts({
+      sessionThreadKey: `discord:thread:${forumId}:${postId}`,
+      limit: 1,
+    });
+    expect(active.posts.map((p) => p.id)).toEqual([postId]);
+    expect(active.posts[0]).toMatchObject({
+      reply_count: 3,
+      title: 'Post 88',
+      tags: [{ id: tagId, name: 'bug' }],
+      author_id: '444444444444444444',
+      created_at: '2026-10-03T12:00:00.000Z',
+      archived: false,
+    });
+    expect(active).toMatchObject({ has_more: true, next_cursor: { before: postId } });
+    const next = await connector.listForumPosts({ channelId: forumId, before: postId });
+    expect(next.posts.map((p) => p.id)).toEqual(['777777777777777771']);
+    expect(next).toMatchObject({ has_more: false, next_cursor: null });
+
+    const archived = await connector.listForumPosts({
+      channelId: forumId,
+      archived: true,
+      before: '2026-10-02T00:00:00.000Z',
+    });
+    expect(rest.get).toHaveBeenCalledWith(
+      `/channels/${forumId}/threads/archived/public?limit=25&before=2026-10-02T00%3A00%3A00.000Z`
+    );
+    expect(archived.posts[0]).toMatchObject({
+      archived: true,
+      locked: true,
+      archived_at: '2026-10-01T00:00:00.000Z',
+    });
+    expect(archived.next_cursor).toEqual({ before: '2026-10-01T00:00:00.000Z' });
+
+    // Discord's archive route rejects page sizes below 2, so a limit of 1 asks for 2.
+    await connector.listForumPosts({ channelId: forumId, archived: true, limit: 1 });
+    expect(rest.get).toHaveBeenCalledWith(`/channels/${forumId}/threads/archived/public?limit=2`);
+  });
+
+  it('refuses to list posts of a text channel or with a cursor of the wrong kind', async () => {
+    const { transport, rest } = makeTransport();
+    const connector = new DiscordConnector(config, transport as never);
+    await expect(connector.listForumPosts({ channelId: forumId })).rejects.toThrow(
+      'is not a forum channel'
+    );
+    // The kind is refused before the guild and bot-member permission lookups.
+    expect(rest.get).not.toHaveBeenCalledWith(`/guilds/${config.guild_id}`);
+    const forum = forumTransport();
+    const forumConnector = new DiscordConnector(config, forum.transport as never);
+    for (const before of [postId, 'March 2026', '1']) {
+      await expect(
+        forumConnector.listForumPosts({ channelId: forumId, archived: true, before })
+      ).rejects.toThrow('Archived forum posts page by an ISO archive timestamp cursor');
+    }
+  });
+});
+
+describe('Discord response modes', () => {
+  const channelId = config.allowed_channel_ids[0];
+  const threadId = '888888888888888888';
+  const otherThreadMessage = '999999999999999999';
+
+  it('validates response modes against the allowed channels', () => {
+    expect(validateDiscordConfig({ ...config, response_modes: { [channelId]: 'all' } }).ok).toBe(
+      true
+    );
+    expect(
+      validateDiscordConfig({ ...config, response_modes: { '121212121212121212': 'all' } }).errors
+    ).toContain('response_modes keys must be allowed channel IDs');
+    expect(
+      validateDiscordConfig({ ...config, response_modes: { [channelId]: 'loud' } }).errors
+    ).toContain('response_modes values must be mention, starters, or all');
+    expect(validateDiscordConfig({ ...config, response_modes: [] }).errors).toContain(
+      'response_modes must map allowed channel IDs to a response mode'
+    );
+  });
+
+  it('admits unmentioned forum post messages by mode, and never a top-level message', () => {
+    const top = { channelId, messageId: '777777777777777777', isThread: false };
+    const opener = {
+      channelId: threadId,
+      parentChannelId: channelId,
+      messageId: threadId,
+      isThread: true,
+    };
+    const reply = { ...opener, messageId: otherThreadMessage };
+    const admits = (config: Parameters<typeof discordResponseModeAdmits>[0]) =>
+      [top, opener, reply].map((m) => discordResponseModeAdmits(config, m));
+    const modes = (mode: 'mention' | 'starters' | 'all') => ({
+      response_modes: { [channelId]: mode },
+    });
+    expect(admits({})).toEqual([false, false, false]);
+    expect(admits(modes('mention'))).toEqual([false, false, false]);
+    expect(admits(modes('starters'))).toEqual([false, true, false]);
+    expect(admits(modes('all'))).toEqual([false, true, true]);
+  });
+
+  it('recognizes the no-reply marker with light formatting only', () => {
+    for (const text of [
+      '[no-reply]',
+      ' [NO-REPLY] ',
+      '`[no-reply]`',
+      '[no-reply].',
+      '`[no-reply]`.',
+      '**[no-reply]**',
+      '_[no-reply]_',
+      '"[no-reply]"',
+      '```\n[no-reply]\n```',
+      '```text\n[no-reply]\n```',
+      '> [no-reply]',
+    ]) {
+      expect(isDiscordNoReply(text)).toBe(true);
+    }
+    for (const text of [
+      'no-reply',
+      '[no-reply] thanks',
+      'Reply: [no-reply]',
+      '```js\nreply()\n```',
+      ' '.repeat(80_000),
+    ]) {
+      expect(isDiscordNoReply(text)).toBe(false);
+    }
+  });
+
+  it('always writes response_modes from setup, so clearing them replaces the stored map', () => {
+    const decisions = {
+      applicationId: config.application_id,
+      guildId: config.guild_id,
+      messageContentAcknowledged: true,
+      allowedChannelIds: [channelId],
+      allowedUserIds: ['444444444444444444'],
+      agorUserId: 'user-1',
+    };
+    expect(buildDiscordSetupArtifact(decisions).draft.config.response_modes).toEqual({});
+    expect(
+      buildDiscordSetupArtifact({ ...decisions, responseModes: { [channelId]: 'all' } }).draft
+        .config.response_modes
+    ).toEqual({ [channelId]: 'all' });
+  });
+
+  // The allowed channel is a forum (type 15) unless a test says otherwise.
+  function modeTransport(parentType = 15) {
+    const harness = makeTransport();
+    harness.rest.get.mockImplementation(async (route: string) => {
+      if (route.startsWith('/users/')) return { id: config.application_id, username: 'Agor' };
+      if (route.includes('/gateway/bot')) return { shards: 1 };
+      if (route.includes('/oauth2/applications/@me')) return { flags: '524288' };
+      if (route.includes('/members/'))
+        return { user: { id: config.application_id }, roles: [], permissions: '309237713920' };
+      if (route === `/guilds/${config.guild_id}`) {
+        return {
+          id: config.guild_id,
+          name: 'Guild',
+          roles: [{ id: config.guild_id, permissions: '0' }],
+        };
+      }
+      if (route === `/channels/${threadId}`) {
+        return { id: threadId, guild_id: config.guild_id, parent_id: channelId, type: 11 };
+      }
+      return { id: channelId, guild_id: config.guild_id, type: parentType };
+    });
+    return harness;
+  }
+
+  async function deliver(
+    responseModes: Record<string, string> | undefined,
+    data: Record<string, unknown>
+  ) {
+    const { transport, rest, dispatch } = modeTransport();
+    // A forum cannot be the default proactive target, so these tests drop it.
+    const connector = new DiscordConnector(
+      {
+        ...config,
+        default_outbound_target: undefined,
+        ...(responseModes ? { response_modes: responseModes } : {}),
+      },
+      transport as never
+    );
+    const received: Array<{ metadata: Record<string, unknown> }> = [];
+    await connector.startListening(async (message) => {
+      received.push(message as never);
+    });
+    rest.get.mockClear();
+    dispatch()?.(
+      {
+        t: 'MESSAGE_CREATE',
+        s: 1,
+        d: {
+          id: '777777777777777777',
+          guild_id: config.guild_id,
+          channel_id: channelId,
+          type: 0,
+          content: 'my build fails',
+          author: { id: '444444444444444444', bot: false },
+          member: { roles: [] },
+          mentions: [],
+          ...data,
+        },
+      },
+      0
+    );
+    await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
+    await connector.stopListening();
+    return { received, rest };
+  }
+
+  it('classifies only non-retryable 4xx provider errors as permanent refusals', () => {
+    for (const status of [400, 403, 404]) {
+      expect(isPermanentProviderRefusal({ status })).toBe(true);
+    }
+    for (const status of [401, 408, 409, 425, 429, 500, 503]) {
+      expect(isPermanentProviderRefusal({ status })).toBe(false);
+    }
+    expect(isPermanentProviderRefusal(new Error('network'))).toBe(false);
+  });
+
+  it('bounds the channel lookup cache and keeps recently read entries', () => {
+    const connector = new DiscordConnector(config, makeTransport().transport as never);
+    const cache = connector as unknown as {
+      channelInfoCache: Map<string, unknown>;
+      cacheChannelInfo(id: string, channel: Record<string, unknown>): void;
+      cachedChannelInfo(id: string): unknown;
+    };
+    cache.cacheChannelInfo('first', { id: 'first' });
+    for (let i = 0; i < 999; i++) cache.cacheChannelInfo(`c${i}`, { id: `c${i}` });
+    // Reading 'first' marks it recently used, so the next insert evicts 'c0'.
+    expect(cache.cachedChannelInfo('first')).toEqual({ id: 'first' });
+    cache.cacheChannelInfo('last', { id: 'last' });
+    expect(cache.channelInfoCache.size).toBe(1000);
+    expect(cache.channelInfoCache.has('first')).toBe(true);
+    expect(cache.channelInfoCache.has('c0')).toBe(false);
+  });
+
+  it('ignores unmentioned chatter without any lookup when no channel has a response mode', async () => {
+    const { received, rest } = await deliver(undefined, { channel_id: threadId });
+    expect(received).toEqual([]);
+    expect(rest.get).not.toHaveBeenCalled();
+  });
+
+  it('admits only an unmentioned forum post opener in starters mode', async () => {
+    const opener = await deliver(
+      { [channelId]: 'starters' },
+      { id: threadId, channel_id: threadId }
+    );
+    expect(opener.received[0]?.metadata).toMatchObject({
+      discord_is_thread: true,
+      discord_has_mention: false,
+    });
+    const postReply = await deliver(
+      { [channelId]: 'starters' },
+      { id: otherThreadMessage, channel_id: threadId }
+    );
+    expect(postReply.received).toEqual([]);
+    // A post reply can never start a conversation, so it needs no lookup.
+    expect(postReply.rest.get).not.toHaveBeenCalled();
+    // An unmentioned top-level message in the allowed channel itself is never admitted.
+    const topLevel = await deliver({ [channelId]: 'starters' }, {});
+    expect(topLevel.received).toEqual([]);
+    expect(topLevel.rest.get).not.toHaveBeenCalled();
+  });
+
+  it('refuses to listen, and the probe flags it, when a text channel has a response mode', async () => {
+    const config_ = { ...config, response_modes: { [channelId]: 'all' } };
+    const text = modeTransport(0);
+    await expect(
+      new DiscordConnector(config_, text.transport as never).startListening(vi.fn())
+    ).rejects.toMatchObject({ code: 'discord_response_mode_invalid' });
+    const probe = await new DiscordConnector(config_, text.transport as never).testConnection();
+    expect(probe.failures).toEqual(
+      expect.arrayContaining([expect.objectContaining({ capability: 'response_modes' })])
+    );
+    const forum = modeTransport(15);
+    const forumProbe = await new DiscordConnector(
+      { ...config_, default_outbound_target: undefined },
+      forum.transport as never
+    ).testConnection();
+    expect(forumProbe.failures).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ capability: 'response_modes' })])
+    );
+  });
+
+  it('admits every unmentioned message in forum posts in all mode', async () => {
+    const threadReply = await deliver(
+      { [channelId]: 'all' },
+      { id: otherThreadMessage, channel_id: threadId }
+    );
+    expect(threadReply.received[0]?.metadata).toMatchObject({
+      discord_is_thread: true,
+      discord_has_mention: false,
+    });
+    const mentioned = await deliver(
+      { [channelId]: 'all' },
+      { content: `<@${config.application_id}> hi`, mentions: [{ id: config.application_id }] }
+    );
+    expect(mentioned.received[0]?.metadata).toMatchObject({ discord_has_mention: true });
   });
 });

@@ -1,6 +1,7 @@
 import type { JsonWebKey, KeyObject } from 'node:crypto';
 import { createHash, createPublicKey, randomBytes } from 'node:crypto';
 import {
+  AgorAvatarAuthority,
   type AgorConfig,
   AgorRoleAuthority,
   AgorUserLifecycleAuthority,
@@ -20,17 +21,26 @@ import {
   runWithTenantDatabaseTransaction,
   seedInitialDataInTransaction,
   select,
+  TenantDisplayRepository,
   TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   UserExternalIdentitiesRepository,
   update,
   users,
+  validateTenantDisplay,
   validateTenantPublicRouting,
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
-import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor/core/types';
-import { isValidExecutionHomeKey, normalizeRole, ROLES } from '@agor/core/types';
+import type {
+  Params,
+  TenantDisplay,
+  User,
+  UserExternalIdentity,
+  UserID,
+  UserRole,
+} from '@agor/core/types';
+import { isValidExecutionHomeKey, MCP_OAUTH_RELAY, normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { lockTenantAuthorizationFence } from '../services/tenant-authorization-fence.js';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
@@ -71,6 +81,8 @@ interface LaunchClaims extends JwtPayload {
   jti?: string;
   nonce?: string;
   public_base_url?: string;
+  /** Optional tenant display label shown in the authenticated header. */
+  workspace_display_name?: string;
 }
 
 type StoredExternalIdentity = UserExternalIdentity;
@@ -303,7 +315,12 @@ async function projectLaunchUser(
   ) {
     throw new NotAuthenticated('Invalid one-time launch assertion execution home');
   }
-  const avatar = claims.avatar || claims.picture;
+  // Avatar ownership is independent of external account/role authority. Do
+  // not rehydrate even a cleared Agor-owned avatar on a subsequent launch.
+  const avatar =
+    identityAuthority.avatarAuthority === AgorAvatarAuthority.EXTERNAL
+      ? claims.avatar || claims.picture
+      : undefined;
   const identity: StoredExternalIdentity = {
     key,
     provider,
@@ -376,8 +393,15 @@ async function projectLaunchUser(
         updated_at: now,
         data: {
           ...data,
-          avatar_url: avatar ?? data.avatar_url ?? data.avatar,
-          avatar_source: avatar ? 'launch-auth' : data.avatar_source,
+          ...(avatar
+            ? {
+                avatar_url: avatar,
+                avatar: undefined,
+                avatar_source: 'launch-auth',
+                avatar_source_id: undefined,
+                avatar_synced_at: undefined,
+              }
+            : {}),
           external_identities: nextIdentities,
         },
       })
@@ -521,7 +545,7 @@ async function exchangeLaunchCode(
   return json as LaunchExchangeResponse;
 }
 
-async function resolveVerificationKey(
+export async function resolveVerificationKey(
   header: JwtHeader,
   settings: ResolvedExternalLaunchProvider
 ): Promise<string | KeyObject> {
@@ -580,6 +604,10 @@ function validateLaunchClaims(
   claims: LaunchClaims,
   settings: ResolvedExternalLaunchProvider
 ): void {
+  // Callback delivery assertions use the launch signing key but are never login assertions.
+  if (claims.purpose === MCP_OAUTH_RELAY.callbackPurpose) {
+    throw new NotAuthenticated('Invalid one-time launch assertion purpose');
+  }
   if (!claims.iss || claims.iss !== settings.issuer) {
     throw new NotAuthenticated('Invalid one-time launch assertion issuer');
   }
@@ -607,6 +635,21 @@ function validateLaunchClaims(
     } catch {
       throw new NotAuthenticated('Invalid one-time launch assertion public URL');
     }
+  }
+}
+
+/**
+ * The display label is cosmetic, so unlike `public_base_url` an invalid value
+ * never rejects the launch. It is dropped with one value-free warning code;
+ * the label is customer text and is never logged.
+ */
+function verifiedTenantDisplay(claims: LaunchClaims): TenantDisplay | null {
+  if (claims.workspace_display_name === undefined) return null;
+  try {
+    return validateTenantDisplay(claims.workspace_display_name, claims.iat);
+  } catch {
+    console.warn('[auth/launch] launch_workspace_display_name_invalid');
+    return null;
   }
 }
 
@@ -765,6 +808,7 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           throw new NotAuthenticated('Invalid one-time launch exchange response');
         }
         const claims = await verifyLaunchAssertion(exchange.assertion, settings);
+        const display = verifiedTenantDisplay(claims);
         // Tenant scope for the runtime DB/RLS must derive ONLY from the
         // verified, signed assertion — never from params, params.tenant, or
         // request headers, all of which are attacker-influenced on the launch
@@ -784,6 +828,9 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
                 await new TenantPublicRoutingRepository(scopedDb).observeVerifiedLaunch(
                   validateTenantPublicRouting(claims.public_base_url, claims.iat)
                 );
+              }
+              if (display) {
+                await new TenantDisplayRepository(scopedDb).observeVerifiedLaunch(display);
               }
               // Claim the default Board while the same tenant authority fence
               // still serializes first-user projection. Immutable ownership

@@ -19,6 +19,9 @@ export interface AgorAgenticToolsSettings {
    * Default: enabled; false is an explicit opt-out. Provider approval remains a release prerequisite.
    */
   claude_subscription_oauth?: boolean;
+
+  /** Hosted OpenCode with checkpointed native state. Default: enabled when every hosted prerequisite holds; 'disabled' opts out. */
+  opencode_hosted_native_state?: 'checkpointed' | 'disabled';
 }
 
 /**
@@ -109,6 +112,12 @@ export interface AgorDaemonSettings {
    * Displayed as a popover around the instance label Tag. */
   instanceDescription?: string;
 
+  /** External app link (e.g. a hosting console) shown in the settings menu; opens in a new tab. */
+  externalAppLink?: string;
+
+  /** Settings-menu label for `externalAppLink` (defaults to the link itself). */
+  externalAppLabel?: string;
+
   /** Maximum expiry for impersonation tokens in ms (default: 3600000 = 1 hour, capped at 1 hour) */
   impersonation_token_expiry_ms?: number;
 
@@ -141,6 +150,16 @@ export interface AgorDaemonSettings {
    * Default: 0 (do not trust X-Forwarded-* headers).
    */
   trust_proxy_hops?: number;
+
+  /**
+   * Compress Socket.IO WebSocket frames with RFC 7692 permessage-deflate
+   * (default: true). The zlib profile is fixed by the daemon; this is only an
+   * on/off switch. Each compressing socket holds up to ~224 KiB of zlib state
+   * (~192 KiB deflate + up to ~32 KiB inflate, depending on the window each
+   * client negotiates; buffers and bookkeeping excluded), and a broadcast is
+   * compressed once per recipient. A change applies to new connections only. Env override: `AGOR_WEBSOCKET_COMPRESSION`.
+   */
+  websocket_compression?: boolean;
 }
 
 /**
@@ -289,6 +308,13 @@ export const AgorUserLifecycleAuthority = {
 export type AgorUserLifecycleAuthority =
   (typeof AgorUserLifecycleAuthority)[keyof typeof AgorUserLifecycleAuthority];
 
+/** Which system owns user avatars, independently of account lifecycle. */
+export const AgorAvatarAuthority = {
+  INTERNAL: 'internal',
+  EXTERNAL: 'external',
+} as const;
+export type AgorAvatarAuthority = (typeof AgorAvatarAuthority)[keyof typeof AgorAvatarAuthority];
+
 /** Which system owns the effective Agor role. */
 export const AgorRoleAuthority = {
   INTERNAL: 'internal',
@@ -329,12 +355,14 @@ export interface AgorExternalIdentitySettings {
  * Deployment-owned authority contract for user identity.
  *
  * The section is optional. Omitting it preserves Agor's normal local user,
- * role, and password authority. The only external profile supported in v1 is
+ * role, and password authority. The supported external account profile is
  * deliberately coherent: external lifecycle, claim-owned roles, disabled
  * local login, and verified launch-time JIT provisioning.
  */
 export interface AgorIdentitySettings {
   user_lifecycle?: AgorUserLifecycleAuthority;
+  /** Defaults to user_lifecycle. Internal avatars are never projected from launch claims. */
+  avatar_authority?: AgorAvatarAuthority;
   role_authority?: AgorRoleAuthority;
   local_auth?: AgorLocalAuthMode;
   /** Named policy for newly assigned local passwords. Defaults to `secure`. */
@@ -342,7 +370,7 @@ export interface AgorIdentitySettings {
   external?: AgorExternalIdentitySettings;
 }
 
-export const IDENTITY_AUTHORITY_CONTRACT_VERSION = 1 as const;
+export const IDENTITY_AUTHORITY_CONTRACT_VERSION = 2 as const;
 
 /** Stable identifiers returned in externally-managed mutation errors. */
 export const AgorIdentityCapability = {
@@ -351,6 +379,7 @@ export const AgorIdentityCapability = {
   USER_IDENTITY_WRITE: 'users.identity.write',
   USER_ROLE_WRITE: 'users.role.write',
   USER_PASSWORD_WRITE: 'users.password.write',
+  USER_AVATAR_WRITE: 'users.avatar.write',
   USER_AVATAR_SETTINGS_WRITE: 'users.avatar-settings.write',
   USER_SELF_CONFIGURATION_WRITE: 'users.self-configuration.write',
 } as const;
@@ -361,6 +390,7 @@ export type AgorIdentityCapability =
 export interface ResolvedIdentityAuthority {
   contractVersion: typeof IDENTITY_AUTHORITY_CONTRACT_VERSION;
   userLifecycle: AgorUserLifecycleAuthority;
+  avatarAuthority: AgorAvatarAuthority;
   roleAuthority: AgorRoleAuthority;
   localAuth: AgorLocalAuthMode;
   external?: {
@@ -374,6 +404,7 @@ export interface ResolvedIdentityAuthority {
       identityWrite: boolean;
       roleWrite: boolean;
       passwordWrite: boolean;
+      avatarWrite: boolean;
       avatarSettingsWrite: boolean;
       selfConfigurationWrite: true;
     };
@@ -447,7 +478,7 @@ export interface AgorDatabaseSettings {
  *   each session gets a per-owner home overlay (`sandbox.home_mode: per_user`),
  *   and the branch is mounted per the caller's effective permission tier.
  *   Linux only. See
- *   `context/explorations/executor-sandboxing.md`.
+ *   `context/guides/rbac-and-unix-isolation.md`.
  */
 export type UnixUserMode = 'simple' | 'delegated' | 'sandbox';
 
@@ -506,7 +537,7 @@ export interface AgorSandboxIncludeSettings {
  *
  * Agor resolves `include.*` / `protect_secrets` / `isolate_branches` into
  * bubblewrap bind mounts + masks using paths it already knows. See
- * `context/explorations/executor-sandboxing.md`.
+ * `context/guides/rbac-and-unix-isolation.md`.
  */
 export interface AgorSandboxSettings {
   /** Master switch. Default: false (open filesystem; tool approval flows still apply). */
@@ -732,6 +763,15 @@ export interface AgorExecutionSettings {
    */
   executor_command_template?: string;
 
+  /** Trusted, synchronous remote containment command. Context is JSON on stdin (no interpolation).
+   * Exit 0 asserts all execution for the exact tenant/task is stopped and cannot start later.
+   * Nonzero/timeout means unknown. Run once; further attempts require explicit user retry.
+   * Uses the launcher's sanitized environment. Not used for local execution.
+   */
+  executor_cleanup_command_template?: string;
+  /** Total cleanup command deadline, 1000..120000ms. Default 30000ms. */
+  executor_cleanup_timeout_ms?: number;
+
   /**
    * Filesystem guarantees provided to every executor invocation.
    *
@@ -750,7 +790,11 @@ export interface AgorExecutionSettings {
    */
   delegated_branch_deletion?: boolean;
 
-  /** A nonzero template launcher may still have submitted remote work. Default: false. */
+  /**
+   * An ordinary nonzero template launcher exit may still have submitted remote
+   * work. Default: false. Signal/null and shell-style >=128 exits are always
+   * ambiguous, irrespective of this assertion; none is OOM evidence.
+   */
   executor_command_nonzero_may_have_dispatched?: boolean;
 
   /**
@@ -799,8 +843,7 @@ export interface AgorExecutionSettings {
    *
    * v0.20+ default already allows both `worktree` and `clone` with
    * `default_mode: worktree`, so this block is only needed when an
-   * operator wants to deviate. See `context/explorations/clone-redesign.md`
-   * for the storage-model design.
+   * operator wants to deviate.
    *
    * @example Disable clone mode entirely (security-gradient deployment)
    * ```yaml
@@ -824,7 +867,7 @@ export interface AgorExecutionSettings {
 
   /**
    * OS-level executor sandbox policy (SRT: bubblewrap / Seatbelt). Disabled by
-   * default. Global, single-policy. See `context/explorations/executor-sandboxing.md`.
+   * default. Global, single-policy. See `context/guides/rbac-and-unix-isolation.md`.
    */
   sandbox?: AgorSandboxSettings;
 }
@@ -1117,7 +1160,6 @@ export interface AgorCorsSettings {
  * `security.git_config_parameters` shape. Mirrors `security.csp`: `extras`
  * appends to safe defaults, `override` replaces them. Mutually exclusive.
  *
- * Defaults + rationale: `docs/internal/credential-leak-defenses-2026-05-11.md`.
  * Don't bake credential-bearing values (e.g. `http.proxy=http://user:pass@…`)
  * here — the daemon redacts them from logs but the env var itself isn't
  * routed through the encrypted env-file path.
@@ -1146,8 +1188,6 @@ export interface AgorSecuritySettings {
  *
  * Allows separation of daemon operating files from git data files.
  * This enables different storage backends (e.g., local SSD for daemon, EFS for branches).
- *
- * @see context/explorations/executor-expansion.md
  */
 export interface AgorPathSettings {
   /**
@@ -1522,6 +1562,14 @@ export interface AgorConfig {
 
   /** Generic external one-time launch-code authentication. */
   external_launch?: AgorExternalLaunchSettings;
+  /**
+   * Optional hosted callback relay. App credentials and user tokens stay in this
+   * runtime. The Cell identity and RS256 signing key come from the existing
+   * `AGOR_CLOUD_CELL_ID` / `AGOR_CLOUD_RUNTIME_*` environment.
+   */
+  mcp_oauth_relay?: {
+    callback_origin: string;
+  };
 
   /** User identity, lifecycle, role, and local-login authority. */
   identity?: AgorIdentitySettings;

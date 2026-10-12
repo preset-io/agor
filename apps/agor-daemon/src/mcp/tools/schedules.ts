@@ -51,6 +51,10 @@ const agenticToolConfigSchema = z
       .optional()
       .describe('Symbolic user or workspace default to resolve each time the schedule runs.'),
     permission_mode: mcpOptionalString('permission_mode', "Permission mode (e.g., 'auto', 'ask')."),
+    codex_include_plugins: z
+      .boolean()
+      .optional()
+      .describe('Include native Codex plugins (default off).'),
     model_config: z
       .object({
         mode: z.enum(['alias', 'exact']).optional(),
@@ -74,6 +78,7 @@ const agenticToolConfigSchema = z
     const hasPreset = config.preset_id !== undefined;
     const hasReference = config.configuration_reference !== undefined;
     const hasInline =
+      config.codex_include_plugins !== undefined ||
       config.permission_mode !== undefined ||
       config.model_config !== undefined ||
       config.context_files !== undefined;

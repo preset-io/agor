@@ -1,6 +1,6 @@
 ---
 title: 'Agor Cloud - Opening a Private Beta'
-description: 'Fully managed Agor: bring your own API keys, pen-tested and hardened for public-internet use (mobile included), same-day security patching, tenant-scoped execution isolation, private network access to your VPC, and an audit trail your security team will accept. Built and operated by the team behind Preset Cloud.'
+description: 'Fully managed Agor: bring your own API keys, hardened for public-internet use (mobile included), same-day security patching, tenant-scoped execution isolation, private network access to your VPC, and an audit trail your security team will accept. Built and operated by the team behind Preset Cloud.'
 author: 'Maxime Beauchemin'
 date: 2025-11-23
 image: '/images/blog/agor-cloud.png'
@@ -18,7 +18,7 @@ really change how you build software.
 
 So why Agor Cloud?
 
-<CloudInviteCTA primaryHref="#cloud-signup-form" />
+<CloudInviteCTA placement="blog-agor-cloud-intro" />
 
 ## The Gap Between "Works for Me" and "Works for Production"
 
@@ -80,7 +80,7 @@ Agor is powerful software, and some of its capabilities (broad filesystem access
 
 Agor Cloud is built the other way: hardened from day one to sit safely on the public internet.
 
-- **Pen-tested** by an independent security firm. Daemon, executor, and exposed APIs all under scrutiny.
+- **Independent penetration testing underway** ahead of general availability, covering the daemon, executor, and exposed APIs.
 - **SOC 2 Type II** audit cycle in flight.
 - **Locked-down feature surface.** The OSS feature flags and configs that expand attack surface (shared dev boxes, certain bypass modes, broad sudo paths) are off in Cloud. We know exactly which knobs should be in which position for a reliable, secure, public-facing instance, because that's what we run for ourselves.
 - **Safer alternatives where it matters.** Where a feature is too risky to expose publicly but still valuable, we ship a safer shape of it. Environment integration on Cloud, for example, goes through a webhook surface rather than in-instance shared dev envs. Same outcome, much smaller blast radius.
@@ -172,7 +172,7 @@ We're not trying to sell you something you don't need. We're looking for teams w
 
 - **Dedicated Agor instance** with your team's repos and worktrees
 - **Bring-your-own-key** for Claude, Codex, Gemini. No proxy, no markup, no cut
-- **Pen-tested and public-internet hardened.** Use from anywhere, mobile included, no VPN required
+- **Hardened for the public internet,** with independent penetration testing underway. Use from anywhere, mobile included, no VPN required
 - **Tenant-scoped execution isolation** as defense-in-depth
 - **Private network access** to your VPC, VPN, or own-cloud account (Managed Private Cloud)
 - **Audit log + multi-cast metrics** integrated with your existing observability stack
@@ -217,7 +217,7 @@ Agor Cloud bridges that gap. Fully managed, secure, observable, built by the tea
 If that sounds like what your team needs, we'd love to talk.
 
 <div id="cloud-signup-form">
-  <JoinBetaCTA sourceCta="blog-agor-cloud" />
+  <JoinBetaCTA placement="blog-agor-cloud" />
 </div>
 
 ---

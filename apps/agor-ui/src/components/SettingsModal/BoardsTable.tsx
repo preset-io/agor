@@ -2,7 +2,6 @@ import {
   type AgorClient,
   type Board,
   type Branch,
-  type Session,
   summarizeBoardImportSkips,
   type User,
 } from '@agor-live/client';
@@ -30,11 +29,11 @@ import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { useSettingsDrill } from './SettingsDrill';
+import { useSessionCounts } from './useBranchPage';
 
 interface BoardsTableProps {
   client: AgorClient | null;
   boardById: Map<string, Board>;
-  sessionsByBranch: Map<string, Session[]>;
   branchById: Map<string, Branch>;
   currentUser?: User | null;
   onCreate?: (board: Partial<Board>) => void;
@@ -47,7 +46,6 @@ interface BoardsTableProps {
 export const BoardsTable: React.FC<BoardsTableProps> = ({
   client,
   boardById,
-  sessionsByBranch,
   branchById,
   currentUser,
   onCreate,
@@ -80,27 +78,6 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       setCreateDirty(false);
     }
   }, [isCreating, form]);
-
-  // Calculate session count per board (branch-centric model). Build the
-  // board buckets once so opening Settings is O(branches + sessions) instead
-  // of O(boards × branches).
-  const boardSessionCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-
-    for (const branch of branchById.values()) {
-      if (!branch.board_id) continue;
-      counts.set(
-        branch.board_id,
-        (counts.get(branch.board_id) ?? 0) + (sessionsByBranch.get(branch.branch_id)?.length ?? 0)
-      );
-    }
-
-    for (const board of boardById.values()) {
-      if (!counts.has(board.board_id)) counts.set(board.board_id, 0);
-    }
-
-    return counts;
-  }, [boardById, sessionsByBranch, branchById]);
 
   const handleCreate = () => {
     // Validate all fields (not just 'name') so custom_context JSON rules run.
@@ -249,6 +226,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       (board) => board.board_id,
     ]);
   }, [boardById, archiveFilter, searchTerm]);
+  const boardSessionCounts = useSessionCounts(client, 'board_id');
 
   const columns = [
     {
@@ -279,7 +257,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       title: 'Sessions',
       key: 'sessions',
       width: 100,
-      render: (_: unknown, board: Board) => boardSessionCounts.get(board.board_id) || 0,
+      render: (_: unknown, board: Board) => boardSessionCounts.get(board.board_id) ?? null,
     },
     {
       title: 'Actions',

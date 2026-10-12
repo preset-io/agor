@@ -17,8 +17,6 @@
  *   - submitted (enabled)   ✅ Tokens saved / channel enabled
  *   - submitted (disabled)  ⚠️ test failed — channel left disabled
  *   - dismissed             ⊘ Token setup dismissed
- *
- * See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
 import type { AgorClient, ChannelType, WidgetMessageMetadata } from '@agor-live/client';

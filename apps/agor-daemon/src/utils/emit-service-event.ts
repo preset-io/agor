@@ -99,3 +99,28 @@ export function emitServiceEvent(app: Application, event: ManualServiceEvent): v
 
   if (!enqueueAfterTenantDatabaseCommit(emit)) emit();
 }
+
+/**
+ * Replace a CRUD after-hook's automatic event with commit-bound publication.
+ * A nested Feathers method returns before its caller's transaction commits;
+ * publishing then lets another daemon authorize against not-yet-visible rows.
+ * Keep the canonical event (including bulk results and dispatch redaction), not
+ * an extra patched event. Rollback discards the queued publication entirely.
+ */
+export function publishCommittedServiceEvent(context: HookContext): HookContext {
+  const event = context.event;
+  if (!event) return context;
+  context.event = null;
+  const data = context.dispatch !== undefined ? context.dispatch : context.result;
+  for (const row of Array.isArray(data) ? data : [data]) {
+    emitServiceEvent(context.app, {
+      path: context.path,
+      event,
+      method: context.method,
+      id: context.id,
+      data: row,
+      params: context.params,
+    });
+  }
+  return context;
+}

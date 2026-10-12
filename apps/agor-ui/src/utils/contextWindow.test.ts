@@ -1,8 +1,10 @@
+import type { Task } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   getContextWindowGradient,
   getContextWindowPercentage,
   resolveContextWindowPercentage,
+  selectLatestContextWindow,
 } from './contextWindow';
 
 const colors = { normal: 'normal', warning: 'warning', critical: 'critical' };
@@ -48,5 +50,45 @@ describe('contextWindow utils', () => {
     );
     // Green (0% bucket), 0% fill
     expect(gradient).toBe('linear-gradient(to right, normal 0%, transparent 0%)');
+  });
+});
+
+describe('selectLatestContextWindow', () => {
+  const projection = {
+    task_id: 'turn-9',
+    computed_context_window: 50_000,
+    model: 'synthetic-model',
+    duration_ms: 1200,
+    normalized_sdk_response: {
+      tokenUsage: { inputTokens: 50_000, outputTokens: 1, totalTokens: 50_001 },
+      contextWindowLimit: 200_000,
+      contextUsageSnapshot: { totalTokens: 50_000, maxTokens: 180_000, percentage: 28 },
+    },
+  };
+  const loaded = { task_id: 'turn-9', raw_sdk_response: { modelUsage: {} } } as unknown as Task;
+
+  it('keeps the indicator after its turn left the loaded transcript', () => {
+    expect(selectLatestContextWindow(projection, [], 'claude-code')).toEqual({
+      used: 50_000,
+      limit: 180_000,
+      taskMetadata: {
+        model: 'synthetic-model',
+        duration_ms: 1200,
+        agentic_tool: 'claude-code',
+        raw_sdk_response: undefined,
+        normalized_sdk_response: projection.normalized_sdk_response,
+      },
+    });
+  });
+
+  it('offers the raw SDK breakdown while the turn is loaded', () => {
+    expect(
+      selectLatestContextWindow(projection, [loaded], 'claude-code')?.taskMetadata.raw_sdk_response
+    ).toBe(loaded.raw_sdk_response);
+  });
+
+  it('shows nothing without a projection or an agentic tool', () => {
+    expect(selectLatestContextWindow(undefined, [loaded], 'claude-code')).toBeNull();
+    expect(selectLatestContextWindow(projection, [loaded], undefined)).toBeNull();
   });
 });

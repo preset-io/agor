@@ -114,6 +114,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
         codexSandboxMode: userDefaults?.codexSandboxMode ?? parentCodex?.sandboxMode,
         codexApprovalPolicy: userDefaults?.codexApprovalPolicy ?? parentCodex?.approvalPolicy,
         codexNetworkAccess: userDefaults?.codexNetworkAccess ?? parentCodex?.networkAccess,
+        codexIncludePlugins: userDefaults?.codexIncludePlugins ?? parentCodex?.includePlugins,
       };
     },
     [currentUser, session]

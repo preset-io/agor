@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assertKnowledgeDirectorySupported, KnowledgeDirectory } from './directory';
 import { KnowledgeProgress } from './progress';
-import { exportKnowledge, type knowledgeTransferClient } from './transfer';
+import { exportKnowledge } from './repository-export';
+import type { knowledgeTransferClient } from './transfer';
 
 describe('assertKnowledgeDirectorySupported', () => {
   it('accepts POSIX platforms and refuses Windows with a clear reason', () => {

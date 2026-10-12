@@ -1,7 +1,7 @@
 import type { AgorClient, Branch } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
-import { Button, Descriptions, Form, Input, Popconfirm, Space, Typography } from 'antd';
+import { Button, Descriptions, Form, Input, Popconfirm, Space, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { useConnectionDisabled } from '../../../contexts/ConnectionContext';
 import { useThemedMessage } from '../../../utils/message';
@@ -26,6 +26,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
   client,
   onRetired,
 }) => {
+  const { token } = theme.useToken();
   const [retiring, setRetiring] = useState(false);
   const disabled = useConnectionDisabled();
   const { showSuccess, showError } = useThemedMessage();
@@ -50,12 +51,12 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         <Space>
           {config.emoji ? (
-            <span style={{ fontSize: 20 }}>{config.emoji}</span>
+            <span style={{ fontSize: token.fontSizeHeading3, lineHeight: 1 }}>{config.emoji}</span>
           ) : (
-            <RobotOutlined style={{ fontSize: 20 }} />
+            <RobotOutlined style={{ fontSize: token.fontSizeHeading3 }} />
           )}
-          <Typography.Text strong style={{ fontSize: 16 }}>
-            Teammate Configuration
+          <Typography.Text strong style={{ fontSize: token.fontSizeLG }}>
+            Teammate configuration
           </Typography.Text>
         </Space>
 

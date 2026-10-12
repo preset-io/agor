@@ -60,7 +60,63 @@ requires client approval that Agor cannot complete. A listed entry is not a
 guarantee that every provider account can connect; follow the readiness guidance
 and provider requirements shown before connecting.
 
+## Deleting a saved server
+
+In **My Servers → Settings → Remove server**, the confirmation shows the total
+number of sessions still attached, including disabled attachments. Choose
+**Delete and detach** to remove the server, its saved connection, and those
+attachments together (or **Delete** when none are attached). Cancel changes nothing. If the attachment count changes
+before deletion, review the refreshed count and confirm again. Counts do not
+reveal names or details of sessions you cannot view.
+
+Future turns no longer resolve the deleted server. The existing runtime
+revocation mechanism interrupts mediated tool access where enabled; deletion
+cannot recall credentials already handed to a direct, unmediated running agent.
+Saved branch/user defaults remain unchanged, as described above.
+
+The session picker offers only shared servers and private servers usable by
+both you and the session owner. Administrative inventory remains separate.
+Already attached servers retain their names when those details are readable,
+including while choices refresh or when you cannot change the attachments.
+Displaying an attached name does not make that server available to attach again.
+
 ## Authentication
+
+### Private and shared installations
+
+Catalog defaults to **Private**, including for administrators. Administrators and
+members allowed to create shared servers can explicitly choose **Shared**. This
+shares the configuration, not the installer's account: Catalog supports shared
+open servers and per-user OAuth only. Each user signs in separately. Bearer/API
+keys and other embedded credentials remain private. The live endpoint's auth
+requirement, not just the catalog label, is checked before installation.
+
+Both choices are **session-scoped**: a shared install is available to attach,
+not automatically enabled in every session. Settings' ownership choice is
+independent of scope. **Settings → MCP Servers** also defaults new configurations
+to **Private**. Private + Global applies only to the owner's sessions, not every
+user's sessions. This UI default does not change historical admin CLI/MCP/API
+creation defaults when ownership is omitted. Manual shared configurations can share embedded credentials;
+only per-user OAuth or user environment references isolate user credentials.
+Existing ownership cannot be changed by editing a server.
+
+Catalog reconnect selects the requested ownership identity; Private never falls
+back to a shared row or someone else's private configuration. A matching shared
+install is reused without changing configuration. Disabled or changed shared
+installs require an explicit Settings action rather than automatic reconciliation.
+Cancelling sign-in or a failed Connect response does not remove a shared install:
+another user may already have adopted it. Remove it explicitly in My Servers or
+Settings. Private installs retain owner-specific reconciliation and credential
+rotation fencing. OAuth reconnect always acts on the signing-in user's grant;
+it never copies another user's grant or falls back to a shared OAuth credential.
+
+Members restricted to existing servers (or to creating private servers) can
+explicitly choose **Use existing shared** when Catalog finds an eligible shared
+installation. This does not publish, repair, or re-enable configuration; members
+can sign in with their own per-user OAuth grant. Private remains a separate
+choice and never silently selects shared configuration. Members restricted to
+existing servers can also reuse their matching private installations. Advisory readiness
+does not grant permission to create or repair a server; the daemon checks again.
 
 Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. An entry may be:
 
@@ -169,13 +225,13 @@ Upgrading Agor removes obsolete remote-auth, URL, and header fields from existin
 
 ## Safe edits, storage, and removal
 
-Bearer tokens and other MCP auth/header/env secrets are stored in MCP server JSON according to the deployment's storage security. Catalog installs are private to their owner, access controls restrict the row, and API, realtime, and UI projections redact secrets. Redaction is an output-boundary control, not application-level encryption; encryption at rest applies only when the deployment's documented database or storage configuration guarantees it. OAuth access and refresh tokens use Agor's durable per-user OAuth token store; PostgreSQL deployments envelope-encrypt those token fields. Token and client-secret values are not returned by status endpoints or written to operational logs.
+Bearer tokens and other MCP auth/header/env secrets are stored in MCP server JSON according to the deployment's storage security. Catalog installs carrying bearer credentials are private to their owner, access controls restrict the row, and API, realtime, and UI projections redact secrets. Redaction is an output-boundary control, not application-level encryption; encryption at rest applies only when the deployment's documented database or storage configuration guarantees it. OAuth access and refresh tokens use Agor's durable per-user OAuth token store; PostgreSQL deployments envelope-encrypt those token fields. Token and client-secret values are not returned by status endpoints or written to operational logs.
 
 **Test Authentication** on a new form checks authentication setup; **Test Connection** lists capabilities. Saved servers and new OAuth servers use **Save & Test Connection**: it saves the current form first, then probes only that durable server configuration. This preserves saved secrets and binds OAuth grants to the correct endpoint. A failed save prevents the probe. After OAuth creates a server, **Save** saves subsequent edits rather than simply dismissing the form. Results are cleared when the draft, server, or authenticated caller changes.
 
 Editing authentication is patch-safe: leaving a saved secret blank preserves it, while **Clear saved secret** explicitly removes it. Other omitted authentication fields are preserved; switching authentication type replaces the old mode. The edit form uses a configuration revision to detect another device's concurrent save. If that happens, **Reload latest** fetches the authoritative row and deliberately discards the local unsaved form before another save. OAuth shared/per-user mode changes remove credentials and grants that belong to the previous subject mode.
 
-Connecting an entry again reuses the same owner-specific install; starting a session is a separate, explicit action. Supplying a new bearer token verifies and atomically rotates that stored install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token.
+Connecting an entry again reuses the same installation for the selected ownership; starting a session is a separate, explicit action. Supplying a new bearer token verifies and atomically rotates that stored install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token.
 
 ## Connection restrictions and recovery
 
@@ -262,3 +318,45 @@ before upgrading; do not run old and new daemons against the upgraded schema.
 To propose or maintain catalog entries, see
 [Contributing to the MCP catalog](/guide/development#contributing-to-the-mcp-catalog).
 Hiding an entry prevents new catalog installs, but does not revoke existing connections.
+
+## Customer-owned OAuth apps
+
+Some Catalog entries offer **Use your own OAuth app**: you register an OAuth app
+with the provider and enter its client ID (and, for confidential apps, client
+secret) in the secure Catalog form. Like other Catalog apps, the install can be
+**Private** or **Shared**: a shared install's app credentials are entered once by
+whoever creates it, and other members reuse them without seeing the secret. Each
+user then consents to their own provider grant (or an admin connects one **Shared**
+grant), and sharing an app does not share users' tokens. On PostgreSQL, these app
+secrets are encrypted with `AGOR_MASTER_SECRET`; other servers' client secrets are
+stored as before. All are redacted on reads. Never paste a client
+secret into agent chat; MCP configuration tools accept only a
+`{{ user.env.NAME }}` reference for it. Rotating app credentials invalidates
+pending attempts and stored grants, so affected users must reconnect.
+
+### Asana recipe
+
+1. In Asana's developer console, create an **MCP app** (not a standard API app).
+2. Set its redirect URL to the exact callback the Agor Catalog form shows, and
+   select the permitted workspaces under distribution.
+3. Enter the client ID and secret in the Catalog form, then connect.
+
+Catalog uses `https://mcp.asana.com/v2/mcp` with configured-client OAuth and no
+DCR. See [Asana's MCP app guide](https://developers.asana.com/docs/integrating-with-asanas-mcp-server).
+
+### Stable hosted callback
+
+By default the redirect URI is this daemon's own OAuth callback. An operator can
+instead route customer-owned app callbacks through a stable Agor Cloud origin. All
+other OAuth servers (including DCR and pre-registered ones) keep the daemon's own
+callback:
+
+```yaml
+mcp_oauth_relay:
+  callback_origin: https://<trusted-cloud-console-origin>
+```
+
+The redirect URI the UI then shows is
+`<callback_origin>/api/mcp-oauth/relay/callback/<sha256-hex-of-exact-issuer>`.
+Register it exactly as shown. The relay requires PostgreSQL, plus the Cloud launch
+trust and Cell credentials that Agor Cloud provisions.

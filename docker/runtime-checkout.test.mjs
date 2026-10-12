@@ -72,6 +72,16 @@ test('cold clone then warm fetch/reset retains unrelated cached state', async ()
       prepareCheckout({ ...options, expectedFingerprint: 'stale-image' }),
       /dependencies differ/
     );
+    let fingerprintRoot;
+    await prepareCheckout({
+      ...options,
+      expectedFingerprint: 'docs-dependencies',
+      fingerprint: async (path) => {
+        fingerprintRoot = path;
+        return 'docs-dependencies';
+      },
+    });
+    assert.equal(fingerprintRoot, join(state, 'checkout'));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

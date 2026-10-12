@@ -362,7 +362,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
           type="info"
           showIcon
           title="Provider availability is private to the session owner"
-          description="Execution uses the immutable session owner's OpenCode credentials. Their availability is not shown to collaborators; keep the stored exact pair or enter exact IDs manually."
+          description="The owner's provider availability is not shown to collaborators. Keep the stored exact pair or enter exact IDs manually."
         />
       )}
 

@@ -54,4 +54,43 @@ describe('BoardTeammatePanel teammate tab', () => {
       'true'
     );
   });
+
+  it('shows a loading skeleton, not an empty or inaccessible state, until the board is ready', () => {
+    const onTabChange = vi.fn();
+    const { rerender } = render(
+      <AntApp>
+        <BoardTeammatePanel
+          board={{ ...board, primary_teammate_id: 'branch-1' } as Board}
+          onTabChange={onTabChange}
+          primaryTeammateInaccessible={false}
+          boardReady={false}
+          onSessionClick={vi.fn()}
+          client={null}
+        />
+      </AntApp>
+    );
+
+    expect(screen.getByTestId('board-partition-skeleton')).toBeInTheDocument();
+    expect(screen.queryByText('Teammate unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByText(/does not have a primary teammate/)).not.toBeInTheDocument();
+    expect(onTabChange).not.toHaveBeenCalledWith('all-sessions');
+
+    rerender(
+      <AntApp>
+        <BoardTeammatePanel
+          board={{ ...board, primary_teammate_id: 'branch-1' } as Board}
+          onTabChange={onTabChange}
+          primaryTeammateBranch={primaryTeammateBranch}
+          primaryTeammateRepo={primaryTeammateRepo}
+          primaryTeammateInaccessible={false}
+          boardReady
+          onSessionClick={vi.fn()}
+          client={null}
+        />
+      </AntApp>
+    );
+    expect(screen.queryByTestId('board-partition-skeleton')).not.toBeInTheDocument();
+    expect(screen.getByTestId('teammate-session-sections')).toBeInTheDocument();
+    expect(onTabChange).not.toHaveBeenCalledWith('all-sessions');
+  });
 });

@@ -5,6 +5,8 @@ import type { ButtonHTMLAttributes, MouseEventHandler, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
+import { boardScopeKey } from '../../store/scopeMerge';
+import { boardCoverage } from '../../test/userScopeCoverage';
 import SessionCanvas from './SessionCanvas';
 
 const permissionState = vi.hoisted(() => ({ canEdit: true }));
@@ -64,7 +66,12 @@ beforeEach(() => {
   reactFlowProps = null;
   onNodesChangeInternalSpy.mockClear();
   setNodesUnsafeSpy.mockClear();
-  agorStore.setState({ userById: new Map(), commentById: new Map() });
+  agorStore.setState({
+    userById: new Map(),
+    commentById: new Map(),
+    // Structural edits need the board's partition loaded.
+    coverage: new Map([[boardScopeKey('board-1'), boardCoverage()]]),
+  });
 });
 
 describe('SessionCanvas zoom shortcuts', () => {

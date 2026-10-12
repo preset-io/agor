@@ -15,27 +15,15 @@ import type {
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import {
-  AppstoreOutlined,
-  BranchesOutlined,
-  CloseOutlined,
-  ClusterOutlined,
-  ControlOutlined,
-  CreditCardOutlined,
-  ExperimentOutlined,
-  FolderOutlined,
-  InfoCircleOutlined,
-  MessageOutlined,
-  RobotOutlined,
-  TeamOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons';
+import { ArrowLeftOutlined, CloseOutlined, RightOutlined, UserOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Grid, Layout, Menu, Modal, Select, Tag, theme } from 'antd';
+import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Tag, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuthenticatedAuthorityScope } from '@/hooks/useAuthorityOperationGuard';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useBranchSessions } from '../../hooks/useBranchSessions';
+import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -43,15 +31,14 @@ import {
   selectBoardById,
   selectBoardObjectById,
   selectBranchById,
-  selectCardById,
   selectCardTypeById,
   selectGatewayChannelById,
   selectMcpServerById,
   selectRepoById,
-  selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
@@ -70,6 +57,7 @@ import {
   SettingsDrillProvider,
   useDirtyLeaveGuard,
 } from './SettingsDrill';
+import { buildSettingsNav, settingsSectionMobileLabel } from './settingsNavigation';
 import { TeammatesTable } from './TeammatesTable';
 import { UsersTable } from './UsersTable';
 import { WorkspacePreferencesTab } from './WorkspacePreferencesTab';
@@ -95,7 +83,10 @@ export interface SettingsModalProps {
   ) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>, shouldApply?: () => boolean) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean, shouldApply?: () => boolean) => void;
-  onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDeleteBranch?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
   onCreateBranch?: (
@@ -183,10 +174,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const boardObjectById = useAgorStore(selectBoardObjectById);
   const repoById = useAgorStore(selectRepoById);
   const branchById = useAgorStore(selectBranchById);
-  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const userById = useAgorStore(selectUserById);
   const mcpServerById = useAgorStore(selectMcpServerById);
-  const cardById = useAgorStore(selectCardById);
   const cardTypeById = useAgorStore(selectCardTypeById);
   const gatewayChannelById = useAgorStore(selectGatewayChannelById);
   const artifactById = useAgorStore(selectArtifactById);
@@ -197,11 +186,12 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   );
 
   const { token } = theme.useToken();
-  // Responsive shell: below AntD's `md` breakpoint the persistent Sider nav is
-  // replaced by a full-width Select, and the Modal fills the viewport — mirrors
-  // the compact pattern in UserSettingsModal so both Settings surfaces match.
+  // Responsive shell: below AntD's `md` breakpoint the Modal + Sider become a
+  // full-screen Drawer with a grouped section index that drills into the same
+  // section content (and the same in-place drill-in editors).
   const screens = Grid.useBreakpoint();
   const compact = !screens.md;
+  const reducedMotion = usePrefersReducedMotion();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
   // Drill-in navigation: the Content pane swaps between a section's list view
@@ -227,13 +217,26 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   }, [setController]);
 
   // Branches and Teammates edit the same entity (a branch) via the shared
-  // BranchModal, now rendered in-place (embedded) as the section's drill-in
-  // instead of a stacked modal. The record is resolved live from the store so
-  // it stays fresh while open.
+  // BranchModal, rendered in-place (embedded) as the section's drill-in instead
+  // of a stacked modal. The store holds only the loaded scopes' branches, so the
+  // clicked row is snapshotted; the live store copy wins when it is loaded.
+  const [branchSnapshot, setBranchSnapshot] = useState<Branch | null>(null);
   const branchDrill =
-    drill?.mode === 'edit' && (drill.kind === 'branches' || drill.kind === 'teammates')
-      ? (branchById.get(drill.recordId ?? '') ?? null)
+    drill?.mode === 'edit' &&
+    (drill.kind === 'branches' || drill.kind === 'teammates') &&
+    drill.recordId
+      ? (branchById.get(drill.recordId) ??
+        (branchSnapshot?.branch_id === drill.recordId ? branchSnapshot : null))
       : null;
+  const openBranchDrill = useCallback(
+    (kind: 'branches' | 'teammates', branch: Branch) => {
+      setBranchSnapshot(branch);
+      openDrill({ kind, mode: 'edit', recordId: branch.branch_id });
+    },
+    [openDrill]
+  );
+  // The store holds only the loaded scopes' sessions: each opening reads the branch's.
+  const branchSessions = useBranchSessions(client, branchDrill?.branch_id ?? null);
 
   const handleArchiveOrDeleteBranchFromDrill = useCallback(
     async (branchId: string, options: BranchArchiveOrDeleteOptions) => {
@@ -341,134 +344,102 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     [isAdmin, canListUsers]
   );
 
-  // Menu items for left sidebar navigation. People leads (access first), then
-  // Resources, then Integrations, then Admin.
-
-  const menuItems: MenuProps['items'] = useMemo(
-    () => [
-      // People leads: who has access is the first thing an admin checks. Users
-      // is visible to any member (the daemon serves the roster to them); Groups
-      // is admin-only.
-      ...(canListUsers || isAdmin
-        ? [
-            {
-              key: 'people',
-              label: 'People',
-              type: 'group' as const,
-              children: [
-                ...(canListUsers ? [{ key: 'users', label: 'Users', icon: <TeamOutlined /> }] : []),
-                ...(isAdmin ? [{ key: 'groups', label: 'Groups', icon: <ClusterOutlined /> }] : []),
-              ],
-            },
-          ]
-        : []),
-      {
-        key: 'resources',
-        label: 'Resources',
-        type: 'group' as const,
-        children: [
-          { key: 'boards', label: 'Boards', icon: <AppstoreOutlined /> },
-          { key: 'repos', label: 'Repositories', icon: <FolderOutlined /> },
-          { key: 'branches', label: 'Branches', icon: <BranchesOutlined /> },
-          { key: 'teammates', label: 'Teammates', icon: <RobotOutlined /> },
-          { key: 'artifacts', label: 'Artifacts', icon: <ExperimentOutlined /> },
-          ...(isAdmin
-            ? [{ key: 'workspace-preferences', label: 'Preferences', icon: <ControlOutlined /> }]
-            : []),
-        ],
-      },
-      {
-        key: 'cards-group',
-        label: (
-          <span>
-            Cards{' '}
-            <Tag
-              color="warning"
-              style={{ marginInlineStart: token.marginXXS, fontSize: token.fontSizeSM }}
-            >
-              Beta
-            </Tag>
-          </span>
-        ),
-        type: 'group' as const,
-        children: [
-          { key: 'card-types', label: 'Card Types', icon: <CreditCardOutlined /> },
-          { key: 'cards', label: 'All Cards', icon: <AppstoreOutlined /> },
-        ],
-      },
-      // Integrations (admin-only): Agentic Tools, the MCP Marketplace pointer,
-      // and Gateway Channels. MCP servers are configured in the Marketplace modal
-      // now, so this points out to it rather than leaving a dead end where the
-      // MCP Servers table used to be.
-      ...(isAdmin
-        ? [
-            {
-              key: 'integrations',
-              label: (
-                <span>
-                  Integrations{' '}
-                  <Tag style={{ marginInlineStart: token.marginXXS, fontSize: token.fontSizeSM }}>
-                    Admin
-                  </Tag>
-                </span>
-              ),
-              type: 'group' as const,
-              children: [
-                ...(canSeeSection('agentic-tools')
-                  ? [
-                      {
-                        key: 'agentic-tools',
-                        label: 'Agentic Tools',
-                        icon: <ThunderboltOutlined />,
-                      },
-                    ]
-                  : []),
-                // The MCP Marketplace is reachable only from the global navbar,
-                // never from Settings (no nav row or signpost here).
-                ...(canSeeSection('gateway')
-                  ? [{ key: 'gateway', label: 'Gateway Channels', icon: <MessageOutlined /> }]
-                  : []),
-              ],
-            },
-          ]
-        : []),
-      {
-        key: 'system',
-        label: 'System',
-        type: 'group' as const,
-        children: [{ key: 'about', label: 'About', icon: <InfoCircleOutlined /> }],
-      },
-    ],
-    [canSeeSection, canListUsers, isAdmin, token]
+  // One nav model feeds the desktop sidebar and the mobile index, so they cannot drift apart
+  const settingsNav = useMemo(
+    () =>
+      buildSettingsNav({
+        isAdmin,
+        canSeeSection,
+        counts: {
+          boards: boardById.size,
+          repos: repoById.size,
+          // No branch or card count: the store holds only the loaded scopes' rows.
+          artifacts: artifactById.size,
+          gateway: gatewayChannelById.size,
+          users: userById.size,
+        },
+      }),
+    [
+      canSeeSection,
+      isAdmin,
+      boardById.size,
+      repoById.size,
+      artifactById.size,
+      gatewayChannelById.size,
+      userById.size,
+    ]
   );
 
-  // Flat "Group · Section" options for the compact nav Select. Mirrors the
-  // grouped menuItems gating above (plain strings so the Select is searchable).
-  const mobileSectionOptions = useMemo(() => {
-    const opts: { value: string; label: string }[] = [];
-    if (canListUsers) opts.push({ value: 'users', label: 'People · Users' });
-    if (isAdmin) opts.push({ value: 'groups', label: 'People · Groups' });
-    opts.push({ value: 'boards', label: 'Resources · Boards' });
-    opts.push({ value: 'repos', label: 'Resources · Repositories' });
-    opts.push({ value: 'branches', label: 'Resources · Branches' });
-    opts.push({ value: 'teammates', label: 'Resources · Teammates' });
-    opts.push({ value: 'artifacts', label: 'Resources · Artifacts' });
-    if (isAdmin) {
-      opts.push({ value: 'workspace-preferences', label: 'Resources · Preferences' });
+  // Menu items for left sidebar navigation. People leads (access first), then
+  // Resources, Cards, Integrations and System.
+  const menuItems: MenuProps['items'] = useMemo(
+    () =>
+      settingsNav.map((group) => ({
+        key: group.key,
+        label: group.badge ? (
+          <span>
+            {group.title}{' '}
+            <Tag
+              color={group.badge === 'Beta' ? 'warning' : undefined}
+              style={{ marginInlineStart: token.marginXXS, fontSize: token.fontSizeSM }}
+            >
+              {group.badge}
+            </Tag>
+          </span>
+        ) : (
+          group.title
+        ),
+        type: 'group' as const,
+        children: group.rows.map((row) => ({
+          key: row.section,
+          icon: row.icon,
+          label: row.label,
+        })),
+      })),
+    [settingsNav, token]
+  );
+
+  // Mobile drill state: null = the grouped index. A deep-link opener (e.g. the
+  // "Create teammate" flow) seeds straight into its section; the generic mobile
+  // entry ('boards', from the More sheet) opens on the index. Desktop ignores this.
+  const [mobileSection, setMobileSection] = useState<SettingsSection | null>(() =>
+    activeTab &&
+    activeTab !== 'boards' &&
+    (SETTINGS_SECTIONS as readonly string[]).includes(activeTab)
+      ? (activeTab as SettingsSection)
+      : null
+  );
+
+  const drillIntoSection = useCallback(
+    (section: SettingsSection) => {
+      setMobileSection(section);
+      if (section !== activeTab) onTabChange?.(section);
+    },
+    [activeTab, onTabChange]
+  );
+
+  // Mobile header Back: leaves an open drill-in (guarded) and the section
+  // together, returning to the index.
+  const handleMobileBack = useCallback(() => {
+    const back = () => {
+      closeDrill();
+      setMobileSection(null);
+    };
+    if (drill) {
+      void confirmLeaveIfDirty().then((ok) => ok && back());
+    } else {
+      back();
     }
-    opts.push({ value: 'card-types', label: 'Cards · Card Types' });
-    opts.push({ value: 'cards', label: 'Cards · All Cards' });
-    if (isAdmin) {
-      if (canSeeSection('agentic-tools')) {
-        opts.push({ value: 'agentic-tools', label: 'Integrations · Agentic Tools' });
-      }
-      if (canSeeSection('gateway')) {
-        opts.push({ value: 'gateway', label: 'Integrations · Gateway Channels' });
-      }
-    }
-    opts.push({ value: 'about', label: 'System · About' });
-    return opts;
-  }, [canListUsers, isAdmin, canSeeSection]);
+  }, [closeDrill, confirmLeaveIfDirty, drill]);
+
+  // Shared iOS-style grouped-list card wrapper for the mobile index.
+  const settingsGroupCardStyle: React.CSSProperties = {
+    marginTop: token.marginXS,
+    border: `1px solid ${token.colorBorderSecondary}`,
+    borderRadius: token.borderRadiusLG,
+    background: token.colorBgContainer,
+    overflow: 'hidden',
+  };
 
   // The shared BranchModal, rendered in-place as the drill-in for both the
   // Branches and Teammates sections (embedded → no stacked modal).
@@ -479,7 +450,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       onClose={closeDrill}
       branch={branchDrill}
       repo={repoById.get(branchDrill.repo_id) ?? null}
-      sessions={sessionsByBranch.get(branchDrill.branch_id) ?? []}
+      sessions={branchSessions}
       boardObjects={boardObjects}
       client={client}
       currentUser={currentUser}
@@ -505,7 +476,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           <BoardsTable
             client={client}
             boardById={boardById}
-            sessionsByBranch={sessionsByBranch}
             branchById={branchById}
             currentUser={currentUser}
             onCreate={onCreateBoard}
@@ -520,6 +490,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           <ReposTable
             repoById={repoById}
             canConfigureCleanup={isAdmin}
+            identityKey={settingsAuthority.identityKey}
+            operationScope={settingsAuthority.operationScope}
             onCreate={onCreateRepo}
             onCreateLocal={onCreateLocalRepo}
             onUpdate={onUpdateRepo}
@@ -530,17 +502,15 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         return (
           branchEditor ?? (
             <BranchesTable
+              currentUser={currentUser}
               client={client}
               branchById={branchById}
               repoById={repoById}
               boardById={boardById}
-              sessionsByBranch={sessionsByBranch}
               onArchiveOrDelete={onArchiveOrDeleteBranch}
               onUnarchive={onUnarchiveBranch}
               onCreate={onCreateBranch}
-              onRowClick={(branch) =>
-                openDrill({ kind: 'branches', mode: 'edit', recordId: branch.branch_id })
-              }
+              onRowClick={(branch) => openBranchDrill('branches', branch)}
               onStartEnvironment={onStartEnvironment}
               onStopEnvironment={onStopEnvironment}
               onClose={onClose}
@@ -555,12 +525,9 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
               branchById={branchById}
               repoById={repoById}
               boardById={boardById}
-              sessionsByBranch={sessionsByBranch}
               userById={userById}
               onArchiveOrDelete={onArchiveOrDeleteBranch}
-              onRowClick={(branch) =>
-                openDrill({ kind: 'teammates', mode: 'edit', recordId: branch.branch_id })
-              }
+              onRowClick={(branch) => openBranchDrill('teammates', branch)}
               onCreateTeammate={onCreateTeammate}
               currentUser={currentUser}
               client={client}
@@ -574,16 +541,18 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         return (
           <AllCardsPanel
             client={client}
-            cardById={cardById}
             cardTypeById={cardTypeById}
             boardById={boardById}
-            boardObjects={boardObjects}
+            // The resolved user's role: the panel's dataset reads (with or
+            // without placements) start once, at open.
+            canReadPlacements={hasMinimumRole(currentUser?.role, ROLES.MEMBER)}
             onClose={onClose}
           />
         );
       case 'artifacts':
         return (
           <ArtifactsTable
+            client={client}
             artifactById={artifactById}
             branchById={branchById}
             boardById={boardById}
@@ -645,6 +614,215 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const drillProvider = (children: React.ReactNode) => (
+    <SettingsDrillProvider
+      drill={drill}
+      openDrill={openDrill}
+      closeDrill={closeDrill}
+      confirmLeaveIfDirty={confirmLeaveIfDirty}
+      controller={controller}
+      setController={setController}
+    >
+      {children}
+    </SettingsDrillProvider>
+  );
+
+  if (compact) {
+    return (
+      <Drawer
+        title={null}
+        aria-label="Workspace settings"
+        closable={false}
+        placement="bottom"
+        // Full-bleed so the settings surface covers the app header instead of
+        // leaving a stale title peeking above it.
+        height="100dvh"
+        {...reducedMotionSurface(reducedMotion)}
+        open={open}
+        onClose={handleModalClose}
+        footer={
+          drillFooter ? (
+            <Flex justify="flex-end" gap={token.marginXS}>
+              {drillFooter}
+            </Flex>
+          ) : null
+        }
+        styles={{ body: { padding: 0, overflow: 'hidden' } }}
+      >
+        {drillProvider(
+          <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+            <Flex
+              align="center"
+              gap={token.marginXS}
+              style={{
+                padding: `${token.paddingSM}px ${token.paddingSM}px`,
+                borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                background: token.colorBgElevated,
+                flex: '0 0 auto',
+              }}
+            >
+              {mobileSection ? (
+                <Button
+                  type="text"
+                  icon={<ArrowLeftOutlined />}
+                  aria-label="Back"
+                  onClick={handleMobileBack}
+                  style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
+                />
+              ) : (
+                <div style={{ width: MOBILE_TOUCH_TARGET }} />
+              )}
+              <Typography.Title
+                level={5}
+                ellipsis
+                style={{ margin: 0, flex: 1, minWidth: 0, textAlign: 'center' }}
+              >
+                {mobileSection ? settingsSectionMobileLabel(mobileSection) : 'Workspace Settings'}
+              </Typography.Title>
+              <Button
+                type="text"
+                icon={<CloseOutlined />}
+                aria-label="Close settings"
+                onClick={handleModalClose}
+                style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
+              />
+            </Flex>
+            <Content
+              style={{
+                padding: mobileSection
+                  ? `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`
+                  : 0,
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                minWidth: 0,
+                width: '100%',
+                maxWidth: '100%',
+                boxSizing: 'border-box',
+              }}
+            >
+              {mobileSection ? (
+                <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>
+                  {renderContent()}
+                </div>
+              ) : (
+                <Flex
+                  vertical
+                  gap={token.marginLG}
+                  style={{
+                    padding: `${token.paddingMD}px ${token.padding}px ${token.paddingXL}px`,
+                  }}
+                >
+                  {/* Account identity summary (read-only). */}
+                  {currentUser && (
+                    <div>
+                      <Typography.Text
+                        type="secondary"
+                        style={{
+                          fontSize: token.fontSizeSM,
+                          paddingInlineStart: token.paddingXS,
+                          textTransform: 'uppercase',
+                          letterSpacing: 0.4,
+                        }}
+                      >
+                        Account
+                      </Typography.Text>
+                      <div style={settingsGroupCardStyle}>
+                        <Flex align="center" gap={token.margin} style={{ padding: token.padding }}>
+                          <UserOutlined
+                            style={{ fontSize: token.fontSizeLG, color: token.colorTextSecondary }}
+                          />
+                          <Flex vertical style={{ flex: 1, minWidth: 0 }}>
+                            <Typography.Text strong ellipsis>
+                              {currentUser.name || currentUser.email || 'You'}
+                            </Typography.Text>
+                            <Typography.Text
+                              type="secondary"
+                              ellipsis
+                              style={{ fontSize: token.fontSizeSM }}
+                            >
+                              {[currentUser.email, currentUser.role].filter(Boolean).join(' · ')}
+                            </Typography.Text>
+                          </Flex>
+                        </Flex>
+                      </div>
+                    </div>
+                  )}
+
+                  {settingsNav.map((group) => (
+                    <div key={group.key}>
+                      <Typography.Text
+                        type="secondary"
+                        style={{
+                          fontSize: token.fontSizeSM,
+                          paddingInlineStart: token.paddingXS,
+                          textTransform: 'uppercase',
+                          letterSpacing: 0.4,
+                        }}
+                      >
+                        {group.mobileTitle ?? group.title}
+                        {group.badge ? ` · ${group.badge}` : ''}
+                      </Typography.Text>
+                      <div style={settingsGroupCardStyle}>
+                        {group.rows.map((row, index) => (
+                          <button
+                            key={row.section}
+                            type="button"
+                            aria-label={row.mobileLabel ?? row.label}
+                            onClick={() => drillIntoSection(row.section)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: token.margin,
+                              width: '100%',
+                              minHeight: MOBILE_TOUCH_TARGET,
+                              padding: `${token.paddingXS}px ${token.padding}px`,
+                              cursor: 'pointer',
+                              background: 'none',
+                              border: 'none',
+                              borderTop:
+                                index === 0 ? undefined : `1px solid ${token.colorBorderSecondary}`,
+                              font: 'inherit',
+                              color: 'inherit',
+                              textAlign: 'left',
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: token.fontSizeLG,
+                                color: token.colorTextSecondary,
+                              }}
+                            >
+                              {row.icon}
+                            </span>
+                            <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }}>
+                              {row.mobileLabel ?? row.label}
+                            </Typography.Text>
+                            {row.count !== undefined && (
+                              <Typography.Text
+                                type="secondary"
+                                style={{ fontSize: token.fontSizeSM }}
+                              >
+                                {row.count}
+                              </Typography.Text>
+                            )}
+                            <RightOutlined
+                              aria-hidden
+                              style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM }}
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </Flex>
+              )}
+            </Content>
+          </Layout>
+        )}
+      </Drawer>
+    );
+  }
+
   return (
     <Modal
       // The header bar is hidden (styles.header) but the dialog still needs an
@@ -654,8 +832,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       onCancel={handleModalClose}
       footer={drillFooter}
       closable
-      width={compact ? 'calc(100vw - 16px)' : 1200}
-      style={{ top: compact ? 8 : 40 }}
+      width={1200}
+      style={{ top: 40 }}
       styles={{
         wrapper: {
           padding: 0,
@@ -671,109 +849,56 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         },
         body: {
           padding: 0,
-          height: compact ? 'calc(100dvh - 96px)' : 'calc(100vh - 200px)',
-          minHeight: compact ? 0 : 500,
-          maxHeight: compact ? 'none' : 800,
+          height: 'calc(100vh - 200px)',
+          minHeight: 500,
+          maxHeight: 800,
         },
         footer: {
           margin: 0,
-          padding: compact ? '12px 16px' : '12px 24px',
+          padding: '12px 24px',
           background: token.colorBgContainer,
           borderTop: `1px solid ${token.colorBorderSecondary}`,
         },
       }}
       closeIcon={<CloseOutlined />}
     >
-      <SettingsDrillProvider
-        drill={drill}
-        openDrill={openDrill}
-        closeDrill={closeDrill}
-        confirmLeaveIfDirty={confirmLeaveIfDirty}
-        controller={controller}
-        setController={setController}
-      >
-        <Layout
-          style={{
-            height: '100%',
-            background: token.colorBgContainer,
-            flexDirection: compact ? 'column' : 'row',
-          }}
-        >
-          {compact ? (
-            // Compact: the persistent Sider is replaced by a full-width section
-            // Select in a top bar, so the nav doesn't eat horizontal space.
-            <div
-              style={{
-                flex: '0 0 auto',
-                padding: `${token.paddingSM}px ${token.paddingMD}px`,
-                background: token.colorBgElevated,
-                borderBottom: `1px solid ${token.colorBorderSecondary}`,
-              }}
-            >
-              <div
-                style={{
-                  fontWeight: 600,
-                  fontSize: 16,
-                  color: token.colorText,
-                  marginBottom: token.marginSM,
-                }}
-              >
-                Workspace Settings
-              </div>
-              <Select
-                aria-label="Settings section"
-                showSearch
-                optionFilterProp="label"
-                value={activeTab}
-                options={mobileSectionOptions}
-                onChange={(key) => handleNavClick(key)}
-                style={{ width: '100%' }}
-                size="large"
-              />
-            </div>
-          ) : (
-            <Sider
-              width={240}
-              style={{
-                background: token.colorBgElevated,
-                borderRight: `1px solid ${token.colorBorderSecondary}`,
-                overflow: 'auto',
-                padding: '20px 0',
-              }}
-            >
-              {/* Text-only label: at the 240px Sider width the icon + text wrapped
-                  to two lines, so the leading icon was dropped. This header is the
-                  only chrome that never scrolls away inside a drill-in, so the
-                  distinct wording — "Workspace Settings" vs "User Settings" — is
-                  what now marks the surface at a glance. Mirrored in UserSettingsModal. */}
-              <div style={{ padding: '0 24px 16px' }}>
-                <span style={{ fontWeight: 600, fontSize: 18, color: token.colorText }}>
-                  Workspace Settings
-                </span>
-              </div>
-              <Menu
-                mode="inline"
-                selectedKeys={[activeTab]}
-                onClick={({ key }) => handleNavClick(key)}
-                items={menuItems}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                }}
-              />
-            </Sider>
-          )}
-          <Content
+      {drillProvider(
+        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+          <Sider
+            width={240}
             style={{
-              padding: compact ? '20px 16px 24px' : '40px 32px 32px',
+              background: token.colorBgElevated,
+              borderRight: `1px solid ${token.colorBorderSecondary}`,
               overflow: 'auto',
-              minWidth: 0,
+              padding: '20px 0',
             }}
           >
+            {/* Text-only label: at the 240px Sider width the icon + text wrapped
+                to two lines, so the leading icon was dropped. This header is the
+                only chrome that never scrolls away inside a drill-in, so the
+                distinct wording ("Workspace Settings" vs "User Settings") is
+                what now marks the surface at a glance. Mirrored in UserSettingsModal. */}
+            <div style={{ padding: '0 24px 16px' }}>
+              <span style={{ fontWeight: 600, fontSize: 18, color: token.colorText }}>
+                Workspace Settings
+              </span>
+            </div>
+            <Menu
+              mode="inline"
+              selectedKeys={[activeTab]}
+              onClick={({ key }) => handleNavClick(key)}
+              items={menuItems}
+              style={{
+                border: 'none',
+                background: 'transparent',
+              }}
+            />
+          </Sider>
+          <Content style={{ padding: '40px 32px 32px', overflow: 'auto', minWidth: 0 }}>
             {renderContent()}
           </Content>
         </Layout>
-      </SettingsDrillProvider>
+      )}
     </Modal>
   );
 };

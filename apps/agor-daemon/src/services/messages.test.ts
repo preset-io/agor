@@ -686,7 +686,17 @@ dbTest(
     const sessions = new SessionRepository(db);
     const tasks = new TaskRepository(db);
     const repository = new MessagesRepository(db);
-    app.use('/sessions', { get: (id: string) => sessions.findById(id) });
+    // SessionsService.get's opt-in completeness enrichment, without its RBAC.
+    app.use('/sessions', {
+      get: async (id: string, params?: { query?: Record<string, unknown> }) => {
+        const session = await sessions.findById(id);
+        if (!session || !params?.query?.include_tasks_complete) return session;
+        return {
+          ...session,
+          tasks_complete: await tasks.isSessionTaskListComplete(id as never, session.tasks),
+        };
+      },
+    });
     app.use('/tasks', createTasksService(db, app));
     app.service('tasks').hooks({ before: { all: [typedValidateQuery(taskQueryValidator)] } });
     app.use('/messages', createMessagesService(db));
@@ -722,6 +732,7 @@ dbTest(
         const textBytes = dataset === 'tool-heavy' ? 256 : 16_384;
         const toolBytes = dataset === 'tool-heavy' ? 100_000 : 128;
         let latestTaskId!: TaskID;
+        const dispatched: TaskID[] = [];
         for (let index = 0; index < 100; index++) {
           const task = await tasks.create({
             session_id: sessionId,
@@ -732,6 +743,7 @@ dbTest(
             duration_ms: 1000,
           });
           latestTaskId = task.task_id;
+          dispatched.push(task.task_id);
           const input = { value: `CANARY${'x'.repeat(toolBytes)}` };
           await createMessages(repository, [
             {
@@ -767,6 +779,8 @@ dbTest(
             },
           ]);
         }
+        // Dispatch appends each turn to Session.tasks, the lean transcript's order.
+        await sessions.update(sessionId, { tasks: dispatched });
         const measure = async (mode: TaskHydrationMode) => {
           const client = await createRestClient(base);
           client.io = Object.assign(new EventEmitter(), {
@@ -791,9 +805,18 @@ dbTest(
           if (mode === 'lean') {
             expect(initial.some((receipt) => receipt.body.includes('CANARY'))).toBe(false);
             expect(handle.state.tasks).toHaveLength(10);
-            // Subscription + session + task page + queue + one message batch.
-            expect(initial).toHaveLength(5);
-            expect(initial.filter((receipt) => receipt.path === '/messages')).toHaveLength(1);
+            // Display order, decided by the Session read itself: subscription +
+            // session (with tasks_complete) + task page + queue + one message batch.
+            expect(Reflect.get(handle, 'leanOrder')).toBe('display');
+            expect(initial.map((receipt) => receipt.path).sort()).toEqual(
+              [
+                '/messages',
+                '/session-streams',
+                `/sessions/${sessionId}`,
+                `/sessions/${sessionId}/tasks/queue`,
+                '/tasks',
+              ].sort()
+            );
           }
           const detailStart = receipts.length;
           if (mode === 'lean') await handle.loadTaskMessages(latestTaskId);

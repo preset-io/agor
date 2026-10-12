@@ -19,9 +19,18 @@ const { Text } = Typography;
 interface RateLimitBlockProps {
   message: Message;
   agentic_tool?: string;
+  /** The turn has ended, so nothing is still waiting on the limit. */
+  settled?: boolean;
+  /** The turn's outcome banner already states when the limit resets. */
+  resetShownInOutcome?: boolean;
 }
 
-export const RateLimitBlock: React.FC<RateLimitBlockProps> = ({ message, agentic_tool }) => {
+export const RateLimitBlock: React.FC<RateLimitBlockProps> = ({
+  message,
+  agentic_tool,
+  settled = false,
+  resetShownInOutcome = false,
+}) => {
   const { token } = theme.useToken();
 
   if (!Array.isArray(message.content)) return null;
@@ -40,17 +49,24 @@ export const RateLimitBlock: React.FC<RateLimitBlockProps> = ({ message, agentic
     return null;
   }
 
-  const text = ('text' in block ? block.text : '') as string;
   const isRateLimit = block.type === 'rate_limit';
   const isSdkEvent = block.type === 'sdk_event';
   const status = isRateLimit && 'status' in block ? (block.status as string) : undefined;
   const rateLimitType =
     isRateLimit && 'rateLimitType' in block ? (block.rateLimitType as string) : undefined;
-  const resetsAt = isRateLimit && 'resetsAt' in block ? (block.resetsAt as number) : undefined;
+  const resetsAt =
+    isRateLimit && !resetShownInOutcome && 'resetsAt' in block
+      ? (block.resetsAt as number)
+      : undefined;
   const waitMs = !isRateLimit && 'waitMs' in block ? (block.waitMs as number) : undefined;
   const sdkType = isSdkEvent && 'sdkType' in block ? (block.sdkType as string) : undefined;
   const sdkSubtype = isSdkEvent && 'sdkSubtype' in block ? (block.sdkSubtype as string) : undefined;
 
+  const rawText = ('text' in block ? block.text : '') as string;
+  const text =
+    isRateLimit && settled
+      ? `${status === 'rejected' ? 'Rate limited' : 'Approaching rate limit'} (${rateLimitType ?? 'unknown'}).`
+      : rawText;
   const isWarning = isRateLimit && status !== 'allowed';
   const iconColor = isWarning ? token.colorWarning : token.colorTextTertiary;
 

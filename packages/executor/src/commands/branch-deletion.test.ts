@@ -116,6 +116,7 @@ describe('concrete deletion command with disposable storage', () => {
     { unknownUpload: false, slow: false, malformedData: false, unsafeHome: 'foreign' },
     { unknownUpload: false, slow: false, malformedData: false, unsafeHome: 'symlink' },
     { unknownUpload: false, slow: false, malformedData: false, unsafeHome: 'missing_root' },
+    { unknownUpload: false, slow: false, malformedData: false, unsafeHome: 'shared_home' },
     { unknownUpload: true, slow: false, malformedData: false },
     { unknownUpload: false, slow: true, malformedData: false },
     { unknownUpload: false, slow: false, malformedData: true },
@@ -129,7 +130,7 @@ describe('concrete deletion command with disposable storage', () => {
       const root = await mkdtemp(join(tmpdir(), 'agor-delete-fixture-'));
       const id = '01900000-0000-7000-8000-000000000001';
       const workspace = join(root, 'branches', 'victim');
-      const home = join(root, 'homes', id);
+      const home = join(root, unsafeHome === 'shared_home' ? 'home' : 'branch-homes', id);
       const neighbor = join(root, 'branches', 'neighbor');
       const log = vi.spyOn(console, 'error').mockImplementation(() => {});
       const actions: string[] = [];
@@ -155,8 +156,8 @@ describe('concrete deletion command with disposable storage', () => {
           await git.raw(['worktree', 'add', '-b', 'victim', workspace]);
         }
         if (unsafeHome === 'symlink') {
-          await rm(join(root, 'homes'), { recursive: true });
-          await symlink(join(root, 'branches'), join(root, 'homes'));
+          await rm(join(root, 'branch-homes'), { recursive: true });
+          await symlink(join(root, 'branches'), join(root, 'branch-homes'));
         }
         if (slow) vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
         vi.stubGlobal(
@@ -179,6 +180,7 @@ describe('concrete deletion command with disposable storage', () => {
             if (body.action === 'data' && malformedData) return new Response('{}');
             if (body.action === 'upload' && unknownUpload)
               throw new Error('fixture transport loss');
+            if (body.action === 'settled') return new Response(JSON.stringify({ ok: true }));
             return new Response(JSON.stringify({ remaining: false }), { status: 200 });
           })
         );
@@ -219,7 +221,9 @@ describe('concrete deletion command with disposable storage', () => {
               branchesRoot: join(root, 'branches'),
               repoPath: join(root, 'base'),
               branchHome:
-                unsafeHome === 'missing_root' ? join(root, 'other-tenant', 'homes', id) : home,
+                unsafeHome === 'missing_root'
+                  ? join(root, 'other-tenant', 'branch-homes', id)
+                  : home,
               tenantDataRoot:
                 unsafeHome === 'foreign' || unsafeHome === 'missing_root'
                   ? join(root, 'other-tenant')
@@ -241,9 +245,11 @@ describe('concrete deletion command with disposable storage', () => {
           expect(result.success).toBe(false);
           expect((await stat(workspace)).isDirectory()).toBe(true);
           expect((await stat(neighbor)).isDirectory()).toBe(true);
-          expect(actions).toEqual(['claim', 'quiesce', 'failed']);
+          expect(actions).toEqual(['claim', 'quiesce', 'settled']);
           expect(log).toHaveBeenCalledWith(
-            `[branch.delete] event=storage_failed step=validate_sdk_home code=${unsafeHome === 'missing_root' ? 'ENOENT' : 'verification_failed'}`
+            expect.stringContaining(
+              `step=validate_sdk_home code=${unsafeHome === 'missing_root' ? 'ENOENT' : 'verification_failed'}`
+            )
           );
           expect(JSON.stringify(log.mock.calls)).not.toContain(root);
           return;
@@ -263,7 +269,7 @@ describe('concrete deletion command with disposable storage', () => {
           unknownUpload
             ? ['claim', 'quiesce', 'upload']
             : malformedData
-              ? ['claim', 'quiesce', 'upload', 'storage', 'data']
+              ? ['claim', 'quiesce', 'upload', 'storage', 'data', 'settled']
               : ['claim', 'quiesce', 'upload', 'storage', 'data', 'finalize']
         );
       } finally {

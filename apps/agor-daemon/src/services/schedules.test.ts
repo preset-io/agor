@@ -2,11 +2,12 @@ import {
   AgenticToolPresetRepository,
   BranchRepository,
   generateId,
+  MCPServerRepository,
   RepoRepository,
   ScheduleRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { BadRequest } from '@agor/core/feathers';
+import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type {
   BranchID,
   Schedule,
@@ -258,5 +259,76 @@ describe('SchedulesService default configuration references', () => {
         params(creator)
       )
     ).rejects.toBeInstanceOf(BadRequest);
+  });
+});
+
+describe('SchedulesService MCP server attachments', () => {
+  async function createServer(
+    db: ConstructorParameters<typeof SchedulesService>[0],
+    ownerUserId?: UserID
+  ) {
+    return new MCPServerRepository(db).create({
+      name: `schedule-mcp-${generateId()}`,
+      transport: 'stdio',
+      command: 'node',
+      args: [],
+      scope: ownerUserId ? 'session' : 'global',
+      source: 'user',
+      enabled: true,
+      ...(ownerUserId ? { owner_user_id: ownerUserId } : {}),
+    });
+  }
+
+  function codexSchedule(branchId: BranchID, mcpServerIds: string[]): ScheduleCreateData {
+    return {
+      ...scheduleData(branchId, { agentic_tool: 'codex' }),
+      mcp_server_ids: mcpServerIds,
+    };
+  }
+
+  dbTest('rejects a server the schedule creator cannot use', async ({ db }) => {
+    const { creator, caller, branch } = await setupContext(db);
+    const othersServer = await createServer(db, caller.user_id as UserID);
+    const service = new SchedulesService(db);
+
+    await expect(
+      service.create(codexSchedule(branch.branch_id, [othersServer.mcp_server_id]), params(creator))
+    ).rejects.toBeInstanceOf(Forbidden);
+    expect(await new ScheduleRepository(db).findAll()).toHaveLength(0);
+  });
+
+  dbTest('accepts shared servers and servers the creator owns', async ({ db }) => {
+    const { creator, branch } = await setupContext(db);
+    const shared = await createServer(db);
+    const own = await createServer(db, creator.user_id as UserID);
+    const service = new SchedulesService(db);
+
+    const created = await service.create(
+      codexSchedule(branch.branch_id, [shared.mcp_server_id, own.mcp_server_id]),
+      params(creator)
+    );
+
+    expect(created.mcp_server_ids).toEqual([shared.mcp_server_id, own.mcp_server_id]);
+  });
+
+  dbTest('validates a patched server list against the run-as creator', async ({ db }) => {
+    const { creator, caller, branch } = await setupContext(db);
+    const existing = await new ScheduleRepository(db).create({
+      ...codexSchedule(branch.branch_id, []),
+      created_by: creator.user_id,
+    });
+    const callersServer = await createServer(db, caller.user_id as UserID);
+    const service = new SchedulesService(db);
+
+    await expect(
+      service.patch(
+        existing.schedule_id,
+        { mcp_server_ids: [callersServer.mcp_server_id] },
+        params(caller, existing)
+      )
+    ).rejects.toBeInstanceOf(Forbidden);
+    expect(
+      (await new ScheduleRepository(db).findById(existing.schedule_id))?.mcp_server_ids
+    ).toEqual([]);
   });
 });

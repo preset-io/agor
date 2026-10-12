@@ -31,3 +31,15 @@ export interface TenantPublicRouting {
 export interface StoredTenantPublicRouting extends TenantPublicRouting {
   tenant_id: TenantID | string;
 }
+
+/** Display label observed from a verified launch, persisted per tenant. */
+export interface TenantDisplay {
+  label: string;
+  /** Signed assertion iat; orders observations exactly like routing. */
+  assertion_issued_at: number;
+}
+
+/** Same tenant binding as {@link StoredTenantPublicRouting}. */
+export interface StoredTenantDisplay extends TenantDisplay {
+  tenant_id: TenantID | string;
+}

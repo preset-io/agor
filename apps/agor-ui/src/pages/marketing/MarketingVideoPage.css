@@ -59,7 +59,7 @@
   border-radius: 14px;
   background:
     radial-gradient(circle at 30% 20%, rgba(94, 234, 212, 0.16), transparent 42%),
-    linear-gradient(135deg, #0a1626 0%, #101c30 55%, #1a1206 100%);
+    linear-gradient(135deg, #0a1626 0%, #101c30 55%, #06201f 100%);
   border: 1px solid rgba(255, 255, 255, 0.14);
   display: flex;
   align-items: center;
