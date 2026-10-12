@@ -39,7 +39,10 @@ interface TileProps {
   authGeneration: number;
   userId?: string;
   readinessRevision: number;
-  /** A drawer is open; a late hover/focus tooltip would sit atop it and swallow Escape. */
+  /**
+   * A drawer is open; a late hover tooltip would sit atop it and swallow Escape. Forcing
+   * `open` is safe: antd resets its own state when `open` changes, so nothing stale returns.
+   */
   suppressTooltip: boolean;
   onOpen: (event: React.MouseEvent<HTMLElement>) => void;
 }
@@ -78,12 +81,14 @@ function ToolTile({
           {entry.benefit}
         </>
       }
-      trigger={['hover', 'focus']}
+      // Hover only. A focus trigger reopened it when focus returned from the drawer and kept
+      // it open, away from the pointer, until blur. Keyboard users get the description below.
       open={suppressTooltip ? false : undefined}
     >
       <Button
         block
         aria-label={`${title}: view details`}
+        aria-description={entry.benefit}
         aria-describedby={isConnected ? statusId : undefined}
         aria-haspopup="dialog"
         onClick={onOpen}

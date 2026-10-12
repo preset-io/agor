@@ -256,6 +256,28 @@ describe('onboarding-owned Catalog in Chromium', () => {
     await waitFor(() => expect(tile).toHaveFocus());
   });
 
+  it('keeps tile tooltips hover-only, so focus returning from the drawer opens none', async () => {
+    const api = makeCatalogClient([githubHandoffEntry]);
+    render(<Harness api={api} complete={vi.fn()} update={vi.fn()} />);
+    const tile = await githubTile();
+    expect(tile).toHaveAccessibleDescription(githubHandoffEntry.benefit);
+    const openTooltip = () => document.querySelector('.ant-tooltip:not(.ant-tooltip-hidden)');
+    // The real pointer persists between tests; park it off the tiles so only focus is in play.
+    await userEvent.hover(screen.getByPlaceholderText('Search tools'));
+
+    tile.focus();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(openTooltip()).toBeNull();
+
+    await userEvent.keyboard('{Enter}');
+    await screen.findByPlaceholderText(/bearer access token/);
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(tile).toHaveFocus());
+    // A focus trigger used to reopen it here and keep it open, away from the pointer, until blur.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(openTooltip()).toBeNull();
+  });
+
   it('installs without workspace or session creation, retries a refused PAT and returns in context before completion', async () => {
     const api = makeCatalogClient([githubHandoffEntry]);
     api.connect.mockRejectedValueOnce(

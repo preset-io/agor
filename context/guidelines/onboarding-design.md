@@ -43,7 +43,8 @@ Legacy `preferences.onboarding.goals` and `persona` stay untouched: no migration
 - The grid replaces the old one-row-per-provider layout: 3 columns, 2 at ≤480px. A tile is a
   button with the Catalog's own logo (`CatalogEntryAvatar` + `icon_url`, letter fallback), the
   Catalog display title, and the category label as one secondary line; the description lives in a
-  Tooltip on hover and focus. "Connected" comes from caller-scoped readiness
+  hover-only Tooltip and in the button's `aria-description`. No focus trigger: focus returning from
+  the drawer would reopen it away from the pointer. "Connected" comes from caller-scoped readiness
   (`useCatalogReadiness`), never inferred.
 - Logo hosts must stay in the daemon's default CSP `img-src` (`MCP_CATALOG_CSP_IMG_SRCS`);
   a blocked image falls back to the letter.
