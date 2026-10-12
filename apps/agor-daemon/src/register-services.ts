@@ -4999,7 +4999,6 @@ export async function registerMCPServices(
                 success: false,
                 error: `OAuth resource metadata endpoint returned ${metadataResponse.status}`,
                 oauthType: 'oauth2.1',
-                metadataUrl: rfc9728Url,
                 requiresBrowserFlow: true,
               };
             }
@@ -5013,8 +5012,6 @@ export async function registerMCPServices(
                 success: false,
                 error: 'OAuth resource metadata missing authorization_servers',
                 oauthType: 'oauth2.1',
-                metadataUrl: rfc9728Url,
-                metadata,
               };
             }
 
@@ -5049,7 +5046,6 @@ export async function registerMCPServices(
               message: authServerMetadata?.registration_endpoint
                 ? 'OAuth 2.1 auto-discovery successful (DCR supported). Click "Start OAuth Flow" to authenticate.'
                 : 'OAuth 2.1 auto-discovery successful. Click "Start OAuth Flow" to authenticate.',
-              metadataUrl: rfc9728Url,
               authorizationServers: metadata.authorization_servers,
               scopesSupported: metadata.scopes_supported,
               authServerMetadata: authServerMetadata
