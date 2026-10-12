@@ -125,7 +125,8 @@ const MOBILE_COMPOSER_FONT_SIZE = 16;
 
 export interface PromptInputHandle {
   getValue: () => string;
-  clear: () => void;
+  /** Empty the composer, or leave only `remainder` (text typed after a send began). */
+  clear: (remainder?: string) => void;
   insertText: (text: string) => void;
 }
 
@@ -244,15 +245,16 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       ref,
       () => ({
         getValue: () => textareaElementRef.current?.value ?? valueRef.current,
-        clear: () => {
+        clear: (remainder = '') => {
           untouchedSeedRef.current = false;
           discardDraftSeed(sessionId);
-          valueRef.current = '';
-          inputValueRef.current = '';
+          valueRef.current = remainder;
+          inputValueRef.current = remainder;
           if (textareaElementRef.current) {
-            textareaElementRef.current.value = '';
+            textareaElementRef.current.value = remainder;
           }
-          setValue('');
+          setValue(remainder);
+          // A remainder is re-persisted by the debounced draft save.
           deleteDraft(sessionId);
         },
         insertText: (text: string) => {
@@ -1117,10 +1119,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // may have typed identical text and selected different attachments.
       const composerOwnsAdmissionCompletion =
         composerSessionIdentityRef.current === sendStartComposerIdentity;
-      const composerStillOwnsSentText =
-        composerOwnsAdmissionCompletion && promptRef.current?.getValue() === latestValue;
-      if (composerStillOwnsSentText) {
-        promptRef.current?.clear();
+      const textAfterAdmission = composerOwnsAdmissionCompletion
+        ? promptRef.current?.getValue()
+        : undefined;
+      // Typing on after Enter appends to the sent text while admission is
+      // pending. Remove the sent part and keep what was added, so a quick
+      // follow-up never leaves the already-sent prompt in the box.
+      if (textAfterAdmission?.startsWith(latestValue)) {
+        const typedAfterSend = textAfterAdmission.slice(latestValue.length);
+        promptRef.current?.clear(latestValue ? typedAfterSend.trimStart() : typedAfterSend);
         clearComposerAttachments();
         setComposerAttachmentValidationError(null);
       } else {
