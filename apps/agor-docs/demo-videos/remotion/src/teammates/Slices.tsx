@@ -53,6 +53,8 @@ export const PROMPT_LEAD = OPEN * 0.6;
 export const REVEAL = 0.8;
 export const SLANT = 60;
 const HEADER = 130;
+/** Where a strip's name rests: below the title band across the middle. */
+const NAME_REST = 790;
 // Weight of the open slice relative to a closed one (open ≈ 15/18 of the width).
 const OPEN_WEIGHT = 14;
 
@@ -71,8 +73,8 @@ const mixCam = (a: Cam, b: Cam, p: number): Cam => ({
   cy: lerp(a.cy, b.cy, p),
   z: lerp(a.z, b.z, p),
 });
-/** While typing: the question box, bottom right. */
-const PROMPT_CAM: Cam = { cx: 1440, cy: 1000, z: 1.9 };
+/** While typing: close on the input row (the text starts at x≈1000, y≈1024). */
+const PROMPT_CAM: Cam = { cx: 1160, cy: 1000, z: 4.2 };
 /** The band at the end: the whole session panel. */
 const BAND_CAM: Cam = { cx: 1440, cy: 572, z: 0.5 };
 const BAND_H = 1080 * BAND_CAM.z;
@@ -85,7 +87,9 @@ export const Slices: React.FC<{
   timing: SlicesTiming;
   /** When each slice slides in at the start (staggered). */
   enterAt: number[];
-}> = ({ slices, timing, enterAt }) => {
+  /** When the names fade on (under the section title). */
+  namesAt: number;
+}> = ({ slices, timing, enterAt, namesAt }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps;
@@ -169,12 +173,14 @@ export const Slices: React.FC<{
 
         // The name rides just above the recording (pushed up into the header
         // bar), and drops back to the middle once the recording has left.
-        const pushed = Math.min(540, Math.max(HEADER / 2, top - HEADER / 2));
+        const pushed = Math.min(NAME_REST, Math.max(HEADER / 2, top - HEADER / 2));
         const settle = win(closeAts[i] + OPEN * 0.6, 0.45); // once the recording has cleared
-        const nameY = leave > 0 && t < timing.revealAt ? lerp(HEADER / 2, 540, settle) : pushed;
+        const nameY =
+          leave > 0 && t < timing.revealAt ? lerp(HEADER / 2, NAME_REST, settle) : pushed;
         // The name and the emoji never overlap: one fades out before the other fades in.
-        const fit = interpolate(w, [270, 330], [0, 1], clamp);
-        const emojiOnly = interpolate(w, [190, 250], [1, 0], clamp);
+        const namesOn = win(namesAt, 0.5);
+        const fit = interpolate(w, [270, 330], [0, 1], clamp) * namesOn;
+        const emojiOnly = interpolate(w, [190, 250], [1, 0], clamp) * namesOn;
         const nameSize = Math.min(92, Math.max(40, w * 0.1));
 
         return (

@@ -102,6 +102,7 @@ export const AiTeammatesBebop: React.FC<{ withEnd?: boolean }> = ({ withEnd = tr
             answerRate: ANSWER_RATE,
           }}
           enterAt={[0, 0.08, 0.16, 0.24]}
+          namesAt={0.85}
         />
         <Sequence name="Title" durationInFrames={f(TITLE_HOLD + 0.2)} premountFor={fps}>
           <BandTitle text="AI teammates that can do anything" holdFor={TITLE_HOLD} />
