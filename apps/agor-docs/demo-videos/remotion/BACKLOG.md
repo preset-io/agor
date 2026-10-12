@@ -27,3 +27,18 @@ blocking anything.
   primary teammate, so it lives in the side panel): drop the zone, or seed
   something there.
 - Typing speed versus readability in the prompt close-ups.
+
+## Workflow
+
+- Storyboard each new section first: a one-page frame sheet of beats and
+  timings to approve before building (most revision rounds were structural).
+- Timestamped notes: review in Remotion Studio (`npm run dev`) and quote
+  frame numbers, which map straight to code.
+- `npm run review <Composition>`: render a section and publish a private
+  review page (contact sheets plus a still per beat) that takes comments.
+- Iterate on half-resolution single-section renders; full reel at the end
+  of a round.
+- Move sections 1 and 2 to beats-as-data, like RaiseTogether's `PILLARS`.
+- `npm run scout -- <seed> <paths...>` in ../e2e: the throwaway screenshot
+  pass as a tool, so planning a UI section starts from every screen.
+- Before anyone else sees the project: the Remotion company license.
