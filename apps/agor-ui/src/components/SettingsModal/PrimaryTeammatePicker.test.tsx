@@ -261,35 +261,24 @@ describe('PrimaryTeammatePicker', () => {
   });
 });
 
-it('can clear an inaccessible stored preference without selecting a replacement', async () => {
-  seedStore([]);
-  const { client, setPrimaryTeammate } = createClient(null);
-  setPrimaryTeammate.mockResolvedValueOnce(null);
-  renderPicker(client);
-  await screen.findByText(/No primary assistant set/);
-  fireEvent.click(screen.getByRole('button', { name: 'Clear primary assistant' }));
-  await waitFor(() =>
-    expect(setPrimaryTeammate).toHaveBeenCalledWith({ branchId: null, expectedUserId: USER_ID })
-  );
-});
-
-it('offers Clear in compact Ask flows only once a primary assistant is set', async () => {
+it('never offers to clear the primary assistant, in Settings or the compact Ask flows', async () => {
   const ada = teammate('branch-1', 'Ada');
   seedStore([ada]);
-  const view = render(
-    <AntApp>
-      <PrimaryTeammatePicker client={createClient(null).client} currentUserId={USER_ID} compact />
-    </AntApp>
-  );
-  await screen.findByRole('combobox');
-  await waitFor(() => expect(screen.queryByRole('img', { name: 'loading' })).toBeNull());
-  expect(screen.queryByRole('button', { name: 'Clear primary assistant' })).not.toBeInTheDocument();
-  view.unmount();
-
-  render(
-    <AntApp>
-      <PrimaryTeammatePicker client={createClient(ada).client} currentUserId={USER_ID} compact />
-    </AntApp>
-  );
-  expect(await screen.findByRole('button', { name: 'Clear primary assistant' })).toBeVisible();
+  for (const [current, compact] of [
+    [null, true],
+    [ada, true],
+    [null, false],
+    [ada, false],
+  ] as const) {
+    const { client, getPrimaryTeammate } = createClient(current);
+    const view = render(
+      <AntApp>
+        <PrimaryTeammatePicker client={client} currentUserId={USER_ID} compact={compact} />
+      </AntApp>
+    );
+    await waitFor(() => expect(getPrimaryTeammate).toHaveBeenCalled());
+    if (current) await screen.findByText(/Currently/);
+    expect(screen.queryByRole('button', { name: /clear/i })).not.toBeInTheDocument();
+    view.unmount();
+  }
 });
