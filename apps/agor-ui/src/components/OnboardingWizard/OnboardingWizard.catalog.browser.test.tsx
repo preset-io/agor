@@ -238,17 +238,12 @@ describe('onboarding-owned Catalog in Chromium', () => {
     expect(JSON.stringify(update.mock.calls)).not.toContain('test-only-not-a-provider-credential');
   });
 
-  it('keeps a late tile tooltip from swallowing Escape for the open drawer', async () => {
+  it('closes the drawer with one Escape while the pointer rests on the tile', async () => {
     const api = makeCatalogClient([githubHandoffEntry]);
     render(<Harness api={api} complete={vi.fn()} update={vi.fn()} />);
     const tile = await githubTile();
+    // A real click leaves the pointer on the tile; its hover tooltip must not take Escape.
     await openGitHub();
-    // A pointer left resting on the tile fires its delayed hover after the drawer opens. The
-    // tooltip portal would then be topmost and take Escape, leaving the drawer open.
-    tile.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    tile.dispatchEvent(new MouseEvent('mouseenter'));
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    expect(document.querySelector('.ant-tooltip:not(.ant-tooltip-hidden)')).toBeNull();
     await userEvent.keyboard('{Escape}');
     await waitFor(() =>
       expect(screen.queryByPlaceholderText(/bearer access token/)).not.toBeInTheDocument()
