@@ -1,6 +1,6 @@
 // agor.live's dark palette (apps/agor-docs/components/LandingPage.module.css
 // on main): near-black green backgrounds, mint-white ink, and the teal
-// gradient (deep teal → teal → aqua) plus its lime accent.
+// green / teal / aqua / sky-blue range.
 
 export const BG = '#07100f';
 /** The site's page background, top to bottom. */
@@ -11,7 +11,7 @@ export const MUTED = '#9fc4bd';
 /** Dark text on the bright fills. */
 export const ON_FILL = '#07100f';
 
-export const DEEP_TEAL = '#2e9a92';
+export const GREEN = '#2ea78f';
 export const TEAL = '#34e6c4';
 export const AQUA = '#a8f5ed';
-export const LIME = '#d9fb89';
+export const SKY = '#7ad9ff';

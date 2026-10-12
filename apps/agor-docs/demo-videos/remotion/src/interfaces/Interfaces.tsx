@@ -12,7 +12,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import { AQUA, BG, DEEP_TEAL, INK, LIME, ON_FILL, TEAL } from '../brand/palette';
+import { AQUA, BG, GREEN, INK, ON_FILL, SKY, TEAL } from '../brand/palette';
 import { FadeToBlack } from '../teammates/Bebop';
 import marks from '../teammates/marks.json';
 import {
@@ -328,7 +328,8 @@ const AgorStage: React.FC<{ startAt: number }> = ({ startAt }) => {
         <Sequence from={Math.round(startAt * fps)} premountFor={fps}>
           <Video
             src={staticFile('clips/engbot.mp4')}
-            trimBefore={Math.round((m.sent - 0.4) * fps)}
+            // Just before EngBot's table lands (the wait before it is dead air).
+            trimBefore={Math.round((m.sent + 2.2) * fps)}
             playbackRate={1.6}
             muted
             style={{ width: '100%', height: '100%' }}
@@ -361,7 +362,7 @@ export const Interfaces: React.FC = () => {
     <AbsoluteFill style={{ background: BG, fontFamily }}>
       <PanelFrame
         corner="tl"
-        color={DEEP_TEAL}
+        color={GREEN}
         name="Slack"
         mark={<BrandMark icon="slack-icon" size={130} />}
         spinAt={SPIN_AT[0]}
@@ -372,7 +373,7 @@ export const Interfaces: React.FC = () => {
       </PanelFrame>
       <PanelFrame
         corner="tr"
-        color={AQUA}
+        color={SKY}
         name="Discord"
         mark={<BrandMark icon="discord-icon" size={140} />}
         spinAt={SPIN_AT[1]}
@@ -383,7 +384,7 @@ export const Interfaces: React.FC = () => {
       </PanelFrame>
       <PanelFrame
         corner="bl"
-        color={LIME}
+        color={AQUA}
         name="Claude Desktop + MCP"
         mark={<BrandMark icon="model-context-protocol" size={140} viewBox="0 0 70 69" />}
         spinAt={SPIN_AT[2]}

@@ -15,24 +15,23 @@ import { ON_FILL } from '../brand/palette';
 // An accordion of four slanted slices sharing the frame.
 //
 // - Each slice is a color with its teammate's name centered in it; the name
-//   grows with the slice, and a strip too narrow for the name shows just
-//   its emoji (never vertical text).
+//   grows with the slice, and a strip too narrow for it is a plain color
+//   bar (never vertical text).
 // - A slice opens (to about 85% of the width) while its question is typed:
 //   the recording slides up from the bottom, pushing the name up into a
 //   header bar.
 // - It closes as the next one opens: the recording slides up and off,
 //   leaving a plain colored strip.
 // - At the end the slices even out and every recording slides back up into
-//   a band under its header showing the whole session while the answers
-//   play. The last slice morphs straight into its band instead of leaving.
-// - As each answer lands, its band pushes in on the telling part of the
-//   reply and a one-line takeaway wipes on below it.
+//   a band under its header, framed close on the left side of the reply
+//   (where the telling part lands) while the answers play. The last slice
+//   goes straight from the prompt close-up to that framing.
+// - As each answer lands, a one-line takeaway wipes on below its band.
 // - Then the slices slide off, alternately up and down.
 
 export interface SliceSpec {
   clip: string;
   name: string;
-  emoji: string;
   color: string;
   question: string;
   /** The answer's takeaway, shown under the band once it lands. */
@@ -82,9 +81,8 @@ const mixCam = (a: Cam, b: Cam, p: number): Cam => ({
 });
 /** While typing: close on the input row (the text starts at x≈1000, y≈1024). */
 const PROMPT_CAM: Cam = { cx: 1160, cy: 1000, z: 4.2 };
-/** The band at the end: the whole session panel. */
-const BAND_CAM: Cam = { cx: 1440, cy: 572, z: 0.5 };
-const BAND_H = 1080 * BAND_CAM.z;
+/** The band at the end: half the frame's height. */
+const BAND_H = 540;
 const FOCUS_Z = 1.1;
 const TAKEAWAY_Y = HEADER + BAND_H + 34;
 /** Slices slide off (alternately up and down) over this long. */
@@ -164,7 +162,7 @@ export const Slices: React.FC<{
         if (isLast) {
           top = lerp(1080, HEADER, arrive);
           height = lerp(1080 - HEADER, BAND_H, reveal);
-          cam = mixCam(mixCam(PROMPT_CAM, BAND_CAM, reveal), focusCam, focus);
+          cam = mixCam(PROMPT_CAM, focusCam, reveal);
         } else if (t < timing.revealAt) {
           // Slides up in as the slice opens, then up and off as it closes.
           top = lerp(1080, HEADER, arrive) - leave * 1080;
@@ -173,7 +171,7 @@ export const Slices: React.FC<{
         } else {
           top = lerp(1080, HEADER, back);
           height = BAND_H;
-          cam = mixCam(BAND_CAM, focusCam, focus);
+          cam = focusCam;
         }
         const showVideo = t >= timing.openAt[i] && top < 1080 && top + height > HEADER;
         // Keep the view inside the recording.
@@ -197,10 +195,8 @@ export const Slices: React.FC<{
         const settle = win(closeAts[i] + OPEN * 0.6, 0.45); // once the recording has cleared
         const nameY =
           leave > 0 && t < timing.revealAt ? lerp(HEADER / 2, NAME_REST, settle) : pushed;
-        // The name and the emoji never overlap: one fades out before the other fades in.
         const namesOn = win(namesAt, 0.5);
-        const fit = interpolate(w, [270, 330], [0, 1], clamp) * namesOn;
-        const emojiOnly = interpolate(w, [190, 250], [1, 0], clamp) * namesOn;
+        const fit = interpolate(w, [200, 260], [0, 1], clamp) * namesOn;
         const nameSize = Math.min(92, Math.max(40, w * 0.1));
 
         return (
@@ -275,7 +271,7 @@ export const Slices: React.FC<{
               </AbsoluteFill>
             ) : null}
 
-            {/* The name, or just the emoji on a narrow strip. */}
+            {/* The name (hidden on a narrow strip). */}
             <div
               style={{
                 position: 'absolute',
@@ -291,20 +287,7 @@ export const Slices: React.FC<{
                 opacity: fit,
               }}
             >
-              {s.emoji} {s.name}
-            </div>
-            <div
-              style={{
-                position: 'absolute',
-                left: centerX(nameY) - 50,
-                width: 100,
-                top: nameY - 32,
-                textAlign: 'center',
-                fontSize: 52,
-                opacity: emojiOnly,
-              }}
-            >
-              {s.emoji}
+              {s.name}
             </div>
           </AbsoluteFill>
         );

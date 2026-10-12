@@ -22,7 +22,7 @@ const BUILD = 3; // the mark's draw-on (seconds)
 const SHINE_AT = 3.35;
 const SHINE = 0.9;
 /** When each letter hits (a, g, o, r). */
-const IMPACT_AT = [2.7, 2.83, 2.96, 3.09];
+const IMPACT_AT = [2.7, 2.81, 2.92, 3.03];
 /** Seconds by which everything is at rest. */
 export const WORDMARK_SETTLED = SHINE_AT + SHINE;
 
@@ -162,6 +162,10 @@ export const AgorWordmark: React.FC<{ t: number; width?: number }> = ({ t, width
     return amp * Math.exp(-u * 9) * Math.sin(u * 38);
   };
   const SPEED = 2600; // px/s, the convoy's speed
+  /** How far a letter plows into the one ahead (lockup px) before springing back. */
+  const PLOW = 70;
+  /** 0 → 1 (deepest overlap) → back past 0 → settles at 0, over ~0.5s. */
+  const spring = (u: number) => (u > 0.7 ? 0 : Math.exp(-u * 8) * Math.sin(u * 26));
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
       <div
@@ -176,11 +180,17 @@ export const AgorWordmark: React.FC<{ t: number; width?: number }> = ({ t, width
       </div>
       {LETTERS.map((L, i) => {
         const at = IMPACT_AT[i];
-        const before = t < at;
-        const x = before ? D * (1 - i / LETTERS.length) + SPEED * (at - t) : G;
         const next = IMPACT_AT[i + 1];
-        const rot = next !== undefined ? jolt(next, -6) : jolt(at, 4);
-        const pop = next !== undefined ? -Math.abs(jolt(next, 10)) : 0;
+        // Momentum carries each letter into the one ahead (they overlap
+        // and squash), then it springs back to its spot in the pile.
+        const plow = t < at ? 0 : spring(t - at);
+        const x = t < at ? D * (1 - i / LETTERS.length) + SPEED * (at - t) : G - PLOW * plow * k;
+        // Squashed against the letter ahead on its own impact, and a little
+        // again when the next one rear-ends it.
+        const squash =
+          Math.max(0, plow) * 0.24 +
+          (next !== undefined && t >= next ? Math.max(0, spring(t - next)) * 0.12 : 0);
+        const rot = next !== undefined ? jolt(next, -5) : jolt(at, 4);
         return (
           <Img
             key={L.l}
@@ -188,11 +198,12 @@ export const AgorWordmark: React.FC<{ t: number; width?: number }> = ({ t, width
             style={{
               position: 'absolute',
               left: left + L.x * k + x,
-              top: top + L.y * k + pop,
+              top: top + L.y * k,
               width: L.w * k,
               height: L.h * k,
               rotate: `${rot}deg`,
-              transformOrigin: '50% 100%',
+              scale: `${1 - squash} ${1 + squash * 0.45}`,
+              transformOrigin: '0% 100%',
               opacity: interpolate(t, [at - 0.5, at - 0.36], [0, 1], clamp),
             }}
           />

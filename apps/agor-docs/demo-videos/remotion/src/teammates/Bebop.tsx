@@ -8,7 +8,7 @@ import {
   useVideoConfig,
 } from 'remotion';
 import { WORDMARK_SETTLED } from '../brand/AgorWordmark';
-import { AQUA, BG, DEEP_TEAL, INK, LIME, TEAL } from '../brand/palette';
+import { AQUA, BG, GREEN, INK, SKY, TEAL } from '../brand/palette';
 import { EndCard, LogoIntro, NAVY } from './Cards';
 import marks from './marks.json';
 import { EXIT, PROMPT_LEAD, promptSeconds, REVEAL, type SliceSpec, Slices } from './Slices';
@@ -36,8 +36,7 @@ const SLICES: SliceSpec[] = [
   spec('databot', {
     clip: 'databot.mp4',
     name: 'DataBot',
-    emoji: '📊',
-    color: DEEP_TEAL,
+    color: GREEN,
     question: 'How do we define MAU?',
     insight: 'Reconciled two conflicting MAU definitions and opened a PR',
     focus: { cx: 1235, cy: 600 },
@@ -45,8 +44,7 @@ const SLICES: SliceSpec[] = [
   spec('engbot', {
     clip: 'engbot.mp4',
     name: 'EngBot',
-    emoji: '🛠️',
-    color: TEAL,
+    color: AQUA,
     question: "What's the team working on right now?",
     insight: "Rolled up who's on what, PR by PR, and what's blocked",
     focus: { cx: 1235, cy: 620 },
@@ -54,8 +52,7 @@ const SLICES: SliceSpec[] = [
   spec('legalbot', {
     clip: 'legalbot.mp4',
     name: 'LegalBot',
-    emoji: '⚖️',
-    color: AQUA,
+    color: TEAL,
     question: 'Review the limitations of liability in this contract',
     insight: 'Redlined the liability cap against our playbook',
     focus: { cx: 1235, cy: 450 },
@@ -63,8 +60,7 @@ const SLICES: SliceSpec[] = [
   spec('opsbot', {
     clip: 'opsbot.mp4',
     name: 'OpsBot',
-    emoji: '📈',
-    color: LIME,
+    color: SKY,
     question: 'How are my sales doing over the last 90 days?',
     insight: 'Sales up 15% on the prior 90 days, led by web and POS',
     focus: { cx: 1235, cy: 540 },

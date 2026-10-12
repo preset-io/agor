@@ -38,9 +38,8 @@ lockup; the mark itself is a frame-driven port of
     name up into a header bar. As the next opens, the recording slides up
     and off, leaving a plain colored strip.
   - The slices even out and every recording slides back up into a band under
-    its header, showing the whole session while the answers play. As each
-    answer lands, its band pushes in on the telling part of the reply and a
-    one-line takeaway wipes on below it.
+    its header, framed close on the left side of the reply while the answers
+    play. As each answer lands, a one-line takeaway wipes on below it.
   - The slices slide off, alternately up and down, to black.
   - Standalone, ends on a logo-only sign-off.
 - **Interfaces** (`src/interfaces/`): "Access Agor from where you work".
