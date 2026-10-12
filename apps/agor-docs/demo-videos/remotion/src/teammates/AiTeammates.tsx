@@ -1,4 +1,3 @@
-import { loadFont } from '@remotion/google-fonts/SpaceGrotesk';
 import {
   AbsoluteFill,
   Easing,
@@ -7,11 +6,10 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
+import { fontFamily } from '../brand/fonts';
 import { TILES, view } from './geometry';
 import marks from './marks.json';
 import { type ShotTiming, TeammateShot } from './TeammateShot';
-
-const { fontFamily } = loadFont('normal', { weights: ['500', '600', '700'] });
 
 type Bot = keyof typeof marks;
 

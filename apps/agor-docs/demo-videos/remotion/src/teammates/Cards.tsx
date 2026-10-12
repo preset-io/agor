@@ -1,18 +1,37 @@
 import { AbsoluteFill, Easing, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
 import { AgorWordmark, WORDMARK_SETTLED } from '../brand/AgorWordmark';
+import { Heading } from '../brand/Heading';
 import { BG_GRADIENT, INK, ON_FILL, TEAL } from '../brand/palette';
 
 const ease = Easing.bezier(0.16, 1, 0.3, 1);
 const clamp = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
 export const NAVY = BG_GRADIENT;
 
-/** The Agor logo draws on, then the wordmark crashes in (src/brand/AgorWordmark.tsx). */
+/** When the slogan rises in under the wordmark (seconds into the intro). */
+const SLOGAN_AT = WORDMARK_SETTLED - 0.5;
+/** How long the intro runs: the wordmark lands, then the slogan, then a beat. */
+export const LOGO_INTRO_SECONDS = SLOGAN_AT + 1.9;
+
+/**
+ * The Agor logo draws on, the wordmark crashes in (src/brand/AgorWordmark.tsx),
+ * then it lifts to make room for the slogan, which rises in under it.
+ */
 export const LogoIntro: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
+  const t = frame / fps;
+  const lift = interpolate(t, [SLOGAN_AT - 0.1, SLOGAN_AT + 0.5], [0, 1], {
+    ...clamp,
+    easing: ease,
+  });
   return (
     <AbsoluteFill style={{ background: NAVY }}>
-      <AgorWordmark t={frame / fps} />
+      <AbsoluteFill style={{ translate: `0px ${-lift * 95}px` }}>
+        <AgorWordmark t={t} />
+      </AbsoluteFill>
+      <AbsoluteFill style={{ top: 735, alignItems: 'center' }}>
+        <Heading text="Work *together* **again**" size={92} at={SLOGAN_AT + 0.1} stagger={0.12} />
+      </AbsoluteFill>
     </AbsoluteFill>
   );
 };

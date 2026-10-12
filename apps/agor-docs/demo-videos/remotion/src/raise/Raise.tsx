@@ -1,4 +1,3 @@
-import { loadFont } from '@remotion/google-fonts/SpaceGrotesk';
 import { Video } from '@remotion/media';
 import type React from 'react';
 import {
@@ -10,10 +9,10 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import { AQUA, BG, GREEN, INK, MUTED, SKY, TEAL } from '../brand/palette';
+import { fontFamily } from '../brand/fonts';
+import { Heading } from '../brand/Heading';
+import { BG, gradientText, INK } from '../brand/palette';
 import { FadeToBlack } from '../teammates/Bebop';
-
-const { fontFamily } = loadFont('normal', { weights: ['500', '600', '700'] });
 
 // "Raise AI teammates together": from black, the title rises in; then four
 // pillars, each a big word on the left ("with personality", ...) and the
@@ -43,7 +42,9 @@ interface Pillar {
   key: 'personality' | 'integrity' | 'capability' | 'agency';
   word: string;
   line: string;
-  color: string;
+  /** The word's gradient (text), and the window's glow. */
+  gradient: string;
+  glow: string;
   beats: Beat[];
 }
 
@@ -69,7 +70,8 @@ const PILLARS: Pillar[] = [
     key: 'personality',
     word: 'personality',
     line: 'Every teammate gets a name, a role and a persona. Start from a template or from scratch.',
-    color: TEAL,
+    gradient: 'linear-gradient(110deg, #34e6c4, #7ad9ff)',
+    glow: '#34e6c4',
     beats: [
       beat(1.0, 5.2, 1.6, [470, 400, 1.9], [470, 440, 2.1]), // the picker: a dozen teammates
       beat(17.0, 22.4, 2, [960, 600, 1.35], [960, 820, 1.45]), // the starter personas
@@ -80,7 +82,8 @@ const PILLARS: Pillar[] = [
     key: 'integrity',
     word: 'integrity',
     line: 'Grounded in what your company knows, with a knowledge base they read and write.',
-    color: AQUA,
+    gradient: 'linear-gradient(110deg, #2ea78f, #5fe9d0)',
+    glow: '#2ea78f',
     beats: [
       beat(2.6, 8.2, 1.8, [900, 620, 1.45], [900, 660, 1.6]), // home namespace: the Handbook
       beat(17.8, 20.8, 1, [1180, 560, 2.6], [1100, 540, 0.95]), // its graph, close in to all of it
@@ -90,19 +93,21 @@ const PILLARS: Pillar[] = [
     key: 'capability',
     word: 'capability',
     line: 'Plug into the tools your team already uses, from a catalog of MCP servers.',
-    color: SKY,
+    gradient: 'linear-gradient(110deg, #45c4bb, #7ad9ff)',
+    glow: '#7ad9ff',
     beats: [
-      beat(2.1, 9.0, 2, [960, 420, 1.0], [960, 440, 1.15]), // the MCP Catalog
-      beat(10.6, 22.0, 2.8, [960, 300, 1.5], [960, 900, 1.5]), // wiring up Linear
+      beat(2.1, 5.6, 1.5, [960, 420, 1.0], [960, 440, 1.15]), // the MCP Catalog (it closes at 5.7)
+      beat(9.8, 22.0, 2.8, [960, 300, 1.5], [960, 900, 1.5]), // wiring up Linear
     ],
   },
   {
     key: 'agency',
     word: 'agency',
     line: 'A heartbeat and schedules, so they get work done without being asked.',
-    color: GREEN,
+    gradient: 'linear-gradient(110deg, #7ad9ff, #8b8cf5)',
+    glow: '#8b8cf5',
     beats: [
-      beat(5.9, 7.4, 0.6, [960, 470, 1.05], [960, 430, 1.25]), // HEARTBEAT.md
+      beat(6.1, 7.4, 0.5, [960, 470, 1.05], [960, 430, 1.25]), // HEARTBEAT.md
       beat(8.6, 10.4, 1.2, [960, 360, 1.6], [960, 360, 1.75]), // its schedules
       beat(10.6, 16.6, 2.4, [965, 300, 1.35], [965, 620, 1.45]), // a new hourly heartbeat...
       beat(18.4, 19.2, 0.6, [960, 380, 1.5], [960, 380, 1.65]), // ...and it's on the list
@@ -189,30 +194,14 @@ export const RaiseTogether: React.FC = () => {
           opacity: 1 - title,
         }}
       >
-        <div style={{ color: INK, fontSize: 116, fontWeight: 700, letterSpacing: '-0.03em' }}>
-          {'Raise AI teammates together'.split(' ').map((word, i) => {
-            const rise = interpolate(t, [0.2 + i * 0.08, 0.65 + i * 0.08], [0, 1], {
-              ...clamp,
-              easing: ease,
-            });
-            return (
-              <span
-                // biome-ignore lint/suspicious/noArrayIndexKey: words of a fixed string
-                key={i}
-                style={{ display: 'inline-block', overflow: 'hidden', verticalAlign: 'bottom' }}
-              >
-                <span style={{ display: 'inline-block', translate: `0px ${(1 - rise) * 110}%` }}>
-                  {word}&nbsp;
-                </span>
-              </span>
-            );
-          })}
-        </div>
+        <Heading text="Raise **AI teammates** *together*" size={116} at={0.2} />
       </AbsoluteFill>
 
       {/* The pillar's words: "with" + the big word (rolling over to the next), and a line. */}
       <div style={{ position: 'absolute', left: 110, top: 300, width: 660, opacity: windowIn }}>
-        <div style={{ color: MUTED, fontSize: 44, fontWeight: 500 }}>AI teammates with</div>
+        <div style={{ color: INK, fontSize: 60, fontWeight: 100, letterSpacing: '-0.02em' }}>
+          AI teammates with
+        </div>
         <div style={{ position: 'relative', height: 132, overflow: 'hidden' }}>
           {PILLARS.map((p, i) => {
             const inP = interpolate(t, [PILLAR_AT[i] - 0.1, PILLAR_AT[i] + 0.45], [0, 1], {
@@ -230,9 +219,9 @@ export const RaiseTogether: React.FC = () => {
                 style={{
                   position: 'absolute',
                   top: 0,
-                  color: p.color,
+                  ...gradientText(p.gradient),
                   fontSize: 116,
-                  fontWeight: 700,
+                  fontWeight: 600,
                   letterSpacing: '-0.035em',
                   lineHeight: 1.1,
                   translate: `0px ${(1 - inP) * 110 - outP * 110}%`,
@@ -251,7 +240,7 @@ export const RaiseTogether: React.FC = () => {
                 position: 'absolute',
                 color: INK,
                 fontSize: 36,
-                fontWeight: 500,
+                fontWeight: 300,
                 lineHeight: 1.3,
                 opacity:
                   i === current
@@ -276,7 +265,7 @@ export const RaiseTogether: React.FC = () => {
           borderRadius: 22,
           overflow: 'hidden',
           background: '#141414',
-          boxShadow: `0 0 0 2px ${PILLARS[current].color}55, 0 30px 80px rgba(0,0,0,0.55)`,
+          boxShadow: `0 0 0 2px ${PILLARS[current].glow}55, 0 30px 80px rgba(0,0,0,0.55)`,
           translate: `${(1 - windowIn) * 220}px 0px`,
           opacity: windowIn,
         }}

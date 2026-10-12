@@ -1,11 +1,9 @@
-import { loadFont } from '@remotion/google-fonts/SpaceGrotesk';
 import { AbsoluteFill, Sequence, useVideoConfig } from 'remotion';
+import { fontFamily } from './brand/fonts';
 import { INTERFACES_SECONDS, Interfaces } from './interfaces/Interfaces';
 import { RAISE_SECONDS, RaiseTogether } from './raise/Raise';
 import { AiTeammatesBebop, BEBOP_BODY_SECONDS } from './teammates/Bebop';
 import { EndCard } from './teammates/Cards';
-
-const { fontFamily } = loadFont('normal', { weights: ['600', '700'] });
 
 const END = 1.8;
 export const REEL_SECONDS = BEBOP_BODY_SECONDS + INTERFACES_SECONDS + RAISE_SECONDS + END;

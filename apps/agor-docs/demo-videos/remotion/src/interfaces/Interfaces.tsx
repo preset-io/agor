@@ -1,5 +1,4 @@
 import logos from '@iconify-json/logos/icons.json';
-import { loadFont } from '@remotion/google-fonts/SpaceGrotesk';
 import { Video } from '@remotion/media';
 import type React from 'react';
 import {
@@ -12,7 +11,9 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import { AQUA, BG, GREEN, INK, ON_FILL, SKY, TEAL } from '../brand/palette';
+import { fontFamily } from '../brand/fonts';
+import { Heading } from '../brand/Heading';
+import { BG, FILL_BLUE, FILL_GREEN, FILL_INDIGO, FILL_TEAL, INK } from '../brand/palette';
 import { FadeToBlack } from '../teammates/Bebop';
 import marks from '../teammates/marks.json';
 import {
@@ -23,8 +24,6 @@ import {
   STAGE_H,
   STAGE_W,
 } from './stages';
-
-const { fontFamily } = loadFont('normal', { weights: ['600', '700'] });
 
 // Pacing, in seconds (the section starts and ends on black).
 const TITLE_IN = 0.2; // the title's words rise in, alone on black
@@ -232,7 +231,7 @@ const PanelFrame: React.FC<{
             top: nameY - (52 + (LABEL_SIZE - 52) * crop) * 0.62,
             textAlign: 'center',
             whiteSpace: 'nowrap',
-            color: ON_FILL,
+            color: INK,
             fontSize: 52 + (LABEL_SIZE - 52) * crop,
             fontWeight: 700,
             letterSpacing: '-0.02em',
@@ -263,38 +262,13 @@ const Title: React.FC<{ text: string }> = ({ text }) => {
           clipPath: `inset(0 ${100 * out}% 0 0)`,
         }}
       >
-        <div
-          style={{
-            color: INK,
-            fontSize: 112,
-            fontWeight: 700,
-            letterSpacing: '-0.03em',
-            lineHeight: 1.05,
-          }}
-        >
-          {text.split(' ').map((word, i) => {
-            const rise = interpolate(t, [TITLE_IN + i * 0.07, TITLE_IN + i * 0.07 + 0.45], [0, 1], {
-              ...clamp,
-              easing: ease,
-            });
-            return (
-              <span
-                // biome-ignore lint/suspicious/noArrayIndexKey: words of a fixed string
-                key={i}
-                style={{
-                  display: 'inline-block',
-                  overflow: 'hidden',
-                  verticalAlign: 'bottom',
-                  paddingBottom: 8,
-                }}
-              >
-                <span style={{ display: 'inline-block', translate: `0px ${(1 - rise) * 110}%` }}>
-                  {word}&nbsp;
-                </span>
-              </span>
-            );
-          })}
-        </div>
+        <Heading
+          text={text}
+          size={112}
+          at={TITLE_IN}
+          stagger={0.07}
+          style={{ display: 'inline-block' }}
+        />
       </div>
     </AbsoluteFill>
   );
@@ -362,7 +336,7 @@ export const Interfaces: React.FC = () => {
     <AbsoluteFill style={{ background: BG, fontFamily }}>
       <PanelFrame
         corner="tl"
-        color={GREEN}
+        color={FILL_GREEN}
         name="Slack"
         mark={<BrandMark icon="slack-icon" size={130} />}
         spinAt={SPIN_AT[0]}
@@ -373,7 +347,7 @@ export const Interfaces: React.FC = () => {
       </PanelFrame>
       <PanelFrame
         corner="tr"
-        color={SKY}
+        color={FILL_INDIGO}
         name="Discord"
         mark={<BrandMark icon="discord-icon" size={140} />}
         spinAt={SPIN_AT[1]}
@@ -384,7 +358,7 @@ export const Interfaces: React.FC = () => {
       </PanelFrame>
       <PanelFrame
         corner="bl"
-        color={AQUA}
+        color={FILL_BLUE}
         name="Claude Desktop + MCP"
         mark={<BrandMark icon="model-context-protocol" size={140} viewBox="0 0 70 69" />}
         spinAt={SPIN_AT[2]}
@@ -395,7 +369,7 @@ export const Interfaces: React.FC = () => {
       </PanelFrame>
       <PanelFrame
         corner="br"
-        color={TEAL}
+        color={FILL_TEAL}
         name="Agor"
         mark={<Img src={staticFile('agor-logo.svg')} style={{ width: 150, height: 150 }} />}
         spinAt={SPIN_AT[3]}
@@ -413,7 +387,7 @@ export const Interfaces: React.FC = () => {
         <line x1={TOP_X} y1={-10} x2={BOTTOM_X} y2={1090} stroke={BG} strokeWidth={GUTTER} />
         <line x1={-10} y1={LEFT_Y} x2={1930} y2={RIGHT_Y} stroke={BG} strokeWidth={GUTTER} />
       </svg>
-      <Title text="Access Agor from where you work" />
+      <Title text="**Access Agor** from where you *work*" />
       <FadeToBlack at={FADE_AT} seconds={FADE} />
     </AbsoluteFill>
   );

@@ -1,4 +1,3 @@
-import { loadFont } from '@remotion/google-fonts/SpaceGrotesk';
 import {
   AbsoluteFill,
   Easing,
@@ -7,18 +6,17 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import { WORDMARK_SETTLED } from '../brand/AgorWordmark';
-import { AQUA, BG, GREEN, INK, SKY, TEAL } from '../brand/palette';
-import { EndCard, LogoIntro, NAVY } from './Cards';
+import { fontFamily } from '../brand/fonts';
+import { Heading } from '../brand/Heading';
+import { BG, FILL_BLUE, FILL_GREEN, FILL_INDIGO, FILL_TEAL } from '../brand/palette';
+import { EndCard, LOGO_INTRO_SECONDS, LogoIntro, NAVY } from './Cards';
 import marks from './marks.json';
 import { EXIT, PROMPT_LEAD, promptSeconds, REVEAL, type SliceSpec, Slices } from './Slices';
-
-const { fontFamily } = loadFont('normal', { weights: ['500', '600', '700'] });
 
 type Bot = keyof typeof marks;
 
 // Pacing, in seconds.
-const LOGO = WORDMARK_SETTLED + 0.25; // the wordmark has landed and shone
+const LOGO = LOGO_INTRO_SECONDS; // the wordmark and the slogan
 const TITLE_HOLD = 2.3; // the slices and the title, before the first opens
 const PROMPT_RATE = 1.8;
 const ANSWER_RATE = 1.25;
@@ -36,7 +34,7 @@ const SLICES: SliceSpec[] = [
   spec('databot', {
     clip: 'databot.mp4',
     name: 'DataBot',
-    color: GREEN,
+    color: FILL_GREEN,
     question: 'How do we define MAU?',
     insight: 'Reconciled two conflicting MAU definitions and opened a PR',
     focus: { cx: 1235, cy: 600 },
@@ -44,7 +42,7 @@ const SLICES: SliceSpec[] = [
   spec('engbot', {
     clip: 'engbot.mp4',
     name: 'EngBot',
-    color: AQUA,
+    color: FILL_TEAL,
     question: "What's the team working on right now?",
     insight: "Rolled up who's on what, PR by PR, and what's blocked",
     focus: { cx: 1235, cy: 620 },
@@ -52,7 +50,7 @@ const SLICES: SliceSpec[] = [
   spec('legalbot', {
     clip: 'legalbot.mp4',
     name: 'LegalBot',
-    color: TEAL,
+    color: FILL_BLUE,
     question: 'Review the limitations of liability in this contract',
     insight: 'Redlined the liability cap against our playbook',
     focus: { cx: 1235, cy: 450 },
@@ -60,7 +58,7 @@ const SLICES: SliceSpec[] = [
   spec('opsbot', {
     clip: 'opsbot.mp4',
     name: 'OpsBot',
-    color: SKY,
+    color: FILL_INDIGO,
     question: 'How are my sales doing over the last 90 days?',
     insight: 'Sales up 15% on the prior 90 days, led by web and POS',
     focus: { cx: 1235, cy: 540 },
@@ -113,7 +111,7 @@ export const AiTeammatesBebop: React.FC<{ withEnd?: boolean }> = ({ withEnd = tr
           exitAt={EXIT_AT}
         />
         <Sequence name="Title" durationInFrames={f(TITLE_HOLD + 0.2)} premountFor={fps}>
-          <BandTitle text="AI teammates that can do anything" holdFor={TITLE_HOLD} />
+          <BandTitle text="**AI teammates** that can do *anything*" holdFor={TITLE_HOLD} />
         </Sequence>
       </Sequence>
       {withEnd ? (
@@ -144,7 +142,7 @@ export const FadeToBlack: React.FC<{ at: number; seconds?: number }> = ({ at, se
   );
 };
 
-/** A section title on a dark band across the frame, wiping in and out. */
+/** A section title (Heading markup) on a dark band across the frame, wiping in and out. */
 export const BandTitle: React.FC<{ text: string; holdFor: number }> = ({ text, holdFor }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -162,17 +160,7 @@ export const BandTitle: React.FC<{ text: string; holdFor: number }> = ({ text, h
           clipPath: `inset(0 ${100 * outP}% 0 ${100 * (1 - inP)}%)`,
         }}
       >
-        <div
-          style={{
-            color: INK,
-            fontSize: 112,
-            fontWeight: 700,
-            letterSpacing: '-0.03em',
-            lineHeight: 1.05,
-          }}
-        >
-          {text}
-        </div>
+        <Heading text={text} size={112} style={{ display: 'inline-block' }} />
       </div>
     </AbsoluteFill>
   );

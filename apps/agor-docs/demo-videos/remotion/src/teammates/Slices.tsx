@@ -10,7 +10,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import { ON_FILL } from '../brand/palette';
+import { INK } from '../brand/palette';
 
 // An accordion of four slanted slices sharing the frame.
 //
@@ -26,7 +26,8 @@ import { ON_FILL } from '../brand/palette';
 //   a band under its header, framed close on the left side of the reply
 //   (where the telling part lands) while the answers play. The last slice
 //   goes straight from the prompt close-up to that framing.
-// - As each answer lands, a one-line takeaway wipes on below its band.
+// - Once every answer has landed, the one-line takeaways wipe on below the
+//   bands, left to right.
 // - Then the slices slide off, alternately up and down.
 
 export interface SliceSpec {
@@ -114,6 +115,11 @@ export const Slices: React.FC<{
   const closeAts = slices.map((_, i) => (i + 1 < n ? timing.openAt[i + 1] : timing.revealAt));
   const opened = slices.map((_, i) => win(timing.openAt[i], OPEN) * (1 - win(closeAts[i], OPEN)));
   const reveal = win(timing.revealAt, REVEAL);
+  // The takeaways wipe on together (left to right) once the slowest answer lands.
+  const takeawaysAt =
+    timing.revealAt +
+    REVEAL * 0.5 +
+    Math.max(...slices.map((s) => (s.answered + 1.5 - s.sent) / timing.answerRate));
 
   // Widths: share 1920 (+ the slants the outer slices hang past the edges).
   const weights = opened.map((o) => 1 + OPEN_WEIGHT * o);
@@ -148,7 +154,7 @@ export const Slices: React.FC<{
         const back = win(timing.revealAt, REVEAL);
         const answerAt = timing.revealAt + REVEAL * 0.5;
         const playFor = (s.answered + 1.5 - s.sent) / timing.answerRate;
-        const focus = win(answerAt + playFor, 0.9);
+        const focus = win(takeawaysAt + i * 0.12, 0.9);
         const focusCam: Cam = { ...s.focus, z: FOCUS_Z };
         const exit = interpolate(t, [exitAt + i * 0.07, exitAt + i * 0.07 + EXIT], [0, 1], {
           ...clamp,
@@ -221,7 +227,7 @@ export const Slices: React.FC<{
                 fontWeight: 700,
                 letterSpacing: '-0.01em',
                 lineHeight: 1.12,
-                color: ON_FILL,
+                color: INK,
                 clipPath: `inset(0 ${100 * (1 - focus)}% 0 0)`,
               }}
             >
@@ -283,7 +289,7 @@ export const Slices: React.FC<{
                 fontSize: nameSize,
                 fontWeight: 700,
                 letterSpacing: '-0.02em',
-                color: ON_FILL,
+                color: INK,
                 opacity: fit,
               }}
             >

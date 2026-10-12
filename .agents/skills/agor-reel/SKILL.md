@@ -40,6 +40,8 @@ out/<file>.mp4`), then the reel. Copy finished renders to
   long-GOP clip can land on a keyframe seconds away; a frame-picking sheet
   once showed EngBot's table ~2 s early. Confirm with `-i clip -ss <t>`
   (decode-accurate) before committing a `trimBefore`.
+- `tile=` only writes a sheet once every cell is filled: give `-t` a
+  little extra or you get no file and no error.
 - A dark frame on a 1 fps sheet is often a cross-fade or a fade; check a
   still before "fixing" it.
 - Say what you checked and what you couldn't (feel, rhythm). Never claim
@@ -47,15 +49,21 @@ out/<file>.mp4`), then the reel. Copy finished renders to
 
 ## Brand look
 
-- **Palette**: agor.live's dark palette, `src/brand/palette.ts` (from
+- **Palette**: agor.live's dark look, `src/brand/palette.ts` (from
   `apps/agor-docs/components/LandingPage.module.css` on `main`). Background
-  `#07100f`, ink `#eafff9`, fills from the green / teal / aqua / sky range
-  (`GREEN #2ea78f`, `TEAL #34e6c4`, `AQUA #a8f5ed`, `SKY #7ad9ff`). Evan
-  rejected playful pink/yellow/blue and a mostly-mint set with lime: stay in
-  the blue-green range, and alternate light/dark neighbors so adjacent
-  fills read as distinct.
-- **Type**: Space Grotesk (`@remotion/google-fonts`), loaded in every
-  composition that renders text (the reel too, or it falls back to serif).
+  `#07100f`, ink `#eafff9`. Big color blocks use rich gradient fills that
+  run green → teal → blue → indigo (`FILL_GREEN`, `FILL_TEAL`, `FILL_BLUE`,
+  `FILL_INDIGO`, after the site's teammates ring) with white ink on top.
+  Evan rejected, in turn: playful pink/yellow/blue; mostly-mint with lime;
+  and pastel aqua/sky ("minty-gross", "lavender is odd", two near-identical
+  greens). Keep fills saturated and clearly distinct; no pastels.
+- **Type**: Hanken Grotesk, the site's heading face (`src/brand/fonts.ts`),
+  in every composition. Headings follow the site's style with
+  `<Heading text="Work *together* **again**" />` (`src/brand/Heading.tsx`):
+  plain words are thin (100), `*accent*` is 600 with the teal→sky gradient,
+  `**strong**` is 700 ink. Words can rise in one by one (`at`).
+- **Slogan**: "Work together again" rises in under the wordmark at the
+  start (`LogoIntro`).
 - **Wordmark**: `src/brand/AgorWordmark.tsx`. The mark is a frame-driven
   port of `../animated_agor_logo/index_4k.html` (same paths, keyframes,
   easings); the "agor" letters are crops of the flat lockup PNG in
@@ -85,6 +93,11 @@ cameras with `Easing.bezier(0.45, 0, 0.55, 1)` for pans and
   through a wide shot.
 - Trim waits out of the source (`trimBefore` after the thing appears), not
   with speed alone; an empty panel reads as dead air.
+- End a beat before the page navigates: UI clips contain boot screens and
+  empty states between pages (`actor.open()`), and they read as broken
+  product. Check each beat's last second on a decode-accurate sheet.
+- Takeaways or captions that belong together land together (stagger them a
+  little), not each on its own clip's schedule.
 
 ## Motion lessons (Evan's director notes)
 
