@@ -100,7 +100,8 @@ export const NameCard: React.FC<{
 };
 
 /** End card: the panes dim behind the finished logo and the title. */
-export const EndCard: React.FC<{ line: string }> = ({ line }) => {
+/** The sign-off: the finished logo on the navy card (an optional line under it). */
+export const EndCard: React.FC<{ line?: string }> = ({ line }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   return (
@@ -116,7 +117,7 @@ export const EndCard: React.FC<{ line: string }> = ({ line }) => {
         style={{
           width: 1280,
           height: 720,
-          marginTop: -160,
+          marginTop: line ? -160 : 0,
           // Feather the logo clip's own background into the card's.
           maskImage: 'radial-gradient(ellipse 45% 55% at center, black 55%, transparent 100%)',
           WebkitMaskImage:
@@ -144,7 +145,7 @@ export const EndCard: React.FC<{ line: string }> = ({ line }) => {
           opacity: interpolate(frame, [0.35 * fps, 0.8 * fps], [0, 1], clamp),
         }}
       >
-        {line}
+        {line ?? null}
       </div>
     </AbsoluteFill>
   );

@@ -6,7 +6,7 @@ import { EndCard } from './teammates/Cards';
 
 const { fontFamily } = loadFont('normal', { weights: ['600', '700'] });
 
-const END = 2.8;
+const END = 1.8;
 export const REEL_SECONDS = BEBOP_BODY_SECONDS + INTERFACES_SECONDS + END;
 
 /**
@@ -31,7 +31,7 @@ export const TeammatesReel: React.FC = () => {
         <Interfaces />
       </Sequence>
       <Sequence name="End" from={f(BEBOP_BODY_SECONDS + INTERFACES_SECONDS)} premountFor={fps}>
-        <EndCard line="AI teammates that can do anything" />
+        <EndCard />
       </Sequence>
     </AbsoluteFill>
   );

@@ -20,24 +20,28 @@ sizzle reel and website, as [Remotion](https://www.remotion.dev) compositions.
 
 ## Compositions
 
-- **AiTeammatesBebop** (`src/teammates/Bebop.tsx`): "AI teammates that can
-  do anything", Cowboy Bebop-style.
-  - The Agor logo draws on.
-  - Four colored slices (one per teammate) slam in under the title.
-  - One by one, each slice opens to full screen while its question is typed
-    (bot name tag on screen), and on send closes back into its slice, now
-    showing the session.
-  - Then all four play their real answers side by side, and it ends on the
-    logo and title.
-  - Timing comes from the clips' marks (`question`, `sent`, `answered`);
-    pacing constants sit at the top of `Bebop.tsx`.
-- **Interfaces** (`src/interfaces/`): "talk to them from anywhere", 5s. The
-  same question to EngBot from Slack, Discord, Claude Desktop (through Agor's
-  MCP server) and Agor itself, in four comic panels cut by an off-axis cross
-  of black gutters, each punching in with a slanted tab. Slack, Discord and
-  Claude Desktop are hand-rolled stages (`stages.tsx`): each app's visual
-  grammar, not pixel clones, no third-party logos (like the website's Slack
-  scene). The Agor panel is the real EngBot clip.
+- **AiTeammatesBebop** (`src/teammates/Bebop.tsx`, `Slices.tsx`): "AI teammates
+  that can do anything", Cowboy Bebop-style.
+  - The Agor logo draws on, then four colored slanted slices slam in under the
+    title.
+  - Accordion: each slice opens in turn (to about 85% of the width, the others
+    squeezing into strips with vertical names) while its question is typed,
+    its recording sliding up into it, clipped to the slanted shape. It closes
+    as the next opens, its video cropped down with it.
+  - The slices even out and each video settles into a slanted-edged band
+    showing the whole session, name above and question below, while the
+    answers play.
+  - Ends on a logo-only sign-off.
+- **Interfaces** (`src/interfaces/`): "Access Agor from where you work".
+  - Four comic panels cut by an off-axis cross of black gutters start as
+    color blocks with each app's mark (official marks from the CC0 `logos`
+    icon set, unaltered) under the title.
+  - One by one each recording wipes in from its panel's outer corner: the
+    same question to EngBot from Slack, Discord, Claude Desktop (through
+    Agor's MCP server) and Agor.
+  - Slack, Discord and Claude Desktop are hand-rolled stages (`stages.tsx`)
+    in each app's visual grammar, not pixel clones. The Agor panel is the
+    real EngBot clip.
 - **TeammatesReel** (`src/Reel.tsx`): the AI teammates segment hard-cut into
   Interfaces, with one end card.
 - **AiTeammatesGrid** (`src/teammates/AiTeammates.tsx`): the first try, a
