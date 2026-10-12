@@ -20,10 +20,15 @@ const CURSOR_SVG =
   '<path d="M4 2 L4 22 L9.5 17.5 L13 25 L16.5 23.5 L13 16 L20 16 Z" ' +
   'fill="white" stroke="black" stroke-width="1.5" stroke-linejoin="round"/></svg>';
 
+export interface CursorOptions {
+  /** Draw a soft ring where the cursor presses, so clicks read on camera. */
+  ripple?: boolean;
+}
+
 /** Inject the fake cursor overlay. Safe to call again after a navigation. */
-export async function installCursor(page: Page): Promise<void> {
+export async function installCursor(page: Page, options: CursorOptions = {}): Promise<void> {
   await page.evaluate(
-    ({ id, svg }) => {
+    ({ id, svg, ripple }) => {
       if (document.getElementById(id)) return;
       const cursor = document.createElement('div');
       cursor.id = id;
@@ -76,8 +81,42 @@ export async function installCursor(page: Page): Promise<void> {
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
+      if (ripple) {
+        // Centered on the cursor's tip as drawn (curX/curY), not the raw
+        // event, so the ring and the arrow always agree on camera.
+        window.addEventListener(
+          'mousedown',
+          () => {
+            const ring = document.createElement('div');
+            ring.style.cssText = [
+              'position:fixed',
+              'z-index:2147483646',
+              'pointer-events:none',
+              `left:${curX + 4 - 22}px`,
+              `top:${curY + 2 - 22}px`,
+              'width:44px',
+              'height:44px',
+              'border-radius:50%',
+              'border:2px solid rgba(255,255,255,0.9)',
+              'background:rgba(255,255,255,0.14)',
+              'box-shadow:0 0 0 1px rgba(0,0,0,0.25)',
+            ].join(';');
+            document.documentElement.appendChild(ring);
+            ring
+              .animate(
+                [
+                  { transform: 'scale(0.35)', opacity: 0.85 },
+                  { transform: 'scale(1.25)', opacity: 0 },
+                ],
+                { duration: 520, easing: 'cubic-bezier(0.2, 0.7, 0.3, 1)' }
+              )
+              .finished.then(() => ring.remove());
+          },
+          true
+        );
+      }
     },
-    { id: CURSOR_ID, svg: CURSOR_SVG }
+    { id: CURSOR_ID, svg: CURSOR_SVG, ripple: options.ripple === true }
   );
 }
 

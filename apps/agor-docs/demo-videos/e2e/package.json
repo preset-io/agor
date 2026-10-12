@@ -2,7 +2,7 @@
   "name": "@agor/real-agor-e2e",
   "version": "0.1.0",
   "private": true,
-  "description": "Playwright E2E suite that drives the REAL Agor daemon + UI (isolated scratch DB, real login, real components) instead of the /demo/marketing-video fixture route. Doubles as both a regression test and a booth-loop video source (built-in Playwright video recording). Standalone install (not a pnpm workspace member) so Playwright stays out of the main workspace lockfile \u2014 same convention as ../ (the fixture capture pipeline).",
+  "description": "Playwright E2E suite that drives the REAL Agor daemon + UI (isolated scratch DB, real login, real components) instead of the /demo/marketing-video fixture route. Doubles as both a regression test and a booth-loop video source (built-in Playwright video recording). Standalone install (not a pnpm workspace member) so Playwright stays out of the main workspace lockfile — same convention as ../ (the fixture capture pipeline).",
   "type": "module",
   "scripts": {
     "test": "playwright test --project=flow",
@@ -11,7 +11,8 @@
     "test:replay": "AGOR_E2E_AGENT_MODE=replay playwright test --project=flow",
     "reel": "npx tsx scripts/stitch-reel.ts",
     "syllabus:md": "npx tsx scripts/generate-syllabus-md.ts",
-    "clip": "npx tsx scripts/clip.ts"
+    "clip": "npx tsx scripts/clip.ts",
+    "seed": "npx tsx scripts/seed.ts"
   },
   "dependencies": {
     "@playwright/test": "^1.62.1"

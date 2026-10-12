@@ -2,9 +2,12 @@ import { defineConfig, devices } from '@playwright/test';
 import { BASE_URL, STORAGE_STATE_PATH, TEST_RESULTS_DIR } from './support/harness';
 
 // AGOR_E2E_VIDEO=4k renders the UI at deviceScaleFactor 2 and records
-// 3840x2160 — verified genuine 2x raster detail, not an upscale. Default
-// stays 1080p: 4K roughly quadruples encode cost and file size, so reserve
-// it for final courseware/booth exports.
+// 3840x2160 of genuine 2x raster detail. Chromium's screencast (which
+// Playwright records from) falls back to CSS-pixel frames after the first
+// cross-site navigation, so a 4K "recording" is otherwise a 1080p picture in
+// the top-left quarter of a grey frame; --force-device-scale-factor=2 keeps
+// the frames at device size (verified with Chromium 151). Default stays
+// 1080p for the syllabus; clips (npm run clip) record 4K by default.
 const fourK = process.env.AGOR_E2E_VIDEO === '4k';
 const scaleFactor = fourK ? 2 : 1;
 const videoSize = fourK ? { width: 3840, height: 2160 } : { width: 1920, height: 1080 };
@@ -48,6 +51,7 @@ export default defineConfig({
       ...devices['Desktop Chrome'],
       viewport: { width: 1920, height: 1080 },
       deviceScaleFactor: scaleFactor,
+      launchOptions: { args: fourK ? ['--force-device-scale-factor=2'] : [] },
     },
   })),
 });

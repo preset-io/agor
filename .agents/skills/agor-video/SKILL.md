@@ -8,14 +8,14 @@ description: Start here for any Agor video work (product clips, tutorial or how-
 There are two ways to make Agor footage. Pick one per shot, then load its
 skill.
 
-|               | **Marketing scenes** (`marketing-scenes` skill)                                                                 | **Real-app capture** (`demo-videos` skill)                                                           |
-| ------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| What it films | Real UI components on fixture data, choreographed on a virtual clock                                            | The real daemon + UI from an empty or checkpointed workspace, driven by Playwright with human pacing |
-| Best for      | Polished, loopable site videos; things the app can't do on cue (six cursors, perfect timing, impossible states) | Proof that it really works: onboarding, live agent turns, settings, how-to and tutorial clips        |
-| Determinism   | Frame-exact (stepped clock)                                                                                     | Real time; agent turns recorded once and replayed from a cassette                                    |
-| Cost          | Free                                                                                                            | Free on replay; live agent turns cost real API money                                                 |
-| Lives in      | `apps/agor-ui/src/pages/marketing/` + `apps/agor-docs/demo-videos/`                                             | `apps/agor-docs/demo-videos/e2e/`                                                                    |
-| Output        | `apps/agor-docs/public/videos/` (site)                                                                          | `~/Desktop/agor_video/` (clips, reels), then site if wanted                                          |
+|               | **Marketing scenes** (`marketing-scenes` skill)                                                                 | **Real-app capture** (`demo-videos` skill)                                                                           |
+| ------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| What it films | Real UI components on fixture data, choreographed on a virtual clock                                            | The real daemon + UI from an empty or checkpointed workspace, driven by Playwright with human pacing                 |
+| Best for      | Polished, loopable site videos; things the app can't do on cue (six cursors, perfect timing, impossible states) | Proof that it really works: multiplayer with real accounts and live cursors, agent turns, how-tos; scripted zoom/pan |
+| Determinism   | Frame-exact (stepped clock)                                                                                     | Real time; agent turns recorded once and replayed from a cassette                                                    |
+| Cost          | Free                                                                                                            | Free on replay; live agent turns cost real API money                                                                 |
+| Lives in      | `apps/agor-ui/src/pages/marketing/` + `apps/agor-docs/demo-videos/`                                             | `apps/agor-docs/demo-videos/e2e/`                                                                                    |
+| Output        | `apps/agor-docs/public/videos/` (site)                                                                          | `~/Desktop/agor_video/` (clips, reels), then site if wanted                                                          |
 
 Rules of thumb:
 

@@ -1,32 +1,27 @@
-// Clip: board-tour (support/clips.ts). Starts from the flow's
-// pre-07-parallel-worktrees checkpoint: a board with the donut-shop repo,
-// branches, and the zones lesson 05 drew. No agent turns.
+// Clip: board-tour (support/clips.ts). The team-board seed: Sam's view of
+// the Donut Shop board, four zones with branches in flight. No agent turns.
 //
 //   npm run clip -- board-tour
 
-import { expect, test } from '@playwright/test';
-import { BOARD_PATH } from '../../support/harness.ts';
-import { beat, glideTo, openLesson, settle, spotlight } from '../../support/pacing.ts';
+import { expect } from '@playwright/test';
+import { clip } from '../../support/studio.ts';
 
-test('clip: board-tour', async ({ page }) => {
-  await openLesson(page, BOARD_PATH, 'board-tour');
-  await expect(page.locator('.react-flow').first()).toBeVisible({ timeout: 30_000 });
-  await beat(page);
+clip('board-tour', async ({ studio }) => {
+  const sam = await studio.actor('sam', { filmed: true });
+  await sam.open(studio.world.board('main').path);
+  await expect(sam.card('glaze-menu-refresh')).toBeVisible({ timeout: 30_000 });
+  await studio.action();
+  await sam.hold(1500);
 
-  // Visit each card on the board in turn (zones and branch cards are both
-  // React Flow nodes), lingering on each.
-  const nodes = page.locator('.react-flow__node');
-  const count = Math.min(await nodes.count(), 6);
-  expect(count).toBeGreaterThan(0);
-  for (let i = 0; i < count; i++) {
-    await spotlight(page, nodes.nth(i));
-  }
+  // Push in on the branch being built.
+  await sam.camera.focus(sam.card('glaze-menu-refresh'), { ms: 1200 });
+  await sam.spotlight(sam.card('glaze-menu-refresh'));
 
-  // Finish on a branch card, then let the whole board breathe.
-  const card = page
-    .locator('.react-flow__node')
-    .filter({ hasText: /glaze|donut|menu/i })
-    .first();
-  if ((await card.count()) > 0) await glideTo(page, card);
-  await settle(page);
+  // Across to the branch waiting on review.
+  await sam.camera.focus(sam.card('order-ahead-checkout'), { ms: 1100 });
+  await sam.spotlight(sam.card('order-ahead-checkout'));
+
+  // And back out to the whole board.
+  await sam.camera.wide({ ms: 1300 });
+  await sam.settle();
 });

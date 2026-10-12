@@ -23,6 +23,26 @@ import { SCRATCH_DIR, snapshotCheckpoint } from './harness.ts';
 /** Where each page's cursor currently rests (Playwright doesn't expose it). */
 const cursorPos = new WeakMap<Page, { x: number; y: number }>();
 
+/** Listens to one page's cursor: a take logs these to its timeline (studio.ts). */
+export interface PacingObserver {
+  rest(x: number, y: number): void;
+  click(x: number, y: number): void;
+}
+const observers = new WeakMap<Page, PacingObserver>();
+
+export function observePacing(page: Page, observer: PacingObserver): void {
+  observers.set(page, observer);
+}
+
+/** Tell the pacing helpers where a page's cursor is (after a raw mouse move). */
+export function setCursorPosition(page: Page, x: number, y: number): void {
+  cursorPos.set(page, { x, y });
+}
+
+export function cursorPosition(page: Page): { x: number; y: number } {
+  return cursorPos.get(page) ?? { x: 960, y: 540 };
+}
+
 const STEP_MS = 16; // target sampling cadence; wall-clock drives position
 
 /** A short narrative pause between steps. */
@@ -80,6 +100,7 @@ export async function pacedMove(page: Page, x: number, y: number, durationMs = 6
     await page.waitForTimeout(STEP_MS);
   }
   cursorPos.set(page, { x, y });
+  observers.get(page)?.rest(x, y);
 }
 
 /** Smooth-scroll a target into the comfortable middle of the viewport. */
@@ -103,6 +124,8 @@ export async function glideTo(page: Page, target: Locator, durationMs = 650): Pr
 /** Glide to a target and click it — the standard demo interaction. */
 export async function glideAndClick(page: Page, target: Locator, durationMs = 650): Promise<void> {
   await glideTo(page, target, durationMs);
+  const at = cursorPosition(page);
+  observers.get(page)?.click(at.x, at.y);
   await target.click();
   await page.waitForTimeout(250);
 }

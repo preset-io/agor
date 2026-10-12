@@ -1,6 +1,6 @@
 ---
 name: demo-videos
-description: Record footage of the REAL Agor app (daemon + UI) with Playwright at human pace — standalone clips (npm run clip), tutorial/how-to snippets, and the from-zero syllabus and its reel — in apps/agor-docs/demo-videos/e2e. Use for any real-app video; for choreographed fixture videos use marketing-scenes (start at agor-video if unsure).
+description: Record footage of the REAL Agor app (daemon + UI) with Playwright at human pace — standalone clips (npm run clip) with seeded state, multiple signed-in people and live cursors, and scripted zoom/pan, tutorial/how-to snippets, and the from-zero syllabus and its reel — in apps/agor-docs/demo-videos/e2e. Use for any real-app video; for choreographed fixture videos use marketing-scenes (start at agor-video if unsure).
 ---
 
 # Real-app video capture
@@ -14,39 +14,81 @@ Playwright projects:
   regression test, a training snippet, and reel footage, and running it
   leaves behind the checkpoint ladder clips start from.
 - **`clips`** (`tests/clips/`, metadata in `support/clips.ts`): standalone
-  shots. Each starts from a checkpoint (or empty), films one thing, and is
-  exported on its own. **New footage almost always goes here.**
+  shots. Each starts from a seeded state, films one moment (with as many
+  signed-in people as it needs), and is exported on its own with scripted
+  zooms. **New footage almost always goes here.**
 
 Read this before touching any of it; it encodes several days of hard-won
 debugging.
 
 ## Making a clip (the usual job)
 
-1. **Pick a starting state.** `startFrom` names a directory in
-   `~/.agor-e2e/checkpoints/` (`pre-<lessonId>` snapshots the flow writes as
-   it runs, e.g. `pre-07-parallel-worktrees` = a board with the donut-shop
-   repo, branches and zones). If the ladder is missing or stale, run the
-   flow once: `npm run test:replay` (free; replays recorded agent turns).
-   Need state the ladder lacks? Seed it inside the clip before
-   `openLesson()` through the daemon's REST API (off camera), or add a
-   lesson that builds it.
-2. **Register it** in `support/clips.ts`: id, title, purpose, `startFrom`,
-   `agent`, beat-sheet `script`, `outputs` (`master` always; `site` for
+Clips are written against the **studio** (`support/studio.ts`): cast
+members as actors, a virtual camera, and a seeded world. Copy
+`tests/clips/two-cursors.spec.ts` (multiplayer) or `board-tour.spec.ts`.
+
+1. **Pick or write a seed** (`support/seeds.ts`): the state the clip opens
+   on, built off camera through the daemon's REST API by `support/seeder.ts`
+   (cast accounts, AI connection, repos, boards with zones, real git
+   branches placed in zones, committed files, sessions, real agent turns,
+   notes, comment threads with replies and reactions). Seeds stack with
+   `extends`, and each is cached as a checkpoint keyed by a hash of its
+   code, so editing one rebuilds only it and what stacks on it.
+   `npm run seed -- --list` / `npm run seed -- <name> [--rebuild]`.
+   A clip can instead start `{ after: '<clip>' }` (where another clip
+   ended; it's recorded first if needed), `{ checkpoint }`, or `'empty'`.
+2. **Register it** in `support/clips.ts`: id, title, purpose, `start`,
+   `agent`, `layout` (`single`, or `split` for two filmed actors side by
+   side), beat-sheet `script`, `outputs` (`master` always; `site` for
    agor.live renditions; `tv` for a 4K30 Roku master).
-3. **Write `tests/clips/<id>.spec.ts`** with only the pacing verbs (below).
-   Open with `openLesson(page, path, '<id>')` so boot screens are trimmed.
-   Copy `tests/clips/board-tour.spec.ts`.
-4. **Record + export:** `npm run clip -- <id>` (add `--live` for new agent
-   turns, `--4k` for native 4K capture, `--export-only` to re-export).
-   Output lands in `~/Desktop/agor_video/clips/<id>/` and the folder opens.
-5. **Verify** with the recipes below, then commit the spec + registry entry.
-   For site use, copy the renditions into `apps/agor-docs/public/videos/`
-   (see the `agor-video` skill for formats).
+3. **Write `tests/clips/<id>.spec.ts`** with `clip('<id>', async ({ studio }) => ...)`:
+   - `studio.actor('sam', { filmed: true })`, `studio.actor('ada')`: each is a
+     separate signed-in browser. Unfilmed actors keep their live cursor on
+     everyone's screen (Agor hides an idle remote cursor after 5s).
+   - `actor.open(path)`, then `await studio.action()` when everyone is on
+     screen: the clip starts there (boot screens are cut).
+   - Actor verbs: `click`, `type`, `glideTo`, `spotlight`, `move`, `drag`,
+     `dragTo` (fractions of the target, so it holds at any board zoom),
+     `press`, `beat`, `settle`, `hold`, `act(page => ...)` for raw steps.
+     Locators: `card(branch)`, `node(text)`, `remoteCursor(castKey)`.
+   - Camera: `actor.camera.focus(locator | locators[] | rect, { zoom, ms, ease })`
+     and `camera.wide()`. It waits for the move by default, so the action
+     follows the push-in. Eases: `smooth` (default), `spring`, `linear`.
+   - `studio.world.board('main').path`, `.branch(name)`, `.session(name)`:
+     what the seed built, by name. `studio.mark(label)` drops a cut point.
+4. **Record + export:** `npm run clip -- <id>`. Records at 4K (true 2x
+   pixels, so zooms up to 2x stay sharp in the 1080p master), then renders
+   to `~/Desktop/agor_video/clips/<id>/`. Flags: `--export-only`
+   (re-render the last take), `--live` (record agent turns), `--1080`,
+   `--reseed`, `--no-open`.
+5. **Tune without re-shooting:** the take's `timeline.jsonl` (in
+   `~/Desktop/agor_video/raw-recordings/takes/<id>/`) holds every camera
+   move with its time, target rect, zoom, length and ease. Edit it and
+   `--export-only`. The export warns when a resting cursor falls outside
+   the camera's frame or an explicit zoom exceeds what the source holds.
+6. **Verify** with the recipes below, then commit the spec, registry entry
+   and any seed. For site use, copy the renditions into
+   `apps/agor-docs/public/videos/` (formats in the `agor-video` skill).
+
+### How the camera and sync work
+
+- Each filmed actor's video starts with a one-frame-exact sync: `open()`
+  paints a magenta card during the boot screens and logs its wall time;
+  the renderer finds that frame, so every timeline event lands on the
+  right frame no matter when each browser started recording.
+- `scripts/lib/render.ts` applies the camera with ffmpeg's `perspective`
+  filter (per-frame corner expressions, cubic sampling: sub-pixel smooth
+  pans, unlike `crop`/`zoompan`), as a balanced `if()` tree over the
+  frame counter. About real time at 4K. No other dependencies.
+- Clicks by filmed actors draw a soft ring (cursor ripple) at capture.
+- The board's side panel starts collapsed (`actor(..., { sidePanel: 'open' })`
+  to keep it); other localStorage UI prefs can be added the same way in
+  `Studio.actor`.
 
 ## Architecture map
 
 - `support/harness.ts` — global setup/teardown. Scratch DB + git home in
-  `.e2e-runtime/` (wiped per run), ports 3131/5199/8899 (daemon/UI/cassette
+  `~/.agor-e2e/runtime` (wiped per run), ports 3131/5199/8899 (daemon/UI/cassette
   proxy). Dev-admin bootstrap (admin@agor.live/admin) via three env gates.
   Login is REST-minted into Playwright storageState — never on camera.
   Demo repos mirrored once into `.e2e-cache/`, fresh clones cut per run.
@@ -58,7 +100,7 @@ debugging.
   `spotlight` (hover + dwell, for pointing at options), `typeInto`,
   `beat`/`settle`, and `openLesson(page, urlPath, lessonId)` which waits out
   loading screens and writes per-lesson trim marks to
-  `.e2e-runtime/trim-marks.jsonl` for the stitcher.
+  `~/.agor-e2e/runtime/trim-marks.jsonl` for the stitcher.
 - `support/cassette-proxy.ts` — records/replays Anthropic traffic.
   `AGOR_E2E_AGENT_MODE=live` records real (metered!) turns into
   `cassettes/flow.json` (committed; auth headers redacted); `replay` plays
@@ -93,8 +135,26 @@ debugging.
 - Restored checkpoints are migrated to the current schema on every run, so
   old snapshots still boot.
 - macOS has no `timeout`; run long suites in the background instead.
-- Biome ignores `demo-videos/e2e/` and there's no tsconfig there (tsx runs
-  it), so neither catches errors in these files; read them carefully.
+- Biome skips `demo-videos/e2e/` in repo-wide runs but checks files passed
+  explicitly (`npx biome check --write <files>`, which the commit hook
+  does). There's no tsconfig; typecheck with the root `tsc` and
+  `--ignoreConfig --allowImportingTsExtensions --module nodenext
+--moduleResolution nodenext --strict --skipLibCheck <files>`.
+- **4K needs `--force-device-scale-factor=2`** (set in
+  `playwright.config.ts` when `AGOR_E2E_VIDEO=4k`). Without it, Chromium's
+  screencast drops to CSS-pixel frames after the first navigation and a
+  "4K" video is a 1080p picture in the top-left quarter of a grey frame
+  (Chromium 151). Recordings made with `--4k` before Oct 2026 have this.
+- Checkpoints copy the database with SQLite's online backup (`sqlite3
+.backup`), so snapshots taken while the daemon runs are consistent.
+- Seeding facts: board edit rights for members come from the board's
+  `others` policy (the seeder sets editor + collaborator; branch
+  capabilities must include `terminal.open` when filesystem access isn't
+  `none`). `onboarding_completed` can only be set by the user on their own
+  row after creation. Creating a branch is async (`filesystem_status`
+  `creating` → `ready`). REST can't write a finished transcript (tasks are
+  executor-owned); use `prompt()` for a real turn, or copy
+  `packages/core/src/seed/demo-fixtures.ts` for DB-level transcripts.
 
 ## Iron rules
 

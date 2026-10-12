@@ -329,9 +329,10 @@ function patchPlaywrightVideoQuality(): void {
 /**
  * Snapshot the current scratch runtime as a named checkpoint. APFS
  * clone-copy (cp -c) makes this near-instant and copy-on-write; falls back
- * to a plain copy elsewhere. Logs are excluded; the daemon may still be
- * writing (heartbeats), so a checkpoint is an iteration cache, not a
- * byte-perfect backup — worst case, re-record from an earlier one.
+ * to a plain copy elsewhere. Logs are excluded, and the database is taken
+ * with SQLite's online backup so it is consistent even though the daemon
+ * is still writing (heartbeats). Repo and branch files are copied as they
+ * stand, so snapshot between actions, never during one.
  */
 export function snapshotCheckpoint(name: string): void {
   if (!existsSync(DB_PATH)) return;
@@ -350,6 +351,21 @@ export function snapshotCheckpoint(name: string): void {
   rmSync(path.join(dest, 'daemon.log'), { force: true });
   rmSync(path.join(dest, 'ui.log'), { force: true });
   rmSync(path.join(dest, 'cassette-proxy.log'), { force: true });
+  // The file copy above can catch the database mid-write (the daemon is
+  // live). Replace it with SQLite's online backup, which is consistent
+  // under concurrent writers, so a checkpoint always restores cleanly.
+  for (const suffix of ['', '-wal', '-shm']) {
+    rmSync(path.join(dest, `agor-e2e.db${suffix}`), { force: true });
+  }
+  const backup = spawnSync(
+    'sqlite3',
+    [DB_PATH, `.backup '${path.join(dest, 'agor-e2e.db').replace(/'/g, "''")}'`],
+    { encoding: 'utf8' }
+  );
+  if (backup.status !== 0) {
+    console.warn(`[harness] checkpoint ${name}: database backup failed (${backup.stderr.trim()})`);
+    rmSync(dest, { recursive: true, force: true });
+  }
 }
 
 /**
