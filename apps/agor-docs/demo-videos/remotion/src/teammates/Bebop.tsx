@@ -9,7 +9,7 @@ import {
 } from 'remotion';
 import { EndCard, LogoIntro, NAVY } from './Cards';
 import marks from './marks.json';
-import { OPEN, promptSeconds, REVEAL, type SliceSpec, Slices } from './Slices';
+import { PROMPT_LEAD, promptSeconds, REVEAL, type SliceSpec, Slices } from './Slices';
 
 const { fontFamily } = loadFont('normal', { weights: ['500', '600', '700'] });
 
@@ -22,6 +22,7 @@ const PROMPT_RATE = 1.8;
 const ANSWER_RATE = 1.25;
 const HOLD = 1.4;
 const END = 1.8;
+const FADE = 0.6; // to black at the end of the segment
 
 const spec = (bot: Bot, rest: Omit<SliceSpec, 'question0' | 'sent' | 'answered'>): SliceSpec => ({
   ...rest,
@@ -65,11 +66,11 @@ const SLICES: SliceSpec[] = [
 const OPEN_AT: number[] = [TITLE_HOLD];
 for (let i = 1; i < SLICES.length; i++) {
   const prev = SLICES[i - 1];
-  OPEN_AT.push(OPEN_AT[i - 1] + OPEN * 0.45 + promptSeconds(prev, PROMPT_RATE) + 0.15);
+  OPEN_AT.push(OPEN_AT[i - 1] + PROMPT_LEAD + promptSeconds(prev, PROMPT_RATE) + 0.15);
 }
 const last = SLICES[SLICES.length - 1];
 const REVEAL_AT =
-  OPEN_AT[OPEN_AT.length - 1] + OPEN * 0.45 + promptSeconds(last, PROMPT_RATE) + 0.2;
+  OPEN_AT[OPEN_AT.length - 1] + PROMPT_LEAD + promptSeconds(last, PROMPT_RATE) + 0.2;
 const playFor = (s: SliceSpec) => (s.answered + 1.5 - s.sent) / ANSWER_RATE;
 const SEGMENT = REVEAL_AT + REVEAL + Math.max(...SLICES.map(playFor)) + HOLD;
 export const BEBOP_SECONDS = LOGO + SEGMENT + END;
@@ -105,6 +106,7 @@ export const AiTeammatesBebop: React.FC<{ withEnd?: boolean }> = ({ withEnd = tr
         <Sequence name="Title" durationInFrames={f(TITLE_HOLD + 0.2)} premountFor={fps}>
           <BandTitle text="AI teammates that can do anything" holdFor={TITLE_HOLD} />
         </Sequence>
+        <FadeToBlack at={SEGMENT - FADE} />
       </Sequence>
       {withEnd ? (
         <Sequence name="End" from={f(LOGO + SEGMENT)} premountFor={fps}>
@@ -117,6 +119,22 @@ export const AiTeammatesBebop: React.FC<{ withEnd?: boolean }> = ({ withEnd = tr
 
 const ease = Easing.bezier(0.16, 1, 0.3, 1);
 const clamp = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
+
+/** A black overlay fading in from `at` (seconds) over FADE. */
+export const FadeToBlack: React.FC<{ at: number; seconds?: number }> = ({ at, seconds = FADE }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const t = frame / fps;
+  return (
+    <AbsoluteFill
+      style={{
+        background: '#000',
+        zIndex: 30,
+        opacity: interpolate(t, [at, at + seconds], [0, 1], clamp),
+      }}
+    />
+  );
+};
 
 /** A section title on a dark band across the frame, wiping in and out. */
 export const BandTitle: React.FC<{ text: string; holdFor: number }> = ({ text, holdFor }) => {

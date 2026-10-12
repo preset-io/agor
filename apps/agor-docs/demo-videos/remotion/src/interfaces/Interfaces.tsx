@@ -12,7 +12,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
-import { BandTitle } from '../teammates/Bebop';
+import { FadeToBlack } from '../teammates/Bebop';
 import marks from '../teammates/marks.json';
 import {
   type ChatBeats,
@@ -25,11 +25,20 @@ import {
 
 const { fontFamily } = loadFont('normal', { weights: ['600', '700'] });
 
-const TITLE_HOLD = 1.7;
-/** When each panel's recording wipes in (seconds), in reading order. */
-const WIPE_AT = [1.85, 2.15, 2.45, 2.75];
-const WIPE = 0.55;
-export const INTERFACES_SECONDS = 6.6;
+// Pacing, in seconds (the section starts and ends on black).
+const TITLE_IN = 0.2; // the title's words rise in, alone on black
+const TITLE_OUT = 2.5; // its band wipes away
+/** When each color segment spins in behind the title. */
+const SPIN_AT = [0.9, 1.0, 1.1, 1.2];
+const SPIN = 0.65;
+/** When each app's mark pops onto its segment. */
+const MARK_AT = [1.35, 1.43, 1.51, 1.59];
+/** When each segment crops down to its name label, revealing the recording. */
+const WIPE_AT = [2.7, 3.0, 3.3, 3.6];
+const WIPE = 0.6;
+const FADE_AT = 7.0;
+const FADE = 0.6;
+export const INTERFACES_SECONDS = FADE_AT + FADE;
 
 const ease = Easing.bezier(0.16, 1, 0.3, 1);
 const clamp = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
@@ -94,104 +103,199 @@ const BrandMark: React.FC<{
   );
 };
 
+/** Label geometry: the name's type size and a rough width for it. */
+const LABEL_SIZE = 38;
+const labelWidth = (name: string) => name.length * LABEL_SIZE * 0.56 + 56;
+const LABEL_H = LABEL_SIZE + 22;
+const lerpRect = (
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+  p: number
+) => ({
+  x: a.x + (b.x - a.x) * p,
+  y: a.y + (b.y - a.y) * p,
+  w: a.w + (b.w - a.w) * p,
+  h: a.h + (b.h - a.h) * p,
+});
+
 /**
- * A panel: first a flat color block with the app's mark and name, then its
- * recording wipes in from the panel's outer corner and the mark gives way to
- * a small corner tab.
+ * A panel:
+ * - its color segment spins in around the cross's center;
+ * - the app's mark pops on, on a white tile, with the name under it;
+ * - then the segment crops down to just the name and slides it into the
+ *   panel's outer corner as its label, uncovering the recording behind.
  */
 const PanelFrame: React.FC<{
   corner: Corner;
   color: string;
   name: string;
   mark: React.ReactNode;
-  tileBg: string;
-  enterAt: number;
+  spinAt: number;
+  markAt: number;
   wipeAt: number;
   children: React.ReactNode;
-}> = ({ corner, color, name, mark, tileBg, enterAt, wipeAt, children }) => {
+}> = ({ corner, color, name, mark, spinAt, markAt, wipeAt, children }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps;
   const panel = PANELS[corner];
   const { box } = panel;
-  const enter = interpolate(t, [enterAt, enterAt + 0.4], [0, 1], { ...clamp, easing: ease });
-  const wipe = interpolate(t, [wipeAt, wipeAt + WIPE], [0, 1], { ...clamp, easing: ease });
+  const spin = interpolate(t, [spinAt, spinAt + SPIN], [0, 1], { ...clamp, easing: ease });
+  const pop = interpolate(t, [markAt, markAt + 0.4], [0, 1], {
+    ...clamp,
+    easing: Easing.bezier(0.34, 1.56, 0.64, 1),
+  });
+  const crop = interpolate(t, [wipeAt, wipeAt + WIPE], [0, 1], { ...clamp, easing: ease });
   const scale = Math.max(box.w / STAGE_W, box.h / STAGE_H);
-  const dx = corner.endsWith('l') ? -1 : 1;
-  const dy = corner.startsWith('t') ? -1 : 1;
-  const tab: React.CSSProperties = {
-    position: 'absolute',
-    padding: '10px 26px',
-    background: color,
-    color: '#0b0d12',
-    fontSize: 38,
-    fontWeight: 700,
-    letterSpacing: '-0.02em',
-    clipPath: 'polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%)',
-    opacity: interpolate(wipe, [0.6, 1], [0, 1], clamp),
-    ...(corner.startsWith('t') ? { top: box.y + 26 } : { bottom: 1080 - box.y - box.h + 26 }),
-    ...(corner.endsWith('l') ? { left: box.x + 30 } : { right: 1920 - box.x - box.w + 30 }),
+  const top = corner.startsWith('t');
+  const leftSide = corner.endsWith('l');
+  const sign = corner === 'tl' || corner === 'br' ? -1 : 1;
+
+  // The color block: the whole panel, cropping down to the label.
+  const lw = labelWidth(name);
+  const label = {
+    x: leftSide ? box.x + 30 : box.x + box.w - 30 - lw,
+    y: top ? box.y + 26 : box.y + box.h - 26 - LABEL_H,
+    w: lw,
+    h: LABEL_H,
   };
+  const block = lerpRect(box, label, crop);
+  // The name: from under the mark to the middle of the label.
+  // The mark sits clear of the title band across the middle.
+  const markY = box.y + box.h / 2 - (top ? 90 : 20);
+  const startName = { x: box.x + box.w / 2, y: markY + 150 };
+  const nameX = startName.x + (label.x + label.w / 2 - startName.x) * crop;
+  const nameY = startName.y + (label.y + label.h / 2 - startName.y) * crop;
+  const slant = 14 * crop;
   return (
-    <>
+    <AbsoluteFill
+      style={{
+        transformOrigin: `${cross.x}px ${cross.y}px`,
+        rotate: `${sign * 100 * (1 - spin)}deg`,
+        scale: String(0.4 + 0.6 * spin),
+        opacity: spin > 0 ? 1 : 0,
+      }}
+    >
       <AbsoluteFill style={{ clipPath: polygon(panel.poly) }}>
-        {/* The color block with the app's mark. */}
-        <AbsoluteFill style={{ background: color, opacity: enter }}>
+        {/* The recording, uncovered as the block crops away. */}
+        {crop > 0 ? (
           <div
             style={{
               position: 'absolute',
-              left: box.x,
-              top: box.y,
-              width: box.w,
-              height: box.h,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 22,
-              scale: String(interpolate(enter, [0, 1], [0.85, 1]) * (1 - 0.2 * wipe)),
+              left: box.x + (box.w - STAGE_W * scale) / 2,
+              top: box.y + (box.h - STAGE_H * scale) / 2,
+              width: STAGE_W,
+              height: STAGE_H,
+              transformOrigin: 'top left',
+              scale: String(scale),
             }}
           >
-            <div
-              style={{
-                width: 220,
-                height: 220,
-                borderRadius: 48,
-                background: tileBg,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 18px 40px rgba(0,0,0,0.25)',
-              }}
-            >
-              {mark}
-            </div>
-            <div
-              style={{ color: '#0b0d12', fontSize: 52, fontWeight: 700, letterSpacing: '-0.02em' }}
-            >
-              {name}
-            </div>
+            {children}
           </div>
-        </AbsoluteFill>
-        {/* The recording, wiping in from the outer corner. */}
+        ) : null}
         <div
           style={{
             position: 'absolute',
-            left: box.x + (box.w - STAGE_W * scale) / 2,
-            top: box.y + (box.h - STAGE_H * scale) / 2,
-            width: STAGE_W,
-            height: STAGE_H,
-            transformOrigin: 'top left',
-            scale: String(scale),
-            translate: `${dx * (1 - wipe) * 1100}px ${dy * (1 - wipe) * 640}px`,
-            visibility: wipe > 0 ? 'visible' : 'hidden',
+            left: block.x,
+            top: block.y,
+            width: block.w,
+            height: block.h,
+            background: color,
+            clipPath: `polygon(${slant}px 0, 100% 0, calc(100% - ${slant}px) 100%, 0 100%)`,
+          }}
+        />
+        {/* The mark on its white tile. */}
+        <div
+          style={{
+            position: 'absolute',
+            left: box.x + box.w / 2 - 110,
+            top: markY - 110,
+            width: 220,
+            height: 220,
+            borderRadius: 48,
+            background: '#ffffff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 18px 40px rgba(0,0,0,0.25)',
+            scale: String(pop * (1 - interpolate(crop, [0, 0.45], [0, 1], clamp))),
           }}
         >
-          {children}
+          {mark}
+        </div>
+        <div
+          style={{
+            position: 'absolute',
+            left: nameX - 600,
+            width: 1200,
+            top: nameY - (52 + (LABEL_SIZE - 52) * crop) * 0.62,
+            textAlign: 'center',
+            whiteSpace: 'nowrap',
+            color: '#0b0d12',
+            fontSize: 52 + (LABEL_SIZE - 52) * crop,
+            fontWeight: 700,
+            letterSpacing: '-0.02em',
+            opacity: pop,
+          }}
+        >
+          {name}
         </div>
       </AbsoluteFill>
-      <div style={tab}>{name}</div>
-    </>
+    </AbsoluteFill>
+  );
+};
+
+/** The section title: its words rise in, alone on black, over a black band
+ * that keeps them readable once the segments spin in behind. */
+const Title: React.FC<{ text: string }> = ({ text }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const t = frame / fps;
+  const out = interpolate(t, [TITLE_OUT, TITLE_OUT + 0.4], [0, 1], { ...clamp, easing: ease });
+  return (
+    <AbsoluteFill style={{ justifyContent: 'center', zIndex: 20 }}>
+      <div
+        style={{
+          background: '#050608',
+          padding: '34px 0 40px',
+          textAlign: 'center',
+          clipPath: `inset(0 ${100 * out}% 0 0)`,
+        }}
+      >
+        <div
+          style={{
+            color: '#f4f7fb',
+            fontSize: 112,
+            fontWeight: 700,
+            letterSpacing: '-0.03em',
+            lineHeight: 1.05,
+          }}
+        >
+          {text.split(' ').map((word, i) => {
+            const rise = interpolate(t, [TITLE_IN + i * 0.07, TITLE_IN + i * 0.07 + 0.45], [0, 1], {
+              ...clamp,
+              easing: ease,
+            });
+            return (
+              <span
+                // biome-ignore lint/suspicious/noArrayIndexKey: words of a fixed string
+                key={i}
+                style={{
+                  display: 'inline-block',
+                  overflow: 'hidden',
+                  verticalAlign: 'bottom',
+                  paddingBottom: 8,
+                }}
+              >
+                <span style={{ display: 'inline-block', translate: `0px ${(1 - rise) * 110}%` }}>
+                  {word}&nbsp;
+                </span>
+              </span>
+            );
+          })}
+        </div>
+      </div>
+    </AbsoluteFill>
   );
 };
 
@@ -240,25 +344,27 @@ const beats = (wipeAt: number, reply: number): ChatBeats => ({
 });
 
 /**
- * "Access Agor from where you work": four comic panels (an off-axis cross of
- * black gutters) start as color blocks with each app's mark under the
- * title; then one by one each wipes in to show the same question to EngBot
- * from Slack, Discord, Claude Desktop (through Agor's MCP server) and Agor.
+ * "Access Agor from where you work": from black, the title rises in; four
+ * comic-panel color segments (an off-axis cross of black gutters) spin in
+ * behind it and each app's mark pops on; then one by one each segment crops
+ * down to its name label, uncovering the same question to EngBot from
+ * Slack, Discord, Claude Desktop (through Agor's MCP server) and Agor. Ends
+ * on black.
  */
 export const Interfaces: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps;
-  const f = (sec: number) => Math.round(sec * fps);
+  const gutters = interpolate(t, [SPIN_AT[3] + SPIN * 0.6, SPIN_AT[3] + SPIN], [0, 1], clamp);
   return (
     <AbsoluteFill style={{ background: '#050608', fontFamily }}>
       <PanelFrame
         corner="tl"
         color="#f472b6"
         name="Slack"
-        tileBg="#ffffff"
         mark={<BrandMark icon="slack-icon" size={130} />}
-        enterAt={0}
+        spinAt={SPIN_AT[0]}
+        markAt={MARK_AT[0]}
         wipeAt={WIPE_AT[0]}
       >
         <SlackStage t={t} beats={beats(WIPE_AT[0], 1.5)} />
@@ -267,9 +373,9 @@ export const Interfaces: React.FC = () => {
         corner="tr"
         color="#60a5fa"
         name="Discord"
-        tileBg="#ffffff"
         mark={<BrandMark icon="discord-icon" size={140} />}
-        enterAt={0.08}
+        spinAt={SPIN_AT[1]}
+        markAt={MARK_AT[1]}
         wipeAt={WIPE_AT[1]}
       >
         <DiscordStage t={t} beats={beats(WIPE_AT[1], 1.6)} />
@@ -278,9 +384,9 @@ export const Interfaces: React.FC = () => {
         corner="bl"
         color="#fbbf24"
         name="Claude Desktop + MCP"
-        tileBg="#ffffff"
         mark={<BrandMark icon="model-context-protocol" size={140} viewBox="0 0 70 69" />}
-        enterAt={0.16}
+        spinAt={SPIN_AT[2]}
+        markAt={MARK_AT[2]}
         wipeAt={WIPE_AT[2]}
       >
         <ClaudeDesktopStage t={t} beats={beats(WIPE_AT[2], 1.8)} />
@@ -289,20 +395,24 @@ export const Interfaces: React.FC = () => {
         corner="br"
         color="#2dd4bf"
         name="Agor"
-        tileBg="#0d1526"
         mark={<Img src={staticFile('agor-logo.svg')} style={{ width: 150, height: 150 }} />}
-        enterAt={0.24}
+        spinAt={SPIN_AT[3]}
+        markAt={MARK_AT[3]}
         wipeAt={WIPE_AT[3]}
       >
         <AgorStage startAt={WIPE_AT[3]} />
       </PanelFrame>
-      <svg width={1920} height={1080} style={{ position: 'absolute', inset: 0 }} aria-hidden="true">
+      <svg
+        width={1920}
+        height={1080}
+        style={{ position: 'absolute', inset: 0, opacity: gutters }}
+        aria-hidden="true"
+      >
         <line x1={TOP_X} y1={-10} x2={BOTTOM_X} y2={1090} stroke="#050608" strokeWidth={GUTTER} />
         <line x1={-10} y1={LEFT_Y} x2={1930} y2={RIGHT_Y} stroke="#050608" strokeWidth={GUTTER} />
       </svg>
-      <Sequence name="Title" durationInFrames={f(TITLE_HOLD + 0.2)} premountFor={fps}>
-        <BandTitle text="Access Agor from where you work" holdFor={TITLE_HOLD} />
-      </Sequence>
+      <Title text="Access Agor from where you work" />
+      <FadeToBlack at={FADE_AT} seconds={FADE} />
     </AbsoluteFill>
   );
 };
