@@ -1,18 +1,19 @@
 import { loadFont } from '@remotion/google-fonts/SpaceGrotesk';
 import { AbsoluteFill, Sequence, useVideoConfig } from 'remotion';
 import { INTERFACES_SECONDS, Interfaces } from './interfaces/Interfaces';
+import { RAISE_SECONDS, RaiseTogether } from './raise/Raise';
 import { AiTeammatesBebop, BEBOP_BODY_SECONDS } from './teammates/Bebop';
 import { EndCard } from './teammates/Cards';
 
 const { fontFamily } = loadFont('normal', { weights: ['600', '700'] });
 
 const END = 1.8;
-export const REEL_SECONDS = BEBOP_BODY_SECONDS + INTERFACES_SECONDS + END;
+export const REEL_SECONDS = BEBOP_BODY_SECONDS + INTERFACES_SECONDS + RAISE_SECONDS + END;
 
 /**
- * The teammates sections back to back: the AI teammates segment (logo,
- * slices, answers), hard cut into "talk to them from anywhere", then one
- * end card.
+ * The sections back to back: the AI teammates segment (logo, slices,
+ * answers), "Access Agor from where you work", "Raise AI teammates
+ * together", then one end card.
  */
 export const TeammatesReel: React.FC = () => {
   const { fps } = useVideoConfig();
@@ -30,7 +31,19 @@ export const TeammatesReel: React.FC = () => {
       >
         <Interfaces />
       </Sequence>
-      <Sequence name="End" from={f(BEBOP_BODY_SECONDS + INTERFACES_SECONDS)} premountFor={fps}>
+      <Sequence
+        name="Raise AI teammates together"
+        from={f(BEBOP_BODY_SECONDS + INTERFACES_SECONDS)}
+        durationInFrames={f(RAISE_SECONDS)}
+        premountFor={fps}
+      >
+        <RaiseTogether />
+      </Sequence>
+      <Sequence
+        name="End"
+        from={f(BEBOP_BODY_SECONDS + INTERFACES_SECONDS + RAISE_SECONDS)}
+        premountFor={fps}
+      >
         <EndCard />
       </Sequence>
     </AbsoluteFill>

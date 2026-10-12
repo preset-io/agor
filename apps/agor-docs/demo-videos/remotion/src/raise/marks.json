@@ -1,0 +1,23 @@
+{
+  "personality": {
+    "picker": 0.3,
+    "gallery": 15.867,
+    "configure": 26.7,
+    "create": 34.2
+  },
+  "integrity": {
+    "kb-select": 2.367,
+    "graph": 17.633
+  },
+  "capability": {
+    "catalog": 0,
+    "configure": 9.733,
+    "filled": 21.967
+  },
+  "agency": {
+    "heartbeat": 2.333,
+    "schedules": 7.9,
+    "new-schedule": 10.8,
+    "created": 18.6
+  }
+}

@@ -20,6 +20,7 @@ import { DEMO_REPO_PATH } from './harness.ts';
 import type { Seeder } from './seeder.ts';
 import { donutOps } from './seeds/donut-ops.ts';
 import { saasy } from './seeds/saasy.ts';
+import { teammatesTogether } from './seeds/teammates-together.ts';
 
 export interface SeedDef {
   name: string;
@@ -105,6 +106,7 @@ export const SEEDS: SeedDef[] = [
   },
   saasy,
   donutOps,
+  teammatesTogether,
 ];
 
 export function seedByName(name: string): SeedDef {

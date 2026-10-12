@@ -147,6 +147,54 @@ export const CLIPS: ClipMeta[] = [
     outputs: ['master', 'raw', 'tight'],
     timeoutMs: 20 * 60_000,
   },
+  // "Raise AI teammates together": four pillars, real UI, exported raw for the edit.
+  {
+    id: 'raise-personality',
+    title: 'Agents with personality',
+    purpose:
+      'Sizzle reel, Raise AI teammates together: the crew, the starter personas, a new teammate.',
+    start: { seed: 'teammates-together' },
+    script: [
+      'Sam opens the teammate picker and runs the cursor down a dozen named teammates',
+      'Create AI teammate: the starter personas, filtered by category',
+      'Sam names a new teammate, picks a persona and gives it a job',
+    ],
+    outputs: ['master', 'raw'],
+  },
+  {
+    id: 'raise-integrity',
+    title: 'Agents with integrity',
+    purpose:
+      "Sizzle reel, Raise AI teammates together: a teammate grounded in the company's knowledge.",
+    start: { seed: 'teammates-together' },
+    script: [
+      "EngBot's Teammate Knowledge: Sam picks the SaaSy Co. Handbook as its home",
+      "The Handbook's graph: ~200 linked pages",
+    ],
+    outputs: ['master', 'raw'],
+  },
+  {
+    id: 'raise-capability',
+    title: 'Agents with capability',
+    purpose: 'Sizzle reel, Raise AI teammates together: the MCP Catalog and a server wired up.',
+    start: { seed: 'teammates-together' },
+    script: [
+      'The MCP Catalog: the cursor skims GitHub, Linear, Sentry, Notion; the grid scrolls',
+      'Settings → MCP Servers → New: Linear over HTTP with OAuth',
+    ],
+    outputs: ['master', 'raw'],
+  },
+  {
+    id: 'raise-agency',
+    title: 'Agents with agency',
+    purpose: 'Sizzle reel, Raise AI teammates together: a heartbeat and schedules.',
+    start: { seed: 'teammates-together' },
+    script: [
+      "EngBot's HEARTBEAT.md: what it does without being asked",
+      'Its schedules, then a new hourly heartbeat',
+    ],
+    outputs: ['master', 'raw'],
+  },
 ];
 
 export function clipById(id: string): ClipMeta {

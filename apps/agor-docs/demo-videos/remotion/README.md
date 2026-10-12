@@ -53,8 +53,19 @@ lockup; the mark itself is a frame-driven port of
   - Slack, Discord and Claude Desktop are hand-rolled stages (`stages.tsx`)
     in each app's visual grammar, not pixel clones. The Agor panel is the
     real EngBot clip. Fades to black.
+- **RaiseTogether** (`src/raise/Raise.tsx`): "Raise AI teammates together".
+  - From black, the title rises in. Then four pillars, each a big word on
+    the left ("with personality", "integrity", "capability", "agency") that
+    rolls over to the next, and the real product on the right in a window,
+    the camera easing over the UI beat by beat.
+  - The clips are e2e `raise-<pillar>` (seed `teammates-together`: 13
+    teammates, a ~200-page Handbook in Knowledge, EngBot's HEARTBEAT.md and
+    schedules), captured with `npm run clip -- raise-<pillar> --snappy` and
+    pulled in by `npm run sync`. Each beat is source seconds, a rate and a
+    camera move in `PILLARS`.
+  - Ends on black.
 - **TeammatesReel** (`src/Reel.tsx`): the AI teammates segment, then
-  Interfaces, then one end card.
+  Interfaces, then RaiseTogether, then one end card.
 - **AiTeammatesGrid** (`src/teammates/AiTeammates.tsx`): the first try, a
   2x2 Brady Bunch grid. Kept for comparison.
 

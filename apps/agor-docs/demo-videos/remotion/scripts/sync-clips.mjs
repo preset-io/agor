@@ -46,3 +46,27 @@ writeFileSync(
   path.join(ROOT, 'src', 'teammates', 'marks.json'),
   `${JSON.stringify(marks, null, 2)}\n`
 );
+
+// "Raise AI teammates together": one UI clip per pillar (snappy, untightened
+// raw), with every mark it logged.
+const PILLARS = ['personality', 'integrity', 'capability', 'agency'];
+const raiseMarks = {};
+for (const pillar of PILLARS) {
+  const id = `raise-${pillar}`;
+  const dir = path.join(CLIPS, id);
+  const video = path.join(dir, `${id}-snappy-raw.mp4`);
+  const markFile = path.join(dir, `${id}-snappy-marks.json`);
+  if (!existsSync(video) || !existsSync(markFile)) {
+    throw new Error(`missing ${video} (run: npm run clip -- ${id} --snappy in ../e2e)`);
+  }
+  copyFileSync(video, path.join(ROOT, 'public', 'clips', `${id}.mp4`));
+  raiseMarks[pillar] = Object.fromEntries(
+    JSON.parse(readFileSync(markFile, 'utf8')).map((m) => [m.label, m.seconds])
+  );
+  console.log(`${id}: ${JSON.stringify(raiseMarks[pillar])}`);
+}
+mkdirSync(path.join(ROOT, 'src', 'raise'), { recursive: true });
+writeFileSync(
+  path.join(ROOT, 'src', 'raise', 'marks.json'),
+  `${JSON.stringify(raiseMarks, null, 2)}\n`
+);
