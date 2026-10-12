@@ -141,6 +141,20 @@ function roleGrantsSessionPrompt(role: unknown): boolean {
  * Global superadmin bypass is intentionally excluded: administration does not
  * grant prompt authority or widen one principal's projected Branch mounts.
  */
+/**
+ * A raw `CURRENT_TIMESTAMP` read back as a Date. Postgres drivers return a
+ * Date; SQLite returns UTC as text with no zone (`2026-10-12 08:59:15`),
+ * which `new Date()` would read as local time, putting every observation
+ * off by the host's UTC offset (an executor heartbeat stamped an hour old
+ * on a BST machine gets its task killed as stale).
+ */
+export function parseDatabaseTimestamp(value: unknown): Date {
+  if (value instanceof Date) return value;
+  const text = String(value);
+  const sqliteUtc = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/.exec(text);
+  return new Date(sqliteUtc ? `${sqliteUtc[1]}T${sqliteUtc[2]}Z` : text);
+}
+
 export async function resolveSessionRuntimeBranchAccess(
   db: Database,
   input: {
@@ -270,8 +284,7 @@ export async function resolveSessionRuntimeBranchAccess(
     row.session_sdk_home_scope === 'branch' &&
     Boolean(row.workspace_sharing_enabled) &&
     Boolean(row.allow_shared_session_prompts);
-  const observedAt =
-    row.observed_at instanceof Date ? row.observed_at : new Date(String(row.observed_at));
+  const observedAt = parseDatabaseTimestamp(row.observed_at);
   return {
     branch_id: String(row.branch_id),
     principal_available: principalUserId !== undefined,
