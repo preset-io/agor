@@ -22,9 +22,11 @@ import {
 // - It closes as the next one opens: the recording slides up and off,
 //   leaving a plain colored strip.
 // - At the end the slices even out and every recording slides back up into
-//   a band under its header showing the whole session, with the question
-//   below, while the answers play. The last slice morphs straight into its
-//   band instead of leaving.
+//   a band under its header showing the whole session while the answers
+//   play. The last slice morphs straight into its band instead of leaving.
+// - As each answer lands, its band pushes in on the telling part of the
+//   reply and a one-line takeaway wipes on below it.
+// - Then the slices slide off, alternately up and down.
 
 export interface SliceSpec {
   clip: string;
@@ -32,6 +34,10 @@ export interface SliceSpec {
   emoji: string;
   color: string;
   question: string;
+  /** The answer's takeaway, shown under the band once it lands. */
+  insight: string;
+  /** Where the telling part of the reply sits in the final frame (app px). */
+  focus: { cx: number; cy: number };
   /** Clip marks (source seconds). */
   question0: number;
   sent: number;
@@ -78,6 +84,11 @@ const PROMPT_CAM: Cam = { cx: 1160, cy: 1000, z: 4.2 };
 /** The band at the end: the whole session panel. */
 const BAND_CAM: Cam = { cx: 1440, cy: 572, z: 0.5 };
 const BAND_H = 1080 * BAND_CAM.z;
+const FOCUS_Z = 1.1;
+const TAKEAWAY_Y = HEADER + BAND_H + 34;
+/** Slices slide off (alternately up and down) over this long. */
+export const EXIT = 0.75;
+const easeIn = Easing.bezier(0.7, 0, 0.84, 0);
 
 export const promptSeconds = (s: SliceSpec, rate: number) =>
   (s.sent - Math.max(0, s.question0 - 0.2)) / rate;
@@ -89,7 +100,9 @@ export const Slices: React.FC<{
   enterAt: number[];
   /** When the names fade on (under the section title). */
   namesAt: number;
-}> = ({ slices, timing, enterAt, namesAt }) => {
+  /** When the slices start sliding off. */
+  exitAt: number;
+}> = ({ slices, timing, enterAt, namesAt, exitAt }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps;
@@ -136,6 +149,12 @@ export const Slices: React.FC<{
         const back = win(timing.revealAt, REVEAL);
         const answerAt = timing.revealAt + REVEAL * 0.5;
         const playFor = (s.answered + 1.5 - s.sent) / timing.answerRate;
+        const focus = win(answerAt + playFor, 0.9);
+        const focusCam: Cam = { ...s.focus, z: FOCUS_Z };
+        const exit = interpolate(t, [exitAt + i * 0.07, exitAt + i * 0.07 + EXIT], [0, 1], {
+          ...clamp,
+          easing: easeIn,
+        });
 
         // Where the recording sits (top edge, height) and how it's framed.
         let top: number;
@@ -144,7 +163,7 @@ export const Slices: React.FC<{
         if (isLast) {
           top = lerp(1080, HEADER, arrive);
           height = lerp(1080 - HEADER, BAND_H, reveal);
-          cam = mixCam(PROMPT_CAM, BAND_CAM, reveal);
+          cam = mixCam(mixCam(PROMPT_CAM, BAND_CAM, reveal), focusCam, focus);
         } else if (t < timing.revealAt) {
           // Slides up in as the slice opens, then up and off as it closes.
           top = lerp(1080, HEADER, arrive) - leave * 1080;
@@ -153,7 +172,7 @@ export const Slices: React.FC<{
         } else {
           top = lerp(1080, HEADER, back);
           height = BAND_H;
-          cam = BAND_CAM;
+          cam = mixCam(BAND_CAM, focusCam, focus);
         }
         const showVideo = t >= timing.openAt[i] && top < 1080 && top + height > HEADER;
         // Keep the view inside the recording.
@@ -187,26 +206,29 @@ export const Slices: React.FC<{
           <AbsoluteFill
             key={s.name}
             style={{
-              translate: `0px ${(1 - enter) * from * 1150}px`,
+              translate: `0px ${((1 - enter) * from + exit * (i % 2 === 0 ? -1 : 1)) * 1150}px`,
               zIndex: opened[i] > 0 ? 2 : 1,
             }}
           >
             <AbsoluteFill style={{ background: s.color, clipPath: shape(0, 1080) }} />
-            {/* The question, under the band at the end. */}
+            {/* The takeaway, under the band once the answer lands. */}
             <div
               style={{
                 position: 'absolute',
-                left: left(HEADER + BAND_H + 60) + 18,
-                width: w - SLANT - 36,
-                top: HEADER + BAND_H + 30,
-                fontSize: 38,
-                fontWeight: 600,
+                left: Math.max(36, left(TAKEAWAY_Y) + 24),
+                width:
+                  Math.min(1884, right(TAKEAWAY_Y + 200) - 24) -
+                  Math.max(36, left(TAKEAWAY_Y) + 24),
+                top: TAKEAWAY_Y,
+                fontSize: 40,
+                fontWeight: 700,
+                letterSpacing: '-0.01em',
                 lineHeight: 1.12,
                 color: '#0b0d12',
-                opacity: interpolate(back, [0.6, 1], [0, 1], clamp),
+                clipPath: `inset(0 ${100 * (1 - focus)}% 0 0)`,
               }}
             >
-              “{s.question}”
+              {s.insight}
             </div>
             {showVideo ? (
               <AbsoluteFill

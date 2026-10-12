@@ -9,7 +9,7 @@ import {
 } from 'remotion';
 import { EndCard, LogoIntro, NAVY } from './Cards';
 import marks from './marks.json';
-import { PROMPT_LEAD, promptSeconds, REVEAL, type SliceSpec, Slices } from './Slices';
+import { EXIT, PROMPT_LEAD, promptSeconds, REVEAL, type SliceSpec, Slices } from './Slices';
 
 const { fontFamily } = loadFont('normal', { weights: ['500', '600', '700'] });
 
@@ -20,9 +20,8 @@ const LOGO = 3.4; // the draw-on is finished and shining by here
 const TITLE_HOLD = 2.3; // the slices and the title, before the first opens
 const PROMPT_RATE = 1.8;
 const ANSWER_RATE = 1.25;
-const HOLD = 1.4;
+const HOLD = 2.4; // after the last answer lands, before the slices slide off
 const END = 1.8;
-const FADE = 0.6; // to black at the end of the segment
 
 const spec = (bot: Bot, rest: Omit<SliceSpec, 'question0' | 'sent' | 'answered'>): SliceSpec => ({
   ...rest,
@@ -38,6 +37,8 @@ const SLICES: SliceSpec[] = [
     emoji: '📊',
     color: '#2dd4bf',
     question: 'How do we define MAU?',
+    insight: 'Reconciled two conflicting MAU definitions and opened a PR',
+    focus: { cx: 1235, cy: 600 },
   }),
   spec('engbot', {
     clip: 'engbot.mp4',
@@ -45,6 +46,8 @@ const SLICES: SliceSpec[] = [
     emoji: '🛠️',
     color: '#60a5fa',
     question: "What's the team working on right now?",
+    insight: "Rolled up who's on what, PR by PR, and what's blocked",
+    focus: { cx: 1235, cy: 620 },
   }),
   spec('legalbot', {
     clip: 'legalbot.mp4',
@@ -52,6 +55,8 @@ const SLICES: SliceSpec[] = [
     emoji: '⚖️',
     color: '#fbbf24',
     question: 'Review the limitations of liability in this contract',
+    insight: 'Redlined the liability cap against our playbook',
+    focus: { cx: 1235, cy: 450 },
   }),
   spec('opsbot', {
     clip: 'opsbot.mp4',
@@ -59,6 +64,8 @@ const SLICES: SliceSpec[] = [
     emoji: '📈',
     color: '#f472b6',
     question: 'How are my sales doing over the last 90 days?',
+    insight: 'Sales up 15% on the prior 90 days, led by web and POS',
+    focus: { cx: 1235, cy: 540 },
   }),
 ];
 
@@ -72,7 +79,8 @@ const last = SLICES[SLICES.length - 1];
 const REVEAL_AT =
   OPEN_AT[OPEN_AT.length - 1] + PROMPT_LEAD + promptSeconds(last, PROMPT_RATE) + 0.2;
 const playFor = (s: SliceSpec) => (s.answered + 1.5 - s.sent) / ANSWER_RATE;
-const SEGMENT = REVEAL_AT + REVEAL + Math.max(...SLICES.map(playFor)) + HOLD;
+const EXIT_AT = REVEAL_AT + REVEAL + Math.max(...SLICES.map(playFor)) + HOLD;
+const SEGMENT = EXIT_AT + EXIT + 0.07 * (SLICES.length - 1) + 0.15;
 export const BEBOP_SECONDS = LOGO + SEGMENT + END;
 /** Without the end card (for the combined reel). */
 export const BEBOP_BODY_SECONDS = LOGO + SEGMENT;
@@ -93,6 +101,7 @@ export const AiTeammatesBebop: React.FC<{ withEnd?: boolean }> = ({ withEnd = tr
         <LogoIntro />
       </Sequence>
       <Sequence name="Slices" from={f(LOGO)} durationInFrames={f(SEGMENT)} premountFor={fps}>
+        <AbsoluteFill style={{ background: '#000' }} />
         <Slices
           slices={SLICES}
           timing={{
@@ -103,11 +112,11 @@ export const AiTeammatesBebop: React.FC<{ withEnd?: boolean }> = ({ withEnd = tr
           }}
           enterAt={[0, 0.08, 0.16, 0.24]}
           namesAt={0.85}
+          exitAt={EXIT_AT}
         />
         <Sequence name="Title" durationInFrames={f(TITLE_HOLD + 0.2)} premountFor={fps}>
           <BandTitle text="AI teammates that can do anything" holdFor={TITLE_HOLD} />
         </Sequence>
-        <FadeToBlack at={SEGMENT - FADE} />
       </Sequence>
       {withEnd ? (
         <Sequence name="End" from={f(LOGO + SEGMENT)} premountFor={fps}>
@@ -121,8 +130,8 @@ export const AiTeammatesBebop: React.FC<{ withEnd?: boolean }> = ({ withEnd = tr
 const ease = Easing.bezier(0.16, 1, 0.3, 1);
 const clamp = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
 
-/** A black overlay fading in from `at` (seconds) over FADE. */
-export const FadeToBlack: React.FC<{ at: number; seconds?: number }> = ({ at, seconds = FADE }) => {
+/** A black overlay fading in from `at` (seconds) (0.6s by default). */
+export const FadeToBlack: React.FC<{ at: number; seconds?: number }> = ({ at, seconds = 0.6 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps;

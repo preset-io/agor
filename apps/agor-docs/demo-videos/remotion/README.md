@@ -31,8 +31,10 @@ sizzle reel and website, as [Remotion](https://www.remotion.dev) compositions.
     name up into a header bar. As the next opens, the recording slides up
     and off, leaving a plain colored strip.
   - The slices even out and every recording slides back up into a band under
-    its header, showing the whole session, with the question below, while
-    the answers play. Fades to black.
+    its header, showing the whole session while the answers play. As each
+    answer lands, its band pushes in on the telling part of the reply and a
+    one-line takeaway wipes on below it.
+  - The slices slide off, alternately up and down, to black.
   - Standalone, ends on a logo-only sign-off.
 - **Interfaces** (`src/interfaces/`): "Access Agor from where you work".
   - From black, the title's words rise in alone; four comic-panel color
