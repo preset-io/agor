@@ -506,13 +506,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         }
       >
         <Tooltip
-          title={
+          title={hoverTooltip(
             composerAttachmentUploading
               ? composerUploadTooltip
               : connectionDisabled
                 ? 'Disconnected from daemon'
                 : 'Attach files to prompt'
-          }
+          )}
           placement="left"
         >
           <span style={labelGroupStyle}>
@@ -553,13 +553,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         }
       >
         <Tooltip
-          title={
+          title={hoverTooltip(
             composerAttachmentUploading
               ? composerUploadTooltip
               : connectionDisabled
                 ? 'Disconnected from daemon'
                 : 'Upload files with options'
-          }
+          )}
           placement="left"
         >
           <span style={labelGroupStyle}>
@@ -654,13 +654,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }
         >
           <Tooltip
-            title={
+            title={hoverTooltip(
               composerAttachmentsPresent
                 ? composerAttachmentActionTooltip
                 : connectionDisabled || !hasInput
                   ? 'Needs input and a live connection'
                   : 'Ask a side question via an ephemeral fork'
-            }
+            )}
             placement="left"
           >
             <span style={labelGroupStyle}>
@@ -705,7 +705,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }
         >
           <Tooltip
-            title={
+            title={hoverTooltip(
               connectionDisabled
                 ? 'Disconnected'
                 : composerAttachmentsPresent
@@ -713,7 +713,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   : isRunning
                     ? 'Session is running'
                     : 'Spawn a child subsession'
-            }
+            )}
             placement="left"
           >
             <span style={labelGroupStyle}>
