@@ -2121,11 +2121,15 @@ function AppContent() {
             onDeleteGatewayChannel={handleDeleteGatewayChannel}
             onUpdateArtifact={handleUpdateArtifact}
             onDeleteArtifact={handleDeleteArtifact}
-            // As on desktop: close Settings, then the shared create-teammate flow (owned by MobileApp).
-            onCreateTeammate={() => {
-              handleSettingsClose();
-              requestShellPicker(OPEN_CREATE_FLOW_EVENT, 'teammate');
-            }}
+            // As on desktop: member-only; close Settings, then the shared create-teammate flow (owned by MobileApp).
+            onCreateTeammate={
+              hasMinimumRole(currentUser?.role, ROLES.MEMBER)
+                ? () => {
+                    handleSettingsClose();
+                    requestShellPicker(OPEN_CREATE_FLOW_EVENT, 'teammate');
+                  }
+                : undefined
+            }
             branchStorageConfig={featuresConfig?.branchStorage}
           />
         )}

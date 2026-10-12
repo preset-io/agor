@@ -1641,11 +1641,16 @@ export const App: React.FC<AppProps> = ({
           onDeleteGatewayChannel={onDeleteGatewayChannel}
           onUpdateArtifact={onUpdateArtifact}
           onDeleteArtifact={onDeleteArtifact}
-          onCreateTeammate={() => {
-            closeSettings();
-            onSettingsClose?.();
-            createFlows.openCreate('teammate');
-          }}
+          // Creating a teammate creates a board and branch, which require member.
+          onCreateTeammate={
+            hasMinimumRole(user?.role, ROLES.MEMBER)
+              ? () => {
+                  closeSettings();
+                  onSettingsClose?.();
+                  createFlows.openCreate('teammate');
+                }
+              : undefined
+          }
           branchStorageConfig={branchStorageConfig}
         />
         {sessionSettingsSession && (

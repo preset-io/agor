@@ -414,7 +414,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             userById={userById}
             onArchiveOrDelete={onArchiveOrDeleteBranch}
             onRowClick={handleBranchRowClick}
-            onCreateTeammate={onCreateTeammate ?? onCreateTeammate}
+            onCreateTeammate={onCreateTeammate}
             onClose={onClose}
           />
         );
