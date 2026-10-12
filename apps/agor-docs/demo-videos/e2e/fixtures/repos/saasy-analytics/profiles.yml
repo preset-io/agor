@@ -1,6 +1,6 @@
-orbitly:
+saasy:
   target: dev
   outputs:
     dev:
       type: duckdb
-      path: warehouse/orbitly.duckdb
+      path: warehouse/saasy.duckdb

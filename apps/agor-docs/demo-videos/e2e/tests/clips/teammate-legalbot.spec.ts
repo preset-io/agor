@@ -14,6 +14,6 @@ clip('teammate-legalbot', async ({ studio }) => {
   await askTeammate(studio, {
     session: 'ask-legalbot',
     question: 'Please review the limitations of liability in this contract',
-    attach: path.join(FIXTURES_DIR, 'docs', 'halvard-msa.pdf'),
+    attach: path.join(FIXTURES_DIR, 'docs', 'foobar-msa.pdf'),
   });
 });

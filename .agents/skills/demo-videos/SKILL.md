@@ -94,7 +94,7 @@ members as actors, a virtual camera, and a seeded world. Copy
 
 ## Teammate Q&A clips and fictional companies
 
-- `support/seeds/orbitly.ts`: **Orbitly**, a fictional B2B SaaS (field-service
+- `support/seeds/saasy.ts`: **SaaSy Co.**, a fictional B2B SaaS (field-service
   scheduling). Engineering board with branches named for Jira tickets
   (`issue_url`, `pull_request_url`), sessions by their owners, and three
   teammates: **DataBot** (dbt project + DuckDB warehouse cloned into its
@@ -121,7 +121,7 @@ members as actors, a virtual camera, and a seeded world. Copy
   workspace and puts it first on the daemon's PATH, so agents can open and
   list PRs without touching real GitHub. Its data is
   `<scratch>/fake-github/<owner>__<repo>.json`, seeded by `fakeGithub()`.
-- `data/orbitly/build.sql` generates the SaaS warehouse deterministically
+- `data/saasy/build.sql` generates the SaaS warehouse deterministically
   (hash-based "randomness") ending today. `data/donut-shop/` is a Parquet
   export of the DonutShop MotherDuck database; `buildDonutShopWarehouse()`
   drops stray post-history orders and shifts every date so the last full day

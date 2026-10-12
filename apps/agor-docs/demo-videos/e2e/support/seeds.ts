@@ -19,7 +19,7 @@ import { CAST_KEYS } from './cast.ts';
 import { DEMO_REPO_PATH } from './harness.ts';
 import type { Seeder } from './seeder.ts';
 import { donutOps } from './seeds/donut-ops.ts';
-import { orbitly } from './seeds/orbitly.ts';
+import { saasy } from './seeds/saasy.ts';
 
 export interface SeedDef {
   name: string;
@@ -103,7 +103,7 @@ export const SEEDS: SeedDef[] = [
       });
     },
   },
-  orbitly,
+  saasy,
   donutOps,
 ];
 

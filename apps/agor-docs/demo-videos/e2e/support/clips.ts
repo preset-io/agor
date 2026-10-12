@@ -87,7 +87,7 @@ export const CLIPS: ClipMeta[] = [
     title: '@DataBot: how do we define MAU?',
     purpose:
       'Sizzle reel, AI teammates segment: a data teammate turns a question into a dbt model and a PR.',
-    start: { seed: 'orbitly' },
+    start: { seed: 'saasy' },
     agent: true,
     script: [
       'Sam types "How do we define MAU?" in DataBot\'s session',
@@ -102,7 +102,7 @@ export const CLIPS: ClipMeta[] = [
     title: "@EngBot: what's the team working on?",
     purpose:
       'Sizzle reel, AI teammates segment: an engineering-manager teammate summarizes tickets, PRs and reviews.',
-    start: { seed: 'orbitly' },
+    start: { seed: 'saasy' },
     agent: true,
     script: [
       'Sam asks EngBot what the team is working on right now',
@@ -117,7 +117,7 @@ export const CLIPS: ClipMeta[] = [
     title: '@LegalBot: review the limitations of liability',
     purpose:
       'Sizzle reel, AI teammates segment: a legal teammate catches a bad clause and proposes a redline.',
-    start: { seed: 'orbitly' },
+    start: { seed: 'saasy' },
     agent: true,
     script: [
       "Sam attaches a vendor MSA (PDF) in LegalBot's session and asks for a liability review",

@@ -1,6 +1,6 @@
-# orbitly-app
+# saasy-app
 
-Orbitly: scheduling, dispatch and invoicing for field-service teams.
+SaaSy Co.: scheduling, dispatch and invoicing for field-service teams.
 
 - `src/scheduling/`: jobs, technician calendars, route optimization
 - `src/billing/`: invoices, payments, QuickBooks sync

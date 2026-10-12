@@ -1,15 +1,15 @@
-// Orbitly: a fictional B2B SaaS company (scheduling, dispatch and invoicing
+// SaaSy Co.: a fictional B2B SaaS company (scheduling, dispatch and invoicing
 // for field-service trades) and its AI teammates, for the "AI teammates can
 // do anything" clips. Sam, Ada, Grace and Kai are its engineering team.
 //
-// - DataBot owns the analytics warehouse (fixtures/data/orbitly) and the
-//   dbt project (fixtures/repos/orbitly-analytics), cloned into its branch.
+// - DataBot owns the analytics warehouse (fixtures/data/saasy) and the
+//   dbt project (fixtures/repos/saasy-analytics), cloned into its branch.
 // - EngBot reads the team's board (branches named for Jira tickets, with
 //   ticket and PR links) and the PRs in the GitHub stand-in.
-// - LegalBot reviews contracts against Orbitly's playbook.
+// - LegalBot reviews contracts against SaaSy Co.'s playbook.
 
 import {
-  buildOrbitlyWarehouse,
+  buildSaasyWarehouse,
   cloneInto,
   type FakePull,
   fakeGithub,
@@ -17,37 +17,37 @@ import {
 } from '../fixtures.ts';
 import type { SeedDef } from '../seeds.ts';
 
-export const ORBITLY_JIRA = 'https://orbitlyhq.atlassian.net/browse';
-const APP = 'orbitlyhq/app';
-const ANALYTICS = 'orbitlyhq/analytics';
+export const SAASY_JIRA = 'https://saasy-co.atlassian.net/browse';
+const APP = 'saasy-co/app';
+const ANALYTICS = 'saasy-co/analytics';
 const pr = (repo: string, n: number) => `https://github.com/${repo}/pull/${n}`;
 
 const TEAM = `## The team
 
 | Person | GitHub | Focus |
 | --- | --- | --- |
-| Sam Rivera | sam-orbitlyhq | Engineering manager, billing |
-| Ada Okafor | ada-orbitlyhq | Scheduling and routing |
-| Grace Liu | grace-orbitlyhq | Integrations (QuickBooks), analytics |
-| Kai Moreno | kai-orbitlyhq | Mobile app, finance reporting |
+| Sam Rivera | sam-saasyco | Engineering manager, billing |
+| Ada Okafor | ada-saasyco | Scheduling and routing |
+| Grace Liu | grace-saasyco | Integrations (QuickBooks), analytics |
+| Kai Moreno | kai-saasyco | Mobile app, finance reporting |
 `;
 
 const USER = `- **Name:** Sam Rivera
 - **What to call them:** Sam
-- **Role:** Engineering manager at Orbitly
+- **Role:** Engineering manager at SaaSy Co.
 
 ## Sharing and action preferences
 
-- **External actions:** pushing branches and opening pull requests in Orbitly's
+- **External actions:** pushing branches and opening pull requests in SaaSy Co.'s
   repos is pre-approved; everything else, ask first.
 - **Style:** short answers, numbers over adjectives, tables when comparing.`;
 
 const APP_PULLS: FakePull[] = [
   {
     number: 318,
-    title: 'ORB-412: Route optimizer respects customer time windows',
-    head: 'orb-412-route-time-windows',
-    author: 'ada-orbitlyhq',
+    title: 'SAASY-412: Route optimizer respects customer time windows',
+    head: 'saasy-412-route-time-windows',
+    author: 'ada-saasyco',
     state: 'open',
     draft: true,
     ageDays: 1,
@@ -56,45 +56,45 @@ const APP_PULLS: FakePull[] = [
   },
   {
     number: 317,
-    title: 'ORB-405: Cap the technician app offline queue at 500 updates',
-    head: 'orb-405-offline-queue-cap',
-    author: 'kai-orbitlyhq',
+    title: 'SAASY-405: Cap the technician app offline queue at 500 updates',
+    head: 'saasy-405-offline-queue-cap',
+    author: 'kai-saasyco',
     state: 'open',
     ageDays: 2,
-    reviewers: ['sam-orbitlyhq'],
+    reviewers: ['sam-saasyco'],
     additions: 88,
     deletions: 12,
   },
   {
     number: 315,
-    title: 'ORB-398: Retry QuickBooks sync with backoff',
-    head: 'orb-398-quickbooks-retry',
-    author: 'grace-orbitlyhq',
+    title: 'SAASY-398: Retry QuickBooks sync with backoff',
+    head: 'saasy-398-quickbooks-retry',
+    author: 'grace-saasyco',
     state: 'open',
     ageDays: 4,
-    reviews: [{ by: 'kai-orbitlyhq', state: 'CHANGES_REQUESTED' }],
+    reviews: [{ by: 'kai-saasyco', state: 'CHANGES_REQUESTED' }],
     additions: 203,
     deletions: 41,
   },
   {
     number: 312,
-    title: 'ORB-391: Dispatcher can bulk-reassign jobs',
-    head: 'orb-391-bulk-reassign',
-    author: 'ada-orbitlyhq',
+    title: 'SAASY-391: Dispatcher can bulk-reassign jobs',
+    head: 'saasy-391-bulk-reassign',
+    author: 'ada-saasyco',
     state: 'merged',
     ageDays: 6,
-    reviews: [{ by: 'grace-orbitlyhq', state: 'APPROVED' }],
+    reviews: [{ by: 'grace-saasyco', state: 'APPROVED' }],
   },
   {
     number: 309,
-    title: 'ORB-377: Fix invoice rounding on multi-tax lines',
-    head: 'orb-377-invoice-rounding',
-    author: 'sam-orbitlyhq',
+    title: 'SAASY-377: Fix invoice rounding on multi-tax lines',
+    head: 'saasy-377-invoice-rounding',
+    author: 'sam-saasyco',
     state: 'merged',
     ageDays: 8,
     reviews: [
-      { by: 'ada-orbitlyhq', state: 'APPROVED' },
-      { by: 'kai-orbitlyhq', state: 'APPROVED' },
+      { by: 'ada-saasyco', state: 'APPROVED' },
+      { by: 'kai-saasyco', state: 'APPROVED' },
     ],
   },
 ];
@@ -104,26 +104,26 @@ const ANALYTICS_PULLS: FakePull[] = [
     number: 211,
     title: 'Add dim_accounts.seats',
     head: 'dim-accounts-seats',
-    author: 'grace-orbitlyhq',
+    author: 'grace-saasyco',
     state: 'merged',
     ageDays: 12,
-    reviews: [{ by: 'kai-orbitlyhq', state: 'APPROVED' }],
+    reviews: [{ by: 'kai-saasyco', state: 'APPROVED' }],
   },
 ];
 
-const DATABOT = `You are DataBot, Orbitly's analytics engineer. You own the analytics
+const DATABOT = `You are DataBot, SaaSy Co.'s analytics engineer. You own the analytics
 warehouse and its dbt project.
 
 ## Your tools
 
-- The dbt project is cloned at \`analytics/\` (GitHub: orbitlyhq/analytics). Raw
+- The dbt project is cloned at \`analytics/\` (GitHub: saasy-co/analytics). Raw
   tables: \`raw.accounts\`, \`raw.users\`, \`raw.events\`; staging models in
   \`models/staging/\`, marts in \`models/marts/\`, one-off queries in
   \`analyses/\`.
-- The warehouse is DuckDB: \`duckdb analytics/warehouse/orbitly.duckdb -c "..."\`.
+- The warehouse is DuckDB: \`duckdb analytics/warehouse/saasy.duckdb -c "..."\`.
   dbt itself isn't installed here: check a model by running its SQL in DuckDB
   with refs swapped for the raw tables.
-- \`gh\` works for orbitlyhq/analytics (run it inside \`analytics/\`).
+- \`gh\` works for saasy-co/analytics (run it inside \`analytics/\`).
 
 ## How you work
 
@@ -143,23 +143,23 @@ When someone asks how a metric is defined:
 
 ${TEAM}`;
 
-const ENGBOT = `You are EngBot, the engineering manager's right hand at Orbitly. You
+const ENGBOT = `You are EngBot, the engineering manager's right hand at SaaSy Co. You
 keep track of who is doing what so nobody has to ask around.
 
 ## Where the work is
 
-- The team's Agor board is **Orbitly**. Each branch on it is one Jira ticket:
+- The team's Agor board is **SaaSy Co.**. Each branch on it is one Jira ticket:
   the branch is named after the ticket and carries its \`issue_url\` (Jira) and
   \`pull_request_url\`. Use Agor's tools (\`agor_boards_get\` with entities,
   \`agor_branches_list\`, \`agor_sessions_list\`, \`agor_users_list\`) to see
   branches, their owners, zones, and recent agent sessions.
-- Pull requests are on GitHub in orbitlyhq/app: \`gh pr list -R orbitlyhq/app --state all\`,
-  \`gh pr view N -R orbitlyhq/app\`, \`gh search prs --reviewed-by LOGIN --state all\`.
+- Pull requests are on GitHub in saasy-co/app: \`gh pr list -R saasy-co/app --state all\`,
+  \`gh pr view N -R saasy-co/app\`, \`gh search prs --reviewed-by LOGIN --state all\`.
 
 ## How you answer "what's the team working on?"
 
 Always check both sources before answering: the board (who owns which
-ticket branch) and GitHub (\`gh pr list -R orbitlyhq/app --state all --json
+ticket branch) and GitHub (\`gh pr list -R saasy-co/app --state all --json
 number,title,author,state,isDraft,reviews,reviewRequests\`), so you know
 each PR's state and who reviewed it.
 
@@ -167,7 +167,7 @@ Answer with one table, one row per person (use their names):
 
 | Person | Working on | PRs opened | Reviews |
 
-- Working on: Jira key and a few plain words (e.g. "ORB-412 route time windows").
+- Working on: Jira key and a few plain words (e.g. "SAASY-412 route time windows").
 - PRs opened: number and state (draft / open / merged).
 - Reviews: PRs they reviewed (approved or changes requested) or owe a
   review on.
@@ -178,8 +178,8 @@ teammates); people want to know what their team is doing.
 
 ${TEAM}`;
 
-const LEGALBOT = `You are LegalBot, Orbitly's commercial counsel. You review vendor and
-customer contracts against Orbitly's playbook (\`PLAYBOOK.md\`) and say plainly
+const LEGALBOT = `You are LegalBot, SaaSy Co.'s commercial counsel. You review vendor and
+customer contracts against SaaSy Co.'s playbook (\`PLAYBOOK.md\`) and say plainly
 whether to sign.
 
 ## How you review
@@ -191,7 +191,7 @@ whether to sign.
 - Give a redline: the replacement language, ready to send.
 - Don't pad: no general disclaimers, no restating the whole contract.`;
 
-const PLAYBOOK = `# Orbitly contract playbook: vendor agreements
+const PLAYBOOK = `# SaaSy Co. contract playbook: vendor agreements
 
 ## Limitation of liability
 
@@ -209,19 +209,19 @@ const PLAYBOOK = `# Orbitly contract playbook: vendor agreements
 - Auto-renewal is fine with a notice window of 60 days or less.
 `;
 
-export const orbitly: SeedDef = {
-  name: 'orbitly',
+export const saasy: SeedDef = {
+  name: 'saasy',
   extends: 'workspace',
   description:
-    'Orbitly (fictional B2B SaaS): engineering board with ticket branches and PRs, analytics warehouse, and three AI teammates (DataBot, EngBot, LegalBot).',
-  inputs: ['support/seeds/orbitly.ts', 'fixtures/repos', 'fixtures/data/orbitly'],
+    'SaaSy Co. (fictional B2B SaaS): engineering board with ticket branches and PRs, analytics warehouse, and three AI teammates (DataBot, EngBot, LegalBot).',
+  inputs: ['support/seeds/saasy.ts', 'fixtures/repos', 'fixtures/data/saasy'],
   async run(s) {
     // Repos: real git, with a local stand-in for GitHub.
-    const appDir = localRepo('orbitly-app', APP);
-    await s.repo('orbitly-app', appDir, APP);
-    localRepo('orbitly-analytics', ANALYTICS);
+    const appDir = localRepo('saasy-app', APP);
+    await s.repo('saasy-app', appDir, APP);
+    localRepo('saasy-analytics', ANALYTICS);
     fakeGithub(APP, 'Scheduling, dispatch and invoicing for field-service teams', APP_PULLS);
-    fakeGithub(ANALYTICS, "Orbitly's analytics warehouse (dbt + DuckDB)", ANALYTICS_PULLS);
+    fakeGithub(ANALYTICS, "SaaSy Co.'s analytics warehouse (dbt + DuckDB)", ANALYTICS_PULLS);
 
     const zone = (label: string, col: number, color: string) => ({
       label,
@@ -231,8 +231,8 @@ export const orbitly: SeedDef = {
       height: 760,
       color,
     });
-    await s.board('orbitly', {
-      title: 'Orbitly',
+    await s.board('saasy', {
+      title: 'SaaSy Co.',
       icon: '🛰️',
       description: 'Scheduling, dispatch and invoicing for field-service teams.',
       zones: {
@@ -252,39 +252,39 @@ export const orbitly: SeedDef = {
     ) =>
       s.branch({
         name,
-        repo: 'orbitly-app',
-        board: 'orbitly',
+        repo: 'saasy-app',
+        board: 'saasy',
         zone,
         at: { x: 30, y: 70 + row * 230 },
         as,
         from: 'main',
-        issueUrl: `${ORBITLY_JIRA}/${key}`,
+        issueUrl: `${SAASY_JIRA}/${key}`,
         ...(prNumber ? { prUrl: pr(APP, prNumber) } : {}),
       });
-    await ticket('orb-412-route-time-windows', 'ORB-412', 'progress', 0, 'ada', 318);
-    await ticket('orb-421-calendar-drag-drop', 'ORB-421', 'progress', 1, 'ada');
-    await ticket('orb-405-offline-queue-cap', 'ORB-405', 'review', 0, 'kai', 317);
-    await ticket('orb-398-quickbooks-retry', 'ORB-398', 'review', 1, 'grace', 315);
-    await ticket('orb-377-invoice-rounding', 'ORB-377', 'done', 0, 'sam', 309);
+    await ticket('saasy-412-route-time-windows', 'SAASY-412', 'progress', 0, 'ada', 318);
+    await ticket('saasy-421-calendar-drag-drop', 'SAASY-421', 'progress', 1, 'ada');
+    await ticket('saasy-405-offline-queue-cap', 'SAASY-405', 'review', 0, 'kai', 317);
+    await ticket('saasy-398-quickbooks-retry', 'SAASY-398', 'review', 1, 'grace', 315);
+    await ticket('saasy-377-invoice-rounding', 'SAASY-377', 'done', 0, 'sam', 309);
     // A little live activity on the board: sessions their owners started.
     await s.session('ada-routing', {
-      branch: 'orb-412-route-time-windows',
+      branch: 'saasy-412-route-time-windows',
       as: 'ada',
       title: 'Respect customer time windows in the solver',
     });
     await s.session('kai-queue', {
-      branch: 'orb-405-offline-queue-cap',
+      branch: 'saasy-405-offline-queue-cap',
       as: 'kai',
       title: 'Cap the offline queue',
     });
     await s.session('grace-qb', {
-      branch: 'orb-398-quickbooks-retry',
+      branch: 'saasy-398-quickbooks-retry',
       as: 'grace',
       title: 'Address Kai’s review: jitter + max attempts',
     });
 
     const teammate = (row: number) => ({
-      board: 'orbitly',
+      board: 'saasy',
       zone: 'teammates',
       at: { x: 30, y: 70 + row * 260 },
     });
@@ -307,7 +307,7 @@ export const orbitly: SeedDef = {
       files: { '.gitignore': 'analytics/\n' },
     });
     cloneInto(ANALYTICS, `${databot.dir}/analytics`);
-    buildOrbitlyWarehouse(`${databot.dir}/analytics/warehouse/orbitly.duckdb`);
+    buildSaasyWarehouse(`${databot.dir}/analytics/warehouse/saasy.duckdb`);
     await s.teammate('legalbot', {
       ...teammate(2),
       displayName: 'LegalBot',
@@ -324,6 +324,6 @@ export const orbitly: SeedDef = {
     await s.session('ask-databot', { branch: 'databot', permissionMode: 'bypassPermissions' });
     // Titled: Agor's auto-title would use the attachment instructions it
     // prepends to the first prompt.
-    await s.session('ask-legalbot', { branch: 'legalbot', title: 'Halvard MSA: liability review' });
+    await s.session('ask-legalbot', { branch: 'legalbot', title: 'FooBar MSA: liability review' });
   },
 };

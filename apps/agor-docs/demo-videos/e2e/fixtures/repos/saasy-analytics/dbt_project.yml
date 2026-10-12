@@ -1,13 +1,13 @@
-name: orbitly
+name: saasy
 version: '1.0.0'
 config-version: 2
-profile: orbitly
+profile: saasy
 
 model-paths: ['models']
 analysis-paths: ['analyses']
 
 models:
-  orbitly:
+  saasy:
     staging:
       +materialized: view
     marts:

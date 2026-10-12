@@ -33,6 +33,18 @@ export async function askTeammate(studio: Studio, options: AskOptions): Promise<
   await studio.action();
   await sam.hold(900);
 
+  // Camera, act 1: a close-up (about 2x) on the lower half of the session
+  // panel, where the question is typed. Masters get the moves; raw cuts
+  // never do.
+  const box = await prompt.boundingBox();
+  const viewport = sam.page.viewportSize() ?? { width: 1920, height: 1080 };
+  const left = box ? Math.max(0, box.x - 24) : viewport.width / 2;
+  const panel = { x: left, y: 64, w: viewport.width - left, h: viewport.height - 64 };
+  await sam.camera.focus(
+    { x: left, y: viewport.height / 2, w: viewport.width - left, h: viewport.height / 2 },
+    { zoom: 1.95, ms: 1600 }
+  );
+
   studio.mark('question');
   if (options.attach) {
     const chooser = sam.page.waitForEvent('filechooser');
@@ -44,6 +56,9 @@ export async function askTeammate(studio: Studio, options: AskOptions): Promise<
   await sam.hold(500);
   studio.mark('sent');
   await sam.press('Enter');
+  // Act 2: ease out to the whole session panel, so the question and the
+  // answer (which starts near the top of a short conversation) stay in frame.
+  await sam.camera.focus(panel, { zoom: 1.25, ms: 1400, wait: false });
 
   // Wait for the real turn to finish (live or replayed), over REST.
   const api = await AgorApi.login(CAST.sam.email, CAST.sam.password);
@@ -63,5 +78,8 @@ export async function askTeammate(studio: Studio, options: AskOptions): Promise<
     await sam.hold(1000);
   }
   studio.mark('answered');
-  await sam.hold(options.holdMs ?? 4000);
+  await sam.hold(options.holdMs ?? 3000);
+  // Pull back to show where the answer lives: the board and the teammate.
+  await sam.camera.wide({ ms: 1600 });
+  await sam.hold(2000);
 }

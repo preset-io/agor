@@ -1,7 +1,7 @@
--- Orbitly: a fictional B2B SaaS company (field-service scheduling software
+-- SaaSy Co.: a fictional B2B SaaS company (field-service scheduling software
 -- for HVAC, plumbing, electrical and similar trades) for the demo videos.
 --
--- Builds the raw schema of Orbitly's analytics warehouse: accounts, users,
+-- Builds the raw schema of SaaSy Co.'s analytics warehouse: accounts, users,
 -- and 13 months of product events ending today. Deterministic: every
 -- "random" value is a hash of its row's identity, so the same data comes
 -- out on every machine (only the dates move, so "last month" always has
@@ -31,7 +31,7 @@ WITH base AS (
 SELECT
   account_id,
   CASE
-    WHEN account_id <= 3 THEN ['Orbitly (internal)', 'Orbitly QA sandbox', 'Demo: Sample Plumbing Co'][account_id]
+    WHEN account_id <= 3 THEN ['SaaSy Co. (internal)', 'SaaSy Co. QA sandbox', 'Demo: Sample Plumbing Co'][account_id]
     ELSE
       ['Summit', 'Bluegrass', 'Copperline', 'Northfield', 'Redstone', 'Harbor', 'Prairie', 'Ironwood', 'Lakeside', 'Granite', 'Cedar', 'Maple', 'Riverbend', 'Oakhurst', 'Pioneer', 'Keystone'][1 + (account_id * 7) % 16]
       || ' '
@@ -64,7 +64,7 @@ WITH sized AS (
 SELECT
   account_id * 1000 + n AS user_id,
   account_id,
-  CASE WHEN is_internal THEN 'user' || (account_id * 1000 + n) || '@orbitly.io'
+  CASE WHEN is_internal THEN 'user' || (account_id * 1000 + n) || '@saasy.example'
        ELSE 'user' || (account_id * 1000 + n) || '@customer-' || account_id || '.example' END AS email,
   CASE WHEN n = 1 THEN 'admin' WHEN rnd('role', account_id * 1000 + n) < 0.25 THEN 'dispatcher' ELSE 'technician' END AS role,
   created_at + INTERVAL (floor(rnd('ucreated', account_id * 1000 + n) * 120)) DAY AS created_at
@@ -124,7 +124,7 @@ FROM raw.users u, range(0, 13) t(m)
 WHERE rnd('passive-user', u.user_id) < 0.08;
 
 CREATE OR REPLACE VIEW raw.warehouse_info AS
-SELECT 'orbitly' AS company, current_date AS built_on,
+SELECT 'saasy' AS company, current_date AS built_on,
   (SELECT count(*) FROM raw.accounts) AS accounts,
   (SELECT count(*) FROM raw.users) AS users,
   (SELECT count(*) FROM raw.events) AS events;

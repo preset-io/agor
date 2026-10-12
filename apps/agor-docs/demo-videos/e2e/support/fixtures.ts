@@ -101,11 +101,11 @@ export function fakeGithub(github: string, description: string, pulls: FakePull[
   );
 }
 
-/** Orbitly's warehouse (fixtures/data/orbitly/build.sql), 13 months ending today. */
-export function buildOrbitlyWarehouse(dest: string): void {
+/** SaaSy Co.'s warehouse (fixtures/data/saasy/build.sql), 13 months ending today. */
+export function buildSaasyWarehouse(dest: string): void {
   mkdirSync(path.dirname(dest), { recursive: true });
   rmSync(dest, { force: true });
-  const sql = readFileSync(path.join(FIXTURES_DIR, 'data', 'orbitly', 'build.sql'), 'utf8');
+  const sql = readFileSync(path.join(FIXTURES_DIR, 'data', 'saasy', 'build.sql'), 'utf8');
   run('duckdb', [dest], path.dirname(dest), sql);
 }
 
