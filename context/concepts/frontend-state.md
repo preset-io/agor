@@ -2,7 +2,8 @@
 
 How the browser client holds data, what survives a reload, what writes each store, and what
 bounds it. `UI` = `apps/agor-ui/src`, `client` = `packages/client/src`,
-`core` = `packages/core/src`. Line numbers are as of `85d7ce81`; code wins when they drift.
+`core` = `packages/core/src`. Line numbers are as of `85d7ce81` and counts as of `97eafaca`; code
+wins when they drift.
 
 Entity retention (scopes, coverage, pins, the partition LRU, reconnect resync) is specified in
 [`user-first-scoped-hydration.md`](user-first-scoped-hydration.md). This doc links there instead
@@ -218,13 +219,6 @@ every listener (`:924`).
 | **Unbounded**    | Lean transcript that cannot trim                                                                                               | Turns loaded × time open. See [Transcript bounds](#transcript-bounds)                                                                                      |
 | Unbounded, small | `keyToCanonical`, `accessCache.known`, `deletedMcpServerIds`, canvas warning sets, `commentRefs`, per-entity localStorage keys | Distinct sessions, branches or boards touched until each one's clear point (see the inventory)                                                             |
 
-**Worst offenders.** These are the three bold rows above, ranked by how they can grow inside one
-tab. None has been measured; recommendation 2 is how to rank them with evidence.
-
-1. The lean transcript that cannot trim. It grows with turns while a session stays open.
-2. Global collections. They grow with the workspace, and comments carry bodies.
-3. Session-row `tasks` arrays. They grow with total turns across up to 10,000 loaded sessions.
-
 ### Transcript bounds
 
 - A trim runs only when all of these hold (`ConversationView.tsx:471-492`):
@@ -254,9 +248,25 @@ tab. None has been measured; recommendation 2 is how to rank them with evidence.
 - **Tab lifetime:** global `created` events, the small unbounded maps, and localStorage keys
   (which also outlive the tab).
 
-The open issue #2757 (Safari tab reaching 11-12 GB overnight, filed 2026-09-14) predates the
-retention fixes listed under [Prior work](#prior-work). Whether it still reproduces is
-**unverified**.
+## Known limitations
+
+Current behavior, by design or not yet addressed:
+
+- The lean transcript does not trim while the reader is scrolled up or an older page is loading
+  (`UI/components/ConversationView/ConversationView.tsx:471-492`), nor when the handle reads in
+  task-ID order (`client/reactive-session.ts:1333,1362-1368`). Its text grows with every turn
+  loaded while the session stays open.
+- Global collections (comments, users, repos, boards, card types, MCP servers, gateway channels,
+  artifacts) are never evicted. Eviction covers only branches, sessions, board objects and cards
+  (`UI/store/retention.ts:195-211`). Global rows leave only on a `removed` event or a full clear.
+- Every session row, lean rows included, carries its full `tasks: TaskID[]` list
+  (`core/types/session.ts:348`; `core/db/repositories/sessions.ts:228`).
+- Logout clears only the tokens and the draft seed (`UI/hooks/useAuth.ts:994,1017`;
+  `UI/utils/tokenRefresh.ts:94-97`). Per-branch peek keys and per-session MCP-banner keys stay in
+  localStorage (`UI/components/BranchCard/BranchCard.tsx:45,205-208`;
+  `UI/components/SessionPanel/SessionFooter.tsx:239-242`).
+
+Follow-up work is tracked in [#3077](https://github.com/preset-io/agor/issues/3077).
 
 ## Listener hygiene
 
@@ -274,8 +284,8 @@ retention fixes listed under [Prior work](#prior-work). Whether it still reprodu
 ## Broader architecture
 
 - **Shells:**
-  - `UI/App.tsx` (2,355 lines) holds the router, providers, auth, CRUD handlers and modals.
-  - `UI/components/App/App.tsx` (1,738 lines) is the lazy desktop workspace.
+  - `UI/App.tsx` holds the router, providers, auth, CRUD handlers and modals.
+  - `UI/components/App/App.tsx` is the lazy desktop workspace.
   - `UI/components/mobile/MobileApp.tsx` is the phone shell.
 - **Routing:**
   - `BrowserRouter` at `UI/App.tsx:2354`, routes at `:2197-2302`, lazy page loaders at
@@ -286,88 +296,12 @@ retention fixes listed under [Prior work](#prior-work). Whether it still reprodu
 - **Providers:** memoized, except the theme value, an inline object
   (`UI/contexts/ThemeContext.tsx:142`).
 - **Prop drilling and mixed ownership.** Counts exclude tests and marketing pages:
-  - 64 `userById=` props and 200 `client={client}` props.
-  - 83 whole-map `useAgorStore(select…ById)` subscriptions in 29 files.
+  - 62 `userById=` props and 199 `client={client}` props.
+  - 80 whole-map `useAgorStore(select…)` subscriptions in 29 files, counting the 15 plain map
+    selectors at `UI/store/selectors.ts:39-54`.
   - Some components both subscribe and drill, e.g. `AppHeader.tsx:180-182`.
   - `MobileApp.tsx:182-188` subscribes to 7 maps and passes them down.
   - Actions arrive both as props and through `AppActionsContext`
     (`UI/components/App/App.tsx:1150`).
-- **Re-render hotspots:**
-  - Every `BranchNode` subscribes to the whole `userById` (`SessionCanvas.tsx:319`), so any user
-    patch re-renders every card wrapper.
-  - `UrlStateBridge` subscribes to four whole maps (`UI/components/App/App.tsx:141-144`); it
-    renders nothing.
-  - Session patches reach subscribers at most once per frame (`realtimeBatch.ts`). `useAgorData`
-    itself subscribes only to load state (`useAgorData.ts:425-434`).
 - **Mixed sources:** `canSwitchTool` reads `tasks` from the store row while the panel renders
   tasks from the handle (`SessionPanel.tsx:980`).
-- **Large files** (lines):
-
-  | File                         | Lines |
-  | ---------------------------- | ----- |
-  | `GatewayChannelsTable.tsx`   | 4,839 |
-  | `KnowledgePage.tsx`          | 4,644 |
-  | `SessionCanvas.tsx`          | 3,503 |
-  | `client/reactive-session.ts` | 3,212 |
-  | `UserSettingsModal.tsx`      | 2,686 |
-  | `OnboardingWizard.tsx`       | 2,360 |
-  | `SessionPanel.tsx`           | 1,989 |
-  | `SessionFooter.tsx`          | 1,832 |
-  | `useAgorData.ts`             | 1,767 |
-
-## Recommendations
-
-Smallest correct fix first; each reuses an existing mechanism.
-
-1. **P1, correctness.** In `sessionRemoved`, filter every bucket with `isSessionRowRemovedWith`,
-   as archive does (`agorMaps.ts:286-292`). Add a test next to `agorStore.test.ts:194`.
-2. **P1, evidence.** Re-run #2757 on current main. Add a long-idle board with a running session
-   to `apps/agor-ui/scripts/production-retention-harness.mjs`, which CI already runs
-   (`.github/workflows/ci.yml:225-233`). Do this before investing in the items below.
-3. **P2, legacy transcripts.** Let `trimOlderTasks` trim in task-ID order: after dropping turns,
-   move the `leanOldestTaskId` paging cursor (`client/reactive-session.ts:1637`) to the first
-   kept turn. Today it refuses (`:1359-1365`). Check the result against the existing paging
-   tests.
-4. **P2, session rows.** Every store-row reader of `session.tasks` uses only emptiness or the last
-   id (`UI/store/homeSelectors.ts:158,172`; `UI/components/HomePage/HomeRow.tsx:276`;
-   `SessionPanel.tsx:980`). So:
-   - keep the last id and a count on ingest, in `buildSessionMaps`, `applySessionPatchToMaps` and
-     `sessionCreated`;
-   - mark the row as projected, the way `read_shape` marks lean context.
-
-   Handles read their own full record, so transcripts are unaffected.
-
-5. **P2, small unbounded maps:**
-   - delete the `keyToCanonical` aliases when their subscription entry is deleted
-     (`client/reactive-session.ts:3002`);
-   - cap `accessCache.known` with the same LRU pattern as `sharedCssVarScope.ts:84-87`.
-6. **P3, localStorage:**
-   - move peeked-session and MCP-banner keys under `userStorageKey`;
-   - prune them in `branchRemoved` and `sessionRemoved`, as `removeCollapsedBranchNode` already
-     does;
-   - drop the dead `agor:currentBoardId` writer and the `feathers-jwt` fallback.
-7. **P3, global comments.** Home's rule needs only unresolved roots on live boards and their
-   replies (`UI/store/userScope.ts:144-146`). Read those globally and load resolved threads with
-   the board partition. This changes an invariant in the hydration doc, so update it in the same
-   PR.
-8. **P3, rendering:**
-   - give `BranchNode` a selector for only the users it shows;
-   - memoize the theme context value;
-   - re-enable `StrictMode` once `useAgorClient` survives a double mount (`UI/main.tsx:33-34`).
-
-## Prior work
-
-| PR    | Change                                   |
-| ----- | ---------------------------------------- |
-| #2908 | GlobalSearch closures                    |
-| #2909 | Syntax-highlight retention               |
-| #2930 | Completed thinking streams               |
-| #2932 | Socket RPC settlement and fetch journals |
-| #2950 | Detail retention bounded to 10 turns     |
-| #2963 | 32 MiB byte budget                       |
-| #2964 | 30-turn trim                             |
-| #3004 | View bookkeeping for trimmed turns       |
-| #2952 | Scoped hydration                         |
-
-Collection, not just store absence, is tested in production builds by
-`apps/agor-ui/scripts/test-transcript-retention.mjs` and `test-global-search-retention.mjs`.
