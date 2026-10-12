@@ -69,6 +69,35 @@ it('does not reopen from a stationary hover after keyboard dismissal', async () 
   expect(trigger).toHaveFocus();
 });
 
+it('does not reopen when a resting pointer sits where the popover appears', async () => {
+  // A pointer left over the popover region (e.g. by an earlier interaction) makes the browser
+  // re-dispatch mouseenter after the popover leaves; only real pointer movement may hover-open.
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;left:40px;top:60px;width:100px;height:100px;';
+  document.body.appendChild(probe);
+  await userEvent.hover(probe);
+  probe.remove();
+  render(
+    <ContextWindowPill
+      used={22}
+      limit={100}
+      taskMetadata={{ raw_sdk_response: { usage: { input_tokens: 22 } } }}
+    />
+  );
+  const trigger = screen.getByRole('button', { name: /Context window 22% used/ });
+  trigger.focus();
+  await act(async () => userEvent.keyboard('{Enter}'));
+  const rawDetails = await screen.findByRole('button', { name: /Raw SDK Response/ });
+  await waitFor(() => expect(rawDetails).toBeVisible());
+  await act(async () => userEvent.tab());
+  expect(rawDetails).toHaveFocus();
+  await act(async () => userEvent.keyboard('{Escape}'));
+  await waitFor(() => expect(rawDetails).not.toBeVisible(), { timeout: 2000 });
+  // Outlast the 0.3s hover-open delay.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  expect(trigger).toHaveAttribute('aria-expanded', 'false');
+});
+
 it('does not return focus on outside dismissal', async () => {
   render(
     <>
