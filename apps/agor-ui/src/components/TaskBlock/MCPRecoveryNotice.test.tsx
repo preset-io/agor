@@ -5,6 +5,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MCPRecoveryNotice } from './TaskBlock';
 
+const { openCatalog } = vi.hoisted(() => ({ openCatalog: vi.fn() }));
+vi.mock('../../contexts/MCPCatalogModalContext', () => ({
+  useMCPCatalogModal: () => ({ openCatalog }),
+}));
+
 function recovery(overrides: Partial<MCPRuntimeRecovery> = {}): MCPRuntimeRecovery {
   return {
     generation: 3,
@@ -107,10 +112,9 @@ describe('MCPRecoveryNotice', () => {
       />
     );
     expect(screen.getByText('MCP sign-in required')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Sign in to Calendar' })).toHaveAttribute(
-      'href',
-      '/settings/mcp/server-1/'
-    );
+    // MCP sign-in lives in the MCP Marketplace, not in a Settings section.
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in to Calendar' }));
+    expect(openCatalog).toHaveBeenCalledOnce();
   });
 
   it('announces a failed provider refresh with error severity', () => {
