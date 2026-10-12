@@ -603,13 +603,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }
         >
           <Tooltip
-            title={
+            title={hoverTooltip(
               connectionDisabled
                 ? 'Disconnected from daemon'
                 : composerAttachmentsPresent
                   ? composerAttachmentActionTooltip
                   : 'Fork this session'
-            }
+            )}
             placement="left"
           >
             <span style={labelGroupStyle}>

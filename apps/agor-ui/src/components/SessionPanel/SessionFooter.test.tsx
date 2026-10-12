@@ -756,7 +756,13 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
       }
       fireEvent.click(screen.getByLabelText('More options'));
       const sheet = (await screen.findByText('Session controls')).closest('[role=dialog]')!;
-      expect(within(sheet as HTMLElement).getByLabelText('Fork session')).toBeInTheDocument();
+      const forkRow = within(sheet as HTMLElement).getByLabelText('Fork session');
+      // A tap must not leave the row's hover hint over the sheet.
+      fireEvent.mouseEnter(within(forkRow).getByText('Fork session'));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      });
+      expect(screen.queryByText('Fork this session')).not.toBeInTheDocument();
       expect(within(sheet as HTMLElement).getByLabelText('Spawn subsession')).toHaveAttribute(
         'aria-disabled',
         'true'
