@@ -182,7 +182,11 @@ function ToolsForIdentity({ client, user, connected, authGeneration, onConnected
         ) : status === 'loading' ? (
           <Skeleton active />
         ) : matches.length === 0 ? (
-          <Typography.Text type="secondary">No tools match "{filters.search}".</Typography.Text>
+          <Typography.Text type="secondary">
+            {filters.search.trim()
+              ? `No tools match "${filters.search.trim()}".`
+              : 'No tools to show.'}
+          </Typography.Text>
         ) : (
           <div
             style={{

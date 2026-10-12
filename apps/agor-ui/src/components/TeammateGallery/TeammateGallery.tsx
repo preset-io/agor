@@ -245,16 +245,13 @@ const FILTER_OPTIONS = [
   })),
 ] satisfies { value: GalleryFilter; label: string }[];
 
-export interface TeammateGalleryFiltersProps {
+interface TeammateGalleryFiltersProps {
   value: GalleryFilter;
   onChange: (filter: GalleryFilter) => void;
 }
 
-/** Exclusive category control shared by every gallery host. */
-export const TeammateGalleryFilters: React.FC<TeammateGalleryFiltersProps> = ({
-  value,
-  onChange,
-}) => {
+/** Exclusive category control for the full gallery. */
+const TeammateGalleryFilters: React.FC<TeammateGalleryFiltersProps> = ({ value, onChange }) => {
   const { token } = theme.useToken();
 
   return (

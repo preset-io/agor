@@ -70,6 +70,11 @@ describe('OnboardingToolsStep', () => {
     await waitFor(() => expect(screen.queryByText('GitHub')).not.toBeInTheDocument());
     expect(tile('Notion')).toBeInTheDocument();
     expect(tile('Linear')).toBeInTheDocument();
+
+    // A category with nothing in it must not echo an empty search back as `""`.
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by category' }));
+    fireEvent.click(await screen.findByTitle('Observability'));
+    expect(await screen.findByText('No tools to show.')).toBeInTheDocument();
   });
 
   it('shows the Catalog logo (letter fallback), display title and category on each tile', async () => {
