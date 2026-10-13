@@ -54,6 +54,7 @@ import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServe
 import {
   allowedMcpScopes,
   allowedMcpTransports,
+  askAdminIfPolicyRefused,
   canAddMcpServer,
   canAddSharedMcpServer,
   canDeleteMcpServer,
@@ -62,6 +63,7 @@ import {
   explainManageRestriction,
   type MCPServerCapabilityContext,
   policyPendingState,
+  workspaceAdminNames,
 } from '../MCPServer/memberPolicy';
 import { useMCPServerDiscovery } from '../MCPServer/useMCPServerDiscovery';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
@@ -132,7 +134,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   onCreate,
   onDelete,
 }) => {
-  const { showError } = useThemedMessage();
+  const { showError, showInfo } = useThemedMessage();
   // Same set the session panel and the picker read, so an install is
   // "unfinished" in exactly one sense across all three.
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
@@ -168,7 +170,10 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     ]
   );
   const canAdd = !policyPending && canAddMcpServer(capability);
-  const addRestriction = policyPending ? policyPendingHint : explainAddRestriction(capability);
+  const adminNames = useMemo(() => workspaceAdminNames(userById.values()), [userById]);
+  const addRestriction = policyPending
+    ? policyPendingHint
+    : explainAddRestriction(capability, { adminNames });
   const operationGuard = useAuthorityOperationGuard(
     durableAuthorityKey
       ? [durableAuthorityKey, client, memberPolicy.policy, memberPolicy.canConfigure]
@@ -301,14 +306,14 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   ): Promise<string | null> => {
     if (!client || !operation.isCurrent()) return null;
     if (!addIsCurrentlyAllowed()) {
-      showError(capabilityRef.current.addRestriction);
+      showInfo(capabilityRef.current.addRestriction);
       return null;
     }
     try {
       await createForm.validateFields();
       if (!operation.isCurrent()) return null;
       if (!addIsCurrentlyAllowed()) {
-        showError(capabilityRef.current.addRestriction);
+        showInfo(capabilityRef.current.addRestriction);
         return null;
       }
       const data = buildCreateData(createForm.getFieldsValue(true));
@@ -340,6 +345,11 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       return createdServerId;
     } catch (error) {
       if (!operation.isCurrent()) return null;
+      const askAdmin = askAdminIfPolicyRefused(error, { adminNames });
+      if (askAdmin) {
+        showInfo(askAdmin);
+        return null;
+      }
       // Say which field. Swallowing a validation rejection here left the OAuth
       // button doing nothing at all, with nothing on screen to explain it.
       showError(
@@ -367,7 +377,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     }
 
     if (!addIsCurrentlyAllowed()) {
-      showError(capabilityRef.current.addRestriction);
+      showInfo(capabilityRef.current.addRestriction);
       return;
     }
 
@@ -376,7 +386,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       await createForm.validateFields();
       if (!operation.isCurrent()) return;
       if (!addIsCurrentlyAllowed()) {
-        showError(capabilityRef.current.addRestriction);
+        showInfo(capabilityRef.current.addRestriction);
         return;
       }
       const data = buildCreateData(createForm.getFieldsValue(true));
@@ -680,9 +690,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
                 New MCP Server
               </Button>
             ) : (
-              <Tooltip
-                title={policyPending ? policyPendingHint : explainAddRestriction(capability)}
-              >
+              <Tooltip title={addRestriction}>
                 <span>
                   <Button type="primary" icon={<PlusOutlined />} disabled>
                     New MCP Server

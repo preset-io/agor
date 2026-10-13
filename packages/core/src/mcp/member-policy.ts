@@ -88,6 +88,20 @@ export function mayMemberWriteMCPServers(policy: MCPMemberPolicy): boolean {
 }
 
 /**
+ * `data.code` on the Forbidden a member gets when the policy refuses every
+ * write ({@link mayMemberWriteMCPServers} is false). Stable so a client can
+ * answer "ask an admin" without matching the daemon's prose, and an agent can
+ * branch on it instead of retrying.
+ */
+export const MCP_MEMBER_POLICY_REFUSED_CODE = 'mcp_member_policy_refused';
+
+/** Whether an error is the daemon's {@link MCP_MEMBER_POLICY_REFUSED_CODE} refusal. */
+export function isMcpMemberPolicyRefusal(error: unknown): boolean {
+  const data = (error as { data?: { code?: unknown } } | null | undefined)?.data;
+  return data?.code === MCP_MEMBER_POLICY_REFUSED_CODE;
+}
+
+/**
  * Whether policy and ownership place this server in a member's hands.
  *
  * Admins are not members: they administer every server, so callers answer that

@@ -3,6 +3,7 @@
  * server row, and what ownership the row ends up with.
  */
 
+import { MCP_MEMBER_POLICY_REFUSED_CODE } from '@agor/core/mcp';
 import type { AuthenticatedParams, MCPMemberPolicy, MCPServer, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -227,6 +228,19 @@ describe('authorizeMcpServerWrite', () => {
     await expect(
       authorizeMcpServerWrite(db, installParams, { method: 'create', data: remoteCreate })
     ).rejects.toThrow(/this entry cannot be installed/);
+  });
+
+  // Clients word "ask an admin" from the code, so both sentences must carry it.
+  it.each([
+    ['a marketplace install', { mcpCatalogInstall: { entry_name: 'com.deepwiki/mcp' } }],
+    ['an ordinary create', {}],
+  ])('marks the policy refusal of %s with a stable code', async (_label, extra) => {
+    resolveMcpMemberPolicy.mockResolvedValue('use_existing_only');
+    const params = { ...paramsFor(ALICE, 'member'), ...extra } as unknown as AuthenticatedParams;
+
+    await expect(
+      authorizeMcpServerWrite(db, params, { method: 'create', data: remoteCreate })
+    ).rejects.toMatchObject({ data: { code: MCP_MEMBER_POLICY_REFUSED_CODE } });
   });
 
   it('keeps the direct-configuration wording for an ordinary create', async () => {

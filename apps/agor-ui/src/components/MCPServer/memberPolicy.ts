@@ -11,12 +11,13 @@
 
 import {
   isAtLeastMemberRole,
+  isMcpMemberPolicyRefusal,
   mayMemberManageMCPServer,
   mayMemberUseMCPScope,
   mayMemberUseMCPTransport,
 } from '@agor/core/mcp/member-policy';
-import type { MCPMemberPolicy, MCPScope, MCPServer, MCPTransport } from '@agor-live/client';
-import { MCP_SCOPES, MCP_TRANSPORTS } from '@agor-live/client';
+import type { MCPMemberPolicy, MCPScope, MCPServer, MCPTransport, User } from '@agor-live/client';
+import { hasMinimumRole, MCP_SCOPES, MCP_TRANSPORTS, ROLES } from '@agor-live/client';
 
 export interface MCPMemberPolicyDescription {
   /** The value, named as a sentence about members rather than as its enum. */
@@ -185,8 +186,52 @@ export function canRefreshMcpServer(
   return context.isAdmin || (!!context.userId && server.owner_user_id === context.userId);
 }
 
+const LOST_CONNECTION_RESTRICTION = 'Lost connection to Agor.';
+
 const READ_ONLY_RESTRICTION =
   'Your account has read-only access, so it cannot configure MCP servers. An admin can change your role.';
+
+/** Beyond this many, naming them stops helping the reader pick one. */
+const MAX_NAMED_ADMINS = 3;
+const ADMIN_LIST_FORMAT = new Intl.ListFormat('en', { type: 'disjunction' });
+
+export interface AskAdminContext {
+  /** The server being asked for; absent where no particular one is in view. */
+  serverName?: string;
+  /** Administrators' display names, from the user directory every member can already read. */
+  adminNames?: readonly string[];
+}
+
+/** Display names of the directory's administrators, sorted, for {@link askAdminToAddMcpServer}. */
+export function workspaceAdminNames(
+  users: Iterable<Pick<User, 'name' | 'email' | 'role'>>
+): string[] {
+  return [...users]
+    .filter((user) => hasMinimumRole(user.role, ROLES.ADMIN))
+    .map((user) => user.name?.trim() || user.email)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * What a member can do when the policy keeps adding servers to administrators:
+ * ask one. Information, not a failure — the member did nothing wrong.
+ */
+export function askAdminToAddMcpServer({ serverName, adminNames = [] }: AskAdminContext = {}) {
+  const named = adminNames.length > 0 && adminNames.length <= MAX_NAMED_ADMINS;
+  const who = named
+    ? `an administrator (${ADMIN_LIST_FORMAT.format(adminNames)})`
+    : 'an administrator';
+  return `Ask ${who} to add ${serverName || 'the server you need'} to this workspace.`;
+}
+
+/**
+ * The same answer for a write the daemon refused under the policy — the
+ * backstop for a click the UI expected to succeed. `null` for any other error.
+ */
+export function askAdminIfPolicyRefused(error: unknown, ask: AskAdminContext): string | null {
+  return isMcpMemberPolicyRefusal(error) ? askAdminToAddMcpServer(ask) : null;
+}
 
 /**
  * Why a refused action is refused, phrased so the reader can act on it — ask an
@@ -196,9 +241,14 @@ const READ_ONLY_RESTRICTION =
  * policy: the policy is not what is stopping them, and changing it would not
  * help.
  */
-export function explainAddRestriction({ role, policy }: MCPServerCapabilityContext): string {
+export function explainAddRestriction(
+  { role, connectionReady }: MCPServerCapabilityContext,
+  ask?: AskAdminContext
+): string {
   if (!isAtLeastMemberRole(role)) return READ_ONLY_RESTRICTION;
-  return `This workspace's MCP policy — "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}" — does not let you add or change MCP servers. An admin can configure one, or change the policy.`;
+  // Admins land here too while disconnected; asking an admin would be wrong.
+  if (!connectionReady) return LOST_CONNECTION_RESTRICTION;
+  return askAdminToAddMcpServer(ask);
 }
 
 /** Why changing or removing this particular server is refused. */

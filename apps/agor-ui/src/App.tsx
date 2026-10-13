@@ -45,6 +45,7 @@ import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal'
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { MCPCatalogModalHost } from './components/Marketplace/MCPCatalogModalHost';
+import { askAdminIfPolicyRefused } from './components/MCPServer/memberPolicy';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { type OnboardingCompletionResult, OnboardingWizard } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
@@ -88,6 +89,7 @@ import {
 import { usePinnedOpenRows } from './hooks/usePinnedRows';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
 import { useUnarchiveBranch } from './hooks/useUnarchiveBranch';
+import { useWorkspaceAdminNames } from './hooks/useWorkspaceAdminNames';
 import { repoPatched, sessionCreated } from './store/agorRealtimeActions';
 import { agorStore, useAgorStore } from './store/agorStore';
 import { DeviceRouter } from './surfaces/DeviceRouter';
@@ -262,7 +264,9 @@ function preloadRouteModule(moduleKey: RouteModuleKey): Promise<unknown> {
 }
 
 function AppContent() {
-  const { showSuccess, showError, showWarning, showLoading, destroy } = useThemedMessage();
+  const { showSuccess, showError, showWarning, showInfo, showLoading, destroy } =
+    useThemedMessage();
+  const workspaceAdminNames = useWorkspaceAdminNames();
   const navigate = useNavigate();
   const location = useLocation();
   const { currentSurface, workspaceSurfaceShouldRun } = useWorkspaceSurfaceLifecycle(
@@ -1696,6 +1700,11 @@ function AppContent() {
       showSuccess('MCP server added successfully!');
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
+      const askAdmin = askAdminIfPolicyRefused(error, { adminNames: workspaceAdminNames });
+      if (askAdmin) {
+        showInfo(askAdmin);
+        return;
+      }
       showError(
         `Failed to add MCP server: ${error instanceof Error ? error.message : String(error)}`
       );

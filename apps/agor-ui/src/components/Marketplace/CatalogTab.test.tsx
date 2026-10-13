@@ -1,3 +1,4 @@
+import { MCP_MEMBER_POLICY_REFUSED_CODE } from '@agor/core/mcp/member-policy';
 import type { AgorClient, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -938,8 +939,38 @@ describe('connect capability reaches the drawer', () => {
     const connect = await findNoAuthConnect(drawer);
 
     expect(connect).toBeDisabled();
-    expect(drawer.getByText(/Use existing servers only/)).toBeInTheDocument();
+    expect(
+      drawer.getByText('Ask an administrator to add DeepWiki to this workspace.')
+    ).toBeInTheDocument();
     expect(connectCalls).toHaveLength(0);
+  });
+
+  it('turns a policy refusal from the daemon into who to ask, not an error', async () => {
+    // The answer the UI acted on was stale; the daemon is what decides.
+    memberPolicyAnswer = { policy: 'allow_private_only', can_configure: true };
+    connectImpl = async () => {
+      throw Object.assign(
+        new Error('Your organization does not allow members to add MCP servers'),
+        {
+          name: 'Forbidden',
+          code: 403,
+          data: { code: MCP_MEMBER_POLICY_REFUSED_CODE },
+        }
+      );
+    };
+
+    const drawer = await openAndAcknowledge(MEMBER);
+    const connect = await findNoAuthConnect(drawer);
+    await waitFor(() => expect(connect).toBeEnabled());
+    fireEvent.click(connect);
+
+    expect(
+      await drawer.findByText('Ask an administrator to add DeepWiki to this workspace.')
+    ).toBeVisible();
+    expect(drawer.queryByText(/does not allow members/)).not.toBeInTheDocument();
+    expect(document.querySelector('.ant-alert-error')).toBeNull();
+    expect(connect).toBeDisabled();
+    expect(connectCalls).toHaveLength(1);
   });
 
   it('enables Connect when the server grants the member capability', async () => {

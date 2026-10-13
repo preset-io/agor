@@ -39,9 +39,11 @@ import {
   theme,
 } from 'antd';
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useWorkspaceAdminNames } from '../../hooks/useWorkspaceAdminNames';
 import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import {
+  askAdminToAddMcpServer,
   canAddMcpServer,
   canAddSharedMcpServer,
   canUseExistingMcpServer,
@@ -97,6 +99,8 @@ export interface CatalogDetailDrawerProps {
   startingSession: boolean;
   startSessionError: string | null;
   connectError: string | null;
+  /** The daemon refused the last Connect under the member policy; say who to ask instead. */
+  connectRefusedByPolicy?: boolean;
   /**
    * What the live endpoint said it wanted, if a previous connect was refused
    * over the bearer access token. Overrides the entry's `auth_type` for deciding whether
@@ -169,6 +173,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   startingSession,
   startSessionError,
   connectError,
+  connectRefusedByPolicy = false,
   credentialRequirement,
   connectCapability,
   policyPending,
@@ -188,6 +193,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   const { token } = theme.useToken();
   const onboarding = mode === 'onboarding';
   const titleId = useId();
+  const adminNames = useWorkspaceAdminNames();
   const successActionRef = useRef<HTMLButtonElement | null>(null);
   const [teammateId, setTeammateId] = useState<BranchID | undefined>();
   const [agenticTool, setAgenticTool] = useState<AgenticToolName>(DEFAULT_AGENT);
@@ -376,6 +382,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   // biome-ignore lint/correctness/useExhaustiveDependencies: both interaction boundaries clear a prior popup refusal
   useEffect(() => setPopupBlocked(false), [open, entryId]);
 
+  const askAdmin = { serverName: title, adminNames };
   const canShare = canAddSharedMcpServer(connectCapability);
   const canUseShared =
     !policyPending &&
@@ -397,7 +404,9 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             : canAddMcpServer(connectCapability) ||
               (reusable && canUseExistingMcpServer(connectCapability))
         )
-      ? undefined
+      ? connectRefusedByPolicy
+        ? askAdminToAddMcpServer(askAdmin)
+        : undefined
       : sharing === 'shared' && canUseExistingMcpServer(connectCapability)
         ? readinessLoading
           ? 'Checking whether an existing shared installation is available…'
@@ -406,7 +415,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             : 'No eligible shared installation is available. You cannot publish or repair shared configuration under the current policy. Choose Private if allowed, or ask an admin.'
         : canUseShared
           ? 'Choose Use existing shared to connect without adding a private server.'
-          : explainAddRestriction(connectCapability);
+          : explainAddRestriction(connectCapability, askAdmin);
   // An existing shared install already carries its OAuth app; only whoever
   // creates an install enters the app credentials.
   const reusesSharedApp = Boolean(

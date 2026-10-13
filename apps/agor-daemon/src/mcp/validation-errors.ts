@@ -1,4 +1,5 @@
 import { BadRequest } from '@agor/core/feathers';
+import { isMcpMemberPolicyRefusal, MCP_MEMBER_POLICY_REFUSED_CODE } from '@agor/core/mcp';
 
 const MAX_ISSUES = 8;
 const QUERY_FIELDS = new Set([
@@ -102,6 +103,30 @@ export function mcpValidationFailure(error: unknown, tool: string) {
           hint: inputError
             ? 'Correct the indicated fields using agor_get_tool_details before retrying.'
             : 'A downstream service rejected the request. Check the indicated fields against agor_get_tool_details; if your payload matches, report a tool/service schema mismatch. Do not retry unchanged.',
+        }),
+      },
+    ],
+    isError: true,
+  };
+}
+
+/**
+ * The member policy refusing an MCP server write, shaped like the failures
+ * above so an agent acting for a member stops and hands the request to an admin
+ * rather than retrying or trying another way to configure the server.
+ */
+export function mcpMemberPolicyRefusal(error: unknown, tool: string) {
+  if (!isMcpMemberPolicyRefusal(error)) return undefined;
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: JSON.stringify({
+          error: (error as Error).message,
+          tool,
+          code: MCP_MEMBER_POLICY_REFUSED_CODE,
+          retryable: false,
+          hint: 'In this workspace only admins can add or change MCP servers. Do not retry or try another way to configure it. Tell the user to ask a workspace admin to add the server they need; once it exists they can connect it and use it.',
         }),
       },
     ],

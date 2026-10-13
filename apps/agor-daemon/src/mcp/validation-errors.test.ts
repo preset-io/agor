@@ -1,7 +1,12 @@
 import { BadRequest, Forbidden } from '@agor/core/feathers';
+import { MCP_MEMBER_POLICY_REFUSED_CODE } from '@agor/core/mcp';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { inputValidationIssues, mcpValidationFailure } from './validation-errors.js';
+import {
+  inputValidationIssues,
+  mcpMemberPolicyRefusal,
+  mcpValidationFailure,
+} from './validation-errors.js';
 
 describe('MCP validation diagnostics', () => {
   it('distinguishes downstream validation without attributing it to the caller or exposing raw AJV data', () => {
@@ -49,5 +54,28 @@ describe('MCP validation diagnostics', () => {
     ]) {
       expect(mcpValidationFailure(error, 'agor_boards_get')).toBeUndefined();
     }
+  });
+});
+
+describe('MCP member policy refusal', () => {
+  it('tells an agent to hand the request to an admin instead of retrying', () => {
+    const error = new Forbidden('ask an admin to add one', {
+      code: MCP_MEMBER_POLICY_REFUSED_CODE,
+    });
+    const result = mcpMemberPolicyRefusal(error, 'agor_mcp_servers_create')!;
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      error: 'ask an admin to add one',
+      tool: 'agor_mcp_servers_create',
+      code: MCP_MEMBER_POLICY_REFUSED_CODE,
+      retryable: false,
+      hint: expect.stringMatching(/ask a workspace admin/),
+    });
+  });
+
+  it('leaves every other Forbidden to the generic path', () => {
+    expect(mcpMemberPolicyRefusal(new Forbidden('denied'), 'agor_mcp_servers_create')).toBe(
+      undefined
+    );
   });
 });

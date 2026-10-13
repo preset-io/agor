@@ -225,7 +225,14 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
 
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
 
-    expect(screen.getByRole('button', { name: /New MCP Server/i })).toBeDisabled();
+    const add = screen.getByRole('button', { name: /New MCP Server/i });
+    expect(add).toBeDisabled();
+    fireEvent.mouseOver(add);
+    expect(
+      await screen.findByText(
+        'Ask an administrator (Ada Admin or Bea Admin) to add the server you need to this workspace.'
+      )
+    ).toBeInTheDocument();
 
     // The pane is not admin-gated: the reader who is refused is the one who
     // needs it. It states the choice rather than rendering one they lack.
@@ -257,7 +264,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
     fireEvent.mouseOver(add);
 
     expect(await screen.findByText(POLICY_LOADING_HINT)).toBeInTheDocument();
-    expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Ask an administrator/)).not.toBeInTheDocument();
 
     // The pane must not name the restrictive value it is falling back to either.
     openPolicyPane();
@@ -348,7 +355,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
     fireEvent.mouseOver(add);
 
     expect(await screen.findByText(POLICY_UNREADABLE_HINT)).toBeInTheDocument();
-    expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Ask an administrator/)).not.toBeInTheDocument();
 
     openPolicyPane();
 
@@ -461,7 +468,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
 
     // Naming the policy would be a false lead: changing it would not help.
     expect(await screen.findByText(/read-only access/i)).toBeInTheDocument();
-    expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Ask an administrator/)).not.toBeInTheDocument();
   });
 
   it('reads the policy once, not once per server row', async () => {

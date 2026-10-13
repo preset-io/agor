@@ -36,6 +36,8 @@ export {
   canConfigureMCPServers,
   isAtLeastMemberRole,
   isMcpGrantSubjectEntitled,
+  isMcpMemberPolicyRefusal,
+  MCP_MEMBER_POLICY_REFUSED_CODE,
   MEMBER_PRIVATE_MCP_SCOPE,
   mayMemberManageMCPServer,
   mayMemberUseMCPScope,

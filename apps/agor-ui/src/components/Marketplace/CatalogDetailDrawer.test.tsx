@@ -10,8 +10,11 @@
  */
 
 import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@agor/core/types';
+import type { User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { EMPTY_MAPS } from '../../store/agorMaps';
+import { agorStore } from '../../store/agorStore';
 import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServer/memberPolicy';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
 
@@ -56,6 +59,7 @@ function renderDrawer(
     readiness?: import('@agor/core/types').MCPCatalogReadiness;
     sharing?: import('@agor/core/types').MCPCatalogSharing;
     readinessError?: string;
+    connectRefusedByPolicy?: boolean;
   } = {}
 ) {
   const { capability = ALLOWED, policyPending = false } = options;
@@ -73,6 +77,7 @@ function renderDrawer(
       startSessionError={null}
       connecting={false}
       connectError={null}
+      connectRefusedByPolicy={options.connectRefusedByPolicy}
       connectCapability={capability}
       readiness={options.readiness}
       sharing={options.sharing}
@@ -406,12 +411,45 @@ describe('CatalogDetailDrawer connect capability', () => {
     expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
   });
 
-  it('refuses a member when the workspace policy forbids new servers', () => {
-    renderDrawer(DEEPWIKI, { capability: RESTRICTED_MEMBER });
+  it('tells a member which administrators to ask for this entry', () => {
+    agorStore.setState({
+      ...EMPTY_MAPS,
+      userById: new Map([
+        ['u1', { user_id: 'u1', name: 'Zoe', email: 'z@x.dev', role: 'admin' } as User],
+        ['u2', { user_id: 'u2', email: 'ana@x.dev', role: 'superadmin' } as User],
+        ['u3', { user_id: 'u3', name: 'Mo', email: 'm@x.dev', role: 'member' } as User],
+      ]),
+    });
+    try {
+      renderDrawer(DEEPWIKI, { capability: RESTRICTED_MEMBER });
+      fireEvent.click(screen.getByRole('checkbox'));
+
+      expect(connectButton()).toBeDisabled();
+      expect(
+        screen.getByText(
+          'Ask an administrator (ana@x.dev or Zoe) to add DeepWiki to this workspace.'
+        )
+      ).toBeVisible();
+      expect(screen.queryByText(/Use existing servers only/)).not.toBeInTheDocument();
+    } finally {
+      agorStore.setState({ ...EMPTY_MAPS });
+    }
+  });
+
+  it('answers a Connect the daemon refused under the policy, as information', () => {
+    // The UI offered Connect (an existing own install looked reusable), but
+    // the daemon refused the write.
+    renderDrawer(DEEPWIKI, {
+      capability: RESTRICTED_MEMBER,
+      readiness: { catalog_key: DEEPWIKI.name, state: 'installed_ready' },
+      connectRefusedByPolicy: true,
+    });
     fireEvent.click(screen.getByRole('checkbox'));
 
     expect(connectButton()).toBeDisabled();
-    expect(screen.getByText(/Use existing servers only/)).toBeInTheDocument();
+    const notice = screen.getByText('Ask an administrator to add DeepWiki to this workspace.');
+    expect(notice.closest('.ant-alert')).toHaveClass('ant-alert-info');
+    expect(document.querySelector('.ant-alert-error')).toBeNull();
   });
 
   it('enables the action for a member with server-provided capability', () => {
@@ -443,7 +481,7 @@ describe('CatalogDetailDrawer connect capability', () => {
 
     expect(connectButton()).toBeDisabled();
     expect(screen.getByText(POLICY_LOADING_HINT)).toBeInTheDocument();
-    expect(screen.queryByText(/does not let you add/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Ask an administrator/)).not.toBeInTheDocument();
   });
 });
 

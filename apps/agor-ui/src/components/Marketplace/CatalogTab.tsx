@@ -7,6 +7,7 @@ import type { MCPCatalogSharing } from '@agor/core/types';
  * renders one page at a time; only the round trip per page is gone.
  */
 
+import { isMcpMemberPolicyRefusal } from '@agor/core/mcp/member-policy';
 import type {
   AgenticToolName,
   BranchID,
@@ -170,6 +171,10 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const [startingSession, setStartingSession] = useState(false);
   const [startSessionError, setStartSessionError] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // The daemon refused this entry under the member policy although the UI
+  // offered Connect. Keyed by what that answer was about, so another entry,
+  // sharing choice or policy value asks again.
+  const [policyRefusedKey, setPolicyRefusedKey] = useState<string | null>(null);
   const [connectSuccess, setConnectSuccess] = useState<{
     catalogKey: string;
     serverId: string;
@@ -248,6 +253,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     authGeneration,
   });
   const { pending: policyPending, hint: policyPendingHint } = policyPendingState(memberPolicy);
+  const connectAttemptKey = selected ? `${selected.name}|${sharing}|${memberPolicy.policy}` : null;
   const connectCapability = useMemo<MCPServerCapabilityContext>(
     () => ({
       role: currentUser?.role,
@@ -614,6 +620,10 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       } catch (err: unknown) {
         oauthPopup?.close();
         if (!operation.isCurrent()) return;
+        if (isMcpMemberPolicyRefusal(err)) {
+          setPolicyRefusedKey(connectAttemptKey);
+          return;
+        }
         setConnectError(
           onboarding
             ? 'Could not connect this server. Check your credentials and try again.'
@@ -627,7 +637,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, selected, onboarding, sharing]
+    [client, operationGuard, selected, onboarding, sharing, connectAttemptKey]
   );
 
   const continueSurpriseOAuth = useCallback(
@@ -811,6 +821,9 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         startSessionError={startSessionError}
         connecting={connecting}
         connectError={connectError}
+        connectRefusedByPolicy={
+          connectAttemptKey !== null && policyRefusedKey === connectAttemptKey
+        }
         credentialRequirement={keyRequirement}
         connectCapability={connectCapability}
         policyPending={policyPending}

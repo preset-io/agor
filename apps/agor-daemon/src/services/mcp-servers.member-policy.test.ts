@@ -24,6 +24,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
+import { MCP_MEMBER_POLICY_REFUSED_CODE } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   MCPMemberPolicy,
@@ -223,6 +224,9 @@ describe('member policy, as it lands in mcp_servers', () => {
     await expect(create({ scope: 'session' })).rejects.toThrow(
       /does not allow members to configure MCP servers/
     );
+    await expect(create({ scope: 'session' })).rejects.toMatchObject({
+      data: { code: MCP_MEMBER_POLICY_REFUSED_CODE },
+    });
     await expect(storedServers()).resolves.toHaveLength(0);
   });
 });

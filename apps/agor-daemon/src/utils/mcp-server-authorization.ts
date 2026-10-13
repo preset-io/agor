@@ -34,6 +34,7 @@ import {
   isAtLeastMemberRole,
   isMCPServerUsableBy,
   isMcpGrantSubjectEntitled,
+  MCP_MEMBER_POLICY_REFUSED_CODE,
   MEMBER_PRIVATE_MCP_SCOPE,
   mayMemberManageMCPServer,
   mayMemberUseMCPScope,
@@ -454,13 +455,17 @@ function assertScopeUnchangedOrAllowed(
  * the marketplace is the deliberate current state, not a gap waiting on a fix:
  * the policy value that would permit installing from the curated list without
  * permitting arbitrary configuration does not exist yet.
+ *
+ * Both carry {@link MCP_MEMBER_POLICY_REFUSED_CODE}, so a client words its own
+ * "ask an admin" from the code instead of matching either sentence.
  */
 function assertPolicyAllowsWrite(policy: MCPMemberPolicy, isCatalogInstall: boolean): void {
   if (mayMemberWriteMCPServers(policy)) return;
   throw new Forbidden(
     isCatalogInstall
       ? 'Your organization does not allow members to add MCP servers, so this entry cannot be installed; ask an admin to add it'
-      : 'Your organization does not allow members to configure MCP servers; ask an admin to add one'
+      : 'Your organization does not allow members to configure MCP servers; ask an admin to add one',
+    { code: MCP_MEMBER_POLICY_REFUSED_CODE }
   );
 }
 
