@@ -129,6 +129,6 @@ export function useFullSessionDetails(
 export function fullSessionDetailsErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : undefined;
   return message
-    ? `Could not load full session details: ${message}`
-    : 'Could not load full session details.';
+    ? `Couldn't load this session's details. (${message})`
+    : "Couldn't load this session's details.";
 }

@@ -30,6 +30,7 @@ import {
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { type ActionErrorCopy, describeActionError } from '@/utils/connectionErrors';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import {
   passwordPolicyHelp,
@@ -42,7 +43,7 @@ import {
   useAuthenticatedAuthorityScope,
   useAuthorityOperationGuard,
 } from '../../hooks/useAuthorityOperationGuard';
-import { useThemedMessage } from '../../utils/message';
+import { ActionErrorNotice } from '../CompactNotice';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
@@ -61,7 +62,8 @@ interface UsersTableProps {
   onUpdate?: (
     userId: string,
     updates: UpdateUserInput,
-    shouldApply?: () => boolean
+    shouldApply?: () => boolean,
+    options?: { errorShownInline?: boolean }
   ) => void | Promise<void>;
   onDelete?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
 }
@@ -75,13 +77,13 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   onUpdate,
   onDelete,
 }) => {
-  const { showError } = useThemedMessage();
   const { config: authConfig, identityContractState } = useAuthConfig();
   // Create user is a drill-in (no stacked modal): the shell footer drives
   // Save/Cancel and the nav-switch / modal-close guards key on `drill`.
   const { drill, openDrill, closeDrill } = useSettingsDrill();
   const [groups, setGroups] = useState<Group[]>([]);
   const [memberships, setMemberships] = useState<GroupMembership[]>([]);
+  const [groupsLoadError, setGroupsLoadError] = useState<ActionErrorCopy | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
@@ -139,6 +141,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     if (!client || !isAdmin) {
       setGroups([]);
       setMemberships([]);
+      setGroupsLoadError(null);
       return;
     }
     try {
@@ -149,13 +152,12 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       if (!operation.isCurrent()) return;
       setGroups(nextGroups as Group[]);
       setMemberships(nextMemberships as GroupMembership[]);
+      setGroupsLoadError(null);
     } catch (error) {
       if (!operation.isCurrent()) return;
-      showError(
-        `Failed to load user groups: ${error instanceof Error ? error.message : String(error)}`
-      );
+      setGroupsLoadError(describeActionError('load groups', error, { idempotent: true }));
     }
-  }, [client, isAdmin, operationGuard, showError]);
+  }, [client, isAdmin, operationGuard]);
 
   useEffect(() => {
     void loadGroups();
@@ -476,6 +478,14 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           ) : undefined
         }
       />
+
+      {groupsLoadError && (
+        <ActionErrorNotice
+          error={groupsLoadError}
+          action={{ label: 'Try again', onClick: () => void loadGroups() }}
+          style={{ marginBottom: 8 }}
+        />
+      )}
 
       <ResponsiveTable
         dataSource={users}

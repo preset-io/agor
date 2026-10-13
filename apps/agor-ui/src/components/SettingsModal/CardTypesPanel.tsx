@@ -15,9 +15,16 @@ import {
 } from 'antd';
 import { useMemo, useState } from 'react';
 import { useSettingsRoute } from '@/hooks/useSettingsRoute';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  formatActionError,
+  isInFlightConnectionLossError,
+} from '@/utils/connectionErrors';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
+import { ActionErrorNotice } from '../CompactNotice';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { validateJSON } from '../JSONEditor';
@@ -43,6 +50,10 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
   const { openSettings } = useSettingsRoute();
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
+  const [typeError, setTypeError] = useState<ActionErrorCopy | null>(null);
+  const [savingType, setSavingType] = useState(false);
+  // A create whose reply was lost may have landed; block a second click until the form changes.
+  const [typeCreateUnconfirmed, setTypeCreateUnconfirmed] = useState(false);
   // Opening a type seeds the form before the editor mounts.
   const isDraftDirty = useDrillFormDraft(form, drill);
 
@@ -74,8 +85,10 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
 
   const handleCreateType = async () => {
     if (!client) return;
+    setTypeError(null);
     try {
       const values = await form.validateFields();
+      setSavingType(true);
       await client.service('card-types').create({
         name: values.name,
         emoji: values.emoji || undefined,
@@ -83,18 +96,22 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
         json_schema: buildSchema(values.json_schema),
       });
       closeDrill();
-      showSuccess('Card type created');
+      showSuccess('Card type created.');
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'errorFields' in err) return;
-      console.error('Failed to create card type:', err);
-      showError('Failed to create card type');
+      setTypeError(describeActionError('create the card type', err, { idempotent: false }));
+      setTypeCreateUnconfirmed(isInFlightConnectionLossError(err));
+    } finally {
+      setSavingType(false);
     }
   };
 
   const handleUpdateType = async () => {
     if (!client || !editingType) return;
+    setTypeError(null);
     try {
       const values = await form.validateFields();
+      setSavingType(true);
       await client.service('card-types').patch(editingType.card_type_id, {
         name: values.name,
         emoji: values.emoji || undefined,
@@ -102,11 +119,12 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
         json_schema: buildSchema(values.json_schema),
       });
       closeDrill();
-      showSuccess('Card type updated');
+      showSuccess('Card type updated.');
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'errorFields' in err) return;
-      console.error('Failed to update card type:', err);
-      showError('Failed to update card type');
+      setTypeError(describeActionError('save the card type', err, { idempotent: true }));
+    } finally {
+      setSavingType(false);
     }
   };
 
@@ -114,15 +132,15 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
     if (!client) return;
     try {
       await client.service('card-types').remove(cardTypeId);
-      showSuccess('Card type deleted');
+      showSuccess('Card type deleted.');
     } catch (err) {
-      console.error('Failed to delete card type:', err);
-      showError('Failed to delete card type');
+      showError(formatActionError('delete the card type', err, { idempotent: true }));
     }
   };
 
   const openEditType = (ct: CardType) => {
     form.resetFields();
+    setTypeError(null);
     form.setFieldsValue({
       name: ct.name,
       emoji: ct.emoji,
@@ -134,6 +152,8 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
 
   const openCreateType = () => {
     form.resetFields();
+    setTypeError(null);
+    setTypeCreateUnconfirmed(false);
     openDrill({ mode: 'create' });
   };
 
@@ -209,10 +229,18 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
       <DrillInFrame
         title={editingType ? 'Edit Card Type' : 'Create Card Type'}
         dirty={isDraftDirty}
+        saving={savingType}
         saveLabel={editingType ? 'Save' : 'Create'}
+        saveDisabled={!editingType && typeCreateUnconfirmed}
         onSave={editingType ? handleUpdateType : handleCreateType}
       >
-        <Form form={form} layout="vertical" style={{ maxWidth: 520 }}>
+        {typeError && <ActionErrorNotice error={typeError} style={{ marginBottom: 8 }} />}
+        <Form
+          form={form}
+          layout="vertical"
+          style={{ maxWidth: 520 }}
+          onValuesChange={() => setTypeCreateUnconfirmed(false)}
+        >
           <Form.Item label="Name" style={{ marginBottom: 24 }}>
             <Flex gap={8}>
               <Form.Item name="emoji" noStyle>
@@ -233,7 +261,14 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
           <Form.Item
             name="json_schema"
             label="Data schema (optional)"
-            rules={[{ validator: validateJSON }]}
+            rules={[
+              {
+                validator: (rule, value: string) =>
+                  validateJSON(rule, value).catch(() =>
+                    Promise.reject(new Error("The schema isn't valid JSON."))
+                  ),
+              },
+            ]}
           >
             <CardTypeSchemaEditor key={editingType?.card_type_id ?? 'new'} />
           </Form.Item>

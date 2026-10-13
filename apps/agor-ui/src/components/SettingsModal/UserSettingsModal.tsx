@@ -73,6 +73,11 @@ import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { copyToClipboard } from '../../utils/clipboard';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  notConnectedMessage,
+} from '../../utils/connectionErrors';
 import { isOnboardingDeferred, type OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import {
   passwordPolicyHelp,
@@ -90,6 +95,7 @@ import {
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { ClaudeAuthSettings } from '../ClaudeAuth';
 import { CodexAuthSettings } from '../CodexAuth';
+import { ActionErrorNotice } from '../CompactNotice';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { HighlightMatch } from '../HighlightMatch';
 import { SessionMcpServersField } from '../MCPServerSelect';
@@ -114,6 +120,7 @@ const AGENTIC_TOOL_TABS = AGENTIC_TOOL_NAMES;
 const MAIN_FORM_KEYS = ['profile', 'security', 'preferences', 'access'] as const;
 
 const PROVIDER_KEY_PREFIX = 'provider:';
+const DELETE_CONFIG_ACTION = 'delete the saved configuration';
 
 type ProviderSubtab = 'auth' | 'defaults';
 
@@ -266,7 +273,8 @@ export interface UserSettingsModalProps {
   onUpdate?: (
     userId: string,
     updates: UpdateUserInput,
-    shouldApply?: () => boolean
+    shouldApply?: () => boolean,
+    options?: { errorShownInline?: boolean }
   ) => void | Promise<void>;
   onReopenOnboarding?: (
     mode: OnboardingReopenMode,
@@ -319,7 +327,11 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   const [search, setSearch] = useState('');
   const [providerSubtab, setProviderSubtab] = useState<ProviderSubtab>('auth');
   const [savingModal, setSavingModal] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<ActionErrorCopy | null>(null);
+  const [deleteConfigError, setDeleteConfigError] = useState<{
+    tool: AgenticToolName;
+    error: ActionErrorCopy;
+  } | null>(null);
   const initializedUserIdRef = useRef<string | null>(null);
   // A search hit for a provider setting requests the sub-tab it lives on; the
   // provider-subtab reset effect consumes this so the hit lands on the right
@@ -459,6 +471,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   const [userGroupIds, setUserGroupIds] = useState<string[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [groupsLoaded, setGroupsLoaded] = useState(false);
+  const [groupsLoadError, setGroupsLoadError] = useState<ActionErrorCopy | null>(null);
   const groupSelectOptions = useMemo(
     () =>
       [...availableGroups].sort((a, b) => a.name.localeCompare(b.name)).map(toGroupSelectOption),
@@ -542,12 +555,14 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       setAvailableGroups([]);
       setUserGroupIds([]);
       setGroupsLoaded(false);
+      setGroupsLoadError(null);
       form.setFieldValue('groupIds', []);
       return;
     }
 
     setLoadingGroups(true);
     setGroupsLoaded(false);
+    setGroupsLoadError(null);
     try {
       const [groups, memberships] = await Promise.all([
         client.service('groups').findAll({ query: { archived: false } }),
@@ -563,7 +578,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       form.setFieldValue('groupIds', nextGroupIds);
     } catch (error) {
       if (!operation.isCurrent()) return;
-      console.error('Failed to load user groups:', error);
+      setGroupsLoadError(describeActionError('load groups', error, { idempotent: true }));
     } finally {
       if (operation.isCurrent()) setLoadingGroups(false);
     }
@@ -908,7 +923,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
 
       if (!operation.isCurrent()) return false;
       if (Object.keys(updates).length > 0) {
-        await onUpdate?.(user.user_id, updates, operation.isCurrent);
+        await onUpdate?.(user.user_id, updates, operation.isCurrent, { errorShownInline: true });
       }
       if (!operation.isCurrent()) return false;
       if (panels.has('security')) form.setFieldValue('password', '');
@@ -919,9 +934,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       return operation.isCurrent();
     } catch (err) {
       if (!operation.isCurrent()) return false;
-      setSaveError(
-        err instanceof Error ? err.message : 'Settings could not be saved. Please try again.'
-      );
+      setSaveError(describeActionError('save your settings', err, { idempotent: true }));
       return false;
     }
   };
@@ -941,7 +954,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
       const patch = buildAgenticToolCredentialPatch(tool, field, value);
-      await onUpdate?.(user.user_id, patch, operation.isCurrent);
+      await onUpdate?.(user.user_id, patch, operation.isCurrent, { errorShownInline: true });
       if (!operation.isCurrent()) return;
       if (patch.agentic_auth_methods) {
         setAgenticAuthMethods((current) => ({ ...current, ...patch.agentic_auth_methods }));
@@ -958,7 +971,6 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       }));
     } catch (err) {
       if (!operation.isCurrent()) return;
-      console.error(`Failed to save ${tool}.${field}:`, err);
       throw err;
     } finally {
       if (operation.isCurrent()) {
@@ -979,7 +991,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
       const patch = buildAgenticToolCredentialPatch(tool, field, null);
-      await onUpdate?.(user.user_id, patch, operation.isCurrent);
+      await onUpdate?.(user.user_id, patch, operation.isCurrent, { errorShownInline: true });
       if (!operation.isCurrent()) return;
       if (patch.agentic_auth_methods) {
         setAgenticAuthMethods((current) => ({ ...current, ...patch.agentic_auth_methods }));
@@ -1012,7 +1024,6 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       });
     } catch (err) {
       if (!operation.isCurrent()) return;
-      console.error(`Failed to clear ${tool}.${field}:`, err);
       throw err;
     } finally {
       if (operation.isCurrent()) {
@@ -1051,7 +1062,8 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
           env_vars: { [key]: value },
           env_var_scopes: { [key]: scope },
         },
-        operation.isCurrent
+        operation.isCurrent,
+        { errorShownInline: true }
       );
       if (!operation.isCurrent()) return;
       setUserEnvVars((prev) => ({
@@ -1060,7 +1072,6 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       }));
     } catch (err) {
       if (!operation.isCurrent()) return;
-      console.error(`Failed to save ${key}:`, err);
       throw err;
     } finally {
       if (operation.isCurrent()) setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
@@ -1073,7 +1084,9 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     if (!user || !operation.isCurrent()) return;
     try {
       setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
-      await onUpdate?.(user.user_id, { env_var_scopes: { [key]: scope } }, operation.isCurrent);
+      await onUpdate?.(user.user_id, { env_var_scopes: { [key]: scope } }, operation.isCurrent, {
+        errorShownInline: true,
+      });
       if (!operation.isCurrent()) return;
       setUserEnvVars((prev) => ({
         ...prev,
@@ -1081,7 +1094,6 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       }));
     } catch (err) {
       if (!operation.isCurrent()) return;
-      console.error(`Failed to update scope for ${key}:`, err);
       throw err;
     } finally {
       if (operation.isCurrent()) setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
@@ -1095,7 +1107,9 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
-      await onUpdate?.(user.user_id, { env_vars: { [key]: null } }, operation.isCurrent);
+      await onUpdate?.(user.user_id, { env_vars: { [key]: null } }, operation.isCurrent, {
+        errorShownInline: true,
+      });
       if (!operation.isCurrent()) return;
       setUserEnvVars((prev) => {
         const updated = { ...prev };
@@ -1104,7 +1118,6 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       });
     } catch (err) {
       if (!operation.isCurrent()) return;
-      console.error(`Failed to delete ${key}:`, err);
       throw err;
     } finally {
       if (operation.isCurrent()) setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
@@ -1747,7 +1760,14 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     } catch (error) {
       if (!operation.isCurrent()) return;
       setSaveError(
-        error instanceof Error ? error.message : 'Check the highlighted settings before saving.'
+        // Only local validation reaches here, and its text is already user copy.
+        {
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Check the highlighted settings before saving.',
+          raw: null,
+        }
       );
     } finally {
       if (operation.isCurrent()) setSavingModal(false);
@@ -2028,6 +2048,13 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
         Add or remove this user from admin-managed groups.
       </Typography.Paragraph>
+      {groupsLoadError && (
+        <ActionErrorNotice
+          error={groupsLoadError}
+          action={{ label: 'Try again', onClick: () => void loadUserGroups() }}
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       <FieldRow
         label="Groups"
@@ -2247,23 +2274,44 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
                   title="Delete saved personal configuration?"
                   description="This permanently removes your saved credentials for this tool."
                   onConfirm={async () => {
-                    if (nativeClaudeLogin) {
-                      if (!client) throw new Error('Not connected to Agor');
-                      await client.service('claude-auth/logout').create({});
+                    setDeleteConfigError(null);
+                    if (nativeClaudeLogin && !client) {
+                      setDeleteConfigError({
+                        tool,
+                        error: { message: notConnectedMessage(DELETE_CONFIG_ACTION), raw: null },
+                      });
                       return;
                     }
-                    for (const field of allToolFields) {
-                      if (fieldStatus[field.field]) {
-                        await handleToolFieldClear(tool, field.field);
+                    try {
+                      if (nativeClaudeLogin) {
+                        await client?.service('claude-auth/logout').create({});
+                        return;
                       }
+                      for (const field of allToolFields) {
+                        if (fieldStatus[field.field]) {
+                          await handleToolFieldClear(tool, field.field);
+                        }
+                      }
+                    } catch (error) {
+                      setDeleteConfigError({
+                        tool,
+                        error: describeActionError(DELETE_CONFIG_ACTION, error, {
+                          idempotent: true,
+                        }),
+                      });
+                      return;
                     }
                     if (tool === 'codex' || tool === 'claude-code') {
-                      await handleAuthMethodChange(tool, 'api_key');
+                      // onUpdate already shows this failure as a toast.
+                      await handleAuthMethodChange(tool, 'api_key').catch(() => undefined);
                     }
                   }}
                 >
                   <Button danger>Delete saved personal configuration</Button>
                 </Popconfirm>
+              )}
+              {deleteConfigError?.tool === tool && (
+                <ActionErrorNotice error={deleteConfigError.error} />
               )}
             </Space>
           )
@@ -2398,7 +2446,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   const renderFormPanels = () => (
     <>
       {saveError && (
-        <Alert type="error" showIcon title={saveError} style={{ marginBottom: token.marginMD }} />
+        <ActionErrorNotice error={saveError} style={{ marginBottom: token.marginMD }} />
       )}
       <Form
         form={form}

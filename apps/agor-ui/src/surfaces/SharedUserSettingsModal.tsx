@@ -15,7 +15,8 @@ export interface SharedUserSettingsModalProps {
   onUpdateUser?: (
     userId: string,
     updates: UpdateUserInput,
-    shouldApply?: () => boolean
+    shouldApply?: () => boolean,
+    options?: { errorShownInline?: boolean }
   ) => void | Promise<void>;
   onRefreshCurrentUser?: (shouldApply: () => boolean) => Promise<unknown>;
   onReopenOnboarding?: (
@@ -61,7 +62,7 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
       user={user}
       currentUser={user}
       client={client}
-      onUpdate={async (userId, updates, childShouldApply) => {
+      onUpdate={async (userId, updates, childShouldApply, options) => {
         const operation = operationGuard.begin();
         const shouldApply = () =>
           operation.isCurrent() && (childShouldApply ? childShouldApply() : true);
@@ -69,7 +70,7 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
         const update = async () => {
           if (previous) await previous.catch(() => {});
           if (!shouldApply()) return;
-          await onUpdateUser?.(userId, updates, shouldApply);
+          await onUpdateUser?.(userId, updates, shouldApply, options);
           if (!operation.isCurrent()) return;
           // The auth snapshot belongs to the caller, not to the dialog. A
           // route-driven close after persistence must not leave it stale.

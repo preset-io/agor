@@ -4,24 +4,33 @@
 
 import type { AgorClient, Board, UUID } from '@agor-live/client';
 import { useState } from 'react';
-import { formatActionError } from '../utils/connectionErrors';
+import {
+  ALREADY_DONE,
+  formatActionError,
+  isAlreadyDone,
+  notConnectedMessage,
+} from '../utils/connectionErrors';
 import { useThemedMessage } from '../utils/message';
 
 interface UseBoardActionsResult {
   createBoard: (board: Partial<Board>) => Promise<Board | null>;
   updateBoard: (boardId: UUID, updates: Partial<Board>) => Promise<Board | null>;
   deleteBoard: (boardId: UUID) => Promise<boolean>;
-  archiveBoard: (boardId: UUID) => Promise<Board | null>;
-  unarchiveBoard: (boardId: UUID) => Promise<Board | null>;
+  archiveBoard: (boardId: UUID) => Promise<boolean>;
+  unarchiveBoard: (boardId: UUID) => Promise<boolean>;
   loading: boolean;
 }
 
 export function useBoardActions(client: AgorClient | null): UseBoardActionsResult {
   const [loading, setLoading] = useState(false);
   const { showError } = useThemedMessage();
+  const notConnected = (action: string) => showError(notConnectedMessage(action));
 
   const createBoard = async (board: Partial<Board>): Promise<Board | null> => {
-    if (!client) return null;
+    if (!client) {
+      notConnected('create the board');
+      return null;
+    }
 
     try {
       setLoading(true);
@@ -36,7 +45,10 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
   };
 
   const updateBoard = async (boardId: UUID, updates: Partial<Board>): Promise<Board | null> => {
-    if (!client) return null;
+    if (!client) {
+      notConnected('update the board');
+      return null;
+    }
 
     try {
       setLoading(true);
@@ -51,13 +63,17 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
   };
 
   const deleteBoard = async (boardId: UUID): Promise<boolean> => {
-    if (!client) return false;
+    if (!client) {
+      notConnected('delete the board');
+      return false;
+    }
 
     try {
       setLoading(true);
       await client.service('boards').remove(boardId);
       return true;
     } catch (error) {
+      if (isAlreadyDone(error, ALREADY_DONE.boardMissing)) return true;
       showError(formatActionError('delete the board', error, { idempotent: true }));
       return false;
     } finally {
@@ -65,31 +81,39 @@ export function useBoardActions(client: AgorClient | null): UseBoardActionsResul
     }
   };
 
-  const archiveBoard = async (boardId: UUID): Promise<Board | null> => {
-    if (!client) return null;
+  const archiveBoard = async (boardId: UUID): Promise<boolean> => {
+    if (!client) {
+      notConnected('archive the board');
+      return false;
+    }
 
     try {
       setLoading(true);
-      const archived = await client.service(`boards/${boardId}/archive`).create({});
-      return archived as Board;
+      await client.service(`boards/${boardId}/archive`).create({});
+      return true;
     } catch (error) {
+      if (isAlreadyDone(error, ALREADY_DONE.boardArchived)) return true;
       showError(formatActionError('archive the board', error, { idempotent: true }));
-      return null;
+      return false;
     } finally {
       setLoading(false);
     }
   };
 
-  const unarchiveBoard = async (boardId: UUID): Promise<Board | null> => {
-    if (!client) return null;
+  const unarchiveBoard = async (boardId: UUID): Promise<boolean> => {
+    if (!client) {
+      notConnected('unarchive the board');
+      return false;
+    }
 
     try {
       setLoading(true);
-      const unarchived = await client.service(`boards/${boardId}/unarchive`).create({});
-      return unarchived as Board;
+      await client.service(`boards/${boardId}/unarchive`).create({});
+      return true;
     } catch (error) {
+      if (isAlreadyDone(error, ALREADY_DONE.boardNotArchived)) return true;
       showError(formatActionError('unarchive the board', error, { idempotent: true }));
-      return null;
+      return false;
     } finally {
       setLoading(false);
     }

@@ -52,7 +52,7 @@ describe('BoardTeammatePanel messages', () => {
     {
       raw: 'You need Board Editor or Manager access to set primary teammate',
       toast:
-        'Failed to assign the teammate: You need Board Editor or Manager access to set primary teammate',
+        "Couldn't assign the teammate. (You need Board Editor or Manager access to set primary teammate)",
     },
     {
       raw: 'socket has been disconnected',

@@ -117,7 +117,7 @@ describe('repository notifications', () => {
   it('offline prefetch rejects quietly rather than claiming success', async () => {
     const h = harness();
     await expect(createRepository(null, data, { silent: true }, h.notify, h.apply)).rejects.toThrow(
-      'Reconnect'
+      'Client not connected'
     );
     expect(h.notify.showError).not.toHaveBeenCalled();
   });

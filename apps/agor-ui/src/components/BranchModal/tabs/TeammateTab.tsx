@@ -2,12 +2,20 @@ import type { AgorClient, Branch } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
 import { Button, Descriptions, Form, Input, Popconfirm, Space, Typography, theme } from 'antd';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useConnectionDisabled } from '../../../contexts/ConnectionContext';
+import {
+  errorMessage,
+  formatActionError,
+  isInFlightConnectionLossError,
+} from '../../../utils/connectionErrors';
 import { useThemedMessage } from '../../../utils/message';
 import { EmojiPickerInput } from '../../EmojiPickerInput/EmojiPickerInput';
 import { Tag } from '../../Tag';
 import type { TeammateFormState } from '../useBranchModalForm';
+
+const RETIRED_SUCCESS = 'Teammate retired; files preserved';
+const NOT_ACTIVE_TEAMMATE = 'Retirement requires an active teammate';
 
 interface TeammateTabProps {
   branch: Branch;
@@ -29,16 +37,27 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
   const { token } = theme.useToken();
   const [retiring, setRetiring] = useState(false);
   const disabled = useConnectionDisabled();
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess, showInfo, showError } = useThemedMessage();
+  // The branch whose last retire lost its reply; a retry it then refuses means that one went through.
+  const lostRetireFor = useRef<string | null>(null);
   const retire = async () => {
     if (!client) return;
     setRetiring(true);
+    const branchId = branch.branch_id;
     try {
-      await client.service(`branches/${branch.branch_id}/retire-teammate`).create({});
-      showSuccess('Teammate retired; files preserved');
+      await client.service(`branches/${branchId}/retire-teammate`).create({});
+      lostRetireFor.current = null;
+      showSuccess(RETIRED_SUCCESS);
       onRetired?.();
     } catch (error) {
-      showError(error instanceof Error ? error.message : 'Failed to retire teammate');
+      const ownReplay = lostRetireFor.current === branchId;
+      lostRetireFor.current = isInFlightConnectionLossError(error) ? branchId : null;
+      if (ownReplay && errorMessage(error) === NOT_ACTIVE_TEAMMATE) {
+        showInfo(RETIRED_SUCCESS);
+        onRetired?.();
+        return;
+      }
+      showError(formatActionError('retire the teammate', error, { idempotent: true }));
     } finally {
       setRetiring(false);
     }

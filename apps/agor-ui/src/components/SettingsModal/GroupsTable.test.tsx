@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { GroupsTable } from './GroupsTable';
+import { StandaloneSettingsDrillProvider } from './SettingsDrill';
 
 function user(user_id: string, role: User['role']): User {
   return {
@@ -103,5 +104,67 @@ describe('GroupsTable archive under socket eviction', () => {
     // The socket comes back: the list is read again.
     listeners.get('connect')?.();
     expect(groupReads).toBe(2);
+  });
+});
+
+describe('GroupsTable failures', () => {
+  const admin = user('admin', 'admin');
+  function renderGroups(service: (path: string) => Record<string, unknown>) {
+    const client = { service: vi.fn(service) } as unknown as AgorClient;
+    return render(
+      <ConfigProvider theme={{ hashed: false }}>
+        <AntApp>
+          <StandaloneSettingsDrillProvider section="groups">
+            <GroupsTable
+              client={client}
+              currentUser={admin}
+              userById={new Map([[admin.user_id, admin]])}
+            />
+          </StandaloneSettingsDrillProvider>
+        </AntApp>
+      </ConfigProvider>
+    );
+  }
+
+  it('shows a load failure and retries on Try again', async () => {
+    const findAll = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValue([{ group_id: 'g1', name: 'Engineering', slug: 'eng' }]);
+    renderGroups((path) => ({
+      findAll: path === 'groups' ? findAll : vi.fn().mockResolvedValue([]),
+    }));
+    expect(await screen.findByText("Couldn't load groups.")).toBeInTheDocument();
+    expect(screen.queryByText('No data')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Engineering')).toBeInTheDocument();
+  });
+
+  it('keeps the create form open with its values and the error', async () => {
+    const create = vi.fn().mockRejectedValue(new Error('boom'));
+    renderGroups(() => ({ findAll: vi.fn().mockResolvedValue([]), create }));
+    fireEvent.click(await screen.findByRole('button', { name: /new group/i }));
+    const name = screen.getByLabelText('Name');
+    fireEvent.change(name, { target: { value: 'Design' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(await screen.findByText("Couldn't create the group.")).toBeInTheDocument();
+    expect(create).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText('Name')).toHaveValue('Design');
+  });
+
+  it('blocks a second create after a lost reply until the form changes', async () => {
+    const create = vi.fn().mockRejectedValue(new Error('socket has been disconnected'));
+    renderGroups(() => ({ findAll: vi.fn().mockResolvedValue([]), create }));
+    fireEvent.click(await screen.findByRole('button', { name: /new group/i }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Design' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(
+      await screen.findByText(
+        'The connection to Agor dropped before this was confirmed. Refresh to see if it went through before you try to create the group again.'
+      )
+    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled());
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Design 2' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
   });
 });

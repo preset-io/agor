@@ -61,6 +61,26 @@ describe('SharedUserSettingsModal authority fencing', () => {
     captured = null;
   });
 
+  it('passes the inline-error option through, so a failed save shows once', async () => {
+    const onUpdateUser = vi.fn(async () => {});
+    render(
+      view(
+        3,
+        <SharedUserSettingsModal
+          open
+          user={user}
+          client={client}
+          onClose={vi.fn()}
+          onUpdateUser={onUpdateUser}
+        />
+      )
+    );
+    await act(async () => {
+      await captured!.onUpdate('member-a', { name: 'A' }, () => true, { errorShownInline: true });
+    });
+    expect(onUpdateUser.mock.calls[0]?.[3]).toEqual({ errorShownInline: true });
+  });
+
   it('drops refresh and restart continuations from the previous auth generation', async () => {
     const updatePending = deferred();
     const restartPending = deferred();

@@ -8,6 +8,7 @@ import type {
 import { ReloadOutlined } from '@ant-design/icons';
 import { Alert, Button, Space, Tabs } from 'antd';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatActionError } from '../../../utils/connectionErrors';
 import { useThemedMessage } from '../../../utils/message';
 import { CodePreviewModal } from '../../CodePreviewModal/CodePreviewModal';
 import type { FileItem } from '../../FileCollection/FileCollection';
@@ -40,7 +41,7 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
   const branchIdRef = useRef(branch.branch_id);
   branchIdRef.current = branch.branch_id;
 
-  const { showLoading, showSuccess, showError } = useThemedMessage();
+  const { showLoading, showSuccess, showError, showInfo } = useThemedMessage();
 
   // The endpoint reads the worktree and git status on every request, so the
   // same operation handles both the initial load and an in-place refresh.
@@ -109,12 +110,12 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
       if (!currentClient) return;
 
       if (file.gitStatus === 'deleted') {
-        showError('This file was deleted in the working tree');
+        showInfo("This file was deleted, so there's nothing to open.");
         return;
       }
 
       try {
-        showLoading('Downloading file...', { key: 'download' });
+        showLoading('Downloading file…', { key: 'download' });
 
         const detail = (await currentClient.service('file').get(file.path, {
           query: { branch_id: branchIdRef.current },
@@ -150,13 +151,14 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        showSuccess('Downloaded!', { key: 'download' });
+        showSuccess('File downloaded.', { key: 'download' });
       } catch (err) {
-        console.error('Failed to download file:', err);
-        showError('Failed to download file', { key: 'download' });
+        showError(formatActionError('download the file', err, { idempotent: true }), {
+          key: 'download',
+        });
       }
     },
-    [showLoading, showSuccess, showError]
+    [showLoading, showSuccess, showError, showInfo]
   );
 
   // Handle file click - preview text files or download others - stable callback
@@ -183,9 +185,8 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
 
           if (detailRequestIdRef.current === requestId) setSelectedFile(detail as FileDetail);
         } catch (err) {
-          console.error('Failed to fetch file detail:', err);
           if (detailRequestIdRef.current === requestId) {
-            showError(err instanceof Error ? err.message : 'Failed to load file');
+            showError(formatActionError('open the file', err, { idempotent: true }));
             setModalOpen(false);
           }
         } finally {

@@ -308,7 +308,7 @@ describe('HomePage', () => {
     const dialog = await screen.findByRole('dialog');
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
     expect(
-      within(dialog).getAllByText('Archive session and same-branch children?')[0]
+      within(dialog).getAllByText('Archive this session and its subsessions?')[0]
     ).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
     await waitFor(() => expect(archived).toEqual(['f0']));

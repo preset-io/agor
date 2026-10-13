@@ -15,11 +15,18 @@ import {
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  formatActionError,
+  isInFlightConnectionLossError,
+} from '@/utils/connectionErrors';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
 import { searchableSelectProps, toUserSelectOption } from '@/utils/selectSearch';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
+import { ActionErrorNotice } from '../CompactNotice';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
@@ -45,6 +52,11 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   const [form] = Form.useForm();
   const slugEditedRef = useRef(false);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const [loadError, setLoadError] = useState<ActionErrorCopy | null>(null);
+  const [saveError, setSaveError] = useState<ActionErrorCopy | null>(null);
+  const [saving, setSaving] = useState(false);
+  // A create whose reply was lost may have landed; block a second click until the form changes.
+  const [createUnconfirmed, setCreateUnconfirmed] = useState(false);
 
   const { drill, openDrill, closeDrill } = useSettingsDrill();
 
@@ -52,21 +64,25 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
     if (!client || !isAdmin) {
       setGroups([]);
       setMemberships([]);
+      setLoadError(null);
       return;
     }
-    const [nextGroups, nextMemberships] = await Promise.all([
-      client.service('groups').findAll({ query: { archived: false } }),
-      client.service('group-memberships').findAll({}),
-    ]);
-    setGroups(nextGroups as Group[]);
-    setMemberships(nextMemberships as GroupMembership[]);
+    try {
+      const [nextGroups, nextMemberships] = await Promise.all([
+        client.service('groups').findAll({ query: { archived: false } }),
+        client.service('group-memberships').findAll({}),
+      ]);
+      setGroups(nextGroups as Group[]);
+      setMemberships(nextMemberships as GroupMembership[]);
+      setLoadError(null);
+    } catch (error) {
+      setLoadError(describeActionError('load groups', error, { idempotent: true }));
+    }
   }, [client, isAdmin]);
 
   useEffect(() => {
-    load().catch((error) =>
-      showError(`Failed to load groups: ${error instanceof Error ? error.message : String(error)}`)
-    );
-  }, [load, showError]);
+    void load();
+  }, [load]);
 
   // Revoking group changes (archive, removed members) make the daemon reconnect
   // every socket in the tenant, which drops a read sent meanwhile: read again
@@ -124,10 +140,17 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
 
   // Seed the form whenever the drill-in targets a group (edit) or opens fresh
   // (create). The slug auto-fill flag is reset alongside so name-driven slugs
-  // resume from a clean slate.
+  // resume from a clean slate. Reloads of the same group keep the draft.
+  const seededGroupIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (editingGroup) {
+    if (!editingGroup) {
+      seededGroupIdRef.current = null;
+      return;
+    }
+    if (seededGroupIdRef.current !== editingGroup.group_id) {
+      seededGroupIdRef.current = editingGroup.group_id;
       slugEditedRef.current = false;
+      setSaveError(null);
       form.setFieldsValue({
         name: editingGroup.name,
         slug: editingGroup.slug || '',
@@ -141,6 +164,8 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   useEffect(() => {
     if (isCreating) {
       slugEditedRef.current = false;
+      setSaveError(null);
+      setCreateUnconfirmed(false);
       form.resetFields();
       setEditingMemberIds([]);
       setDirty(false);
@@ -151,6 +176,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   const handleValuesChange = useCallback(
     (changedValues: { name?: string; slug?: string }) => {
       setDirty(true);
+      setCreateUnconfirmed(false);
       if (Object.hasOwn(changedValues, 'slug')) {
         slugEditedRef.current = true;
         return;
@@ -164,18 +190,34 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
 
   const handleSave = useCallback(async () => {
     if (!client) return;
-    const values = await form.validateFields();
-    if (editingGroup) {
-      await client.service('groups').patch(editingGroup.group_id, values);
-      await syncGroupMembers(editingGroup, editingMemberIds);
-      showSuccess('Group updated');
-    } else {
-      await client.service('groups').create(values);
-      showSuccess('Group created');
+    const values = await form.validateFields().catch(() => null);
+    if (!values) return;
+    setSaveError(null);
+    setSaving(true);
+    try {
+      if (editingGroup) {
+        await client.service('groups').patch(editingGroup.group_id, values);
+        await syncGroupMembers(editingGroup, editingMemberIds);
+      } else {
+        await client.service('groups').create(values);
+      }
+    } catch (error) {
+      if (editingGroup) {
+        setSaveError(describeActionError('save the group', error, { idempotent: true }));
+        // A partial save may have changed members, so the next attempt diffs against fresh data.
+        await load();
+      } else {
+        setSaveError(describeActionError('create the group', error, { idempotent: false }));
+        setCreateUnconfirmed(isInFlightConnectionLossError(error));
+      }
+      return;
+    } finally {
+      setSaving(false);
     }
+    showSuccess(editingGroup ? 'Group updated.' : 'Group created.');
     setDirty(false);
     closeDrill();
-    void load().catch(() => undefined);
+    void load();
   }, [
     client,
     form,
@@ -189,10 +231,15 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
 
   const archiveGroup = async (group: Group) => {
     if (!client) return;
-    await client.service('groups').patch(group.group_id, { archived: true });
+    try {
+      await client.service('groups').patch(group.group_id, { archived: true });
+    } catch (error) {
+      showError(formatActionError('archive the group', error, { idempotent: true }));
+      return;
+    }
     // Not a re-read: the patch's socket is about to be reconnected (see above).
     setGroups((previous) => previous.filter((g) => g.group_id !== group.group_id));
-    showSuccess('Group archived');
+    showSuccess('Group archived.');
   };
 
   if (!isAdmin) {
@@ -225,8 +272,11 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
       <DrillInFrame
         title={editingGroup ? `Edit ${editingGroup.name}` : 'New Group'}
         dirty={dirty}
+        saving={saving}
+        saveDisabled={!editingGroup && createUnconfirmed}
         onSave={handleSave}
       >
+        {saveError && <ActionErrorNotice error={saveError} style={{ marginBottom: 8 }} />}
         <Form
           form={form}
           layout="vertical"
@@ -295,7 +345,15 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
         }
       />
 
-      {filteredGroups.length === 0 ? (
+      {loadError && (
+        <ActionErrorNotice
+          error={loadError}
+          action={{ label: 'Try again', onClick: () => void load() }}
+          style={{ marginBottom: 8 }}
+        />
+      )}
+
+      {loadError && groups.length === 0 ? null : filteredGroups.length === 0 ? (
         <div
           style={{
             display: 'flex',

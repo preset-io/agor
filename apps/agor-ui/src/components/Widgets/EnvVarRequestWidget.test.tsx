@@ -290,7 +290,7 @@ describe('EnvVarRequestWidget — pending state', () => {
     await waitFor(() => {
       expect(saveBtn.disabled).toBe(false);
     });
-    expect(screen.getAllByText(/Save failed: Invalid env var/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("Couldn't save the variables.")).toBeTruthy();
     expect(calls.length).toBe(1);
   });
 
@@ -309,7 +309,38 @@ describe('EnvVarRequestWidget — pending state', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(await screen.findByText(/Only global saved values/i)).toBeTruthy();
-    expect(screen.getAllByText(/Save failed: Invalid env var/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("Couldn't save the variables.")).toBeTruthy();
+  });
+
+  it('says the connection dropped when there is no client to save with', async () => {
+    const widget = makeWidget();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={null} />
+    );
+    fireEvent.change(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i), {
+      target: { value: 'shh' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(
+      await screen.findByText(
+        "Couldn't save the variables. The connection to Agor dropped. Try again once it's back."
+      )
+    ).toBeTruthy();
+  });
+
+  it('shows a failed dismiss inline and keeps the form', async () => {
+    const widget = makeWidget();
+    const { client } = makeStubClient({ shouldFail: true });
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+    expect(await screen.findByText("Couldn't dismiss this request.")).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText('Invalid env var')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
   });
 
   it('shows a local submitted summary after save so duplicate clicks cannot resubmit', async () => {
@@ -455,5 +486,109 @@ describe('EnvVarRequestWidget — terminal states', () => {
     );
     expect(screen.getByText(/already configured/i)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+  });
+});
+
+describe('EnvVarRequestWidget — already answered', () => {
+  function sequenceClient(errors: Error[]) {
+    const calls: string[] = [];
+    const client = {
+      service(path: string) {
+        return {
+          async get() {
+            return {};
+          },
+          async create() {
+            calls.push(path);
+            const next = errors.shift();
+            if (next) throw next;
+            return { widget_id: 'wid-1', status: 'submitted' };
+          },
+        };
+      },
+    } as unknown as AgorClient;
+    return { client, calls };
+  }
+  const alreadySubmitted = () =>
+    Object.assign(new Error('Widget wid-1 is already submitted; cannot submit again.'), {
+      name: 'Forbidden',
+      code: 403,
+    });
+
+  it('treats a retry after its own lost reply as saved', async () => {
+    const widget = makeWidget();
+    const { client, calls } = sequenceClient([
+      new Error('socket has been disconnected'),
+      alreadySubmitted(),
+    ]);
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+    fireEvent.change(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i), {
+      target: { value: 'secret-key' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(
+      await screen.findByText(
+        "The connection to Agor dropped before this was confirmed. If it didn't go through, try to save the variables again once the connection is back."
+      )
+    ).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).toBeNull());
+    expect(calls).toHaveLength(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('keeps its own lost reply across a retry that lands while it is still resolving', async () => {
+    const widget = makeWidget();
+    const { client, calls } = sequenceClient([
+      new Error('socket has been disconnected'),
+      Object.assign(new Error('Widget wid-1 is already resolving; cannot submit again.'), {
+        name: 'Forbidden',
+        code: 403,
+      }),
+      alreadySubmitted(),
+    ]);
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+    fireEvent.change(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i), {
+      target: { value: 'secret-key' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByText(/The connection to Agor dropped before this was confirmed/);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    expect(
+      await screen.findByText(
+        "Couldn't save the variables. This request is still being answered. Refresh in a moment to see the result."
+      )
+    ).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).toBeNull());
+    expect(calls).toHaveLength(3);
+  });
+
+  it('shows a neutral note when someone else already answered', async () => {
+    const widget = makeWidget();
+    const { client } = sequenceClient([alreadySubmitted()]);
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+    fireEvent.change(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i), {
+      target: { value: 'secret-key' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    const note = await screen.findByText(
+      'This request was already answered. Refresh to see the result.'
+    );
+    expect(note.closest('[data-notice-type]')?.getAttribute('data-notice-type')).toBe('neutral');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(
+      ((await screen.findByRole('button', { name: 'Save' })) as HTMLButtonElement).disabled
+    ).toBe(true);
   });
 });

@@ -18,7 +18,8 @@ const uploadMockState = vi.hoisted(() => ({
 
 // Accounting transport has dedicated hook tests; these suites exercise panel actions/composer.
 
-vi.mock('../FileUpload/upload', () => ({
+vi.mock('../FileUpload/upload', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../FileUpload/upload')>()),
   uploadFilesToSession: uploadMockState.uploadFilesToSession,
 }));
 
@@ -562,9 +563,12 @@ describe('SessionPanel composer send', () => {
     fireEvent.click(sendButton as HTMLButtonElement);
 
     expect(await screen.findByText(`chart.png: ${reason}`)).toBeVisible();
+    expect(await screen.findByText(`Couldn't upload chart.png. (${reason})`)).toBeVisible();
     fireEvent.click(sendButton as HTMLButtonElement);
     expect(
-      await screen.findByText(`chart.png: ${reason}. Remove failed files before sending.`)
+      await screen.findByText(
+        `Couldn't send, because chart.png didn't upload (${reason}). Remove it, then send again.`
+      )
     ).toBeVisible();
     expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledTimes(1);
     expect(onSendPrompt).not.toHaveBeenCalled();
