@@ -112,7 +112,16 @@ export interface GatewayListenerOptions {
   onError?: (error: unknown) => void | Promise<void>;
 }
 
-export type GatewayInboundCallback = (msg: InboundMessage) => void | Promise<void>;
+/** Optional routing outcome lets connectors release budgets for terminal rejections.
+ * Legacy callbacks returning void retain their existing accepted-delivery behavior.
+ */
+export interface GatewayInboundResult {
+  accepted: boolean;
+}
+
+export type GatewayInboundCallback = (
+  msg: InboundMessage
+) => void | GatewayInboundResult | Promise<void> | Promise<GatewayInboundResult | undefined>;
 
 /**
  * Outbound payload for a single message.

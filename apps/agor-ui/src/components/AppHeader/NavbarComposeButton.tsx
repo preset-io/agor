@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useConnectionState, useMutationGate } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { useAgorStore } from '../../store/agorStore';
+import { agorStore, useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
 import { resolveSessionMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
@@ -67,6 +67,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
 
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userById = useAgorStore(selectUserById);
+  const settingsHydrated = useAgorStore((state) => state.agenticToolSettingsHydrated);
   const agenticToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
 
   const [open, setOpen] = useState(false);
@@ -126,7 +127,11 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         attachmentFiles: attachments.map((attachment) => attachment.file),
       }),
     // Same conditions as the buttons' disabled state; also re-checked when picking a primary resumes a held send.
-    canSend: () => !disabled && configValidity.valid && hasContent,
+    canSend: () =>
+      !disabled &&
+      agorStore.getState().agenticToolSettingsHydrated &&
+      configValidity.valid &&
+      hasContent,
     validate: () =>
       form.validateFields().then(
         () => true,
@@ -173,6 +178,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
 
   const sendDisabled =
     disabled ||
+    !settingsHydrated ||
     resolving ||
     resolveFailed ||
     !configValidity.valid ||

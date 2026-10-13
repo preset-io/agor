@@ -22,14 +22,17 @@ vi.mock('@slack/socket-mode', () => ({
   },
 }));
 
+import type { GatewayInboundCallback } from '../connector';
 import {
   extractSlackInboundFiles,
   isChannelAllowedByWhitelist,
   isSlackDirectMessageId,
   isSlackFileSourceAllowed,
+  isSlackInboundSurfaceAllowed,
   isSlackWriteTargetAllowed,
   markdownToMrkdwn,
   markdownToSlackPayload,
+  normalizeSlackReactionName,
   SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES,
   SLACK_REQUEST_TIMEOUT_METADATA_KEY,
   SlackConnector,
@@ -73,6 +76,532 @@ describe('Slack listener lifecycle', () => {
       }
     }
   );
+});
+
+describe('SlackConnector inbound reactions', () => {
+  type SlackEventHandler = (args: {
+    type: string;
+    body: Record<string, unknown>;
+    ack: () => Promise<void>;
+  }) => Promise<void>;
+
+  const reactedReply = {
+    ts: '200.000002',
+    thread_ts: '200.000000',
+    text: 'Ready to merge?',
+    user: 'UBOT',
+    bot_id: 'B1',
+  };
+
+  function reactionEvent(overrides: Record<string, unknown> = {}) {
+    return {
+      type: 'reaction_added',
+      user: 'UADA',
+      reaction: 'white_check_mark',
+      item_user: 'UBOT',
+      item: { type: 'message', channel: 'D123', ts: '200.000002' },
+      event_ts: '300.000001',
+      ...overrides,
+    };
+  }
+
+  async function startReactionListener(
+    args: {
+      config?: Record<string, unknown>;
+      channelInfo?: Record<string, unknown>;
+      replies?: ReturnType<typeof vi.fn>;
+      callback?: ReturnType<typeof vi.fn>;
+      durable?: boolean;
+      botUserId?: string | null;
+      isBot?: boolean | null;
+    } = {}
+  ) {
+    socketModeMocks.instances.length = 0;
+    socketModeMocks.startImpl = () => Promise.resolve();
+    const connector = new SlackConnector({
+      bot_token: 'bot-redacted',
+      app_token: 'app-redacted',
+      inbound_reactions: true,
+      ...args.config,
+    });
+    const replies = args.replies ?? vi.fn(async () => ({ messages: [reactedReply] }));
+    const web = {
+      auth: {
+        test: vi
+          .fn()
+          .mockResolvedValue({ user_id: args.botUserId === undefined ? 'UBOT' : args.botUserId }),
+      },
+      conversations: {
+        replies,
+        info: vi.fn(async () => ({ ok: true, channel: args.channelInfo ?? { is_im: true } })),
+      },
+      users: {
+        info: vi.fn(async () => ({
+          user: {
+            is_bot: args.isBot === undefined ? false : args.isBot,
+            profile: { email: 'ada@example.com', display_name: 'Ada' },
+          },
+        })),
+      },
+    };
+    (connector as unknown as { web: unknown }).web = web;
+    const callback = args.callback ?? vi.fn(async () => undefined);
+    await connector.startListening(callback as unknown as GatewayInboundCallback, {
+      durableEventIdempotency: args.durable ?? false,
+    });
+    const handler = socketModeMocks.instances[0].on.mock.calls.find(
+      ([name]) => name === 'slack_event'
+    )?.[1] as SlackEventHandler;
+    const emit = async (event: Record<string, unknown>, ack = vi.fn(async () => undefined)) => {
+      await handler({
+        type: 'events_api',
+        body: { team_id: 'T1', event_id: `Ev-${event.event_ts}`, event },
+        ack,
+      });
+      return ack;
+    };
+    return { connector, callback, emit, replies, web };
+  }
+
+  it('routes a reaction on a bot reply to its thread root with reaction metadata', async () => {
+    const { callback, emit, replies } = await startReactionListener();
+
+    const ack = await emit(reactionEvent());
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(replies).toHaveBeenCalledWith({
+      channel: 'D123',
+      ts: '200.000002',
+      oldest: '200.000002',
+      inclusive: true,
+      limit: 2,
+    });
+    expect(callback).toHaveBeenCalledOnce();
+    expect(callback.mock.calls[0][0]).toMatchObject({
+      providerEventId: 'slack:reaction:T1:D123:200.000002:UADA:white_check_mark:added:300.000001',
+      threadId: 'D123-200.000000',
+      text: ':white_check_mark:',
+      userId: 'UADA',
+      metadata: {
+        channel: 'D123',
+        channel_type: 'im',
+        slack_user_id: 'UADA',
+        slack_team_id: 'T1',
+        slack_bot_user_id: 'UBOT',
+        slack_thread_ts: '200.000000',
+        slack_is_thread_reply: true,
+        slack_has_mention: false,
+        slack_event_type: 'reaction_added',
+        slack_reaction: 'white_check_mark',
+        slack_reaction_item_ts: '200.000002',
+        slack_reaction_item_user_id: 'UBOT',
+        slack_reaction_item_text: 'Ready to merge?',
+        slack_user_email: 'ada@example.com',
+        slack_user_name: 'Ada',
+      },
+    });
+    // A reaction has no message of its own, so it must not look like one.
+    expect(callback.mock.calls[0][0].metadata).not.toHaveProperty('slack_message_ts');
+  });
+
+  it('routes reaction_removed with a distinct provider event identity', async () => {
+    const { callback, emit } = await startReactionListener();
+
+    await emit(reactionEvent({ type: 'reaction_removed' }));
+
+    expect(callback.mock.calls[0][0]).toMatchObject({
+      providerEventId: 'slack:reaction:T1:D123:200.000002:UADA:white_check_mark:removed:300.000001',
+      metadata: { slack_event_type: 'reaction_removed' },
+    });
+  });
+
+  it('ignores reactions entirely when inbound_reactions is off', async () => {
+    const { callback, emit, replies } = await startReactionListener({
+      config: { inbound_reactions: false },
+    });
+
+    const ack = await emit(reactionEvent());
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(replies).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the bot itself', { user: 'UBOT' }],
+    ['a non-message item', { item: { type: 'file', file: 'F1' } }],
+    ['a malformed emoji name', { reaction: 'x:<@U1>' }],
+    ['a missing reactor', { user: undefined }],
+  ])('ignores a reaction from %s', async (_label, overrides) => {
+    const { callback, emit } = await startReactionListener();
+
+    const ack = await emit(reactionEvent(overrides));
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['public channels disabled', {}, 0],
+    [
+      'a channel outside the whitelist',
+      { enable_channels: true, allowed_channel_ids: ['C999'] },
+      0,
+    ],
+    [
+      'an enabled, whitelisted public channel',
+      { enable_channels: true, allowed_channel_ids: ['C123'] },
+      1,
+    ],
+  ])('applies surface filters: %s', async (_label, config, expectedCalls) => {
+    const { callback, emit } = await startReactionListener({
+      config,
+      channelInfo: { name: 'eng' },
+    });
+
+    await emit(reactionEvent({ item: { type: 'message', channel: 'C123', ts: '200.000002' } }));
+
+    expect(callback).toHaveBeenCalledTimes(expectedCalls);
+  });
+
+  it.each([false, true])('never admits an unresolved reply root (durable=%s)', async (durable) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const replies = vi.fn().mockRejectedValue(new Error('network unavailable'));
+    const { callback, emit } = await startReactionListener({ replies, durable });
+    const ack = vi.fn(async () => undefined);
+
+    for (const ts of ['200.000002', '200.000003', '200.000004', '200.000005']) {
+      const delivery = emit(reactionEvent({ item: { type: 'message', channel: 'D123', ts } }), ack);
+      if (durable) await expect(delivery).rejects.toThrow('thread could not be resolved');
+      else await delivery;
+    }
+    expect(callback).not.toHaveBeenCalled();
+    expect(ack).toHaveBeenCalledTimes(durable ? 0 : 4);
+
+    replies.mockResolvedValue({ messages: [reactedReply] });
+    await emit(reactionEvent());
+    expect(callback).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it('drops reactions until the listening bot identity is resolved', async () => {
+    const { callback, emit, replies, web } = await startReactionListener({ botUserId: null });
+    const ack = await emit(reactionEvent());
+    expect(ack).toHaveBeenCalledOnce();
+    expect(callback).not.toHaveBeenCalled();
+    expect(replies).not.toHaveBeenCalled();
+    expect(web.users.info).not.toHaveBeenCalled();
+  });
+
+  it.each([true, null])('drops non-human or unresolved reactors (isBot=%s)', async (isBot) => {
+    const { callback, emit, web } = await startReactionListener({ isBot });
+    await emit(reactionEvent());
+    await emit(reactionEvent({ reaction: 'two', event_ts: '300.000002' }));
+    expect(callback).not.toHaveBeenCalled();
+    // Cached identity must filter other bots on subsequent events too.
+    expect(web.users.info).toHaveBeenCalledOnce();
+  });
+
+  it('drops reactions when the user profile lookup fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { callback, emit, web } = await startReactionListener();
+    web.users.info.mockRejectedValueOnce(new Error('unavailable'));
+    await emit(reactionEvent());
+    expect(callback).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it.each([
+    { data: { error: 'missing_scope' } },
+    { data: { error: 'user_not_found' } },
+    { statusCode: 403 },
+  ])('acks and drops a permanent durable user lookup failure: %j', async (error) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { callback, emit, web, replies } = await startReactionListener({ durable: true });
+    web.users.info.mockRejectedValue(error);
+
+    const ack = await emit(reactionEvent());
+    expect(ack).toHaveBeenCalledOnce();
+    expect(callback).not.toHaveBeenCalled();
+    expect(replies).not.toHaveBeenCalled();
+    expect(web.users.info).toHaveBeenCalledOnce();
+
+    // Even an unexpected redelivery or a new reaction must remain terminal
+    // without retrying the permanent lookup refusal inside the cache TTL.
+    const redeliveryAck = await emit(reactionEvent());
+    const nextAck = await emit(reactionEvent({ reaction: 'two', event_ts: '300.000002' }));
+    expect(redeliveryAck).toHaveBeenCalledOnce();
+    expect(nextAck).toHaveBeenCalledOnce();
+    expect(callback).not.toHaveBeenCalled();
+    expect(replies).not.toHaveBeenCalled();
+    expect(web.users.info).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it.each(['org_login_required', 'team_added_to_org'])(
+    'retries temporary organization migration user lookup failures: %s',
+    async (code) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const { callback, emit, web } = await startReactionListener({ durable: true });
+      web.users.info.mockRejectedValueOnce({ data: { error: code } });
+      const ack = vi.fn(async () => undefined);
+      await expect(emit(reactionEvent(), ack)).rejects.toThrow(
+        'user profile could not be resolved'
+      );
+      expect(ack).not.toHaveBeenCalled();
+      expect(callback).not.toHaveBeenCalled();
+      await emit(reactionEvent(), ack);
+      expect(web.users.info).toHaveBeenCalledTimes(2);
+      expect(ack).toHaveBeenCalledOnce();
+      expect(callback).toHaveBeenCalledOnce();
+      warn.mockRestore();
+    }
+  );
+
+  it('retries a failed durable human lookup immediately and acks only after routing succeeds', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { callback, emit, web, replies } = await startReactionListener({ durable: true });
+    const ack = vi.fn(async () => undefined);
+    web.users.info.mockRejectedValueOnce(new Error('network unavailable'));
+
+    await expect(emit(reactionEvent(), ack)).rejects.toThrow('user profile could not be resolved');
+    expect(ack).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+    expect(replies).not.toHaveBeenCalled();
+
+    callback.mockImplementation(async () => {
+      expect(ack).not.toHaveBeenCalled();
+    });
+    await emit(reactionEvent(), ack);
+    await emit(reactionEvent(), ack);
+    expect(web.users.info).toHaveBeenCalledTimes(2);
+    expect(callback).toHaveBeenCalledOnce();
+    expect(ack).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it('does not reuse an optional metadata lookup failure for a durable reaction', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { connector, callback, emit, web } = await startReactionListener({ durable: true });
+    web.users.info.mockRejectedValueOnce(new Error('network unavailable'));
+    await connector.lookupUserProfile('UADA');
+    const ack = await emit(reactionEvent());
+    expect(web.users.info).toHaveBeenCalledTimes(2);
+    expect(callback).toHaveBeenCalledOnce();
+    expect(ack).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it('keeps failed identity caches isolated between gateway channel connectors', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const first = await startReactionListener({ durable: true });
+    const other = await startReactionListener({ durable: true, isBot: true });
+    first.web.users.info.mockRejectedValueOnce(new Error('network unavailable'));
+    await expect(first.emit(reactionEvent())).rejects.toThrow('user profile could not be resolved');
+    await other.emit(reactionEvent());
+    await first.emit(reactionEvent());
+    // The same Slack ID in another channel/tenant must use its own credentials
+    // and bot identity, never the recovered human profile from the first connector.
+    await other.emit(reactionEvent({ reaction: 'two', event_ts: '300.000002' }));
+    expect(first.callback).toHaveBeenCalledOnce();
+    expect(other.callback).not.toHaveBeenCalled();
+    expect(other.replies).not.toHaveBeenCalled();
+    expect(other.web.users.info).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it.each([
+    { data: { error: 'missing_scope' } },
+    { data: { error: 'message_not_found' } },
+    { data: { error: 'channel_not_found' } },
+    { statusCode: 403 },
+    null,
+  ])('acks and drops a permanent thread lookup failure: %j', async (error) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const replies = error
+      ? vi.fn().mockRejectedValue(error)
+      : vi.fn().mockResolvedValue({ messages: [] });
+    const { callback, emit } = await startReactionListener({ replies, durable: true });
+    const ack = await emit(reactionEvent());
+    expect(ack).toHaveBeenCalledOnce();
+    expect(callback).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it.each([
+    new Error('network unavailable'),
+    { code: 'slack_webapi_rate_limited_error', retryAfter: 1 },
+    { data: { error: 'ratelimited' } },
+    { data: { error: 'internal_error' } },
+    { data: { error: 'org_login_required' } },
+    { data: { error: 'team_added_to_org' } },
+    { statusCode: 503 },
+    { statusCode: 429 },
+  ])('retries transient thread lookup failures without acking: %j', async (error) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const replies = vi
+      .fn()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValue({ messages: [reactedReply] });
+    const { callback, emit } = await startReactionListener({ replies, durable: true });
+    const ack = vi.fn(async () => undefined);
+    await expect(emit(reactionEvent(), ack)).rejects.toThrow('thread could not be resolved');
+    expect(ack).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+    await emit(reactionEvent(), ack);
+    expect(ack).toHaveBeenCalledOnce();
+    expect(callback).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it('uses the thread parent when Slack returns only the parent of a reacted reply', async () => {
+    const replies = vi.fn(async () => ({
+      messages: [{ ts: '200.000000', thread_ts: '200.000000', text: 'root' }],
+    }));
+    const { callback, emit } = await startReactionListener({ replies });
+
+    await emit(reactionEvent());
+
+    expect(callback.mock.calls[0][0].threadId).toBe('D123-200.000000');
+    expect(callback.mock.calls[0][0].metadata).not.toHaveProperty('slack_reaction_item_text');
+  });
+
+  it('delivers a repeated identical reaction once per cooldown', async () => {
+    const { callback, emit } = await startReactionListener();
+
+    await emit(reactionEvent());
+    await emit(reactionEvent({ event_ts: '300.000002' }));
+    await emit(reactionEvent({ type: 'reaction_removed', event_ts: '300.000003' }));
+
+    // The add is delivered once; its removal is a distinct signal.
+    expect(callback).toHaveBeenCalledTimes(2);
+  });
+
+  it('caps reaction prompts per thread so emoji spam cannot queue a burst', async () => {
+    const { callback, emit } = await startReactionListener();
+
+    for (const [index, reaction] of ['one', 'two', 'three', 'four', 'five'].entries()) {
+      await emit(reactionEvent({ reaction, event_ts: `300.00000${index}` }));
+    }
+
+    expect(callback).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(['success', 'failure'])(
+    'does not acknowledge an in-flight durable redelivery before routing %s',
+    async (outcome) => {
+      let finish!: () => void;
+      let fail!: (error: Error) => void;
+      const callback = vi.fn(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            finish = resolve;
+            fail = reject;
+          })
+      );
+      const { emit } = await startReactionListener({ callback, durable: true });
+      const ackOriginal = vi.fn(async () => undefined);
+      const ackRetry = vi.fn(async () => undefined);
+      const original = emit(reactionEvent(), ackOriginal);
+      await vi.waitFor(() => expect(callback).toHaveBeenCalledOnce());
+      const retry = emit(reactionEvent(), ackRetry);
+      const settled = Promise.allSettled([original, retry]);
+      await Promise.resolve();
+      expect(ackOriginal).not.toHaveBeenCalled();
+      expect(ackRetry).not.toHaveBeenCalled();
+      expect(callback).toHaveBeenCalledOnce();
+      if (outcome === 'failure') fail(new Error('routing failed'));
+      else finish();
+      expect((await settled).map((result) => result.status)).toEqual(
+        outcome === 'failure' ? ['rejected', 'rejected'] : ['fulfilled', 'fulfilled']
+      );
+      expect(ackOriginal).toHaveBeenCalledTimes(outcome === 'failure' ? 0 : 1);
+      expect(ackRetry).toHaveBeenCalledTimes(outcome === 'failure' ? 0 : 1);
+      if (outcome === 'failure') {
+        callback.mockImplementation(async () => undefined);
+        await emit(reactionEvent(), ackRetry);
+        expect(callback).toHaveBeenCalledTimes(2);
+        expect(ackRetry).toHaveBeenCalledOnce();
+      }
+    }
+  );
+
+  it.each([false, true])(
+    'releases rejected reactions without consuming the thread budget (durable=%s)',
+    async (durable) => {
+      const callback = vi.fn().mockResolvedValue({ accepted: false });
+      const { emit } = await startReactionListener({ callback, durable });
+      for (const [index, reaction] of ['one', 'two', 'three'].entries()) {
+        await emit(reactionEvent({ reaction, event_ts: `300.00000${index}` }));
+      }
+      callback.mockResolvedValue({ accepted: true });
+      // A previously rejected occurrence does not retain its own cooldown either.
+      await emit(reactionEvent({ reaction: 'one', event_ts: '300.000004' }));
+      await emit(reactionEvent({ reaction: 'four', event_ts: '300.000005' }));
+      await emit(reactionEvent({ reaction: 'five', event_ts: '300.000006' }));
+      await emit(reactionEvent({ reaction: 'six', event_ts: '300.000007' }));
+      expect(callback).toHaveBeenCalledTimes(6);
+    }
+  );
+
+  it('releases the rate limit when durable routing fails so the redelivery is accepted', async () => {
+    const callback = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('routing failed'))
+      .mockResolvedValueOnce(undefined);
+    const { emit } = await startReactionListener({ callback, durable: true });
+
+    await expect(emit(reactionEvent())).rejects.toThrow('routing failed');
+    const ack = await emit(reactionEvent());
+
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(ack).toHaveBeenCalledOnce();
+  });
+});
+
+describe('normalizeSlackReactionName', () => {
+  it.each([
+    'white_check_mark',
+    '+1',
+    '-1',
+    'thumbsup::skin-tone-2',
+    'man-woman-girl-boy',
+    'e-mail',
+  ])('accepts %s', (name) => {
+    expect(normalizeSlackReactionName(name)).toBe(name);
+  });
+
+  it.each(['', 'has space', 'x:<@U1>', 'a'.repeat(101), 42, undefined, 'x::skin-tone-9'])(
+    'rejects %s',
+    (name) => {
+      expect(normalizeSlackReactionName(name)).toBeNull();
+    }
+  );
+});
+
+describe('isSlackInboundSurfaceAllowed', () => {
+  const surfaces = {
+    enableChannels: true,
+    enableGroups: false,
+    enableMpim: false,
+    allowedChannelIds: ['C1'],
+  };
+
+  it('always allows DMs, even outside the whitelist', () => {
+    expect(isSlackInboundSurfaceAllowed('im', 'D9', surfaces)).toBe(true);
+  });
+
+  it('follows the surface toggle and whitelist for channel-like surfaces', () => {
+    expect(isSlackInboundSurfaceAllowed('channel', 'C1', surfaces)).toBe(true);
+    expect(isSlackInboundSurfaceAllowed('channel', 'C2', surfaces)).toBe(false);
+    expect(isSlackInboundSurfaceAllowed('group', 'C1', surfaces)).toBe(false);
+    expect(isSlackInboundSurfaceAllowed('mpim', 'C1', surfaces)).toBe(false);
+  });
+
+  it('fails closed on an unresolved or unknown conversation type', () => {
+    expect(isSlackInboundSurfaceAllowed(undefined, 'C1', surfaces)).toBe(false);
+    expect(isSlackInboundSurfaceAllowed('app_home', 'C1', surfaces)).toBe(false);
+  });
 });
 
 /**

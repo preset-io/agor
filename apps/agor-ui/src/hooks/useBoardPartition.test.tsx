@@ -16,6 +16,7 @@ import {
   fakeFeathersClient,
   gate,
   makeBoard,
+  makeBoardObject,
   makeBranch,
   withTestAuthority,
 } from '../test/harness';
@@ -164,6 +165,35 @@ describe('useBoardPartition', () => {
     await waitFor(() => expect(sessionReads()).toBe(3));
     await act(async () => releaseAll());
     await waitFor(() => expect(result.current.boardReady).toBe(true));
+  });
+
+  it('unarchiving a branch onto the displayed board reads its saved placement', async () => {
+    // Placement reads skip archived branches, so the archived branch and its
+    // stored position are both absent until it is unarchived.
+    let archived = true;
+    const fake = fakeFeathersClient(
+      {
+        branches: { findAll: async () => (archived ? [] : [makeBranch('br-back')]) },
+        'board-objects': {
+          findAll: async () =>
+            archived ? [] : [makeBoardObject('o-back', { branch_id: 'br-back' })],
+        },
+        boards: { get: async () => ({ board_id: BOARD, name: 'Board', objects: {} }) },
+      },
+      { fallback: async () => [] }
+    );
+    const { result } = renderHook(() =>
+      useBoardPartition(fake.client, BOARD, { canUseMemberWorkspaceServices: true })
+    );
+    await waitFor(() => expect(result.current.boardReady).toBe(true));
+    expect(agorStore.getState().boardObjectById.has('o-back')).toBe(false);
+
+    // Unarchive emits only the branch patch, never a board-object event.
+    archived = false;
+    act(() => arrive('br-back'));
+    await waitFor(() => expect(fake.callsTo('board-objects', 'findAll')).toHaveLength(2));
+    await waitFor(() => expect(result.current.boardReady).toBe(true));
+    expect(agorStore.getState().boardObjectById.get('o-back')?.branch_id).toBe('br-back');
   });
 
   it('sustained arrivals end in a bounded number of reads and a ready board', async () => {

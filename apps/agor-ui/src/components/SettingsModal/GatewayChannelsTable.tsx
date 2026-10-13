@@ -482,6 +482,7 @@ const CONNECTION_PROBE_FIELDS = new Set<string>([
   'align_slack_users',
   'outbound_enabled',
   'ingest_files',
+  'inbound_reactions',
   'agent_thread_history',
   'agent_channel_history',
   'agent_reactions',
@@ -1079,6 +1080,7 @@ const SlackSetupWizard: React.FC<{
   const alignUsers = Form.useWatch('align_slack_users', form) ?? true;
   const outbound = Form.useWatch('outbound_enabled', form) ?? false;
   const ingestFiles = Form.useWatch('ingest_files', form) ?? false;
+  const inboundReactions = Form.useWatch('inbound_reactions', form) ?? false;
   const agentThreadHistory =
     Form.useWatch('agent_thread_history', form) ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history;
   const agentChannelHistory =
@@ -1100,6 +1102,7 @@ const SlackSetupWizard: React.FC<{
       alignUsers,
       outbound,
       ingestFiles,
+      inboundReactions,
       agentTools: {
         thread_history: agentThreadHistory,
         channel_history: agentChannelHistory,
@@ -1116,6 +1119,7 @@ const SlackSetupWizard: React.FC<{
       alignUsers,
       outbound,
       ingestFiles,
+      inboundReactions,
       agentThreadHistory,
       agentChannelHistory,
       agentReactions,
@@ -1354,6 +1358,16 @@ const SlackSetupWizard: React.FC<{
           valuePropName="checked"
           initialValue={false}
           tooltip="Let session agents add/remove emoji reactions on Slack messages through the gateway MCP tools. Adds the reactions:write scope."
+        >
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
+          label="Deliver reactions to sessions"
+          name="inbound_reactions"
+          valuePropName="checked"
+          initialValue={false}
+          tooltip="When someone reacts to a message in a thread that already has a session (for example ✅ on the bot's reply), send the reaction to that session as a short prompt. Never starts a new session and is rate limited per thread. Adds the reactions:read scope and the reaction_added/reaction_removed events."
         >
           <Switch />
         </Form.Item>
@@ -2189,6 +2203,9 @@ const ChannelFormFields: React.FC<{
     Form.useWatch('outbound_enabled', form) ?? slackConfig?.outbound_enabled
   );
   const ingestFiles = Boolean(Form.useWatch('ingest_files', form) ?? slackConfig?.ingest_files);
+  const inboundReactions = Boolean(
+    Form.useWatch('inbound_reactions', form) ?? slackConfig?.inbound_reactions
+  );
   const storedAgentTools = useMemo(
     () => resolveSlackAgentTools(slackConfig?.agent_tools),
     [slackConfig]
@@ -2228,6 +2245,7 @@ const ChannelFormFields: React.FC<{
       alignUsers: alignSlackUsers,
       outbound: outboundEnabled,
       ingestFiles,
+      inboundReactions,
       agentTools: {
         thread_history: agentThreadHistory,
         channel_history: agentChannelHistory,
@@ -2244,6 +2262,7 @@ const ChannelFormFields: React.FC<{
       alignSlackUsers,
       outboundEnabled,
       ingestFiles,
+      inboundReactions,
       agentThreadHistory,
       agentChannelHistory,
       agentReactions,
@@ -2266,6 +2285,7 @@ const ChannelFormFields: React.FC<{
       alignUsers: Boolean(slackConfig?.align_slack_users),
       outbound: Boolean(slackConfig?.outbound_enabled),
       ingestFiles: Boolean(slackConfig?.ingest_files),
+      inboundReactions: Boolean(slackConfig?.inbound_reactions),
       agentTools: storedAgentTools,
     });
   }, [mode, editingChannel, slackConfig, storedAgentTools]);
@@ -3503,6 +3523,16 @@ const ChannelFormFields: React.FC<{
                     </Form.Item>
 
                     <Form.Item
+                      label="Deliver reactions to sessions"
+                      name="inbound_reactions"
+                      valuePropName="checked"
+                      initialValue={false}
+                      tooltip="When someone reacts to a message in a thread that already has a session (for example ✅ on the bot's reply), send the reaction to that session as a short prompt. Never starts a new session and is rate limited per thread. Requires the reactions:read scope and the reaction_added/reaction_removed events."
+                    >
+                      <Switch />
+                    </Form.Item>
+
+                    <Form.Item
                       label="Agents can upload files"
                       name="agent_file_upload"
                       valuePropName="checked"
@@ -3975,6 +4005,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       allowed_channel_ids: values.allowed_channel_ids ?? [],
       outbound_enabled: values.outbound_enabled ?? false,
       ingest_files: values.ingest_files ?? false,
+      inbound_reactions: values.inbound_reactions ?? false,
       agent_tools: {
         thread_history: values.agent_thread_history ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history,
         channel_history: values.agent_channel_history ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history,
@@ -4154,6 +4185,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.outbound_enabled = values.outbound_enabled ?? false;
       config.default_outbound_target = values.default_outbound_target || null;
       config.ingest_files = values.ingest_files ?? false;
+      config.inbound_reactions = values.inbound_reactions ?? false;
       config.agent_tools = {
         thread_history: values.agent_thread_history ?? SLACK_AGENT_TOOL_DEFAULTS.thread_history,
         channel_history: values.agent_channel_history ?? SLACK_AGENT_TOOL_DEFAULTS.channel_history,
@@ -4460,6 +4492,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.outbound_enabled = config?.outbound_enabled ?? false;
       formValues.default_outbound_target = config?.default_outbound_target;
       formValues.ingest_files = config?.ingest_files ?? false;
+      formValues.inbound_reactions = config?.inbound_reactions ?? false;
       const agentTools = resolveSlackAgentTools(config?.agent_tools);
       formValues.agent_thread_history = agentTools.thread_history;
       formValues.agent_channel_history = agentTools.channel_history;

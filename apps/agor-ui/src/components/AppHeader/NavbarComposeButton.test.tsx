@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { agorStore } from '../../store/agorStore';
 import { NavbarComposeButton } from './NavbarComposeButton';
 
 const goToSession = vi.hoisted(() => vi.fn());
@@ -18,15 +19,6 @@ vi.mock('../../hooks/useAppNavigation', () => ({
     goToArtifact: vi.fn(),
     goHome: vi.fn(),
   }),
-}));
-
-vi.mock('../../store/agorStore', () => ({
-  useAgorStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      mcpServerById: new Map(),
-      userById: new Map(),
-      agenticToolSettingsByName: new Map(),
-    }),
 }));
 
 vi.mock('../AgenticConfigChipRow', () => ({
@@ -67,27 +59,39 @@ vi.mock('../AgenticConfigChipRow', () => ({
   },
 }));
 
-vi.mock('../AgentSelectionGrid', () => ({
-  AVAILABLE_AGENTS: [
-    { id: 'claude-code', name: 'Claude Code', icon: '🤖' },
-    { id: 'codex', name: 'Codex', icon: '💻' },
-  ],
-  AgentSelectionGrid: ({
-    selectedAgentId,
-    onSelect,
-    variant,
-  }: {
-    selectedAgentId: string | null;
-    onSelect: (id: string) => void;
-    variant?: string;
-  }) => (
-    <div data-testid="agent-grid" data-selected={selectedAgentId ?? ''} data-variant={variant}>
-      <button type="button" data-testid="pick-codex" onClick={() => onSelect('codex')}>
-        codex
-      </button>
-    </div>
-  ),
-}));
+vi.mock('../AgentSelectionGrid', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../AgentSelectionGrid')>();
+  return {
+    AVAILABLE_AGENTS: [
+      { id: 'claude-code', name: 'Claude Code', icon: '🤖' },
+      { id: 'codex', name: 'Codex', icon: '💻' },
+    ],
+    AgentSelectionGrid: ({
+      selectedAgentId,
+      onSelect,
+      variant,
+      fallbackToFirstVisibleAgent,
+    }: {
+      fallbackToFirstVisibleAgent?: boolean;
+      selectedAgentId: string | null;
+      onSelect: (id: string) => void;
+      variant?: string;
+    }) => (
+      <div data-testid="agent-grid" data-selected={selectedAgentId ?? ''} data-variant={variant}>
+        <original.AgentSelectionGrid
+          variant="select"
+          agents={original.AVAILABLE_AGENTS}
+          selectedAgentId={selectedAgentId}
+          onSelect={onSelect}
+          fallbackToFirstVisibleAgent={fallbackToFirstVisibleAgent}
+        />
+        <button type="button" data-testid="pick-codex" onClick={() => onSelect('codex')}>
+          codex
+        </button>
+      </div>
+    ),
+  };
+});
 
 // Passthrough drop zone that exposes a file-drop trigger.
 vi.mock('../SessionPanel/SessionComposerDropZone', () => ({
@@ -258,6 +262,65 @@ describe('NavbarComposeButton', () => {
   beforeEach(() => {
     goToSession.mockClear();
     localStorage.clear();
+    agorStore.getState().reset();
+    agorStore.getState().setAgenticToolSettings([]);
+  });
+
+  it('holds navbar sends until settings hydrate and preserves the draft', async () => {
+    agorStore.getState().resetMaps();
+    const currentUser = { user_id: 'user-1', primary_agentic_tool: 'claude-code' } as User;
+    const { onCreateSession } = renderCompose({ primary: primaryBranch, currentUser });
+    openPopover();
+    const input = await screen.findByTestId('compose-prompt');
+    fireEvent.change(input, { target: { value: 'Keep navbar draft' } });
+    const send = screen.getByRole('button', { name: 'Send in background' });
+    expect(send).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send & open' })).toBeDisabled();
+    fireEvent.click(send);
+    expect(onCreateSession).not.toHaveBeenCalled();
+    expect(input).toHaveValue('Keep navbar draft');
+    act(() =>
+      agorStore.getState().setAgenticToolSettings([
+        {
+          tool: 'claude-code',
+          enabled: false,
+          deployment_available: true,
+          resolution_policy: 'user_preferred',
+          inline_configuration_allowed: true,
+          connection: {},
+        },
+      ])
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('config-chip-row')).toHaveAttribute('data-tool', 'codex')
+    );
+    expect(send).toBeEnabled();
+    // Workspace/tenant change must revoke the prior settings snapshot while leaving the draft intact.
+    act(() => agorStore.getState().resetMaps());
+    expect(send).toBeDisabled();
+    fireEvent.click(send);
+    expect(onCreateSession).not.toHaveBeenCalled();
+    act(() => agorStore.getState().setAgenticToolSettings([]));
+    fireEvent.click(send);
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: 'codex', initialPrompt: 'Keep navbar draft' }),
+      'board-primary'
+    );
+  });
+
+  it('does not resume a held navbar send with unknown workspace settings', async () => {
+    const { onCreateSession } = renderCompose({ primary: null });
+    openPopover();
+    const input = await screen.findByTestId('compose-prompt');
+    fireEvent.change(input, { target: { value: 'Held draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send in background' }));
+    await screen.findByText('Pick a primary assistant above to send.');
+    act(() => agorStore.getState().resetMaps());
+    fireEvent.click(screen.getByTestId('pick-teammate'));
+    await act(async () => {});
+    expect(onCreateSession).not.toHaveBeenCalled();
+    expect(input).toHaveValue('Held draft');
   });
   afterEach(() => vi.restoreAllMocks());
 

@@ -16,6 +16,7 @@
  *     allow_thread_replies_without_mention?: boolean, // Legacy; ignored for Slack channel-like prompts
  *     allowed_channel_ids?: string[],               // Channel ID whitelist
  *     ingest_files?: boolean,                       // Forward message attachments (requires files:read)
+ *     inbound_reactions?: boolean,                  // Deliver human reactions in mapped threads (requires reactions:read)
  *     agent_tools?: SlackAgentToolsConfig           // Agent-callable MCP tool toggles (gated in the daemon tool layer)
  *   }
  *
@@ -148,6 +149,10 @@ interface SlackConfig {
 
   // Ingest files attached to inbound messages (requires files:read scope)
   ingest_files?: boolean;
+
+  // Deliver human emoji reactions on messages in mapped threads (requires
+  // reactions:read scope + reaction_added/reaction_removed events)
+  inbound_reactions?: boolean;
 
   // Agent-callable MCP tool toggles (gated in the daemon tool layer)
   agent_tools?: SlackAgentToolsConfig;
@@ -656,6 +661,29 @@ export function markdownToSlackPayload(markdown: string): OutboundPayload {
   return { text, blocks };
 }
 
+function isRetryableSlackLookupError(error: unknown): boolean {
+  const code = extractSlackErrorCode(error);
+  const statusCode =
+    typeof error === 'object' && error !== null && 'statusCode' in error
+      ? error.statusCode
+      : undefined;
+  // Platform refusals are terminal unless Slack explicitly reports a
+  // temporary condition. Transport failures and rate limits remain retryable.
+  return code
+    ? [
+        'ratelimited',
+        'internal_error',
+        'fatal_error',
+        'request_timeout',
+        'service_unavailable',
+        'org_login_required',
+        'team_added_to_org',
+      ].includes(code)
+    : typeof statusCode === 'number'
+      ? statusCode === 408 || statusCode === 429 || statusCode >= 500
+      : true;
+}
+
 /**
  * Extract a Slack error code from either a non-OK response object
  * (`{ error: 'invalid_blocks' }`) or a thrown `WebAPIPlatformError`
@@ -811,6 +839,57 @@ export function extractSlackInboundFiles(raw: unknown): InboundFile[] {
   return files;
 }
 
+/** Slack events delivered when `config.inbound_reactions` is enabled. */
+export const SLACK_INBOUND_REACTION_EVENT_TYPES = ['reaction_added', 'reaction_removed'] as const;
+
+export type SlackInboundReactionEventType = (typeof SLACK_INBOUND_REACTION_EVENT_TYPES)[number];
+
+export function isSlackInboundReactionEventType(
+  value: unknown
+): value is SlackInboundReactionEventType {
+  return (SLACK_INBOUND_REACTION_EVENT_TYPES as readonly unknown[]).includes(value);
+}
+
+/**
+ * Slack emoji short names are lowercase letters, digits, and `_+-'`, with an
+ * optional `::skin-tone-N` suffix. Anything else (including an absent value)
+ * is rejected, so a reaction name is safe to interpolate into a prompt line.
+ */
+const SLACK_REACTION_NAME_SHAPE = /^[a-z0-9_+'-]{1,100}(::skin-tone-[2-6])?$/i;
+
+export function normalizeSlackReactionName(raw: unknown): string | null {
+  return typeof raw === 'string' && SLACK_REACTION_NAME_SHAPE.test(raw) ? raw : null;
+}
+
+/** Inbound surface toggles shared by the message and reaction listeners. */
+export interface SlackInboundSurfaces {
+  enableChannels: boolean;
+  enableGroups: boolean;
+  enableMpim: boolean;
+  allowedChannelIds: string[] | undefined;
+}
+
+/**
+ * Whether a resolved conversation type is a surface this channel listens on.
+ * DMs are always on; channel-like surfaces follow their toggle and the
+ * channel whitelist. An unresolved or unknown type fails closed.
+ */
+export function isSlackInboundSurfaceAllowed(
+  channelType: string | undefined,
+  channelId: string,
+  surfaces: SlackInboundSurfaces
+): boolean {
+  const enabled =
+    channelType === 'im' ||
+    (channelType === 'channel' && surfaces.enableChannels) ||
+    (channelType === 'group' && surfaces.enableGroups) ||
+    (channelType === 'mpim' && surfaces.enableMpim);
+  return (
+    enabled &&
+    isChannelAllowedByWhitelist(channelType as string, channelId, surfaces.allowedChannelIds)
+  );
+}
+
 export function isChannelAllowedByWhitelist(
   channelType: string,
   channelId: string | undefined,
@@ -934,7 +1013,13 @@ export class SlackConnector implements GatewayConnector {
   /** Cache: Slack user ID → profile (email + display name, or null if unavailable). */
   private userProfileCache = new Map<
     string,
-    { email: string | null; displayName: string | null; expiresAt: number }
+    {
+      email: string | null;
+      displayName: string | null;
+      isBot: boolean | null;
+      expiresAt: number;
+      retryableLookupFailed?: boolean;
+    }
   >();
   private inboundEventDedup = new Map<string, number>();
 
@@ -943,6 +1028,24 @@ export class SlackConnector implements GatewayConnector {
   private static USER_CACHE_TTL_MS = 15 * 60 * 1000; // 15 min for successful lookups
   private static USER_CACHE_ERROR_TTL_MS = 60 * 1000; // 1 min for errors (transient recovery)
   private static INBOUND_EVENT_DEDUP_TTL_MS = 5 * 60 * 1000; // Slack may send message + app_mention for one user action
+
+  /**
+   * Inbound reaction rate limiting. Each reaction becomes a prompt, so emoji
+   * spam must not queue a burst of Tasks: one prompt per
+   * (message, user, emoji, added/removed) per cooldown, and at most
+   * INBOUND_REACTION_THREAD_MAX prompts per thread per window. Entries are
+   * recorded before routing and released if routing fails or rejects, so a retried
+   * delivery is not mistaken for spam.
+   */
+  // Connector instances belong to one tenant-owned gateway channel. Pending
+  // occurrences must finish before any durable redelivery can be acknowledged.
+  private inboundReactionOccurrences = new Map<string, Promise<void>>();
+  private inboundReactionCooldowns = new Map<string, number>();
+  private inboundReactionThreadWindows = new Map<string, number[]>();
+  private static INBOUND_REACTION_COOLDOWN_MS = 60 * 1000;
+  private static INBOUND_REACTION_THREAD_WINDOW_MS = 60 * 1000;
+  private static INBOUND_REACTION_THREAD_MAX = 3;
+  private static INBOUND_REACTION_EXCERPT_MAX_CHARS = 500;
 
   /**
    * Cache: Slack channel ID → channel type string (channel/group/mpim/im).
@@ -1148,11 +1251,15 @@ export class SlackConnector implements GatewayConnector {
    * (so transient failures recover quickly). Evicts expired entries on
    * each call to prevent unbounded cache growth.
    *
-   * Returns `{ email: null, displayName: null }` if unavailable.
+   * Returns null profile fields (including bot identity) if unavailable.
+   * Durable reactions opt into throwing on retryable lookup failures and bypassing
+   * cached retryable failures so redelivery can recover immediately without
+   * admitting bots.
    */
   async lookupUserProfile(
-    slackUserId: string
-  ): Promise<{ email: string | null; displayName: string | null }> {
+    slackUserId: string,
+    retryOnFailure = false
+  ): Promise<{ email: string | null; displayName: string | null; isBot: boolean | null }> {
     const now = Date.now();
 
     // Evict expired entries to prevent unbounded growth
@@ -1161,13 +1268,14 @@ export class SlackConnector implements GatewayConnector {
     }
 
     const cached = this.userProfileCache.get(slackUserId);
-    if (cached && cached.expiresAt > now) {
-      return { email: cached.email, displayName: cached.displayName };
+    if (cached && cached.expiresAt > now && !(retryOnFailure && cached.retryableLookupFailed)) {
+      return { email: cached.email, displayName: cached.displayName, isBot: cached.isBot };
     }
 
     try {
       const result = await this.web.users.info({ user: slackUserId });
       const email = result.user?.profile?.email ?? null;
+      const isBot = result.user?.is_bot ?? null;
       const displayName =
         result.user?.profile?.display_name ||
         result.user?.profile?.real_name ||
@@ -1177,6 +1285,7 @@ export class SlackConnector implements GatewayConnector {
       this.userProfileCache.set(slackUserId, {
         email,
         displayName,
+        isBot,
         expiresAt: now + SlackConnector.USER_CACHE_TTL_MS,
       });
 
@@ -1186,18 +1295,27 @@ export class SlackConnector implements GatewayConnector {
         );
       }
 
-      return { email, displayName };
+      return { email, displayName, isBot };
     } catch (error) {
       console.warn(
         `[slack] Failed to look up profile for user ${slackUserId}: ${sanitizeGatewayProviderError(error)}`
       );
-      // Short TTL for errors so transient failures (rate limits, network) recover quickly
+      // Durable reactions retry only temporary identity lookup failures, without
+      // a negative cache entry hiding recovery on Slack's next retry.
+      const retryable = isRetryableSlackLookupError(error);
+      if (retryOnFailure && retryable) {
+        this.userProfileCache.delete(slackUserId);
+        throw new Error('Slack reaction user profile could not be resolved');
+      }
+      // Cache permanent refusals too: unknown bot identity stays fail-closed.
       this.userProfileCache.set(slackUserId, {
         email: null,
         displayName: null,
+        isBot: null,
         expiresAt: now + SlackConnector.USER_CACHE_ERROR_TTL_MS,
+        retryableLookupFailed: retryable,
       });
-      return { email: null, displayName: null };
+      return { email: null, displayName: null, isBot: null };
     }
   }
 
@@ -1370,6 +1488,292 @@ export class SlackConnector implements GatewayConnector {
     if (this.inboundEventDedup.has(key)) return false;
     this.inboundEventDedup.set(key, now + SlackConnector.INBOUND_EVENT_DEDUP_TTL_MS);
     return true;
+  }
+
+  private evictInboundReactionLimits(now: number): void {
+    for (const [key, expiresAt] of this.inboundReactionCooldowns) {
+      if (expiresAt <= now) this.inboundReactionCooldowns.delete(key);
+    }
+    const windowStart = now - SlackConnector.INBOUND_REACTION_THREAD_WINDOW_MS;
+    for (const [threadId, times] of this.inboundReactionThreadWindows) {
+      const live = times.filter((time) => time > windowStart);
+      if (live.length === 0) this.inboundReactionThreadWindows.delete(threadId);
+      else this.inboundReactionThreadWindows.set(threadId, live);
+    }
+  }
+
+  private isInboundReactionCoolingDown(key: string): boolean {
+    this.evictInboundReactionLimits(Date.now());
+    return this.inboundReactionCooldowns.has(key);
+  }
+
+  /**
+   * Admit one reaction against both limits, or return null when either is
+   * exhausted. The returned function releases the admission (used when
+   * routing fails or rejects so Slack's redelivery is not rate limited).
+   */
+  private admitInboundReaction(key: string, threadId: string): (() => void) | null {
+    const now = Date.now();
+    this.evictInboundReactionLimits(now);
+    const times = this.inboundReactionThreadWindows.get(threadId) ?? [];
+    if (
+      this.inboundReactionCooldowns.has(key) ||
+      times.length >= SlackConnector.INBOUND_REACTION_THREAD_MAX
+    ) {
+      return null;
+    }
+    this.inboundReactionCooldowns.set(key, now + SlackConnector.INBOUND_REACTION_COOLDOWN_MS);
+    this.inboundReactionThreadWindows.set(threadId, [...times, now]);
+    return () => {
+      if (
+        this.inboundReactionCooldowns.get(key) ===
+        now + SlackConnector.INBOUND_REACTION_COOLDOWN_MS
+      ) {
+        this.inboundReactionCooldowns.delete(key);
+      }
+      const current = this.inboundReactionThreadWindows.get(threadId);
+      if (!current) return;
+      const index = current.indexOf(now);
+      if (index !== -1) current.splice(index, 1);
+      if (current.length === 0) this.inboundReactionThreadWindows.delete(threadId);
+    };
+  }
+
+  /**
+   * Resolve a reacted message to its thread root and a short excerpt.
+   *
+   * Reaction events only carry the reacted message's channel and ts, which
+   * may be a thread root, a reply, or a standalone message. The message's own
+   * `thread_ts` identifies the thread (absent on a standalone message, whose
+   * ts is its own thread root). Returns { status: 'unavailable', retryable } when
+   * Slack cannot be read; callers must not assume a reply is a root and split
+   * the per-thread budget.
+   */
+  private async lookupReactedMessage(
+    channel: string,
+    ts: string
+  ): Promise<
+    | { status: 'resolved'; threadTs: string; text: string | null }
+    | { status: 'unavailable'; retryable: boolean }
+  > {
+    try {
+      const result = await this.web.conversations.replies({
+        channel,
+        ts,
+        oldest: ts,
+        inclusive: true,
+        limit: 2,
+      });
+      const messages = result.messages ?? [];
+      const target = messages.find((message) => message.ts === ts);
+      if (target) {
+        return {
+          status: 'resolved',
+          threadTs: typeof target.thread_ts === 'string' ? target.thread_ts : ts,
+          text:
+            typeof target.text === 'string'
+              ? target.text.slice(0, SlackConnector.INBOUND_REACTION_EXCERPT_MAX_CHARS)
+              : null,
+        };
+      }
+      // Only the thread parent came back: the reacted message is one of its replies.
+      const parent = messages[0];
+      const parentTs =
+        typeof parent?.thread_ts === 'string'
+          ? parent.thread_ts
+          : typeof parent?.ts === 'string'
+            ? parent.ts
+            : undefined;
+      return parentTs
+        ? { status: 'resolved', threadTs: parentTs, text: null }
+        : { status: 'unavailable', retryable: false };
+    } catch (error) {
+      console.warn(
+        `[slack] Failed to resolve reacted message thread: ${sanitizeGatewayProviderError(error)}`
+      );
+      const retryable = isRetryableSlackLookupError(error);
+      return { status: 'unavailable', retryable };
+    }
+  }
+
+  /**
+   * Route one `reaction_added` / `reaction_removed` event.
+   *
+   * Reactions are a mapped-thread-only signal: the connector applies the same
+   * surface and whitelist filters as messages, drops the bot's own reactions,
+   * and rate limits; the gateway then drops any reaction whose thread is not
+   * already mapped to a session and applies the usual identity/authority
+   * checks. Acknowledgement follows the message path's rules.
+   */
+  private async handleInboundReactionEvent(args: {
+    body: Record<string, unknown>;
+    ack: () => Promise<void>;
+    eventType: SlackInboundReactionEventType;
+    callback: GatewayInboundCallback;
+    options: GatewayListenerOptions;
+    surfaces: SlackInboundSurfaces;
+  }): Promise<void> {
+    if (!args.options.durableEventIdempotency) {
+      return this.processInboundReactionEvent(args);
+    }
+    const event = (args.body.event ?? {}) as Record<string, unknown>;
+    // event_id is stable across Slack retries. If absent, the provider event
+    // timestamp plus its payload identifies the same occurrence.
+    const occurrence =
+      typeof args.body.event_id === 'string'
+        ? args.body.event_id
+        : typeof event.event_ts === 'string'
+          ? JSON.stringify([args.body.team_id, args.eventType, event])
+          : undefined;
+    const pending = occurrence ? this.inboundReactionOccurrences.get(occurrence) : undefined;
+    if (pending) {
+      await pending;
+      await args.ack();
+      return;
+    }
+    const processing = this.processInboundReactionEvent({ ...args, ack: async () => {} });
+    if (occurrence) this.inboundReactionOccurrences.set(occurrence, processing);
+    try {
+      await processing;
+      await args.ack();
+    } finally {
+      if (occurrence) this.inboundReactionOccurrences.delete(occurrence);
+    }
+  }
+
+  private async processInboundReactionEvent(args: {
+    body: Record<string, unknown>;
+    ack: () => Promise<void>;
+    eventType: SlackInboundReactionEventType;
+    callback: GatewayInboundCallback;
+    options: GatewayListenerOptions;
+    surfaces: SlackInboundSurfaces;
+  }): Promise<void> {
+    const { body, ack, eventType, callback, options, surfaces } = args;
+    let acknowledged = false;
+    if (!options.durableEventIdempotency) {
+      await ack();
+      acknowledged = true;
+    }
+
+    let routed = false;
+    let releaseAdmission: (() => void) | null = null;
+    try {
+      const event = (body.event ?? {}) as Record<string, unknown>;
+      const item =
+        typeof event.item === 'object' && event.item !== null
+          ? (event.item as Record<string, unknown>)
+          : undefined;
+      const reactingUser = typeof event.user === 'string' ? event.user : undefined;
+      const reaction = normalizeSlackReactionName(event.reaction);
+      const channel = typeof item?.channel === 'string' ? item.channel : undefined;
+      const itemTs = typeof item?.ts === 'string' ? item.ts : undefined;
+      if (item?.type !== 'message' || !reactingUser || !reaction || !channel || !itemTs) {
+        return;
+      }
+      // Without a verified bot identity the bot's own reactions (including
+      // those agents add through the reaction tools) cannot be told apart.
+      if (!this.botUserId || reactingUser === this.botUserId) {
+        return;
+      }
+
+      const channelType = await this.resolveChannelType(channel, undefined);
+      if (!isSlackInboundSurfaceAllowed(channelType, channel, surfaces)) {
+        return;
+      }
+
+      const action = eventType === 'reaction_added' ? 'added' : 'removed';
+      const cooldownKey = `${channel}:${itemTs}:${reactingUser}:${reaction}:${action}`;
+      if (this.isInboundReactionCoolingDown(cooldownKey)) {
+        console.debug(
+          `[slack] Skipping rate-limited reaction event=${eventType} channel=${channel} ts=${itemTs}`
+        );
+        return;
+      }
+
+      const profile = await this.lookupUserProfile(reactingUser, options.durableEventIdempotency);
+      // Verify human identity before spending a thread lookup on another bot.
+      if (profile.isBot !== false) return;
+      const reacted = await this.lookupReactedMessage(channel, itemTs);
+      if (reacted.status === 'unavailable') {
+        // No root means no reliable thread budget. Only transient failures
+        // warrant redelivery; missing messages and permanent refusals are dropped.
+        if (options.durableEventIdempotency && reacted.retryable) {
+          throw new Error('Slack reaction thread could not be resolved');
+        }
+        return;
+      }
+      const threadTs = reacted.threadTs;
+      const threadId = `${channel}-${threadTs}`;
+      releaseAdmission = this.admitInboundReaction(cooldownKey, threadId);
+      if (!releaseAdmission) {
+        console.debug(
+          `[slack] Skipping rate-limited reaction event=${eventType} thread=${threadId}`
+        );
+        return;
+      }
+
+      const firstAuthorization = Array.isArray(body.authorizations)
+        ? (body.authorizations[0] as { team_id?: unknown } | undefined)
+        : undefined;
+      const slackTeamId =
+        typeof body.team_id === 'string'
+          ? body.team_id
+          : typeof firstAuthorization?.team_id === 'string'
+            ? firstAuthorization.team_id
+            : undefined;
+      const itemUser = typeof event.item_user === 'string' ? event.item_user : undefined;
+      const eventTs = typeof event.event_ts === 'string' ? event.event_ts : undefined;
+      const slackChannelName = channelType !== 'im' ? await this.lookupChannelName(channel) : null;
+
+      console.log(
+        `[slack] Accepted inbound reaction: event=${eventType} thread=${threadId} channel_type=${channelType} user=${reactingUser}`
+      );
+
+      routed = true;
+      const outcome = await callback({
+        providerEventId: eventTs
+          ? `slack:reaction:${slackTeamId ?? 'unknown'}:${channel}:${itemTs}:${reactingUser}:${reaction}:${action}:${eventTs}`
+          : typeof body.event_id === 'string'
+            ? `slack:event:${body.event_id}`
+            : undefined,
+        threadId,
+        text: `:${reaction}:`,
+        userId: reactingUser,
+        timestamp: eventTs ?? new Date().toISOString(),
+        metadata: {
+          channel,
+          channel_type: channelType,
+          slack_user_id: reactingUser,
+          ...(slackTeamId ? { slack_team_id: slackTeamId } : {}),
+          slack_bot_user_id: this.botUserId,
+          slack_thread_ts: threadTs,
+          slack_is_thread_reply: threadTs !== itemTs,
+          // A reaction is never a mention; the gateway admits it only into
+          // an already-mapped thread.
+          slack_has_mention: false,
+          slack_event_type: eventType,
+          ...(typeof body.event_id === 'string' ? { slack_event_id: body.event_id } : {}),
+          slack_reaction: reaction,
+          slack_reaction_item_ts: itemTs,
+          ...(itemUser ? { slack_reaction_item_user_id: itemUser } : {}),
+          ...(reacted?.text ? { slack_reaction_item_text: reacted.text } : {}),
+          ...(profile.email ? { slack_user_email: profile.email } : {}),
+          ...(profile.displayName ? { slack_user_name: profile.displayName } : {}),
+          ...(slackChannelName ? { slack_channel_name: slackChannelName } : {}),
+          ...(this.config.align_slack_users ? { align_slack_users: true } : {}),
+        },
+      });
+      if (outcome?.accepted === false) releaseAdmission();
+      releaseAdmission = null;
+      if (!acknowledged) {
+        await ack();
+        acknowledged = true;
+      }
+    } finally {
+      releaseAdmission?.();
+      if (!routed && !acknowledged) await ack();
+    }
   }
 
   /**
@@ -2315,6 +2719,21 @@ export class SlackConnector implements GatewayConnector {
       }
 
       const eventType = body?.event?.type;
+      if (isSlackInboundReactionEventType(eventType)) {
+        if (this.config.inbound_reactions !== true) {
+          await ack();
+          return;
+        }
+        await this.handleInboundReactionEvent({
+          body,
+          ack,
+          eventType,
+          callback,
+          options,
+          surfaces: { enableChannels, enableGroups, enableMpim, allowedChannelIds },
+        });
+        return;
+      }
       if (eventType !== 'message' && eventType !== 'app_mention') {
         await ack();
         return;

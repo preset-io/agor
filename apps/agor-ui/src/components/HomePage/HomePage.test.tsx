@@ -781,6 +781,70 @@ describe('HomePage', () => {
     expect(screen.getByText('Archive')).toBeInTheDocument();
   });
 
+  it.each(['desktop', 'phone'])(
+    'holds %s Home sends until tool settings hydrate, preserving the draft',
+    async (viewport) => {
+      if (viewport === 'desktop') asDesktop();
+      const primary = teammate('primary', 'b-primary');
+      const onCreateSession = vi.fn(async () => null);
+      const client = {
+        service: () => ({ getPrimaryTeammate: async () => primary, find: async () => [] }),
+      } as unknown as AgorClient;
+      seed({ sessions: [session('idle')], branches: [primary] });
+      agorStore.setState({ agenticToolSettingsHydrated: false });
+      renderHome({
+        client,
+        onCreateSession,
+        currentUser: { ...user, primary_agentic_tool: 'claude-code' },
+      });
+      const input = (await screen.findByRole('textbox', {
+        name: 'Ask Teammate primary',
+      })) as HTMLTextAreaElement;
+      fireEvent.change(input, { target: { value: 'Keep this draft' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      const send =
+        viewport === 'phone'
+          ? screen.getByRole('button', { name: 'Send in background' })
+          : screen.getByText('Send in background').closest('button');
+      expect((send as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(send!);
+      expect(onCreateSession).not.toHaveBeenCalled();
+      expect(input.value).toBe('Keep this draft');
+      expect(screen.getByText('Loading agentic tool availability')).toHaveAttribute(
+        'role',
+        'status'
+      );
+
+      act(() =>
+        agorStore.getState().setAgenticToolSettings([
+          {
+            tool: 'claude-code',
+            enabled: false,
+            deployment_available: true,
+            resolution_policy: 'user_preferred',
+            inline_configuration_allowed: true,
+            connection: {},
+          },
+        ])
+      );
+      expect(screen.queryByText('Loading agentic tool availability')).not.toBeInTheDocument();
+      expect((send as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+      expect(onCreateSession.mock.calls[0]).toEqual([
+        expect.objectContaining({ agent: 'codex', initialPrompt: 'Keep this draft' }),
+        'b-primary',
+      ]);
+      // A workspace switch must close the gate again, not reuse its old snapshot.
+      act(() => agorStore.getState().resetMaps());
+      expect((send as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(onCreateSession).toHaveBeenCalledTimes(1);
+      expect(input.value).toBe('Keep this draft');
+    }
+  );
+
   it('does not send twice while a send is in flight', async () => {
     let finish!: (result: { sessionId: string }) => void;
     const onCreateSession = vi.fn(
