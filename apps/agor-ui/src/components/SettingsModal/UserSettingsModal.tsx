@@ -2570,6 +2570,62 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     </ConfigProvider>
   );
 
+  // The phone layout: a section picker instead of the sider. Inside Settings
+  // the shell already supplies Back and Close.
+  const compactBody = (
+    <ConfigProvider theme={scopedTheme}>
+      <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+        <Flex
+          vertical
+          gap={token.marginSM}
+          style={{
+            padding: `${token.paddingSM}px ${token.paddingMD}px`,
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
+            background: token.colorBgElevated,
+            flex: '0 0 auto',
+          }}
+        >
+          <Flex align="center" justify="space-between" gap={token.marginSM}>
+            <div style={{ minWidth: 0 }}>{siderTitle}</div>
+            {!embedded && (
+              <Button
+                type="text"
+                icon={<CloseOutlined />}
+                aria-label="Close user settings"
+                disabled={saving}
+                onClick={requestClose}
+              />
+            )}
+          </Flex>
+          <Select
+            aria-label="User settings section"
+            showSearch
+            optionFilterProp="label"
+            value={activeInNav ? activeKey : undefined}
+            placeholder="Choose a settings section"
+            options={mobileSectionOptions}
+            onChange={setActiveKey}
+            style={{ width: '100%' }}
+            size="large"
+          />
+        </Flex>
+        <Content
+          style={{
+            padding: `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            minWidth: 0,
+            width: '100%',
+            maxWidth: '100%',
+            boxSizing: 'border-box',
+          }}
+        >
+          <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>{renderFormPanels()}</div>
+        </Content>
+      </Layout>
+    </ConfigProvider>
+  );
+
   // Drill-in mode for the Workspace Settings shell: no outer Modal. The editor
   // keeps its own panel-aware footer (ownsFooter) and publishes `dirty` for the
   // shell leave guard; the breadcrumb backs out via requestClose → onClose.
@@ -2583,7 +2639,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       >
         <Flex vertical style={{ height: '100%', minHeight: 0 }}>
           {hiddenForms}
-          <div style={{ flex: 1, minHeight: 0 }}>{desktopBody}</div>
+          <div style={{ flex: 1, minHeight: 0 }}>{compact ? compactBody : desktopBody}</div>
           <Space
             style={{
               width: '100%',
@@ -2614,57 +2670,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         styles={{ body: { padding: 0, overflow: 'hidden' } }}
       >
         {hiddenForms}
-        <ConfigProvider theme={scopedTheme}>
-          <Layout style={{ height: '100%', background: token.colorBgContainer }}>
-            <Flex
-              vertical
-              gap={token.marginSM}
-              style={{
-                padding: `${token.paddingSM}px ${token.paddingMD}px`,
-                borderBottom: `1px solid ${token.colorBorderSecondary}`,
-                background: token.colorBgElevated,
-                flex: '0 0 auto',
-              }}
-            >
-              <Flex align="center" justify="space-between" gap={token.marginSM}>
-                <div style={{ minWidth: 0 }}>{siderTitle}</div>
-                <Button
-                  type="text"
-                  icon={<CloseOutlined />}
-                  aria-label="Close user settings"
-                  disabled={saving}
-                  onClick={requestClose}
-                />
-              </Flex>
-              <Select
-                aria-label="User settings section"
-                showSearch
-                optionFilterProp="label"
-                value={activeInNav ? activeKey : undefined}
-                placeholder="Choose a settings section"
-                options={mobileSectionOptions}
-                onChange={setActiveKey}
-                style={{ width: '100%' }}
-                size="large"
-              />
-            </Flex>
-            <Content
-              style={{
-                padding: `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`,
-                overflowY: 'auto',
-                overflowX: 'hidden',
-                minWidth: 0,
-                width: '100%',
-                maxWidth: '100%',
-                boxSizing: 'border-box',
-              }}
-            >
-              <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>
-                {renderFormPanels()}
-              </div>
-            </Content>
-          </Layout>
-        </ConfigProvider>
+        {compactBody}
       </Drawer>
     );
   }
