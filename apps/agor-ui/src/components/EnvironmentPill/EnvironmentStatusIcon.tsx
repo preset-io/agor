@@ -13,13 +13,19 @@ interface EnvironmentStatusIconProps {
   state: EnvironmentInferredState;
   /** Icon font size in px. */
   size?: number;
+  /** An `error` whose command outcome Agor couldn't confirm; shown as a warning. */
+  unconfirmed?: boolean;
 }
 
 /**
  * Status icon for an environment's inferred state, shared by the environment
  * pill surfaces so they render the same iconography and spinner.
  */
-export function EnvironmentStatusIcon({ state, size = 12 }: EnvironmentStatusIconProps) {
+export function EnvironmentStatusIcon({
+  state,
+  size = 12,
+  unconfirmed,
+}: EnvironmentStatusIconProps) {
   const { token } = theme.useToken();
   switch (state) {
     case 'starting':
@@ -45,6 +51,9 @@ export function EnvironmentStatusIcon({ state, size = 12 }: EnvironmentStatusIco
         />
       );
     case 'error':
+      if (unconfirmed) {
+        return <WarningOutlined style={{ color: token.colorWarning, fontSize: size }} />;
+      }
       return <CloseCircleOutlined style={{ color: token.colorError, fontSize: size }} />;
     default:
       return <StopOutlined style={{ color: token.colorTextDisabled, fontSize: size }} />;

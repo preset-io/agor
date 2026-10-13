@@ -85,7 +85,8 @@ export interface BranchModalFormApi {
   canEditGeneral: boolean;
   canManagePolicy: boolean;
   canEditPermissions: boolean;
-  canControlEnvironment: boolean;
+  /** Undefined while access is loading or couldn't be loaded. */
+  canControlEnvironment: boolean | undefined;
 
   // Board-move validation: `board_id` is a Select of every board the caller
   // can VIEW, not just the ones they can attach a branch to, so a selection
@@ -358,7 +359,12 @@ export function useBranchModalForm({
   const canManagePolicy = Boolean(
     capabilityPolicy && (isSuperAdmin || effectiveAccess?.can === 'all' || isPrimaryOwner)
   );
-  const canControlEnvironment = canManagePolicy;
+  // Mirrors the daemon's environment rule: admin, or effective `all` on the branch.
+  const canControlEnvironment = hasMinimumRole(currentUser?.role, ROLES.ADMIN)
+    ? true
+    : permissionsLoading || permissionsLoadError || !effectiveAccess
+      ? undefined
+      : effectiveAccess.can === 'all';
   const canViewPermissions = Boolean(capabilityPolicy);
   const canEditGeneral = canManagePolicy;
   // Every authenticated viewer may author their own personal session-sharing

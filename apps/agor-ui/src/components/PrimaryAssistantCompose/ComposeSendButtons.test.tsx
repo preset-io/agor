@@ -1,6 +1,7 @@
 import type { Branch } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { Tooltip } from 'antd';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ComposeSendButtons } from './ComposeSendButtons';
 
 const ada = {
@@ -10,6 +11,8 @@ const ada = {
 } as unknown as Branch;
 
 describe('ComposeSendButtons', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('names both actions in the full layout', () => {
     const onSend = vi.fn();
     render(<ComposeSendButtons branch={ada} submitting={null} onSend={onSend} />);
@@ -31,6 +34,29 @@ describe('ComposeSendButtons', () => {
 
     fireEvent.click(background);
     expect(onSend).toHaveBeenLastCalledWith('background');
+  });
+
+  it('skips the hover tooltips on touch screens, where they would stick after a tap', async () => {
+    // A touch screen: no media query matches, so there is no hover.
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...matchMedia(query),
+      matches: false,
+    }));
+    render(
+      <>
+        <ComposeSendButtons branch={ada} submitting={null} onSend={vi.fn()} />
+        <Tooltip title="Control tooltip">
+          <span>control</span>
+        </Tooltip>
+      </>
+    );
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send in background' }));
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send & open' }));
+    fireEvent.mouseEnter(screen.getByText('control'));
+    // Hovered last, so once it shows, any send tooltip would have shown too.
+    await screen.findByText('Control tooltip');
+    expect(screen.getAllByRole('tooltip')).toHaveLength(1);
   });
 
   it('disables both compact buttons while a send is in flight', () => {

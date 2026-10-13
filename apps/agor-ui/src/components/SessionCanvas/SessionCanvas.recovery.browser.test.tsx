@@ -79,19 +79,24 @@ it('board primary excluded from the canvas still exposes recovery in its panel',
   );
   const view = render(compose(branch));
   expect(view.container.querySelector(`[data-id="${branch.branch_id}"]`)).toBeNull();
-  fireEvent.click(await screen.findByRole('button', { name: 'Recover' }));
+  expect(
+    await screen.findByText(
+      "This branch's files aren't available. Restore them to start a session."
+    )
+  ).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Restore files' }));
   await waitFor(() => expect(create).toHaveBeenCalledWith({}));
   expect(service).toHaveBeenCalledWith(`branches/${branch.branch_id}/retry-provisioning`);
   view.rerender(
     compose({ ...branch, filesystem_status: 'creating', provisioning_operation: 'restore' })
   );
-  expect(await screen.findByText('Filesystem recovery in progress')).toBeVisible();
-  expect(screen.queryByRole('button', { name: 'Recover' })).toBeNull();
+  expect(await screen.findByText("Agor is restoring this branch's files…")).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Restore files' })).toBeNull();
   view.rerender(
     compose({ ...branch, filesystem_status: 'creating', provisioning_operation: 'create' })
   );
-  expect(await screen.findByText('Filesystem provisioning in progress')).toBeVisible();
-  expect(screen.queryByText('Filesystem recovery in progress')).toBeNull();
+  expect(await screen.findByText('Agor is setting up this branch…')).toBeVisible();
+  expect(screen.queryByText("Agor is restoring this branch's files…")).toBeNull();
   view.rerender(
     compose({
       ...branch,
@@ -100,14 +105,11 @@ it('board primary excluded from the canvas still exposes recovery in its panel',
       error_message: 'Template fetch failed',
     })
   );
-  expect(await screen.findByText(/Ask a workspace admin to check/)).toBeVisible();
-  const summary = screen.getByText('Technical details');
-  const details = summary.closest('details')!;
-  expect(details).not.toHaveAttribute('open');
-  await userEvent.click(summary);
-  expect(details).toHaveAttribute('open');
-  expect((await screen.findAllByText('Template fetch failed'))[0]).toBeVisible();
-  expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible();
+  expect(await screen.findByText("Agor couldn't set up your teammate's workspace.")).toBeVisible();
+  expect(screen.queryByText('Template fetch failed')).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: 'Details' }));
+  expect(await screen.findByText('Template fetch failed')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeVisible();
   view.rerender(
     compose({
       ...branch,
@@ -116,10 +118,8 @@ it('board primary excluded from the canvas still exposes recovery in its panel',
       error_message: 'Repair Git linkage',
     })
   );
-  expect(screen.queryByText('Technical details')).toBeNull();
-  expect(screen.queryByText(/Ask a workspace admin to check/)).toBeNull();
-  expect((await screen.findAllByText('Repair Git linkage'))[0]).toBeVisible();
-  expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible();
+  expect(await screen.findByText("Agor couldn't restore this branch's files.")).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeVisible();
   view.rerender(compose({ ...branch, filesystem_status: 'ready' }));
-  expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
 });

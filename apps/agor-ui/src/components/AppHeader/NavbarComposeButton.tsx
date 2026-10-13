@@ -1,23 +1,14 @@
 import type { AgenticToolName, AgorClient, Branch, User } from '@agor-live/client';
 import { DEFAULT_AGENTIC_TOOL_NAME } from '@agor-live/client';
 import { BulbOutlined, CloseOutlined, EditOutlined, RobotOutlined } from '@ant-design/icons';
-import {
-  Alert,
-  App as AntApp,
-  Button,
-  Flex,
-  Form,
-  Popover,
-  Spin,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Button, Flex, Form, Popover, Spin, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { useConnectionState, useMutationGate } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
+import { useThemedMessage } from '../../utils/message';
 import { resolveSessionMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
 import { DEFAULT_TEAMMATE_EMOJI, teammateEmoji, teammateLabel } from '../../utils/teammateLabels';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
@@ -30,6 +21,7 @@ import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { ComposeSendButtons, usePrimaryAssistantSend } from '../PrimaryAssistantCompose';
+import { PrimaryLookupFailedNotice } from '../PrimaryAssistantCompose/PrimaryLookupFailedNotice';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { SessionComposerDropZone } from '../SessionPanel/SessionComposerDropZone';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
@@ -68,7 +60,9 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   disabled = false,
 }) => {
   const { token } = theme.useToken();
-  const { message } = AntApp.useApp();
+  const { showError } = useThemedMessage();
+  const mutationGate = useMutationGate();
+  const { connected } = useConnectionState();
   const [form] = Form.useForm();
 
   const mcpServerById = useAgorStore(selectMcpServerById);
@@ -86,7 +80,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     useComposerAttachments({
       sessionId: null,
       scopeKey: `navbar:${currentUser?.user_id ?? 'anonymous'}`,
-      showError: (msg) => message.error(msg),
+      showError,
     });
 
   const hasContent = prompt.trim().length > 0 || attachments.length > 0;
@@ -108,6 +102,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     setPrimaryBranch,
     resolving,
     resolveFailed,
+    retryResolve,
     pendingSend,
     clearPendingSend,
     submitting,
@@ -230,11 +225,10 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
           <Spin />
         </Flex>
       ) : resolveFailed ? (
-        <Alert
-          type="error"
-          showIcon
-          message="Couldn't load your primary assistant"
-          description="Check the connection and reopen this composer to retry."
+        <PrimaryLookupFailedNotice
+          connected={connected}
+          retrying={resolving}
+          onRetry={() => void retryResolve()}
         />
       ) : (
         <Form form={form} layout="vertical" requiredMark={false}>
@@ -351,21 +345,24 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
       destroyTooltipOnHide
       content={content}
     >
-      <Tooltip title="Start quick session">
-        <Button
-          type="default"
-          aria-label="Compose — ask your primary assistant"
-          disabled={disabled}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: token.marginXXS,
-          }}
-        >
-          <span style={{ fontSize: token.fontSize, lineHeight: 1 }}>{triggerEmoji}</span>
-          <EditOutlined style={{ fontSize: token.fontSizeLG }} />
-        </Button>
+      <Tooltip title={(disabled && mutationGate.message) || 'Start quick session'}>
+        {/* A disabled button fires no hover events, so the wrapper carries the tooltip. */}
+        <span style={{ display: 'inline-flex' }}>
+          <Button
+            type="default"
+            aria-label="Compose — ask your primary assistant"
+            disabled={disabled}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: token.marginXXS,
+            }}
+          >
+            <span style={{ fontSize: token.fontSize, lineHeight: 1 }}>{triggerEmoji}</span>
+            <EditOutlined style={{ fontSize: token.fontSizeLG }} />
+          </Button>
+        </span>
       </Tooltip>
     </Popover>
   );

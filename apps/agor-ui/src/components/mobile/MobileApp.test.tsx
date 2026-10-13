@@ -2,9 +2,11 @@ import { DEFAULT_AGENTIC_TOOL_NAME } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { ThemeProvider } from '../../contexts/ThemeContext';
 import { agorStore } from '../../store/agorStore';
 import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { OPEN_CREATE_FLOW_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { MobileApp } from './MobileApp';
 
@@ -30,7 +32,6 @@ vi.mock('../BranchModal', () => ({
   },
 }));
 
-vi.mock('./MobileNavTree', () => ({ MobileNavTree: () => null }));
 // Home is the shared HomePage (covered by its own suites); these cases drive the tab-bar Ask.
 vi.mock('../HomePage', () => ({ HomePage: () => null }));
 
@@ -185,11 +186,11 @@ describe('MobileApp branch actions', () => {
     const onSessionClick = branchModalProps.onSessionClick as (id: string) => void;
     act(() => onSessionClick('session-9'));
 
-    // Sheet closes and the session opens on its own /m route, a full-screen sub-view with no tab bar.
+    // Sheet closes and the session opens on its own full-screen /m route. The
+    // docked tab bar stays visible on the sub-view (Ask remains reachable).
     expect(screen.queryByTestId('branch-sheet')).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: 'Ask your primary assistant' })
-    ).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-page')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
   });
 
   it('renders board content under the /m/* descendant route', () => {
@@ -215,11 +216,12 @@ describe('MobileApp branch actions', () => {
     expect(screen.getByRole('button', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('hides the tab bar on a full-screen session detail route', () => {
+  it('keeps the docked tab bar on a full-screen session detail route', () => {
     renderMobileApp('/m/session/session-1');
-    expect(
-      screen.queryByRole('button', { name: 'Ask your primary assistant' })
-    ).not.toBeInTheDocument();
+    // The bar is visible on every /m screen; on a sub-view no tab is force-active.
+    expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Home' })).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('button', { name: 'Board' })).not.toHaveAttribute('aria-current');
   });
 
   it('surfaces the shared connect-AI banner on Home', () => {
@@ -347,6 +349,39 @@ describe('MobileApp branch actions', () => {
     expect(teammatePicker.props).toMatchObject({ authenticationGeneration: 4 });
   });
 
+  it('opens the shared create-teammate flow from the Ask sheet, as desktop does', async () => {
+    const onOpenWorkspaceSettings = vi.fn();
+    const client = { service: () => ({ getPrimaryTeammate: async () => null }) };
+    render(
+      mobileAppTree('/m', {
+        client,
+        user: { user_id: 'user-1', role: 'member' },
+        onOpenWorkspaceSettings,
+      })
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create a new teammate' }));
+    expect(await screen.findByText('New AI teammate')).toBeInTheDocument();
+    // Not the Settings teammates tab, whose create button the phone shell had left unwired.
+    expect(onOpenWorkspaceSettings).not.toHaveBeenCalled();
+  });
+
+  it('offers no create link to viewers, who cannot create teammates', async () => {
+    const client = { service: () => ({ getPrimaryTeammate: async () => null }) };
+    render(mobileAppTree('/m', { client, user: { user_id: 'user-1', role: 'viewer' } }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    await screen.findByTestId('teammate-picker');
+    expect(screen.queryByRole('button', { name: 'Create a new teammate' })).not.toBeInTheDocument();
+  });
+
+  it("opens the shared create-teammate flow for Settings' Create AI teammate", async () => {
+    render(mobileAppTree('/m', { user: { user_id: 'user-1', role: 'member' } }));
+    act(() => requestShellPicker(OPEN_CREATE_FLOW_EVENT, 'teammate'));
+    expect(await screen.findByText('New AI teammate')).toBeInTheDocument();
+  });
+
   it('starts Ask sessions with the caller saved agent defaults, like desktop quick compose', async () => {
     const onCreateSession = vi.fn(async () => null);
     const client = primaryClient;
@@ -378,5 +413,74 @@ describe('MobileApp branch actions', () => {
       }),
       'board-1',
     ]);
+  });
+});
+
+const ONLINE = {
+  connected: true,
+  connecting: false,
+  authGeneration: 1,
+  outOfSync: false,
+  capturedSha: null as string | null,
+  currentSha: null as string | null,
+};
+
+describe('MobileApp connection banner', () => {
+  it.each([
+    {
+      state: { connected: false, connecting: true },
+      text: 'Reconnecting to Agor…',
+      action: 'Reconnect',
+    },
+    {
+      state: { connected: false },
+      text: "Lost connection to Agor. You can't make changes until it's back.",
+      action: 'Reconnect',
+    },
+    {
+      state: { outOfSync: true, capturedSha: 'abc123', currentSha: 'def456' },
+      text: "Agor was updated since this tab opened. Reload to get the latest version, but anything you haven't saved will be lost. (abc123 → def456)",
+      action: 'Reload page',
+    },
+  ])('shows "$text"', ({ state, text, action }) => {
+    const onRetryConnection = vi.fn();
+    render(
+      <ConnectionProvider value={{ ...ONLINE, ...state }}>
+        {mobileAppTree('/m', { onRetryConnection })}
+      </ConnectionProvider>
+    );
+    expect(screen.getByText(text)).toBeInTheDocument();
+    if (action) expect(screen.getByRole('button', { name: action })).toBeInTheDocument();
+    if (action === 'Reconnect') {
+      fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+      expect(onRetryConnection).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('shows nothing while connected', () => {
+    render(<ConnectionProvider value={ONLINE}>{mobileAppTree('/m', {})}</ConnectionProvider>);
+    expect(screen.queryByText(/Agor/)).not.toBeInTheDocument();
+  });
+});
+
+describe('MobileApp Ask with a failed primary lookup', () => {
+  it('reports the failure instead of offering the picker, and Try again starts the session', async () => {
+    const getPrimaryTeammate = vi.fn().mockRejectedValue(new Error('Request timed out'));
+    const onCreateSession = vi.fn(async () => ({ sessionId: 'session-new' }));
+    const client = { service: () => ({ getPrimaryTeammate }) };
+    render(
+      <ConnectionProvider value={ONLINE}>
+        {mobileAppTree('/m', { client, user: { user_id: 'user-1' }, onCreateSession })}
+      </ConnectionProvider>
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+
+    expect(await screen.findByText("Couldn't load your primary assistant.")).toBeInTheDocument();
+    expect(screen.queryByTestId('teammate-picker')).not.toBeInTheDocument();
+
+    getPrimaryTeammate.mockResolvedValue(primaryBranch);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
   });
 });

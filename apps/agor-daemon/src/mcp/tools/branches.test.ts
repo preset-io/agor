@@ -6,6 +6,10 @@ import { InMemoryTransport, McpServer, type ServerContext } from '@modelcontextp
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DrizzleService, type Repository } from '../../adapters/drizzle.js';
 import { loadBranch } from '../../utils/branch-authorization.js';
+import {
+  type McpPromptProvenanceStamp,
+  resolvePromptProvenance,
+} from '../../utils/prompt-provenance.js';
 import { registerBranchTools } from './branches.js';
 
 vi.mock('../../utils/executor-delegated-home.js', () => ({
@@ -1892,6 +1896,94 @@ describe('agor_branches_set_zone', () => {
     expect(findByBranchId).not.toHaveBeenCalled();
     expect(boardObjectsPatch).not.toHaveBeenCalled();
     expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('labels the always_new trigger prompt with its tool and keeps the trusted stamp', async () => {
+    const stamp = {
+      authenticated_by: 'session_token' as const,
+      origin_user_id: 'user-1',
+      origin_user_label: 'user@example.test',
+      origin_session_id: '01a0d369-82f3-7458-8265-861a4752b7b2',
+      origin_branch_id: 'branch-origin',
+      origin_agentic_tool: 'claude-code',
+    };
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+      _promptProvenance: stamp,
+    };
+    const branch = { branch_id: 'branch-1', board_id: 'board-1', name: 'branch-1' };
+    const zone = {
+      type: 'zone',
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 400,
+      label: 'Review',
+      trigger: { template: 'Review {{branch.name}}', behavior: 'always_new' },
+    };
+    const promptCreate = vi.fn(async () => ({ task_id: 'task-1', status: 'running' }));
+    const app = {
+      get: () => ({}),
+      service(name: string) {
+        if (name === 'branches') return { get: vi.fn(async () => branch) };
+        if (name === 'boards') {
+          return {
+            get: vi.fn(async () => ({ board_id: 'board-1', objects: { 'zone-review': zone } })),
+          };
+        }
+        if (name === 'board-objects') {
+          return {
+            findByBranchId: vi.fn(async () => null),
+            create: vi.fn(async (data: Record<string, unknown>) => ({
+              object_id: 'obj-1',
+              ...data,
+            })),
+          };
+        }
+        if (name === 'users') return { get: vi.fn(async () => ({ user_id: 'user-1' })) };
+        if (name === 'sessions') {
+          return {
+            create: vi.fn(async () => ({ session_id: 'session-new', agentic_tool: 'claude-code' })),
+          };
+        }
+        if (name === '/sessions/:id/prompt') return { create: promptCreate };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+
+    const setZone = registerAndCaptureHandler('agor_branches_set_zone', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+    await setZone({ branchId: 'branch-1', zoneId: 'zone-review' });
+
+    expect(promptCreate).toHaveBeenCalledOnce();
+    const [data, params] = promptCreate.mock.calls[0] as unknown as [
+      { prompt: string },
+      { provider?: string; _promptProvenance?: McpPromptProvenanceStamp },
+    ];
+    expect(params.provider).toBeUndefined();
+    expect(params._promptProvenance).toEqual({
+      ...stamp,
+      tool: 'agor_branches_set_zone',
+      mode: 'always_new',
+    });
+
+    // What the prompt route would admit from exactly these params.
+    const admitted = resolvePromptProvenance({
+      stamp: params._promptProvenance as McpPromptProvenanceStamp,
+      body: data.prompt,
+      escapedSentinels: 0,
+    });
+    expect(admitted.metadata).toMatchObject({
+      origin_session_id: stamp.origin_session_id,
+      tool: 'agor_branches_set_zone',
+      mode: 'always_new',
+    });
+    expect(admitted.prompt).toContain('via agor_branches_set_zone (always_new)');
   });
 });
 

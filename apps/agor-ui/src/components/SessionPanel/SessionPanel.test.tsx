@@ -547,7 +547,7 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
       } as unknown as AgorClient,
       activeSession: { ...session, status: 'stopping', agentic_tool: 'codex' },
     });
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry cleanup' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     expect(await screen.findByText(message as string)).toBeVisible();
     expect(create).toHaveBeenCalledOnce();
   });
@@ -576,7 +576,7 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     });
 
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry cleanup' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
     fireEvent.click(await screen.findByRole('button', { name: 'Reopen anyway…' }));
 
     const dialog = within(
@@ -645,9 +645,9 @@ describe.each([390, 1280])('shared Stop path at %ipx', (width) => {
     // Proves the width actually selected the shell, so this cannot quietly run the desktop path twice.
     const closeLabel = viewport.isMobile ? 'Close' : 'Close panel';
     expect(screen.getByRole('button', { name: closeLabel })).toBeInTheDocument();
-    // Text lookup avoids jsdom's CSS-variable shorthand bug in accessible-name
+    // Label lookup avoids jsdom's CSS-variable shorthand bug in accessible-name
     // calculation; real-browser QA covers the visible button and touch target.
-    const stop = screen.getByText('Stop').closest('button')!;
+    const stop = screen.getByLabelText('Stop');
     fireEvent.click(stop);
     fireEvent.click(stop);
     expect(stop).toBeDisabled();

@@ -128,6 +128,7 @@ import {
   type LatestSessionUpdateRequests,
   runSessionUpdateWithLatestNotification,
 } from './utils/sessionUpdateNotifications';
+import { OPEN_CREATE_FLOW_EVENT, requestShellPicker } from './utils/shellEvents';
 import { getRouterBasename, isMobileShellPath } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
@@ -2120,6 +2121,15 @@ function AppContent() {
             onDeleteGatewayChannel={handleDeleteGatewayChannel}
             onUpdateArtifact={handleUpdateArtifact}
             onDeleteArtifact={handleDeleteArtifact}
+            // As on desktop: member-only; close Settings, then the shared create-teammate flow (owned by MobileApp).
+            onCreateTeammate={
+              hasMinimumRole(currentUser?.role, ROLES.MEMBER)
+                ? () => {
+                    handleSettingsClose();
+                    requestShellPicker(OPEN_CREATE_FLOW_EVENT, 'teammate');
+                  }
+                : undefined
+            }
             branchStorageConfig={featuresConfig?.branchStorage}
           />
         )}
@@ -2248,6 +2258,7 @@ function AppContent() {
                   onToggleReaction={handleToggleReaction}
                   onDeleteComment={handleDeleteComment}
                   onLogout={logout}
+                  onRetryConnection={retryConnection}
                   externalAppLink={headerInstanceConfig?.externalAppLink}
                   externalAppLabel={headerInstanceConfig?.externalAppLabel}
                   onOpenWorkspaceSettings={setSettingsTabToOpen}
@@ -2260,6 +2271,7 @@ function AppContent() {
                   onUpdateRepo={handleUpdateRepo}
                   onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
                   onExecuteScheduleNow={handleExecuteScheduleNow}
+                  onUpdateBoard={handleUpdateBoard}
                 />
               }
             />

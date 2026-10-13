@@ -400,6 +400,41 @@ describe('SessionPanel composer send', () => {
     expect(screen.getByLabelText('Preview user-b.txt')).toBeInTheDocument();
   });
 
+  it('drops the sent prompt but keeps text typed on while admission was pending', async () => {
+    const send = deferred<boolean>();
+    const onSendPrompt = vi.fn().mockReturnValue(send.promise);
+    renderSessionPanel({ onSendPrompt });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+
+    fireEvent.change(textarea, { target: { value: 'First prompt' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledOnce());
+    fireEvent.change(textarea, { target: { value: 'First prompt\nand a follow-up' } });
+    await act(async () => {
+      send.resolve(true);
+    });
+
+    expect(textarea).toHaveValue('and a follow-up');
+    await waitFor(() => expect(getPromptDraft('user-a', 'session-1')).toBe('and a follow-up'));
+  });
+
+  it('keeps an edited prompt intact when admission completes', async () => {
+    const send = deferred<boolean>();
+    const onSendPrompt = vi.fn().mockReturnValue(send.promise);
+    renderSessionPanel({ onSendPrompt });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+
+    fireEvent.change(textarea, { target: { value: 'First prompt' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledOnce());
+    fireEvent.change(textarea, { target: { value: 'First draft, rewritten' } });
+    await act(async () => {
+      send.resolve(true);
+    });
+
+    expect(textarea).toHaveValue('First draft, rewritten');
+  });
+
   it('ignores a rapid second send while the first attachment upload is still in flight', async () => {
     const upload = deferred<UploadFilesToSessionResult>();
     const onSendPrompt = vi.fn();

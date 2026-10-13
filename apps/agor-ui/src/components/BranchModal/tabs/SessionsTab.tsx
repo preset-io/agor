@@ -1,4 +1,10 @@
-import type { AgorClient, Branch, Session, SessionID } from '@agor-live/client';
+import {
+  type AgorClient,
+  type Branch,
+  type Session,
+  type SessionID,
+  SessionStatus,
+} from '@agor-live/client';
 import { EyeInvisibleOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
 import {
   Badge,
@@ -16,11 +22,32 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
-import { getSessionStatusTone } from '../../../utils/sessionStatus';
+import { getSessionStatusLabel, READY_STATUS } from '../../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 import { ArchiveIcon } from '../../ArchiveButton';
-import { TaskStatusIcon } from '../../TaskStatusIcon';
+import { StatusPill } from '../../Pill';
+import { getSessionStatusPresentation } from '../../Pill/SessionStatusIcon';
 import { ToolIcon } from '../../ToolIcon/ToolIcon';
+
+const READY_FILTER = 'ready';
+
+/** Idle sessions ready for a prompt show as "Ready", so they filter as Ready, not Idle. */
+const getStatusFilterValue = (session: Session): string =>
+  session.status === SessionStatus.IDLE && session.ready_for_prompt ? READY_FILTER : session.status;
+
+const STATUS_FILTERS = [
+  { text: READY_STATUS.label, value: READY_FILTER },
+  ...[
+    SessionStatus.IDLE,
+    SessionStatus.RUNNING,
+    SessionStatus.COMPLETED,
+    SessionStatus.FAILED,
+    SessionStatus.AWAITING_PERMISSION,
+    SessionStatus.AWAITING_INPUT,
+    SessionStatus.TIMED_OUT,
+    SessionStatus.STOPPING,
+  ].map((status) => ({ text: getSessionStatusLabel(status), value: status })),
+];
 
 interface SessionsTabProps {
   branch: Branch;
@@ -266,7 +293,8 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
           title.toLowerCase().includes(lower) ||
           s.session_id.toLowerCase().includes(lower) ||
           s.agentic_tool.toLowerCase().includes(lower) ||
-          s.status.toLowerCase().includes(lower)
+          s.status.toLowerCase().includes(lower) ||
+          getSessionStatusPresentation(s).label.toLowerCase().includes(lower)
         );
       });
     }
@@ -317,25 +345,10 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
     {
       title: 'Status',
       key: 'status',
-      width: 130,
-      render: (_, session) => (
-        <Space size={4}>
-          <TaskStatusIcon status={session.status} size={14} />
-          <Tag color={getSessionStatusTone(session.status)} style={{ margin: 0, fontSize: 11 }}>
-            {session.status}
-          </Tag>
-        </Space>
-      ),
-      filters: [
-        { text: 'Idle', value: 'idle' },
-        { text: 'Running', value: 'running' },
-        { text: 'Completed', value: 'completed' },
-        { text: 'Failed', value: 'failed' },
-        { text: 'Awaiting Permission', value: 'awaiting_permission' },
-        { text: 'Awaiting Input', value: 'awaiting_input' },
-        { text: 'Timed Out', value: 'timed_out' },
-      ],
-      onFilter: (value, record) => record.status === value,
+      width: 190,
+      render: (_, session) => <StatusPill session={session} style={{ margin: 0 }} />,
+      filters: STATUS_FILTERS,
+      onFilter: (value, record) => getStatusFilterValue(record) === value,
     },
     {
       title: 'Created',

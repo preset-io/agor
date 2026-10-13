@@ -43,6 +43,7 @@ import {
   EMPTY_COLLAPSED_BRANCH_NODES,
   setCollapsedBranchNode,
 } from '../../utils/collapsedBranchNodes';
+import { formatActionError } from '../../utils/connectionErrors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { useThemedMessage } from '../../utils/message';
 import {
@@ -597,8 +598,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         enabled,
         disabled: connectionDisabled || !client,
         tooltip: enabled
-          ? 'Callbacks linked — click to stop callback notifications while keeping the relationship'
-          : 'Callbacks unlinked — click to resume callback notifications for this relationship',
+          ? 'Callbacks on. Click to stop notifications but keep the link.'
+          : 'Callbacks off. Click to turn notifications back on.',
       };
     },
     [client, connectionDisabled, getCallbackRelationship, getCallbackTargetId]
@@ -626,10 +627,12 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             enabled: nextEnabled,
           },
         });
-        showSuccess(nextEnabled ? 'Callbacks linked' : 'Callbacks unlinked');
+        showSuccess(nextEnabled ? 'Callbacks linked.' : 'Callbacks unlinked.');
       } catch (error) {
         showError(
-          `Failed to update callbacks: ${error instanceof Error ? error.message : String(error)}`
+          formatActionError(nextEnabled ? 'link callbacks' : 'unlink callbacks', error, {
+            idempotent: true,
+          })
         );
       }
     },
@@ -1386,7 +1389,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 e.stopPropagation();
                 onCreateSession(branch.branch_id);
               }}
-              title={isCreating ? 'Branch is being created...' : undefined}
+              title={isCreating ? 'Agor is setting up this branch…' : undefined}
               style={
                 isMobileViewport
                   ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
@@ -1578,32 +1581,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
             marginTop: 8,
           }}
         >
-          {isCreating ? (
-            <Typography.Text type="secondary">Creating branch on filesystem...</Typography.Text>
-          ) : isFailed ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center' }}>
-              <Typography.Text type="danger" strong>
-                Branch creation failed
-              </Typography.Text>
-              {branch.error_message && (
-                <Tooltip title={branch.error_message} placement="bottom">
-                  <Typography.Text
-                    type="secondary"
-                    style={{
-                      fontSize: 12,
-                      maxWidth: 220,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      cursor: 'help',
-                    }}
-                  >
-                    {branch.error_message}
-                  </Typography.Text>
-                </Tooltip>
-              )}
-            </div>
-          ) : onCreateSession ? (
+          {/* Setup state is told once, by the branch's status notice. */}
+          {isCreating || isFailed ? null : onCreateSession ? (
             <Button
               type="primary"
               icon={<PlusOutlined />}

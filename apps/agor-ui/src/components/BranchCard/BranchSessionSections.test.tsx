@@ -201,9 +201,9 @@ describe('BranchSessionSections', () => {
     renderSections({ sessions: [failedSession] });
 
     expect(screen.getByText('Investigate crash')).toBeInTheDocument();
-    expect(screen.getByLabelText('Latest task failed')).toBeInTheDocument();
+    expect(screen.getByLabelText('Last run failed')).toBeInTheDocument();
     expect(
-      screen.getByLabelText('Open session Investigate crash; latest task failed')
+      screen.getByLabelText('Open session Investigate crash; last run failed')
     ).toBeInTheDocument();
   });
 
@@ -216,7 +216,7 @@ describe('BranchSessionSections', () => {
     renderSections({ sessions: [stoppedSession] });
 
     expect(screen.getByText('Stopped by user')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Latest task failed')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Last run failed')).not.toBeInTheDocument();
   });
 
   it('counts and renders only visible manual sessions when archived ancestors are filtered out', () => {
