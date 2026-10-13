@@ -9,6 +9,8 @@
 import type { Locator, Page } from '@playwright/test';
 
 const HEADER = 64;
+/** The board's left rail (panel tabs and canvas tools). */
+const RAIL = 110;
 
 async function union(nodes: Locator[]) {
   const boxes = (await Promise.all(nodes.map((n) => n.boundingBox()))).filter(
@@ -34,28 +36,30 @@ export async function frameNodes(
   const margin = options.margin ?? 60;
   const view = page.viewportSize() ?? { width: 1920, height: 1080 };
   const target = {
-    x: margin,
+    x: RAIL + margin,
     y: HEADER + margin,
-    w: view.width - 2 * margin,
+    w: view.width - RAIL - 2 * margin,
     h: view.height - HEADER - 2 * margin,
   };
-  for (let i = 0; i < (options.maxZoomSteps ?? 24); i++) {
+  // Zoom first (React Flow caps each Ctrl+wheel step at a few percent, so
+  // step until the scale is right), then pan the center into place.
+  for (let i = 0; i < (options.maxZoomSteps ?? 120); i++) {
     const box = await union(nodes);
     const scale = Math.min(target.w / box.w, target.h / box.h);
-    const cx = box.x + box.w / 2;
-    const cy = box.y + box.h / 2;
-    const dx = target.x + target.w / 2 - cx;
-    const dy = target.y + target.h / 2 - cy;
-    if (Math.abs(Math.log(scale)) < 0.02 && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
-    if (Math.abs(Math.log(scale)) >= 0.02) {
-      await page.mouse.move(cx, cy);
-      await page.keyboard.down('Control');
-      await page.mouse.wheel(0, -Math.log2(scale) / 0.02);
-      await page.keyboard.up('Control');
-    } else {
-      await page.mouse.move(view.width / 2, view.height / 2);
-      await page.mouse.wheel(-dx / 0.5, -dy / 0.5);
-    }
-    await page.waitForTimeout(250);
+    if (Math.abs(Math.log(scale)) < 0.015) break;
+    await page.mouse.move(box.x + box.w / 2, box.y + box.h / 2);
+    await page.keyboard.down('Control');
+    await page.mouse.wheel(0, scale > 1 ? -40 : 40);
+    await page.keyboard.up('Control');
+    await page.waitForTimeout(60);
+  }
+  for (let i = 0; i < 12; i++) {
+    const box = await union(nodes);
+    const dx = target.x + target.w / 2 - (box.x + box.w / 2);
+    const dy = target.y + target.h / 2 - (box.y + box.h / 2);
+    if (Math.abs(dx) < 4 && Math.abs(dy) < 4) break;
+    await page.mouse.move(view.width / 2, view.height / 2);
+    await page.mouse.wheel(-dx / 0.5, -dy / 0.5);
+    await page.waitForTimeout(200);
   }
 }

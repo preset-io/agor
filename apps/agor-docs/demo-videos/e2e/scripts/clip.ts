@@ -166,7 +166,16 @@ function exportClip(clip: ClipMeta, open: boolean, pace?: 'snappy'): void {
       e.type === 'click' && ready && e.wall >= ready.wall ? [[sec(e.wall), e.x, e.y]] : []
     );
     if (pointer.length === 0) return;
-    writeFileSync(path.join(outDir, file), `${JSON.stringify({ pointer, clicks })}\n`);
+    // Per-actor paths too, when a take logs several (puppeted drags, one
+    // cursor per card); `pointer`/`clicks` above are everyone's together.
+    const tracks: Record<string, { pointer: number[][]; clicks: number[][] }> = {};
+    for (const e of events) {
+      if ((e.type !== 'pointer' && e.type !== 'click') || !ready || e.wall < ready.wall) continue;
+      tracks[e.actor] ??= { pointer: [], clicks: [] };
+      const track = tracks[e.actor];
+      (e.type === 'pointer' ? track.pointer : track.clicks).push([sec(e.wall), e.x, e.y]);
+    }
+    writeFileSync(path.join(outDir, file), `${JSON.stringify({ pointer, clicks, tracks })}\n`);
   };
   const stills = events.flatMap((e) => (e.type === 'still' ? [e] : []));
   if (stills.length > 0) {

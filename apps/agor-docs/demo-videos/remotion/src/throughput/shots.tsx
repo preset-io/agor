@@ -51,7 +51,15 @@ export interface ShotSpec {
   keys: Key[];
   /** The box, or a function of seconds into the shot (to snap or swing it). */
   box: Box | ((t: number) => Box);
+  /** Sharp typing stills laid over the input they show, from composition second `at`. */
+  typing?: { stills: Stills; at: number };
 }
+
+/**
+ * Full screen, with a little bleed so a slight tilt never shows an edge.
+ * `rot` drifts by at most a degree: interest, not swimming.
+ */
+export const full = (rot = 0): Box => ({ x: -30, y: -18, w: 1980, h: 1116, rot });
 
 export const shotSeconds = (s: ShotSpec) => (s.to - s.from) / s.rate;
 export const shotEnd = (s: ShotSpec) => s.start + shotSeconds(s);
@@ -107,8 +115,10 @@ export const Frame: React.FC<{
   children: React.ReactNode;
   glow?: string;
   radius?: number;
+  /** No border, glow or rounding (full-screen shots). */
+  bare?: boolean;
   style?: React.CSSProperties;
-}> = ({ box, children, glow = '#34e6c4', radius = 18, style }) => (
+}> = ({ box, children, glow = '#34e6c4', radius = 18, bare, style }) => (
   <div
     style={{
       position: 'absolute',
@@ -118,9 +128,9 @@ export const Frame: React.FC<{
       height: box.h,
       rotate: `${box.rot}deg`,
       overflow: 'hidden',
-      borderRadius: radius,
+      borderRadius: bare ? 0 : radius,
       background: '#0d1312',
-      boxShadow: `0 0 0 2px ${glow}66, 0 40px 90px rgba(0,0,0,0.6)`,
+      boxShadow: bare ? undefined : `0 0 0 2px ${glow}66, 0 40px 90px rgba(0,0,0,0.6)`,
       ...style,
     }}
   >
@@ -133,8 +143,10 @@ export const Shot: React.FC<{
   spec: ShotSpec;
   glow?: string;
   tail?: number;
+  /** Cross in over this many seconds (0: a hard cut). */
+  fadeIn?: number;
   style?: React.CSSProperties;
-}> = ({ spec, glow, tail = 0.4, style }) => {
+}> = ({ spec, glow, tail = 0.4, fadeIn = 0, style }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps; // seconds into the shot (inside its Sequence)
@@ -142,8 +154,15 @@ export const Shot: React.FC<{
   const src = spec.from + Math.min(t, seconds) * spec.rate;
   const box = boxAt(spec, t);
   const cam = camAt(spec.keys, src, box);
+  const typing = spec.typing;
+  const still = typing ? stillAt(typing.stills, spec.start + t - typing.at) : 0;
   return (
-    <Frame box={box} glow={glow} style={style}>
+    <Frame
+      box={box}
+      glow={glow}
+      bare={box.w >= 1920}
+      style={{ opacity: fadeIn > 0 ? interpolate(t, [0, fadeIn], [0, 1], clamp) : 1, ...style }}
+    >
       <div
         style={{
           position: 'absolute',
@@ -176,6 +195,19 @@ export const Shot: React.FC<{
             />
           </Freeze>
         </Sequence>
+        {/* The typing, sharp: the take's close-up still of the input, laid over it. */}
+        {typing && spec.start + t >= typing.at - 0.05 ? (
+          <Img
+            src={staticFile(`clips/${typing.stills.dir}/${String(still).padStart(3, '0')}.jpg`)}
+            style={{
+              position: 'absolute',
+              left: typing.stills.rect.x * cam.z,
+              top: typing.stills.rect.y * cam.z,
+              width: typing.stills.rect.w * cam.z,
+              height: typing.stills.rect.h * cam.z,
+            }}
+          />
+        ) : null}
       </div>
     </Frame>
   );
@@ -186,6 +218,7 @@ export const ShotAt: React.FC<{
   spec: ShotSpec;
   glow?: string;
   tail?: number;
+  fadeIn?: number;
   style?: React.CSSProperties;
 }> = (props) => {
   const { fps } = useVideoConfig();
@@ -244,13 +277,24 @@ export function caretAt(stills: Stills, chars: number): number {
   return Math.min(0.95, (40 + 12 + chars * 7.4) / stills.rect.w);
 }
 
-/** A recorded mouse path (cursorless take), by clip. */
-export const TRACKS = cursors as unknown as Record<Clip, CursorTrack>;
+/** A recorded mouse path (cursorless take), by clip; `tracks` holds per-actor paths. */
+export const TRACKS = cursors as unknown as Record<
+  Clip,
+  CursorTrack & { tracks?: Record<string, CursorTrack> }
+>;
 
 /** The take's mouse in a shot at composition second t (screen px). */
 export function onTrack(s: ShotSpec, t: number): Pt {
   const local = Math.min(Math.max(0, t - s.start), shotSeconds(s));
   return toScreen(s, t, pointerAt(TRACKS[s.clip], s.from + local * s.rate));
+}
+
+/** One actor's logged path in a shot (screen px), e.g. a puppeted drag's `troupe-2`. */
+export function onActorTrack(s: ShotSpec, actor: string, t: number): Pt | null {
+  const track = TRACKS[s.clip].tracks?.[actor];
+  if (!track || track.pointer.length === 0) return null;
+  const local = Math.min(Math.max(0, t - s.start), shotSeconds(s));
+  return toScreen(s, t, pointerAt(track, s.from + local * s.rate));
 }
 
 /** A recorded click's composition time in a shot (or undefined if outside it). */
