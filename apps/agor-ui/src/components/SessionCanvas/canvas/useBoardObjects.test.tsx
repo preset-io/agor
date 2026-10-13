@@ -75,7 +75,11 @@ describe('justifyZoneContents production path', () => {
     data: { branch: { name: 'Review branch' } },
   } satisfies Node;
 
-  function renderJustify(nodes: Node[], placements: unknown[]) {
+  function renderJustify(
+    nodes: Node[],
+    placements: unknown[],
+    onWriteFailed?: (error: unknown) => void
+  ) {
     const routed = makeRoutedClient();
     const setNodes = vi.fn();
     const hook = renderHook(
@@ -86,6 +90,7 @@ describe('justifyZoneContents production path', () => {
           boardObjectsForBoard: placements as never,
           nodes,
           setNodes,
+          onWriteFailed,
           deletedObjectsRef: { current: new Set<string>() },
           guard: useBoardMutationGuard('board-1', true),
         }),
@@ -182,6 +187,36 @@ describe('justifyZoneContents production path', () => {
     expect(showSuccess).toHaveBeenCalledWith('Justified 2 items to the center.');
   });
 
+  it("redraws from the board and names the server's reason when the justified layout cannot be saved", async () => {
+    const narrow = { ...branch, width: 380 } satisfies Node;
+    const onWriteFailed = vi.fn();
+    const view = renderJustify(
+      [narrow],
+      [
+        {
+          object_id: 'placement-branch',
+          branch_id: branch.id,
+          zone_id: zoneId,
+          position: narrow.position,
+        },
+      ],
+      onWriteFailed
+    );
+    view.boardsPatch.mockRejectedValue(new Error('Board is read-only for this user'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await act(async () => view.result.current.justifyZoneContents(zoneId, 'middle'));
+
+    expect(showError).toHaveBeenCalledWith(
+      "Couldn't justify the zone. (Board is read-only for this user)"
+    );
+    expect(showSuccess).not.toHaveBeenCalled();
+    // The optimistic justify was drawn, so the failed write must resync the canvas.
+    expect(view.setNodes).toHaveBeenCalledTimes(1);
+    expect(onWriteFailed).toHaveBeenCalledTimes(1);
+    consoleError.mockRestore();
+  });
+
   describe('in an Auto Zone', () => {
     const autoZone = { ...zone, layout: { mode: 'auto', preset: 'grid' } };
     const narrow = { ...branch, width: 380 } satisfies Node;
@@ -246,7 +281,7 @@ describe('justifyZoneContents production path', () => {
       await act(async () => view.result.current.justifyZoneContents(zoneId, 'middle'));
 
       expect(actions(routed.boardsPatch)).toEqual(['upsertObject']);
-      expect(showError).toHaveBeenCalledWith('Failed to disable Auto Zone');
+      expect(showError).toHaveBeenCalledWith("Couldn't turn off Auto Zone. (network down)");
       expect(showSuccess).not.toHaveBeenCalled();
     });
 
@@ -3657,7 +3692,7 @@ describe('setZoneContentsCompact', () => {
       await result.current.setZoneContentsCompact('zone-1', true);
     });
 
-    expect(showError).toHaveBeenCalledWith('Failed to update zone density');
+    expect(showError).toHaveBeenCalledWith("Couldn't change the zone density. (network down)");
     expect(showSuccess).not.toHaveBeenCalled();
   });
 });
@@ -4622,6 +4657,57 @@ describe('arrangeBoardZones production path', () => {
 
     expect(toolbar.boardsPatch.mock.calls).toEqual(direct.boardsPatch.mock.calls);
     expect(toolbar.boardObjectsPatch.mock.calls).toEqual(direct.boardObjectsPatch.mock.calls);
+  });
+
+  it("names the server's reason when the whole-board arrange cannot be saved", async () => {
+    const { client, boardsPatch } = makeRoutedClient();
+    boardsPatch.mockRejectedValue(new Error('Board is read-only for this user'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const board = makeBoard({
+      note: { type: 'markdown', x: 1600, y: 900, width: 320, content: 'Note' },
+      other: { type: 'markdown', x: -400, y: 40, width: 320, content: 'Other' },
+    });
+    const nodes: Node[] = [
+      {
+        id: 'note',
+        type: 'markdown',
+        position: { x: 1600, y: 900 },
+        width: 320,
+        height: 160,
+        data: {},
+      },
+      {
+        id: 'other',
+        type: 'markdown',
+        position: { x: -400, y: 40 },
+        width: 320,
+        height: 160,
+        data: {},
+      },
+    ];
+    const view = renderHook(
+      () =>
+        useBoardObjects({
+          board,
+          client,
+          boardObjectsForBoard: [],
+          nodes,
+          setNodes: vi.fn(),
+          deletedObjectsRef: { current: new Set<string>() },
+          guard: useBoardMutationGuard('board-1', true),
+        }),
+      { wrapper }
+    );
+
+    await act(async () => {
+      await view.result.current.arrangeWholeBoard();
+    });
+
+    expect(boardsPatch).toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith(
+      "Couldn't arrange the zones. (Board is read-only for this user)"
+    );
+    consoleError.mockRestore();
   });
 
   it('arranges free mixed objects without requiring a zone', async () => {

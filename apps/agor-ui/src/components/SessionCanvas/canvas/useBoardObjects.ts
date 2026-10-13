@@ -764,7 +764,7 @@ export const useBoardObjects = ({
           manuallyControlledZoneIdsRef.current.delete(zoneId);
           zoneDemotionPromisesRef.current.delete(zoneId);
           console.error('Failed to disable Auto Zone:', error);
-          showError('Failed to disable Auto Zone');
+          showError(formatActionError('turn off Auto Zone', error, { idempotent: true }));
           return false;
         });
       zoneDemotionPromisesRef.current.set(zoneId, demotion);
@@ -815,7 +815,7 @@ export const useBoardObjects = ({
         );
       } catch (error) {
         console.error('Failed to update card density:', error);
-        showError('Failed to update card density');
+        showError(formatActionError('change the card density', error, { idempotent: true }));
       }
     },
     [client, deferAutoZone, demoteAutoZone, showError]
@@ -892,7 +892,7 @@ export const useBoardObjects = ({
         );
       } catch (error) {
         console.error('Failed to update zone density:', error);
-        showError('Failed to update zone density');
+        showError(formatActionError('change the zone density', error, { idempotent: true }));
       }
     },
     [boardObjectsForBoard, client, demoteAutoZone, showError, showSuccess]
@@ -1834,7 +1834,11 @@ export const useBoardObjects = ({
               });
             } catch (refreshError) {
               console.error('Failed to refresh current board layout:', refreshError);
-              if (options.userInitiated) showError('Failed to refresh the current board layout');
+              if (options.userInitiated) {
+                showError(
+                  formatActionError('refresh the board layout', refreshError, { idempotent: true })
+                );
+              }
             }
             return;
           }
@@ -1847,7 +1851,7 @@ export const useBoardObjects = ({
           return;
         }
         console.error('Failed to arrange zone contents:', error);
-        showError('Failed to arrange zone contents');
+        showError(formatActionError('arrange the zone', error, { idempotent: true }));
       }
     },
     [
@@ -2066,7 +2070,10 @@ export const useBoardObjects = ({
         );
       } catch (error) {
         console.error('Failed to justify zone contents:', error);
-        showError('Failed to justify zone contents');
+        showError(formatActionError('justify the zone', error, { idempotent: true }));
+        // The justified positions were drawn before the write; redraw from
+        // the board so the canvas does not show geometry that was not saved.
+        onWriteFailedRef.current?.(error);
       }
     },
     [
@@ -2632,7 +2639,11 @@ export const useBoardObjects = ({
               });
             } catch (refreshError) {
               console.error('Failed to refresh current board layout:', refreshError);
-              if (userInitiated) showError('Failed to refresh the current board layout');
+              if (userInitiated) {
+                showError(
+                  formatActionError('refresh the board layout', refreshError, { idempotent: true })
+                );
+              }
             }
             return;
           }
@@ -2645,7 +2656,7 @@ export const useBoardObjects = ({
         showError(
           error instanceof LayoutObstacleError
             ? 'The selected layout cannot fit without overlapping fixed board objects.'
-            : 'Failed to arrange zones'
+            : formatActionError('arrange the zones', error, { idempotent: true })
         );
       } finally {
         if (ownsInFlight) {
