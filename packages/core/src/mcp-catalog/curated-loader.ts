@@ -7,7 +7,6 @@
  * rather than silently putting a half-populated card into the marketplace.
  */
 
-import { existsSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -172,16 +171,14 @@ const catalogFileSchema = z
 /**
  * Absolute path of the checked-in catalog file, alongside its loader.
  *
- * Resolved from `import.meta.url`, not `__dirname`: with code splitting, the
- * tsup `__dirname` shim lives in a shared chunk at the package root. Source
- * mode and the `mcp-catalog/index.js` entry sit beside the file; code hoisted
- * into a root chunk finds it one level down.
+ * Resolved from `import.meta.url`, not `__dirname`: under code splitting the
+ * tsup `__dirname` shim lives in a shared chunk at the package root. This
+ * module stays in the `mcp-catalog/index.js` entry (core keeps
+ * `@agor/core/mcp-catalog` external); scripts/packaged-entry-import-smoke.mjs
+ * loads the file from `dist` to catch a regression.
  */
 export function curatedCatalogPath(): string {
-  const directory = path.dirname(fileURLToPath(import.meta.url));
-  const besideLoader = path.join(directory, 'curated.yaml');
-  const fromPackageRoot = path.join(directory, 'mcp-catalog', 'curated.yaml');
-  return existsSync(besideLoader) || !existsSync(fromPackageRoot) ? besideLoader : fromPackageRoot;
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), 'curated.yaml');
 }
 
 /**

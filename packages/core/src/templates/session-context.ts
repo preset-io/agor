@@ -7,7 +7,6 @@
  * prompt prefixes remain stable for server-side caching.
  */
 
-import { existsSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,15 +17,14 @@ import { renderTemplate } from './handlebars-helpers';
  * Load Agor system prompt template from disk
  */
 export async function loadAgorSystemPromptTemplate(): Promise<string> {
-  // `import.meta.url`, not `__dirname`: with code splitting, the tsup
-  // `__dirname` shim lives in a shared chunk at the package root. Source mode
-  // and the `templates/session-context.js` entry sit beside the template; code
-  // hoisted into a root chunk finds it one level down.
-  const directory = path.dirname(fileURLToPath(import.meta.url));
-  const besideLoader = path.join(directory, 'agor-system-prompt.md');
-  const fromPackageRoot = path.join(directory, 'templates', 'agor-system-prompt.md');
-  const templatePath =
-    existsSync(besideLoader) || !existsSync(fromPackageRoot) ? besideLoader : fromPackageRoot;
+  // `import.meta.url`, not `__dirname`: under code splitting the tsup
+  // `__dirname` shim lives in a shared chunk at the package root. This module
+  // stays in the `templates/session-context.js` entry;
+  // scripts/packaged-entry-import-smoke.mjs loads the template from `dist`.
+  const templatePath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    'agor-system-prompt.md'
+  );
   return await fs.readFile(templatePath, 'utf-8');
 }
 
