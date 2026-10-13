@@ -540,6 +540,37 @@ describe('EnvVarRequestWidget — already answered', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  it('keeps its own lost reply across a retry that lands while it is still resolving', async () => {
+    const widget = makeWidget();
+    const { client, calls } = sequenceClient([
+      new Error('socket has been disconnected'),
+      Object.assign(new Error('Widget wid-1 is already resolving; cannot submit again.'), {
+        name: 'Forbidden',
+        code: 403,
+      }),
+      alreadySubmitted(),
+    ]);
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+    fireEvent.change(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i), {
+      target: { value: 'secret-key' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByText(/The connection to Agor dropped before this was confirmed/);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    expect(
+      await screen.findByText(
+        "Couldn't save the variables. This request is still being answered. Refresh in a moment to see the result."
+      )
+    ).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Save' })).toBeNull());
+    expect(calls).toHaveLength(3);
+  });
+
   it('shows a neutral note when someone else already answered', async () => {
     const widget = makeWidget();
     const { client } = sequenceClient([alreadySubmitted()]);

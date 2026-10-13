@@ -130,8 +130,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     }
   }, [activeTab, form.canViewPermissions]);
 
-  // Each open of each branch is its own form session: a save that settles after the
-  // modal closed or switched branch must not show its banner on the next one.
+  // A save settling after close or a branch switch must not show its banner on the next form.
   const formSessionRef = useRef(0);
   const branchId = branch?.branch_id;
   // biome-ignore lint/correctness/useExhaustiveDependencies: open and branchId start a new form session

@@ -69,6 +69,8 @@ export function useMCPServerOAuthStart({
   const oauthCompletedCleanupRef = useRef<(() => void) | null>(null);
   const startAllowedRef = useRef(startAllowed);
   startAllowedRef.current = startAllowed;
+  const blockedMessageRef = useRef(blockedMessage);
+  blockedMessageRef.current = blockedMessage;
   const authorityKeyRef = useRef(authorityKey);
   authorityKeyRef.current = authorityKey;
   const clientRef = useRef(client);
@@ -146,7 +148,7 @@ export function useMCPServerOAuthStart({
         authorityKeyRef.current === startAuthorityKey &&
         clientRef.current === startClient
       ) {
-        showWarning(blockedMessage);
+        showWarning(blockedMessageRef.current);
         return;
       }
       if (!isCurrentStart()) return;
@@ -256,7 +258,6 @@ export function useMCPServerOAuthStart({
     showSuccess,
     showWarning,
     errorShownInline,
-    blockedMessage,
   ]);
 
   return {

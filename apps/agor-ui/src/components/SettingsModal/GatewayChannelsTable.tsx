@@ -3792,8 +3792,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const [createStep, setCreateStep] = useState(0);
   const [creating, setCreating] = useState(false);
   const [discordDraftId, setDiscordDraftId] = useState<string | null>(null);
-  // A draft create whose reply was lost may have landed; block a second click until the form changes.
-  const [discordDraftUnconfirmed, setDiscordDraftUnconfirmed] = useState(false);
+  // A create whose reply was lost may have landed; block a second click until the form changes.
+  const [createUnconfirmed, setCreateUnconfirmed] = useState(false);
 
   // ── GitHub App Setup State (create mode) ──
   const [githubLoading, setGithubLoading] = useState(false);
@@ -3828,7 +3828,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const resetCreateFlow = useCallback(() => {
     setCreateStep(0);
     setDiscordDraftId(null);
-    setDiscordDraftUnconfirmed(false);
+    setCreateUnconfirmed(false);
     setSaveError(null);
     setAgentWarning(null);
     resetGithubState();
@@ -4228,7 +4228,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
     setCreating(true);
     setSaveError(null);
-    let sentDiscordDraftCreate = false;
+    let sentCreate = false;
     try {
       await createForm.validateFields();
       if (!operation.isCurrent()) return;
@@ -4252,7 +4252,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             setSaveError({ message: notConnectedMessage('create the channel'), raw: null });
             return;
           }
-          sentDiscordDraftCreate = true;
+          sentCreate = true;
           const created = (await client
             .service('gateway-channels')
             .create(draftData)) as GatewayChannel;
@@ -4309,6 +4309,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       }
 
       if (!operation.isCurrent()) return;
+      sentCreate = true;
       await client.service('gateway-channels').create(data);
       if (!operation.isCurrent()) return;
       showSuccess('Channel created.');
@@ -4323,8 +4324,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         showError(err.errorFields[0].errors[0] || 'Fill in the required fields.');
       } else {
         setSaveError(describeActionError('create the channel', error, { idempotent: false }));
-        if (sentDiscordDraftCreate && isInFlightConnectionLossError(error)) {
-          setDiscordDraftUnconfirmed(true);
+        if (sentCreate && isInFlightConnectionLossError(error)) {
+          setCreateUnconfirmed(true);
         }
       }
     } finally {
@@ -4784,12 +4785,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
               <Button
                 type="primary"
                 loading={creating}
-                disabled={
-                  isFinalCreateStep &&
-                  channelType === 'discord' &&
-                  !discordDraftId &&
-                  discordDraftUnconfirmed
-                }
+                disabled={isFinalCreateStep && createUnconfirmed}
                 onClick={handleCreatePrimary}
               >
                 {isFinalCreateStep
@@ -4811,7 +4807,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           layout="vertical"
           preserve
           onValuesChange={(changed) => {
-            setDiscordDraftUnconfirmed(false);
+            setCreateUnconfirmed(false);
             handleProbeFieldsChange(changed);
           }}
           style={{ marginTop: 16 }}

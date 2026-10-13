@@ -12,7 +12,6 @@ import {
 import { useThemedMessage } from '../../utils/message';
 import { openUploadBlob } from '../../utils/uploadBlob';
 import { ActionErrorNotice, CompactNotice } from '../CompactNotice';
-import type { UploadedFile } from './upload';
 import { UploadConnectionError, uploadFilesToSession } from './upload';
 
 const { TextArea } = Input;
@@ -28,7 +27,6 @@ export interface FileUploadProps {
   daemonUrl: string;
   open: boolean;
   onClose: () => void;
-  onUploadComplete?: (files: UploadedFile[]) => void;
   onInsertMention?: (filepath: string) => void;
   initialFiles?: File[]; // Allow passing dropped files
 }
@@ -38,7 +36,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   daemonUrl,
   open,
   onClose,
-  onUploadComplete,
   onInsertMention,
   initialFiles,
 }) => {
@@ -134,11 +131,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         showSuccess(`Uploaded as ${result.files[0].filename}.`);
       } else {
         showSuccess(`Uploaded ${result.files.length} files.`);
-      }
-
-      // Call completion callback
-      if (onUploadComplete) {
-        onUploadComplete(result.files);
       }
 
       // If not notifying agent, optionally insert @filepath mention

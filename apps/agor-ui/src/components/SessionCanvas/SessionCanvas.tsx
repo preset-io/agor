@@ -928,24 +928,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Track objects we've deleted locally (to prevent them from reappearing during WebSocket updates)
     const deletedObjectsRef = useRef<Set<string>>(new Set());
 
-    // A failed board write redraws the canvas from the store's board: bumping
-    // this re-runs the board->nodes sync (once the drag ends, if one is in
-    // progress). A lost reply redraws again on the next auth generation, after
-    // the reconnect resync has read the board again.
+    // A failed board write redraws the canvas from the store (after the drag, if one is in progress).
     const [boardResyncNonce, setBoardResyncNonce] = useState(0);
     const boardResyncPendingRef = useRef(false);
-    const boardResyncOnReconnectRef = useRef(false);
-    const resyncBoardNodes = useCallback((error?: unknown) => {
-      if (isInFlightConnectionLossError(error)) boardResyncOnReconnectRef.current = true;
+    const resyncBoardNodes = useCallback(() => {
       boardResyncPendingRef.current = true;
       setBoardResyncNonce((nonce) => nonce + 1);
     }, []);
-    // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per auth generation
-    useEffect(() => {
-      if (!boardResyncOnReconnectRef.current) return;
-      boardResyncOnReconnectRef.current = false;
-      resyncBoardNodes();
-    }, [connection.authGeneration, resyncBoardNodes]);
 
     // Initialize nodes and edges state BEFORE using them
     const [nodes, setNodesUnsafe, onNodesChangeInternal] = useNodesState([]);
@@ -2160,7 +2149,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       showError(
                         formatActionError('save the zone size', error, { idempotent: true })
                       );
-                      resyncBoardNodes(error);
+                      resyncBoardNodes();
                     }
                   }
                 }
@@ -2759,7 +2748,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               .catch((error: unknown) => {
                 showError(formatActionError('add the zone', error, { idempotent: false }));
                 // A lost reply may still have created it: the redraw shows what the store has.
-                resyncBoardNodes(error);
+                resyncBoardNodes();
               });
           }
         }
@@ -2980,10 +2969,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // The save is an upsert by this client id, so repeating it is safe.
         const saveError = describeActionError('save the note', error, { idempotent: true });
         // The note shows what the store has, or goes if it has nothing.
-        resyncBoardNodes(error);
+        resyncBoardNodes();
         if (isInFlightConnectionLossError(error)) {
-          // It may have saved: keep its id so saving again (while this
-          // editor's ticket holds) updates it rather than adding a second note.
+          // It may have saved: keep its id so saving again updates it rather than adding a second note.
           setMarkdownModal((current) =>
             current
               ? {

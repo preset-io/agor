@@ -147,12 +147,6 @@ describe('server texts written for agents, the CLI or internals', () => {
       'A repository with that name is already added.',
     ],
     [
-      'repos.ts',
-      'delete the repository',
-      'SAFETY CHECK FAILED: Found 2 branch(s) not belonging to repo 019a2b3c. Aborting deletion to prevent cross-repo data loss. This is a bug — please report it.',
-      'Agor stopped early to protect your files, so please report this.',
-    ],
-    [
       'scheduler.ts',
       'run the schedule now',
       'An active run from schedule "Nightly" is already in progress and allow_concurrent_runs is disabled.',
@@ -230,14 +224,24 @@ describe('server texts written for agents, the CLI or internals', () => {
     ).toBe(`Couldn't connect. (${serverText})`);
   });
 
-  it('does not match an answered widget that is still resolving', () => {
+  it('says a widget is still being answered, not a permission problem', () => {
     // widgets/submissions.ts
     const error = feathersError(
       'Forbidden',
       'Widget 019a2b3c is already resolving; cannot submit again.'
     );
     expect(formatActionError('save the variables', error, { idempotent: true })).toBe(
-      "Couldn't save the variables. You don't have permission to do this. (Widget 019a2b3c is already resolving; cannot submit again.)"
+      "Couldn't save the variables. This request is still being answered. Refresh in a moment to see the result."
+    );
+  });
+
+  it('guesses no permission reason for a widget in another resolved state', () => {
+    const error = feathersError(
+      'Forbidden',
+      'Widget 019a2b3c is already unavailable; cannot submit again.'
+    );
+    expect(formatActionError('save the variables', error, { idempotent: true })).toBe(
+      "Couldn't save the variables. (Widget 019a2b3c is already unavailable; cannot submit again.)"
     );
   });
 });

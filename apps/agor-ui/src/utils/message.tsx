@@ -149,8 +149,8 @@ const MessageContent: React.FC<MessageContentProps> = ({
             type="text"
             size="small"
             icon={<CloseOutlined />}
-            aria-label="Dismiss error message"
-            title="Dismiss error message"
+            aria-label={kind === 'error' ? 'Dismiss error message' : 'Dismiss message'}
+            title={kind === 'error' ? 'Dismiss error message' : 'Dismiss message'}
             data-agor-error-dismiss
             onClick={handleDismiss}
           />
@@ -226,8 +226,7 @@ export function useThemedMessage() {
     [message]
   );
 
-  // A message that stays until dismissed gets a key and a Dismiss button, so
-  // it can be closed and replaced in place instead of stacking.
+  // A message with a Dismiss button and a key, so it can be closed and replaced in place.
   const openPersistent = useCallback(
     (
       open: typeof message.error,
@@ -262,7 +261,7 @@ export function useThemedMessage() {
             {content}
           </MessageContent>
         ),
-        duration: 0,
+        duration: options?.duration ?? 0,
         key,
         onClose: handleClose,
       });
@@ -274,18 +273,7 @@ export function useThemedMessage() {
   // them. Callers can still opt into a finite duration explicitly.
   const showError = useCallback(
     (content: React.ReactNode, options?: ThemedMessageOptions) =>
-      options?.duration
-        ? message.error({
-            content: (
-              <MessageContent textContent={extractVisibleTextContent(content)} kind="error">
-                {content}
-              </MessageContent>
-            ),
-            duration: options.duration,
-            key: options.key,
-            onClose: options.onClose,
-          })
-        : openPersistent(message.error, 'error', content, options),
+      openPersistent(message.error, 'error', content, options),
     [message, openPersistent]
   );
 

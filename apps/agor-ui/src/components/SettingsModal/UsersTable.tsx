@@ -30,7 +30,7 @@ import {
   Typography,
 } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import { describeActionError } from '@/utils/connectionErrors';
+import { type ActionErrorCopy, describeActionError } from '@/utils/connectionErrors';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import {
   passwordPolicyHelp,
@@ -81,9 +81,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [groups, setGroups] = useState<Group[]>([]);
   const [memberships, setMemberships] = useState<GroupMembership[]>([]);
-  const [groupsLoadError, setGroupsLoadError] = useState<ReturnType<
-    typeof describeActionError
-  > | null>(null);
+  const [groupsLoadError, setGroupsLoadError] = useState<ActionErrorCopy | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);

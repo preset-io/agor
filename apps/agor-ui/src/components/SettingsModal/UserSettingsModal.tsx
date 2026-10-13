@@ -462,9 +462,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   const [userGroupIds, setUserGroupIds] = useState<string[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [groupsLoaded, setGroupsLoaded] = useState(false);
-  const [groupsLoadError, setGroupsLoadError] = useState<ReturnType<
-    typeof describeActionError
-  > | null>(null);
+  const [groupsLoadError, setGroupsLoadError] = useState<ActionErrorCopy | null>(null);
   const groupSelectOptions = useMemo(
     () =>
       [...availableGroups].sort((a, b) => a.name.localeCompare(b.name)).map(toGroupSelectOption),

@@ -131,7 +131,7 @@ interface PendingCardProps {
 
 const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) => {
   const { token } = theme.useToken();
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess } = useThemedMessage();
   const [state, setState] = useState<ConnectState>('idle');
   const [failure, setFailure] = useState<string | null>(null);
   const [answeredElsewhere, setAnsweredElsewhere] = useState(false);
@@ -271,7 +271,6 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
         setState('idle');
         const message = attempt.recovery?.message ?? oauthAttemptFailureMessage(attempt.status);
         setFailure(message);
-        showError(message);
         return;
       }
 

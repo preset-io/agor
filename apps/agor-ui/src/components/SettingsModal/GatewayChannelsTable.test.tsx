@@ -411,6 +411,24 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(channelCreate.mock.calls[0][0].agor_user_id).toBeFalsy();
   });
 
+  it('blocks a second create after a lost reply until the form changes', async () => {
+    const { client, channelCreate } = makeClient();
+    channelCreate.mockRejectedValue(new Error('socket has been disconnected'));
+    renderTable(client);
+    clickButton(/Add Channel/);
+    await advanceToTokensStep();
+    fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
+    fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
+    clickButton(/Create channel/);
+    await screen.findByText(
+      /Refresh to see if it went through before you try to create the channel again/
+    );
+    expect(getButton(/Create channel/)).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test2' } });
+    expect(getButton(/Create channel/)).toBeEnabled();
+    expect(channelCreate).toHaveBeenCalledTimes(1);
+  });
+
   it('erases create secrets and cancels validation continuation on admin A -> admin B', async () => {
     const { client, channelCreate } = makeClient();
     const branch = makeBranch();

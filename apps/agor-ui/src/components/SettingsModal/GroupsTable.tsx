@@ -41,10 +41,9 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   const createSlugEditedRef = useRef(false);
   const editSlugEditedRef = useRef(false);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
-  type ActionError = ActionErrorCopy;
-  const [loadError, setLoadError] = useState<ActionError | null>(null);
-  const [createError, setCreateError] = useState<ActionError | null>(null);
-  const [saveError, setSaveError] = useState<ActionError | null>(null);
+  const [loadError, setLoadError] = useState<ActionErrorCopy | null>(null);
+  const [createError, setCreateError] = useState<ActionErrorCopy | null>(null);
+  const [saveError, setSaveError] = useState<ActionErrorCopy | null>(null);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   // A create whose reply was lost may have landed; block a second click until the form changes.

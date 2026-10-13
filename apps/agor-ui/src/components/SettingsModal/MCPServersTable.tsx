@@ -104,10 +104,7 @@ function describeSaveError(action: string, error: unknown, idempotent: boolean) 
     : describeActionError(action, error, { idempotent });
 }
 
-/**
- * The server's current config version when a patch conflicts only because
- * this editor's previous patch, whose reply was lost, already went through.
- */
+/** The server's config version when a conflict is only this editor's own lost-reply patch landing. */
 function versionAfterOwnLostPatch(error: unknown, sentVersion: number): number | null {
   const { name, code, data } = (error ?? {}) as {
     name?: unknown;

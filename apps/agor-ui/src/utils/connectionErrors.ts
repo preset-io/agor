@@ -91,10 +91,6 @@ const REJECTIONS: ReadonlyArray<{ pattern: RegExp; reason: string | null }> = [
     reason: 'A repository with that name is already added.',
   },
   {
-    pattern: /^SAFETY CHECK FAILED: /,
-    reason: 'Agor stopped early to protect your files, so please report this.',
-  },
-  {
     pattern:
       /^An active run from schedule ".+" is already in progress and allow_concurrent_runs is disabled\.$/,
     reason: 'A run from this schedule is still in progress.',
@@ -116,6 +112,11 @@ const REJECTIONS: ReadonlyArray<{ pattern: RegExp; reason: string | null }> = [
     pattern: /^Widget \S+ is already (submitted|dismissed); cannot \w+ again\.$/,
     reason: 'This request was already answered. Refresh to see the result.',
   },
+  {
+    pattern: /^Widget \S+ is already resolving; cannot \w+ again\.$/,
+    reason: 'This request is still being answered. Refresh in a moment to see the result.',
+  },
+  { pattern: /^Widget \S+ is already \S+; cannot \w+ again\.$/, reason: null },
   { pattern: /^Invalid submit payload: /, reason: null },
   { pattern: /^.+ is disabled for this workspace\.?$/, reason: null },
 ];
