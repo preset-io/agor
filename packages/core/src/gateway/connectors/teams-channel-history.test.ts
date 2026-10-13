@@ -6,10 +6,16 @@ import {
   TeamsChannelHistoryError,
 } from './teams-channel-history';
 import { fetchTeamsTeamChannels, isTeamsRscDenied, resetTeamsGraphCaches } from './teams-graph';
+import {
+  CHANNEL_ID,
+  fakeFetch,
+  GROUP_ID,
+  graphCalls,
+  graphMessage,
+  json,
+  ROOT_ID,
+} from './teams-graph.test-support';
 
-const CHANNEL_ID = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2';
-const GROUP_ID = 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b';
-const ROOT_ID = '1616989510408';
 const CHANNEL_BASE = `https://graph.microsoft.com/v1.0/teams/${GROUP_ID}/channels/${encodeURIComponent(CHANNEL_ID)}/messages`;
 
 const config: TeamsGatewayConfig = {
@@ -28,47 +34,6 @@ const cacheScope = {
   gatewayChannelId: 'channel-a',
   providerConfigGeneration: 1,
 };
-
-function graphMessage(id: string, overrides: Record<string, unknown> = {}) {
-  return {
-    id,
-    messageType: 'message',
-    createdDateTime: new Date(Number(id)).toISOString(),
-    lastModifiedDateTime: new Date(Number(id)).toISOString(),
-    deletedDateTime: null,
-    subject: null,
-    from: { user: { id: 'aad-robin', displayName: 'Robin Kline' }, application: null },
-    body: { contentType: 'html', content: `<p>message ${id}</p>` },
-    attachments: [],
-    mentions: [],
-    ...overrides,
-  };
-}
-
-function json(body: unknown, status = 200, headers: Record<string, string> = {}) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json', ...headers },
-  });
-}
-
-function fakeFetch(route: (url: string) => Response | undefined) {
-  return vi.fn(async (input: string | URL | Request) => {
-    const url = String(input);
-    if (url.startsWith('https://login.microsoftonline.com/')) {
-      return json({ token_type: 'Bearer', expires_in: 3599, access_token: 'graph-token' });
-    }
-    const response = route(url);
-    if (response) return response;
-    throw new Error(`unexpected request ${url}`);
-  });
-}
-
-function graphUrls(fetchImpl: ReturnType<typeof fakeFetch>): string[] {
-  return fetchImpl.mock.calls
-    .map(([url]) => String(url))
-    .filter((url) => url.startsWith('https://graph.microsoft.com/'));
-}
 
 afterEach(() => {
   resetTeamsGraphCaches();
@@ -170,7 +135,7 @@ describe('Teams thread history', () => {
         { fetchImpl }
       )
     ).rejects.toMatchObject({ code: 'provider' });
-    const [url] = graphUrls(fetchImpl);
+    const [url] = graphCalls(fetchImpl);
     expect(new URL(url).origin).toBe('https://graph.microsoft.com');
     expect(new URL(url).searchParams.get('$skiptoken')).toBe('x&$filter=1#https://evil.example/');
   });

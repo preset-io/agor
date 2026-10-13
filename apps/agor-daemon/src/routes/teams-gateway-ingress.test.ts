@@ -38,8 +38,8 @@ describe('validateTeamsVerifiedIdentity', () => {
   });
 
   it.each([
-    'http://example.test/',
-    ' https://example.test/',
+    'http://smba.trafficmanager.net/teams',
+    ' https://smba.trafficmanager.net/teams/',
     'https://user:pass@example.test/',
     'not-a-url',
     'https://attacker.example/teams/',
@@ -63,16 +63,6 @@ describe('validateTeamsVerifiedIdentity', () => {
       'invalid_tenant',
     ],
     ['service URL', { serviceurl: 'https://evil.example/teams' }, 'invalid_service_url'],
-    [
-      'service URL whitespace',
-      { serviceurl: ' https://smba.trafficmanager.net/teams/' },
-      'invalid_service_url',
-    ],
-    [
-      'service URL scheme',
-      { serviceurl: 'http://smba.trafficmanager.net/teams' },
-      'invalid_service_url',
-    ],
     [
       'channel endorsement',
       { signingJwk: { kid: 'key-1', endorsements: ['slack'] } },
@@ -114,10 +104,15 @@ describe('fetchTeamsSigningJwk', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ keys }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await fetchTeamsSigningJwk(signedRequest('key-1'), claims, config);
+    const first = await fetchTeamsSigningJwk(signedRequest('key-1'), claims, config);
+    expect(first.endorsements).toEqual(['msteams']);
     await fetchTeamsSigningJwk(signedRequest('key-2'), claims, config);
     await fetchTeamsSigningJwk(signedRequest('key-1'), claims, config);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://login.botframework.com/v1/.well-known/keys',
+      expect.objectContaining({ redirect: 'error' })
+    );
 
     keys = [...keys, { kid: 'key-3', endorsements: ['msteams'] }];
     vi.setSystemTime(Date.now() + 2 * 60_000);
@@ -147,26 +142,6 @@ describe('fetchTeamsSigningJwk', () => {
     vi.stubGlobal('fetch', fetchMock);
     await expect(fetchTeamsSigningJwk(signedRequest('unknown'), claims, config)).rejects.toThrow(
       /not found/
-    );
-  });
-
-  it('reads endorsements from the exact Bot Framework JWKS selected by the SDK-authorized token', async () => {
-    const token = `${Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'key-1' })).toString('base64url')}.payload.signature`;
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ keys: [teamsSigningJwk] }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      })
-    );
-    vi.stubGlobal('fetch', fetchMock);
-    const request = {
-      headers: { authorization: `Bearer ${token}` },
-    } as unknown as Request;
-    const result = await fetchTeamsSigningJwk(request, claims, config);
-    expect(result.endorsements).toEqual(['msteams']);
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://login.botframework.com/v1/.well-known/keys',
-      expect.objectContaining({ redirect: 'error' })
     );
   });
 

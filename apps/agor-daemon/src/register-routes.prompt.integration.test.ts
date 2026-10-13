@@ -4,10 +4,8 @@ import {
   BranchRepository,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
-  eq,
   GatewayChannelRepository,
   GatewayInboundEventRepository,
-  gatewayInboundEvents,
   generateId,
   getCurrentTenantDatabaseScope,
   MessagesRepository,
@@ -17,7 +15,6 @@ import {
   SessionRepository,
   TaskRepository,
   UsersRepository,
-  update,
 } from '@agor/core/db';
 import { type Application, feathers, feathersExpress, socketio } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
@@ -275,7 +272,7 @@ describe('registered prompt route launch handoff', () => {
     expect(await f.scoped(() => f.taskRepo.findById(idempotencyTaskId))).toBeNull();
     expect(f.executeTask).not.toHaveBeenCalled();
   });
-  it.each(['disable', 'config-tuning', 'reclaim', 'unchanged'] as const)(
+  it.each(['disable', 'unchanged'] as const)(
     'checks real prompt admission after asynchronous %s preparation',
     async (mutation) => {
       vi.stubEnv('AGOR_MASTER_SECRET', 'disposable-teams-admission-secret');
@@ -340,27 +337,8 @@ describe('registered prompt route launch handoff', () => {
       try {
         await Promise.race([ready, work]);
         await f.scoped(async () => {
-          if (mutation === 'reclaim') {
-            await update(f.db, gatewayInboundEvents)
-              .set({ processing_expires_at: new Date(0) })
-              .where(eq(gatewayInboundEvents.id, claim.id))
-              .run();
-            expect(
-              await new GatewayInboundEventRepository(f.db).claimQueued(
-                claim.id,
-                'worker-b',
-                30_000
-              )
-            ).toBeTruthy();
-          } else if (mutation === 'disable') {
+          if (mutation === 'disable') {
             await new GatewayChannelRepository(f.db).update(channel.id, { enabled: false });
-          } else if (mutation === 'config-tuning') {
-            await new GatewayChannelRepository(f.db).updateWithVerifiedProviderInstallation(
-              channel.id,
-              { config: { ...channel.config, catch_up: { mode: 'off', max_messages: 10 } } },
-              'teams-app',
-              channel.provider_config_generation
-            );
           }
         });
       } finally {

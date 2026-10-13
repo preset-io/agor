@@ -538,6 +538,69 @@ export const TEAMS_SHARED_CASES: TeamsCase[] = [
     },
   ],
   [
+    'holds a later inbound occurrence behind its predecessor across replicas',
+    async (h) => {
+      const { channel } = await h.a(seedTeamsGateway);
+      const admit = (scope: Scope, providerEventId: string) =>
+        scope((db) =>
+          new GatewayInboundEventRepository(db).admitVerifiedHttp(
+            teamsAdmission(channel, providerEventId)
+          )
+        );
+      const first = await admit(h.a, 'teams:activity:first');
+      const second = await admit(h.b, 'teams:activity:second');
+      const due = async () =>
+        (
+          await h.system('teams_gateway_ingress_discovery', (db) =>
+            new GatewayInboundEventRepository(db).findDueTeamsRefs(db, {
+              limit: 100,
+              now: new Date(),
+            })
+          )
+        ).filter((ref) => ref.gateway_channel_id === channel.id);
+      expect(await due()).toEqual([
+        {
+          tenant_id: h.tenantId,
+          gateway_channel_id: channel.id,
+          thread_id: TEAMS_THREAD_ID,
+          event_id: first.event.id,
+        },
+      ]);
+      expect(
+        await h.a((db) =>
+          new GatewayInboundEventRepository(db).claimQueued(first.event.id, 'replica-a', 30_000)
+        )
+      ).toBeTruthy();
+      expect(await due()).toEqual([]);
+      expect(
+        await h.b((db) =>
+          new GatewayInboundEventRepository(db).claimQueued(second.event.id, 'replica-b', 30_000)
+        )
+      ).toBeNull();
+      expect(
+        await h.a((db) =>
+          new GatewayInboundEventRepository(db).complete({
+            eventId: first.event.id,
+            channelId: channel.id,
+            processingToken: 'replica-a',
+            requireListenerClaim: false,
+          })
+        )
+      ).toBe(true);
+      expect((await due()).map((ref) => ref.event_id)).toEqual([second.event.id]);
+      if (h.foreign) {
+        expect(
+          await h.foreign((db) =>
+            new GatewayInboundEventRepository(db).findByProviderEvent(
+              channel.id,
+              'teams:activity:first'
+            )
+          )
+        ).toBeNull();
+      }
+    },
+  ],
+  [
     'dead-letters a permanent inbound fence and erases its queued payload',
     (h) =>
       h.a(async (db) => {

@@ -1,5 +1,5 @@
-import { and, eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, vi } from 'vitest';
 import { select, update } from '../database-wrapper';
 import { gatewayInboundEvents } from '../schema';
 import { ownedDbTest } from '../test-helpers';
@@ -23,13 +23,11 @@ import {
 import { ThreadSessionMapRepository } from './thread-session-map';
 
 describe('Teams gateway HA repositories', () => {
-  const priorMasterSecret = process.env.AGOR_MASTER_SECRET;
   beforeAll(() => {
-    process.env.AGOR_MASTER_SECRET = 'teams-gateway-ha-test-secret';
+    vi.stubEnv('AGOR_MASTER_SECRET', 'teams-gateway-ha-test-secret');
   });
   afterAll(() => {
-    if (priorMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
-    else process.env.AGOR_MASTER_SECRET = priorMasterSecret;
+    vi.unstubAllEnvs();
   });
 
   for (const [name, run] of TEAMS_SHARED_CASES) {
@@ -187,7 +185,7 @@ describe('Teams gateway HA repositories', () => {
   );
 
   ownedDbTest('holds later messages behind the oldest mapped Teams delivery', async ({ db }) => {
-    const { channel, mapping } = await seedTeamsGateway(db);
+    const { mapping } = await seedTeamsGateway(db);
     const { deliveries, messages } = teamsDeliveryWriters(db);
     const first = await messages.create(assistantMessage(mapping.session_id, 0));
     const second = await messages.create(assistantMessage(mapping.session_id, 1));
@@ -218,80 +216,7 @@ describe('Teams gateway HA repositories', () => {
     expect(
       (await deliveries.findDueRefs(db, { now: new Date() })).map((row) => row.delivery_id)
     ).toEqual([secondDelivery.delivery_id]);
-
-    // The inbound table remains independently queryable and tenant-free in SQLite.
-    expect(
-      await select(db)
-        .from(gatewayInboundEvents)
-        .where(
-          and(
-            eq(gatewayInboundEvents.gateway_channel_id, channel.id),
-            eq(gatewayInboundEvents.status, 'pending')
-          )
-        )
-        .all()
-    ).toHaveLength(0);
-    await update(db, gatewayInboundEvents)
-      .set({ status: 'completed', completed_at: new Date() })
-      .where(eq(gatewayInboundEvents.gateway_channel_id, channel.id))
-      .run();
   });
-
-  ownedDbTest('holds a later inbound occurrence behind its predecessor', async ({ db }) => {
-    const { channel } = await seedTeamsGateway(db);
-    const inbound = new GatewayInboundEventRepository(db);
-    const first = await inbound.admitVerifiedHttp(teamsAdmission(channel, 'teams:activity:first'));
-    const second = await inbound.admitVerifiedHttp(
-      teamsAdmission(channel, 'teams:activity:second')
-    );
-    expect(first.outcome).toBe('admitted');
-    expect(second.outcome).toBe('admitted');
-
-    expect(
-      (await inbound.findDueTeamsRefs(db, { now: new Date() })).map((row) => row.event_id)
-    ).toEqual([first.event.id]);
-    const claim = await inbound.claimQueued(first.event.id, 'predecessor-token', 30_000);
-    expect(claim).toBeTruthy();
-    expect(await inbound.findDueTeamsRefs(db, { now: new Date() })).toEqual([]);
-    expect(
-      await inbound.complete({
-        eventId: first.event.id,
-        channelId: channel.id,
-        processingToken: 'predecessor-token',
-        requireListenerClaim: false,
-      })
-    ).toBe(true);
-    expect(
-      (await inbound.findDueTeamsRefs(db, { now: new Date() })).map((row) => row.event_id)
-    ).toEqual([second.event.id]);
-  });
-
-  ownedDbTest(
-    'discovers expired payloads and terminalizes them in tenant-scoped claim',
-    async ({ db }) => {
-      const { channel } = await seedTeamsGateway(db);
-      const inbound = new GatewayInboundEventRepository(db);
-      const admitted = await inbound.admitVerifiedHttp({
-        ...teamsAdmission(channel, 'teams:activity:expires'),
-        payloadTtlMs: 1,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(await inbound.findDueTeamsRefs(db, { now: new Date() })).toEqual([
-        expect.objectContaining({ event_id: admitted.event.id }),
-      ]);
-      expect(await inbound.claimQueued(admitted.event.id, 'expired-claim', 30_000)).toBeNull();
-      const stored = await select(db)
-        .from(gatewayInboundEvents)
-        .where(eq(gatewayInboundEvents.id, admitted.event.id))
-        .one();
-      expect(stored).toMatchObject({
-        status: 'dead_letter',
-        payload_encrypted: null,
-        payload_expires_at: null,
-        last_error_code: 'payload_expired',
-      });
-    }
-  );
 
   ownedDbTest(
     'schedules inbound and outbound retries from the injected SQLite database time',

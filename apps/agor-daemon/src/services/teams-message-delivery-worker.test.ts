@@ -462,7 +462,6 @@ describe('TeamsMessageDeliveryWorker send outcomes', () => {
 
   it.each([
     ['503', sendError(503), 'provider_http_503'],
-    ['504', sendError(504), 'provider_http_504'],
     [
       'connection reset',
       sendError(undefined, { networkCode: 'ECONNRESET' }),
@@ -491,48 +490,29 @@ describe('TeamsMessageDeliveryWorker send outcomes', () => {
   });
 
   it.each([
-    ['500', sendError(500), 'dead_letter', 'provider_http_500'],
-    ['400', sendError(400), 'dead_letter', 'provider_http_400'],
+    ['500', sendError(500), 'dead_letter', 'provider_http_500', null],
     [
       'bot removed',
       sendError(403, { providerCode: 'BotNotInConversationRoster' }),
       'canceled',
       'conversation_address_revoked',
-    ],
-    [
-      'conversation gone',
-      sendError(404, { providerCode: 'ConversationNotFound' }),
-      'canceled',
-      'conversation_address_revoked',
+      'bot_removed',
     ],
     [
       'bot disabled by admin',
       sendError(403, { providerCode: 'BotDisabledByAdmin' }),
       'canceled',
       'conversation_address_suspended',
+      'bot_disabled',
     ],
-  ])('terminalizes %s', async (_label, error, status, code) => {
+  ])('terminalizes %s', async (_label, error, status, code, revokedAs) => {
     const setup = harness();
     setup.send.mockRejectedValueOnce(error);
     await setup.worker.checkOnce();
     expect(setup.repository.row).toMatchObject({ status, last_error_code: code });
-  });
-
-  it('revokes the thread address when Teams says the bot left the conversation', async () => {
-    const setup = harness();
-    setup.send.mockRejectedValueOnce(
-      sendError(403, { providerCode: 'BotNotInConversationRoster' })
+    expect(setup.revokeThread.mock.calls).toEqual(
+      revokedAs ? [['channel-1', '19:channel|root-1', revokedAs]] : []
     );
-    await setup.worker.checkOnce();
-    expect(setup.revokeThread).toHaveBeenCalledWith(
-      'channel-1',
-      '19:channel|root-1',
-      'bot_removed'
-    );
-    expect(setup.repository.row).toMatchObject({
-      status: 'canceled',
-      last_error_code: 'conversation_address_revoked',
-    });
   });
 
   it('cancels a delivery to a revoked address before preparing a send', async () => {

@@ -1,6 +1,6 @@
 import type { GatewayChannel } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect } from 'vitest';
+import { afterAll, beforeAll, describe, expect, vi } from 'vitest';
 import { teamsAddressRevocationFromActivity } from '../../gateway/connectors/teams-address-events';
 import type { Database } from '../client';
 import { runDatabaseTransaction, update } from '../database-wrapper';
@@ -42,13 +42,11 @@ function input(
 }
 
 describe('TeamsConversationAddressRepository', () => {
-  const priorSecret = process.env.AGOR_MASTER_SECRET;
   beforeAll(() => {
-    process.env.AGOR_MASTER_SECRET = 'teams-address-test-secret';
+    vi.stubEnv('AGOR_MASTER_SECRET', 'teams-address-test-secret');
   });
   afterAll(() => {
-    if (priorSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
-    else process.env.AGOR_MASTER_SECRET = priorSecret;
+    vi.unstubAllEnvs();
   });
 
   ownedDbTest(

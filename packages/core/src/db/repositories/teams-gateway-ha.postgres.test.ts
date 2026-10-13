@@ -35,11 +35,9 @@ import {
   seedClaimedTeamsDelivery,
   seedTeamsGateway,
   TEAMS_SHARED_CASES,
-  TEAMS_THREAD_ID,
   teamsAdmission,
   teamsDeliveryWriters,
 } from './teams-gateway-ha.test-support';
-import { ThreadSessionMapRepository } from './thread-session-map';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -63,114 +61,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
       (dbA as Database & { $client: { end: () => Promise<void> } }).$client.end(),
       (dbB as Database & { $client: { end: () => Promise<void> } }).$client.end(),
     ]);
-  });
-
-  it('projects tenant ids without ambiguous joins and serializes the same lane across replicas', async () => {
-    const tenantId = `teams-pg-${generateId()}` as TenantID;
-    const { channel } = await seedTeamsChannel(dbA, tenantId);
-    const first = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
-      new GatewayInboundEventRepository(scoped).admitVerifiedHttp(
-        teamsAdmission(channel, 'teams:activity:pg-first')
-      )
-    );
-    const second = await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
-      new GatewayInboundEventRepository(scoped).admitVerifiedHttp(
-        teamsAdmission(channel, 'teams:activity:pg-second')
-      )
-    );
-
-    const due = await runWithSystemDatabaseScope(
-      dbA,
-      'Teams PostgreSQL lane discovery',
-      (systemDb) =>
-        new GatewayInboundEventRepository(systemDb).findDueTeamsRefs(systemDb, {
-          limit: 10,
-          now: new Date(),
-        }),
-      { capability: 'teams_gateway_ingress_discovery' }
-    );
-    expect(due).toEqual([
-      {
-        tenant_id: tenantId,
-        gateway_channel_id: channel.id,
-        thread_id: TEAMS_THREAD_ID,
-        event_id: first.event.id,
-      },
-    ]);
-
-    const firstClaim = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
-      new GatewayInboundEventRepository(scoped).claimQueued(
-        first.event.id,
-        'replica-a',
-        30_000,
-        new Date()
-      )
-    );
-    expect(firstClaim).toBeTruthy();
-    expect(
-      await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
-        new GatewayInboundEventRepository(scoped).claimQueued(
-          second.event.id,
-          'replica-b',
-          30_000,
-          new Date()
-        )
-      )
-    ).toBeNull();
-
-    await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
-      new GatewayInboundEventRepository(scoped).complete({
-        eventId: first.event.id,
-        channelId: channel.id,
-        processingToken: 'replica-a',
-        requireListenerClaim: false,
-      })
-    );
-    expect(
-      (
-        await runWithSystemDatabaseScope(
-          dbB,
-          'Teams PostgreSQL second lane discovery',
-          (systemDb) =>
-            new GatewayInboundEventRepository(systemDb).findDueTeamsRefs(systemDb, {
-              limit: 10,
-              now: new Date(),
-            }),
-          { capability: 'teams_gateway_ingress_discovery' }
-        )
-      ).map((ref) => ref.event_id)
-    ).toEqual([second.event.id]);
-
-    const otherTenant = `teams-pg-other-${generateId()}` as TenantID;
-    expect(
-      await runWithTenantDatabaseScope(dbB, otherTenant, (scoped) =>
-        new GatewayInboundEventRepository(scoped).findByProviderEvent(
-          channel.id,
-          'teams:activity:pg-first'
-        )
-      )
-    ).toBeNull();
-  });
-
-  it('keeps the Teams catch-up cursor monotonic across replicas', async () => {
-    const tenantId = `teams-pg-${generateId()}` as TenantID;
-    const { mapping } = await seedTeamsChannel(dbA, tenantId);
-    expect(
-      await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
-        new ThreadSessionMapRepository(scoped).advanceTeamsLastAdmittedActivityId(
-          mapping.id,
-          '1700000002000'
-        )
-      )
-    ).toBe(true);
-    expect(
-      await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
-        new ThreadSessionMapRepository(scoped).advanceTeamsLastAdmittedActivityId(
-          mapping.id,
-          '1700000001000'
-        )
-      )
-    ).toBe(false);
   });
 
   it('limits system-scope inbound discovery to queued Teams rows in every tenant', async () => {

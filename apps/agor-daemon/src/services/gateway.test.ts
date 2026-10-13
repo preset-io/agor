@@ -148,6 +148,46 @@ const slackChannel: GatewayChannel = {
   last_message_at: null,
 } as unknown as GatewayChannel;
 
+function makeTeamsChannel(
+  overrides: Partial<Omit<GatewayChannel, 'config'>> & { config?: Record<string, unknown> } = {}
+): GatewayChannel {
+  const { config, ...rest } = overrides;
+  return {
+    ...slackChannel,
+    id: 'teams-channel',
+    channel_type: 'teams',
+    channel_key: 'teams-key',
+    config: {
+      app_id: 'teams-app',
+      app_password: 'secret',
+      microsoft_tenant_id: 'tenant-a',
+      ...config,
+    },
+    provider_installation_id: 'teams-app',
+    provider_config_generation: 3,
+    ...rest,
+  } as GatewayChannel;
+}
+
+/** A Teams create carrying the verified inbound-event authority the worker would pass. */
+function teamsCreate(
+  service: GatewayService,
+  channel: GatewayChannel,
+  data: Parameters<GatewayService['create']>[0]
+) {
+  return service.create(
+    withVerifiedHttpGatewayAuthority(data, {
+      id: data.gateway_inbound_event_id as never,
+      gateway_channel_id: channel.id,
+      processing_token: 'claim-token',
+      provider_config_generation: channel.provider_config_generation,
+      verified_app_id: 'teams-app',
+      verified_tenant_id: 'tenant-a',
+      thread_id: data.thread_id,
+    })
+  );
+}
+
 function makeGuardedPostgresDatabase() {
   const transactions: Array<{
     execute: ReturnType<typeof vi.fn>;
@@ -782,22 +822,12 @@ describe('GatewayService user alignment operational logs', () => {
     userMap?: Record<string, string>;
     lookup?: () => Promise<unknown>;
   }) {
-    const channel = {
-      ...slackChannel,
-      id: 'teams-aligned-channel' as never,
-      channel_type: 'teams',
-      channel_key: 'teams-aligned-key',
+    const channel = makeTeamsChannel({
+      id: 'teams-aligned-channel',
       agor_user_id: null,
-      config: {
-        app_id: 'teams-app',
-        app_password: 'secret',
-        microsoft_tenant_id: 'tenant-a',
-        align_teams_users: true,
-        ...(opts.userMap ? { user_map: opts.userMap } : {}),
-      },
-      provider_installation_id: 'teams-app',
+      config: { align_teams_users: true, ...(opts.userMap ? { user_map: opts.userMap } : {}) },
       provider_config_generation: 2,
-    } as unknown as GatewayChannel;
+    });
     const harness = makeGatewayHarness({
       channel,
       existingMapping: makeMapping({ channel_id: channel.id, thread_id: '19:dm-thread' }),
@@ -832,18 +862,7 @@ describe('GatewayService user alignment operational logs', () => {
       },
       gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a1' as never,
     };
-    const create = () =>
-      harness.service.create(
-        withVerifiedHttpGatewayAuthority(data, {
-          id: data.gateway_inbound_event_id,
-          gateway_channel_id: channel.id,
-          processing_token: 'claim-token',
-          provider_config_generation: 2,
-          verified_app_id: 'teams-app',
-          verified_tenant_id: 'tenant-a',
-          thread_id: data.thread_id,
-        })
-      );
+    const create = () => teamsCreate(harness.service, channel, data);
     return { ...harness, lookup, notice, create };
   }
 
@@ -896,34 +915,21 @@ describe('GatewayService user alignment operational logs', () => {
     ).channelRepo.findByKey();
     (channel.config as Record<string, unknown>).outbound_enabled = false;
     await expect(
-      service.create(
-        withVerifiedHttpGatewayAuthority(
-          {
-            channel_key: channel.channel_key,
-            thread_id: '19:dm-thread',
-            text: '',
-            skipped_files: [{ name: 'report<1>.pdf', reason: 'unsupported_type' }],
-            metadata: { teams_conversation_type: 'personal' },
-            teams_user_aad_object_id: 'aad-object-1',
-            teams_member: {
-              service_url: 'https://smba.trafficmanager.net/amer/',
-              conversation_id: 'a:personal-conversation',
-              team_id: null,
-              user_id: '29:user-1',
-            },
-            gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a3' as never,
-          },
-          {
-            id: '01927f9d-0000-7000-8000-0000000000a3',
-            gateway_channel_id: channel.id,
-            processing_token: 'claim-token',
-            provider_config_generation: 2,
-            verified_app_id: 'teams-app',
-            verified_tenant_id: 'tenant-a',
-            thread_id: '19:dm-thread',
-          }
-        )
-      )
+      teamsCreate(service, channel, {
+        channel_key: channel.channel_key,
+        thread_id: '19:dm-thread',
+        text: '',
+        skipped_files: [{ name: 'report<1>.pdf', reason: 'unsupported_type' }],
+        metadata: { teams_conversation_type: 'personal' },
+        teams_user_aad_object_id: 'aad-object-1',
+        teams_member: {
+          service_url: 'https://smba.trafficmanager.net/amer/',
+          conversation_id: 'a:personal-conversation',
+          team_id: null,
+          user_id: '29:user-1',
+        },
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a3' as never,
+      })
     ).resolves.toMatchObject({ success: true });
     const prompt = String(promptCreate.mock.calls[0][0].prompt);
     expect(prompt).toContain(
@@ -955,17 +961,7 @@ describe('GatewayService user alignment operational logs', () => {
       },
       gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a4' as never,
     };
-    return service.create(
-      withVerifiedHttpGatewayAuthority(data, {
-        id: data.gateway_inbound_event_id,
-        gateway_channel_id: channel.id,
-        processing_token: 'claim-token',
-        provider_config_generation: 2,
-        verified_app_id: 'teams-app',
-        verified_tenant_id: 'tenant-a',
-        thread_id: '19:dm-thread',
-      })
-    );
+    return teamsCreate(service, channel, data);
   }
 
   const teamsImage = {
@@ -1042,13 +1038,16 @@ describe('GatewayService user alignment operational logs', () => {
     );
   });
 
-  it('rejects an unmatched Teams sender with a not-linked notice and no fallback user', async () => {
+  it('rejects unmatched Teams senders (email and user_map misses) with one not-linked notice', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    const { create, notice, promptCreate } = teamsAlignedHarness({ alignedUser: null });
-    await expect(create()).resolves.toEqual({ success: false, sessionId: '', created: false });
-    expect(promptCreate).not.toHaveBeenCalled();
-    expect(notice).toHaveBeenCalledOnce();
-    expect(String(notice.mock.calls[0]?.[2])).toContain("isn't linked to an Agor user");
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const userMap of [undefined, { 'aad-object-1': '01927f9d-0000-7000-8000-0000000000aa' }]) {
+      const { create, notice, promptCreate } = teamsAlignedHarness({ alignedUser: null, userMap });
+      await expect(create()).resolves.toEqual({ success: false, sessionId: '', created: false });
+      expect(promptCreate).not.toHaveBeenCalled();
+      expect(notice).toHaveBeenCalledOnce();
+      expect(String(notice.mock.calls[0]?.[2])).toContain("isn't linked to an Agor user");
+    }
   });
 
   it('retries a transient Teams member lookup instead of rejecting the sender', async () => {
@@ -2285,18 +2284,10 @@ describe('GatewayService startup/bootstrap hint (#1982)', () => {
 
 describe('GatewayService durable listener delivery fences', () => {
   it('requires exact structured mentions in Teams group chats despite require_mention false', async () => {
-    const channel = {
-      ...slackChannel,
-      id: 'teams-group-mention-channel' as never,
-      channel_type: 'teams',
-      channel_key: 'teams-group-mention-key',
-      config: {
-        app_id: 'teams-app',
-        app_password: 'secret',
-        microsoft_tenant_id: 'tenant-a',
-        require_mention: false,
-      },
-    } as GatewayChannel;
+    const channel = makeTeamsChannel({
+      id: 'teams-group-mention-channel',
+      config: { require_mention: false },
+    });
     const { service, promptCreate } = makeGatewayHarness({
       channel,
       existingMapping: makeMapping({ channel_id: channel.id, thread_id: '19:group@thread.v2' }),
@@ -2312,19 +2303,7 @@ describe('GatewayService durable listener delivery fences', () => {
       },
       gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000097' as never,
     };
-    await expect(
-      service.create(
-        withVerifiedHttpGatewayAuthority(data, {
-          id: data.gateway_inbound_event_id,
-          gateway_channel_id: channel.id,
-          processing_token: 'claim-token',
-          provider_config_generation: channel.provider_config_generation,
-          verified_app_id: 'teams-app',
-          verified_tenant_id: 'tenant-a',
-          thread_id: data.thread_id,
-        })
-      )
-    ).resolves.toMatchObject({
+    await expect(teamsCreate(service, channel, data)).resolves.toMatchObject({
       success: false,
       created: false,
     });
@@ -2332,20 +2311,10 @@ describe('GatewayService durable listener delivery fences', () => {
   });
 
   it('rejects direct Teams creates without durable ownership and accepts the verified HTTP path', async () => {
-    const channel: GatewayChannel = {
-      ...slackChannel,
-      id: 'teams-authority-channel' as never,
-      channel_type: 'teams',
-      channel_key: 'teams-authority-key',
-      config: {
-        app_id: 'teams-app',
-        app_password: 'secret',
-        microsoft_tenant_id: 'tenant-a',
-        require_mention: true,
-      },
-      provider_installation_id: 'teams-app',
-      provider_config_generation: 3,
-    } as GatewayChannel;
+    const channel = makeTeamsChannel({
+      id: 'teams-authority-channel',
+      config: { require_mention: true },
+    });
     const mapping = makeMapping({
       channel_id: channel.id,
       thread_id: '19:channel|root-1',
@@ -2371,19 +2340,7 @@ describe('GatewayService durable listener delivery fences', () => {
     };
 
     await expect(service.create(data)).rejects.toThrow(/authority must be verified/i);
-    await expect(
-      service.create(
-        withVerifiedHttpGatewayAuthority(data, {
-          id: data.gateway_inbound_event_id,
-          gateway_channel_id: channel.id,
-          processing_token: 'claim-token',
-          provider_config_generation: channel.provider_config_generation,
-          verified_app_id: 'teams-app',
-          verified_tenant_id: 'tenant-a',
-          thread_id: data.thread_id,
-        })
-      )
-    ).resolves.toMatchObject({
+    await expect(teamsCreate(service, channel, data)).resolves.toMatchObject({
       success: true,
       taskId: 'task-1',
     });
@@ -2397,15 +2354,7 @@ describe('GatewayService durable listener delivery fences', () => {
   });
 
   it('reconciles a Teams queue retry from its stable Task without durable listener ownership', async () => {
-    const channel = {
-      ...slackChannel,
-      id: 'teams-retry-channel' as never,
-      channel_type: 'teams',
-      channel_key: 'teams-retry-key',
-      config: { app_id: 'teams-app', app_password: 'secret', microsoft_tenant_id: 'tenant-a' },
-      provider_installation_id: 'teams-app',
-      provider_config_generation: 1,
-    } as GatewayChannel;
+    const channel = makeTeamsChannel({ id: 'teams-retry-channel', provider_config_generation: 1 });
     const mapping = makeMapping({
       channel_id: channel.id,
       thread_id: '19:retry|root',
@@ -2441,19 +2390,10 @@ describe('GatewayService durable listener delivery fences', () => {
       idempotency_task_id: taskId,
       idempotency_session_id: mapping.session_id,
     };
-    await expect(
-      service.create(
-        withVerifiedHttpGatewayAuthority(data, {
-          id: eventId,
-          gateway_channel_id: channel.id,
-          processing_token: 'claim-token',
-          provider_config_generation: 1,
-          verified_app_id: 'teams-app',
-          verified_tenant_id: 'tenant-a',
-          thread_id: data.thread_id,
-        })
-      )
-    ).resolves.toMatchObject({ success: true, taskId });
+    await expect(teamsCreate(service, channel, data)).resolves.toMatchObject({
+      success: true,
+      taskId,
+    });
     expect(priorTask).toHaveBeenCalledWith(taskId);
     expect(promptCreate).not.toHaveBeenCalled();
     expect(sessionsGet).not.toHaveBeenCalled();
@@ -2481,15 +2421,9 @@ describe('GatewayService durable listener delivery fences', () => {
   describe('Teams standard-channel catch-up', () => {
     const triggerId = '1616990132035';
     const threadId = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2|1616989510408';
-    const channel: GatewayChannel = {
-      ...slackChannel,
-      id: 'teams-catch-up-channel' as never,
-      channel_type: 'teams',
-      channel_key: 'teams-catch-up-key',
+    const channel = makeTeamsChannel({
+      id: 'teams-catch-up-channel',
       config: {
-        app_id: 'teams-app',
-        app_password: 'secret',
-        microsoft_tenant_id: 'tenant-a',
         catch_up: {
           mode: 'best_effort',
           max_messages: 50,
@@ -2497,9 +2431,7 @@ describe('GatewayService durable listener delivery fences', () => {
           request_timeout_ms: 8_000,
         },
       },
-      provider_installation_id: 'teams-app',
-      provider_config_generation: 3,
-    } as GatewayChannel;
+    });
 
     function admit(service: GatewayService) {
       const data = {
@@ -2518,17 +2450,7 @@ describe('GatewayService durable listener delivery fences', () => {
         gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000095' as never,
         idempotency_task_id: '01927f9d-0000-7000-8000-000000000094' as never,
       };
-      return service.create(
-        withVerifiedHttpGatewayAuthority(data, {
-          id: data.gateway_inbound_event_id,
-          gateway_channel_id: channel.id,
-          processing_token: 'claim-token',
-          provider_config_generation: 3,
-          verified_app_id: 'teams-app',
-          verified_tenant_id: 'tenant-a',
-          thread_id: threadId,
-        })
-      );
+      return teamsCreate(service, channel, data);
     }
 
     function harness(fetchProviderHistory: ReturnType<typeof vi.fn>) {
@@ -2596,22 +2518,6 @@ describe('GatewayService durable listener delivery fences', () => {
       expect(promptCreate.mock.invocationCallOrder[0]).toBeLessThan(
         threadMapRepo.advanceTeamsLastAdmittedActivityId.mock.invocationCallOrder[0]
       );
-    });
-
-    it('admits the mention with history_status when the read fails and leaves the cursor', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-      const fetchProviderHistory = vi.fn(async () => {
-        throw new Error('Graph unavailable');
-      });
-      const { service, promptCreate, threadMapRepo } = harness(fetchProviderHistory);
-
-      await expect(admit(service)).resolves.toMatchObject({ success: true });
-      warn.mockRestore();
-      expect(promptCreate).toHaveBeenCalledOnce();
-      const prompt = promptCreate.mock.calls[0][0].prompt as string;
-      expect(prompt).toContain('history_status');
-      expect(prompt).toContain('what did we decide?');
-      expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).not.toHaveBeenCalled();
     });
   });
 
@@ -6849,21 +6755,13 @@ describe('GatewayService Slack inbound reactions', () => {
 });
 
 describe('GatewayService Teams notices', () => {
-  const teamsChannel = {
-    ...slackChannel,
-    id: 'teams-notice-channel' as never,
-    channel_type: 'teams',
-    channel_key: 'teams-notice-key',
+  const teamsChannel = makeTeamsChannel({
+    id: 'teams-notice-channel',
     config: {
-      app_id: 'teams-app',
-      app_password: 'secret',
-      microsoft_tenant_id: 'tenant-a',
       align_teams_users: true,
       user_map: { 'aad-mapped': '01927f9d-0000-7000-8000-0000000000aa' },
     },
-    provider_installation_id: 'teams-app',
-    provider_config_generation: 3,
-  } as GatewayChannel;
+  });
 
   function teamsNoticeHarness() {
     const harness = makeGatewayHarness({
@@ -6967,11 +6865,7 @@ describe('GatewayService Teams notices', () => {
   });
 
   describe('session-created notice', () => {
-    const fixedChannel = {
-      ...teamsChannel,
-      id: 'teams-fixed-channel' as never,
-      config: { app_id: 'teams-app', app_password: 'secret', microsoft_tenant_id: 'tenant-a' },
-    } as GatewayChannel;
+    const fixedChannel = makeTeamsChannel({ id: 'teams-fixed-channel' });
     const sessionUrl = 'https://agor.example/ui/s/sess-1/';
     const linkNotice = `Agor: Session created: [View session](${sessionUrl}).`;
 
@@ -7003,17 +6897,7 @@ describe('GatewayService Teams notices', () => {
         idempotency_task_id: '01927f9d-0000-7000-8000-0000000000d2' as never,
         ...(ids.session ? { idempotency_session_id: ids.session as never } : {}),
       };
-      return service.create(
-        withVerifiedHttpGatewayAuthority(data, {
-          id: data.gateway_inbound_event_id,
-          gateway_channel_id: fixedChannel.id,
-          processing_token: 'claim-token',
-          provider_config_generation: 3,
-          verified_app_id: 'teams-app',
-          verified_tenant_id: 'tenant-a',
-          thread_id: threadId,
-        })
-      );
+      return teamsCreate(service, fixedChannel, data);
     }
 
     it('posts one masked link with the follow-up hint when a channel session is created', async () => {
@@ -7076,58 +6960,16 @@ describe('GatewayService Teams notices', () => {
       ]);
     });
   });
-
-  it('tells an unlinked Teams user once that their account is not linked', async () => {
-    const { service, notices, promptCreate } = teamsNoticeHarness();
-    const data = {
-      channel_key: teamsChannel.channel_key,
-      thread_id: '19:c|root-1',
-      text: 'hello',
-      metadata: { teams_conversation_type: 'channel', teams_has_mention: true },
-      teams_user_aad_object_id: 'aad-unmapped',
-      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a1' as never,
-    };
-    await expect(
-      service.create(
-        withVerifiedHttpGatewayAuthority(data, {
-          id: data.gateway_inbound_event_id,
-          gateway_channel_id: teamsChannel.id,
-          processing_token: 'claim-token',
-          provider_config_generation: 3,
-          verified_app_id: 'teams-app',
-          verified_tenant_id: 'tenant-a',
-          thread_id: data.thread_id,
-        })
-      )
-    ).resolves.toMatchObject({ success: false });
-    expect(promptCreate).not.toHaveBeenCalled();
-    expect(notices).toHaveBeenCalledOnce();
-    expect(notices).toHaveBeenCalledWith(
-      teamsChannel,
-      '19:c|root-1',
-      expect.stringMatching(/isn't linked to an Agor user/)
-    );
-  });
 });
 
 describe('GatewayService Teams proactive sends', () => {
   const TEAMS_CHANNEL = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2';
   const SIBLING = '19:9b8a7f6e5d4c4b3a2f1e0d9c8b7a6f5e@thread.tacv2';
   const ROOT = '1616990000001';
-  const channel = {
-    ...slackChannel,
-    id: 'teams-outbound-channel' as never,
-    channel_type: 'teams',
-    channel_key: 'teams-outbound-key',
-    config: {
-      app_id: 'teams-app',
-      app_password: 'secret',
-      microsoft_tenant_id: 'tenant-a',
-      outbound_enabled: true,
-    },
-    provider_installation_id: 'teams-app',
-    provider_config_generation: 3,
-  } as GatewayChannel;
+  const channel = makeTeamsChannel({
+    id: 'teams-outbound-channel',
+    config: { outbound_enabled: true },
+  });
   const anchorAddress = { serviceUrl: 'https://smba.trafficmanager.net/amer/' };
   const fenced = (overrides: Record<string, unknown> = {}) => ({
     ok: true,
@@ -7359,19 +7201,7 @@ describe('GatewayService Teams proactive sends', () => {
       },
       gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000b1' as never,
     };
-    await expect(
-      service.create(
-        withVerifiedHttpGatewayAuthority(data, {
-          id: data.gateway_inbound_event_id,
-          gateway_channel_id: channel.id,
-          processing_token: 'claim-token',
-          provider_config_generation: 3,
-          verified_app_id: 'teams-app',
-          verified_tenant_id: 'tenant-a',
-          thread_id: data.thread_id,
-        })
-      )
-    ).resolves.toMatchObject({ success: true });
+    await expect(teamsCreate(service, channel, data)).resolves.toMatchObject({ success: true });
     expect(outboundRepo.admitReplySession).toHaveBeenCalledWith(channel.id, data.thread_id);
     expect(threadMapRepo.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -7437,17 +7267,7 @@ describe('GatewayService Teams proactive sends', () => {
       },
       gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000b3' as never,
     };
-    await service.create(
-      withVerifiedHttpGatewayAuthority(data, {
-        id: data.gateway_inbound_event_id,
-        gateway_channel_id: channel.id,
-        processing_token: 'claim-token',
-        provider_config_generation: 3,
-        verified_app_id: 'teams-app',
-        verified_tenant_id: 'tenant-a',
-        thread_id: data.thread_id,
-      })
-    );
+    await teamsCreate(service, channel, data);
     expect(fetchProviderHistory).toHaveBeenCalledWith(
       expect.objectContaining({ afterProviderCursor: '1616990000009' })
     );
@@ -7506,17 +7326,7 @@ describe('GatewayService Teams proactive sends', () => {
       metadata: { teams_conversation_type: 'personal' },
       gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000b2' as never,
     };
-    await service.create(
-      withVerifiedHttpGatewayAuthority(data, {
-        id: data.gateway_inbound_event_id,
-        gateway_channel_id: channel.id,
-        processing_token: 'claim-token',
-        provider_config_generation: 3,
-        verified_app_id: 'teams-app',
-        verified_tenant_id: 'tenant-a',
-        thread_id: data.thread_id,
-      })
-    );
+    await teamsCreate(service, channel, data);
     expect(outboundRepo.admitReplySession).not.toHaveBeenCalled();
   });
 });

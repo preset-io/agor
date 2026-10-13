@@ -4,7 +4,7 @@
  * revocation. Task-addressed routing runs in the shared Teams gateway cases.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { TenantID } from '../../types';
 import { createDatabase, type Database } from '../client';
@@ -100,8 +100,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams message deliveries P
   });
 
   it('does not let another tenant revoke an address by channel id', async () => {
-    const previousSecret = process.env.AGOR_MASTER_SECRET;
-    process.env.AGOR_MASTER_SECRET = 'teams-address-pg-secret';
+    vi.stubEnv('AGOR_MASTER_SECRET', 'teams-address-pg-secret');
     try {
       const tenantA = `teams-revoke-a-${generateId()}` as TenantID;
       const tenantB = `teams-revoke-b-${generateId()}` as TenantID;
@@ -135,8 +134,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams message deliveries P
         )
       ).toMatchObject({ ok: true });
     } finally {
-      if (previousSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
-      else process.env.AGOR_MASTER_SECRET = previousSecret;
+      vi.unstubAllEnvs();
     }
   });
 });

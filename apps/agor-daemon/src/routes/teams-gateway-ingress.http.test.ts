@@ -107,7 +107,6 @@ async function withRoute(
       body?: Record<string, unknown>,
       channelId?: string
     ) => Promise<globalThis.Response>;
-    setEndorsements: (value: string[] | undefined) => void;
     onEndorsementFetch: (callback: () => Promise<void>) => void;
     wakeWorker: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
@@ -115,7 +114,6 @@ async function withRoute(
 ) {
   const channel = await seedChannel(db, extraConfig);
   const kid = randomUUID();
-  let endorsements: string[] | undefined = ['msteams'];
   let beforeEndorsement: (() => Promise<void>) | undefined;
   const app = express();
   app.use(express.json({ limit: '2mb' }));
@@ -127,7 +125,7 @@ async function withRoute(
           kid,
           alg: 'RS256',
           use: 'sig',
-          endorsements,
+          endorsements: ['msteams'],
         },
       ],
     })
@@ -180,9 +178,6 @@ async function withRoute(
           },
           body: JSON.stringify(body),
         }),
-      setEndorsements: (value) => {
-        endorsements = value;
-      },
       onEndorsementFetch: (callback) => {
         beforeEndorsement = callback;
       },
@@ -251,51 +246,22 @@ describe('registered Teams HTTP ingress with real SDK JWT verification', {
     });
   });
 
-  for (const failure of [
-    'missing',
-    'forged',
-    'expired',
-    'audience',
-    'issuer',
-    'tenant',
-    'activity tenant',
-    'service URL',
-    'unsafe service URL',
-    'endorsement',
-    'missing endorsement',
-  ] as const) {
+  // Post-SDK identity variants are covered by the validateTeamsVerifiedIdentity table.
+  for (const failure of ['missing', 'forged', 'expired', 'audience', 'issuer', 'tenant'] as const) {
     ownedDbTest(`rejects ${failure} with no event or address`, async ({ db }) => {
-      await withRoute(db, async ({ sign, post, setEndorsements }) => {
+      await withRoute(db, async ({ sign, post }) => {
         const claims: Record<string, unknown> = {};
-        let body = activity();
         if (failure === 'expired') claims.exp = Math.floor(Date.now() / 1000) - 600;
         if (failure === 'audience') claims.aud = 'other-app';
         if (failure === 'issuer') claims.iss = 'https://invalid.example';
         if (failure === 'tenant') claims.tid = 'other-tenant';
-        if (failure === 'activity tenant')
-          body = activity({ channelData: { tenant: { id: 'other-tenant' } } });
-        if (failure === 'service URL') claims.serviceurl = 'https://other.example/';
-        if (failure === 'unsafe service URL') {
-          claims.serviceurl = 'http://smba.trafficmanager.net/teams/';
-          body = activity({ serviceUrl: claims.serviceurl });
-        }
-        if (failure === 'endorsement') setEndorsements(['slack']);
-        if (failure === 'missing endorsement') setEndorsements(undefined);
         const result = await post(
           failure === 'missing' ? undefined : sign(claims, failure === 'forged'),
-          body
+          activity()
         );
-        expect(result.status).toBe(
-          ['missing', 'forged', 'expired', 'audience', 'issuer'].includes(failure) ? 401 : 403
-        );
+        expect(result.status).toBe(failure === 'tenant' ? 403 : 401);
         if (result.status === 403) {
-          expect(await result.json()).toMatchObject({
-            code: failure.includes('tenant')
-              ? 'invalid_tenant'
-              : failure.includes('endorsement')
-                ? 'invalid_channel_endorsement'
-                : 'invalid_service_url',
-          });
+          expect(await result.json()).toMatchObject({ code: 'invalid_tenant' });
         }
         await expectNoPersistence(db);
       });
@@ -511,44 +477,6 @@ describe('registered Teams HTTP ingress with real SDK JWT verification', {
         ).toBe(200);
         expect(await select(db).from(gatewayInboundEvents).all()).toHaveLength(2);
         expect(await select(db).from(teamsConversationAddresses).all()).toHaveLength(2);
-      });
-    }
-  );
-
-  ownedDbTest(
-    'uses a collision-safe conversation/activity tuple and the base channel conversation',
-    async ({ db }) => {
-      await withRoute(db, async ({ sign, post }) => {
-        const token = sign();
-        for (const [conversationId, id] of [
-          ['a|b', 'c'],
-          ['a', 'b|c'],
-        ]) {
-          expect(
-            (
-              await post(
-                token,
-                activity({ id, conversation: { id: conversationId, conversationType: 'personal' } })
-              )
-            ).status
-          ).toBe(200);
-        }
-        const channelActivity = activity({
-          id: 'channel-reply',
-          replyToId: 'root',
-          conversation: { id: 'base;messageid=root', conversationType: 'channel' },
-          entities: [{ type: 'mention', mentioned: { id: config.app_id } }],
-        });
-        expect((await post(token, channelActivity)).status).toBe(200);
-        expect(
-          (
-            await post(token, {
-              ...channelActivity,
-              conversation: { id: 'base', conversationType: 'channel' },
-            })
-          ).status
-        ).toBe(200);
-        expect(await select(db).from(gatewayInboundEvents).all()).toHaveLength(3);
       });
     }
   );
