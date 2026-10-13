@@ -39,6 +39,57 @@ describe('useBranchModalForm normalized permission package', () => {
     expect(result.current.canEditGeneral).toBe(true);
   });
 
+  it.each([
+    { shape: 'administrator with view access', role: 'admin', can: 'view', want: true },
+    { shape: 'member with all access', role: 'member', can: 'all', want: true },
+    { shape: 'member with session access', role: 'member', can: 'session', want: false },
+    { shape: 'member whose access lookup failed', role: 'member', can: null, want: undefined },
+    {
+      shape: 'member whose permission package failed',
+      role: 'member',
+      can: 'all',
+      failPermissionsFind: true,
+      want: undefined,
+    },
+    {
+      shape: 'administrator whose access lookups failed',
+      role: 'admin',
+      can: null,
+      failPermissionsFind: true,
+      want: true,
+    },
+  ] satisfies Array<{
+    shape: string;
+    role: 'admin' | 'member';
+    can: string | null;
+    failPermissionsFind?: boolean;
+    want: boolean | undefined;
+  }>)(
+    'resolves environment control for a $shape',
+    async ({ role, can, failPermissionsFind = false, want }) => {
+      const user = makeUser({ user_id: 'user-2', role });
+      const branch = makeBranch();
+      const options = {
+        users: [user],
+        failPermissionsFind,
+        // A getter so the failed lookup rejects only when the hook asks for it.
+        get effectiveAccess() {
+          return can === null
+            ? Promise.reject(new Error('unavailable'))
+            : { can, is_owner: false, source: 'others' };
+        },
+      };
+      const { client } = makeStubClient(options);
+      const { result } = renderHook(
+        () => useBranchModalForm({ branch, client, currentUser: user, open: true }),
+        { wrapper }
+      );
+      if (role === 'member') expect(result.current.canControlEnvironment).toBeUndefined();
+      await waitFor(() => expect(result.current.permissionsLoading).toBe(false));
+      expect(result.current.canControlEnvironment).toBe(want);
+    }
+  );
+
   it('lets a branch viewer edit only their personal sharing rule', async () => {
     const viewer = makeUser({ user_id: 'viewer-1', role: 'member' });
     const branch = makeBranch();

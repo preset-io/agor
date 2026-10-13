@@ -8,7 +8,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { Alert, Badge, Button, Drawer, Grid, Modal, Space, Tabs, theme } from 'antd';
+import { Badge, Button, Drawer, Grid, Modal, Space, Tabs, theme } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
@@ -19,7 +19,7 @@ import {
   isInFlightConnectionLossError,
 } from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
-import { ActionErrorNotice } from '../CompactNotice';
+import { ActionErrorNotice, CompactNotice } from '../CompactNotice';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab } from './tabs/GeneralTab';
@@ -148,18 +148,10 @@ export const BranchModal: React.FC<BranchModalProps> = ({
 
   if (!repo) {
     const unavailable = (
-      <Alert
+      <CompactNotice
         type="warning"
-        showIcon
-        title="Repository details are unavailable"
-        description="This branch cannot be edited until its repository has loaded. Open workspace repositories to check its configuration."
-        action={
-          onOpenSettings ? (
-            <Button size="small" onClick={onOpenSettings}>
-              Repositories
-            </Button>
-          ) : undefined
-        }
+        message="This branch's repository hasn't loaded, so you can't edit it yet."
+        actions={onOpenSettings ? [{ label: 'Open repositories', onClick: onOpenSettings }] : []}
       />
     );
     return presentation === 'bottom-sheet' || compact ? (

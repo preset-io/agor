@@ -4,7 +4,7 @@ import { ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { GlobalToken } from 'antd';
 import { theme } from 'antd';
 import type React from 'react';
-import { isSessionFailed } from '../../utils/sessionStatus';
+import { describeSessionStatus, isSessionFailed, READY_STATUS } from '../../utils/sessionStatus';
 import { ToolIcon } from '../ToolIcon';
 
 /**
@@ -34,24 +34,9 @@ export const isSessionRowRead = (session: Session, selected: boolean): boolean =
 
 type StatusMarkKind = 'running' | 'input' | 'waiting' | 'timed-out' | 'failed' | 'ready';
 
-const STATUS_MARK_LABELS: Record<StatusMarkKind, string> = {
-  running: 'Running',
-  input: 'Awaiting input',
-  waiting: 'Waiting',
-  'timed-out': 'Timed out',
-  failed: 'Latest task failed',
-  ready: 'Ready for prompt',
-};
-
-/** Per-status wording for the waiting family, so the mark's name says what it waits on. */
-const WAITING_LABELS: Partial<Record<Session['status'], string>> = {
-  [SessionStatus.AWAITING_PERMISSION]: 'Awaiting permission',
-  [SessionStatus.STOPPING]: 'Stopping',
-};
-
 /**
- * Tones follow getSessionStatusTone: running spins green, awaiting input (processing)
- * pulses in the primary color, awaiting permission/stopping (warning) pulse amber.
+ * Tones follow getSessionStatusTone: running spins green, stopping pulses blue,
+ * waiting for approval or a reply pulses amber.
  */
 function getStatusMarkKind(session: Session): StatusMarkKind | null {
   if (session.status === SessionStatus.RUNNING) return 'running';
@@ -63,10 +48,10 @@ function getStatusMarkKind(session: Session): StatusMarkKind | null {
   return null;
 }
 
-function getStatusMarkLabel(session: Session, kind: StatusMarkKind): string {
-  return kind === 'waiting'
-    ? (WAITING_LABELS[session.status] ?? STATUS_MARK_LABELS.waiting)
-    : STATUS_MARK_LABELS[kind];
+/** Rows have no visible label, so the mark's tooltip falls back to it. */
+function getStatusMarkCopy(session: Session, kind: StatusMarkKind) {
+  const { label, description } = kind === 'ready' ? READY_STATUS : describeSessionStatus(session);
+  return { label, title: description ?? label };
 }
 
 /** Row fill: failed rows tint the whole row; selection is a neutral fill. */
@@ -103,21 +88,22 @@ export const SessionRowLogo: React.FC<{ tool: string }> = ({ tool }) => (
 );
 
 /**
- * Trailing status: spinner while running (green); pulsing dot while awaiting input
- * (primary) or awaiting permission/stopping (amber); amber dot when timed out,
+ * Trailing status: spinner while running (green); pulsing dot while awaiting input or
+ * permission (amber) or stopping (primary); amber dot when timed out,
  * primary dot when ready, exclamation when failed.
  */
 export const SessionStatusMark: React.FC<{ session: Session }> = ({ session }) => {
   const { token } = theme.useToken();
   const kind = getStatusMarkKind(session);
   if (!kind) return null;
+  const { label, title } = getStatusMarkCopy(session, kind);
   if (kind === 'failed') {
     // A shape, not just a color, separates failure from the ready dot.
     return (
       <ExclamationCircleOutlined
         role="img"
-        aria-label="Latest task failed"
-        title="Latest task failed"
+        aria-label={label}
+        title={title}
         style={{ color: token.colorErrorText, fontSize: token.fontSizeSM, flex: '0 0 auto' }}
       />
     );
@@ -128,19 +114,18 @@ export const SessionStatusMark: React.FC<{ session: Session }> = ({ session }) =
       <LoadingOutlined
         spin
         role="img"
-        aria-label="Running"
-        title="Running"
+        aria-label={label}
+        title={title}
         style={{ color: token.colorSuccess, fontSize: token.fontSizeSM, flex: '0 0 auto' }}
       />
     );
   }
-  const label = getStatusMarkLabel(session, kind);
   const pulsing = kind === 'input' || kind === 'waiting';
   return (
     <span
       role="img"
       aria-label={label}
-      title={label}
+      title={title}
       className={pulsing ? 'status-dot-run' : undefined}
       style={{
         display: 'inline-block',
@@ -148,7 +133,10 @@ export const SessionStatusMark: React.FC<{ session: Session }> = ({ session }) =
         height: SESSION_STATUS_DOT_SIZE,
         borderRadius: '50%',
         flex: '0 0 auto',
-        background: kind === 'ready' || kind === 'input' ? token.colorPrimary : token.colorWarning,
+        background:
+          kind === 'ready' || session.status === SessionStatus.STOPPING
+            ? token.colorPrimary
+            : token.colorWarning,
       }}
     />
   );
@@ -157,5 +145,5 @@ export const SessionStatusMark: React.FC<{ session: Session }> = ({ session }) =
 /** Accessible-name suffix for state that rows show only visually. */
 export function getSessionRowStateLabel(session: Session): string | null {
   const kind = getStatusMarkKind(session);
-  return kind ? getStatusMarkLabel(session, kind).toLowerCase() : null;
+  return kind ? getStatusMarkCopy(session, kind).label.toLowerCase() : null;
 }

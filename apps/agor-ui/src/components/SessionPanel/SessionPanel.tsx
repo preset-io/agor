@@ -86,7 +86,7 @@ import {
   readPromptDraftSeed,
   savePromptDraft,
 } from '../../utils/promptDrafts';
-import { getSessionStatusLabel } from '../../utils/sessionStatus';
+import { describeSessionStatus } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
@@ -1681,7 +1681,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               <Flex align="center" gap={token.marginXXS} wrap>
                 <Badge status={getStatusColor()} />
                 <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                  {getSessionStatusLabel(session.status)}
+                  {describeSessionStatus(session).label}
                 </Typography.Text>
                 {session.created_by && session.created_by !== currentUserId && (
                   <>
