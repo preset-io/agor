@@ -249,16 +249,12 @@ describe('UsersTable groups load', () => {
             : vi.fn().mockResolvedValue([{ group_id: 'g1', user_id: 'admin' }]),
       }),
     } as unknown as ComponentProps<typeof UsersTable>['client'];
-    render(
-      <ConfigProvider theme={{ hashed: false }}>
-        <AntApp>
-          <UsersTable
-            userById={new Map([[admin.user_id, admin]])}
-            client={client}
-            currentUser={admin}
-          />
-        </AntApp>
-      </ConfigProvider>
+    renderWithSettingsShell(
+      <UsersTable
+        userById={new Map([[admin.user_id, admin]])}
+        client={client}
+        currentUser={admin}
+      />
     );
     expect(await screen.findByText("Couldn't load groups.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));

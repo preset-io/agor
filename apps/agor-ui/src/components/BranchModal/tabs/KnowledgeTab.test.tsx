@@ -76,7 +76,7 @@ describe('KnowledgeTab failures', () => {
     });
     renderTab({ patch });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Save policy' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Save policy$/ }));
 
     await waitFor(() =>
       expect(messageMocks.showError).toHaveBeenCalledWith(
