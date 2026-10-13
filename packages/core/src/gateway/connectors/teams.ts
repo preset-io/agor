@@ -26,6 +26,11 @@ import type {
 import { GATEWAY_READABLE_MIMES, readableMimeForFilename } from '../readable-files';
 import { isTeamsFileDownloadUrl, isTeamsTokenHost } from '../teams-service-url';
 import {
+  fetchTeamsChannelMessageFiles,
+  type TeamsChannelFilesRequest,
+  type TeamsChannelFilesResult,
+} from './teams-channel-files';
+import {
   fetchTeamsThreadHistory,
   listTeamsChannelPosts,
   type TeamsChannelPostsRequest,
@@ -619,6 +624,11 @@ export class TeamsConnector implements GatewayConnector {
   /** Agent read of one standard-channel thread page; access checks belong to the caller. */
   fetchThreadHistory(req: TeamsThreadHistoryRequest): Promise<TeamsThreadHistoryResult> {
     return fetchTeamsThreadHistory(this.config, req);
+  }
+
+  /** Readable files attached to a verified channel message; access checks belong to the caller. */
+  fetchChannelMessageFiles(req: TeamsChannelFilesRequest): Promise<TeamsChannelFilesResult> {
+    return fetchTeamsChannelMessageFiles(this.config, req);
   }
 
   /** Agent list of a standard channel's posts; access checks belong to the caller. */

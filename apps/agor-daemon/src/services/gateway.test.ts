@@ -948,7 +948,8 @@ describe('GatewayService user alignment operational logs', () => {
     service: GatewayService,
     channel: GatewayChannel,
     files: Array<Record<string, unknown>>,
-    skippedFiles: Array<Record<string, unknown>> = []
+    skippedFiles: Array<Record<string, unknown>> = [],
+    overrides: Record<string, unknown> = {}
   ) {
     const data = {
       channel_key: channel.channel_key,
@@ -965,6 +966,7 @@ describe('GatewayService user alignment operational logs', () => {
         user_id: '29:user-1',
       },
       gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a4' as never,
+      ...overrides,
     };
     return teamsCreate(service, channel, data);
   }
@@ -1024,8 +1026,65 @@ describe('GatewayService user alignment operational logs', () => {
     const prompt = String(promptCreate.mock.calls[0][0].prompt);
     expect(prompt).toContain('upl_image');
     expect(prompt).toContain(
-      'Attachments you could not read: "spec.docx" (stored in SharePoint, which Agor cannot read); "notes.txt" (could not be downloaded or is too large).'
+      'Attachments you could not read: "spec.docx" (stored in SharePoint, which Agor has not been given access to); "notes.txt" (could not be downloaded or is too large).'
     );
+    expect(prompt).not.toContain('tempauth');
+  });
+
+  it('reads channel files over Graph and drops the activity SharePoint skip they replace', async () => {
+    const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
+    const channel = await (
+      service as unknown as { channelRepo: { findByKey: () => Promise<GatewayChannel> } }
+    ).channelRepo.findByKey();
+    Object.assign(channel.config, { files: true, catch_up: { mode: 'off' } });
+    const channelImage = {
+      id: 'channel-img',
+      name: 'image.png',
+      mimetype: 'image/png',
+      size: 2048,
+      url_private_download: 'https://contoso.sharepoint.com/sites/Team/download.aspx?tempauth=t',
+    };
+    const fetchChannelMessageFiles = vi.fn(async () => ({
+      files: [channelImage],
+      skipped: [{ name: 'deck.pptx', reason: 'unsupported_type' }],
+    }));
+    vi.spyOn(teamsConnectorCache, 'get').mockReturnValue({ fetchChannelMessageFiles } as never);
+    vi.mocked(ingestProviderInboundFiles).mockResolvedValue({
+      uploads: [{ ref: 'upl_channel' } as never],
+      failed: 0,
+    });
+    const channelThread = '19:general@thread.tacv2';
+    await expect(
+      teamsFileCreate(service, channel, [], [{ name: 'image.png', reason: 'channel_file' }], {
+        thread_id: `${channelThread}|1616989510408`,
+        metadata: { teams_conversation_type: 'channel', teams_has_mention: true },
+        teams_catch_up: {
+          activity_id: '1616990132035',
+          timestamp: '2021-03-29T04:02:12.035Z',
+          service_url: 'https://smba.trafficmanager.net/amer/',
+          team_id: channelThread,
+          team_group_id: null,
+        },
+      })
+    ).resolves.toMatchObject({ success: true });
+    expect(fetchChannelMessageFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: channelThread,
+        rootMessageId: '1616989510408',
+        messageId: '1616990132035',
+        filesEnabled: true,
+        signal: expect.any(AbortSignal),
+      })
+    );
+    const args = vi.mocked(ingestProviderInboundFiles).mock.calls[0][0];
+    expect(args.files).toEqual([channelImage]);
+    const request = await args.requestFor(channelImage as never);
+    expect(request?.headers).toEqual({});
+    expect(request?.isAllowedUrl(channelImage.url_private_download)).toBe(true);
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain('upl_channel');
+    expect(prompt).toContain('"deck.pptx" (unsupported file type)');
+    expect(prompt).not.toContain('stored in SharePoint');
     expect(prompt).not.toContain('tempauth');
   });
 

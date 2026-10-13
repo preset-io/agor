@@ -4,7 +4,10 @@
  * never required for the current mention path.
  */
 
-export const TEAMS_RSC_APPLICATION_PERMISSIONS = ['ChannelMessage.Read.Group'] as const;
+export const TEAMS_RSC_APPLICATION_PERMISSIONS = [
+  'ChannelMessage.Read.Group',
+  'ChannelSettings.Read.Group',
+] as const;
 const TEAMS_BOT_SCOPES = ['personal', 'team', 'groupchat'] as const;
 
 export interface TeamsSetupManifestOptions {

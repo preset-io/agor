@@ -17,7 +17,10 @@ describe('Teams setup artifact', () => {
     ]);
     expect(manifest.authorization).toEqual({
       permissions: {
-        resourceSpecific: [{ name: 'ChannelMessage.Read.Group', type: 'Application' }],
+        resourceSpecific: [
+          { name: 'ChannelMessage.Read.Group', type: 'Application' },
+          { name: 'ChannelSettings.Read.Group', type: 'Application' },
+        ],
       },
     });
     expect(manifest).not.toHaveProperty('agor');

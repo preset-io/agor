@@ -11,6 +11,7 @@ export type TeamsSendConnector = Pick<
   | 'downloadToken'
   | 'startChannelThread'
   | 'listTeamChannels'
+  | 'fetchChannelMessageFiles'
 >;
 
 /** Graph and Bot Connector caches key on trusted tenant, channel, and generation; none without a tenant. */

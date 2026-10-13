@@ -115,6 +115,10 @@ export {
   TeamsMemberLookupError,
 } from './connectors/teams';
 export { teamsAddressRevocationFromActivity } from './connectors/teams-address-events';
+export type {
+  TeamsChannelFilesRequest,
+  TeamsChannelFilesResult,
+} from './connectors/teams-channel-files';
 export type { TeamsThreadHistoryRequest } from './connectors/teams-channel-history';
 export {
   TEAMS_CHANNEL_POSTS_DEFAULT_LIMIT,

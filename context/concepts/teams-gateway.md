@@ -155,9 +155,14 @@ allowlist, outside the outbox. `outbound_enabled` gates only proactive sends.
   never follows a redirect elsewhere. Download URLs live only in the encrypted
   inbound payload and are never logged or stored elsewhere; staged files are
   session executor uploads. One deadline covers all of a message's files and
-  fits the inbound lease with catch-up. Channel and group-chat files
-  (SharePoint) and everything else are named in the prompt as unread, so an
-  attachment-only mention is still admitted.
+  fits the inbound lease with catch-up. Channel activities omit SharePoint
+  files, so a channel mention is re-read over Graph (`ChannelMessage.Read.Group`)
+  inside that deadline; a `reference` file is read only if its drive is the
+  channel's `filesFolder` drive (`ChannelSettings.Read.Group`), through the
+  driveItem's short-lived `downloadUrl`. That read needs a tenant admin grant
+  (`Sites.Selected` on the team site, or `Files.Read.All`); without it, and for
+  group-chat files and other types, the file is named in the prompt as unread,
+  so an attachment-only mention is still admitted.
 - The prompt carries the sender email only when aligned identity resolved it
   from the member API for that prompt; it is not stored in mapping metadata.
 
@@ -247,7 +252,7 @@ plain, as for Discord, while channel foreign keys stay tenant-composite.
 ## Non-goals
 
 Teams SDK 2.x or a global `serviceUrl`; multi-tenant bot registrations; Graph
-transcript mirrors; SharePoint file reads or sending files back; replay or repair APIs for ambiguous
+transcript mirrors; SharePoint reads beyond files attached to a channel mention, or sending files back; replay or repair APIs for ambiguous
 deliveries; Tasks for messages that did not mention the bot.
 
 [teams-guide]: ../../apps/agor-docs/content/guide/message-gateway.mdx#setting-up-microsoft-teams-integration

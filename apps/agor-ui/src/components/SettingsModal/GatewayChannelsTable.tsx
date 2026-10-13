@@ -2663,10 +2663,11 @@ const ChannelFormFields: React.FC<{
             </Checkbox>
           </Form.Item>
           <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-            Pasted images (PNG, JPEG, GIF, WebP) are passed to the agent everywhere, and image and
-            text files (.txt, .log, .md, .csv, .json) in personal chats. Files shared in channels
-            and group chats live in SharePoint and are not read; the agent tells the user which ones
-            it skipped. Turning this on changes the app manifest, so upload the app again.
+            Images (PNG, JPEG, GIF, WebP) and text files (.txt, .log, .md, .csv, .json) are passed
+            to the agent in personal chats, and in channels once an Entra admin grants the app file
+            access (<code>Sites.Selected</code> on the team site, or <code>Files.Read.All</code>).
+            Group chat files are not read; the agent tells the user which ones it skipped. Turning
+            this on changes the app manifest, so upload the app again.
           </Typography.Text>
           <Form.Item name="teams_channel_history" valuePropName="checked" initialValue={false}>
             <Checkbox>

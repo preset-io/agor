@@ -646,10 +646,11 @@ final answer back into the same chat or channel thread.
   channels, personal chats, and group chats are not targets. Answers to people who
   mention the bot do not depend on this setting.
 - **Attachments (off by default).** With **Enable inbound images and files**
-  (`files: true`), pasted images (PNG, JPEG, GIF, WebP) are passed to the agent in
-  every chat and channel, and image and text files (.txt, .log, .md, .csv, .json)
-  sent in personal chats. Files shared in channels and group chats are stored in
-  SharePoint, which Agor cannot read. Turning the setting on also sets
+  (`files: true`), images (PNG, JPEG, GIF, WebP) and text files (.txt, .log, .md,
+  .csv, .json) sent in personal chats are passed to the agent. Teams stores images
+  and files posted in a channel in the team's SharePoint site, and Agor reads them
+  only after an admin grants the app file access (see **Channel files** below).
+  Files shared in group chats are not read. Turning the setting on also sets
   `supportsFiles` in the app manifest, so upload the app package again. A message
   with only an attachment still reaches the agent, which tells the sender which
   files it could not read.
@@ -717,6 +718,16 @@ the agent the replies posted since its last answer. It needs the
 requests and a team owner grants when installing the app. Without it, the bot
 still answers the mention, without the earlier replies. Set **Catch-up mode** to
 **Off** to turn it off.
+
+**Channel files.** Teams does not send the bot the images and files posted in a
+channel, so for each mention Agor reads the message with
+`ChannelMessage.Read.Group`, checks with `ChannelSettings.Read.Group` that each
+file is in that channel's own folder, and downloads it. Downloading needs a
+Microsoft Graph application permission that a team owner cannot grant: an Entra
+admin grants the app registration either `Sites.Selected` plus read access to
+each team's SharePoint site (narrowest), or `Files.Read.All`. Without it, the agent
+tells the sender it cannot open the file. Apps installed before Agor requested
+`ChannelSettings.Read.Group` must be uploaded and installed in the team again.
 
 **Agent channel history (off by default).** Turn on **Let session agents read
 channel history** (`agent_tools.channel_history: true`) to let agents on the
@@ -909,6 +920,10 @@ authoritative mutation transaction.
   on and that the `ChannelMessage.Read.Group` permission was granted in that team.
   The bot still answers the mention without it. Personal and group chats have no
   catch-up.
+- **The agent says it cannot open a channel image or file.** Check that
+  attachments are on, that an Entra admin granted the app `Sites.Selected` with
+  access to the team's site (or `Files.Read.All`), and that the app was installed
+  in the team with `ChannelSettings.Read.Group`.
 - **A history tool says resource-specific consent is missing.** A team owner must
   grant `ChannelMessage.Read.Group` when installing the app in that team. If it
   says Agor has not received an activity from the channel, mention the bot there

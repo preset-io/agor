@@ -186,6 +186,7 @@ import { isMcpRuntimeRecoveryEnabled } from '../utils/mcp-runtime-hints.js';
 import { issueMCPSlackRecoveryToken } from '../utils/mcp-slack-recovery-token.js';
 import { prepareTeamsCatchUp, type TeamsCatchUpTrigger } from '../utils/teams-catch-up.js';
 import { listTeamsAnchoredChannels, TEAMS_ANCHOR_TEAMS } from '../utils/teams-channel-anchors.js';
+import { readTeamsChannelMessageFiles } from '../utils/teams-channel-files.js';
 import { type TeamsSendConnector, teamsConnectorCache } from '../utils/teams-connector-cache.js';
 import {
   createTenantBoundDataAccess,
@@ -851,7 +852,7 @@ const SKIPPED_FILE_REASON: Record<InboundSkippedFile['reason'], string> = {
   unsupported_type: 'unsupported file type',
   files_disabled: 'attachments are turned off for this channel',
   invalid: 'could not be read',
-  channel_file: 'stored in SharePoint, which Agor cannot read',
+  channel_file: 'stored in SharePoint, which Agor has not been given access to',
 };
 
 /**
@@ -886,7 +887,7 @@ const READABLE_ATTACHMENTS_HINT = {
   discord:
     'Images (PNG, JPEG, GIF, WebP) and text files (.txt, .log, .md, .csv, .json) can be read; suggest one of those or pasting the text.',
   teams:
-    'Pasted images and, in personal chats, image and text files can be read; files shared in channels and group chats live in SharePoint, so suggest pasting the text or sending the file in a personal chat.',
+    'Image and text files can be read in personal chats, and in channels once an admin grants Agor access to the team files; otherwise suggest pasting the text or sending the file in a personal chat.',
 } as const;
 
 /** Prompt note for a Discord message admitted by a response mode without a mention. */
@@ -6721,16 +6722,42 @@ export class GatewayService {
       if (channel.channel_type === 'discord' || channel.channel_type === 'teams') {
         const provider = channel.channel_type;
         const filesEnabled = channelConfig.files === true;
-        const unread = (data.skipped_files ?? []).map((file) =>
+        let inboundFiles = data.files ?? [];
+        let skippedFiles = data.skipped_files ?? [];
+        const teamsDeadline =
+          provider === 'teams'
+            ? AbortSignal.timeout(teamsAttachmentDeadlineMs(channelConfig))
+            : undefined;
+        // Channel activities omit SharePoint files, so the mentioned message is read over Graph.
+        const teamsChannelFiles = teamsDeadline
+          ? await readTeamsChannelMessageFiles({
+              channel,
+              connector: teamsConnectorCache.get(getCurrentTenantId(), channel),
+              threadId: data.thread_id,
+              conversationType: data.metadata?.teams_conversation_type,
+              trigger: data.teams_catch_up,
+              filesEnabled,
+              tenantId: getCurrentTenantId(),
+              signal: teamsDeadline,
+            })
+          : undefined;
+        if (teamsChannelFiles) {
+          inboundFiles = [...inboundFiles, ...teamsChannelFiles.files];
+          skippedFiles = [
+            ...skippedFiles.filter((file) => file.reason !== 'channel_file'),
+            ...teamsChannelFiles.skipped,
+          ];
+        }
+        const unread = skippedFiles.map((file) =>
           formatUnreadAttachment(file.name, SKIPPED_FILE_REASON[file.reason])
         );
         if (!filesEnabled) {
-          for (const file of data.files ?? []) {
+          for (const file of inboundFiles) {
             unread.push(formatUnreadAttachment(file.name, SKIPPED_FILE_REASON.files_disabled));
           }
-        } else if (data.files && data.files.length > 0) {
+        } else if (inboundFiles.length > 0) {
           const staging = {
-            files: data.files,
+            files: inboundFiles,
             tenantId: requireCurrentTenantId() as TenantID,
             sessionId,
             branchId: channel.target_branch_id,
@@ -6755,7 +6782,7 @@ export class GatewayService {
                       },
                     }
                   : { isAllowedUrl: isTeamsFileDownloadUrl, headers: {} },
-              signal: AbortSignal.timeout(teamsAttachmentDeadlineMs(channelConfig)),
+              signal: teamsDeadline,
             });
           }
           if (ingestion.uploads.length > 0) {
