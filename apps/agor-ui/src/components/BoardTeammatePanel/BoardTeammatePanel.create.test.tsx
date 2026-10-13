@@ -93,14 +93,15 @@ describe('BoardTeammatePanel empty state', () => {
     expect(screen.queryByText(/no existing teammates are available/i)).toBeNull();
   });
 
-  it('does not offer creating over a primary whose repo is not loaded', () => {
+  it('shows a skeleton, not the empty state, for a primary whose repo is not loaded', () => {
     setBranches([teammate]);
     renderPanel(vi.fn(), {
       board: { ...board, primary_teammate_id: teammate.branch_id },
       branch: teammate,
     });
 
-    expect(screen.getByText(/does not have a primary teammate yet/i)).toBeInTheDocument();
+    expect(screen.getByTestId('board-partition-skeleton')).toBeInTheDocument();
+    expect(screen.queryByText("This board doesn't have a primary teammate yet.")).toBeNull();
     expect(screen.queryByRole('button', { name: /create ai teammate/i })).toBeNull();
     expect(screen.queryByText('Or assign an existing teammate')).toBeNull();
   });

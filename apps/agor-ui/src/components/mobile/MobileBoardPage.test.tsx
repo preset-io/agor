@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { OPEN_BOARD_SWITCHER_EVENT } from '../../utils/shellEvents';
-import { MobileBoardPage } from './MobileBoardPage';
+import { BOARD_UNAVAILABLE, MobileBoardPage } from './MobileBoardPage';
 
 type CanvasProps = {
   readOnly?: boolean;
@@ -174,8 +174,9 @@ describe('MobileBoardPage', () => {
   });
 
   it('keeps the switcher on an unknown board', () => {
+    agorStore.setState({ loading: false } as never);
     renderPage('/m/board/missing');
-    expect(screen.getByText('Board not found')).toBeInTheDocument();
+    expect(screen.getByText(BOARD_UNAVAILABLE)).toBeInTheDocument();
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Home/ })).toBeInTheDocument();
   });

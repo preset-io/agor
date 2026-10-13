@@ -26,7 +26,7 @@ describe('recovery actions', () => {
         onReopen={onReopen}
       />
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Retry cleanup' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(onRetry).toHaveBeenCalledOnce();
     expect(onReopen).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Reopen anyway…' }));
@@ -45,7 +45,7 @@ describe('recovery actions', () => {
     render(
       <RecoveryActions task={task} {...props} canReopen onRetry={vi.fn()} onReopen={vi.fn()} />
     );
-    expect(screen.getByRole('button', { name: /Retry cleanup/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Try again/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Reopen anyway…' })).toBeDisabled();
   });
   it('removes recovery actions when durable state resolves, including late success', () => {
@@ -60,7 +60,7 @@ describe('recovery actions', () => {
         onReopen={vi.fn()}
       />
     );
-    expect(screen.queryByRole('button', { name: 'Retry cleanup' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
   it('shows plain language first and hides technical diagnostics in a disclosure', () => {
     render(

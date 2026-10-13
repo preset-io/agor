@@ -143,7 +143,7 @@ for (const surface of ['shared', 'branch-card', 'teammate'] as const) {
       };
       expectSelection(1);
       const selectedFill = getComputedStyle(rows[1]).backgroundColor;
-      expect(within(rows[1]).getByRole('img', { name: 'Latest task failed' })).toBeVisible();
+      expect(within(rows[1]).getByRole('img', { name: 'Last run failed' })).toBeVisible();
       expect(within(rows[2]).getByRole('img', { name: 'Running' })).toBeVisible();
       await page.screenshot({
         path: `./.vitest/selection-${surface}-${mode}-${window.innerWidth}.png`,

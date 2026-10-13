@@ -1,21 +1,25 @@
 import type { AgorClient, Board, Branch, SpawnConfig, User } from '@agor-live/client';
-import { Empty, Spin, theme } from 'antd';
+import { Spin, Typography, theme } from 'antd';
 import { lazy, Suspense, useEffect, useMemo } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
 import { useTrackBoardVisit } from '../../hooks/useRecentBoards';
 import { useStableCallback } from '../../hooks/useStableCallback';
-import { agorStore, shallow, useStoreWithEqualityFn } from '../../store/agorStore';
+import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { makeBranchesForBoardSelector } from '../../store/selectors';
 import { OPEN_BOARD_SWITCHER_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BoardTeammatePanel, type BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { useBoardTeammatePanelData } from '../BoardTeammatePanel/useBoardTeammatePanelData';
 import type { BranchModalTab } from '../BranchModal';
+import { CompactNotice } from '../CompactNotice';
 import { mobilePageStyle } from './constants';
 
 // React Flow stays out of the shell bundle until a board is opened.
 const SessionCanvas = lazy(() => import('../SessionCanvas/SessionCanvas'));
+
+export const BOARD_UNAVAILABLE =
+  "This board isn't available. It may have been deleted, or you may not have access.";
 
 const BOARD_TABS: BoardTeammatePanelTab[] = ['board', 'teammate', 'all-sessions', 'comments'];
 
@@ -69,6 +73,8 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { token } = theme.useToken();
+  // Boards load with the first workspace read; until then a missing board may still arrive.
+  const loading = useAgorStore((state) => state.loading);
   const userId = currentUser?.user_id;
   const resolvedBoardId = boardById.has(boardId)
     ? boardId
@@ -198,7 +204,17 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           />
         </div>
       ) : (
-        <Empty description="Board not found" style={{ marginBlock: token.marginXL }} />
+        <div style={{ padding: token.padding }}>
+          {loading ? (
+            <Typography.Text type="secondary">Loading board…</Typography.Text>
+          ) : (
+            <CompactNotice
+              type="neutral"
+              message={BOARD_UNAVAILABLE}
+              actions={[{ label: 'Back to home', onClick: () => navigate('/m') }]}
+            />
+          )}
+        </div>
       )}
     </div>
   );
