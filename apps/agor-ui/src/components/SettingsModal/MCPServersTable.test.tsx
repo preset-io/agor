@@ -229,9 +229,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
     expect(add).toBeDisabled();
     fireEvent.mouseOver(add);
     expect(
-      await screen.findByText(
-        'Ask an administrator (Ada Admin or Bea Admin) to add the server you need to this workspace.'
-      )
+      await screen.findByText('Ask an administrator to add the server you need to this workspace.')
     ).toBeInTheDocument();
 
     // The pane is not admin-gated: the reader who is refused is the one who

@@ -63,7 +63,6 @@ import {
   explainManageRestriction,
   type MCPServerCapabilityContext,
   policyPendingState,
-  workspaceAdminNames,
 } from '../MCPServer/memberPolicy';
 import { useMCPServerDiscovery } from '../MCPServer/useMCPServerDiscovery';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
@@ -170,10 +169,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     ]
   );
   const canAdd = !policyPending && canAddMcpServer(capability);
-  const adminNames = useMemo(() => workspaceAdminNames(userById.values()), [userById]);
-  const addRestriction = policyPending
-    ? policyPendingHint
-    : explainAddRestriction(capability, { adminNames });
+  const addRestriction = policyPending ? policyPendingHint : explainAddRestriction(capability);
   const operationGuard = useAuthorityOperationGuard(
     durableAuthorityKey
       ? [durableAuthorityKey, client, memberPolicy.policy, memberPolicy.canConfigure]
@@ -345,7 +341,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       return createdServerId;
     } catch (error) {
       if (!operation.isCurrent()) return null;
-      const askAdmin = askAdminIfPolicyRefused(error, { adminNames });
+      const askAdmin = askAdminIfPolicyRefused(error);
       if (askAdmin) {
         showInfo(askAdmin);
         return null;

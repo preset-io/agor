@@ -10,11 +10,8 @@
  */
 
 import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@agor/core/types';
-import type { User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { EMPTY_MAPS } from '../../store/agorMaps';
-import { agorStore } from '../../store/agorStore';
 import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServer/memberPolicy';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
 
@@ -411,29 +408,15 @@ describe('CatalogDetailDrawer connect capability', () => {
     expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
   });
 
-  it('tells a member which administrators to ask for this entry', () => {
-    agorStore.setState({
-      ...EMPTY_MAPS,
-      userById: new Map([
-        ['u1', { user_id: 'u1', name: 'Zoe', email: 'z@x.dev', role: 'admin' } as User],
-        ['u2', { user_id: 'u2', email: 'ana@x.dev', role: 'superadmin' } as User],
-        ['u3', { user_id: 'u3', name: 'Mo', email: 'm@x.dev', role: 'member' } as User],
-      ]),
-    });
-    try {
-      renderDrawer(DEEPWIKI, { capability: RESTRICTED_MEMBER });
-      fireEvent.click(screen.getByRole('checkbox'));
+  it('tells a member to ask an administrator for this entry', () => {
+    renderDrawer(DEEPWIKI, { capability: RESTRICTED_MEMBER });
+    fireEvent.click(screen.getByRole('checkbox'));
 
-      expect(connectButton()).toBeDisabled();
-      expect(
-        screen.getByText(
-          'Ask an administrator (ana@x.dev or Zoe) to add DeepWiki to this workspace.'
-        )
-      ).toBeVisible();
-      expect(screen.queryByText(/Use existing servers only/)).not.toBeInTheDocument();
-    } finally {
-      agorStore.setState({ ...EMPTY_MAPS });
-    }
+    expect(connectButton()).toBeDisabled();
+    expect(
+      screen.getByText('Ask an administrator to add DeepWiki to this workspace.')
+    ).toBeVisible();
+    expect(screen.queryByText(/Use existing servers only/)).not.toBeInTheDocument();
   });
 
   it('answers a Connect the daemon refused under the policy, as information', () => {

@@ -89,7 +89,6 @@ import {
 import { usePinnedOpenRows } from './hooks/usePinnedRows';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
 import { useUnarchiveBranch } from './hooks/useUnarchiveBranch';
-import { useWorkspaceAdminNames } from './hooks/useWorkspaceAdminNames';
 import { repoPatched, sessionCreated } from './store/agorRealtimeActions';
 import { agorStore, useAgorStore } from './store/agorStore';
 import { DeviceRouter } from './surfaces/DeviceRouter';
@@ -266,7 +265,6 @@ function preloadRouteModule(moduleKey: RouteModuleKey): Promise<unknown> {
 function AppContent() {
   const { showSuccess, showError, showWarning, showInfo, showLoading, destroy } =
     useThemedMessage();
-  const workspaceAdminNames = useWorkspaceAdminNames();
   const navigate = useNavigate();
   const location = useLocation();
   const { currentSurface, workspaceSurfaceShouldRun } = useWorkspaceSurfaceLifecycle(
@@ -1700,7 +1698,7 @@ function AppContent() {
       showSuccess('MCP server added successfully!');
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
-      const askAdmin = askAdminIfPolicyRefused(error, { adminNames: workspaceAdminNames });
+      const askAdmin = askAdminIfPolicyRefused(error);
       if (askAdmin) {
         showInfo(askAdmin);
         return;
