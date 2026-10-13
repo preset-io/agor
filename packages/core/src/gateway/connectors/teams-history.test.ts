@@ -263,6 +263,21 @@ describe('Teams provider history', () => {
     expect(deleted).toMatchObject({ isSystem: true });
   });
 
+  it('refuses a pagination link outside Graph before sending the token anywhere', async () => {
+    const fetchImpl = fakeFetch((url) => {
+      if (url === GRAPH_BASE) return json(graphMessage(ROOT_ID));
+      if (url.startsWith(`${GRAPH_BASE}/replies`)) {
+        return json({ value: [], '@odata.nextLink': 'https://evil.example/replies?page=2' });
+      }
+    });
+    await expect(fetchTeamsProviderHistory(config, request(), { fetchImpl })).rejects.toThrow(
+      /pagination origin/
+    );
+    expect(fetchImpl.mock.calls.map(([url]) => String(url))).not.toContain(
+      'https://evil.example/replies?page=2'
+    );
+  });
+
   it('caches tokens per tenant, channel, generation, and credential, and refreshes once on 401', async () => {
     let graph401 = false;
     const fetchImpl = fakeFetch((url) => {

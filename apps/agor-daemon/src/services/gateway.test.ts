@@ -821,6 +821,7 @@ describe('GatewayService user alignment operational logs', () => {
     alignedUser: User | null;
     userMap?: Record<string, string>;
     lookup?: () => Promise<unknown>;
+    omitMember?: boolean;
   }) {
     const channel = makeTeamsChannel({
       id: 'teams-aligned-channel',
@@ -854,16 +855,20 @@ describe('GatewayService user alignment operational logs', () => {
       user_name: sensitive.slackUsername,
       metadata: { teams_conversation_type: 'personal', teams_user_name: 'Ada' },
       teams_user_aad_object_id: 'aad-object-1',
-      teams_member: {
-        service_url: 'https://smba.trafficmanager.net/amer/',
-        conversation_id: 'a:personal-conversation',
-        team_id: null,
-        user_id: '29:user-1',
-      },
+      ...(opts.omitMember
+        ? {}
+        : {
+            teams_member: {
+              service_url: 'https://smba.trafficmanager.net/amer/',
+              conversation_id: 'a:personal-conversation',
+              team_id: null,
+              user_id: '29:user-1',
+            },
+          }),
       gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a1' as never,
     };
     const create = () => teamsCreate(harness.service, channel, data);
-    return { ...harness, lookup, notice, create };
+    return { ...harness, channel, lookup, notice, create };
   }
 
   it('aligns a Teams sender by member email inside the channel tenant', async () => {
@@ -1038,15 +1043,27 @@ describe('GatewayService user alignment operational logs', () => {
     );
   });
 
-  it('rejects unmatched Teams senders (email and user_map misses) with one not-linked notice', async () => {
+  it('rejects unmatched Teams senders (email, user_map, and member-less misses) with one not-linked notice', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    for (const userMap of [undefined, { 'aad-object-1': '01927f9d-0000-7000-8000-0000000000aa' }]) {
-      const { create, notice, promptCreate } = teamsAlignedHarness({ alignedUser: null, userMap });
+    for (const miss of [
+      {},
+      { userMap: { 'aad-object-1': '01927f9d-0000-7000-8000-0000000000aa' } },
+      { omitMember: true },
+    ]) {
+      const { channel, create, lookup, notice, promptCreate } = teamsAlignedHarness({
+        alignedUser: null,
+        ...miss,
+      });
       await expect(create()).resolves.toEqual({ success: false, sessionId: '', created: false });
       expect(promptCreate).not.toHaveBeenCalled();
+      if ('omitMember' in miss) expect(lookup).not.toHaveBeenCalled();
       expect(notice).toHaveBeenCalledOnce();
-      expect(String(notice.mock.calls[0]?.[2])).toContain("isn't linked to an Agor user");
+      expect(notice).toHaveBeenCalledWith(
+        channel,
+        '19:dm-thread',
+        expect.stringMatching(/isn't linked to an Agor user/)
+      );
     }
   });
 

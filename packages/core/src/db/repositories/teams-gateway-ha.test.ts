@@ -274,6 +274,33 @@ describe('Teams gateway HA repositories', () => {
   );
 
   ownedDbTest(
+    'discovers an expired payload on an enabled channel once and terminalizes it in claim',
+    async ({ db }) => {
+      const { channel } = await seedTeamsGateway(db);
+      const inbound = new GatewayInboundEventRepository(db);
+      const admitted = await inbound.admitVerifiedHttp({
+        ...teamsAdmission(channel, 'teams:activity:expires'),
+        payloadTtlMs: 1,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(await inbound.findDueTeamsRefs(db, { now: new Date() })).toEqual([
+        expect.objectContaining({ event_id: admitted.event.id }),
+      ]);
+      expect(await inbound.claimQueued(admitted.event.id, 'expired-claim', 30_000)).toBeNull();
+      const stored = await select(db)
+        .from(gatewayInboundEvents)
+        .where(eq(gatewayInboundEvents.id, admitted.event.id))
+        .one();
+      expect(stored).toMatchObject({
+        status: 'dead_letter',
+        payload_encrypted: null,
+        payload_expires_at: null,
+        last_error_code: 'payload_expired',
+      });
+    }
+  );
+
+  ownedDbTest(
     'expires only the claimed row, leaving bounded discovery to collect the rest',
     async ({ db }) => {
       const { channel } = await seedTeamsGateway(db);
