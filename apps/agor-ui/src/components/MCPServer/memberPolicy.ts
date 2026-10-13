@@ -185,19 +185,15 @@ export function canRefreshMcpServer(
   return context.isAdmin || (!!context.userId && server.owner_user_id === context.userId);
 }
 
-const LOST_CONNECTION_RESTRICTION = 'Lost connection to Agor.';
-
 const READ_ONLY_RESTRICTION =
   'Your account has read-only access, so it cannot configure MCP servers. An admin can change your role.';
 
 /**
- * What a member can do when the policy keeps adding servers to administrators:
- * ask one. Information, not a failure — the member did nothing wrong. Also the
- * answer to a daemon refusal carrying `isMcpMemberPolicyRefusal`.
+ * A member the policy keeps from adding servers. Also the answer to a daemon
+ * refusal carrying `isMcpMemberPolicyRefusal` — information, not a failure.
  */
-export function askAdminToAddMcpServer(serverName?: string): string {
-  return `Ask an administrator to add ${serverName || 'the server you need'} to this workspace.`;
-}
+export const MEMBER_ADD_RESTRICTION =
+  "Your workspace's MCP policy doesn't let you add servers. Ask an administrator to add one or change the policy.";
 
 /**
  * Why a refused action is refused, phrased so the reader can act on it — ask an
@@ -207,14 +203,9 @@ export function askAdminToAddMcpServer(serverName?: string): string {
  * policy: the policy is not what is stopping them, and changing it would not
  * help.
  */
-export function explainAddRestriction(
-  { role, connectionReady }: MCPServerCapabilityContext,
-  serverName?: string
-): string {
+export function explainAddRestriction({ role }: MCPServerCapabilityContext): string {
   if (!isAtLeastMemberRole(role)) return READ_ONLY_RESTRICTION;
-  // Admins land here too while disconnected; asking an admin would be wrong.
-  if (!connectionReady) return LOST_CONNECTION_RESTRICTION;
-  return askAdminToAddMcpServer(serverName);
+  return MEMBER_ADD_RESTRICTION;
 }
 
 /** Why changing or removing this particular server is refused. */

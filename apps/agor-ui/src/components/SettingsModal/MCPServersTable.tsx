@@ -55,7 +55,6 @@ import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServe
 import {
   allowedMcpScopes,
   allowedMcpTransports,
-  askAdminToAddMcpServer,
   canAddMcpServer,
   canAddSharedMcpServer,
   canDeleteMcpServer,
@@ -63,6 +62,7 @@ import {
   explainAddRestriction,
   explainManageRestriction,
   type MCPServerCapabilityContext,
+  MEMBER_ADD_RESTRICTION,
   policyPendingState,
 } from '../MCPServer/memberPolicy';
 import { useMCPServerDiscovery } from '../MCPServer/useMCPServerDiscovery';
@@ -343,7 +343,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     } catch (error) {
       if (!operation.isCurrent()) return null;
       if (isMcpMemberPolicyRefusal(error)) {
-        showInfo(askAdminToAddMcpServer());
+        showInfo(MEMBER_ADD_RESTRICTION);
         return null;
       }
       // Say which field. Swallowing a validation rejection here left the OAuth

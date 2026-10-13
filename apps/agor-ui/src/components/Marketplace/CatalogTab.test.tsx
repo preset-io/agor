@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../../store/agorStore';
+import { MEMBER_ADD_RESTRICTION } from '../MCPServer/memberPolicy';
 import { CatalogTab } from './CatalogTab';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -955,9 +956,7 @@ describe('connect capability reaches the drawer', () => {
     const connect = await findNoAuthConnect(drawer);
 
     expect(connect).toBeDisabled();
-    expect(
-      drawer.getByText('Ask an administrator to add DeepWiki to this workspace.')
-    ).toBeInTheDocument();
+    expect(drawer.getByText(MEMBER_ADD_RESTRICTION)).toBeInTheDocument();
     expect(connectCalls).toHaveLength(0);
   });
 
@@ -980,9 +979,7 @@ describe('connect capability reaches the drawer', () => {
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
 
-    expect(
-      await drawer.findByText('Ask an administrator to add DeepWiki to this workspace.')
-    ).toBeVisible();
+    expect(await drawer.findByText(MEMBER_ADD_RESTRICTION)).toBeVisible();
     expect(drawer.queryByText(/does not allow members/)).not.toBeInTheDocument();
     expect(document.querySelector('.ant-alert-error')).toBeNull();
     expect(connect).toBeDisabled();
@@ -1017,9 +1014,7 @@ describe('connect capability reaches the drawer', () => {
     const connect = await findNoAuthConnect(drawer);
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
-    expect(
-      await drawer.findByText('Ask an administrator to add DeepWiki to this workspace.')
-    ).toBeVisible();
+    expect(await drawer.findByText(MEMBER_ADD_RESTRICTION)).toBeVisible();
     expect(connect).toBeDisabled();
 
     memberPolicyAnswer = { policy: 'use_existing_only', can_configure: true };
@@ -1031,7 +1026,7 @@ describe('connect capability reaches the drawer', () => {
     const adminRenders = drawerRenders.filter((r) => r.role === 'admin');
     expect(adminRenders.length).toBeGreaterThan(0);
     expect(adminRenders[0]?.notice).toBeNull();
-    expect(screen.queryByText(/Ask an administrator/)).toBeNull();
+    expect(screen.queryByText(MEMBER_ADD_RESTRICTION)).toBeNull();
     const promoted = await findDrawer();
     const checkbox = promoted.getByRole('checkbox') as HTMLInputElement;
     if (!checkbox.checked) fireEvent.click(checkbox);
@@ -1040,7 +1035,7 @@ describe('connect capability reaches the drawer', () => {
         promoted.getByText('Connect', { selector: 'button *' }).closest('button')
       ).toBeEnabled()
     );
-    expect(screen.queryByText(/Ask an administrator/)).toBeNull();
+    expect(screen.queryByText(MEMBER_ADD_RESTRICTION)).toBeNull();
     expect(drawerRenders.filter((r) => r.role === 'admin' && r.notice !== null)).toEqual([]);
     expect(connectCalls).toHaveLength(1);
   });

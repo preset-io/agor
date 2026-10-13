@@ -46,7 +46,7 @@ import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal'
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { MCPCatalogModalHost } from './components/Marketplace/MCPCatalogModalHost';
-import { askAdminToAddMcpServer } from './components/MCPServer/memberPolicy';
+import { MEMBER_ADD_RESTRICTION } from './components/MCPServer/memberPolicy';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { type OnboardingCompletionResult, OnboardingWizard } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
@@ -1700,7 +1700,7 @@ function AppContent() {
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
       if (isMcpMemberPolicyRefusal(error)) {
-        showInfo(askAdminToAddMcpServer());
+        showInfo(MEMBER_ADD_RESTRICTION);
         return;
       }
       showError(

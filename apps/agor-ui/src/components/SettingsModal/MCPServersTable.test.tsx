@@ -5,6 +5,7 @@ import { App as AntdApp } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
+import { MEMBER_ADD_RESTRICTION } from '../MCPServer/memberPolicy';
 import { MCPServersTable } from './MCPServersTable';
 
 const ADMIN: User = {
@@ -228,9 +229,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
     const add = screen.getByRole('button', { name: /New MCP Server/i });
     expect(add).toBeDisabled();
     fireEvent.mouseOver(add);
-    expect(
-      await screen.findByText('Ask an administrator to add the server you need to this workspace.')
-    ).toBeInTheDocument();
+    expect(await screen.findByText(MEMBER_ADD_RESTRICTION)).toBeInTheDocument();
 
     // The pane is not admin-gated: the reader who is refused is the one who
     // needs it. It states the choice rather than rendering one they lack.
@@ -262,7 +261,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
     fireEvent.mouseOver(add);
 
     expect(await screen.findByText(POLICY_LOADING_HINT)).toBeInTheDocument();
-    expect(screen.queryByText(/Ask an administrator/)).not.toBeInTheDocument();
+    expect(screen.queryByText(MEMBER_ADD_RESTRICTION)).not.toBeInTheDocument();
 
     // The pane must not name the restrictive value it is falling back to either.
     openPolicyPane();
@@ -353,7 +352,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
     fireEvent.mouseOver(add);
 
     expect(await screen.findByText(POLICY_UNREADABLE_HINT)).toBeInTheDocument();
-    expect(screen.queryByText(/Ask an administrator/)).not.toBeInTheDocument();
+    expect(screen.queryByText(MEMBER_ADD_RESTRICTION)).not.toBeInTheDocument();
 
     openPolicyPane();
 
@@ -466,7 +465,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
 
     // Naming the policy would be a false lead: changing it would not help.
     expect(await screen.findByText(/read-only access/i)).toBeInTheDocument();
-    expect(screen.queryByText(/Ask an administrator/)).not.toBeInTheDocument();
+    expect(screen.queryByText(MEMBER_ADD_RESTRICTION)).not.toBeInTheDocument();
   });
 
   it('reads the policy once, not once per server row', async () => {

@@ -12,9 +12,12 @@
 import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@agor/core/types';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServer/memberPolicy';
+import {
+  type MCPServerCapabilityContext,
+  MEMBER_ADD_RESTRICTION,
+  POLICY_LOADING_HINT,
+} from '../MCPServer/memberPolicy';
 import { type CatalogConnectNotice, CatalogDetailDrawer } from './CatalogDetailDrawer';
-import { entryTitle } from './catalogPresentation';
 
 const ALLOWED: MCPServerCapabilityContext = {
   connectionReady: true,
@@ -413,9 +416,7 @@ describe('CatalogDetailDrawer connect capability', () => {
     fireEvent.click(screen.getByRole('checkbox'));
 
     expect(connectButton()).toBeDisabled();
-    expect(
-      screen.getByText('Ask an administrator to add DeepWiki to this workspace.')
-    ).toBeVisible();
+    expect(screen.getByText(MEMBER_ADD_RESTRICTION)).toBeVisible();
     expect(screen.queryByText(/Use existing servers only/)).not.toBeInTheDocument();
   });
 
@@ -431,9 +432,7 @@ describe('CatalogDetailDrawer connect capability', () => {
     });
     fireEvent.click(screen.getByRole('checkbox'));
 
-    expect(
-      screen.getByText(`Ask an administrator to add ${entryTitle(OAUTH_LINEAR)} to this workspace.`)
-    ).toBeVisible();
+    expect(screen.getByText(MEMBER_ADD_RESTRICTION)).toBeVisible();
     expect(screen.queryByText(/Choose Private if allowed/)).toBeNull();
     expect(connectButton()).toBeDisabled();
   });
@@ -446,13 +445,13 @@ describe('CatalogDetailDrawer connect capability', () => {
       readiness: { catalog_key: DEEPWIKI.name, state: 'installed_ready' },
       connectNotice: {
         tone: 'info',
-        message: 'Ask an administrator to add DeepWiki to this workspace.',
+        message: MEMBER_ADD_RESTRICTION,
       },
     });
     fireEvent.click(screen.getByRole('checkbox'));
 
     expect(connectButton()).toBeDisabled();
-    const notice = screen.getByText('Ask an administrator to add DeepWiki to this workspace.');
+    const notice = screen.getByText(MEMBER_ADD_RESTRICTION);
     expect(notice.closest('.ant-alert')).toHaveClass('ant-alert-info');
     expect(document.querySelector('.ant-alert-error')).toBeNull();
   });
@@ -486,7 +485,7 @@ describe('CatalogDetailDrawer connect capability', () => {
 
     expect(connectButton()).toBeDisabled();
     expect(screen.getByText(POLICY_LOADING_HINT)).toBeInTheDocument();
-    expect(screen.queryByText(/Ask an administrator/)).not.toBeInTheDocument();
+    expect(screen.queryByText(MEMBER_ADD_RESTRICTION)).not.toBeInTheDocument();
   });
 });
 

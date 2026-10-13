@@ -40,14 +40,14 @@ import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { stagePromptDraftSeed } from '../../utils/promptDrafts';
 import {
-  askAdminToAddMcpServer,
   type MCPServerCapabilityContext,
+  MEMBER_ADD_RESTRICTION,
   policyPendingState,
 } from '../MCPServer/memberPolicy';
 import { CatalogCard } from './CatalogCard';
 import { type CatalogConnectNotice, CatalogDetailDrawer } from './CatalogDetailDrawer';
 import { CatalogToolbar } from './CatalogToolbar';
-import { DEFAULT_SORT, entryTitle } from './catalogPresentation';
+import { DEFAULT_SORT } from './catalogPresentation';
 import {
   MARKETPLACE_DRAWER_FOCUS_FALLBACK_MS,
   MARKETPLACE_OAUTH_POLL_DELAYS_MS,
@@ -630,7 +630,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           isMcpMemberPolicyRefusal(err)
             ? {
                 tone: 'info',
-                message: askAdminToAddMcpServer(entryTitle(selected)),
+                message: MEMBER_ADD_RESTRICTION,
                 authority: attemptAuthority,
               }
             : {

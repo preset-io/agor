@@ -42,7 +42,6 @@ import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'rea
 import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import {
-  askAdminToAddMcpServer,
   canAddMcpServer,
   canAddSharedMcpServer,
   canUseExistingMcpServer,
@@ -411,11 +410,11 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           : readinessError
             ? 'Existing shared availability could not be verified. Reopen Catalog to try again.'
             : !canAddMcpServer(connectCapability)
-              ? askAdminToAddMcpServer(title)
+              ? explainAddRestriction(connectCapability)
               : 'No eligible shared installation is available. You cannot publish or repair shared configuration under the current policy. Choose Private if allowed, or ask an admin.'
         : canUseShared
           ? 'Choose Use existing shared to connect without adding a private server.'
-          : explainAddRestriction(connectCapability, title);
+          : explainAddRestriction(connectCapability);
   // An existing shared install already carries its OAuth app; only whoever
   // creates an install enters the app credentials.
   const reusesSharedApp = Boolean(

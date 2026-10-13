@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  askAdminToAddMcpServer,
   explainAddRestriction,
   type MCPServerCapabilityContext,
+  MEMBER_ADD_RESTRICTION,
 } from './memberPolicy';
 
 const MEMBER: MCPServerCapabilityContext = {
@@ -14,31 +14,12 @@ const MEMBER: MCPServerCapabilityContext = {
   canConfigure: false,
 };
 
-describe('askAdminToAddMcpServer', () => {
-  it('names the server, or the one the reader needs, and never a person', () => {
-    expect(askAdminToAddMcpServer('Linear')).toBe(
-      'Ask an administrator to add Linear to this workspace.'
-    );
-    expect(askAdminToAddMcpServer()).toBe(
-      'Ask an administrator to add the server you need to this workspace.'
-    );
-  });
-});
-
 describe('explainAddRestriction', () => {
-  it('asks an administrator for a member the policy holds back', () => {
-    expect(explainAddRestriction(MEMBER, 'Linear')).toBe(
-      'Ask an administrator to add Linear to this workspace.'
+  it('tells a member the policy holds back to ask an administrator', () => {
+    expect(explainAddRestriction(MEMBER)).toBe(MEMBER_ADD_RESTRICTION);
+    expect(MEMBER_ADD_RESTRICTION).toBe(
+      "Your workspace's MCP policy doesn't let you add servers. Ask an administrator to add one or change the policy."
     );
-  });
-
-  it('does not send a disconnected reader, admins included, to an administrator', () => {
-    expect(explainAddRestriction({ ...MEMBER, connectionReady: false })).toBe(
-      'Lost connection to Agor.'
-    );
-    expect(
-      explainAddRestriction({ ...MEMBER, role: 'admin', isAdmin: true, connectionReady: false })
-    ).toBe('Lost connection to Agor.');
   });
 
   it('tells a viewer about their role, not the policy', () => {
