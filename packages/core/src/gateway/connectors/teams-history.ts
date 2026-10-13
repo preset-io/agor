@@ -9,8 +9,9 @@ import type {
 import {
   asRecord,
   authorizedJson,
-  GRAPH_ORIGIN,
+  compareIds,
   GRAPH_SCOPE,
+  graphChannelMessagesUrl,
   graphNextLink,
   isTeamsRscDenied,
   TEAMS_MESSAGE_ID as MESSAGE_ID,
@@ -37,12 +38,6 @@ export type TeamsProviderHistoryContext = {
   /** Present only with trusted tenant context; without it nothing is cached. */
   cacheScope?: TeamsGraphCacheScope | null;
 };
-
-function compareIds(left: string, right: string): number {
-  const a = BigInt(left);
-  const b = BigInt(right);
-  return a < b ? -1 : a > b ? 1 : 0;
-}
 
 function toHistoryMessage(
   raw: unknown,
@@ -145,7 +140,7 @@ export async function fetchTeamsProviderHistory(
 
   const groupId = await resolveTeamGroupId(runtime, context);
   if (isTeamsRscDenied(runtime, groupId)) return incomplete;
-  const base = `${GRAPH_ORIGIN}/v1.0/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(rootId)}`;
+  const base = `${graphChannelMessagesUrl(groupId, channelId)}/${encodeURIComponent(rootId)}`;
   const limit = maxMessages(config);
   const collected = new Map<string, GatewayProviderHistoryMessage>();
   let earlierOmitted = false;

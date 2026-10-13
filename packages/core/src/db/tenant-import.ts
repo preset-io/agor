@@ -67,7 +67,7 @@ import {
 } from './tenant-filesystem';
 import {
   buildTenantInsertOrder,
-  TENANT_IN_FLIGHT_PAYLOAD_COLUMNS,
+  TENANT_IN_FLIGHT_PAYLOAD_COLUMN,
 } from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
@@ -132,23 +132,22 @@ export async function validateArchivedInFlightPayloads(
   archivePath: string,
   manifest: TenantArchiveManifest
 ): Promise<void> {
-  for (const { table: tableName, column } of TENANT_IN_FLIGHT_PAYLOAD_COLUMNS) {
-    const table = manifest.database.tables.find((candidate) => candidate.name === tableName);
-    if (!table || table.rowCount === 0) continue;
-    for (const line of splitTenantJsonlLines(await readTableJsonl(archivePath, tableName))) {
-      let row: unknown;
-      try {
-        row = JSON.parse(line);
-      } catch {
-        throw new MalformedArchiveError(`Refusing to import ${tableName}: invalid row`);
-      }
-      const value =
-        row && typeof row === 'object' ? (row as Record<string, unknown>)[column] : undefined;
-      if (value !== null && value !== undefined) {
-        throw new MalformedArchiveError(
-          `Refusing to import ${tableName}: archive carries a queued provider payload`
-        );
-      }
+  const { table: tableName, column } = TENANT_IN_FLIGHT_PAYLOAD_COLUMN;
+  const table = manifest.database.tables.find((candidate) => candidate.name === tableName);
+  if (!table || table.rowCount === 0) return;
+  for (const line of splitTenantJsonlLines(await readTableJsonl(archivePath, tableName))) {
+    let row: unknown;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      throw new MalformedArchiveError(`Refusing to import ${tableName}: invalid row`);
+    }
+    const value =
+      row && typeof row === 'object' ? (row as Record<string, unknown>)[column] : undefined;
+    if (value !== null && value !== undefined) {
+      throw new MalformedArchiveError(
+        `Refusing to import ${tableName}: archive carries a queued provider payload`
+      );
     }
   }
 }

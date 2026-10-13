@@ -1,4 +1,8 @@
-import type { GatewayConnector, TeamsProviderHistoryContext } from '@agor/core/gateway';
+import {
+  type GatewayConnector,
+  TEAMS_MESSAGE_ID,
+  type TeamsProviderHistoryContext,
+} from '@agor/core/gateway';
 import type { GatewayChannel, TeamsCatchUpConfig } from '@agor/core/types';
 import { withTeamsConfigDefaults } from '@agor/core/types';
 import {
@@ -6,9 +10,9 @@ import {
   formatGatewayCatchUpFallbackPrompt,
   GatewayCatchUpError,
 } from './gateway-catch-up.js';
+import { teamsGraphCacheScope } from './teams-connector-cache.js';
 
 const TEAMS_PROVIDER_LABEL = 'Microsoft Teams';
-const TEAMS_MESSAGE_ID = /^\d{1,20}$/;
 
 /** Verified trigger coordinates the Teams worker passes to GatewayService; never persisted. */
 export interface TeamsCatchUpTrigger {
@@ -26,7 +30,7 @@ function isBefore(left: string, right: string): boolean {
 // On failure the mention is admitted marked `history_status` with no cursor, so the interval is re-read next time.
 export async function prepareTeamsCatchUp(args: {
   channel: GatewayChannel;
-  connector: () => GatewayConnector | undefined;
+  connector: () => GatewayConnector;
   threadId: string;
   currentText: string;
   conversationType: unknown;
@@ -56,19 +60,12 @@ export async function prepareTeamsCatchUp(args: {
       throw new GatewayCatchUpError('malformed', 'Teams cursor is not before the live mention');
     }
     const connector = args.connector();
-    if (!connector) throw new GatewayCatchUpError('unsupported', 'Teams history is unavailable');
     const providerContext: TeamsProviderHistoryContext = {
       teamId: args.trigger.team_id,
       teamGroupId: args.trigger.team_group_id,
       serviceUrl: args.trigger.service_url,
       triggerTimestamp: args.trigger.timestamp,
-      cacheScope: args.tenantId
-        ? {
-            agorTenantId: args.tenantId,
-            gatewayChannelId: args.channel.id,
-            providerConfigGeneration: args.channel.provider_config_generation,
-          }
-        : null,
+      cacheScope: teamsGraphCacheScope(args.channel, args.tenantId),
     };
     return await fetchGatewayCatchUp({
       connector,

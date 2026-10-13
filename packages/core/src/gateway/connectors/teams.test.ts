@@ -5,9 +5,7 @@ import {
   extractQuotedReplyText,
   fetchTeamsMemberIdentity,
   normalizeTeamsActivity,
-  parseThreadId,
   probeTeamsCredentials,
-  stripMention,
   TeamsConnector,
   TeamsMemberLookupError,
 } from './teams';
@@ -173,89 +171,6 @@ describe('fetchTeamsMemberIdentity', () => {
     } finally {
       getAccessToken.mockRestore();
     }
-  });
-});
-
-describe('parseThreadId', () => {
-  it('parses a valid thread ID', () => {
-    const result = parseThreadId('19:abc123@thread.tacv2|1234567890');
-    expect(result).toEqual({
-      conversationId: '19:abc123@thread.tacv2',
-      activityId: '1234567890',
-    });
-  });
-
-  it('handles conversationId with special characters', () => {
-    const result = parseThreadId('19:meeting_abc123@thread.v2|f:abc-def-123');
-    expect(result).toEqual({
-      conversationId: '19:meeting_abc123@thread.v2',
-      activityId: 'f:abc-def-123',
-    });
-  });
-
-  it('handles multiple pipes (splits on last pipe)', () => {
-    const result = parseThreadId('a|b|c|d');
-    expect(result).toEqual({
-      conversationId: 'a|b|c',
-      activityId: 'd',
-    });
-  });
-
-  it('handles simple format', () => {
-    const result = parseThreadId('conv123|act456');
-    expect(result).toEqual({
-      conversationId: 'conv123',
-      activityId: 'act456',
-    });
-  });
-
-  it('throws on missing pipe', () => {
-    expect(() => parseThreadId('nopipehere')).toThrow('Invalid Teams thread ID format');
-  });
-
-  it('throws on empty conversationId', () => {
-    expect(() => parseThreadId('|activityId')).toThrow('Invalid Teams thread ID format');
-  });
-
-  it('throws on empty activityId', () => {
-    expect(() => parseThreadId('conversationId|')).toThrow('Invalid Teams thread ID format');
-  });
-
-  it('throws on empty string', () => {
-    expect(() => parseThreadId('')).toThrow('Invalid Teams thread ID format');
-  });
-});
-
-describe('stripMention', () => {
-  it('strips mention at the beginning', () => {
-    expect(stripMention('<at>TestBot</at> hello world', 'TestBot')).toBe('hello world');
-  });
-
-  it('strips mention in the middle', () => {
-    expect(stripMention('hey <at>TestBot</at> do something', 'TestBot')).toBe('hey do something');
-  });
-
-  it('strips multiple mentions', () => {
-    expect(stripMention('<at>TestBot</at> hello <at>TestBot</at> world', 'TestBot')).toBe(
-      'hello world'
-    );
-  });
-
-  it('is case-insensitive', () => {
-    expect(stripMention('<at>testbot</at> hello', 'TestBot')).toBe('hello');
-    expect(stripMention('<AT>TestBot</AT> hello', 'TestBot')).toBe('hello');
-  });
-
-  it('returns original text when no mention found', () => {
-    expect(stripMention('hello world', 'TestBot')).toBe('hello world');
-  });
-
-  it('handles empty text', () => {
-    expect(stripMention('', 'TestBot')).toBe('');
-  });
-
-  it('handles regex special characters in bot name', () => {
-    expect(stripMention('<at>Bot (Test)</at> hello', 'Bot (Test)')).toBe('hello');
   });
 });
 

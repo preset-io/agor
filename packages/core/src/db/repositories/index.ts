@@ -25,15 +25,7 @@ export * from './environment-commands';
 export * from './environment-health';
 export * from './executor-session-token-authorities';
 export * from './gateway-channels';
-export {
-  DELIVERY_COMPLETED_RETENTION_MS,
-  DELIVERY_FAILED_RETENTION_MS,
-  type DeliveryChunkReceipt,
-  type DeliveryMapping,
-  deliveryMessageText,
-  isRoutableAssistantMessage,
-  resolveDeliveryMapping,
-} from './gateway-delivery-outbox';
+export { deliveryMessageText } from './gateway-delivery-outbox';
 export * from './gateway-inbound-events';
 export * from './gateway-outbound-messages';
 export * from './github-install-states';

@@ -8,10 +8,12 @@ import {
   type TeamsGatewayConfig,
   type TeamsThreadHistoryResult,
 } from '../../types/gateway';
+import { truncateUtf8 } from '../markdown-chunker';
 import {
   authorizedJson,
-  GRAPH_ORIGIN,
+  compareIds,
   GRAPH_SCOPE,
+  graphChannelMessagesUrl,
   graphNextLink,
   type ParsedGraphChatMessage,
   parseGraphChatMessage,
@@ -149,8 +151,7 @@ async function withGraphRead<T>(
   let groupId: string | undefined;
   try {
     groupId = await resolveTeamGroupId(runtime, req.team);
-    const channelBase = `${GRAPH_ORIGIN}/v1.0/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(req.channelId)}/messages`;
-    return await read(runtime, channelBase);
+    return await read(runtime, graphChannelMessagesUrl(groupId, req.channelId));
   } catch (error) {
     // Not cached team-wide: a 403 here may be specific to this channel, and catch-up shares that cache.
     if (groupId && error instanceof TeamsGraphHttpError && error.status === 403) {
@@ -161,12 +162,6 @@ async function withGraphRead<T>(
 }
 
 const utf8 = new TextEncoder();
-
-function truncateUtf8(value: string, maxBytes: number): string {
-  const bytes = utf8.encode(value);
-  if (bytes.length <= maxBytes) return value;
-  return new TextDecoder().decode(bytes.slice(0, maxBytes)).replace(/�+$/, '');
-}
 
 function toHistoryMessage(message: ParsedGraphChatMessage): TeamsChannelHistoryMessage {
   return {
@@ -232,9 +227,7 @@ export async function fetchTeamsThreadHistory(
           req.includeBotMessages ||
           (!message.isBot && !message.isSystem)
       )
-      .sort((left, right) =>
-        BigInt(left.id) < BigInt(right.id) ? -1 : BigInt(left.id) > BigInt(right.id) ? 1 : 0
-      )
+      .sort((left, right) => compareIds(left.id, right.id))
       .map(toHistoryMessage);
     applyByteBudget(messages);
     return {

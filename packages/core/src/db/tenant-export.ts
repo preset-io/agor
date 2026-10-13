@@ -36,7 +36,7 @@ import { assertValidTenantId } from './tenant-deletion';
 import { copyTenantFilesystemInto, type TenantFilesystemEntry } from './tenant-filesystem';
 import {
   buildTenantInsertOrder,
-  TENANT_IN_FLIGHT_PAYLOAD_COLUMNS,
+  TENANT_IN_FLIGHT_PAYLOAD_COLUMN,
 } from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
@@ -115,13 +115,12 @@ export async function exportTenant(
 
   log(`exporting tenant ${tenantId} (schemaVersion=${identity.schemaVersion})`);
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    for (const { table, column } of TENANT_IN_FLIGHT_PAYLOAD_COLUMNS) {
-      const pending = await countTenantRowsWithValue(scoped, table, column, tenantId);
-      if (pending > 0) {
-        throw new TenantExportInFlightError(
-          `Refusing to export: ${pending} queued ${table} payload(s) are still in flight; retry after the gateway worker processes or expires them`
-        );
-      }
+    const { table, column } = TENANT_IN_FLIGHT_PAYLOAD_COLUMN;
+    const pending = await countTenantRowsWithValue(scoped, table, column, tenantId);
+    if (pending > 0) {
+      throw new TenantExportInFlightError(
+        `Refusing to export: ${pending} queued ${table} payload(s) are still in flight; retry after the gateway worker processes or expires them`
+      );
     }
     for (const table of insertOrder) {
       const { jsonl, rowCount } = await exportTenantTableRows(

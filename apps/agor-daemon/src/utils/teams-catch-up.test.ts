@@ -80,7 +80,9 @@ function connector(
 function run(overrides: Partial<Parameters<typeof prepareTeamsCatchUp>[0]> = {}) {
   return prepareTeamsCatchUp({
     channel: channel(),
-    connector: () => undefined,
+    connector: () => {
+      throw new Error('connector not expected');
+    },
     threadId: THREAD_ID,
     currentText: 'what did we decide?',
     conversationType: 'channel',

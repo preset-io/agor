@@ -36,6 +36,15 @@ export function codePointLength(value: string): number {
   return count;
 }
 
+const utf8 = new TextEncoder();
+
+/** Cut to at most `maxBytes` of UTF-8 without leaving a broken trailing character. */
+export function truncateUtf8(value: string, maxBytes: number): string {
+  const bytes = utf8.encode(value);
+  if (bytes.length <= maxBytes) return value;
+  return new TextDecoder().decode(bytes.slice(0, maxBytes)).replace(/�+$/, '');
+}
+
 /** UTF-16 code units, the unit several providers (e.g. Teams) count. */
 export function utf16Length(value: string): number {
   return value.length;

@@ -105,49 +105,32 @@ export {
   requiredBotScopes,
   SLACK_AGENT_TOOL_SCOPES,
 } from './connectors/slack-manifest';
-export type {
-  NormalizedTeamsActivity,
-  TeamsMemberIdentity,
-  TeamsMemberLookupRequest,
-} from './connectors/teams';
+export type { NormalizedTeamsActivity } from './connectors/teams';
 export {
   createTeamsAuthConfiguration,
   extractQuotedReplyText,
   fetchTeamsMemberIdentity,
   normalizeTeamsActivity,
-  parseThreadId as parseTeamsThreadId,
-  probeTeamsCredentials,
-  TEAMS_NOT_VERIFIABLE,
   TeamsConnector,
   TeamsMemberLookupError,
 } from './connectors/teams';
-export type { TeamsAddressRevocationEvent } from './connectors/teams-address-events';
 export { teamsAddressRevocationFromActivity } from './connectors/teams-address-events';
-export type {
-  TeamsChannelHistoryErrorCode,
-  TeamsChannelPostsRequest,
-  TeamsThreadHistoryRequest,
-} from './connectors/teams-channel-history';
+export type { TeamsThreadHistoryRequest } from './connectors/teams-channel-history';
 export {
   TEAMS_CHANNEL_POSTS_DEFAULT_LIMIT,
   TEAMS_HISTORY_MAX_LIMIT,
   TEAMS_THREAD_HISTORY_DEFAULT_LIMIT,
-  TeamsChannelHistoryError,
 } from './connectors/teams-channel-history';
 export type { TeamsTeamChannel } from './connectors/teams-graph';
-export { resetTeamsGraphCaches, TEAMS_MESSAGE_ID } from './connectors/teams-graph';
+export { TEAMS_MESSAGE_ID } from './connectors/teams-graph';
 export type { TeamsProviderHistoryContext } from './connectors/teams-history';
-export { fetchTeamsProviderHistory } from './connectors/teams-history';
-export type { TeamsSetupManifestOptions } from './connectors/teams-manifest';
 export {
   buildTeamsSetupManifest,
-  TEAMS_BOT_SCOPES,
   TEAMS_RSC_APPLICATION_PERMISSIONS,
   teamsGatewayCallbackUrl,
 } from './connectors/teams-manifest';
 export type {
   PreparedTeamsSend,
-  TeamsAccessTokenProvider,
   TeamsChannelThreadResult,
   TeamsSendOutcome,
 } from './connectors/teams-send';
@@ -185,13 +168,13 @@ export {
   type GatewayListenerFailureKind,
   gatewayListenerFailure,
 } from './listener-error';
-export type { MarkdownChunkOptions } from './markdown-chunker';
-export { chunkMarkdown, codePointLength, utf16Length } from './markdown-chunker';
+export { chunkMarkdown, utf16Length } from './markdown-chunker';
 export {
   gatewayFailureCode,
   isPermanentProviderRefusal,
   sanitizeGatewayProviderError,
 } from './provider-error';
+export { GATEWAY_READABLE_MIMES } from './readable-files';
 export { redactGatewayChannelSecrets } from './redaction';
 export {
   formatGatewayFollowUpRoutingMessage,
@@ -200,10 +183,9 @@ export {
   formatGatewaySystemMessage,
   formatGatewaySystemPayload,
 } from './system-message';
-export { safeTeamsMetadata, TEAMS_SAFE_METADATA_KEYS } from './teams-metadata';
+export { safeTeamsMetadata } from './teams-metadata';
 export {
   isAllowedTeamsServiceUrl,
   isTeamsFileDownloadUrl,
   isTeamsTokenHost,
-  TEAMS_SERVICE_URL_HOSTS,
 } from './teams-service-url';

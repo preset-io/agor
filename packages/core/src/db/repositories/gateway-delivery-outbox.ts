@@ -15,6 +15,7 @@ import {
   databaseNowExpression,
   deleteFrom,
   getDatabaseNow,
+  getDatabaseWallClock,
   isSQLiteDatabase,
   lockRowForUpdate,
   runDatabaseTransaction,
@@ -357,15 +358,13 @@ async function rowClock(
   wall = false
 ): Promise<Date> {
   if (outbox.clock === 'caller') return fallback ?? new Date();
-  if (wall && !isSQLiteDatabase(tx)) {
-    // A lock wait may outlive the lease, so use wall time rather than transaction start.
-    const clock = (await select(tx, { now: sql<Date>`clock_timestamp()` })
-      .from(outbox.table)
-      .where(byId(outbox, deliveryId))
-      .one()) as { now?: Date | string } | null;
-    if (clock?.now) return new Date(clock.now);
-  }
-  const now = await getDatabaseNow(tx, outbox.table, byId(outbox, deliveryId), fallback);
+  // A lock wait may outlive the lease, so `wall` uses wall time rather than transaction start.
+  const now = await (wall ? getDatabaseWallClock : getDatabaseNow)(
+    tx,
+    outbox.table,
+    byId(outbox, deliveryId),
+    fallback
+  );
   if (!now) throw new RepositoryError(`Unable to obtain database time for ${outbox.label}`);
   return now;
 }
@@ -408,6 +407,34 @@ function isSQLiteBusy(error: unknown): boolean {
 export interface DeliveryLease {
   row: DeliveryOutboxRow;
   leaseExpiresAt: Date;
+}
+
+export function asIso(value: Date | string | number): string {
+  return new Date(value).toISOString();
+}
+
+/** A leased delivery as handed to a provider worker. */
+export interface DeliveryClaim<D extends { delivery_id: string }> {
+  delivery_id: D['delivery_id'];
+  claim_token: string;
+  claim_generation: number;
+  lease_expires_at: string;
+  delivery: D;
+}
+
+export function toDeliveryClaim<D extends { delivery_id: string; claim_generation: number }>(
+  delivery: D,
+  claimToken: string,
+  leaseExpiresAt: Date,
+  claimGeneration = delivery.claim_generation
+): DeliveryClaim<D> {
+  return {
+    delivery_id: delivery.delivery_id,
+    claim_token: claimToken,
+    claim_generation: claimGeneration,
+    lease_expires_at: asIso(leaseExpiresAt),
+    delivery,
+  };
 }
 
 /**
@@ -598,8 +625,7 @@ export function chunkEffectMarker(
   outbox: DeliveryOutbox,
   row: DeliveryOutboxRow,
   chunkIndex: number,
-  now: Date,
-  recoveryGraceMs?: number
+  now: Date
 ): Record<string, unknown> | null {
   if (chunkIndex < 0 || chunkIndex >= MAX_DELIVERY_CHUNK_RECEIPTS) {
     throw new RepositoryError(`${outbox.label} chunk marker bound exceeded`);
@@ -611,13 +637,7 @@ export function chunkEffectMarker(
     throw new RepositoryError(`${outbox.label} has another ambiguous chunk in flight`);
   }
   if (row.ambiguous_chunk_index === chunkIndex) return null;
-  return {
-    ambiguous_chunk_index: chunkIndex,
-    effect_started_at: now,
-    ...(outbox.hasRecoveryGrace && recoveryGraceMs !== undefined
-      ? { effect_recovery_grace_until: new Date(now.getTime() + recoveryGraceMs) }
-      : {}),
-  };
+  return { ambiguous_chunk_index: chunkIndex, effect_started_at: now };
 }
 
 /** Columns that clear a chunk marker after the provider proved non-acceptance. */

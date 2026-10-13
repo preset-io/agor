@@ -303,6 +303,18 @@ export function stripHtml(value: string): string {
     .trim();
 }
 
+/** Numeric order of epoch-ms Teams message IDs. */
+export function compareIds(left: string, right: string): number {
+  const a = BigInt(left);
+  const b = BigInt(right);
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** The Graph messages collection of one team channel. */
+export function graphChannelMessagesUrl(groupId: string, channelId: string): string {
+  return `${GRAPH_ORIGIN}/v1.0/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages`;
+}
+
 /** A Graph `@odata.nextLink`, refused unless it stays on the Graph origin. */
 export function graphNextLink(value: unknown): string | null {
   const link = text(value);

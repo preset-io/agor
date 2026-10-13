@@ -871,27 +871,23 @@ function formatUnreadAttachment(name: string, reason: string): string {
  * Prompt note naming the attachments the agent could not read. The user must
  * hear about them, so it overrides the option to stay silent.
  */
-function formatUnreadAttachmentsNote(unread: string[], hint: string): string {
+function formatUnreadAttachmentsNote(
+  unread: string[],
+  filesEnabled: boolean,
+  readableHint: string
+): string {
+  const hint = filesEnabled
+    ? readableHint
+    : 'Attachments are turned off for this channel; suggest pasting the text instead.';
   return `(Attachments you could not read: ${unread.join('; ')}. Tell the user which files you could not read, even if you would otherwise stay silent. ${hint})`;
 }
 
-function formatDiscordUnreadAttachmentsNote(unread: string[], filesEnabled: boolean): string {
-  return formatUnreadAttachmentsNote(
-    unread,
-    filesEnabled
-      ? 'Images (PNG, JPEG, GIF, WebP) and text files (.txt, .log, .md, .csv, .json) can be read; suggest one of those or pasting the text.'
-      : 'Attachments are turned off for this channel; suggest pasting the text instead.'
-  );
-}
-
-function formatTeamsUnreadAttachmentsNote(unread: string[], filesEnabled: boolean): string {
-  return formatUnreadAttachmentsNote(
-    unread,
-    filesEnabled
-      ? 'Pasted images and, in personal chats, image and text files can be read; files shared in channels and group chats live in SharePoint, so suggest pasting the text or sending the file in a personal chat.'
-      : 'Attachments are turned off for this channel; suggest pasting the text instead.'
-  );
-}
+const READABLE_ATTACHMENTS_HINT = {
+  discord:
+    'Images (PNG, JPEG, GIF, WebP) and text files (.txt, .log, .md, .csv, .json) can be read; suggest one of those or pasting the text.',
+  teams:
+    'Pasted images and, in personal chats, image and text files can be read; files shared in channels and group chats live in SharePoint, so suggest pasting the text or sending the file in a personal chat.',
+} as const;
 
 /** Prompt note for a Discord message admitted by a response mode without a mention. */
 const DISCORD_UNADDRESSED_NOTE = `This Discord message did not mention you; the channel is set to let you answer anyway, and every message you write is posted. Reply only if you can genuinely help. If people are already handling it or you have nothing useful to add, write nothing else at all: your only message must be exactly ${DISCORD_NO_REPLY_SENTINEL}, and nothing will be posted.`;
@@ -6717,83 +6713,65 @@ export class GatewayService {
         }
       }
 
-      // Discord inbound attachments use the provider's signed CDN URL and the
-      // same tenant/session/branch-scoped staging plus executor materializer
-      // as browser and Slack uploads. The capability is opt-in. Every
-      // attachment the agent cannot read (skipped by the connector, or failed
-      // here) is named in the prompt so the agent tells the user.
-      if (channel.channel_type === 'discord') {
-        const unread = (data.skipped_files ?? []).map((file) =>
-          formatUnreadAttachment(file.name, SKIPPED_FILE_REASON[file.reason])
-        );
-        if (channelConfig.files !== true) {
-          for (const file of data.files ?? []) {
-            unread.push(formatUnreadAttachment(file.name, SKIPPED_FILE_REASON.files_disabled));
-          }
-        } else if (data.files && data.files.length > 0) {
-          const ingestion = await ingestDiscordInboundImages({
-            files: data.files,
-            tenantId: requireCurrentTenantId() as TenantID,
-            sessionId,
-            branchId: channel.target_branch_id,
-            createdBy: channel.agor_user_id ?? user.user_id,
-          });
-          if (ingestion.uploads.length > 0) {
-            promptText = buildPromptWithAttachments(promptText, ingestion.uploads);
-            console.log(
-              `[gateway] Ingested ${ingestion.uploads.length} Discord attachment(s) for session ${shortId(sessionId)}`
-            );
-          }
-          for (const name of ingestion.failedNames ?? []) {
-            unread.push(formatUnreadAttachment(name, 'could not be downloaded or is too large'));
-          }
-        }
-        if (unread.length > 0) {
-          promptText = `${promptText}\n\n${formatDiscordUnreadAttachmentsNote(unread, channelConfig.files === true)}`;
-        }
-      }
-      // Teams: inline images use the bot token on Bot Connector hosts only; personal-chat
-      // files use their pre-authenticated SharePoint URL with no credential.
-      if (channel.channel_type === 'teams') {
+      // Discord attachments use the provider's signed CDN URL; Teams inline images use the
+      // bot token on Bot Connector hosts only, and personal-chat files their pre-authenticated
+      // SharePoint URL with no credential. Both stage like browser and Slack uploads. The
+      // capability is opt-in, and every attachment the agent cannot read (skipped by the
+      // connector, or failed here) is named in the prompt so the agent tells the user.
+      if (channel.channel_type === 'discord' || channel.channel_type === 'teams') {
+        const provider = channel.channel_type;
         const filesEnabled = channelConfig.files === true;
         const unread = (data.skipped_files ?? []).map((file) =>
           formatUnreadAttachment(file.name, SKIPPED_FILE_REASON[file.reason])
         );
-        if (data.files?.length && !filesEnabled) {
-          for (const file of data.files) {
+        if (!filesEnabled) {
+          for (const file of data.files ?? []) {
             unread.push(formatUnreadAttachment(file.name, SKIPPED_FILE_REASON.files_disabled));
           }
-        } else if (data.files?.length) {
-          const connector = teamsConnectorCache.get(getCurrentTenantId(), channel);
-          const ingestion = await ingestProviderInboundFiles({
+        } else if (data.files && data.files.length > 0) {
+          const staging = {
             files: data.files,
-            label: 'Teams',
-            provenance: 'gateway-teams',
-            textFromOctetStream: true,
-            requestFor: async (file): Promise<ProviderFileRequest> =>
-              file.auth === 'provider_token'
-                ? {
-                    isAllowedUrl: isTeamsTokenHost,
-                    headers: {
-                      Authorization: `Bearer ${await connector.downloadToken(file.url_private_download)}`,
-                    },
-                  }
-                : { isAllowedUrl: isTeamsFileDownloadUrl, headers: {} },
             tenantId: requireCurrentTenantId() as TenantID,
             sessionId,
             branchId: channel.target_branch_id,
             createdBy: channel.agor_user_id ?? user.user_id,
-            signal: AbortSignal.timeout(teamsAttachmentDeadlineMs(channelConfig)),
-          });
+          };
+          let ingestion: Awaited<ReturnType<typeof ingestProviderInboundFiles>>;
+          if (provider === 'discord') {
+            ingestion = await ingestDiscordInboundImages(staging);
+          } else {
+            const connector = teamsConnectorCache.get(getCurrentTenantId(), channel);
+            ingestion = await ingestProviderInboundFiles({
+              ...staging,
+              label: 'Teams',
+              provenance: 'gateway-teams',
+              textFromOctetStream: true,
+              requestFor: async (file): Promise<ProviderFileRequest> =>
+                file.auth === 'provider_token'
+                  ? {
+                      isAllowedUrl: isTeamsTokenHost,
+                      headers: {
+                        Authorization: `Bearer ${await connector.downloadToken(file.url_private_download)}`,
+                      },
+                    }
+                  : { isAllowedUrl: isTeamsFileDownloadUrl, headers: {} },
+              signal: AbortSignal.timeout(teamsAttachmentDeadlineMs(channelConfig)),
+            });
+          }
           if (ingestion.uploads.length > 0) {
             promptText = buildPromptWithAttachments(promptText, ingestion.uploads);
+            if (provider === 'discord') {
+              console.log(
+                `[gateway] Ingested ${ingestion.uploads.length} Discord attachment(s) for session ${shortId(sessionId)}`
+              );
+            }
           }
           for (const name of ingestion.failedNames ?? []) {
             unread.push(formatUnreadAttachment(name, 'could not be downloaded or is too large'));
           }
         }
         if (unread.length > 0) {
-          promptText = `${promptText}\n\n${formatTeamsUnreadAttachmentsNote(unread, filesEnabled)}`;
+          promptText = `${promptText}\n\n${formatUnreadAttachmentsNote(unread, filesEnabled, READABLE_ATTACHMENTS_HINT[provider])}`;
         }
       }
 

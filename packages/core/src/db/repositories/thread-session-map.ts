@@ -423,25 +423,11 @@ export class ThreadSessionMapRepository
     if (!isDiscordSnowflake(cursor)) {
       throw new RepositoryError('Invalid Discord message ID');
     }
-
-    return runDatabaseTransaction(
-      this.db,
-      async (txDb) => {
-        await lockRowForUpdate(txDb, this.db, threadSessionMap, eq(threadSessionMap.id, id));
-        const row = await select(txDb)
-          .from(threadSessionMap)
-          .where(eq(threadSessionMap.id, id))
-          .one();
-        if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
-        const previous = row.discord_last_admitted_message_id;
-        if (previous && compareDiscordSnowflakes(cursor, previous) <= 0) return false;
-        await update(txDb, threadSessionMap)
-          .set({ discord_last_admitted_message_id: cursor })
-          .where(eq(threadSessionMap.id, id))
-          .run();
-        return true;
-      },
-      { sqliteImmediate: true }
+    return this.advanceCursor(
+      id,
+      'discord_last_admitted_message_id',
+      cursor,
+      (previous) => compareDiscordSnowflakes(cursor, previous) > 0
     );
   }
 
@@ -451,6 +437,21 @@ export class ThreadSessionMapRepository
     cursor: string
   ): Promise<boolean> {
     if (!/^\d{1,20}$/.test(cursor)) throw new RepositoryError('Invalid Teams message ID');
+    return this.advanceCursor(
+      id,
+      'teams_last_admitted_activity_id',
+      cursor,
+      (previous) => !/^\d{1,20}$/.test(previous) || BigInt(cursor) > BigInt(previous)
+    );
+  }
+
+  /** Write `cursor` under the row lock only when it is newer than the stored one. */
+  private advanceCursor(
+    id: ThreadSessionMapID,
+    column: 'discord_last_admitted_message_id' | 'teams_last_admitted_activity_id',
+    cursor: string,
+    isNewer: (previous: string) => boolean
+  ): Promise<boolean> {
     return runDatabaseTransaction(
       this.db,
       async (txDb) => {
@@ -460,12 +461,10 @@ export class ThreadSessionMapRepository
           .where(eq(threadSessionMap.id, id))
           .one();
         if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
-        const previous = row.teams_last_admitted_activity_id;
-        if (previous && /^\d{1,20}$/.test(previous) && BigInt(cursor) <= BigInt(previous)) {
-          return false;
-        }
+        const previous = row[column];
+        if (previous && !isNewer(previous)) return false;
         await update(txDb, threadSessionMap)
-          .set({ teams_last_admitted_activity_id: cursor })
+          .set({ [column]: cursor })
           .where(eq(threadSessionMap.id, id))
           .run();
         return true;

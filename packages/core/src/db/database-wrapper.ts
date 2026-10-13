@@ -177,6 +177,26 @@ export async function getDatabaseNow(
   return Number.isNaN(value.getTime()) ? null : value;
 }
 
+/**
+ * Like {@link getDatabaseNow}, but PostgreSQL reads `clock_timestamp()`: transaction-start
+ * time may precede a lock wait, and a fence after the lock needs the actual time.
+ */
+export async function getDatabaseWallClock(
+  db: Database,
+  table: SQLiteTable | PgTable,
+  where: SQLWrapper,
+  fallback?: Date
+): Promise<Date | null> {
+  if (!isSQLiteDatabase(db)) {
+    const clock = (await select(db, { now: sql<Date>`clock_timestamp()` })
+      .from(table)
+      .where(where)
+      .one()) as { now?: Date | string } | null;
+    if (clock?.now) return new Date(clock.now);
+  }
+  return getDatabaseNow(db, table, where, fallback);
+}
+
 /** Return the canonical dialect for an already-created database instance. */
 export function getDatabaseInstanceDialect(db: Database): DatabaseDialect {
   return isSQLiteDatabase(db) ? 'sqlite' : 'postgresql';

@@ -22,33 +22,21 @@ export type TeamsSendFailurePhase = 'prepare' | 'send';
 
 /** Sanitized Teams send failure; never carries tokens, text, or provider prose. */
 export class TeamsSendError extends Error {
-  readonly phase: TeamsSendFailurePhase;
+  readonly phase!: TeamsSendFailurePhase;
   readonly status?: number;
   readonly providerCode?: string;
   readonly networkCode?: string;
   readonly retryAfterMs?: number;
   readonly reason?: string;
 
-  constructor(input: {
-    phase: TeamsSendFailurePhase;
-    status?: number;
-    providerCode?: string;
-    networkCode?: string;
-    retryAfterMs?: number;
-    reason?: string;
-  }) {
+  constructor(input: Omit<TeamsSendError, keyof Error>) {
     super(
       `Teams ${input.phase} failed${input.status ? ` status=${input.status}` : ''}${
         input.reason ? ` reason=${input.reason}` : ''
       }`
     );
     this.name = 'TeamsSendError';
-    this.phase = input.phase;
-    this.status = input.status;
-    this.providerCode = input.providerCode;
-    this.networkCode = input.networkCode;
-    this.retryAfterMs = input.retryAfterMs;
-    this.reason = input.reason;
+    Object.assign(this, input);
   }
 }
 
@@ -172,6 +160,24 @@ export interface PreparedTeamsSend {
   sendTyping(signal?: AbortSignal): Promise<void>;
 }
 
+/** Host check, token, and client; every failure here is pre-effect. */
+async function connectorClient(
+  serviceUrl: unknown,
+  tokens: TeamsAccessTokenProvider
+): Promise<ConnectorClient> {
+  if (!isTeamsTokenHost(serviceUrl)) {
+    throw new TeamsSendError({ phase: 'prepare', reason: 'service_url_not_allowed' });
+  }
+  let token: string;
+  try {
+    token = await tokens.getAccessToken(botFrameworkScope(serviceUrl));
+  } catch {
+    throw new TeamsSendError({ phase: 'prepare', reason: 'token_unavailable' });
+  }
+  if (!token) throw new TeamsSendError({ phase: 'prepare', reason: 'token_unavailable' });
+  return ConnectorClient.createClientWithToken(serviceUrl, token);
+}
+
 /** Validate the address and fetch a token; every failure here is pre-effect. */
 export async function prepareTeamsSend(
   address: Record<string, unknown>,
@@ -183,18 +189,7 @@ export async function prepareTeamsSend(
   if (typeof conversationId !== 'string' || !conversationId) {
     throw new TeamsSendError({ phase: 'prepare', reason: 'address_invalid' });
   }
-  if (!isTeamsTokenHost(reference.serviceUrl)) {
-    throw new TeamsSendError({ phase: 'prepare', reason: 'service_url_not_allowed' });
-  }
-  const serviceUrl = reference.serviceUrl;
-  let token: string;
-  try {
-    token = await tokens.getAccessToken(botFrameworkScope(serviceUrl));
-  } catch {
-    throw new TeamsSendError({ phase: 'prepare', reason: 'token_unavailable' });
-  }
-  if (!token) throw new TeamsSendError({ phase: 'prepare', reason: 'token_unavailable' });
-  const client = ConnectorClient.createClientWithToken(serviceUrl, token);
+  const client = await connectorClient(reference.serviceUrl, tokens);
   const budget = options.textBudget ?? TEAMS_MESSAGE_TEXT_BUDGET;
   const post = async (fields: Record<string, unknown>, signal?: AbortSignal) => {
     const activity = Activity.fromObject(fields);
@@ -262,18 +257,7 @@ export async function startTeamsChannelThread(
   if (!TEAMS_CHANNEL_ID_PATTERN.test(input.channelId) || input.chunks.length === 0) {
     throw new TeamsSendError({ phase: 'prepare', reason: 'address_invalid' });
   }
-  if (!isTeamsTokenHost(reference.serviceUrl)) {
-    throw new TeamsSendError({ phase: 'prepare', reason: 'service_url_not_allowed' });
-  }
-  const serviceUrl = reference.serviceUrl;
-  let token: string;
-  try {
-    token = await tokens.getAccessToken(botFrameworkScope(serviceUrl));
-  } catch {
-    throw new TeamsSendError({ phase: 'prepare', reason: 'token_unavailable' });
-  }
-  if (!token) throw new TeamsSendError({ phase: 'prepare', reason: 'token_unavailable' });
-  const client = ConnectorClient.createClientWithToken(serviceUrl, token);
+  const client = await connectorClient(reference.serviceUrl, tokens);
   let created: { id?: unknown; activityId?: unknown };
   try {
     const response = await client.httpClient.request<{ id?: unknown; activityId?: unknown }>({
@@ -301,7 +285,7 @@ export async function startTeamsChannelThread(
     const thread = await prepareTeamsSend(
       {
         channelId: 'msteams',
-        serviceUrl,
+        serviceUrl: reference.serviceUrl,
         conversation: {
           id: `${input.channelId};messageid=${rootMessageId}`,
           isGroup: true,

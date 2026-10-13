@@ -7,6 +7,7 @@ export const GATEWAY_READABLE_MIMES: ReadonlySet<string> = new Set([
   'text/plain',
   'text/markdown',
   'text/csv',
+  'text/tab-separated-values',
   'application/json',
 ]);
 
@@ -18,6 +19,7 @@ const GATEWAY_READABLE_EXTENSIONS: ReadonlyArray<[RegExp, string]> = [
   [/\.(txt|log)$/, 'text/plain'],
   [/\.(md|markdown)$/, 'text/markdown'],
   [/\.csv$/, 'text/csv'],
+  [/\.tsv$/, 'text/tab-separated-values'],
   [/\.json$/, 'application/json'],
 ];
 

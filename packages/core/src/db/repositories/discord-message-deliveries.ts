@@ -30,11 +30,14 @@ import {
 import { getCurrentTenantId } from '../tenant-context';
 import { RepositoryError } from './base';
 import {
+  asIso,
   boundedReceipts,
   chunkCheckpoint,
   chunkEffectMarker,
   claimWithLease,
   clearChunkEffect,
+  type DeliveryClaim,
+  type DeliveryDueRef,
   type DeliveryOutbox,
   type DeliveryOutboxRow,
   deliveryMessageText,
@@ -43,22 +46,15 @@ import {
   reloadClaim,
   renewClaim,
   resolveDeliveryMapping,
+  toDeliveryClaim,
   transitionClaim,
 } from './gateway-delivery-outbox';
 
-export interface DiscordMessageDeliveryDiscoveryRef {
-  tenant_id: string;
+export type DiscordMessageDeliveryDiscoveryRef = DeliveryDueRef & {
   delivery_id: DiscordMessageDeliveryID;
-  thread_session_map_id: ThreadSessionMapID;
-}
+};
 
-export interface DiscordMessageDeliveryClaim {
-  delivery_id: DiscordMessageDeliveryID;
-  claim_token: string;
-  claim_generation: number;
-  lease_expires_at: string;
-  delivery: DiscordMessageDelivery;
-}
+export type DiscordMessageDeliveryClaim = DeliveryClaim<DiscordMessageDelivery>;
 
 export class DiscordMessageDeliveryClaimLostError extends Error {
   constructor(deliveryId: string) {
@@ -80,10 +76,6 @@ const DISCORD_OUTBOX: DeliveryOutbox = {
   fairDiscovery: true,
   claimLost: (deliveryId) => new DiscordMessageDeliveryClaimLostError(deliveryId),
 };
-
-function asIso(value: Date | string | number): string {
-  return new Date(value).toISOString();
-}
 
 /** Extract text only at the worker boundary; it is never stored in the intent. */
 export function extractDiscordDeliveryText(message: Message): string {
@@ -131,21 +123,6 @@ function rowToDelivery(row: DiscordMessageDeliveryRow | DeliveryOutboxRow): Disc
 
 function mergeAliases(existing: string[], incoming: string[]): string[] {
   return [...new Set([...existing, ...incoming])].slice(0, MAX_ALIASES);
-}
-
-function toClaim(
-  claimToken: string,
-  claimGeneration: number,
-  lease: { row: DeliveryOutboxRow; leaseExpiresAt: Date }
-): DiscordMessageDeliveryClaim {
-  const delivery = rowToDelivery(lease.row);
-  return {
-    delivery_id: delivery.delivery_id,
-    claim_token: claimToken,
-    claim_generation: claimGeneration,
-    lease_expires_at: asIso(lease.leaseExpiresAt),
-    delivery,
-  };
 }
 
 export class DiscordMessageDeliveryRepository {
@@ -250,7 +227,14 @@ export class DiscordMessageDeliveryRepository {
       leaseDurationMs,
       now,
     });
-    return lease ? toClaim(claimToken, lease.row.claim_generation, lease) : null;
+    return lease
+      ? toDeliveryClaim(
+          rowToDelivery(lease.row),
+          claimToken,
+          lease.leaseExpiresAt,
+          lease.row.claim_generation
+        )
+      : null;
   }
 
   /** Reload a claim in a short tenant transaction before provider work. */
@@ -279,7 +263,14 @@ export class DiscordMessageDeliveryRepository {
       ...input,
       now: input.now ?? new Date(),
     });
-    return lease ? toClaim(input.claimToken, input.claimGeneration, lease) : null;
+    return lease
+      ? toDeliveryClaim(
+          rowToDelivery(lease.row),
+          input.claimToken,
+          lease.leaseExpiresAt,
+          input.claimGeneration
+        )
+      : null;
   }
 
   /**

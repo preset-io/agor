@@ -4,6 +4,7 @@
  */
 
 import type { TeamsAddressRevocationReason } from '../../types/gateway';
+import { asRecord, text } from './teams-graph';
 
 export interface TeamsAddressRevocationEvent {
   /** Base conversation ids (no `;messageid=` suffix) whose addresses are revoked. */
@@ -11,16 +12,6 @@ export interface TeamsAddressRevocationEvent {
   /** Team thread id when the event covers every channel of a team. */
   teamId: string | null;
   reason: TeamsAddressRevocationReason;
-}
-
-function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function text(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function baseConversationId(id: string | null): string | null {
@@ -35,9 +26,9 @@ export function teamsAddressRevocationFromActivity(
   appId: string
 ): TeamsAddressRevocationEvent | null {
   const type = text(raw.type);
-  const channelData = record(raw.channelData);
-  const teamId = text(record(channelData.team).id);
-  const conversationId = baseConversationId(text(record(raw.conversation).id));
+  const channelData = asRecord(raw.channelData);
+  const teamId = text(asRecord(channelData.team).id);
+  const conversationId = baseConversationId(text(asRecord(raw.conversation).id));
   const scope = (reason: TeamsAddressRevocationReason): TeamsAddressRevocationEvent => ({
     conversationIds: conversationId ? [conversationId] : [],
     teamId,
@@ -52,14 +43,14 @@ export function teamsAddressRevocationFromActivity(
     return scope('conversation_deleted');
   }
   if (eventType === 'channelDeleted') {
-    const channelId = baseConversationId(text(record(channelData.channel).id));
+    const channelId = baseConversationId(text(asRecord(channelData.channel).id));
     return channelId
       ? { conversationIds: [channelId], teamId: null, reason: 'conversation_deleted' }
       : null;
   }
   const removed = Array.isArray(raw.membersRemoved) ? raw.membersRemoved : [];
   const botRemoved = removed.some((member) => {
-    const id = text(record(member).id);
+    const id = text(asRecord(member).id);
     return !!appId && (id === appId || id === `28:${appId}`);
   });
   return botRemoved ? scope('bot_removed') : null;

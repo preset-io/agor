@@ -32,7 +32,9 @@ import {
   type TeamsThreadHistoryRequest,
 } from './teams-channel-history';
 import {
+  asRecord,
   fetchTeamsTeamChannels,
+  text as stringValue,
   type TeamsGraphCacheScope,
   type TeamsTeamChannel,
 } from './teams-graph';
@@ -318,32 +320,6 @@ export function createTeamsAuthConfiguration(config: TeamsGatewayConfig): AuthCo
   };
 }
 
-/**
- * Parse a composite thread ID into conversationId + activityId. Kept as a
- * pure compatibility helper for existing integrations and tests.
- */
-export function parseThreadId(threadId: string): { conversationId: string; activityId: string } {
-  const lastPipe = threadId.lastIndexOf('|');
-  if (lastPipe === -1) {
-    throw new Error(
-      `Invalid Teams thread ID format: "${threadId}" (expected "{conversationId}|{activityId}")`
-    );
-  }
-  const conversationId = threadId.substring(0, lastPipe);
-  const activityId = threadId.substring(lastPipe + 1);
-  if (!conversationId || !activityId) {
-    throw new Error(
-      `Invalid Teams thread ID format: "${threadId}" (expected "{conversationId}|{activityId}")`
-    );
-  }
-  return { conversationId, activityId };
-}
-
-export function stripMention(text: string, botName: string): string {
-  const escaped = botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return text.replace(new RegExp(`<at>${escaped}</at>\\s*`, 'gi'), '').trim();
-}
-
 function stripHtmlTags(text: string): string {
   return text.replace(/<[^>]+>/g, '');
 }
@@ -453,16 +429,6 @@ export function partitionTeamsInboundFiles(
     }
   }
   return { files, skipped };
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function stringValue(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 /** Normalize an SDK Activity without retaining the untrusted raw request. */

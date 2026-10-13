@@ -33,6 +33,7 @@ import {
 } from '../schema';
 import { getCurrentTenantId } from '../tenant-context';
 import { RepositoryError } from './base';
+import { asIso } from './gateway-delivery-outbox';
 
 export interface TeamsConversationAddressInput {
   gatewayChannelId: GatewayChannelID;
@@ -59,10 +60,6 @@ export class TeamsServiceUrlNotAllowedError extends RepositoryError {
   }
 }
 
-function iso(value: Date | string | number): string {
-  return new Date(value).toISOString();
-}
-
 function rowToAddress(row: TeamsConversationAddressRow): TeamsConversationAddress {
   return {
     address_id: row.address_id as TeamsConversationAddressID,
@@ -77,24 +74,29 @@ function rowToAddress(row: TeamsConversationAddressRow): TeamsConversationAddres
     verified_app_id: row.verified_app_id,
     verified_tenant_id: row.verified_tenant_id,
     provider_config_generation: row.provider_config_generation,
-    refreshed_at: iso(row.refreshed_at),
-    revoked_at: row.revoked_at ? iso(row.revoked_at) : null,
+    refreshed_at: asIso(row.refreshed_at),
+    revoked_at: row.revoked_at ? asIso(row.revoked_at) : null,
     revoked_reason: row.revoked_reason ?? null,
   };
+}
+
+/** Decrypt a stored JSON object; any failure is a `RepositoryError` with `message`. */
+export function decryptJsonRecord(ciphertext: string, message: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(decryptApiKey(ciphertext)) as unknown;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('value is not an object');
+    }
+    return value as Record<string, unknown>;
+  } catch (error) {
+    throw new RepositoryError(message, error);
+  }
 }
 
 export function decryptTeamsConversationAddress(
   row: TeamsConversationAddress
 ): Record<string, unknown> {
-  try {
-    const value = JSON.parse(decryptApiKey(row.encrypted_address)) as unknown;
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw new Error('address is not an object');
-    }
-    return value as Record<string, unknown>;
-  } catch (error) {
-    throw new RepositoryError('Failed to decrypt Teams conversation address', error);
-  }
+  return decryptJsonRecord(row.encrypted_address, 'Failed to decrypt Teams conversation address');
 }
 
 /** Why a stored address cannot be used for a send right now. */
@@ -152,23 +154,24 @@ export class TeamsConversationAddressRepository {
       eq(teamsConversationAddresses.thread_id, input.threadId)
     );
     const existing = await select(tx).from(teamsConversationAddresses).where(where).one();
+    const fields = {
+      conversation_id: input.conversationId,
+      root_message_id: input.rootMessageId ?? null,
+      team_id: input.teamId ?? existing?.team_id ?? null,
+      team_aad_group_id: input.teamAadGroupId ?? existing?.team_aad_group_id ?? null,
+      teams_channel_type:
+        input.teamsChannelType?.toLowerCase() ?? existing?.teams_channel_type ?? null,
+      encrypted_address: encryptedAddress,
+      verified_app_id: input.verifiedAppId,
+      verified_tenant_id: input.verifiedTenantId,
+      provider_config_generation: input.providerConfigGeneration,
+      refreshed_at: now,
+      revoked_at: null,
+      revoked_reason: null,
+    };
     if (existing) {
       const updated = await update(tx, teamsConversationAddresses)
-        .set({
-          conversation_id: input.conversationId,
-          root_message_id: input.rootMessageId ?? null,
-          team_id: input.teamId ?? existing.team_id ?? null,
-          team_aad_group_id: input.teamAadGroupId ?? existing.team_aad_group_id ?? null,
-          teams_channel_type:
-            input.teamsChannelType?.toLowerCase() ?? existing.teams_channel_type ?? null,
-          encrypted_address: encryptedAddress,
-          verified_app_id: input.verifiedAppId,
-          verified_tenant_id: input.verifiedTenantId,
-          provider_config_generation: input.providerConfigGeneration,
-          refreshed_at: now,
-          revoked_at: null,
-          revoked_reason: null,
-        })
+        .set(fields)
         .where(eq(teamsConversationAddresses.address_id, existing.address_id))
         .returning()
         .one();
@@ -178,18 +181,7 @@ export class TeamsConversationAddressRepository {
       address_id: generateId(),
       gateway_channel_id: input.gatewayChannelId,
       thread_id: input.threadId,
-      conversation_id: input.conversationId,
-      root_message_id: input.rootMessageId ?? null,
-      team_id: input.teamId ?? null,
-      team_aad_group_id: input.teamAadGroupId ?? null,
-      teams_channel_type: input.teamsChannelType?.toLowerCase() ?? null,
-      encrypted_address: encryptedAddress,
-      verified_app_id: input.verifiedAppId,
-      verified_tenant_id: input.verifiedTenantId,
-      provider_config_generation: input.providerConfigGeneration,
-      refreshed_at: now,
-      revoked_at: null,
-      revoked_reason: null,
+      ...fields,
       ...(tenantId ? { tenant_id: tenantId } : {}),
     };
     return rowToAddress(
@@ -318,7 +310,6 @@ export class TeamsConversationAddressRepository {
   }): Promise<FencedTeamsAddress> {
     const row = await this.findByChannelAndThread(input.channel.id, input.threadId);
     if (!row) return { ok: false, code: 'conversation_address_missing' };
-    if (row.thread_id !== input.threadId) return { ok: false, code: 'conversation_address_stale' };
     return this.fenceRow(input.channel, row, input.expected);
   }
 

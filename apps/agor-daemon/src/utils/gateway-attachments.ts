@@ -16,7 +16,11 @@
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { InboundFile } from '@agor/core/gateway';
-import { gatewayFailureCode, isAllowedDiscordAttachmentUrl } from '@agor/core/gateway';
+import {
+  GATEWAY_READABLE_MIMES,
+  gatewayFailureCode,
+  isAllowedDiscordAttachmentUrl,
+} from '@agor/core/gateway';
 import type {
   BranchID,
   SessionID,
@@ -61,30 +65,16 @@ export function isAllowedSlackFileUrl(rawUrl: string): boolean {
 }
 
 /**
- * MIME types the ingestion pipeline accepts: images and text-like files
- * (logs, plain text, CSV, JSON, markdown) agents use as context. Unlike
- * browser uploads (any type, chosen by the signed-in user), gateway ingestion
- * downloads third-party-posted files automatically, so it stays deliberately
- * narrow and excludes script-bearing types like image/svg+xml as well as PDFs,
- * office documents, and archives.
+ * Unlike browser uploads (any type, chosen by the signed-in user), gateway ingestion
+ * downloads third-party-posted files automatically, so it stays deliberately narrow
+ * and excludes script-bearing types like image/svg+xml as well as PDFs, office
+ * documents, and archives. `extra` is the channel's `ingest_mime_types`; `type/*`
+ * entries match a whole family.
  */
-const GATEWAY_INGEST_MIME_TYPES: ReadonlySet<string> = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-  'text/plain',
-  'text/markdown',
-  'text/csv',
-  'text/tab-separated-values',
-  'application/json',
-]);
-
-/** `extra` is the channel's `ingest_mime_types`; `type/*` entries match a whole family. */
 function isAllowedIngestMime(rawMime: string, extra: unknown = []): boolean {
   const mime = normalizeUploadMimeType(rawMime);
   return (
-    GATEWAY_INGEST_MIME_TYPES.has(mime) ||
+    GATEWAY_READABLE_MIMES.has(mime) ||
     // Channel config is an untyped persisted record. Invalid settings must not
     // throw during filtering and prevent delivery of the message's text.
     (Array.isArray(extra) &&

@@ -53,16 +53,11 @@ export const NON_PORTABLE_TENANT_TABLES: ReadonlySet<string> = new Set([
   'teams_message_deliveries',
 ]);
 
-/** A movable column holding queued provider ciphertext; it never crosses an archive. */
-export interface TenantInFlightPayloadColumn {
-  readonly table: string;
-  readonly column: string;
-}
-
-// Queued Teams activities are encrypted for this deployment; restoring one would replay it.
-export const TENANT_IN_FLIGHT_PAYLOAD_COLUMNS: readonly TenantInFlightPayloadColumn[] = [
-  { table: 'gateway_inbound_events', column: 'payload_encrypted' },
-];
+/** Queued Teams activities are encrypted for this deployment; restoring one would replay it. */
+export const TENANT_IN_FLIGHT_PAYLOAD_COLUMN = {
+  table: 'gateway_inbound_events',
+  column: 'payload_encrypted',
+} as const;
 
 function portableDeletionManifest() {
   return buildTenantDeletionManifest().filter(

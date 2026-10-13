@@ -18,6 +18,7 @@ import type { Database } from '../client';
 import {
   databaseNowExpression,
   getDatabaseNow,
+  getDatabaseWallClock,
   insert,
   isSQLiteDatabase,
   lockRowForUpdate,
@@ -25,10 +26,11 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { decryptApiKey, encryptApiKey } from '../encryption';
+import { encryptApiKey } from '../encryption';
 import { type GatewayInboundEventRow, gatewayChannels, gatewayInboundEvents } from '../schema';
 import { RepositoryError } from './base';
 import {
+  decryptJsonRecord,
   type TeamsConversationAddressInput,
   TeamsConversationAddressRepository,
 } from './teams-conversation-addresses';
@@ -599,24 +601,14 @@ export class GatewayInboundEventRepository {
       .from(gatewayInboundEvents)
       .where(eq(gatewayInboundEvents.id, authority.id))
       .one();
-    // PostgreSQL CURRENT_TIMESTAMP is transaction-start time, which may precede
-    // a lock wait. The admission fence needs the actual time after both locks.
-    const clock =
-      event && !isSQLiteDatabase(this.db)
-        ? await select(this.db, { now: sql<Date>`clock_timestamp()` })
-            .from(gatewayInboundEvents)
-            .where(eq(gatewayInboundEvents.id, authority.id))
-            .one()
-        : null;
-    const now = clock
-      ? new Date(clock.now)
-      : event
-        ? await getDatabaseNow(
-            this.db,
-            gatewayInboundEvents,
-            eq(gatewayInboundEvents.id, authority.id)
-          )
-        : null;
+    // The admission fence needs the actual time after both locks.
+    const now = event
+      ? await getDatabaseWallClock(
+          this.db,
+          gatewayInboundEvents,
+          eq(gatewayInboundEvents.id, authority.id)
+        )
+      : null;
     if (
       !channel ||
       !event ||
@@ -644,14 +636,7 @@ export class GatewayInboundEventRepository {
 
   decryptQueuedPayload(event: GatewayInboundEvent): Record<string, unknown> {
     if (!event.payload_encrypted) throw new RepositoryError('Teams queued payload is unavailable');
-    try {
-      const payload = JSON.parse(decryptApiKey(event.payload_encrypted)) as unknown;
-      if (!payload || typeof payload !== 'object' || Array.isArray(payload))
-        throw new Error('payload is not an object');
-      return payload as Record<string, unknown>;
-    } catch (error) {
-      throw new RepositoryError('Failed to decrypt Teams queued payload', error);
-    }
+    return decryptJsonRecord(event.payload_encrypted, 'Failed to decrypt Teams queued payload');
   }
 
   async failQueued(input: {

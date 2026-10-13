@@ -118,14 +118,15 @@ export interface DiscordMessageDeliveryChunkReceipt {
   reply_aliases: string[];
 }
 
-export interface DiscordMessageDelivery {
-  delivery_id: DiscordMessageDeliveryID;
+/** Fields every provider's final-response delivery row shares. */
+export interface GatewayMessageDeliveryBase<ID, Status, Receipt> {
+  delivery_id: ID;
   message_id: UUID;
   gateway_channel_id: GatewayChannelID;
   thread_session_map_id: ThreadSessionMapID;
   provider_installation_id: string;
   provider_config_generation: number;
-  status: DiscordMessageDeliveryStatus;
+  status: Status;
   attempt_count: number;
   next_attempt_at: string;
   claim_token: string | null;
@@ -133,18 +134,26 @@ export interface DiscordMessageDelivery {
   claim_generation: number;
   /** Chunk whose provider effect may have started but lacks a durable receipt. */
   ambiguous_chunk_index: number | null;
-  /** Durable fence timestamp written before the nonce-protected provider call. */
+  /** Durable fence timestamp written before the provider call. */
   effect_started_at: string | null;
-  /** Recovery must remain retryable until this persisted instant. */
-  effect_recovery_grace_until: string | null;
-  chunk_receipts: DiscordMessageDeliveryChunkReceipt[];
-  reply_aliases: string[];
+  chunk_receipts: Receipt[];
   last_error_code: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
   canceled_at: string | null;
   dead_lettered_at: string | null;
+}
+
+export interface DiscordMessageDelivery
+  extends GatewayMessageDeliveryBase<
+    DiscordMessageDeliveryID,
+    DiscordMessageDeliveryStatus,
+    DiscordMessageDeliveryChunkReceipt
+  > {
+  /** Recovery must remain retryable until this persisted instant. */
+  effect_recovery_grace_until: string | null;
+  reply_aliases: string[];
 }
 
 export type TeamsMessageDeliveryStatus =
@@ -162,32 +171,15 @@ export interface TeamsMessageDeliveryChunkReceipt {
 }
 
 /** Narrow durable intent for one Teams assistant message. */
-export interface TeamsMessageDelivery {
-  delivery_id: TeamsMessageDeliveryID;
-  message_id: UUID;
-  gateway_channel_id: GatewayChannelID;
-  thread_session_map_id: ThreadSessionMapID;
-  provider_installation_id: string;
-  provider_config_generation: number;
-  status: TeamsMessageDeliveryStatus;
-  attempt_count: number;
-  next_attempt_at: string;
-  claim_token: string | null;
-  claim_expires_at: string | null;
-  claim_generation: number;
-  /** Chunk whose send may have started but lacks a receipt; never blindly resent. */
-  ambiguous_chunk_index: number | null;
-  effect_started_at: string | null;
-  chunk_receipts: TeamsMessageDeliveryChunkReceipt[];
+export interface TeamsMessageDelivery
+  extends GatewayMessageDeliveryBase<
+    TeamsMessageDeliveryID,
+    TeamsMessageDeliveryStatus,
+    TeamsMessageDeliveryChunkReceipt
+  > {
   /** `<budget>:<sha256>` of the chunk plan, so a resumed delivery sends the same chunks. */
   chunk_plan_digest: string | null;
-  last_error_code: string | null;
   provider_message_id: string | null;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-  canceled_at: string | null;
-  dead_lettered_at: string | null;
 }
 
 /** Why a Teams conversation address stopped being usable; `bot_disabled` is a suspension. */
@@ -308,8 +300,6 @@ export interface TeamsGatewayConfig {
   default_outbound_target?: string | null;
   /** Accepted during migration only; no runtime effect. */
   tenant_id?: string;
-  webhook_port?: number;
-  webhook_path?: string;
 }
 
 /** Per-channel toggles for agent-callable Teams MCP tools; all off unless an admin enables them. */

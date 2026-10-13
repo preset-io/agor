@@ -35,35 +35,30 @@ import {
 import { getCurrentTenantId } from '../tenant-context';
 import { RepositoryError } from './base';
 import {
+  asIso,
   boundedReceipts,
   chunkCheckpoint,
   chunkEffectMarker,
   claimWithLease,
   clearChunkEffect,
+  type DeliveryClaim,
   type DeliveryClaimRef,
-  type DeliveryLease,
+  type DeliveryDueRef,
   type DeliveryOutbox,
   type DeliveryOutboxRow,
   findDueRefs,
   purgeTerminal,
   renewClaim,
   resolveDeliveryMapping,
+  toDeliveryClaim,
   transitionClaim,
 } from './gateway-delivery-outbox';
 
-export interface TeamsMessageDeliveryDiscoveryRef {
-  tenant_id: TenantID | string;
+export type TeamsMessageDeliveryDiscoveryRef = DeliveryDueRef & {
   delivery_id: TeamsMessageDeliveryID;
-  thread_session_map_id: ThreadSessionMapID;
-}
+};
 
-export interface TeamsMessageDeliveryClaim {
-  delivery_id: TeamsMessageDeliveryID;
-  claim_token: string;
-  claim_generation: number;
-  lease_expires_at: string;
-  delivery: TeamsMessageDelivery;
-}
+export type TeamsMessageDeliveryClaim = DeliveryClaim<TeamsMessageDelivery>;
 
 type TeamsClaimRef = Omit<DeliveryClaimRef, 'deliveryId'> & { deliveryId: TeamsMessageDeliveryID };
 
@@ -95,10 +90,6 @@ const TEAMS_OUTBOX: DeliveryOutbox = {
   claimLost: (deliveryId) => new TeamsMessageDeliveryClaimLostError(deliveryId),
 };
 
-function asIso(value: Date | string | number): string {
-  return new Date(value).toISOString();
-}
-
 function rowToDelivery(row: TeamsMessageDeliveryRow | DeliveryOutboxRow): TeamsMessageDelivery {
   const record = row as TeamsMessageDeliveryRow;
   return {
@@ -125,17 +116,6 @@ function rowToDelivery(row: TeamsMessageDeliveryRow | DeliveryOutboxRow): TeamsM
     completed_at: record.completed_at ? asIso(record.completed_at) : null,
     canceled_at: record.canceled_at ? asIso(record.canceled_at) : null,
     dead_lettered_at: record.dead_lettered_at ? asIso(record.dead_lettered_at) : null,
-  };
-}
-
-function toClaim(claimToken: string, lease: DeliveryLease): TeamsMessageDeliveryClaim {
-  const delivery = rowToDelivery(lease.row);
-  return {
-    delivery_id: delivery.delivery_id,
-    claim_token: claimToken,
-    claim_generation: delivery.claim_generation,
-    lease_expires_at: asIso(lease.leaseExpiresAt),
-    delivery,
   };
 }
 
@@ -173,21 +153,7 @@ export class TeamsMessageDeliveryRepository {
       thread_session_map_id: candidate.mapping_id,
       provider_installation_id: candidate.provider_installation_id,
       provider_config_generation: candidate.provider_config_generation,
-      status: 'pending',
-      attempt_count: 0,
       next_attempt_at: now,
-      claim_token: null,
-      claim_expires_at: null,
-      claim_generation: 0,
-      ambiguous_chunk_index: null,
-      effect_started_at: null,
-      chunk_receipts: [],
-      chunk_plan_digest: null,
-      last_error_code: null,
-      provider_message_id: null,
-      completed_at: null,
-      canceled_at: null,
-      dead_lettered_at: null,
       ...(tenantId ? { tenant_id: tenantId } : {}),
     };
     await insert(tx, teamsMessageDeliveries).values(insertData).onConflictDoNothing().run();
@@ -256,14 +222,18 @@ export class TeamsMessageDeliveryRepository {
         return true;
       },
     });
-    return lease ? toClaim(claimToken, lease) : null;
+    return lease
+      ? toDeliveryClaim(rowToDelivery(lease.row), claimToken, lease.leaseExpiresAt)
+      : null;
   }
 
   async renewClaim(
     input: TeamsClaimRef & { leaseDurationMs: number }
   ): Promise<TeamsMessageDeliveryClaim | null> {
     const lease = await renewClaim(TEAMS_OUTBOX, this.db, input);
-    return lease ? toClaim(input.claimToken, lease) : null;
+    return lease
+      ? toDeliveryClaim(rowToDelivery(lease.row), input.claimToken, lease.leaseExpiresAt)
+      : null;
   }
 
   /**

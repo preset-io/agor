@@ -194,26 +194,14 @@ export function validateTeamsVerifiedIdentity(
   if (!serviceUrl || !tokenServiceUrl || serviceUrl !== tokenServiceUrl) {
     return 'invalid_service_url';
   }
-  try {
-    const parsed = new URL(serviceUrl);
-    if (
-      serviceUrl !== serviceUrl.trim() ||
-      parsed.protocol !== 'https:' ||
-      parsed.username ||
-      parsed.password ||
-      parsed.hash
-    )
-      return 'invalid_service_url';
-  } catch {
+  if (
+    serviceUrl !== serviceUrl.trim() ||
+    !isAllowedTeamsServiceUrl(serviceUrl) ||
+    new URL(serviceUrl).hash
+  ) {
     return 'invalid_service_url';
   }
-  if (!isAllowedTeamsServiceUrl(serviceUrl)) return 'invalid_service_url';
   return null;
-}
-
-function metadataString(activity: NormalizedTeamsActivity, key: string): string | null {
-  const value = activity.metadata[key];
-  return typeof value === 'string' && value ? value : null;
 }
 
 function allowlisted(
@@ -460,9 +448,9 @@ export function registerTeamsGatewayIngressRoute(input: {
             address: {
               conversationId: normalized.conversationId,
               rootMessageId: normalized.rootMessageId,
-              teamId: metadataString(normalized, 'teams_team_id'),
-              teamAadGroupId: metadataString(normalized, 'teams_team_aad_group_id'),
-              teamsChannelType: metadataString(normalized, 'teams_channel_type'),
+              teamId: exactString(normalized.metadata, 'teams_team_id'),
+              teamAadGroupId: exactString(normalized.metadata, 'teams_team_aad_group_id'),
+              teamsChannelType: exactString(normalized.metadata, 'teams_channel_type'),
               address: normalized.address,
             },
             providerConfigGeneration: channel!.provider_config_generation,
