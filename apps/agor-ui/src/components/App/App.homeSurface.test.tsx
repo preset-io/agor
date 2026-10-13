@@ -50,8 +50,15 @@ vi.mock('../BoardTeammatePanel', () => ({
   TeammatePanelRail: () => null,
 }));
 vi.mock('../SettingsModal', () => ({
-  SettingsModal: (props: { open?: boolean }) =>
-    props.open ? <div data-testid="settings-modal" /> : null,
+  SettingsModal: (props: { open?: boolean; onCreateTeammate?: () => void }) =>
+    props.open ? (
+      <div data-testid="settings-modal">
+        {/* Mirrors TeammatesTable: no callback renders the button disabled. */}
+        <button type="button" onClick={props.onCreateTeammate} disabled={!props.onCreateTeammate}>
+          Create AI teammate
+        </button>
+      </div>
+    ) : null,
   UserSettingsModal: () => null,
 }));
 vi.mock('../BranchModal', () => ({ BranchModal: () => null }));
@@ -247,9 +254,9 @@ const CONNECTED = {
 
 /** Route table mirrors `apps/agor-ui/src/App.tsx` — the bugs live in how
  *  these paths resolve, so an approximation would not reproduce them. */
-function renderApp(initialPath: string) {
+function renderApp(initialPath: string, appUser: User = user) {
   const el = (
-    <App client={null} user={user} connected={true} availableAgents={[]} initialBoardId="" />
+    <App client={null} user={appUser} connected={true} availableAgents={[]} initialBoardId="" />
   );
   return render(
     <ConnectionProvider value={CONNECTED}>
@@ -313,6 +320,30 @@ beforeEach(() => {
   resetAccessCacheForTests();
   seedStore();
   canvasCommit.mockClear();
+});
+
+describe('Settings › Create AI teammate', () => {
+  it('is disabled for viewers, who cannot create the board and branch it needs', async () => {
+    renderApp('/', { ...user, role: 'viewer' } as User);
+    await settle();
+    fireEvent.click(screen.getByTestId('open-settings'));
+    await settle();
+
+    expect(screen.getByRole('button', { name: 'Create AI teammate' })).toBeDisabled();
+  });
+
+  it('opens the shared create-teammate flow for members', async () => {
+    renderApp('/', { ...user, role: 'member' } as User);
+    await settle();
+    fireEvent.click(screen.getByTestId('open-settings'));
+    await settle();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create AI teammate' }));
+    await settle();
+
+    expect(screen.queryByTestId('settings-modal')).toBeNull();
+    expect(await screen.findByText('New AI teammate')).toBeInTheDocument();
+  });
 });
 
 describe('Settings opens as an overlay, not a navigation', () => {

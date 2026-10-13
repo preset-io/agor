@@ -130,6 +130,27 @@ describe('makeHomeBucketsSelector', () => {
     );
   });
 
+  it('only counts needs at needsLimit 0, leaving My work unchanged', () => {
+    const run = (id: string, h: number, extra: Partial<Session> = {}) =>
+      session(id, { branch_id: 'pipe', last_updated: hoursAgo(h), ...extra });
+    const s = state({
+      sessions: [
+        session('perm', { status: 'awaiting_permission' }),
+        run('f1', 3, { status: 'failed' }),
+        run('f2', 2, { status: 'failed' }),
+        run('done', 1, { ready_for_prompt: true, branch_id: 'other' }),
+        session('idle', { last_updated: hoursAgo(4) }),
+      ],
+    });
+    const full = select(s, { needsLimit: 50 });
+    const counted = select(s, { needsLimit: 0 });
+    expect(counted.needs).toEqual([]);
+    expect(counted.needsCount).toBe(full.needsCount);
+    expect(counted.needsByReason).toEqual(full.needsByReason);
+    expect(counted.recent).toEqual(full.recent);
+    expect(counted.recentCount).toBe(full.recentCount);
+  });
+
   it('lists finished-not-opened only for sessions the user started', () => {
     const s = state({
       sessions: [

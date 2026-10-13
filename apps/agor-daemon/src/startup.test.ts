@@ -1,4 +1,9 @@
-import { createTenantScopedDatabaseProxy, MissingTenantDatabaseScopeError } from '@agor/core/db';
+import {
+  BranchMaintenanceRepository,
+  createTenantScopedDatabaseProxy,
+  getCurrentTenantId,
+  MissingTenantDatabaseScopeError,
+} from '@agor/core/db';
 import type { Session, Task } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -16,6 +21,7 @@ import {
   createEnvironmentHealthMonitor,
   initializeEnvironmentHealthMonitor,
   prepareTaskRuntimeStartup,
+  reconcileInterruptedBranchMetadataArchives,
   type StartupContext,
   shouldContainLocalExecutorsOnShutdown,
   shouldReconnectSocketClientsOnShutdown,
@@ -148,6 +154,28 @@ function makeSession(overrides: Partial<Session>): Session {
     ...overrides,
   } as Session;
 }
+
+describe('metadata archive startup recovery', () => {
+  it('runs only in the trusted bootstrap tenant before standalone startup serves requests', async () => {
+    const { ctx } = makeStartupContextWithGuardedDb();
+    const reconcile = vi
+      .spyOn(BranchMaintenanceRepository.prototype, 'reconcileInterruptedMetadataArchives')
+      .mockImplementation(async () => {
+        expect(getCurrentTenantId()).toBe('startup-tenant');
+        expect((ctx.db as unknown as { marker(): string }).marker()).toBe('scoped');
+        return { scanned: 1, released: 1 };
+      });
+    try {
+      await reconcileInterruptedBranchMetadataArchives(ctx);
+      expect(reconcile).toHaveBeenCalledOnce();
+      ctx.taskRuntimePolicy = 'shared_postgres';
+      await reconcileInterruptedBranchMetadataArchives(ctx);
+      expect(reconcile).toHaveBeenCalledOnce();
+    } finally {
+      reconcile.mockRestore();
+    }
+  });
+});
 
 describe('startup tenant database scope', () => {
   it('contains local executors only under the standalone shutdown contract', () => {

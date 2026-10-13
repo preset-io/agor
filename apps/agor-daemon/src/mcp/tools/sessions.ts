@@ -38,6 +38,7 @@ import type { SessionBulkArchiveResult, SessionParams } from '../../services/ses
 import { requireActiveAgenticTool } from '../../utils/agentic-tool-runtime.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
+import { withPromptProvenanceTool } from '../../utils/prompt-provenance.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -712,7 +713,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           metadata: { system_authored: true },
         },
         {
-          ...ctx.baseServiceParams,
+          ...withPromptProvenanceTool(ctx.baseServiceParams, 'agor_sessions_spawn'),
           provider: undefined,
           route: { id: childSession.session_id },
         }
@@ -782,16 +783,24 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           )
         );
       }
+      // Name the delivering tool on the inherited server-stamped origin. The
+      // stamp itself rides on `ctx.baseServiceParams`, so forgetting this line
+      // would only blur a label, never drop the block.
+      const provenanceParams = withPromptProvenanceTool(
+        ctx.baseServiceParams,
+        'agor_sessions_prompt',
+        mode
+      );
       const callbackParams = args.callback
         ? {
-            ...ctx.baseServiceParams,
+            ...provenanceParams,
             _taskCompletionCallback: {
               target_session_id: ctx.sessionId!,
               requested_from_session_id: ctx.sessionId!,
               requested_by_user_id: ctx.userId,
             },
           }
-        : ctx.baseServiceParams;
+        : provenanceParams;
 
       if (mode === 'continue') {
         // The prompt route returns the Task entity directly. Whether it ran
@@ -1072,7 +1081,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .enum(['once', 'persistent'])
           .optional()
           .describe(
-            'Callback firing mode: "persistent" (default) fires on every completion until unlinked, "once" fires on the first completion then auto-disables'
+            'Callback firing mode: "persistent" (default) fires on every completion until unlinked, including turns processing child results. Use it for coordinators: C completes -> B processes -> B completes -> A. "once" is consumed by the first completion, which may only be the delegation turn. No descendant ownership transfer.'
           ),
         parentSessionId: z
           .string()
@@ -1316,7 +1325,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             stream: true,
             metadata: { system_authored: true },
           },
-          { ...ctx.baseServiceParams, provider: undefined, route: { id: session.session_id } }
+          {
+            ...withPromptProvenanceTool(ctx.baseServiceParams, 'agor_sessions_create'),
+            provider: undefined,
+            route: { id: session.session_id },
+          }
         );
       }
 
@@ -1379,7 +1392,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .enum(['once', 'persistent'])
           .optional()
           .describe(
-            'Callback mode: "once" fires once then auto-disables, "persistent" fires every time (optional)'
+            'Callback mode: "persistent" fires on every completion, including processing child results; use for multi-hop coordinators. "once" auto-disables after the first completion (even an initial delegation turn). Does not change exact-task callback scope (optional)'
           ),
       }),
     },

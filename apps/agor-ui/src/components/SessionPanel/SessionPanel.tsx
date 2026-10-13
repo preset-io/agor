@@ -120,9 +120,13 @@ export type { PermissionMode };
 // The parent reads/clears the value imperatively via a ref.
 // ---------------------------------------------------------------------------
 
+// iOS Safari zooms into inputs below 16px.
+const MOBILE_COMPOSER_FONT_SIZE = 16;
+
 export interface PromptInputHandle {
   getValue: () => string;
-  clear: () => void;
+  /** Empty the composer, or leave only `remainder` (text typed after a send began). */
+  clear: (remainder?: string) => void;
   insertText: (text: string) => void;
 }
 
@@ -180,6 +184,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     ref
   ) => {
     const isMobile = useIsMobileViewport();
+    const { token } = theme.useToken();
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
     const textareaElementRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -240,15 +245,16 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       ref,
       () => ({
         getValue: () => textareaElementRef.current?.value ?? valueRef.current,
-        clear: () => {
+        clear: (remainder = '') => {
           untouchedSeedRef.current = false;
           discardDraftSeed(sessionId);
-          valueRef.current = '';
-          inputValueRef.current = '';
+          valueRef.current = remainder;
+          inputValueRef.current = remainder;
           if (textareaElementRef.current) {
-            textareaElementRef.current.value = '';
+            textareaElementRef.current.value = remainder;
           }
-          setValue('');
+          setValue(remainder);
+          // A remainder is re-persisted by the debounced draft save.
           deleteDraft(sessionId);
         },
         insertText: (text: string) => {
@@ -326,7 +332,19 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         highlightWhenEmpty
         // Preserve the mobile composer's iOS no-autozoom threshold. The shared
         // textarea also applies these metrics to its mention highlight overlay.
-        textareaStyle={isMobile ? { fontSize: 16 } : undefined}
+        // Block padding makes one line a full touch-target tall.
+        textareaStyle={
+          isMobile
+            ? {
+                fontSize: MOBILE_COMPOSER_FONT_SIZE,
+                paddingBlock:
+                  (MOBILE_TOUCH_TARGET -
+                    2 * token.lineWidth -
+                    MOBILE_COMPOSER_FONT_SIZE * token.lineHeight) /
+                  2,
+              }
+            : undefined
+        }
       />
     );
   }
@@ -876,11 +894,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onSubmit={stableFooterHandlers.onSendPrompt}
           hasExternalInput={hasComposerAttachments}
           placeholder={
-            isRunning
-              ? 'Queue here… @ for mentions, : for emoji'
-              : 'Prompt here… @ for mentions, : for emoji'
+            isMobileShell
+              ? isRunning
+                ? 'Queue here…'
+                : 'Prompt here…'
+              : isRunning
+                ? 'Queue here… @ for mentions, : for emoji'
+                : 'Prompt here… @ for mentions, : for emoji'
           }
-          autoSize={{ minRows: 1, maxRows: isMobileShell ? 4 : 10 }}
+          autoSize={{ minRows: 1, maxRows: isMobileShell ? 5 : 10 }}
           client={client}
           userById={userById}
           onFilesDrop={addComposerAttachments}
@@ -953,7 +975,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     confirmArchive(session.session_id, { onArchived: onClose });
   };
 
-  const hasBranchActions = !!branch;
+  // The mobile canvas lives on a separate Board tab, so there is no map to center from here.
+  const showCenterMap = !!branch && !isMobileShell;
+  const hasBranchActions = showCenterMap || !!(onOpenTerminal && branch);
   const canSwitchTool =
     hasActiveAgenticTool && !!branch && !!onChooseAgenticTool && (session.tasks?.length ?? 0) === 0;
   const handleSwitchTool = async (tool: string) => {
@@ -967,7 +991,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
   const moreMenuItems: MenuProps['items'] = [
-    ...(branch
+    ...(showCenterMap && branch
       ? [
           {
             key: 'center-map',
@@ -1095,10 +1119,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // may have typed identical text and selected different attachments.
       const composerOwnsAdmissionCompletion =
         composerSessionIdentityRef.current === sendStartComposerIdentity;
-      const composerStillOwnsSentText =
-        composerOwnsAdmissionCompletion && promptRef.current?.getValue() === latestValue;
-      if (composerStillOwnsSentText) {
-        promptRef.current?.clear();
+      const textAfterAdmission = composerOwnsAdmissionCompletion
+        ? promptRef.current?.getValue()
+        : undefined;
+      // Typing on after Enter appends to the sent text while admission is
+      // pending. Remove the sent part and keep what was added, so a quick
+      // follow-up never leaves the already-sent prompt in the box.
+      if (textAfterAdmission?.startsWith(latestValue)) {
+        const typedAfterSend = textAfterAdmission.slice(latestValue.length);
+        promptRef.current?.clear(latestValue ? typedAfterSend.trimStart() : typedAfterSend);
         clearComposerAttachments();
         setComposerAttachmentValidationError(null);
       } else {

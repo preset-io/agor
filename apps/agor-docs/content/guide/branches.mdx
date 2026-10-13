@@ -330,6 +330,17 @@ automatically. A repository administrator can open **Repository settings** above
 the archive dialog; saving refreshes the command without submitting archive or
 overriding an explicit Preserve/Delete choice.
 
+If two branch records share or overlap a workspace path, choose **Archive → Leave
+untouched** to hide the broken record without touching files. Cleanup, workspace
+removal, and permanent deletion remain blocked while the paths overlap,
+even if the other record is archived, failed, cleaned, or marked deleted. These
+states do not prove that files are absent or that provisioning cannot retry.
+
+Agor has no ownership-reconciliation UI or API. After file-preserving archival,
+ask your installation operator (or hosted support) to investigate the conflicting
+workspace-path records before retrying filesystem maintenance. Do not delete files
+or change a recorded path merely to bypass the overlap guard.
+
 ### Branch cleanup settings
 
 In **Settings → Repositories → Edit**, configure **Branch cleanup**. Cleanup is
@@ -462,12 +473,12 @@ Editor or Manager. **Clear board primary** remains available in **Archive or Del
 branch management alone does not grant board authority.
 
 Personal routing preferences are not a permanent veto over branch management, even
-when a former collaborator can no longer access the teammate. Users can also choose
-**Clear primary assistant** in their own settings, or call
-`users.setPrimaryTeammate({ branchId: null, expectedUserId })`, without choosing a
-replacement. Ordinary cleanup/archive/delete retains primary protection; retirement
-is a separate, explicit, file-preserving action. Permanent deletion, if wanted,
-remains a later authorized operation.
+when a former collaborator can no longer access the teammate: retirement clears them.
+In Settings, users change their primary assistant by picking another one. To unset it
+without a replacement, call `users.setPrimaryTeammate({ branchId: null, expectedUserId })`.
+Ordinary cleanup/archive/delete retains primary protection; retirement is a separate,
+explicit, file-preserving action. Permanent deletion, if wanted, remains a later
+authorized operation.
 
 ### Recovery rollout and operator preflight
 
