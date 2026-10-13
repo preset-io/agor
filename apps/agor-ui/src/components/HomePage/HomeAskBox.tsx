@@ -295,6 +295,11 @@ export const HomeAskBox = memo(function HomeAskBox({
           aria-label={`Ask ${name}`}
           style={{ fontSize: token.fontSizeLG }}
         />
+        {!settingsHydrated && (
+          <Typography.Text role="status" type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            Loading agentic tool availability
+          </Typography.Text>
+        )}
         <Flex align="center" gap={token.marginXS} data-home-ask-toolbar>
           <AskTargetSelect
             client={client}

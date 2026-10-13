@@ -811,6 +811,10 @@ describe('HomePage', () => {
       fireEvent.click(send!);
       expect(onCreateSession).not.toHaveBeenCalled();
       expect(input.value).toBe('Keep this draft');
+      expect(screen.getByText('Loading agentic tool availability')).toHaveAttribute(
+        'role',
+        'status'
+      );
 
       act(() =>
         agorStore.getState().setAgenticToolSettings([
@@ -824,6 +828,7 @@ describe('HomePage', () => {
           },
         ])
       );
+      expect(screen.queryByText('Loading agentic tool availability')).not.toBeInTheDocument();
       expect((send as HTMLButtonElement).disabled).toBe(false);
       fireEvent.keyDown(input, { key: 'Enter' });
       await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));

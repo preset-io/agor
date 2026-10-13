@@ -147,8 +147,7 @@ export const PAGINATION = {
 
 /**
  * Error message thrown by the client `findAll()` helper when offset pagination
- * sees the collection change between pages. Callers that can safely restart
- * the read (the board partition loader) match on it.
+ * sees the collection change between pages.
  */
 export const PAGINATION_CHURN_MESSAGE = 'Paginated findAll() changed while pages were being read';
 
