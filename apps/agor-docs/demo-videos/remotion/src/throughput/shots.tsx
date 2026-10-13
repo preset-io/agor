@@ -52,7 +52,15 @@ export interface ShotSpec {
   /** The box, or a function of seconds into the shot (to snap or swing it). */
   box: Box | ((t: number) => Box);
   /** Sharp typing stills laid over the input they show, from composition second `at`. */
-  typing?: { stills: Stills; at: number };
+  typing?: {
+    stills: Stills;
+    at: number;
+    /** Source second it's sent: the input closes, so the stills go. */
+    until: number;
+    /** Keep the top of each still, down to just under the input box (the
+     * buttons below it then come from the video, never half and half). */
+    keep?: number;
+  };
 }
 
 /**
@@ -196,17 +204,26 @@ export const Shot: React.FC<{
           </Freeze>
         </Sequence>
         {/* The typing, sharp: the take's close-up still of the input, laid over it. */}
-        {typing && spec.start + t >= typing.at - 0.05 ? (
-          <Img
-            src={staticFile(`clips/${typing.stills.dir}/${String(still).padStart(3, '0')}.jpg`)}
+        {typing && spec.start + t >= typing.at - 0.05 && src < typing.until ? (
+          <div
             style={{
               position: 'absolute',
               left: typing.stills.rect.x * cam.z,
               top: typing.stills.rect.y * cam.z,
               width: typing.stills.rect.w * cam.z,
-              height: typing.stills.rect.h * cam.z,
+              height: typing.stills.rect.h * cam.z * (typing.keep ?? 1),
+              overflow: 'hidden',
             }}
-          />
+          >
+            <Img
+              src={staticFile(`clips/${typing.stills.dir}/${String(still).padStart(3, '0')}.jpg`)}
+              style={{
+                display: 'block',
+                width: typing.stills.rect.w * cam.z,
+                height: typing.stills.rect.h * cam.z,
+              }}
+            />
+          </div>
         ) : null}
       </div>
     </Frame>

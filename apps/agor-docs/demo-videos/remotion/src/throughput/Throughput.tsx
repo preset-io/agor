@@ -102,7 +102,8 @@ function typingShot(
         { at: sent + 0.15, cx: COMPOSE.cx + 16, cy: COMPOSE.cy + 4, z: 2.9 },
       ],
       box: full(),
-      typing: { stills, at: typeAt },
+      // Compose's input ends 77% of the way down its stills; the buttons follow.
+      typing: { stills, at: typeAt, until: sent - 0.02, keep: 0.77 },
     },
   };
 }
