@@ -45,11 +45,10 @@ import {
 import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
-import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 import { UserAvatarsTab } from './UserAvatarsTab';
 import { UserSettingsModal } from './UserSettingsModal';
 
@@ -81,7 +80,6 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   // Create user is a drill-in (no stacked modal): the shell footer drives
   // Save/Cancel and the nav-switch / modal-close guards key on `drill`.
   const { drill, openDrill, closeDrill } = useSettingsDrill();
-  const [createDirty, setCreateDirty] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [memberships, setMemberships] = useState<GroupMembership[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -104,18 +102,15 @@ export const UsersTable: React.FC<UsersTableProps> = ({
     isAdmin && isIdentityCapabilityAvailable(authConfig, identityContractState, 'create');
   // Create drill-in is active when the shell's drill targets this section in
   // create mode (and the caller is allowed to create).
-  const isCreating = canCreateUsers && drill?.kind === 'users' && drill.mode === 'create';
+  const isCreating = canCreateUsers && drill?.mode === 'create';
   // Edit user also drills in place of the list (embedded UserSettingsModal),
   // driven by the shell drill state so the breadcrumb + leave-guards apply.
   const editingUser =
-    drill?.kind === 'users' && drill.mode === 'edit' && drill.recordId
-      ? (userById.get(drill.recordId) ?? null)
-      : null;
+    drill?.mode === 'edit' && drill.recordId ? (userById.get(drill.recordId) ?? null) : null;
   // Reset the form to create defaults each time the drill-in opens.
   useEffect(() => {
     if (isCreating) {
       form.resetFields();
-      setCreateDirty(false);
     }
   }, [isCreating, form]);
   const canDeleteUsers = isIdentityCapabilityAvailable(authConfig, identityContractState, 'delete');
@@ -222,7 +217,6 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       );
       if (!operation.isCurrent()) return;
       form.resetFields();
-      setCreateDirty(false);
       closeDrill();
     } catch (error) {
       if (!operation.isCurrent()) return;
@@ -327,7 +321,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
                 size="small"
                 icon={<EditOutlined />}
                 aria-label={`Edit ${user.email}`}
-                onClick={() => openDrill({ kind: 'users', mode: 'edit', recordId: user.user_id })}
+                onClick={() => openDrill({ mode: 'edit', recordId: user.user_id })}
               />
             )}
             {showDelete && (
@@ -359,25 +353,17 @@ export const UsersTable: React.FC<UsersTableProps> = ({
   // Create/Cancel and the breadcrumb ("Users ›") backs out via closeDrill.
   if (isCreating) {
     return (
-      <AdaptiveSettingsModal
-        embedded
-        open
+      <DrillInFrame
         title="Create User"
-        okText="Create"
-        dirty={createDirty}
-        onOk={handleCreate}
-        onCancel={() => {
+        saveLabel="Create"
+        dirty={() => form.isFieldsTouched()}
+        onSave={handleCreate}
+        onBack={() => {
           form.resetFields();
-          setCreateDirty(false);
           closeDrill();
         }}
       >
-        <Form
-          form={form}
-          layout="vertical"
-          style={{ maxWidth: 520 }}
-          onValuesChange={() => setCreateDirty(true)}
-        >
+        <Form form={form} layout="vertical" style={{ maxWidth: 520 }}>
           <Form.Item label="Name" name="name" style={{ marginBottom: 24 }}>
             <Input placeholder="John Doe" />
           </Form.Item>
@@ -437,7 +423,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
             <Checkbox>Force password change on first login</Checkbox>
           </Form.Item>
         </Form>
-      </AdaptiveSettingsModal>
+      </DrillInFrame>
     );
   }
 
@@ -482,7 +468,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
             <Button
               type="primary"
               icon={<PlusOutlined />}
-              onClick={() => openDrill({ kind: 'users', mode: 'create' })}
+              onClick={() => openDrill({ mode: 'create' })}
             >
               New User
             </Button>

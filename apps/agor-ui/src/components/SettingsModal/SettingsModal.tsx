@@ -18,7 +18,7 @@ import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { ArrowLeftOutlined, CloseOutlined, RightOutlined, UserOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Tag, Typography, theme } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useAuthenticatedAuthorityScope } from '@/hooks/useAuthorityOperationGuard';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -50,12 +50,7 @@ import { CardTypesPanel } from './CardTypesPanel';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { GroupsTable } from './GroupsTable';
 import { ReposTable } from './ReposTable';
-import {
-  type DrillController,
-  type DrillTarget,
-  SettingsDrillProvider,
-  useDirtyLeaveGuard,
-} from './SettingsDrill';
+import { SettingsDrillProvider, useDrillShell } from './SettingsDrill';
 import { buildSettingsNav, settingsSectionMobileLabel } from './settingsNavigation';
 import { TeammatesTable } from './TeammatesTable';
 import { UsersTable } from './UsersTable';
@@ -192,26 +187,9 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
   // Drill-in navigation: the Content pane swaps between a section's list view
-  // and its detail/edit view in place, instead of stacking a second Modal. One
-  // piece of state owned here decides list-vs-editor; the active editor
-  // publishes a controller so the shared footer can drive Save/Cancel.
-  const [drill, setDrill] = useState<DrillTarget | null>(null);
-  const [controller, setControllerState] = useState<DrillController | null>(null);
-  // Mirror the controller into a ref so the leave-guard can read the latest
-  // dirty flag without depending on it (keeps the guard identity stable).
-  const controllerRef = useRef<DrillController | null>(null);
-  const setController = useCallback((next: DrillController | null) => {
-    controllerRef.current = next;
-    setControllerState(next);
-  }, []);
-  const getDirty = useCallback(() => controllerRef.current?.dirty ?? false, []);
-  const confirmLeaveIfDirty = useDirtyLeaveGuard(getDirty);
-
-  const openDrill = useCallback((target: DrillTarget) => setDrill(target), []);
-  const closeDrill = useCallback(() => {
-    setDrill(null);
-    setController(null);
-  }, [setController]);
+  // and its detail/edit view in place, instead of stacking a second Modal.
+  const shell = useDrillShell(activeTab as SettingsSection);
+  const { drill, openDrill, closeDrill, confirmLeaveIfDirty } = shell;
 
   // Branches and Teammates edit the same entity (a branch) via the shared
   // BranchModal, rendered in-place (embedded) as the section's drill-in instead
@@ -220,15 +198,15 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const [branchSnapshot, setBranchSnapshot] = useState<Branch | null>(null);
   const branchDrill =
     drill?.mode === 'edit' &&
-    (drill.kind === 'branches' || drill.kind === 'teammates') &&
+    (activeTab === 'branches' || activeTab === 'teammates') &&
     drill.recordId
       ? (branchById.get(drill.recordId) ??
         (branchSnapshot?.branch_id === drill.recordId ? branchSnapshot : null))
       : null;
   const openBranchDrill = useCallback(
-    (kind: 'branches' | 'teammates', branch: Branch) => {
+    (branch: Branch) => {
       setBranchSnapshot(branch);
-      openDrill({ kind, mode: 'edit', recordId: branch.branch_id });
+      openDrill({ mode: 'edit', recordId: branch.branch_id });
     },
     [openDrill]
   );
@@ -243,65 +221,24 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     [onArchiveOrDeleteBranch, closeDrill]
   );
 
-  // Any external section change (deep link, prop-controlled tab) abandons an
-  // open drill-in; leaving the section is the same as backing out of it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset keyed on section change only
-  useEffect(() => {
-    setDrill(null);
-    setController(null);
-  }, [activeTab]);
-
   const handleNavClick = useCallback(
     (key: string) => {
       // The MCP Marketplace is intentionally NOT reachable from Settings — it
       // lives only on the global navbar. No nav row or signpost here.
       if (!settingsSectionKeys.has(key)) return;
       if (key === activeTab) return;
-      const go = () => {
+      confirmLeaveIfDirty(() => {
         closeDrill();
         onTabChange?.(key as SettingsSection);
-      };
-      if (drill) {
-        void confirmLeaveIfDirty().then((ok) => ok && go());
-      } else {
-        go();
-      }
+      });
     },
-    [activeTab, closeDrill, confirmLeaveIfDirty, drill, onTabChange, settingsSectionKeys]
+    [activeTab, closeDrill, confirmLeaveIfDirty, onTabChange, settingsSectionKeys]
   );
 
-  const handleModalClose = useCallback(() => {
-    if (drill) {
-      void confirmLeaveIfDirty().then((ok) => {
-        if (ok) {
-          closeDrill();
-          onClose();
-        }
-      });
-    } else {
-      onClose();
-    }
-  }, [closeDrill, confirmLeaveIfDirty, drill, onClose]);
-
-  const drillFooter =
-    controller && !controller.ownsFooter
-      ? [
-          <Button key="cancel" onClick={controller.onBack} disabled={controller.saving}>
-            Cancel
-          </Button>,
-          controller.onSave ? (
-            <Button
-              key="save"
-              type="primary"
-              loading={controller.saving}
-              disabled={controller.saveDisabled}
-              onClick={() => void controller.onSave?.()}
-            >
-              {controller.saveLabel ?? 'Save'}
-            </Button>
-          ) : null,
-        ]
-      : null;
+  const handleModalClose = useCallback(
+    () => confirmLeaveIfDirty(onClose),
+    [confirmLeaveIfDirty, onClose]
+  );
 
   // Role gate — MCP Servers and Gateway Channels are global admin-managed
   // configuration (credentials, webhook URLs, env vars). The daemon enforces
@@ -417,17 +354,14 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
 
   // Mobile header Back: leaves an open drill-in (guarded) and the section
   // together, returning to the index.
-  const handleMobileBack = useCallback(() => {
-    const back = () => {
-      closeDrill();
-      setMobileSection(null);
-    };
-    if (drill) {
-      void confirmLeaveIfDirty().then((ok) => ok && back());
-    } else {
-      back();
-    }
-  }, [closeDrill, confirmLeaveIfDirty, drill]);
+  const handleMobileBack = useCallback(
+    () =>
+      confirmLeaveIfDirty(() => {
+        closeDrill();
+        setMobileSection(null);
+      }),
+    [closeDrill, confirmLeaveIfDirty]
+  );
 
   // Shared iOS-style grouped-list card wrapper for the mobile index.
   const settingsGroupCardStyle: React.CSSProperties = {
@@ -507,7 +441,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
               onArchiveOrDelete={onArchiveOrDeleteBranch}
               onUnarchive={onUnarchiveBranch}
               onCreate={onCreateBranch}
-              onRowClick={(branch) => openBranchDrill('branches', branch)}
+              onRowClick={openBranchDrill}
               onStartEnvironment={onStartEnvironment}
               onStopEnvironment={onStopEnvironment}
               onClose={onClose}
@@ -524,7 +458,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
               boardById={boardById}
               userById={userById}
               onArchiveOrDelete={onArchiveOrDeleteBranch}
-              onRowClick={(branch) => openBranchDrill('teammates', branch)}
+              onRowClick={openBranchDrill}
               onCreateTeammate={onCreateTeammate}
               currentUser={currentUser}
               client={client}
@@ -612,16 +546,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   };
 
   const drillProvider = (children: React.ReactNode) => (
-    <SettingsDrillProvider
-      drill={drill}
-      openDrill={openDrill}
-      closeDrill={closeDrill}
-      confirmLeaveIfDirty={confirmLeaveIfDirty}
-      controller={controller}
-      setController={setController}
-    >
-      {children}
-    </SettingsDrillProvider>
+    <SettingsDrillProvider shell={shell}>{children}</SettingsDrillProvider>
   );
 
   if (compact) {
@@ -637,13 +562,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         {...reducedMotionSurface(reducedMotion)}
         open={open}
         onClose={handleModalClose}
-        footer={
-          drillFooter ? (
-            <Flex justify="flex-end" gap={token.marginXS}>
-              {drillFooter}
-            </Flex>
-          ) : null
-        }
+        footer={shell.footer}
         styles={{ body: { padding: 0, overflow: 'hidden' } }}
       >
         {drillProvider(
@@ -827,7 +746,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       title="Workspace Settings"
       open={open}
       onCancel={handleModalClose}
-      footer={drillFooter}
+      footer={shell.footer}
       closable
       width={1200}
       style={{ top: 40 }}

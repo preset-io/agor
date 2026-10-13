@@ -116,13 +116,12 @@ import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPi
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { JSONEditor, validateJSON } from '../JSONEditor';
-import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { BranchSelect } from './BranchSelect';
 import { FIELD_WIDTHS } from './panelPrimitives';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 import { SettingsIdentity } from './SettingsIdentity';
 import { UserSelect } from './UserSelect';
 
@@ -3730,30 +3729,17 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   );
   const operationGuard = useAuthorityOperationGuard(callerAuthority.operationScope);
   const canManage = !!currentUser && hasMinimumRole(currentUser.role, ROLES.ADMIN);
-  // Create/edit are drill-ins (no stacked modal on top of Settings). The wizard's
-  // own booleans stay the source of truth; the drill state is mirrored from them
-  // (below) so the breadcrumb + shell leave-guards apply.
-  const { openDrill, closeDrill } = useSettingsDrill();
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [editModalOpen, setEditModalOpen] = useState(false);
-  const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
+  // Create/edit are drill-ins (no stacked modal on top of Settings), driven by
+  // the shell's drill state.
+  const { drill, openDrill, closeDrill, confirmLeaveIfDirty } = useSettingsDrill();
+  const createModalOpen = drill?.mode === 'create';
+  const editModalOpen = drill?.mode === 'edit';
+  const editingChannel =
+    editModalOpen && drill.recordId ? (gatewayChannelById.get(drill.recordId) ?? null) : null;
   const [channelType, setChannelType] = useState<ChannelType>('slack');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>('claude-code');
   const [requiresSupportedToolSelection, setRequiresSupportedToolSelection] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-
-  // Mirror the wizard's open booleans into the shell drill state so the
-  // breadcrumb ("Gateway Channels ›") renders and the editor swaps in place of
-  // the list. Cancel/Save close via the booleans, which clears the drill here.
-  useEffect(() => {
-    if (createModalOpen) {
-      openDrill({ kind: 'gateway', mode: 'create' });
-    } else if (editModalOpen) {
-      openDrill({ kind: 'gateway', mode: 'edit', recordId: editingChannel?.id });
-    } else {
-      closeDrill();
-    }
-  }, [createModalOpen, editModalOpen, editingChannel?.id, openDrill, closeDrill]);
 
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
@@ -3828,9 +3814,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   useLayoutEffect(() => {
     createForm.resetFields();
     editForm.resetFields();
-    setCreateModalOpen(false);
-    setEditModalOpen(false);
-    setEditingChannel(null);
+    closeDrill();
     setChannelType('slack');
     setSelectedAgent('claude-code');
     setRequiresSupportedToolSelection(false);
@@ -4268,7 +4252,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         await client.service('gateway-channels').patch(discordDraftId, { enabled: true });
         showSuccess('Discord gateway verified and enabled.');
         createForm.resetFields();
-        setCreateModalOpen(false);
+        closeDrill();
         setChannelType('slack');
         resetCreateFlow();
         return;
@@ -4293,7 +4277,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (!operation.isCurrent()) return;
       showSuccess('Gateway channel created!');
       createForm.resetFields();
-      setCreateModalOpen(false);
+      closeDrill();
       setChannelType('slack');
       resetCreateFlow();
     } catch (error: unknown) {
@@ -4340,7 +4324,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   const closeCreateModal = () => {
     createForm.resetFields();
-    setCreateModalOpen(false);
+    closeDrill();
     setChannelType('slack');
     setSelectedAgent('claude-code');
     setRequiresSupportedToolSelection(false);
@@ -4350,7 +4334,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const handleEdit = (channel: GatewayChannel) => {
     if (!canManage) return;
     resetConnectionTest();
-    setEditingChannel(channel);
     setChannelType(channel.channel_type);
     const persistedAgent = channel.agentic_config?.agent ?? 'claude-code';
     const agent = isAgenticToolName(persistedAgent) ? persistedAgent : null;
@@ -4503,7 +4486,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
 
     editForm.setFieldsValue(formValues);
-    setEditModalOpen(true);
+    openDrill({ mode: 'edit', recordId: channel.id });
   };
 
   const handleUpdate = async () => {
@@ -4537,8 +4520,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       await onUpdate?.(editingChannel.id, updates, operation.isCurrent);
       if (!operation.isCurrent()) return;
       editForm.resetFields();
-      setEditModalOpen(false);
-      setEditingChannel(null);
+      closeDrill();
       setChannelType('slack');
       setRequiresSupportedToolSelection(false);
     } catch (error) {
@@ -4662,108 +4644,15 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     ]);
   }, [gatewayChannelById, searchTerm, branchById, userById]);
 
-  return (
-    <div>
-      {/* List is hidden while a create/edit drill-in is open (no modal on modal);
-          the embedded editors below render in its place. */}
-      {!createModalOpen && !editModalOpen && (
-        <>
-          <ResponsiveSettingsHeader
-            title="Gateway Channels"
-            description="Route messages from Slack, Discord, GitHub, Microsoft Teams, and other platforms to Agor sessions."
-            search={
-              <Input
-                allowClear
-                placeholder="Search name, type, target branch, or person"
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-              />
-            }
-            count={`${channels.length} ${channels.length === 1 ? 'channel' : 'channels'}`}
-            primaryActions={
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                disabled={!canManage}
-                onClick={() => {
-                  resetConnectionTest();
-                  createForm.setFieldValue(
-                    'mcpServerIds',
-                    currentUser?.default_mcp_server_ids ?? []
-                  );
-                  setCreateModalOpen(true);
-                }}
-              >
-                Add Channel
-              </Button>
-            }
-          />
-
-          {channels.length === 0 ? (
-            <div
-              style={{
-                padding: '60px 20px',
-                textAlign: 'center',
-                color: token.colorTextTertiary,
-              }}
-            >
-              <MessageOutlined style={{ fontSize: 48, marginBottom: 16, display: 'block' }} />
-              <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-                {searchTerm ? 'No matching channels.' : 'No channels configured.'}
-              </Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Add a channel to route messages from Slack, Discord, Teams, or other platforms to
-                Agor sessions.
-              </Typography.Text>
-            </div>
-          ) : (
-            <ResponsiveTable
-              primaryColumnKey="name"
-              dataSource={channels}
-              columns={columns}
-              tableLayout="fixed"
-              key={searchTerm}
-              rowKey="id"
-              pagination={{ defaultPageSize: 10, showSizeChanger: true }}
-              size="small"
-            />
-          )}
-        </>
-      )}
-
-      {/* Create Channel drill-in (embedded, keeps its own wizard footer) */}
-      <AdaptiveSettingsModal
-        embedded
+  // Create/edit drill in place of the list (no modal on modal).
+  if (createModalOpen) {
+    // The wizard keeps its own footer; the frame supplies the breadcrumb and guard.
+    return (
+      <DrillInFrame
         title="Add Gateway Channel"
-        open={createModalOpen}
-        onCancel={closeCreateModal}
-        width={600}
-        footer={
-          // One structurally-identical footer on every step: Back (left),
-          // Cancel + primary (right). Buttons never move between steps.
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <Button
-              type="link"
-              disabled={createStep === 0}
-              onClick={() => setCreateStep((step) => Math.max(0, step - 1))}
-              style={{ paddingLeft: 0 }}
-            >
-              Back
-            </Button>
-            <Space style={{ marginLeft: 'auto' }}>
-              <Button onClick={closeCreateModal}>Cancel</Button>
-              <Button type="primary" loading={creating} onClick={handleCreatePrimary}>
-                {isFinalCreateStep
-                  ? channelType === 'discord'
-                    ? discordDraftId
-                      ? 'Verify and enable'
-                      : 'Create secure draft'
-                    : 'Create channel'
-                  : 'Continue'}
-              </Button>
-            </Space>
-          </div>
-        }
+        dirty={() => createForm.isFieldsTouched()}
+        onBack={closeCreateModal}
+        ownsFooter
       >
         <Form
           form={createForm}
@@ -4797,26 +4686,49 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             authorityGuard={operationGuard}
           />
         </Form>
-      </AdaptiveSettingsModal>
+        {/* One structurally-identical footer on every step: Back (left),
+            Cancel + primary (right). Buttons never move between steps. */}
+        <div style={{ display: 'flex', alignItems: 'center', marginTop: 16 }}>
+          <Button
+            type="link"
+            disabled={createStep === 0}
+            onClick={() => setCreateStep((step) => Math.max(0, step - 1))}
+            style={{ paddingLeft: 0 }}
+          >
+            Back
+          </Button>
+          <Space style={{ marginLeft: 'auto' }}>
+            <Button onClick={() => confirmLeaveIfDirty(closeCreateModal)}>Cancel</Button>
+            <Button type="primary" loading={creating} onClick={handleCreatePrimary}>
+              {isFinalCreateStep
+                ? channelType === 'discord'
+                  ? discordDraftId
+                    ? 'Verify and enable'
+                    : 'Create secure draft'
+                  : 'Create channel'
+                : 'Continue'}
+            </Button>
+          </Space>
+        </div>
+      </DrillInFrame>
+    );
+  }
 
-      {/* Edit Channel drill-in (embedded) */}
-      <AdaptiveSettingsModal
-        embedded
+  if (editModalOpen) {
+    return (
+      <DrillInFrame
         title="Edit Gateway Channel"
-        open={editModalOpen}
-        onOk={handleUpdate}
-        onCancel={() => {
+        dirty={() => editForm.isFieldsTouched()}
+        onSave={handleUpdate}
+        saveDisabled={requiresSupportedToolSelection}
+        onBack={() => {
           editForm.resetFields();
-          setEditModalOpen(false);
-          setEditingChannel(null);
+          closeDrill();
           setChannelType('slack');
           setSelectedAgent('claude-code');
           setRequiresSupportedToolSelection(false);
           resetConnectionTest();
         }}
-        okText="Save"
-        okButtonProps={{ disabled: requiresSupportedToolSelection }}
-        width={600}
       >
         {requiresSupportedToolSelection && (
           <Alert
@@ -4868,7 +4780,69 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             authorityGuard={operationGuard}
           />
         </Form>
-      </AdaptiveSettingsModal>
+      </DrillInFrame>
+    );
+  }
+
+  return (
+    <div>
+      <ResponsiveSettingsHeader
+        title="Gateway Channels"
+        description="Route messages from Slack, Discord, GitHub, Microsoft Teams, and other platforms to Agor sessions."
+        search={
+          <Input
+            allowClear
+            placeholder="Search name, type, target branch, or person"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        }
+        count={`${channels.length} ${channels.length === 1 ? 'channel' : 'channels'}`}
+        primaryActions={
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            disabled={!canManage}
+            onClick={() => {
+              resetConnectionTest();
+              createForm.setFieldValue('mcpServerIds', currentUser?.default_mcp_server_ids ?? []);
+              openDrill({ mode: 'create' });
+            }}
+          >
+            Add Channel
+          </Button>
+        }
+      />
+
+      {channels.length === 0 ? (
+        <div
+          style={{
+            padding: '60px 20px',
+            textAlign: 'center',
+            color: token.colorTextTertiary,
+          }}
+        >
+          <MessageOutlined style={{ fontSize: 48, marginBottom: 16, display: 'block' }} />
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+            {searchTerm ? 'No matching channels.' : 'No channels configured.'}
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Add a channel to route messages from Slack, Discord, Teams, or other platforms to Agor
+            sessions.
+          </Typography.Text>
+        </div>
+      ) : (
+        <ResponsiveTable
+          primaryColumnKey="name"
+          dataSource={channels}
+          columns={columns}
+          tableLayout="fixed"
+          key={searchTerm}
+          rowKey="id"
+          pagination={{ defaultPageSize: 10, showSizeChanger: true }}
+          size="small"
+        />
+      )}
     </div>
   );
 };

@@ -101,7 +101,7 @@ import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
 import { PrimaryTeammatePicker } from './PrimaryTeammatePicker';
 import { FieldRow, PanelHeader, SectionDivider, SettingsSection } from './panelPrimitives';
-import { DrillInFrame } from './SettingsDrill';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 import { UploadsTab } from './UploadsTab';
 import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
@@ -729,6 +729,9 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     // Let persistence settle before dismissing the field saving/error state.
     if (!saving) handleClose();
   };
+  // Inside Workspace Settings, Close runs the drill-in's unsaved-changes guard;
+  // outside a drill shell this leaves at once.
+  const { confirmLeaveIfDirty } = useSettingsDrill();
 
   const syncUserGroups = async (
     nextGroupIds: string[],
@@ -2470,7 +2473,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         </Button>,
       ]
     : [
-        <Button key="close" onClick={requestClose} disabled={saving}>
+        <Button key="close" onClick={() => confirmLeaveIfDirty(requestClose)} disabled={saving}>
           Close
         </Button>,
         <Button

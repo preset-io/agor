@@ -32,7 +32,7 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { RepoFormFields } from '../forms/RepoFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { Tag } from '../Tag';
-import { ListPanelHeader } from './panelPrimitives';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
@@ -75,7 +75,6 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   );
   const [searchTerm, setSearchTerm] = useState('');
   const [repoMode, setRepoMode] = useState<'remote' | 'local'>('remote');
-  const [dirty, setDirty] = useState(false);
   const [repoForm] = Form.useForm();
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [repoToDelete, setRepoToDelete] = useState<Repo | null>(null);
@@ -90,7 +89,6 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     authorityKeyRef.current = identityKey;
     repoForm.resetFields();
     setRepoMode('remote');
-    setDirty(false);
     setDeleteModalOpen(false);
     setRepoToDelete(null);
     closeDrill();
@@ -99,17 +97,15 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   // Editing/creating swaps this section's Content pane for the drill-in editor
   // below, instead of stacking a second Modal on top of Settings.
   const editingRepo =
-    drill?.kind === 'repos' && drill.mode === 'edit' && drill.recordId
-      ? (repoById.get(drill.recordId) ?? null)
-      : null;
-  const isCreating = drill?.kind === 'repos' && drill.mode === 'create';
+    drill?.mode === 'edit' && drill.recordId ? (repoById.get(drill.recordId) ?? null) : null;
+  const isCreating = drill?.mode === 'create';
   const isEditing = !!editingRepo;
 
   const openEdit = useCallback(
-    (repo: Repo) => openDrill({ kind: 'repos', mode: 'edit', recordId: repo.repo_id }),
+    (repo: Repo) => openDrill({ mode: 'edit', recordId: repo.repo_id }),
     [openDrill]
   );
-  const openCreate = useCallback(() => openDrill({ kind: 'repos', mode: 'create' }), [openDrill]);
+  const openCreate = useCallback(() => openDrill({ mode: 'create' }), [openDrill]);
 
   const filteredRepos = useMemo(
     () =>
@@ -128,12 +124,12 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   useEffect(() => {
     if (editingRepo) {
       setRepoMode(editingRepo.repo_type ?? 'remote');
+      repoForm.resetFields();
       repoForm.setFieldsValue({
         slug: editingRepo.slug,
         default_branch: editingRepo.default_branch || 'main',
         cleanup_policy: resolveRepoCleanupPolicy(editingRepo.cleanup_policy),
       });
-      setDirty(false);
     }
   }, [editingRepo, repoForm]);
 
@@ -144,7 +140,6 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       setRepoMode('remote');
       repoForm.resetFields();
       repoForm.setFieldsValue({ default_branch: 'main' });
-      setDirty(false);
     }
   }, [isCreating, repoForm]);
 
@@ -204,7 +199,6 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         );
       }
       if (!operation.isCurrent()) return;
-      setDirty(false);
       closeDrill();
     } catch {
       // Ant Design displays validation errors. Parent mutation errors already
@@ -234,7 +228,6 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       slug: undefined,
       default_branch: value === 'remote' ? 'main' : undefined,
     });
-    setDirty(true);
   };
 
   const drillTitle = isEditing
@@ -350,7 +343,12 @@ export const ReposTable: React.FC<ReposTableProps> = ({
 
   if (editingRepo || isCreating) {
     return (
-      <DrillInFrame title={drillTitle} dirty={dirty} saveLabel={drillSaveLabel} onSave={handleSave}>
+      <DrillInFrame
+        title={drillTitle}
+        dirty={() => repoForm.isFieldsTouched()}
+        saveLabel={drillSaveLabel}
+        onSave={handleSave}
+      >
         {editingRepo && (
           <RepoSetupStatus
             repo={editingRepo}
@@ -369,12 +367,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             }
           />
         )}
-        <Form
-          form={repoForm}
-          layout="vertical"
-          style={{ maxWidth: 520 }}
-          onValuesChange={() => setDirty(true)}
-        >
+        <Form form={repoForm} layout="vertical" style={{ maxWidth: 520 }}>
           <RepoFormFields
             form={repoForm}
             mode={isEditing ? 'edit' : 'create'}
@@ -389,7 +382,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
 
   return (
     <div>
-      <ListPanelHeader
+      <ResponsiveSettingsHeader
         title="Repositories"
         description="Connect remote or local git repositories for your sessions."
         search={
@@ -398,10 +391,9 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             placeholder="Search name, slug, URL, path, type, or branch"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 340 }}
           />
         }
-        actions={
+        primaryActions={
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             New Repository
           </Button>

@@ -314,6 +314,31 @@ describe('CardModal permission gating', () => {
 
   const openConfirmations = () => document.querySelectorAll('.ant-modal-confirm').length;
 
+  it('guards Back on a dirty embedded card: Keep editing stays, Discard leaves', async () => {
+    const { client, effectiveAccessFind } = makeClient(['board.view', 'board.edit']);
+    const onClose = vi.fn();
+    renderWithApp(
+      <StandaloneSettingsDrillProvider section="cards">
+        <CardModal embedded open card={card} board={board} client={client} onClose={onClose} />
+      </StandaloneSettingsDrillProvider>
+    );
+    await waitFor(() => expect(effectiveAccessFind).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getAllByText('Edit')[0].closest('button')).toBeEnabled());
+    fireEvent.click(screen.getAllByText('Edit')[0].closest('button') as HTMLButtonElement);
+    fireEvent.change(screen.getByPlaceholderText("Agent's live commentary..."), {
+      target: { value: 'Unsaved note' },
+    });
+
+    fireEvent.click(screen.getByText('All Cards'));
+    await waitFor(() => expect(openConfirmations()).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('All Cards'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  });
+
   it.each([
     ['Archive', 'Archive', false],
     ['Delete', 'Delete', false],

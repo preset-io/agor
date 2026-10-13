@@ -16,148 +16,129 @@ import { settingsSectionLabel } from './settingsNavigation';
  * Drill-in navigation for the Workspace Settings modal.
  *
  * The redesign replaces every stacked "modal on modal" edit/detail dialog with
- * an in-place drill-in: the Content pane swaps from a list view to a detail /
- * edit view while the left nav stays put. One piece of state (`drill`) owned by
- * the modal shell decides list-vs-editor for the active section; each table
- * renders its own editor inline and registers a {@link DrillController} so the
- * shared modal footer can drive Save/Cancel and the unsaved-changes guard.
+ * an in-place drill-in: the Content pane swaps from a section's list view to a
+ * detail / edit view while the nav stays put. The shell owns one piece of state
+ * (`drill`, keyed to the active section) that decides list-vs-editor; each table
+ * renders its editor inline in a {@link DrillInFrame}, which registers a
+ * {@link DrillController} so the shell footer can drive Save/Cancel and the
+ * unsaved-changes guard.
  */
 
 export interface DrillTarget {
-  /** Which section owns the drill-in — always the active nav section. */
-  kind: SettingsSection;
   mode: 'create' | 'edit' | 'view';
   /** Record being edited/viewed (omitted for `create`). */
   recordId?: string;
 }
 
 /**
- * Contract an active drill-in editor publishes to the shell. The footer renders
- * Save/Cancel from this; `dirty` drives the discard guard on Back/Cancel/nav.
+ * Contract an active drill-in editor publishes to the shell footer.
+ *
+ * The footer is a single slot holding one controller: a DrillInFrame nested
+ * inside another would replace its parent's registration (and clear it on
+ * unmount). Nested editors render inline without a second frame instead.
  */
-export interface DrillController {
-  title: ReactNode;
-  dirty: boolean;
+interface DrillController {
+  /** Read when leaving, so `dirty` may be a live getter (e.g. form.isFieldsTouched). */
+  isDirty: () => boolean;
   saving: boolean;
-  /** Omit for autosave editors — the footer then shows no Save button. */
+  /** Omit for autosave editors: the footer then shows no Save button. */
   onSave?: () => void | Promise<void>;
   saveLabel?: string;
   /** Disables the footer Save button (e.g. an invalid create form). */
   saveDisabled?: boolean;
-  /** Invoked by the header back-arrow and footer Cancel. */
+  /** Guarded back, invoked by the breadcrumb and the footer Cancel. */
   onBack: () => void;
-  /**
-   * Set when the editor renders its own in-panel footer (e.g. Gateway's
-   * multi-step create wizard) and only needs the controller to publish `dirty`
-   * for the shell's leave guard. The shell then suppresses its own footer so the
-   * two don't stack.
-   */
+  /** The editor renders its own footer; the shell suppresses its Save/Cancel. */
   ownsFooter?: boolean;
 }
 
 interface SettingsDrillContextValue {
+  /** The section the drill-in belongs to (the shell's active tab). */
+  section?: SettingsSection;
   drill: DrillTarget | null;
   openDrill: (target: DrillTarget) => void;
   closeDrill: () => void;
-  /** Runs the unsaved-changes guard, resolving true when it is safe to leave. */
-  confirmLeaveIfDirty: () => Promise<boolean>;
+  /** Runs `leave` now when the open editor is clean, else after a discard confirm. */
+  confirmLeaveIfDirty: (leave: () => void) => void;
   registerController: (controller: DrillController | null) => void;
 }
 
-const defaultSettingsDrillContext: SettingsDrillContextValue = {
+const SettingsDrillContext = createContext<SettingsDrillContextValue>({
   drill: null,
   openDrill: () => undefined,
   closeDrill: () => undefined,
-  confirmLeaveIfDirty: async () => true,
+  confirmLeaveIfDirty: (leave) => leave(),
   registerController: () => undefined,
-};
-
-const SettingsDrillContext = createContext<SettingsDrillContextValue>(defaultSettingsDrillContext);
+});
 
 export function useSettingsDrill(): SettingsDrillContextValue {
   return useContext(SettingsDrillContext);
 }
 
-export interface SettingsDrillProviderProps {
-  drill: DrillTarget | null;
-  openDrill: (target: DrillTarget) => void;
-  closeDrill: () => void;
-  confirmLeaveIfDirty: () => Promise<boolean>;
-  controller: DrillController | null;
-  setController: (controller: DrillController | null) => void;
-  children: ReactNode;
+export interface DrillShell extends SettingsDrillContextValue {
+  /** The shell's Save/Cancel footer, or null when no editor needs one. */
+  footer: ReactNode;
 }
 
 /**
- * Provider wired to state owned by the modal shell. The shell keeps `drill` and
- * the active `controller` so it can render the footer next to the dialog frame.
+ * Drill state, controller slot and leave guard for one settings surface. Used by
+ * the Settings modal and by {@link StandaloneSettingsDrillProvider}, so tests run
+ * the production wiring.
  */
-export const SettingsDrillProvider: React.FC<SettingsDrillProviderProps> = ({
-  drill,
-  openDrill,
-  closeDrill,
-  confirmLeaveIfDirty,
-  setController,
-  children,
-}) => {
-  const registerController = useCallback(
-    (controller: DrillController | null) => setController(controller),
-    [setController]
+export function useDrillShell(section?: SettingsSection): DrillShell {
+  const { modal } = AntApp.useApp();
+  const [state, setState] = useState<{ section?: SettingsSection; target: DrillTarget } | null>(
+    null
   );
-  const value = useMemo<SettingsDrillContextValue>(
-    () => ({ drill, openDrill, closeDrill, confirmLeaveIfDirty, registerController }),
-    [drill, openDrill, closeDrill, confirmLeaveIfDirty, registerController]
-  );
-  return <SettingsDrillContext.Provider value={value}>{children}</SettingsDrillContext.Provider>;
-};
+  // Leaving the section (nav click, deep link) abandons its drill-in.
+  if (state && state.section !== section) setState(null);
+  const drill = state?.section === section ? (state?.target ?? null) : null;
 
-/**
- * Self-managed drill provider that owns its own `drill`/`controller` state.
- * The Workspace Settings shell wires the controlled SettingsDrillProvider, but
- * this is handy for rendering a settings surface standalone — e.g. focused unit
- * tests of a single table's drill-in.
- */
-export const StandaloneSettingsDrillProvider: React.FC<{ children: ReactNode }> = ({
-  children,
-}) => {
-  const [drill, setDrill] = useState<DrillTarget | null>(null);
   const [controller, setControllerState] = useState<DrillController | null>(null);
   const controllerRef = useRef<DrillController | null>(null);
-  const setController = useCallback((next: DrillController | null) => {
+  const registerController = useCallback((next: DrillController | null) => {
     controllerRef.current = next;
     setControllerState(next);
   }, []);
-  const getDirty = useCallback(() => controllerRef.current?.dirty ?? false, []);
-  const confirmLeaveIfDirty = useDirtyLeaveGuard(getDirty);
-  const openDrill = useCallback((target: DrillTarget) => setDrill(target), []);
-  const closeDrill = useCallback(() => {
-    setDrill(null);
-    setController(null);
-  }, [setController]);
-  return (
-    <SettingsDrillProvider
-      drill={drill}
-      openDrill={openDrill}
-      closeDrill={closeDrill}
-      confirmLeaveIfDirty={confirmLeaveIfDirty}
-      controller={controller}
-      setController={setController}
-    >
-      {children}
-      {/* Mirror the real shell's controller-driven footer so a standalone drill-in
-          editor's Save/Cancel are actually rendered (the shell owns the footer,
-          not DrillInFrame). Editors that own their footer suppress this. */}
-      {controller && !controller.ownsFooter ? (
-        <SettingsDrillStandaloneFooter controller={controller} />
-      ) : null}
-    </SettingsDrillProvider>
-  );
-};
 
-/** The controller-driven Save/Cancel footer, matching the shell's footer. */
-const SettingsDrillStandaloneFooter: React.FC<{ controller: DrillController }> = ({
-  controller,
-}) => (
+  // Stable identity (reads the controller through a ref), so DrillInFrame's
+  // registration effect doesn't re-run on every register.
+  const confirmLeaveIfDirty = useCallback(
+    (leave: () => void) => {
+      if (!controllerRef.current?.isDirty()) {
+        leave();
+        return;
+      }
+      modal.confirm({
+        title: 'Discard unsaved changes?',
+        content: 'You have unsaved changes. Leaving now will discard them.',
+        okText: 'Discard',
+        okButtonProps: { danger: true },
+        cancelText: 'Keep editing',
+        onOk: leave,
+      });
+    },
+    [modal]
+  );
+  const openDrill = useCallback((target: DrillTarget) => setState({ section, target }), [section]);
+  const closeDrill = useCallback(() => {
+    setState(null);
+    registerController(null);
+  }, [registerController]);
+
+  return {
+    section,
+    drill,
+    openDrill,
+    closeDrill,
+    confirmLeaveIfDirty,
+    registerController,
+    footer: controller && !controller.ownsFooter ? <DrillFooter controller={controller} /> : null,
+  };
+}
+
+/** The controller-driven Save/Cancel footer. */
+const DrillFooter: React.FC<{ controller: DrillController }> = ({ controller }) => (
   <Flex justify="flex-end" gap={8}>
     <Button onClick={controller.onBack} disabled={controller.saving}>
       Cancel
@@ -175,33 +156,58 @@ const SettingsDrillStandaloneFooter: React.FC<{ controller: DrillController }> =
   </Flex>
 );
 
+export const SettingsDrillProvider: React.FC<{ shell: DrillShell; children: ReactNode }> = ({
+  shell,
+  children,
+}) => {
+  const { section, drill, openDrill, closeDrill, confirmLeaveIfDirty, registerController } = shell;
+  const value = useMemo(
+    () => ({ section, drill, openDrill, closeDrill, confirmLeaveIfDirty, registerController }),
+    [section, drill, openDrill, closeDrill, confirmLeaveIfDirty, registerController]
+  );
+  return <SettingsDrillContext.Provider value={value}>{children}</SettingsDrillContext.Provider>;
+};
+
+/** A settings surface rendered on its own (focused tests), with the shell's footer. */
+export const StandaloneSettingsDrillProvider: React.FC<{
+  section?: SettingsSection;
+  children: ReactNode;
+}> = ({ section, children }) => {
+  const shell = useDrillShell(section);
+  return (
+    <SettingsDrillProvider shell={shell}>
+      {children}
+      {shell.footer}
+    </SettingsDrillProvider>
+  );
+};
+
 export interface DrillInFrameProps {
   title: ReactNode;
-  dirty?: boolean;
+  /** A value, or a getter read when leaving (e.g. `() => form.isFieldsTouched()`). */
+  dirty?: boolean | (() => boolean);
   saving?: boolean;
   /** Omit for autosave editors; the footer then renders no Save button. */
   onSave?: () => void | Promise<void>;
   saveLabel?: string;
   /** Disables the footer Save button (e.g. an invalid create form). */
   saveDisabled?: boolean;
-  /** Overrides the default back behavior (guarded close). */
+  /** Runs after the unsaved-changes guard; defaults to closing the drill-in. */
   onBack?: () => void;
   /** Right-aligned node in the header row (e.g. a Reset action). */
   extra?: ReactNode;
   /**
-   * Set when the editor renders its own footer (e.g. UserSettingsModal's
-   * panel-aware Save/Done bar or Gateway's create wizard) and only needs the
-   * frame for the breadcrumb + to publish `dirty` for the shell's leave guard.
-   * The shell then suppresses its own Save/Cancel footer so the two don't stack.
+   * The editor renders its own footer (User, Card and Gateway-create editors)
+   * and uses the frame for the breadcrumb, the guard and `dirty` only.
    */
   ownsFooter?: boolean;
   children: ReactNode;
 }
 
 /**
- * Wraps a drill-in editor: renders the back-arrow header and publishes the
+ * Wraps a drill-in editor: renders the breadcrumb and publishes the
  * Save/dirty/back contract to the shell footer. Destructive confirmations are
- * intentionally NOT routed through here — they stay as their own blocking
+ * intentionally NOT routed through here; they stay as their own blocking
  * dialogs (Popconfirm / ArchiveDeleteBranchModal / repo delete choice).
  */
 export const DrillInFrame: React.FC<DrillInFrameProps> = ({
@@ -217,61 +223,50 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
   children,
 }) => {
   const { token } = theme.useToken();
-  const screens = Grid.useBreakpoint();
-  const compact = !screens.md;
-  const { drill, confirmLeaveIfDirty, closeDrill, registerController } = useSettingsDrill();
-  // First crumb = the section/list this drill-in was opened from, derived from
-  // the active drill target (no caller needs to pass it).
-  const sectionLabel = drill ? settingsSectionLabel(drill.kind) : undefined;
+  const compact = !Grid.useBreakpoint().md;
+  const { section, confirmLeaveIfDirty, closeDrill, registerController } = useSettingsDrill();
 
-  const back = useCallback(() => {
-    if (onBack) {
-      onBack();
-      return;
-    }
-    void confirmLeaveIfDirty().then((ok) => {
-      if (ok) closeDrill();
-    });
-  }, [onBack, confirmLeaveIfDirty, closeDrill]);
-
-  // Keep the latest callbacks/title in refs and register through STABLE wrappers,
-  // so re-registration is driven only by the footer's display values
-  // (dirty/saving/saveLabel/hasOnSave). Editors routinely pass a fresh
-  // onSave/onBack/title identity every render (e.g. BranchModal's non-memoized
-  // handleSave); without this, the effect re-runs each render → setController →
-  // the owner re-renders the editor → new identities → infinite loop (the
-  // Branches drill-in crash). Wrappers read the refs so Save/Back stay current.
+  // Latest props behind refs, registered through stable wrappers: editors pass
+  // fresh onSave/onBack identities every render (e.g. BranchModal), and
+  // re-registering on each one loops register → re-render → new identity.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
-  const backRef = useRef(back);
-  backRef.current = back;
-  const titleRef = useRef(title);
-  titleRef.current = title;
+  const isDirty = useCallback(() => {
+    const value = dirtyRef.current;
+    return typeof value === 'function' ? value() : value;
+  }, []);
+  // Every way back (breadcrumb, footer Cancel) runs the guard first.
+  const back = useCallback(
+    () => confirmLeaveIfDirty(() => (onBackRef.current ?? closeDrill)()),
+    [confirmLeaveIfDirty, closeDrill]
+  );
   const stableOnSave = useCallback(() => onSaveRef.current?.(), []);
-  const stableBack = useCallback(() => backRef.current(), []);
   const hasOnSave = onSave != null;
 
   useEffect(() => {
     registerController({
-      title: titleRef.current,
-      dirty,
+      isDirty,
       saving,
       saveLabel,
       saveDisabled,
       onSave: hasOnSave ? stableOnSave : undefined,
-      onBack: stableBack,
+      onBack: back,
       ownsFooter,
     });
     return () => registerController(null);
   }, [
     registerController,
-    dirty,
+    isDirty,
     saving,
     saveLabel,
     saveDisabled,
     hasOnSave,
     stableOnSave,
-    stableBack,
+    back,
     ownsFooter,
   ]);
 
@@ -284,19 +279,17 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
         wrap
         style={{ marginBottom: compact ? token.marginMD : token.marginLG }}
       >
-        {/* Breadcrumb replaces the old back-arrow + title. The section crumb is a
-            clickable link that goes back to the list; it routes through the same
-            guarded `back` as before, so the unsaved-changes confirmation still
-            fires. The current-record crumb is the (non-clickable) page marker. */}
+        {/* The section crumb goes back to the list through the guarded `back`;
+            the current-record crumb is the (non-clickable) page marker. */}
         <Breadcrumb
           items={[
-            ...(sectionLabel
+            ...(section
               ? [
                   {
                     key: 'section',
                     title: (
                       <Typography.Link onClick={back} style={{ fontWeight: 500 }}>
-                        {sectionLabel}
+                        {settingsSectionLabel(section)}
                       </Typography.Link>
                     ),
                   },
@@ -318,34 +311,3 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
     </Flex>
   );
 };
-
-/**
- * Hook the shell uses to build a stable `confirmLeaveIfDirty`. Dirtiness is read
- * at call time through `getDirty` (a ref-backed getter) so this callback keeps a
- * stable identity across controller registrations — otherwise the identity would
- * churn on every register and re-fire the DrillInFrame effect in a loop.
- * Resolves true when leaving is safe (clean, or the user confirmed discarding).
- * AntD's static `Modal.confirm` is avoided so the confirm inherits the app theme.
- */
-export function useDirtyLeaveGuard(getDirty: () => boolean): () => Promise<boolean> {
-  const { modal } = AntApp.useApp();
-  return useCallback(
-    () =>
-      new Promise<boolean>((resolve) => {
-        if (!getDirty()) {
-          resolve(true);
-          return;
-        }
-        modal.confirm({
-          title: 'Discard unsaved changes?',
-          content: 'You have unsaved changes. Leaving now will discard them.',
-          okText: 'Discard',
-          okButtonProps: { danger: true },
-          cancelText: 'Keep editing',
-          onOk: () => resolve(true),
-          onCancel: () => resolve(false),
-        });
-      }),
-    [getDirty, modal]
-  );
-}

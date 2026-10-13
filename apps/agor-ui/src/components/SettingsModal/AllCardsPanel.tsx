@@ -1,7 +1,7 @@
 import type { AgorClient, Board, CardType, CardWithType } from '@agor-live/client';
 import { ExportOutlined, PushpinFilled } from '@ant-design/icons';
 import { Button, Empty, Input, Space, Table, Tag, Tooltip, Typography } from 'antd';
-import { type Key, useCallback, useEffect, useMemo, useState } from 'react';
+import { type Key, useCallback, useMemo, useState } from 'react';
 import { useAppNavigation } from '@/hooks/useAppNavigation';
 import { useSettingsRoute } from '@/hooks/useSettingsRoute';
 import { useAgorStore } from '@/store/agorStore';
@@ -10,7 +10,7 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { getBoardEmoji } from '../BoardTile';
 import CardModal from '../CardModal/CardModal';
 import { HighlightMatch } from '../HighlightMatch';
-import { ListPanelHeader } from './panelPrimitives';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { useSettingsDrill } from './SettingsDrill';
 import { useSettingsCards } from './useSettingsCards';
@@ -47,19 +47,8 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   // Controlled Type filter so a click on a card's type tag narrows the list.
   const [typeFilter, setTypeFilter] = useState<string[]>(itemId ? [itemId] : []);
-  const [cardModalCard, setCardModalCard] = useState<CardWithType | null>(null);
-  const [cardModalOpen, setCardModalOpen] = useState(false);
   // Card detail opens as a drill-in (no modal stacked on the Settings modal).
-  // The local open state stays the source of truth; mirror it into the shell
-  // drill state so the breadcrumb renders and the list is hidden while open.
-  const { openDrill, closeDrill } = useSettingsDrill();
-  useEffect(() => {
-    if (cardModalOpen && cardModalCard) {
-      openDrill({ kind: 'cards', mode: 'view', recordId: cardModalCard.card_id });
-    } else {
-      closeDrill();
-    }
-  }, [cardModalOpen, cardModalCard, openDrill, closeDrill]);
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
 
   // card_id → zone info (name + color) from the card placements.
   const cardZoneInfo = useMemo(() => {
@@ -161,8 +150,7 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
             ellipsis
             title={title}
             onClick={() => {
-              setCardModalCard(card);
-              setCardModalOpen(true);
+              openDrill({ mode: 'view', recordId: card.card_id });
             }}
           >
             <HighlightMatch text={title} query={searchTerm} />
@@ -293,30 +281,27 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
     },
   ];
 
-  const cardModalBoard = cardModalCard ? (boardById.get(cardModalCard.board_id) ?? null) : null;
-
-  // Card detail drills in place of the list (no stacked modal). Early-returned so
-  // the Content pane swaps list↔card; CardModal keeps its Archive/Delete/Save
-  // footer, and the breadcrumb ("Cards ›") backs out.
-  if (cardModalOpen && cardModalCard) {
+  // Card detail drills in place of the list (no stacked modal); the live
+  // dataset keeps it current. CardModal keeps its Archive/Delete/Save footer.
+  const viewingCard =
+    drill?.mode === 'view' ? allCards.find((card) => card.card_id === drill.recordId) : undefined;
+  if (viewingCard) {
     return (
       <CardModal
         embedded
         open
-        card={cardModalCard}
-        board={cardModalBoard}
+        card={viewingCard}
+        board={boardById.get(viewingCard.board_id) ?? null}
         client={client}
-        onClose={() => setCardModalOpen(false)}
-        afterClose={() => setCardModalCard(null)}
-        onCardUpdated={(updated) => setCardModalCard(updated)}
-        onCardDeleted={() => setCardModalOpen(false)}
+        onClose={closeDrill}
+        onCardDeleted={closeDrill}
       />
     );
   }
 
   return (
     <div>
-      <ListPanelHeader
+      <ResponsiveSettingsHeader
         title="All Cards"
         description="Every card across all boards. Filter by type, board, or zone."
         search={
@@ -325,7 +310,6 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
             placeholder="Search title, type, board, zone, creator, or data"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 360 }}
           />
         }
       />

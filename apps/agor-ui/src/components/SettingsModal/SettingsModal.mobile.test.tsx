@@ -26,7 +26,7 @@ vi.mock('./BoardsTable', async () => {
     return (
       <div>
         Boards section content
-        <button type="button" onClick={() => openDrill({ kind: 'boards', mode: 'create' })}>
+        <button type="button" onClick={() => openDrill({ mode: 'create' })}>
           New board
         </button>
       </div>

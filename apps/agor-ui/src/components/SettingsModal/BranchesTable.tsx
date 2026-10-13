@@ -31,7 +31,7 @@ import { BranchFormFields } from '../BranchFormFields';
 import { useDebouncedSearchQuery } from '../GlobalSearch/useGlobalSearch';
 import { HighlightMatch } from '../HighlightMatch';
 import { renderEnvCell } from './BranchEnvColumn';
-import { ListPanelHeader } from './panelPrimitives';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
@@ -107,7 +107,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   // "Create Branch" opens in place as the section's drill-in (like branch edit
   // and teammate create) rather than stacking a Modal on top of Settings.
   const { drill, openDrill, closeDrill } = useSettingsDrill();
-  const createModalOpen = drill?.kind === 'branches' && drill.mode === 'create';
+  const createModalOpen = drill?.mode === 'create';
   const [form] = Form.useForm();
   const [useSameBranchName, setUseSameBranchName] = useState(true);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
@@ -482,6 +482,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         title="Create Branch"
         saveLabel="Create"
         saveDisabled={!isFormValid}
+        dirty={() => form.isFieldsTouched()}
         onSave={handleCreate}
         onBack={handleCancel}
       >
@@ -508,36 +509,35 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
 
   return (
     <div>
-      <ListPanelHeader
+      <ResponsiveSettingsHeader
         title="Branches"
         description="Manage git branches for isolated development contexts across sessions."
         search={
-          <Space>
-            <Input
-              allowClear
-              placeholder="Search by name, ref, notes, or URL"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              style={{ width: token.sizeUnit * 40 }}
-            />
-            <Select
-              value={archiveFilter}
-              onChange={(value) => setArchiveFilter(value)}
-              style={{ width: 120 }}
-              options={[
-                { value: 'active', label: 'Active' },
-                { value: 'teammates', label: 'Teammates' },
-                { value: 'all', label: 'All' },
-                { value: 'archived', label: 'Archived' },
-              ]}
-            />
-          </Space>
+          <Input
+            allowClear
+            placeholder="Search by name, ref, notes, or URL"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
         }
-        actions={
+        filters={
+          <Select
+            value={archiveFilter}
+            onChange={(value) => setArchiveFilter(value)}
+            style={{ width: 120 }}
+            options={[
+              { value: 'active', label: 'Active' },
+              { value: 'teammates', label: 'Teammates' },
+              { value: 'all', label: 'All' },
+              { value: 'archived', label: 'Archived' },
+            ]}
+          />
+        }
+        primaryActions={
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={() => openDrill({ kind: 'branches', mode: 'create' })}
+            onClick={() => openDrill({ mode: 'create' })}
             disabled={repos.length === 0}
           >
             Create Branch

@@ -24,11 +24,10 @@ import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
-import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 import { useSessionCounts } from './useBranchPage';
 
 interface BoardsTableProps {
@@ -58,24 +57,20 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const { showSuccess, showError, showWarning } = useThemedMessage();
   // Create board is a drill-in (no stacked modal on top of Settings).
   const { drill, openDrill, closeDrill } = useSettingsDrill();
-  const [createDirty, setCreateDirty] = useState(false);
   // Edit board also drills in place of the list (no stacked modal), driven by
   // the shell drill state so the breadcrumb + leave-guards apply.
   const editingBoard =
-    drill?.kind === 'boards' && drill.mode === 'edit' && drill.recordId
-      ? (boardById.get(drill.recordId) ?? null)
-      : null;
+    drill?.mode === 'edit' && drill.recordId ? (boardById.get(drill.recordId) ?? null) : null;
   const [archiveFilter, setArchiveFilter] = useState<'active' | 'archived' | 'all'>('active');
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
 
-  const isCreating = drill?.kind === 'boards' && drill.mode === 'create';
+  const isCreating = drill?.mode === 'create';
   // New boards start on the theme-aware default (no persisted background); the
   // editor's Default mode reflects a fresh form.
   useEffect(() => {
     if (isCreating) {
       form.resetFields();
-      setCreateDirty(false);
     }
   }, [isCreating, form]);
 
@@ -87,7 +82,6 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       .then(() => {
         onCreate?.(extractBoardFormValues(form));
         form.resetFields();
-        setCreateDirty(false);
         closeDrill();
       })
       .catch(() => {
@@ -95,8 +89,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       });
   };
 
-  const handleEdit = (board: Board) =>
-    openDrill({ kind: 'boards', mode: 'edit', recordId: board.board_id });
+  const handleEdit = (board: Board) => openDrill({ mode: 'edit', recordId: board.board_id });
 
   const handleDelete = (boardId: string) => {
     onDelete?.(boardId);
@@ -323,29 +316,20 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   // Create/Cancel and the breadcrumb ("Boards ›") backs out via closeDrill.
   if (isCreating) {
     return (
-      <AdaptiveSettingsModal
-        embedded
-        open
+      <DrillInFrame
         title="Create Board"
-        okText="Create"
-        dirty={createDirty}
-        onOk={handleCreate}
-        onCancel={() => {
+        saveLabel="Create"
+        dirty={() => form.isFieldsTouched()}
+        onSave={handleCreate}
+        onBack={() => {
           form.resetFields();
-          setCreateDirty(false);
           closeDrill();
         }}
       >
-        <Form
-          form={form}
-          layout="vertical"
-          preserve
-          style={{ maxWidth: 520 }}
-          onValuesChange={() => setCreateDirty(true)}
-        >
+        <Form form={form} layout="vertical" preserve style={{ maxWidth: 520 }}>
           <BoardFormFields form={form} extra={customContextField} />
         </Form>
-      </AdaptiveSettingsModal>
+      </DrillInFrame>
     );
   }
 
@@ -398,7 +382,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
             <Button
               type="primary"
               icon={<PlusOutlined />}
-              onClick={() => openDrill({ kind: 'boards', mode: 'create' })}
+              onClick={() => openDrill({ mode: 'create' })}
             >
               New Board
             </Button>

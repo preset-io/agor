@@ -22,11 +22,10 @@ import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useEnsureBranches } from '../../hooks/useEnsureRows';
 import { boardSelectFilter, boardSelectOptions, getBoardEmoji } from '../BoardTile';
 import { HighlightMatch } from '../HighlightMatch';
-import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 import { SettingsIdentity } from './SettingsIdentity';
 
 interface ArtifactsTableProps {
@@ -67,13 +66,10 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
 }) => {
   // Edit artifact is a drill-in (no stacked modal on top of Settings).
   const { drill, openDrill, closeDrill } = useSettingsDrill();
-  const [editDirty, setEditDirty] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
   const editingArtifact =
-    drill?.kind === 'artifacts' && drill.mode === 'edit' && drill.recordId
-      ? (artifactById.get(drill.recordId) ?? null)
-      : null;
+    drill?.mode === 'edit' && drill.recordId ? (artifactById.get(drill.recordId) ?? null) : null;
   // The store holds only the loaded scopes' branches: read the ones artifacts name.
   useEnsureBranches(
     client,
@@ -96,17 +92,17 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   );
 
   const handleEdit = (artifact: Artifact) =>
-    openDrill({ kind: 'artifacts', mode: 'edit', recordId: artifact.artifact_id });
+    openDrill({ mode: 'edit', recordId: artifact.artifact_id });
 
   // Seed the form whenever the drill-in targets an artifact.
   useEffect(() => {
     if (editingArtifact) {
+      form.resetFields();
       form.setFieldsValue({
         name: editingArtifact.name,
         description: editingArtifact.description || '',
         board_id: editingArtifact.board_id,
       });
-      setEditDirty(false);
     }
   }, [editingArtifact, form]);
 
@@ -128,7 +124,6 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
       if (Object.keys(updates).length > 0) {
         onUpdate?.(editingArtifact.artifact_id, updates);
       }
-      setEditDirty(false);
       closeDrill();
     });
   };
@@ -301,16 +296,12 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   // and the breadcrumb ("Artifacts ›") backs out via closeDrill.
   if (editingArtifact) {
     return (
-      <AdaptiveSettingsModal
-        embedded
-        open
+      <DrillInFrame
         title="Edit Artifact"
-        okText="Save"
-        dirty={editDirty}
-        onOk={handleUpdate}
-        onCancel={() => {
+        dirty={() => form.isFieldsTouched()}
+        onSave={handleUpdate}
+        onBack={() => {
           form.resetFields();
-          setEditDirty(false);
           closeDrill();
         }}
       >
@@ -322,12 +313,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
             ? branchById.get(editingArtifact.branch_id)?.name || 'Unavailable branch'
             : 'Not recorded'}
         </Typography.Paragraph>
-        <Form
-          form={form}
-          layout="vertical"
-          style={{ maxWidth: 520 }}
-          onValuesChange={() => setEditDirty(true)}
-        >
+        <Form form={form} layout="vertical" style={{ maxWidth: 520 }}>
           <Form.Item
             label="Name"
             name="name"
@@ -352,7 +338,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
             />
           </Form.Item>
         </Form>
-      </AdaptiveSettingsModal>
+      </DrillInFrame>
     );
   }
 

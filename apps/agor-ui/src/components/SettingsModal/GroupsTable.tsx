@@ -24,7 +24,8 @@ import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
-import { FIELD_WIDTHS, ListPanelHeader, SectionDivider } from './panelPrimitives';
+import { FIELD_WIDTHS, SectionDivider } from './panelPrimitives';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
@@ -86,16 +87,14 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   // Editing/creating swaps this section's Content pane for the drill-in editor
   // below, instead of stacking a second Modal on top of Settings.
   const editingGroup =
-    drill?.kind === 'groups' && drill.mode === 'edit' && drill.recordId
-      ? (groupById.get(drill.recordId) ?? null)
-      : null;
-  const isCreating = drill?.kind === 'groups' && drill.mode === 'create';
+    drill?.mode === 'edit' && drill.recordId ? (groupById.get(drill.recordId) ?? null) : null;
+  const isCreating = drill?.mode === 'create';
 
   const openEdit = useCallback(
-    (group: Group) => openDrill({ kind: 'groups', mode: 'edit', recordId: group.group_id }),
+    (group: Group) => openDrill({ mode: 'edit', recordId: group.group_id }),
     [openDrill]
   );
-  const openCreate = useCallback(() => openDrill({ kind: 'groups', mode: 'create' }), [openDrill]);
+  const openCreate = useCallback(() => openDrill({ mode: 'create' }), [openDrill]);
 
   const syncGroupMembers = useCallback(
     async (group: Group, nextUserIds: string[]) => {
@@ -264,7 +263,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
 
   return (
     <div>
-      <ListPanelHeader
+      <ResponsiveSettingsHeader
         title="Groups"
         description="Manage groups and user memberships."
         search={
@@ -273,10 +272,9 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             placeholder="Search name, slug, description, or members"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 320 }}
           />
         }
-        actions={
+        primaryActions={
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             New Group
           </Button>

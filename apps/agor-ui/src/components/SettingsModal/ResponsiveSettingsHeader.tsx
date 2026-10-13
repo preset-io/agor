@@ -47,7 +47,7 @@ const SEARCH_WIDTH = 320;
  *
  * The structured slots (rather than one freeform `actions` blob) are deliberate:
  * the API keeps a caller from cramming filters and the primary action into one
- * undifferentiated row. Mirrors the convention of `ListPanelHeader`.
+ * undifferentiated row.
  */
 export function ResponsiveSettingsHeader({
   title,

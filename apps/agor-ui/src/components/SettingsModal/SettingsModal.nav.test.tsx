@@ -8,12 +8,13 @@
  * heading with it.
  */
 
-import type { User } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
+import type { CardType, GatewayChannel, User } from '@agor-live/client';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Grid } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type SettingsSection, useSettingsRoute } from '../../hooks/useSettingsRoute';
+import { agorStore } from '../../store/agorStore';
 import { SettingsModal } from './SettingsModal';
 
 vi.mock('./BoardsTable', () => ({
@@ -189,5 +190,63 @@ describe('SettingsModal deep-linked sections', () => {
 
     renderDeepLink('admin', 'groups');
     expect(contentPane()).not.toBeNull();
+  });
+});
+
+describe('SettingsModal drill-ins', () => {
+  afterEach(() => agorStore.getState().reset());
+  const admin = makeUser('admin');
+  const settings = (activeTab: string, open = true) => (
+    <MemoryRouter>
+      <SettingsModal
+        open={open}
+        onClose={vi.fn()}
+        client={null}
+        currentUser={admin}
+        activeTab={activeTab}
+      />
+    </MemoryRouter>
+  );
+
+  it('labels a Card Types editor with its own section, not All Cards', async () => {
+    agorStore.setState({
+      cardTypeById: new Map([
+        ['type-1', { card_type_id: 'type-1', name: 'Ticket', emoji: '🎫' } as CardType],
+      ]),
+    });
+    render(settings('card-types'));
+    fireEvent.click(screen.getByText('Ticket'));
+    await screen.findByText('Edit Card Type');
+    const crumbs = document.querySelector('.ant-breadcrumb')?.textContent ?? '';
+    expect(crumbs).toContain('Card Types');
+    expect(crumbs).not.toContain('All Cards');
+  });
+
+  it('reopens Gateway Channels on the list after closing Settings mid-edit', async () => {
+    agorStore.setState({
+      userById: new Map([[admin.user_id, admin]]),
+      gatewayChannelById: new Map([
+        [
+          'channel-1',
+          {
+            id: 'channel-1',
+            name: 'Team GitHub',
+            channel_type: 'github',
+            agor_user_id: admin.user_id,
+            enabled: true,
+            config: {},
+            agentic_config: { agent: 'claude-code' },
+          } as unknown as GatewayChannel,
+        ],
+      ]),
+    });
+    const view = render(settings('gateway'));
+    fireEvent.click(screen.getByTitle('Edit'));
+    await screen.findByText('Edit Gateway Channel');
+
+    view.rerender(settings('gateway', false));
+    view.rerender(settings('gateway'));
+    await waitFor(() => expect(screen.getByText('Team GitHub')).toBeInTheDocument());
+    expect(screen.queryByText('Edit Gateway Channel')).not.toBeInTheDocument();
   });
 });

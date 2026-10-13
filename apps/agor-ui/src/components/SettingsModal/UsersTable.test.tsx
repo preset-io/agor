@@ -196,4 +196,36 @@ describe('UsersTable role authority', () => {
     expect(screen.getByText('Create User')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('••••••••')).toHaveValue('new-user-password');
   });
+
+  it('guards Back on a dirty user edit, from the breadcrumb and from Close', async () => {
+    const admin = user('admin', 'admin');
+    const member = user('member', 'member');
+    renderWithSettingsShell(
+      <UsersTable
+        userById={new Map([admin, member].map((item) => [item.user_id, item]))}
+        client={null}
+        currentUser={admin}
+        onUpdate={vi.fn()}
+      />,
+      'users'
+    );
+    fireEvent.click(screen.getByLabelText('Edit member@example.test'));
+    fireEvent.change(await screen.findByDisplayValue('member'), {
+      target: { value: 'Renamed member' },
+    });
+    const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
+
+    fireEvent.click(screen.getByText('Users'));
+    await waitFor(() => expect(confirms()).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByDisplayValue('Renamed member')).toBeInTheDocument();
+    await waitFor(() => expect(confirms()).toBe(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(confirms()).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Edit member@example.test')).toBeInTheDocument()
+    );
+  });
 });

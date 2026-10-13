@@ -96,11 +96,11 @@ vi.mock('../AgenticToolConfigurationPicker', async () => {
   };
 });
 
-function renderWithProviders(ui: React.ReactElement) {
+function renderWithProviders(ui: React.ReactElement, section?: 'gateway') {
   return render(
     <MemoryRouter>
       <AntdApp>
-        <StandaloneSettingsDrillProvider>{ui}</StandaloneSettingsDrillProvider>
+        <StandaloneSettingsDrillProvider section={section}>{ui}</StandaloneSettingsDrillProvider>
       </AntdApp>
     </MemoryRouter>
   );
@@ -499,6 +499,7 @@ function renderEditTable(
   opts: {
     currentUser?: User;
     onUpdate?: (channelId: string, updates: Partial<GatewayChannel>) => void;
+    section?: 'gateway';
   } = {}
 ) {
   const branch = makeBranch();
@@ -518,7 +519,8 @@ function renderEditTable(
       mcpServerById={new Map<string, MCPServer>()}
       currentUser={currentUser}
       onUpdate={opts.onUpdate}
-    />
+    />,
+    opts.section
   );
   fireEvent.click(screen.getByTitle('Edit'));
 }
@@ -1227,5 +1229,37 @@ describe('gateway inventory boundaries', () => {
     expect(document.querySelector('[role="switch"]')).toBeNull();
     expect(onDelete).not.toHaveBeenCalled();
     expect(onUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('GatewayChannelsTable unsaved-changes guard', () => {
+  const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
+
+  it('asks before leaving a dirty edit, from the breadcrumb and the footer Cancel', async () => {
+    renderEditTable(null, makeSlackChannel(), { section: 'gateway' });
+    fireEvent.change(screen.getByDisplayValue('Team Slack'), { target: { value: 'Renamed' } });
+
+    fireEvent.click(screen.getByText('Gateway Channels'));
+    await waitFor(() => expect(confirms()).toBe(1));
+    clickButton(/^Keep editing$/);
+    expect(screen.getByDisplayValue('Renamed')).toBeInTheDocument();
+    await waitFor(() => expect(confirms()).toBe(0));
+
+    clickButton(/^Cancel$/);
+    await waitFor(() => expect(confirms()).toBe(1));
+    clickButton(/^Discard$/);
+    await waitFor(() => expect(queryButton(/Add Channel/)).toBeDefined());
+  });
+
+  it('asks before the create wizard Cancel discards a typed name', async () => {
+    renderTable(null);
+    clickButton(/Add Channel/);
+    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+      target: { value: 'Draft channel' },
+    });
+    clickButton(/^Cancel$/);
+    await waitFor(() => expect(confirms()).toBe(1));
+    clickButton(/^Keep editing$/);
+    expect(screen.getByDisplayValue('Draft channel')).toBeInTheDocument();
   });
 });

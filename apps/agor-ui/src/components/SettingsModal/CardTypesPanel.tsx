@@ -23,7 +23,7 @@ import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { validateJSON } from '../JSONEditor';
 import { CardTypeSchemaEditor } from './CardTypeSchemaEditor';
-import { ListPanelHeader } from './panelPrimitives';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
@@ -42,14 +42,11 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
   const { drill, openDrill, closeDrill } = useSettingsDrill();
   const { openSettings } = useSettingsRoute();
   const [searchTerm, setSearchTerm] = useState('');
-  const [typeDirty, setTypeDirty] = useState(false);
   const [form] = Form.useForm();
 
   const editingType =
-    drill?.kind === 'cards' && drill.mode === 'edit' && drill.recordId
-      ? (cardTypeById.get(drill.recordId) ?? null)
-      : null;
-  const isCreatingType = drill?.kind === 'cards' && drill.mode === 'create';
+    drill?.mode === 'edit' && drill.recordId ? (cardTypeById.get(drill.recordId) ?? null) : null;
+  const isCreatingType = drill?.mode === 'create';
 
   const cardTypes = useMemo(
     () => mapToArray(cardTypeById).sort((a, b) => a.name.localeCompare(b.name)),
@@ -83,7 +80,6 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
         color: colorFromValue(values.color) || undefined,
         json_schema: buildSchema(values.json_schema),
       });
-      setTypeDirty(false);
       closeDrill();
       showSuccess('Card type created');
     } catch (err: unknown) {
@@ -103,7 +99,6 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
         color: colorFromValue(values.color) || undefined,
         json_schema: buildSchema(values.json_schema),
       });
-      setTypeDirty(false);
       closeDrill();
       showSuccess('Card type updated');
     } catch (err: unknown) {
@@ -125,20 +120,19 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
   };
 
   const openEditType = (ct: CardType) => {
+    form.resetFields();
     form.setFieldsValue({
       name: ct.name,
       emoji: ct.emoji,
       color: ct.color,
       json_schema: ct.json_schema ? JSON.stringify(ct.json_schema, null, 2) : '',
     });
-    setTypeDirty(false);
-    openDrill({ kind: 'cards', mode: 'edit', recordId: ct.card_type_id });
+    openDrill({ mode: 'edit', recordId: ct.card_type_id });
   };
 
   const openCreateType = () => {
     form.resetFields();
-    setTypeDirty(false);
-    openDrill({ kind: 'cards', mode: 'create' });
+    openDrill({ mode: 'create' });
   };
 
   const columns = [
@@ -212,16 +206,11 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
     return (
       <DrillInFrame
         title={editingType ? 'Edit Card Type' : 'Create Card Type'}
-        dirty={typeDirty}
+        dirty={() => form.isFieldsTouched()}
         saveLabel={editingType ? 'Save' : 'Create'}
         onSave={editingType ? handleUpdateType : handleCreateType}
       >
-        <Form
-          form={form}
-          layout="vertical"
-          style={{ maxWidth: 520 }}
-          onValuesChange={() => setTypeDirty(true)}
-        >
+        <Form form={form} layout="vertical" style={{ maxWidth: 520 }}>
           <Form.Item label="Name" style={{ marginBottom: 24 }}>
             <Flex gap={8}>
               <Form.Item name="emoji" noStyle>
@@ -253,7 +242,7 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
 
   return (
     <div>
-      <ListPanelHeader
+      <ResponsiveSettingsHeader
         title="Card Types"
         description="Define reusable card types with an optional data schema."
         search={
@@ -262,10 +251,9 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
             placeholder="Search card types"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 300 }}
           />
         }
-        actions={
+        primaryActions={
           <Button
             type="primary"
             icon={<PlusOutlined />}
