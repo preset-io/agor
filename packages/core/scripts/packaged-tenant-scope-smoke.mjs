@@ -1,13 +1,17 @@
 /**
  * The tenant scope stores, driven across the REAL package entry points.
  *
- * `@agor/core` is built with `splitting: false`, so every tsup entry inlines
- * its own copy of `db/tenant-scope.ts` and `db/tenant-context.ts`. A daemon
- * loads several of them at once. Until the stores were keyed on `Symbol.for`,
- * each copy owned a private `AsyncLocalStorage` and a private proxy-target
- * `WeakMap`, so a scope armed through one entry was invisible to a proxy built
- * by another, `isPostgresDatabaseHandle` could not unwrap the handle it was
- * given, and correctly scoped work was refused (§9, follow-up F4).
+ * `@agor/core` used to be built with `splitting: false`, so every tsup entry
+ * inlined its own copy of `db/tenant-scope.ts` and `db/tenant-context.ts`, and
+ * a daemon loaded several of them at once. Until the stores were keyed on
+ * `Symbol.for`, each copy owned a private `AsyncLocalStorage` and a private
+ * proxy-target `WeakMap`, so a scope armed through one entry was invisible to a
+ * proxy built by another, `isPostgresDatabaseHandle` could not unwrap the
+ * handle it was given, and correctly scoped work was refused (§9, follow-up
+ * F4). Core now builds with `splitting: true`: shared modules live in chunks
+ * evaluated once, so every entry sees the same stores. Section 0 pins that
+ * premise; the rest still drives scope behavior across entry points so a
+ * return to per-entry copies (or a store regression) fails here, in `dist`.
  *
  * `tenant-scope.test.ts` reproduces that duplication in one process with
  * `vi.resetModules()`, which is a faithful model and NOT the packaging
@@ -30,14 +34,14 @@ import assert from 'node:assert/strict';
 const [root, db] = await Promise.all([import('@agor/core'), import('@agor/core/db')]);
 
 // --------------------------------------------------------------------------
-// 0. The premise. Two entries, two evaluations of the same module.
+// 0. The premise. Two entries, ONE evaluation of the tenant-scope module.
 // --------------------------------------------------------------------------
-assert.notEqual(
+assert.equal(
   root.runWithTenantDatabaseScope,
   db.runWithTenantDatabaseScope,
-  'Expected `@agor/core` and `@agor/core/db` to be separate bundled copies. If ' +
-    'this fails because tsup `splitting` was enabled, the duplication hazard is ' +
-    'gone and this smoke test should be rewritten rather than deleted.'
+  'Expected `@agor/core` and `@agor/core/db` to share one tenant-scope module. ' +
+    'If this fails, tsup `splitting` was disabled (or an entry inlined its own ' +
+    'copy) and the per-entry duplication hazard is back.'
 );
 
 /** A SQLite-shaped handle: `run` is what tells the dialect check it is not PG. */
@@ -69,10 +73,8 @@ const postgresHandle = () => ({ transaction: async () => undefined });
 
   assert.throws(
     () => guarded.marker(),
-    // Matched by NAME, not `instanceof`: each entry has its own class object,
-    // and cross-entry `instanceof` is a separate identity question this test
-    // deliberately does not assert. The daemon catches this error inside the
-    // copy that threw it.
+    // Matched by NAME, not `instanceof`, so this section stays meaningful even
+    // if entries ever carry separate class objects again.
     (error) => error?.name === 'MissingTenantDatabaseScopeError',
     'A guarded proxy must refuse outside every scope'
   );

@@ -88,7 +88,11 @@ export default defineConfig({
   format: ['esm'],
   dts: false,
   clean: process.env.TSUP_CLEAN !== 'false',
-  splitting: false,
+  // Shared modules go to chunks evaluated once, so entries share one copy of
+  // tenant-scope stores and other module state (scripts/packaged-tenant-scope-
+  // smoke.mjs pins this). Under splitting, esbuild can't resolve names through
+  // `export * from '<external>'`; internal callers import @agor/git directly.
+  splitting: true,
   // These pure-JS, high-fanout feature dependencies are compiled into the
   // copied core artifact. Keeping them out of the consumer dependency graph
   // materially lowers cold-cache npm extraction concurrency and inode use.
