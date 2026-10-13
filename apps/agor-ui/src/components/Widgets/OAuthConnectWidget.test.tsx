@@ -70,6 +70,7 @@ function widget(overrides: Partial<WidgetMessageMetadata> = {}): WidgetMessageMe
 interface ClientOpts {
   startResult?: unknown;
   resolveError?: Error;
+  dismissError?: Error;
   onCall?: (path: string, body: unknown) => void;
 }
 
@@ -91,6 +92,7 @@ function makeClient(opts: ClientOpts = {}): AgorClient {
           if (opts.resolveError) throw opts.resolveError;
           return { widget_id: 'widget-1', status: 'submitted', auto_resume_queued: true };
         }
+        if (path.endsWith('/dismiss') && opts.dismissError) throw opts.dismissError;
         if (path.endsWith('/dismiss')) return { widget_id: 'widget-1', status: 'dismissed' };
         throw new Error(`Unexpected service call: ${path}`);
       }),
@@ -287,12 +289,76 @@ describe('OAuthConnectWidget — pending', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
-    // The text lands in both the card's Alert and the transient toast.
-    await waitFor(() =>
-      expect(screen.getAllByText(/has not completed/i).length).toBeGreaterThan(0)
-    );
+    // Inline only: the card's Alert, no toast.
+    expect(
+      await screen.findByText(`Couldn't connect. (Sign-in to "Notion" has not completed.)`)
+    ).toBeVisible();
     expect(screen.queryByText(/Connected "Notion"/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+  });
+
+  it('shows a failed dismiss inline and keeps the card', async () => {
+    renderWidget(
+      <OAuthConnectWidget
+        message={message}
+        widget={widget()}
+        client={makeClient({
+          dismissError: new Error('Widget widget-1 resolution claim was lost before completion'),
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+
+    expect(
+      await screen.findByText(
+        "Couldn't dismiss this request. (Widget widget-1 resolution claim was lost before completion)"
+      )
+    ).toBeVisible();
+    expect(screen.queryByText(/Declined to connect/)).not.toBeInTheDocument();
+  });
+
+  it('treats a dismiss retried after its own lost reply as declined', async () => {
+    const errors = [
+      new Error('socket has been disconnected'),
+      new Error('Widget widget-1 is already dismissed; cannot dismiss again.'),
+    ];
+    const client = {
+      service: () => ({
+        create: vi.fn(async () => {
+          throw errors.shift();
+        }),
+      }),
+    } as unknown as AgorClient;
+    renderWidget(<OAuthConnectWidget message={message} widget={widget()} client={client} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(
+      await screen.findByText(
+        "The connection to Agor dropped before this was confirmed. If it didn't go through, try to dismiss this request again once the connection is back. (socket has been disconnected)"
+      )
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(await screen.findByText(/Declined to connect "Notion"/)).toBeVisible();
+  });
+
+  it('shows a neutral note when the request was answered elsewhere', async () => {
+    renderWidget(
+      <OAuthConnectWidget
+        message={message}
+        widget={widget()}
+        client={makeClient({
+          dismissError: new Error('Widget widget-1 is already submitted; cannot dismiss again.'),
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(
+      await screen.findByText('This request was already answered. Refresh to see the result.')
+    ).toBeVisible();
+    expect(screen.queryByText('Sign-in was not completed')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Not now' })).toBeDisabled();
   });
 
   it('dismisses through the shared dismiss endpoint', async () => {

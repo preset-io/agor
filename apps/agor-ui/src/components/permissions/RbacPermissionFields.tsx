@@ -1,14 +1,14 @@
 import type { BranchPermissionLevel, Group, User } from '@agor-live/client';
 import { UserOutlined } from '@ant-design/icons';
-import { Alert, Form, Radio, Select, Space, Typography } from 'antd';
+import { Form, Radio, Select, Space, Typography } from 'antd';
 import { useState } from 'react';
-import { useThemedMessage } from '@/utils/message';
 import {
   searchableSelectProps,
   selectSearchTextFromLabel,
   toGroupSelectOption,
   toUserSelectOption,
 } from '@/utils/selectSearch';
+import { CompactNotice } from '../CompactNotice';
 import { Tag } from '../Tag';
 
 export type FsAccessLevel = 'none' | 'read' | 'write';
@@ -92,8 +92,8 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
   othersFsAccessLabel = 'Filesystem Access',
   showVisibility = true,
 }) => {
-  const { showError } = useThemedMessage();
   const [selectKey, setSelectKey] = useState(0);
+  const [ownersHint, setOwnersHint] = useState<string | null>(null);
   const currentUserId = currentUser?.user_id;
   const isShared = value.visibility === 'shared';
   const ownerLabel = (ownerId: string) => {
@@ -106,14 +106,16 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
 
   const handleOwnersChange = (newOwnerIds: string[]) => {
     if (newOwnerIds.length === 0) {
-      showError('At least one owner is required');
+      setOwnersHint('Keep at least one owner.');
       setSelectKey((prev) => prev + 1);
       return;
     }
+    setOwnersHint(null);
     onChange('ownerIds', newOwnerIds);
   };
 
   const handleVisibilityChange = (visibility: RbacVisibility) => {
+    setOwnersHint(null);
     onChange('visibility', visibility);
     onChange('othersCan', othersCanFromRbacVisibility(visibility, value.othersCan));
     if (visibility === 'private') {
@@ -132,11 +134,11 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
   return (
     <>
       {ownersLoadError && (
-        <Alert
+        <CompactNotice
           type="error"
-          showIcon
-          message="Permissions unavailable"
-          description={`${ownersLoadError.message}. Close and reopen the modal to retry.`}
+          role="alert"
+          message="Couldn't load owners. Close and reopen this window to try again."
+          details={[{ label: 'Error', value: ownersLoadError.message, code: true }]}
           style={{ marginBottom: 16 }}
         />
       )}
@@ -161,7 +163,13 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
       )}
 
       {isShared && (
-        <Form.Item label="Owners" labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} help={ownerHelp}>
+        <Form.Item
+          label="Owners"
+          labelCol={{ span: 8 }}
+          wrapperCol={{ span: 16 }}
+          validateStatus={ownersHint ? 'error' : undefined}
+          help={ownersHint ?? ownerHelp}
+        >
           <Select
             key={selectKey}
             mode="multiple"
@@ -212,14 +220,14 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
           >
             <Space direction="vertical" style={{ width: '100%' }}>
               {groupGrantsUnavailable && (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="Group permissions unavailable"
-                  description={
+                <CompactNotice
+                  type="error"
+                  role="alert"
+                  message="Couldn't load group permissions."
+                  details={
                     groupGrantsError?.message
-                      ? `Group permissions could not be loaded: ${groupGrantsError.message}`
-                      : 'Group grants may not be enabled.'
+                      ? [{ label: 'Error', value: groupGrantsError.message, code: true }]
+                      : undefined
                   }
                 />
               )}

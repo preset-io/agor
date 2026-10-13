@@ -7,8 +7,16 @@
  */
 import type { MCPCatalogEntry, MCPMarketplaceOverview, MCPServerID } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { ConfigProvider } from 'antd';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  type RenderOptions,
+  render as renderWithoutApp,
+  screen,
+  waitFor,
+} from '@testing-library/react';
+import { App as AntdApp, ConfigProvider } from 'antd';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +32,10 @@ import {
 import { marketplaceCredentialPresentation } from './marketplacePresentation';
 import { ServerSettingsDrawer } from './ServerSettingsDrawer';
 import { SessionsTab } from './SessionsTab';
+
+// Themed toasts read the antd App context, as in production.
+const render = (ui: React.ReactElement, options?: RenderOptions) =>
+  renderWithoutApp(ui, { wrapper: AntdApp, ...options });
 
 const CATALOG_ENTRY: MCPCatalogEntry = {
   name: 'com.deepwiki/mcp',

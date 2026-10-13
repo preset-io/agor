@@ -435,7 +435,39 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
       })
     );
     expect(get).not.toHaveBeenCalled();
-    expect(await screen.findByText('Failed to stop execution. You can try again.')).toBeVisible();
+    expect(
+      await screen.findByText("Couldn't stop the agent. (database scope missing)")
+    ).toBeVisible();
+  });
+
+  it('reports an unresolved lost Stop acknowledgement as unconfirmed, not failed', async () => {
+    const taskId = '018f0000-0000-7000-8000-000000000013';
+    reactive.tasks = [
+      { task_id: taskId, session_id: session.session_id, status: 'running' } as Task,
+    ];
+    const create = vi.fn().mockRejectedValue(new Error('socket disconnected before ack'));
+    const get = vi.fn().mockRejectedValue(new Error('task read unavailable'));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    renderPanel({
+      client: {
+        io: stopIo(),
+        service: (path: string) =>
+          path === 'tasks'
+            ? ({ get, on: vi.fn(), off: vi.fn() } as never)
+            : ({ create, on: vi.fn(), off: vi.fn() } as never),
+      } as unknown as AgorClient,
+      activeSession: { ...session, status: 'running', agentic_tool: 'codex' },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /stop/i }));
+
+    expect(
+      await screen.findByText(
+        "The connection to Agor dropped before this was confirmed. If it didn't go through, try to stop the agent again once the connection is back. (The Stop acknowledgement was not received.)"
+      )
+    ).toBeVisible();
+    expect(create).toHaveBeenCalledOnce();
+    expect(screen.queryByText(/^Couldn't stop the agent\./)).not.toBeInTheDocument();
   });
 
   it('reconciles a committed Stop when the Socket.IO acknowledgement is lost without retrying', async () => {
@@ -478,7 +510,7 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     expect(create).toHaveBeenCalledWith({ expected_task_id: taskId });
     expect(get).toHaveBeenCalledWith(taskId);
     expect(
-      screen.queryByText('Failed to stop execution. You can try again.')
+      screen.queryByText("Couldn't stop the agent. (socket disconnected before ack)")
     ).not.toBeInTheDocument();
   });
 
@@ -512,9 +544,7 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     expect(
       await screen.findByText('Waiting for the daemon that owns the local executor process handle.')
     ).toBeVisible();
-    expect(
-      screen.queryByText('Failed to stop execution. You can try again.')
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Couldn't stop the agent\./)).not.toBeInTheDocument();
   });
 
   it.each([
@@ -605,7 +635,7 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     expect(nativePrompt).not.toHaveBeenCalled();
     expect(
       await dialog.findByText(
-        'Could not reopen this session. You may need the branch owner or an administrator to help.'
+        "Couldn't reopen this session. Ask a branch owner or administrator to help. (denied)"
       )
     ).toBeVisible();
   });
@@ -654,7 +684,9 @@ describe.each([390, 1280])('shared Stop path at %ipx', (width) => {
     expect(create).toHaveBeenCalledExactlyOnceWith({ expected_task_id: taskId });
     expect(service).toHaveBeenCalledWith(`sessions/${session.session_id}/stop`);
     rejectStop(Object.assign(new Error('Not allowed to stop this session'), { code: 403 }));
-    await screen.findByText('Failed to stop execution. You can try again.');
+    await screen.findByText(
+      "Couldn't stop the agent. You don't have permission to do this. (Not allowed to stop this session)"
+    );
     expect(create).toHaveBeenCalledOnce();
     await waitFor(() => expect(stop).toBeEnabled());
   });
@@ -731,20 +763,18 @@ describe('SessionPanel archive feedback', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Archive', exact: true }));
       const expected =
         outcome === 'read-failure'
-          ? 'Session and same-branch children archived; refresh required to update the session list.'
+          ? 'Session and its subsessions archived. Refresh to update the list.'
           : outcome === 'mutation-failure'
-            ? 'Failed to archive session'
-            : 'Session and same-branch children archived';
+            ? "Couldn't archive the session. (Archive denied)"
+            : 'Session archived.';
       expect(await screen.findByText(expected)).toBeVisible();
       expect(create).toHaveBeenCalledTimes(1);
       expect(get).toHaveBeenCalledTimes(outcome === 'mutation-failure' ? 0 : 1);
       if (outcome === 'confirmed') expect(onClose).toHaveBeenCalledTimes(1);
       else expect(onClose).not.toHaveBeenCalled();
       if (outcome === 'read-failure') {
-        expect(screen.queryByText('Failed to archive session')).not.toBeInTheDocument();
-        expect(
-          screen.queryByText('Session and same-branch children archived')
-        ).not.toBeInTheDocument();
+        expect(screen.queryByText(/^Couldn't archive the session\./)).not.toBeInTheDocument();
+        expect(screen.queryByText('Session archived.')).not.toBeInTheDocument();
         expect(agorStore.getState().sessionById.get(session.session_id)).toEqual(session);
       }
     }

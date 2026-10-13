@@ -37,7 +37,7 @@ export interface BoardMutationGuard {
   warnDropped: (message?: string) => void;
 }
 
-export const BOARD_RELOADED_WARNING = 'This board reloaded; your last change was not saved.';
+export const BOARD_RELOADED_WARNING = "Couldn't save your change, because the board reloaded.";
 
 /**
  * The outcome of a ticketed board write: `true` saved, `false` the request

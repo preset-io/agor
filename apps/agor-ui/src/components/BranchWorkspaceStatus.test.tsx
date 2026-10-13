@@ -113,7 +113,7 @@ it('keeps the notification and retry affordance when saving dismissal fails', as
   render(view(client));
   fireEvent.click(await findDismissButton());
   await act(async () => request.reject(new Error('Permission changed')));
-  expect(showError).toHaveBeenCalledWith('Failed to dismiss the notification: Permission changed');
+  expect(showError).toHaveBeenCalledWith("Couldn't dismiss the notification. (Permission changed)");
   expect(screen.getByText(FAILED)).not.toBeNull();
   fireEvent.click(await findDismissButton());
   expect(create).toHaveBeenCalledTimes(2);

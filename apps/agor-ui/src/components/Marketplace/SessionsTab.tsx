@@ -10,7 +10,6 @@ import {
   Col,
   Empty,
   Flex,
-  message,
   Popconfirm,
   Row,
   Space,
@@ -22,6 +21,8 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { formatActionError } from '@/utils/connectionErrors';
+import { useThemedMessage } from '@/utils/message';
 import { marketplaceServerTitle, marketplaceSessionTitle } from './marketplacePresentation';
 
 interface SessionGroup {
@@ -51,6 +52,7 @@ export const SessionsTab: React.FC<{
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const guard = useAuthorityOperationGuard(authorityKey);
+  const { showError, showSuccess } = useThemedMessage();
   const [detaching, setDetaching] = useState<string | null>(null);
   const [detachConfirm, setDetachConfirm] = useState<string | null>(null);
   useEffect(() => {
@@ -193,14 +195,14 @@ export const SessionsTab: React.FC<{
                                       .service(`sessions/${server.session_id}/mcp-servers`)
                                       .remove(server.mcp_server_id);
                                     if (!operation.isCurrent()) return;
-                                    message.success('Server detached');
+                                    showSuccess('Server detached.');
                                     await refresh();
                                   } catch (cause) {
                                     if (operation.isCurrent())
-                                      message.error(
-                                        cause instanceof Error
-                                          ? cause.message
-                                          : 'Could not detach server'
+                                      showError(
+                                        formatActionError('detach the server', cause, {
+                                          idempotent: true,
+                                        })
                                       );
                                   } finally {
                                     if (operation.isCurrent()) setDetaching(null);

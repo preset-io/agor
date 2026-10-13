@@ -1,6 +1,7 @@
 import { UploadOutlined } from '@ant-design/icons';
 import { Button, Tooltip } from 'antd';
 import type React from 'react';
+import { LOST_CONNECTION_TOOLTIP } from '../../utils/connectionErrors';
 import { FileUploadButton } from '../FileUpload';
 
 interface SessionUploadControlsProps {
@@ -23,7 +24,7 @@ export const SessionUploadControls: React.FC<SessionUploadControlsProps> = ({
       <Tooltip
         title={
           connectionDisabled
-            ? 'Disconnected from daemon'
+            ? LOST_CONNECTION_TOOLTIP
             : composerAttachmentUploading
               ? 'Uploading files…'
               : 'Attach files'
@@ -34,7 +35,7 @@ export const SessionUploadControls: React.FC<SessionUploadControlsProps> = ({
       <Tooltip
         title={
           connectionDisabled
-            ? 'Disconnected from daemon'
+            ? LOST_CONNECTION_TOOLTIP
             : composerAttachmentUploading
               ? 'Uploading files…'
               : 'Advanced upload'

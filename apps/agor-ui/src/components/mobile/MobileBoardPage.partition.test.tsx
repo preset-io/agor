@@ -47,13 +47,13 @@ function MobileBoardRoute({ client }: { client: AgorClient }) {
 
 withTestAuthority();
 
-// Every tab that waits on the partition offers Retry, not only the canvas.
+// Every tab that waits on the partition offers Try again, not only the canvas.
 it.each([
   ['Board', ''],
   ['Teammate', '?tab=teammate'],
   ['Sessions', '?tab=all-sessions'],
 ])(
-  'a cold mobile board whose partition fails offers Retry on the %s tab, and Retry loads it',
+  'a cold mobile board whose partition fails offers Try again on the %s tab, and Try again loads it',
   async (_tab, search) => {
     window.history.pushState({}, '', `/m/board/${BOARD}${search}`);
     onTestFinished(() => window.history.pushState({}, '', '/'));
@@ -83,7 +83,7 @@ it.each([
     expect(screen.queryByTestId('board-partition-skeleton')).toBeNull();
 
     partitionDown = false;
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(makeBoardReadySelector(BOARD)(agorStore.getState())).toBe(true));
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   }

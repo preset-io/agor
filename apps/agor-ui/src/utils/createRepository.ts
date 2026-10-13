@@ -1,12 +1,18 @@
 import type { AgorClient, CreateRepoRequest, Repo } from '@agor-live/client';
 import type { CreateRepoOptions } from '../types';
+import {
+  CLIENT_NOT_CONNECTED_ERROR,
+  formatActionError,
+  isInFlightConnectionLossError,
+  notConnectedMessage,
+} from './connectionErrors';
 import { repositorySetupMessage } from './repositorySetupMessage';
 
 interface RepoNotifications {
   showError: (message: string, options?: { key?: string }) => unknown;
   showLoading: (message: string, options?: { key?: string }) => unknown;
   showSuccess: (message: string, options?: { key?: string }) => unknown;
-  showWarning: (message: string, options?: { key?: string }) => unknown;
+  showWarning: (message: string, options?: { key?: string; duration?: number }) => unknown;
 }
 
 /** Background callers own status; explicit Add Repository callers get notifications. */
@@ -19,9 +25,8 @@ export async function createRepository(
 ) {
   if (options.shouldApply && !options.shouldApply()) return;
   if (!client) {
-    const error = new Error('Not connected to Agor. Reconnect and try again.');
-    if (!options.silent || options.showErrors) showError(error.message);
-    throw error;
+    if (!options.silent || options.showErrors) showError(notConnectedMessage('add the repository'));
+    throw new Error(CLIENT_NOT_CONNECTED_ERROR);
   }
 
   // POST /repos/clone returns `{ status: 'pending', repo_id }` immediately;
@@ -131,11 +136,9 @@ export async function createRepository(
     }
     settled = true;
     if (!options.silent || options.showErrors) {
-      showError(
-        'Repository setup is taking longer than expected. Check its status in Repository settings before retrying.',
-        {
-          key: toastKey,
-        }
+      showWarning(
+        'Repository setup is taking longer than expected. Check Repository settings before you try again.',
+        { key: toastKey, duration: 0 }
       );
     }
     cleanup();
@@ -192,7 +195,12 @@ export async function createRepository(
     if (!settled) {
       settled = true;
       if (!options.silent || options.showErrors) {
-        showError(repositorySetupMessage(undefined, error), { key: toastKey });
+        showError(
+          isInFlightConnectionLossError(error)
+            ? formatActionError('add the repository', error, { idempotent: false })
+            : repositorySetupMessage(undefined, error),
+          { key: toastKey }
+        );
       }
       cleanup();
     }

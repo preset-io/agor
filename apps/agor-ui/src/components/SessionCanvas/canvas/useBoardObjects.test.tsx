@@ -283,7 +283,7 @@ describe('justifyZoneContents production path', () => {
       expect(actions(routed.boardsPatch)).toEqual(['upsertObject']);
       expect(showSuccess).not.toHaveBeenCalled();
       expect(showWarning).toHaveBeenCalledWith(
-        'This board reloaded; your last change was not saved.'
+        "Couldn't save your change, because the board reloaded."
       );
     });
   });
@@ -732,7 +732,7 @@ describe('updateObject', () => {
     await expect(onUpdate('a', { ...note, content: 'Updated' })).resolves.toBe(false);
 
     expect(patch).toHaveBeenCalledTimes(1);
-    expect(showError).toHaveBeenCalledWith('Failed to save board object');
+    expect(showError).toHaveBeenCalledWith("Couldn't save your change. (network down)");
   });
 
   it('blocks stale update and delete callbacks after permission revocation', async () => {
@@ -995,7 +995,7 @@ describe('reorderObject', () => {
     // Must resolve (swallow the rejection), not throw out of reorderObject.
     await expect(result.current.reorderObject('a', 'front')).resolves.toBeUndefined();
     expect(patch).toHaveBeenCalledTimes(1);
-    expect(showError).toHaveBeenCalledWith('Failed to reorder zone');
+    expect(showError).toHaveBeenCalledWith("Couldn't reorder the zone. (network down)");
   });
 
   it('coerces a non-finite base zIndex via sanitizeZIndex before computing (NaN → default 100 → 101)', async () => {
@@ -5180,5 +5180,45 @@ describe('board object finite-geometry node boundary', () => {
       })
     );
     consoleWarn.mockRestore();
+  });
+});
+
+describe('deleteObject', () => {
+  it.each([
+    ['zone', { type: 'zone', x: 0, y: 0, width: 200, height: 200, label: 'Z' }, 'delete the zone'],
+    ['markdown', { type: 'markdown', x: 0, y: 0, width: 300, content: 'Note' }, 'delete the note'],
+    [
+      'artifact',
+      { type: 'artifact', x: 0, y: 0, width: 300, height: 200, artifact_id: 'artifact-1' },
+      'delete the artifact',
+    ],
+  ])('names the %s in its failure and asks the canvas to redraw', async (_type, object, action) => {
+    const { client } = makeRejectingClient();
+    const board = makeBoard({ target: object });
+    const onWriteFailed = vi.fn();
+    const deletedObjectsRef = { current: new Set<string>() };
+    const { result } = renderHook(
+      () => {
+        const guard = useBoardMutationGuard(board.board_id, true);
+        const objects = useBoardObjects({
+          board,
+          client,
+          boardObjectsForBoard: [],
+          nodes: [],
+          setNodes: vi.fn(),
+          deletedObjectsRef,
+          guard,
+          onWriteFailed,
+        });
+        return { guard, objects };
+      },
+      { wrapper }
+    );
+
+    await result.current.objects.deleteObject('target', result.current.guard.capture());
+
+    expect(showError).toHaveBeenCalledWith(`Couldn't ${action}. (network down)`);
+    expect(onWriteFailed).toHaveBeenCalledTimes(1);
+    expect(deletedObjectsRef.current.has('target')).toBe(false);
   });
 });

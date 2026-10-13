@@ -1,7 +1,8 @@
 import type { AgorClient, Task } from '@agor-live/client';
 import {
+  formatActionError,
   isInFlightConnectionLossError,
-  withConnectionErrorDetail,
+  withRawDetail,
 } from '../../utils/connectionErrors';
 import { waitForConnectedClient } from './stopReconciliation';
 
@@ -94,7 +95,7 @@ export async function sendPromptWithReconciliation({
       baselineTaskId = newest?.task_id ?? null;
     } catch (error) {
       if (isInFlightConnectionLossError(error)) {
-        if (isCurrent()) showError(withConnectionErrorDetail(PROMPT_NOT_SENT_MESSAGE, error));
+        if (isCurrent()) showError(withRawDetail(PROMPT_NOT_SENT_MESSAGE, error));
         return false;
       }
       // Any other failure only costs the landed check; the prompt is still sent.
@@ -106,12 +107,9 @@ export async function sendPromptWithReconciliation({
     await send();
     return isCurrent();
   } catch (error) {
-    console.error('Prompt error:', error);
     if (!isInFlightConnectionLossError(error)) {
       if (isCurrent()) {
-        showError(
-          `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`
-        );
+        showError(formatActionError('send your message', error, { idempotent: false }));
       }
       return false;
     }
@@ -125,7 +123,7 @@ export async function sendPromptWithReconciliation({
           );
     if (!isCurrent()) return false;
     if (outcome === 'landed') return true;
-    showError(withConnectionErrorDetail(PROMPT_OUTCOME_UNKNOWN_MESSAGE, error));
+    showError(withRawDetail(PROMPT_OUTCOME_UNKNOWN_MESSAGE, error));
     return false;
   }
 }

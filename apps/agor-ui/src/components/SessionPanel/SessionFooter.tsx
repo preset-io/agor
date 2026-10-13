@@ -50,6 +50,7 @@ import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
+import { LOST_CONNECTION_TOOLTIP } from '../../utils/connectionErrors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { CompactNotice } from '../CompactNotice';
 import { EffortSelector } from '../EffortSelector';
@@ -510,7 +511,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             composerAttachmentUploading
               ? composerUploadTooltip
               : connectionDisabled
-                ? 'Disconnected from daemon'
+                ? LOST_CONNECTION_TOOLTIP
                 : 'Attach files to prompt'
           )}
           placement="left"
@@ -557,7 +558,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             composerAttachmentUploading
               ? composerUploadTooltip
               : connectionDisabled
-                ? 'Disconnected from daemon'
+                ? LOST_CONNECTION_TOOLTIP
                 : 'Upload files with options'
           )}
           placement="left"
@@ -605,7 +606,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           <Tooltip
             title={hoverTooltip(
               connectionDisabled
-                ? 'Disconnected from daemon'
+                ? LOST_CONNECTION_TOOLTIP
                 : composerAttachmentsPresent
                   ? composerAttachmentActionTooltip
                   : 'Fork this session'
@@ -827,7 +828,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   );
 
   const stopTooltip = connectionDisabled
-    ? 'Disconnected from daemon'
+    ? LOST_CONNECTION_TOOLTIP
     : stopRequestInFlight
       ? 'Stopping...'
       : isStopping
@@ -848,7 +849,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   const sendLabel = isRunning && hasInput ? 'Queue' : 'Send';
   const sendTooltip = connectionDisabled
-    ? 'Disconnected from daemon'
+    ? LOST_CONNECTION_TOOLTIP
     : composerAttachmentUploading
       ? composerUploadTooltip
       : isRunning
@@ -1151,7 +1152,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   composerAttachmentUploading
                     ? composerUploadTooltip
                     : connectionDisabled
-                      ? 'Disconnected from daemon'
+                      ? LOST_CONNECTION_TOOLTIP
                       : 'Attach files'
                 )}
               >
@@ -1174,7 +1175,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   composerAttachmentUploading
                     ? composerUploadTooltip
                     : connectionDisabled
-                      ? 'Disconnected from daemon'
+                      ? LOST_CONNECTION_TOOLTIP
                       : 'Advanced upload'
                 )}
               >
@@ -1192,9 +1193,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             )}
             {barPinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
               <Tooltip
-                title={hoverTooltip(
-                  connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'
-                )}
+                title={hoverTooltip(connectionDisabled ? LOST_CONNECTION_TOOLTIP : 'Fork Session')}
               >
                 <Button
                   size={actionSize}

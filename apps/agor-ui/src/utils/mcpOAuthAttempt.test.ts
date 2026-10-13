@@ -67,11 +67,14 @@ describe('waitForMCPOAuthAttempt', () => {
     expect(get).toHaveBeenCalledWith('attempt-1');
   });
 
-  it('surfaces ambiguity as a fresh-sign-in path without suggesting replay', () => {
-    const message = oauthAttemptFailureMessage('ambiguous');
-    expect(message).toMatch(/uncertain/i);
-    expect(message).toMatch(/new sign-in/i);
-    expect(message).toMatch(/will not be replayed/i);
+  it('points every unfinished attempt at a fresh sign-in', () => {
+    expect(oauthAttemptFailureMessage('ambiguous')).toBe(
+      "Agor couldn't confirm the sign-in. Start a new sign-in."
+    );
+    expect(oauthAttemptFailureMessage('expired')).toBe('Sign-in expired. Start a new sign-in.');
+    expect(oauthAttemptFailureMessage('failed')).toBe(
+      "Sign-in didn't finish. Start a new sign-in."
+    );
   });
 
   it('replaces optimistic UI auth state with durable status and server reads', async () => {

@@ -11,7 +11,13 @@ import {
   type AuthorityOperation,
   useAuthorityOperationGuard,
 } from '../../hooks/useAuthorityOperationGuard';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  formatActionError,
+} from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
+import { ActionErrorNotice } from '../CompactNotice';
 
 interface UserAvatarsTabProps {
   client: AgorClient | null;
@@ -52,6 +58,10 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [lastResult, setLastResult] = useState<UserAvatarSyncResult | null>(null);
+  const [loadError, setLoadError] = useState<ActionErrorCopy | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  // Until the saved settings load, the form holds defaults that must not be saved over them.
+  const [loaded, setLoaded] = useState(false);
   const operationGuard = useAuthorityOperationGuard(operationScope);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: authorityKey intentionally erases caller-specific status
@@ -62,6 +72,8 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
     setLoading(false);
     setSyncing(false);
     setLastResult(null);
+    setLoadError(null);
+    setLoaded(false);
   }, [identityKey]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
@@ -78,10 +90,12 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
     [gatewayChannelById]
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt re-runs the load on Try again
   useEffect(() => {
     const operation = operationGuard.begin();
     if (!client || !operation.isCurrent()) return;
     setLoading(true);
+    setLoadError(null);
     usersAvatarClient(client)
       .getAvatarSettings({})
       .then((value) => {
@@ -91,22 +105,25 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
         setEnabled(next.enabled);
         setGatewayId(next.gateway_channel_id);
         setLastResult(next.last_sync_result ?? null);
+        setLoaded(true);
       })
       .catch((error) => {
-        if (operation.isCurrent()) showError(`Failed to load avatar settings: ${error.message}`);
+        if (operation.isCurrent()) {
+          setLoadError(describeActionError('load avatar settings', error, { idempotent: true }));
+        }
       })
       .finally(() => {
         if (operation.isCurrent()) setLoading(false);
       });
     return () => operation.cancel();
-  }, [client, operationGuard, showError]);
+  }, [client, operationGuard, loadAttempt]);
 
   const save = async (
     operation: AuthorityOperation,
     nextEnabled = enabled,
     nextGatewayId = gatewayId
   ) => {
-    if (!client || !operation.isCurrent()) return;
+    if (!client || !loaded || !operation.isCurrent()) return;
     const saved = (await usersAvatarClient(client).updateAvatarSettings({
       enabled: nextEnabled,
       provider: nextEnabled ? 'slack' : null,
@@ -131,9 +148,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
     } catch (error) {
       if (!operation.isCurrent()) return;
       setEnabled(previousEnabled);
-      showError(
-        `Failed to update avatar settings: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('save avatar settings', error, { idempotent: true }));
     }
   };
 
@@ -150,9 +165,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
     } catch (error) {
       if (!operation.isCurrent()) return;
       setGatewayId(previousGatewayId);
-      showError(
-        `Failed to update avatar settings: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('save avatar settings', error, { idempotent: true }));
     }
   };
 
@@ -161,7 +174,14 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
     if (!client || !gatewayId || !operation.isCurrent()) return;
     setSyncing(true);
     try {
-      await save(operation, true, gatewayId);
+      try {
+        await save(operation, true, gatewayId);
+      } catch (error) {
+        if (operation.isCurrent()) {
+          showError(formatActionError('save avatar settings', error, { idempotent: true }));
+        }
+        return;
+      }
       if (!operation.isCurrent()) return;
       const result = (await usersAvatarClient(client).syncAvatars({
         gateway_channel_id: gatewayId,
@@ -174,9 +194,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
       );
     } catch (error) {
       if (!operation.isCurrent()) return;
-      showError(
-        `Slack avatar sync failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('sync Slack avatars', error, { idempotent: true }));
     } finally {
       if (operation.isCurrent()) setSyncing(false);
     }
@@ -194,77 +212,89 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
         </Typography.Text>
       </div>
 
-      <Card loading={loading} size="small">
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-          <Checkbox
-            checked={enabled}
-            onChange={(event) => enableWithCurrentGateway(event.target.checked)}
-          >
-            Enable Slack-synced avatars
-          </Checkbox>
+      {loadError && (
+        <ActionErrorNotice
+          error={loadError}
+          action={{ label: 'Try again', onClick: () => setLoadAttempt((n) => n + 1) }}
+        />
+      )}
 
-          <Typography.Text type="secondary">
-            Disabling this stops Slack avatar refreshes and removes only Slack-synced avatar URLs.
-            Manually/provider-set avatar URLs are preserved.
-          </Typography.Text>
-
-          <Flex gap={12} align="center" wrap="wrap">
-            <Select
-              style={{ minWidth: 320 }}
-              placeholder="Select Slack gateway"
-              value={gatewayId ?? undefined}
-              onChange={selectGateway}
-              options={slackGateways.map((channel) => ({
-                value: channel.id,
-                label: `${channel.name}${channel.enabled ? '' : ' (disabled)'}`,
-              }))}
-            />
-            <Button
-              type="primary"
-              disabled={!enabled || !gatewayId}
-              loading={syncing}
-              onClick={runSync}
+      {!loadError && (
+        <Card loading={loading} size="small">
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Checkbox
+              checked={enabled}
+              onChange={(event) => enableWithCurrentGateway(event.target.checked)}
             >
-              Sync now
-            </Button>
-          </Flex>
+              Enable Slack-synced avatars
+            </Checkbox>
 
-          {lastResult && (
-            <Typography.Text type={lastResult.failed ? 'warning' : 'secondary'}>
-              Last sync: {lastResult.updated} updated, {lastResult.skipped} skipped,{' '}
-              {lastResult.failed} failed at {new Date(lastResult.finished_at).toLocaleString()}.
-            </Typography.Text>
-          )}
-
-          {lastResult?.failures?.length ? (
-            <Alert
-              type="warning"
-              showIcon
-              message="Avatar sync failures"
-              description={
-                <Space direction="vertical" size={4}>
-                  {lastResult.failures.slice(0, 5).map((failure) => (
-                    <Typography.Text key={`${failure.user_id}-${failure.reason}`} type="secondary">
-                      {failure.email || failure.user_id}: {failure.reason}
-                    </Typography.Text>
-                  ))}
-                  {lastResult.failures.length > 5 && (
-                    <Typography.Text type="secondary">
-                      …and {lastResult.failures.length - 5} more.
-                    </Typography.Text>
-                  )}
-                </Space>
-              }
-            />
-          ) : null}
-
-          {settings.last_sync_at && !lastResult && (
             <Typography.Text type="secondary">
-              Last sync: {new Date(settings.last_sync_at).toLocaleString()}.
+              Disabling this stops Slack avatar refreshes and removes only Slack-synced avatar URLs.
+              Manually/provider-set avatar URLs are preserved.
             </Typography.Text>
-          )}
-        </Space>
-      </Card>
+
+            <Flex gap={12} align="center" wrap="wrap">
+              <Select
+                style={{ minWidth: 320 }}
+                placeholder="Select Slack gateway"
+                value={gatewayId ?? undefined}
+                onChange={selectGateway}
+                options={slackGateways.map((channel) => ({
+                  value: channel.id,
+                  label: `${channel.name}${channel.enabled ? '' : ' (disabled)'}`,
+                }))}
+              />
+              <Button
+                type="primary"
+                disabled={!enabled || !gatewayId}
+                loading={syncing}
+                onClick={runSync}
+              >
+                Sync now
+              </Button>
+            </Flex>
+
+            {lastResult && (
+              <Typography.Text type={lastResult.failed ? 'warning' : 'secondary'}>
+                Last sync: {lastResult.updated} updated, {lastResult.skipped} skipped,{' '}
+                {lastResult.failed} failed at {new Date(lastResult.finished_at).toLocaleString()}.
+              </Typography.Text>
+            )}
+
+            {lastResult?.failures?.length ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="Avatar sync failures"
+                description={
+                  <Space direction="vertical" size={4}>
+                    {lastResult.failures.slice(0, 5).map((failure) => (
+                      <Typography.Text
+                        key={`${failure.user_id}-${failure.reason}`}
+                        type="secondary"
+                      >
+                        {failure.email || failure.user_id}: {failure.reason}
+                      </Typography.Text>
+                    ))}
+                    {lastResult.failures.length > 5 && (
+                      <Typography.Text type="secondary">
+                        …and {lastResult.failures.length - 5} more.
+                      </Typography.Text>
+                    )}
+                  </Space>
+                }
+              />
+            ) : null}
+
+            {settings.last_sync_at && !lastResult && (
+              <Typography.Text type="secondary">
+                Last sync: {new Date(settings.last_sync_at).toLocaleString()}.
+              </Typography.Text>
+            )}
+          </Space>
+        </Card>
+      )}
     </Space>
   );
 };

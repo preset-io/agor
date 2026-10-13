@@ -353,6 +353,26 @@ describe('GatewayChannelsTable Discord create wizard', () => {
     );
     expect(channelPatch.mock.calls[1]).toEqual(['channel-discord', { enabled: true }]);
   }, 30_000);
+  it('blocks a second draft create after a lost reply until the form changes', async () => {
+    const { client, channelCreate } = makeClient();
+    channelCreate.mockRejectedValue(new Error('socket has been disconnected'));
+    renderTable(client);
+    await fillDiscordWizard({ allowedUserId: USER_ID });
+    clickButton(/Create secure draft/);
+    expect(
+      await screen.findByText(
+        'The connection to Agor dropped before this was confirmed. Refresh to see if it went through before you try to create the channel again.',
+        undefined,
+        ASYNC
+      )
+    ).toBeInTheDocument();
+    expect(getButton(/Create secure draft/)).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+      target: { value: 'My Discord 2' },
+    });
+    expect(getButton(/Create secure draft/)).toBeEnabled();
+    expect(channelCreate).toHaveBeenCalledTimes(1);
+  }, 30_000);
 });
 
 describe('GatewayChannelsTable Discord edit', () => {
@@ -412,5 +432,25 @@ describe('GatewayChannelsTable Discord edit', () => {
     const { checked, updates } = await saveEdit(legacy);
     expect(checked).toBe(false);
     expect(updates.config.agent_tools).toEqual({ channel_history: false });
+  }, 30_000);
+  it('keeps the edit open and names a non-numeric Discord ID', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const invalid = {
+      ...storedChannel,
+      config: { ...storedChannel.config, application_id: 'my-app' },
+    } as unknown as GatewayChannel;
+    renderTable(makeClient().client, { channels: [invalid], onUpdate });
+    fireEvent.click(screen.getByTitle('Edit'));
+    await screen.findByLabelText(/Let session agents read channel history/);
+    clickButton(/^Save$/);
+    expect(
+      await screen.findByText(
+        "Couldn't save the channel. Use the numeric Discord ID for Application ID.",
+        undefined,
+        ASYNC
+      )
+    ).toBeVisible();
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /^Save$/ })).toBeVisible();
   }, 30_000);
 });

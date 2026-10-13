@@ -219,7 +219,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
       type="info"
       showIcon
       icon={<LockOutlined />}
-      message="You don't have permission to edit this board's appearance."
+      message="You need edit access to change how this board looks."
     />
   );
 

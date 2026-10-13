@@ -491,6 +491,27 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
   });
 
+  it('shows a failed key save without the raw error, which can echo the key', async () => {
+    const validKey = `sk-ant-api03-${'x'.repeat(40)}`;
+    const onUpdateUser = vi.fn(async () => {
+      throw new Error(`Invalid value ${validKey}`);
+    });
+    const onCheckAuth = vi.fn(async () => ({
+      status: 'unknown' as const,
+      authenticated: false,
+      method: 'none' as const,
+    }));
+    renderWizard({ initialStep: 'llm', onUpdateUser, onCheckAuth });
+
+    clickButton('Claude');
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), { target: { value: validKey } });
+    clickButton(/^connect →/i);
+
+    expect(await screen.findByText("Couldn't save the API key.")).toBeInTheDocument();
+    expect(screen.queryByText('Details')).toBeNull();
+    expect(screen.queryByText(new RegExp(validKey))).toBeNull();
+  });
+
   it('blocks with the provider hint on a definitive unauthenticated result', async () => {
     const onUpdateUser = vi.fn(async () => undefined);
     const onCheckAuth = vi.fn(async () => ({

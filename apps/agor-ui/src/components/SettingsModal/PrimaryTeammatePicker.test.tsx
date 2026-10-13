@@ -282,3 +282,18 @@ it('never offers to clear the primary assistant, in Settings or the compact Ask 
     view.unmount();
   }
 });
+
+describe('PrimaryTeammatePicker failures', () => {
+  it('shows a persistent themed error when picking fails', async () => {
+    seedStore([teammate('branch-1', 'Ada'), teammate('branch-2', 'Grace')]);
+    const { client, setPrimaryTeammate } = createClient(null);
+    setPrimaryTeammate.mockRejectedValueOnce(new Error('boom'));
+    renderPicker(client);
+    await screen.findByText(/No primary assistant set/);
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByText('Grace'));
+    expect(
+      await screen.findByText("Couldn't change your primary assistant. (boom)")
+    ).toBeInTheDocument();
+  });
+});

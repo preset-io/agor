@@ -4,10 +4,15 @@ import { Button, Checkbox, Input, Modal, Space, Typography, Upload } from 'antd'
 import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  unconfirmedMessage,
+} from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
 import { openUploadBlob } from '../../utils/uploadBlob';
-import type { UploadedFile } from './upload';
-import { uploadFilesToSession } from './upload';
+import { ActionErrorNotice, CompactNotice } from '../CompactNotice';
+import { UploadConnectionError, uploadFilesToSession } from './upload';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -22,7 +27,6 @@ export interface FileUploadProps {
   daemonUrl: string;
   open: boolean;
   onClose: () => void;
-  onUploadComplete?: (files: UploadedFile[]) => void;
   onInsertMention?: (filepath: string) => void;
   initialFiles?: File[]; // Allow passing dropped files
 }
@@ -32,15 +36,18 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   daemonUrl,
   open,
   onClose,
-  onUploadComplete,
   onInsertMention,
   initialFiles,
 }) => {
-  const { showSuccess, showWarning, showError } = useThemedMessage();
+  const { showSuccess } = useThemedMessage();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [notifyAgent, setNotifyAgent] = useState(true);
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_UPLOAD_MESSAGE);
   const [uploading, setUploading] = useState(false);
+  const [noFiles, setNoFiles] = useState(false);
+  const [uploadError, setUploadError] = useState<ActionErrorCopy | null>(null);
+  // After an unconfirmed upload, another click could upload and notify the agent twice.
+  const [unconfirmed, setUnconfirmed] = useState(false);
 
   // Mirror fileList in a ref so cleanup (unmount/reset) can revoke object URLs
   // without re-running effects on every keystroke.
@@ -72,7 +79,16 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   const resetFileList = useCallback(() => {
     fileListRef.current.forEach(revokeThumb);
     setFileList([]);
+    setNoFiles(false);
+    setUploadError(null);
+    setUnconfirmed(false);
   }, [revokeThumb]);
+
+  useEffect(() => {
+    if (!open) return;
+    setUploadError(null);
+    setUnconfirmed(false);
+  }, [open]);
 
   // Revoke any outstanding object URLs when the modal unmounts.
   useEffect(() => () => fileListRef.current.forEach(revokeThumb), [revokeThumb]);
@@ -82,16 +98,18 @@ export const FileUpload: React.FC<FileUploadProps> = ({
     if (initialFiles && initialFiles.length > 0 && open) {
       fileListRef.current.forEach(revokeThumb);
       setFileList(initialFiles.map(buildUploadFile)); // Replace to prevent duplicate accumulation
+      setUnconfirmed(false);
     }
   }, [initialFiles, open, buildUploadFile, revokeThumb]);
 
   const handleUpload = async () => {
     if (fileList.length === 0) {
-      showWarning('Please select at least one file');
+      setNoFiles(true);
       return;
     }
 
     setUploading(true);
+    setUploadError(null);
 
     try {
       const files = fileList.flatMap((file) => {
@@ -110,14 +128,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
       // Show success message with final filename(s) so user knows what to reference
       if (result.files.length === 1) {
-        showSuccess(`Uploaded as: ${result.files[0].filename}`);
+        showSuccess(`Uploaded as ${result.files[0].filename}.`);
       } else {
-        showSuccess(`Uploaded ${result.files.length} files successfully`);
-      }
-
-      // Call completion callback
-      if (onUploadComplete) {
-        onUploadComplete(result.files);
+        showSuccess(`Uploaded ${result.files.length} files.`);
       }
 
       // If not notifying agent, optionally insert @filepath mention
@@ -133,8 +146,15 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       setAgentMessage(DEFAULT_AGENT_UPLOAD_MESSAGE);
       onClose();
     } catch (error) {
-      console.error('Upload error:', error);
-      showError(error instanceof Error ? error.message : 'Failed to upload files');
+      if (error instanceof UploadConnectionError) {
+        setUnconfirmed(true);
+        setUploadError({
+          message: unconfirmedMessage('upload the files', { idempotent: false }),
+          raw: error.message,
+        });
+      } else {
+        setUploadError(describeActionError('upload the files', error, { idempotent: false }));
+      }
     } finally {
       setUploading(false);
     }
@@ -154,6 +174,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       onCancel={handleCancel}
       onOk={handleUpload}
       confirmLoading={uploading}
+      okButtonProps={{ disabled: unconfirmed }}
       okText="Upload"
       cancelText="Cancel"
       width={600}
@@ -170,16 +191,22 @@ export const FileUpload: React.FC<FileUploadProps> = ({
             if (file.originFileObj) openUploadBlob(file.originFileObj, file.name, false);
           }}
           beforeUpload={(file) => {
+            setNoFiles(false);
+            setUnconfirmed(false);
             setFileList((prev) => [...prev, buildUploadFile(file)]);
             return false; // Prevent auto upload
           }}
           onRemove={(file) => {
             revokeThumb(file);
+            setUnconfirmed(false);
             setFileList((prev) => prev.filter((f) => f.uid !== file.uid));
           }}
         >
           <Button icon={<UploadOutlined />}>Select Files</Button>
         </Upload>
+
+        {noFiles && <CompactNotice type="warning" message="Select at least one file." />}
+        {uploadError && <ActionErrorNotice error={uploadError} />}
 
         <Text type="secondary" style={{ fontSize: '12px' }}>
           Files are held in temporary session-scoped staging. When notified, the agent receives an

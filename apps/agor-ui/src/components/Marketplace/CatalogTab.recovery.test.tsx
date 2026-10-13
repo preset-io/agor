@@ -392,8 +392,12 @@ describe('explicit onboarding context', () => {
       dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
     );
     fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
-    await dialog.findByText('Could not connect this server. Check your credentials and try again.');
+    await dialog.findByText("Couldn't connect this server.");
+    expect(dialog.queryByRole('button', { name: 'Details' })).not.toBeInTheDocument();
     expect(screen.queryByText(/secret-test-value/)).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(dialog.getByRole('button', { name: 'Connect' })).not.toHaveClass('ant-btn-loading')
+    );
     fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
     await dialog.findByText('Connected and ready');
     expect(api.connect).toHaveBeenCalledTimes(2);

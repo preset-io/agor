@@ -306,7 +306,7 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
     connectionState.connecting = true;
     rerender(<SessionMcpFooterControl {...props} />);
     await waitFor(() =>
-      expect(within(editDialog).getByText(/Reconnect to the Agor daemon/)).toBeVisible()
+      expect(within(editDialog).getByText(/Reconnect to Agor before/)).toBeVisible()
     );
     const save = within(editDialog).getByRole('button', { name: 'Save' });
     expect(save).toBeDisabled();

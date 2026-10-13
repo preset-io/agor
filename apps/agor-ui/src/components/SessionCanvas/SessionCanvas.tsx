@@ -134,6 +134,14 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  formatActionError,
+  isInFlightConnectionLossError,
+  notConnectedMessage,
+  sessionStartedMessageNotSent,
+} from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
 import { REACT_FLOW_DRAG_HANDLE_SELECTOR } from '../../utils/reactFlowDragClasses';
 import { buildScopedBoardCss } from '../../utils/sanitizeCss';
@@ -143,6 +151,7 @@ import BranchCard from '../BranchCard';
 import CardModal from '../CardModal';
 import type { CardNodeData } from '../CardNode';
 import CardNode from '../CardNode';
+import { ActionErrorNotice } from '../CompactNotice';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
 import { BoardPartitionStatus } from './BoardPartitionStatus';
@@ -540,6 +549,7 @@ interface BranchZoneTriggerModalProps {
     zoneId: string;
     trigger: ZoneTrigger;
     sessions: readonly Session[];
+    runError?: ActionErrorCopy;
   };
   client: AgorClient | null;
   branch: Branch | undefined;
@@ -583,6 +593,7 @@ const BranchZoneTriggerModal = React.memo(
         availableAgents={availableAgents}
         mcpServerById={mcpServerById}
         currentUser={currentUser}
+        runError={modal.runError}
         onExecute={onExecute}
       />
     );
@@ -782,7 +793,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
        */
       stale?: boolean;
       /** The last save was rejected (e.g. permission): the draft stays open. */
-      saveError?: string;
+      saveError?: ActionErrorCopy;
+      /** A new note whose create lost its reply: `objectId` is its client id. */
+      createUnconfirmed?: boolean;
     } | null>(null);
     const [markdownContent, setMarkdownContent] = useState('');
     const [markdownWidth, setMarkdownWidth] = useState(500); // Default width
@@ -815,11 +828,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       sessions: readonly Session[];
       /** The drop's write ticket: a board reload while the picker is open drops it. */
       ticket: BoardWriteTicket;
+      /** The last run failed before any session started: the picker stays open to retry. */
+      runError?: ActionErrorCopy;
     } | null>(null);
     const handleCancelBranchTrigger = useCallback(() => setBranchTriggerModal(null), []);
     // The picker action being run: a second Execute (a double click) before
     // the first finishes runs nothing. Set synchronously, before any await.
-    const runningBranchTriggerRef = useRef<typeof branchTriggerModal>(null);
+    const runningBranchTriggerRef = useRef<number | null>(null);
     const handleExecuteBranchTrigger = useStableCallback(
       async ({
         sessionId,
@@ -832,21 +847,34 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         mcpServerIds,
       }: Parameters<React.ComponentProps<typeof ZoneTriggerModal>['onExecute']>[0]) => {
         const triggerModal = branchTriggerModal;
-        if (!client || !triggerModal) {
-          console.error('❌ Cannot execute trigger: client or trigger action not available');
-          setBranchTriggerModal(null);
+        if (!triggerModal) return;
+        const keepOpenWith = (runError: ActionErrorCopy | undefined) =>
+          setBranchTriggerModal((current) =>
+            current?.actionId === triggerModal.actionId && current.runError !== runError
+              ? { ...current, runError }
+              : current
+          );
+        if (!client) {
+          // Nothing was sent; the modal stays open to run again.
+          keepOpenWith({ message: notConnectedMessage("run the zone's trigger"), raw: null });
           return;
         }
-        if (runningBranchTriggerRef.current === triggerModal) return;
-        runningBranchTriggerRef.current = triggerModal;
+        if (runningBranchTriggerRef.current === triggerModal.actionId) return;
+        runningBranchTriggerRef.current = triggerModal.actionId;
+        keepOpenWith(undefined);
 
         // Rechecked before every dispatch, including after each await.
         const stale = () => {
           if (boardGuard.isCurrent(triggerModal.ticket)) return false;
-          boardGuard.warnDropped('This board reloaded; the zone trigger was not run.');
+          boardGuard.warnDropped("Couldn't run the zone's trigger, because the board reloaded.");
           return true;
         };
 
+        // The step in flight when a request fails, and the session it already started.
+        let step: 'start the session' | 'fork the session' | 'start the subsession' | 'prompt' =
+          'start the session';
+        let startedSessionId: string | undefined;
+        let close = true;
         try {
           let targetSessionId = sessionId;
 
@@ -863,6 +891,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               mcpServerIds,
             });
             targetSessionId = newSession.session_id;
+            startedSessionId = newSession.session_id;
             const warning = getSessionCreationWarning(newSession);
             if (warning) showWarning(warning, { duration: 10 });
           }
@@ -873,6 +902,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           switch (action) {
             case 'prompt': {
               if (stale()) return;
+              step = 'prompt';
               await client.sessions.prompt(targetSessionId, renderedTemplate, {
                 permissionMode,
               });
@@ -881,9 +911,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             }
             case 'fork': {
               if (stale()) return;
+              step = 'fork the session';
               const forkedSession = (await client
                 .service(`sessions/${targetSessionId}/fork`)
                 .create({ prompt: renderedTemplate })) as Session;
+              startedSessionId = forkedSession.session_id;
+              step = 'prompt';
               if (stale()) return;
               await client.sessions.prompt(forkedSession.session_id, renderedTemplate, {
                 permissionMode,
@@ -893,9 +926,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             }
             case 'spawn': {
               if (stale()) return;
+              step = 'start the subsession';
               const spawnedSession = (await client
                 .service(`sessions/${targetSessionId}/spawn`)
                 .create({ prompt: renderedTemplate })) as Session;
+              startedSessionId = spawnedSession.session_id;
+              step = 'prompt';
               if (stale()) return;
               await client.sessions.prompt(spawnedSession.session_id, renderedTemplate, {
                 permissionMode,
@@ -908,15 +944,23 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           // Use the same URL/recenter/flag-cleanup path as a session-card click.
           if (resultSessionId) onSessionClick?.(resultSessionId);
         } catch (error) {
-          console.error('❌ Failed to execute zone trigger:', error);
-          showError(
-            `Failed to ${action} session: ${error instanceof Error ? error.message : String(error)}`
-          );
+          if (startedSessionId) {
+            // Running again would start a second session: open this one instead.
+            showError(sessionStartedMessageNotSent(error));
+            onSessionClick?.(startedSessionId);
+          } else {
+            close = false;
+            keepOpenWith(
+              describeActionError(step === 'prompt' ? 'send your message' : step, error, {
+                idempotent: false,
+              })
+            );
+          }
         } finally {
-          if (runningBranchTriggerRef.current === triggerModal) {
+          if (runningBranchTriggerRef.current === triggerModal.actionId) {
             runningBranchTriggerRef.current = null;
           }
-          setBranchTriggerModal(null);
+          if (close) setBranchTriggerModal(null);
         }
       }
     );
@@ -1035,6 +1079,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     }, [placementWrites, board?.board_id]);
     // Track objects we've deleted locally (to prevent them from reappearing during WebSocket updates)
     const deletedObjectsRef = useRef<Set<string>>(new Set());
+
+    // A failed board write redraws the canvas from the store (after the drag, if one is in progress).
+    const [boardResyncNonce, setBoardResyncNonce] = useState(0);
+    const boardResyncPendingRef = useRef(false);
+    const resyncBoardNodes = useCallback(() => {
+      boardResyncPendingRef.current = true;
+      setBoardResyncNonce((nonce) => nonce + 1);
+    }, []);
 
     // Initialize nodes and edges state BEFORE using them
     const [nodes, setNodesUnsafe, onNodesChangeInternal] = useNodesState([]);
@@ -1210,6 +1262,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onZoneDraftLost: handleZoneDraftLost,
       // Every board-object/zone/text/markdown write goes through this guard.
       guard: boardGuard,
+      onWriteFailed: resyncBoardNodes,
     });
 
     const arrangeBoardUnavailable = !mutationGate.canMutate || !canArrangeWholeBoard;
@@ -2206,8 +2259,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // the full parent set on the first paint — splitting the merge let
     // pinned branches lose their parentId and render relative-to-zone
     // positions as absolute (the "pile near origin" on board load).
+    // biome-ignore lint/correctness/useExhaustiveDependencies: boardResyncNonce forces a redraw after a failed write
     useEffect(() => {
       if (isDraggingRef.current) return;
+      boardResyncPendingRef.current = false;
 
       const boardObjectNodes = getBoardObjectNodes();
 
@@ -2271,6 +2326,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       applyZOrder,
       applyLocalPositions,
       partitionNodesByType,
+      boardResyncNonce,
     ]);
 
     // Sync COMMENT nodes separately
@@ -2573,6 +2629,20 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
                 if (!client) return;
                 let dropped = false;
+                // An unsaved resize must not survive the redraw: drop its local
+                // geometry unless a newer resize of the same zone replaced it.
+                const discardUnsavedZoneGeometry = (nodeId: string, rect: ZoneGeometry) => {
+                  const local = localZoneGeometryRef.current[nodeId];
+                  if (
+                    local &&
+                    local.x === rect.x &&
+                    local.y === rect.y &&
+                    local.width === rect.width &&
+                    local.height === rect.height
+                  ) {
+                    delete localZoneGeometryRef.current[nodeId];
+                  }
+                };
 
                 // Persist all resize changes
                 for (const [nodeId, { ticket, ...rect }] of Object.entries(updates)) {
@@ -2582,6 +2652,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   // full-object upsert could restore a zone deleted meanwhile.
                   if (!boardGuard.isCurrent(ticket)) {
                     dropped = true;
+                    discardUnsavedZoneGeometry(nodeId, rect);
                     continue;
                   }
                   // The latest record, never this closure's.
@@ -2606,7 +2677,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                         objectData: updatedObject,
                       } as unknown as Partial<Board>);
                     } catch (error) {
-                      console.error('Failed to persist zone resize:', error);
+                      showError(
+                        formatActionError('save the zone size', error, { idempotent: true })
+                      );
+                      discardUnsavedZoneGeometry(nodeId, rect);
+                      resyncBoardNodes();
                     }
                     continue;
                   }
@@ -2624,12 +2699,18 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                         size: { width: rect.width, height: rect.height },
                       });
                     } catch (error) {
-                      console.error('Failed to persist board entity dimensions:', error);
+                      showError(
+                        formatActionError('save the card size', error, { idempotent: true })
+                      );
+                      resyncBoardNodes();
                     }
                   }
                 }
                 if (dropped) {
-                  boardGuard.warnDropped('This board reloaded; your last resize was not saved.');
+                  boardGuard.warnDropped(
+                    "Couldn't save the zone size, because the board reloaded."
+                  );
+                  resyncBoardNodes();
                 }
               }, 500);
             }
@@ -2651,6 +2732,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         onNodesChangeInternal,
         preserveAutoZoneFrameOnce,
         setNodes,
+        showError,
+        resyncBoardNodes,
       ]
     );
 
@@ -2857,6 +2940,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         activeDragNodeIdsRef.current.clear();
 
         isDraggingRef.current = false;
+        // A failed write during the drag skipped its redraw.
+        if (boardResyncPendingRef.current) setBoardResyncNonce((nonce) => nonce + 1);
         setIsDraggingCanvas(false);
         setAlignmentGuides([]);
 
@@ -3157,7 +3242,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                           const warning = getSessionCreationWarning(session);
                           if (warning) showWarning(warning, { duration: 10 });
                         } catch (error) {
-                          console.error('❌ Failed to execute always_new trigger:', error);
+                          showError(
+                            formatActionError("run the zone's trigger", error, {
+                              idempotent: false,
+                            })
+                          );
                         }
                       })();
                     } else {
@@ -3276,12 +3365,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               );
             }
           } catch (error) {
-            console.error('Failed to persist layout:', error);
+            showError(formatActionError('save the move', error, { idempotent: true }));
           } finally {
             releaseWrite();
           }
           if (dropped) {
-            boardGuard.warnDropped('This board reloaded; your last move was not saved.');
+            boardGuard.warnDropped("Couldn't save the move, because the board reloaded.");
           }
         }, 500);
       },
@@ -3295,6 +3384,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         showWarning,
         boardGuard,
         commentGuard,
+        showError,
       ]
     );
 
@@ -3999,8 +4089,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 objectData,
               } as unknown as Partial<Board>)
               .catch((error: unknown) => {
-                console.error('Failed to add zone:', error);
-                setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
+                showError(formatActionError('add the zone', error, { idempotent: false }));
+                // A lost reply may still have created it: the redraw shows what the store has.
+                resyncBoardNodes();
               });
           }
         }
@@ -4082,7 +4173,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }
       // Placed before a board reload: its anchor geometry may be gone.
       if (!commentGuard.isCurrent(commentPlacement.ticket)) {
-        commentGuard.warnDropped('This board reloaded; place your comment again.');
+        commentGuard.warnDropped(
+          "Couldn't post the comment, because the board reloaded. Place it again."
+        );
         setCommentPlacement(null);
         return;
       }
@@ -4140,7 +4233,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         setCommentInput('');
         setActiveTool('select');
       } catch (error) {
-        console.error('Failed to create spatial comment:', error);
+        // The draft stays in the composer.
+        showError(formatActionError('post the comment', error, { idempotent: false }));
       }
     }, [
       commentPlacement,
@@ -4150,6 +4244,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       commentInput,
       canMutateComments,
       commentGuard,
+      showError,
     ]);
 
     const closeMarkdownModal = useCallback(() => {
@@ -4182,7 +4277,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }
 
       const objectId = markdownModal.objectId || `markdown-${Date.now()}`;
-      const saved = markdownModal.objectId ? board.objects?.[objectId] : undefined;
       const position = markdownModal.position;
       const objectData: BoardObject = {
         type: 'markdown',
@@ -4224,22 +4318,26 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           objectData,
         } as unknown as Partial<Board>);
       } catch (error) {
-        console.error('Failed to save markdown note:', error);
-        // Rollback optimistic update: the note shows what is saved.
-        if (!markdownModal.objectId) {
-          setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
-        } else if (saved?.type === 'markdown') {
-          setNodes((nodes) =>
-            nodes.map((n) =>
-              n.id === objectId
-                ? { ...n, data: { ...n.data, content: saved.content, width: saved.width } }
-                : n
-            )
+        // The save is an upsert by this client id, so repeating it is safe.
+        const saveError = describeActionError('save the note', error, { idempotent: true });
+        // The note shows what the store has, or goes if it has nothing.
+        resyncBoardNodes();
+        if (isInFlightConnectionLossError(error)) {
+          // It may have saved: keep its id so saving again updates it rather than adding a second note.
+          setMarkdownModal((current) =>
+            current
+              ? {
+                  ...current,
+                  objectId,
+                  createUnconfirmed: current.createUnconfirmed || !current.objectId,
+                  saveError,
+                }
+              : current
           );
+          return;
         }
         // Keep the editor open with the draft; only a successful save closes it.
-        const reason = error instanceof Error && error.message ? error.message : String(error);
-        setMarkdownModal((current) => (current ? { ...current, saveError: reason } : current));
+        setMarkdownModal((current) => (current ? { ...current, saveError } : current));
         return;
       }
 
@@ -4255,6 +4353,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       canMutateBoard,
       boardGuard,
       closeMarkdownModal,
+      resyncBoardNodes,
     ]);
 
     // Node click handler for eraser mode and comment placement
@@ -5025,13 +5124,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             width={1000}
           >
             {markdownModal.saveError && !markdownModal.stale && (
-              <Alert
-                type="error"
-                showIcon
-                title="Note not saved."
-                description={markdownModal.saveError}
-                style={{ marginBottom: 16 }}
-              />
+              <ActionErrorNotice error={markdownModal.saveError} style={{ marginBottom: 16 }} />
             )}
             {markdownModal.stale && (
               <Alert
@@ -5039,11 +5132,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 showIcon
                 title={STALE_DRAFT_TITLE}
                 description={
-                  markdownModal.objectId && !board?.objects?.[markdownModal.objectId]
-                    ? 'This note no longer exists on the reloaded board, so your draft was not saved. Copy your draft to keep it.'
-                    : markdownModal.objectId
-                      ? 'This board reloaded while the note was open, so your draft was not saved over it. Copy your draft to keep it, then reopen the note to edit the reloaded one.'
-                      : 'This board reloaded while the note was open, so it was not created. Copy your draft to keep it, then add the note again.'
+                  !markdownModal.objectId ||
+                  (markdownModal.createUnconfirmed && !board?.objects?.[markdownModal.objectId])
+                    ? 'This board reloaded while the note was open, so it was not created. Copy your draft to keep it, then add the note again.'
+                    : !board?.objects?.[markdownModal.objectId]
+                      ? 'This note no longer exists on the reloaded board, so your draft was not saved. Copy your draft to keep it.'
+                      : 'This board reloaded while the note was open, so your draft was not saved over it. Copy your draft to keep it, then reopen the note to edit the reloaded one.'
                 }
                 action={
                   <Space orientation="vertical" size="small">

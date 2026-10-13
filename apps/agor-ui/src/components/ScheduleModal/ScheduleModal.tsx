@@ -56,9 +56,15 @@ import {
   Switch,
   Typography,
 } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Cron } from 'react-js-cron';
 import 'react-js-cron/dist/styles.css';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  isInFlightConnectionLossError,
+  notConnectedMessage,
+} from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
 import {
   type AgenticFormValues,
@@ -71,6 +77,7 @@ import {
   INLINE_AGENTIC_CONFIGURATION,
 } from '../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
+import { ActionErrorNotice } from '../CompactNotice';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -123,6 +130,7 @@ export interface ScheduleModalProps {
 }
 
 const DEFAULT_CRON = '0 * * * *';
+const TIMEZONE_REQUIRED = 'Choose a timezone.';
 
 // ScheduleModal carries schedule-specific fields (cron/tz/retention/etc.)
 // plus the shared `AgenticFormValues` shape that AgenticToolConfigForm and
@@ -156,7 +164,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   onSaved,
 }) => {
   const isEditing = Boolean(schedule?.schedule_id);
-  const { showError, showSuccess } = useThemedMessage();
+  const { showSuccess } = useThemedMessage();
   const [form] = Form.useForm<ScheduleFormValues>();
 
   // Agent picker is controlled via local state because it drives which
@@ -177,6 +185,10 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   );
   const [showCronPicker, setShowCronPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<ActionErrorCopy | null>(null);
+  // A create whose reply was lost may have landed; block a second click until the form changes.
+  const [createUnconfirmed, setCreateUnconfirmed] = useState(false);
+  const saveErrorRef = useRef<HTMLDivElement>(null);
   const executionOwnerResolved =
     !schedule?.created_by || executionOwner?.user_id === schedule.created_by;
 
@@ -194,6 +206,8 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     setAgentTool(tool);
     setRequiresSupportedToolSelection(Boolean(persistedTool && !activeTool));
     setShowCronPicker(false);
+    setSaveError(null);
+    setCreateUnconfirmed(false);
     form.resetFields();
     form.setFieldsValue({
       name: schedule?.name ?? '',
@@ -215,12 +229,18 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     });
   }, [open, schedule, form]);
 
+  // The banner sits at the end of a long form; bring it into view next to the footer.
+  useEffect(() => {
+    if (saveError) saveErrorRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [saveError]);
+
   // Reseed AgenticToolConfigForm fields ONLY when the user actually
   // changes the agent — not on mount/open. A useEffect keyed on
   // `agentTool` would clobber the just-loaded saved values on every
   // edit-open (the original ScheduleTab carried the same warning).
   const handleAgentToolChange = (next: AgenticToolName) => {
     if (next === agentTool && !requiresSupportedToolSelection) return;
+    setCreateUnconfirmed(false);
     setRequiresSupportedToolSelection(false);
     setAgentTool(next);
     const defaults = getFormValuesFromConfig(next);
@@ -249,22 +269,17 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   }, [cronValue]);
 
   const handleSave = async () => {
+    setSaveError(null);
     if (!client) {
-      showError('Not connected to daemon');
+      setSaveError({ message: notConnectedMessage('save the schedule'), raw: null });
       return;
     }
-    if (requiresSupportedToolSelection) {
-      showError('Choose a supported agentic tool before saving this historical schedule');
-      return;
-    }
+    // Save is disabled here; the warning above the form says why.
+    if (requiresSupportedToolSelection) return;
     let values: ScheduleFormValues;
     try {
       values = await form.validateFields();
     } catch {
-      return;
-    }
-    if (values.timezone_mode === 'local' && !values.timezone) {
-      showError("Timezone is required when mode is 'local'");
       return;
     }
     // `getFieldsValue(true)` includes fields rendered inside collapsed
@@ -273,7 +288,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
     const timezoneMode = all.timezone_mode ?? 'local';
     const timezone = all.timezone?.trim();
     if (timezoneMode === 'local' && !timezone) {
-      showError("Timezone is required when mode is 'local'");
+      form.setFields([{ name: 'timezone', errors: [TIMEZONE_REQUIRED] }]);
       return;
     }
     let timezoneConfig: { timezone_mode: 'local'; timezone: string } | { timezone_mode: 'utc' };
@@ -341,11 +356,12 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         saved = await client.service('schedules').create(payload);
       }
 
-      showSuccess(isEditing ? 'Schedule updated' : 'Schedule created');
+      showSuccess(isEditing ? 'Schedule updated.' : 'Schedule created.');
       onSaved?.(saved);
       onClose();
     } catch (e: unknown) {
-      showError(e instanceof Error ? e.message : 'Failed to save schedule');
+      setSaveError(describeActionError('save the schedule', e, { idempotent: isEditing }));
+      if (!isEditing) setCreateUnconfirmed(isInFlightConnectionLossError(e));
     } finally {
       setSaving(false);
     }
@@ -366,7 +382,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           key="save"
           type="primary"
           loading={saving}
-          disabled={requiresSupportedToolSelection}
+          disabled={requiresSupportedToolSelection || createUnconfirmed}
           onClick={handleSave}
         >
           {isEditing ? 'Save' : 'Create'}
@@ -377,12 +393,18 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         <Alert
           type="warning"
           showIcon
-          title="This schedule uses a removed agentic tool"
-          description="Its saved configuration is preserved, but it cannot run. Choose a supported tool to migrate the schedule explicitly."
+          title="This schedule uses an agent that's no longer available"
+          description="Its saved settings are kept, but it can't run. Choose an agent that's still available before you save this schedule."
           style={{ marginTop: 16 }}
         />
       )}
-      <Form form={form} layout="vertical" preserve={false} style={{ marginTop: 16 }}>
+      <Form
+        form={form}
+        layout="vertical"
+        preserve={false}
+        style={{ marginTop: 16 }}
+        onValuesChange={() => setCreateUnconfirmed(false)}
+      >
         <Form.Item name="enabled" label="Enabled" valuePropName="checked">
           <Switch />
         </Form.Item>
@@ -461,7 +483,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           <Form.Item
             name="timezone"
             label="Timezone"
-            rules={[{ required: true, message: 'Timezone is required in local mode' }]}
+            rules={[{ required: true, whitespace: true, message: TIMEZONE_REQUIRED }]}
           >
             <AutoComplete
               // AutoComplete lets the user pick from the curated list OR
@@ -477,7 +499,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           </Form.Item>
         )}
 
-        <Form.Item label="Agentic tool">
+        <Form.Item label="Agent">
           <AgentSelectionGrid
             agents={AVAILABLE_AGENTS}
             selectedAgentId={requiresSupportedToolSelection ? null : agentTool}
@@ -541,8 +563,13 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
             type="info"
             showIcon
             message="Catchup is disabled by default."
-            description="If the daemon is down when a fire is due, only the most recent missed run within the 2-minute grace window will fire. No backfill."
+            description="If Agor is offline when a run is due, only the most recent missed run within 2 minutes starts once it's back. Earlier missed runs are skipped."
           />
+        )}
+        {saveError && (
+          <div ref={saveErrorRef}>
+            <ActionErrorNotice error={saveError} style={{ marginTop: 16 }} />
+          </div>
         )}
       </Form>
     </Modal>

@@ -9,12 +9,17 @@ import type {
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { Badge, Button, Drawer, Grid, Modal, Space, Tabs, theme } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById, selectUserById } from '../../store/selectors';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  isInFlightConnectionLossError,
+} from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
-import { CompactNotice } from '../CompactNotice';
+import { ActionErrorNotice, CompactNotice } from '../CompactNotice';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab } from './tabs/GeneralTab';
@@ -23,7 +28,11 @@ import { PermissionsTab } from './tabs/PermissionsTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 import { SessionsTab } from './tabs/SessionsTab';
 import { TeammateTab } from './tabs/TeammateTab';
-import { type BranchUpdate, useBranchModalForm } from './useBranchModalForm';
+import {
+  type BranchModalSaveResult,
+  type BranchUpdate,
+  useBranchModalForm,
+} from './useBranchModalForm';
 
 export type BranchModalTab =
   | 'general'
@@ -86,7 +95,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const { token } = theme.useToken();
   const screens = Grid.useBreakpoint();
   const compact = !screens.md;
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess } = useThemedMessage();
+  const [saveError, setSaveError] = useState<ActionErrorCopy | null>(null);
   const [activeTab, setActiveTab] = useState<BranchModalTab>('general');
 
   const form = useBranchModalForm({
@@ -120,12 +130,14 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     }
   }, [activeTab, form.canViewPermissions]);
 
-  // Surface permission-package load failures once per error transition.
+  // A save settling after close or a branch switch must not show its banner on the next form.
+  const formSessionRef = useRef(0);
+  const branchId = branch?.branch_id;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: open and branchId start a new form session
   useEffect(() => {
-    if (form.permissionsLoadError) {
-      showError(`Failed to load branch permissions: ${form.permissionsLoadError.message}`);
-    }
-  }, [form.permissionsLoadError, showError]);
+    formSessionRef.current += 1;
+    setSaveError(null);
+  }, [open, branchId]);
 
   const isATeammate = branch ? isTeammate(branch) : false;
   const teammateConfig = useMemo(() => (branch ? getTeammateConfig(branch) : null), [branch]);
@@ -165,12 +177,17 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     : `Branch: ${branch.name}`;
 
   const handleSave = async () => {
+    setSaveError(null);
+    const session = formSessionRef.current;
     const result = await form.save();
+    const current = session === formSessionRef.current;
     if (result.ok) {
-      showSuccess(isATeammate ? 'Teammate updated' : 'Branch updated');
-      onClose();
-    } else {
-      showError(result.error.message || 'Failed to save changes');
+      showSuccess(isATeammate ? 'Teammate updated.' : 'Branch updated.');
+      if (current) onClose();
+    } else if (current) {
+      setSaveError(
+        describeSaveFailure(result, isATeammate ? 'save the teammate' : 'save the branch')
+      );
     }
   };
 
@@ -330,7 +347,14 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const footer = (
     <Space>
       {form.hasChanges && (
-        <Button onClick={form.reset} disabled={form.saving} aria-label="Reset changes">
+        <Button
+          onClick={() => {
+            setSaveError(null);
+            form.reset();
+          }}
+          disabled={form.saving}
+          aria-label="Reset changes"
+        >
           Reset
         </Button>
       )}
@@ -350,12 +374,24 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   );
 
   const contents = (
-    <Tabs
-      tabPosition="top"
-      activeKey={activeTab}
-      onChange={(key) => setActiveTab(key as BranchModalTab)}
-      items={tabItems}
-    />
+    <>
+      {form.permissionsLoadError && (
+        <ActionErrorNotice
+          error={describeActionError("load this branch's permissions", form.permissionsLoadError, {
+            idempotent: true,
+          })}
+          action={{ label: 'Try again', onClick: form.reloadPermissions }}
+          style={{ margin: '12px 16px 0' }}
+        />
+      )}
+      {saveError && <ActionErrorNotice error={saveError} style={{ margin: '12px 16px 0' }} />}
+      <Tabs
+        tabPosition="top"
+        activeKey={activeTab}
+        onChange={(key) => setActiveTab(key as BranchModalTab)}
+        items={tabItems}
+      />
+    </>
   );
 
   if (presentation === 'bottom-sheet' || compact) {
@@ -397,3 +433,18 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     </Modal>
   );
 };
+
+function describeSaveFailure(
+  result: Extract<BranchModalSaveResult, { ok: false }>,
+  action: string
+): ActionErrorCopy {
+  if (result.notReady) return { message: 'Still loading. Try again in a moment.', raw: null };
+  if (!result.permissionsSaved)
+    return describeActionError(action, result.error, { idempotent: true });
+  return {
+    message: isInFlightConnectionLossError(result.error)
+      ? 'Permissions saved, but the connection to Agor dropped before the other changes were confirmed.'
+      : "Permissions saved, but the other changes weren't.",
+    raw: result.error.message,
+  };
+}
