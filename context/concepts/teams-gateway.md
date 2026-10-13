@@ -86,19 +86,17 @@ from its expected predecessor.
 
 ## Identity
 
-- **Aligned** (`align_teams_users: true`, the wizard default): an explicit
-  `user_map` entry (AAD object ID → immutable Agor User ID) wins; otherwise the
-  sender's email from the Bot Connector member API (`email`, falling back to
-  `userPrincipalName`) is matched to an Agor account. Unmatched senders are
-  rejected with a "not linked" notice and never fall back to a fixed user.
-  Transient lookup failures retry the queued activity. Whether the member API
-  returns email for guests is unconfirmed.
-- **Fixed:** `agor_user_id`; every sender runs as that user. `user_map` is
-  rejected in this mode, and the UI warns that everyone in the tenant shares
-  that user's access.
+Modes, the user map, and the "not linked" reply are in the [guide][teams-guide].
+Contracts:
 
-Both lookups run inside the channel's tenant. Credential-minting paths treat a
-Teams Session as aligned only when `align_teams_users` is true.
+- Aligned: a `user_map` entry (AAD object ID → immutable Agor User ID) wins;
+  otherwise the Bot Connector member API email (`email`, then
+  `userPrincipalName`) is matched, using the Bot Framework scope of the
+  activity's service URL. An unmatched sender never falls back to a fixed user;
+  a transient lookup failure retries the queued activity.
+- Fixed (`agor_user_id`): `user_map` is rejected.
+- Both lookups run inside the channel's tenant. Credential-minting paths treat a
+  Teams Session as aligned only when `align_teams_users` is true.
 
 ## Enablement
 
@@ -188,17 +186,15 @@ have no catch-up.
 
 ## Agent history tools
 
-`agor_gateway_teams_thread_history_get` and `agor_gateway_teams_channel_posts_list`
-are a separate opt-in (`agent_tools: { channel_history: true }`); absent, `[]` or
-`false` refuse before any Teams call, and unknown keys or non-booleans fail
-validation.
+What the two tools read and how to enable them is in the [guide][teams-guide].
+Contracts:
 
-- Targets are standard channels this gateway channel has a fenced, unrevoked
-  address for (proof a verified activity arrived there), within the team and
-  channel allowlists. Private and shared channels, personal chats, and group
-  chats are refused; Teams sends the channel type on some activities only, so
-  any stored thread marked private or shared refuses its whole channel. Another
-  tenant's `gatewayChannelId` looks missing.
+- `agent_tools.channel_history` absent, `[]` or `false` refuses before any Teams
+  call; unknown keys or non-booleans fail validation.
+- A target needs a fenced, unrevoked address (proof a verified activity arrived)
+  and passes the team and channel allowlists. Teams sends the channel type on
+  some activities only, so any stored thread marked private or shared refuses
+  its whole channel. Another tenant's `gatewayChannelId` looks missing.
 - Session callers must be on the row's target branch; callers without session
   context need admin or `all` branch permission.
 - The service URL comes only from the fenced address; Graph is the only other
@@ -206,11 +202,10 @@ validation.
   request URL is rebuilt from validated IDs. A `nextLink` off the Graph origin
   fails the read.
 - One Graph page per call under one 20 s deadline; `Retry-After` is waited out
-  only while short. A Graph 403 is reported as `rsc_not_granted` and, unlike
-  catch-up's, is not cached team-wide (it may be specific to one channel).
-- The tools never advance a cursor, admit a Task, or store Teams content.
-  Output is labeled untrusted and carries attachment names, never URLs or
-  tokens.
+  only while short. A Graph 403 is `rsc_not_granted` and, unlike catch-up's, is
+  not cached team-wide (it may be specific to one channel).
+- The tools never advance a cursor, admit a Task, or store Teams content. Output
+  is labeled untrusted and carries attachment names, never URLs or tokens.
 
 The address row keeps the team ID, the team's M365 group ID, and the channel
 type in plaintext: non-secret routing facts Teams sends on some activities. The
@@ -218,31 +213,29 @@ address itself stays encrypted.
 
 ## Proactive sends
 
-`outbound_enabled` (default false; the migration sets it false on every Teams
-row) opts in to `agor_gateway_emit_message` with a `channel:<19:…@thread.tacv2>`
-target. The send is synchronous and not durable, as on Slack and Discord.
+Enabling `outbound_enabled`, targets, and the reply rule are in the
+[guide][teams-guide]. The migration sets `outbound_enabled` false on every Teams
+row. The send is synchronous and not durable, as on Slack and Discord.
 
 - The service URL, tenant, and team come only from a fenced, unrevoked
   standard-channel address: the target channel's own, or another channel's in a
   team whose Bot Connector channel listing includes the target. There is never a
   configured or agent-supplied service URL. Allowlists apply to both the channel
-  and its team.
+  and its team. Channel listings run after the tenant database unit closes.
 - The first chunk creates the post with `POST v3/conversations` (read directly:
-  the SDK adapter drops `activityId`); at most three chunks. A provider-proven
-  non-acceptance with a short `Retry-After` is retried once. An unknown outcome
-  stores no seed and is reported as possibly posted. A failure after the first
-  chunk keeps the seed and reports a partial post. A refused post never revokes
-  the addresses replies use. Channel listings run after the tenant database
-  unit closes, never inside its transaction.
+  the SDK adapter drops `activityId`); at most three chunks, and the reply hint
+  closes the first. A provider-proven non-acceptance with a short `Retry-After`
+  is retried once.
+- An unknown outcome stores no seed and is reported as possibly posted. A
+  failure after the first chunk keeps the seed and reports a partial post. A
+  seed that cannot be recorded after the post is live is reported as posted,
+  never as a failure that invites a resend. A refused post never revokes the
+  addresses replies use.
 - The seed's `platform_thread_id` is exactly `channel|root`, the key
   normalization gives every activity in that reply chain, so admission needs no
-  alias. Only channel conversations reach the seed gate.
-- A reply must still @mention the bot (the post says so); the mention rule is
-  unchanged. The reply that opens a seeded session skips catch-up and moves the
-  cursor to itself; later mentions read catch-up as usual. Answers go through
-  the outbox like any other mapping. The reply hint closes the first chunk, and
-  a seed that cannot be recorded after the post is live is reported as posted,
-  never as a failure that invites a resend.
+  alias. Only channel conversations reach the seed gate. The reply that opens a
+  seeded session skips catch-up and moves the cursor to itself; later mentions
+  read catch-up as usual. Answers go through the outbox.
 
 ## Migration
 
@@ -256,3 +249,5 @@ plain, as for Discord, while channel foreign keys stay tenant-composite.
 Teams SDK 2.x or a global `serviceUrl`; multi-tenant bot registrations; Graph
 transcript mirrors; SharePoint file reads or sending files back; replay or repair APIs for ambiguous
 deliveries; Tasks for messages that did not mention the bot.
+
+[teams-guide]: ../../apps/agor-docs/content/guide/message-gateway.mdx#setting-up-microsoft-teams-integration
