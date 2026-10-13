@@ -226,7 +226,7 @@ export async function fetchTeamsMemberIdentity(
     ((config: TeamsGatewayConfig) =>
       new MsalTokenProvider().getAccessToken(
         createTeamsAuthConfiguration(config),
-        TEAMS_BOT_FRAMEWORK_SCOPE
+        botFrameworkScope(request.serviceUrl)
       ));
   let token: string;
   try {

@@ -1,3 +1,4 @@
+import { MsalTokenProvider } from '@microsoft/agents-hosting';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createTeamsAuthConfiguration,
@@ -157,6 +158,21 @@ describe('fetchTeamsMemberIdentity', () => {
     ).catch((caught: unknown) => caught);
     expect(foreign).toMatchObject({ code: 'teams_service_url_invalid', retryable: false });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('requests the US government Bot Framework scope for a .us service URL', async () => {
+    const getAccessToken = vi
+      .spyOn(MsalTokenProvider.prototype, 'getAccessToken')
+      .mockResolvedValue('bot-token');
+    try {
+      await fetchTeamsMemberIdentity(
+        { ...request, serviceUrl: 'https://smba.infra.gov.teams.microsoft.us/teams/' },
+        { fetchImpl: async () => jsonResponse(200, { email: 'ada@example.us' }) }
+      );
+      expect(getAccessToken).toHaveBeenCalledWith(expect.anything(), 'https://api.botframework.us');
+    } finally {
+      getAccessToken.mockRestore();
+    }
   });
 });
 
