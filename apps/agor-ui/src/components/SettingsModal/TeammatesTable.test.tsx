@@ -66,6 +66,21 @@ describe('TeammatesTable', () => {
     expect(onCreateTeammate).toHaveBeenCalledTimes(1);
   });
 
+  it('disables creation when no create flow is wired (viewers)', () => {
+    const repo = makeRepo();
+
+    renderWithProviders(
+      <TeammatesTable
+        branchById={new Map<string, Branch>()}
+        repoById={new Map([[repo.repo_id, repo]])}
+        boardById={new Map<string, Board>()}
+        userById={new Map<string, User>()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Create AI teammate/i })).toBeDisabled();
+  });
+
   it('applies a page size picked from the pagination size changer', async () => {
     const repo = makeRepo();
 

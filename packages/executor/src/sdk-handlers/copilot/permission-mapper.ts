@@ -22,7 +22,6 @@ import {
   MessageRole,
   PermissionStatus,
   permissionTimeoutMessage,
-  SessionStatus,
   TaskStatus,
 } from '@agor/core/types';
 import type {
@@ -382,7 +381,10 @@ export function createPermissionHandler(
         } as Partial<Message>);
       }
 
-      // Handle timeout
+      // Terminalize the Task. The daemon projects every terminal Task state
+      // onto its Session before acknowledging this request; the executor's
+      // task-scoped credential is revoked at that boundary, so no follow-up
+      // Session patch is valid.
       if (decision.timedOut) {
         console.log(
           `⏰ [Copilot Permission] Permission timed out for ${toolName}, setting timed_out state...`
@@ -395,13 +397,6 @@ export function createPermissionHandler(
             ? { error_message: permissionTimeoutMessage(decision.timeoutMs) }
             : {}),
         });
-
-        if (deps.sessionsService) {
-          await deps.sessionsService.patch(sessionId, {
-            status: SessionStatus.TIMED_OUT,
-            ready_for_prompt: true,
-          });
-        }
 
         return {
           kind: 'denied-interactively-by-user',

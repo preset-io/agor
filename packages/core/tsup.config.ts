@@ -31,6 +31,7 @@ export default defineConfig({
     'ids/index': 'src/lib/ids.ts', // Canonical Node UUIDv7 generation and ID utilities
     'ids/browser': 'src/lib/ids.browser.ts', // Browser-safe UUIDv7 generation via Web Crypto
     'templates/handlebars-helpers': 'src/templates/handlebars-helpers.ts', // Handlebars helpers
+    'templates/prompt-provenance': 'src/templates/prompt-provenance.ts', // Server-stamped prompt provenance block
     'templates/session-context': 'src/templates/session-context.ts', // Agor system prompt rendering
     'templates/spawn-subsession-template': 'src/templates/spawn-subsession-template.ts', // Spawn-subsession meta-prompt
     'templates/teammate-welcome-note': 'src/templates/teammate-welcome-note.ts', // Teammate board welcome note renderer

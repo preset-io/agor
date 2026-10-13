@@ -154,6 +154,12 @@
       "import": "./dist/templates/handlebars-helpers.js",
       "require": "./dist/templates/handlebars-helpers.cjs"
     },
+    "./templates/prompt-provenance": {
+      "source": "./src/templates/prompt-provenance.ts",
+      "types": "./dist/templates/prompt-provenance.d.ts",
+      "import": "./dist/templates/prompt-provenance.js",
+      "require": "./dist/templates/prompt-provenance.cjs"
+    },
     "./templates/session-context": {
       "source": "./src/templates/session-context.ts",
       "types": "./dist/templates/session-context.d.ts",

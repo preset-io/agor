@@ -2,6 +2,7 @@ import type { MCPMarketplaceOverview, MCPServerID } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import {
   act,
+  cleanup,
   fireEvent,
   render as rtlRender,
   screen,
@@ -228,7 +229,10 @@ describe('Marketplace server inventory and settings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete and detach' }));
     expect(onRemove).toHaveBeenCalledWith({ ...props.server, session_count: 3 });
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it('renders a production empty state with a catalog route action', () => {
     const browse = vi.fn();

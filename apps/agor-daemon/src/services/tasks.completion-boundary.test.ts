@@ -39,11 +39,7 @@ it.each([false, true])(
       expect(getCurrentTenantDatabaseScope()).toBe(originalScope);
       await executeRaw(db, sql`INSERT INTO completion_fixture VALUES ('archive')`);
     });
-    const patchSession = vi.fn(async () => {
-      expect(getCurrentTenantDatabaseScope()).toBe(originalScope);
-      await executeRaw(db, sql`INSERT INTO completion_fixture VALUES ('projection')`);
-      return session;
-    });
+    const patchSession = vi.fn();
     let injectionVerified = false;
     let originVerified = false;
     const inject = vi.fn(async () => {
@@ -73,7 +69,11 @@ it.each([false, true])(
     Reflect.set(service, 'id', 'task_id');
     Reflect.set(service, 'repository', {
       update: async () => {
+        expect(getCurrentTenantDatabaseScope()).toBe(originalScope);
+        // TaskRepository owns both writes atomically; the service only
+        // publishes the resulting Session, never patches it a second time.
         await executeRaw(db, sql`INSERT INTO completion_fixture VALUES ('task')`);
+        await executeRaw(db, sql`INSERT INTO completion_fixture VALUES ('projection')`);
         return task;
       },
     });
@@ -99,6 +99,7 @@ it.each([false, true])(
           { suppressTerminalQueueProcessing: true }
         );
         expect(archive).toHaveBeenCalledOnce();
+        expect(patchSession).not.toHaveBeenCalled();
         expect(inject).not.toHaveBeenCalled();
         expect(origin).not.toHaveBeenCalled();
         if (rollback) throw new Error('fixture rollback');

@@ -5,23 +5,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '../../contexts/ThemeContext';
 import { agorStore } from '../../store/agorStore';
 import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { OPEN_CREATE_FLOW_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { MobileApp } from './MobileApp';
 
 vi.mock('./MobileBoardPage', () => ({
   MobileBoardPage: ({
     onOpenBranch,
-    onGiveFirstTask,
   }: {
-    onGiveFirstTask: () => void;
     onOpenBranch: (branchId: string, tab: string) => void;
   }) => (
     <>
       <button type="button" onClick={() => onOpenBranch('branch-1', 'schedule')}>
         Open schedule
-      </button>
-      <button type="button" onClick={onGiveFirstTask}>
-        Give first task
       </button>
     </>
   ),
@@ -37,7 +33,6 @@ vi.mock('../BranchModal', () => ({
   },
 }));
 
-vi.mock('./MobileNavTree', () => ({ MobileNavTree: () => null }));
 // Home is the shared HomePage (covered by its own suites); these cases drive the tab-bar Ask.
 vi.mock('../HomePage', () => ({ HomePage: () => null }));
 
@@ -141,7 +136,7 @@ describe('MobileApp branch actions', () => {
     agorStore.getState().setAgenticToolSettings([]);
   });
 
-  it.each(['Ask your primary assistant', 'Give first task'])(
+  it.each(['Ask your primary assistant'])(
     'holds %s until current workspace tool settings hydrate',
     async (action) => {
       agorStore.getState().resetMaps();
@@ -251,11 +246,11 @@ describe('MobileApp branch actions', () => {
     const onSessionClick = branchModalProps.onSessionClick as (id: string) => void;
     act(() => onSessionClick('session-9'));
 
-    // Sheet closes and the session opens on its own /m route, a full-screen sub-view with no tab bar.
+    // Sheet closes and the session opens on its own full-screen /m route. The
+    // docked tab bar stays visible on the sub-view (Ask remains reachable).
     expect(screen.queryByTestId('branch-sheet')).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: 'Ask your primary assistant' })
-    ).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-page')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
   });
 
   it('renders board content under the /m/* descendant route', () => {
@@ -281,11 +276,12 @@ describe('MobileApp branch actions', () => {
     expect(screen.getByRole('button', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('hides the tab bar on a full-screen session detail route', () => {
+  it('keeps the docked tab bar on a full-screen session detail route', () => {
     renderMobileApp('/m/session/session-1');
-    expect(
-      screen.queryByRole('button', { name: 'Ask your primary assistant' })
-    ).not.toBeInTheDocument();
+    // The bar is visible on every /m screen; on a sub-view no tab is force-active.
+    expect(screen.getByRole('button', { name: 'Ask your primary assistant' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Home' })).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('button', { name: 'Board' })).not.toHaveAttribute('aria-current');
   });
 
   it('surfaces the shared connect-AI banner on Home', () => {
@@ -411,6 +407,39 @@ describe('MobileApp branch actions', () => {
     view.rerender(mobileAppTree('/m', { ...props, authGeneration: 4 }));
     await waitFor(() => expect(teammatePicker.mounts).toBe(mountsBefore + 1));
     expect(teammatePicker.props).toMatchObject({ authenticationGeneration: 4 });
+  });
+
+  it('opens the shared create-teammate flow from the Ask sheet, as desktop does', async () => {
+    const onOpenWorkspaceSettings = vi.fn();
+    const client = { service: () => ({ getPrimaryTeammate: async () => null }) };
+    render(
+      mobileAppTree('/m', {
+        client,
+        user: { user_id: 'user-1', role: 'member' },
+        onOpenWorkspaceSettings,
+      })
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create a new teammate' }));
+    expect(await screen.findByText('New AI teammate')).toBeInTheDocument();
+    // Not the Settings teammates tab, whose create button the phone shell had left unwired.
+    expect(onOpenWorkspaceSettings).not.toHaveBeenCalled();
+  });
+
+  it('offers no create link to viewers, who cannot create teammates', async () => {
+    const client = { service: () => ({ getPrimaryTeammate: async () => null }) };
+    render(mobileAppTree('/m', { client, user: { user_id: 'user-1', role: 'viewer' } }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    await screen.findByTestId('teammate-picker');
+    expect(screen.queryByRole('button', { name: 'Create a new teammate' })).not.toBeInTheDocument();
+  });
+
+  it("opens the shared create-teammate flow for Settings' Create AI teammate", async () => {
+    render(mobileAppTree('/m', { user: { user_id: 'user-1', role: 'member' } }));
+    act(() => requestShellPicker(OPEN_CREATE_FLOW_EVENT, 'teammate'));
+    expect(await screen.findByText('New AI teammate')).toBeInTheDocument();
   });
 
   it('starts Ask sessions with the caller saved agent defaults, like desktop quick compose', async () => {
