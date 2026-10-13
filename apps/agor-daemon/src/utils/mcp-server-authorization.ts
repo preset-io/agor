@@ -463,8 +463,8 @@ function assertPolicyAllowsWrite(policy: MCPMemberPolicy, isCatalogInstall: bool
   if (mayMemberWriteMCPServers(policy)) return;
   throw new Forbidden(
     isCatalogInstall
-      ? 'Your organization does not allow members to add MCP servers, so this entry cannot be installed; ask an admin to add it'
-      : 'Your organization does not allow members to configure MCP servers; ask an admin to add one',
+      ? 'Your organization does not allow members to add MCP servers, so this entry cannot be installed; ask an administrator to add it'
+      : 'Your organization does not allow members to configure MCP servers; ask an administrator to add one',
     { code: MCP_MEMBER_POLICY_REFUSED_CODE }
   );
 }

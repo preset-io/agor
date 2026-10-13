@@ -59,17 +59,17 @@ describe('MCP validation diagnostics', () => {
 
 describe('MCP member policy refusal', () => {
   it('tells an agent to hand the request to an admin instead of retrying', () => {
-    const error = new Forbidden('ask an admin to add one', {
+    const error = new Forbidden('ask an administrator to add one', {
       code: MCP_MEMBER_POLICY_REFUSED_CODE,
     });
     const result = mcpMemberPolicyRefusal(error, 'agor_mcp_servers_create')!;
     expect(result.isError).toBe(true);
     expect(JSON.parse(result.content[0].text)).toMatchObject({
-      error: 'ask an admin to add one',
+      error: 'ask an administrator to add one',
       tool: 'agor_mcp_servers_create',
       code: MCP_MEMBER_POLICY_REFUSED_CODE,
       retryable: false,
-      hint: expect.stringMatching(/ask a workspace admin/),
+      hint: expect.stringMatching(/ask a workspace administrator/),
     });
   });
 

@@ -126,7 +126,7 @@ export function mcpMemberPolicyRefusal(error: unknown, tool: string) {
           tool,
           code: MCP_MEMBER_POLICY_REFUSED_CODE,
           retryable: false,
-          hint: 'In this workspace only admins can add or change MCP servers. Do not retry or try another way to configure it. Tell the user to ask a workspace admin to add the server they need; once it exists they can connect it and use it.',
+          hint: 'In this workspace only administrators can add or change MCP servers. Do not retry or try another way to configure it. Tell the user to ask a workspace administrator to add the server they need; once it exists they can connect it and use it.',
         }),
       },
     ],

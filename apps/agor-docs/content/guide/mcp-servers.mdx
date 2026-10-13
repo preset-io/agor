@@ -120,7 +120,8 @@ does not grant permission to create or repair a server; the daemon checks again.
 When there is nothing a member can reuse, Catalog and **Settings → MCP Servers** ask them to
 have an administrator add the server.
 Agents acting for a member get the same answer as a non-retryable
-`mcp_member_policy_refused` tool error.
+`mcp_member_policy_refused` tool error, and the REST/Feathers `Forbidden` carries the same code in
+`data.code`, so API callers can branch on it.
 
 Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. An entry may be:
 
