@@ -1262,4 +1262,23 @@ describe('GatewayChannelsTable unsaved-changes guard', () => {
     clickButton(/^Keep editing$/);
     expect(screen.getByDisplayValue('Draft channel')).toBeInTheDocument();
   });
+
+  it('leaves an untouched create wizard without asking, despite its seeded defaults', async () => {
+    const user = makeUser({ default_mcp_server_ids: ['mcp-1'] } as Partial<User>);
+    const branch = makeBranch();
+    renderWithProviders(
+      <GatewayChannelsTable
+        client={null}
+        gatewayChannelById={new Map<string, GatewayChannel>()}
+        branchById={new Map([[branch.branch_id, branch]])}
+        userById={new Map([[user.user_id, user]])}
+        mcpServerById={new Map<string, MCPServer>()}
+        currentUser={user}
+      />
+    );
+    clickButton(/Add Channel/);
+    clickButton(/^Cancel$/);
+    await waitFor(() => expect(queryButton(/Add Channel/)).toBeDefined());
+    expect(confirms()).toBe(0);
+  });
 });

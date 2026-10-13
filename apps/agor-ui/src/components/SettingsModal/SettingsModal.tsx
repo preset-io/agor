@@ -63,7 +63,8 @@ export interface SettingsModalProps {
   onClose: () => void;
   client: AgorClient | null; // Still needed for BranchModal
   currentUser?: User | null; // Current logged-in user
-  activeTab?: string; // Control which tab is shown when modal opens
+  /** Requested section; omitted (or unknown) opens the first section the caller can see. */
+  activeTab?: string;
   onTabChange?: (tabKey: string) => void;
   onCreateBoard?: (board: Partial<Board>) => void;
   onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
@@ -130,7 +131,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onClose,
   client,
   currentUser,
-  activeTab = 'users',
+  activeTab: requestedTab,
   onTabChange,
   onCreateBoard,
   onUpdateBoard,
@@ -185,60 +186,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const compact = !screens.md;
   const reducedMotion = usePrefersReducedMotion();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
-
-  // Drill-in navigation: the Content pane swaps between a section's list view
-  // and its detail/edit view in place, instead of stacking a second Modal.
-  const shell = useDrillShell(activeTab as SettingsSection);
-  const { drill, openDrill, closeDrill, confirmLeaveIfDirty } = shell;
-
-  // Branches and Teammates edit the same entity (a branch) via the shared
-  // BranchModal, rendered in-place (embedded) as the section's drill-in instead
-  // of a stacked modal. The store holds only the loaded scopes' branches, so the
-  // clicked row is snapshotted; the live store copy wins when it is loaded.
-  const [branchSnapshot, setBranchSnapshot] = useState<Branch | null>(null);
-  const branchDrill =
-    drill?.mode === 'edit' &&
-    (activeTab === 'branches' || activeTab === 'teammates') &&
-    drill.recordId
-      ? (branchById.get(drill.recordId) ??
-        (branchSnapshot?.branch_id === drill.recordId ? branchSnapshot : null))
-      : null;
-  const openBranchDrill = useCallback(
-    (branch: Branch) => {
-      setBranchSnapshot(branch);
-      openDrill({ mode: 'edit', recordId: branch.branch_id });
-    },
-    [openDrill]
-  );
-  // The store holds only the loaded scopes' sessions: each opening reads the branch's.
-  const branchSessions = useBranchSessions(client, branchDrill?.branch_id ?? null);
-
-  const handleArchiveOrDeleteBranchFromDrill = useCallback(
-    async (branchId: string, options: BranchArchiveOrDeleteOptions) => {
-      await onArchiveOrDeleteBranch?.(branchId, options);
-      closeDrill();
-    },
-    [onArchiveOrDeleteBranch, closeDrill]
-  );
-
-  const handleNavClick = useCallback(
-    (key: string) => {
-      // The MCP Marketplace is intentionally NOT reachable from Settings — it
-      // lives only on the global navbar. No nav row or signpost here.
-      if (!settingsSectionKeys.has(key)) return;
-      if (key === activeTab) return;
-      confirmLeaveIfDirty(() => {
-        closeDrill();
-        onTabChange?.(key as SettingsSection);
-      });
-    },
-    [activeTab, closeDrill, confirmLeaveIfDirty, onTabChange, settingsSectionKeys]
-  );
-
-  const handleModalClose = useCallback(
-    () => confirmLeaveIfDirty(onClose),
-    [confirmLeaveIfDirty, onClose]
-  );
 
   // Role gate — MCP Servers and Gateway Channels are global admin-managed
   // configuration (credentials, webhook URLs, env vars). The daemon enforces
@@ -304,6 +251,66 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     ]
   );
 
+  // No (or an unknown) requested section opens the first one this role can see.
+  const activeTab =
+    requestedTab && settingsSectionKeys.has(requestedTab)
+      ? requestedTab
+      : (settingsNav[0]?.rows[0]?.section ?? 'about');
+
+  // Drill-in navigation: the Content pane swaps between a section's list view
+  // and its detail/edit view in place, instead of stacking a second Modal.
+  const shell = useDrillShell(activeTab as SettingsSection);
+  const { drill, openDrill, closeDrill, confirmLeaveIfDirty } = shell;
+
+  // Branches and Teammates edit the same entity (a branch) via the shared
+  // BranchModal, rendered in-place (embedded) as the section's drill-in instead
+  // of a stacked modal. The store holds only the loaded scopes' branches, so the
+  // clicked row is snapshotted; the live store copy wins when it is loaded.
+  const [branchSnapshot, setBranchSnapshot] = useState<Branch | null>(null);
+  const branchDrill =
+    drill?.mode === 'edit' &&
+    (activeTab === 'branches' || activeTab === 'teammates') &&
+    drill.recordId
+      ? (branchById.get(drill.recordId) ??
+        (branchSnapshot?.branch_id === drill.recordId ? branchSnapshot : null))
+      : null;
+  const openBranchDrill = useCallback(
+    (branch: Branch) => {
+      setBranchSnapshot(branch);
+      openDrill({ mode: 'edit', recordId: branch.branch_id });
+    },
+    [openDrill]
+  );
+  // The store holds only the loaded scopes' sessions: each opening reads the branch's.
+  const branchSessions = useBranchSessions(client, branchDrill?.branch_id ?? null);
+
+  const handleArchiveOrDeleteBranchFromDrill = useCallback(
+    async (branchId: string, options: BranchArchiveOrDeleteOptions) => {
+      await onArchiveOrDeleteBranch?.(branchId, options);
+      closeDrill();
+    },
+    [onArchiveOrDeleteBranch, closeDrill]
+  );
+
+  const handleNavClick = useCallback(
+    (key: string) => {
+      // The MCP Marketplace is intentionally NOT reachable from Settings — it
+      // lives only on the global navbar. No nav row or signpost here.
+      if (!settingsSectionKeys.has(key)) return;
+      if (key === activeTab) return;
+      confirmLeaveIfDirty(() => {
+        closeDrill();
+        onTabChange?.(key as SettingsSection);
+      });
+    },
+    [activeTab, closeDrill, confirmLeaveIfDirty, onTabChange, settingsSectionKeys]
+  );
+
+  const handleModalClose = useCallback(
+    () => confirmLeaveIfDirty(onClose),
+    [confirmLeaveIfDirty, onClose]
+  );
+
   // Menu items for left sidebar navigation. People leads (access first), then
   // Resources, Cards, Integrations and System.
   const menuItems: MenuProps['items'] = useMemo(
@@ -337,10 +344,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   // "Create teammate" flow) seeds straight into its section; the generic mobile
   // entry ('boards', from the More sheet) opens on the index. Desktop ignores this.
   const [mobileSection, setMobileSection] = useState<SettingsSection | null>(() =>
-    activeTab &&
-    activeTab !== 'boards' &&
-    (SETTINGS_SECTIONS as readonly string[]).includes(activeTab)
-      ? (activeTab as SettingsSection)
+    requestedTab &&
+    requestedTab !== 'boards' &&
+    (SETTINGS_SECTIONS as readonly string[]).includes(requestedTab)
+      ? (requestedTab as SettingsSection)
       : null
   );
 

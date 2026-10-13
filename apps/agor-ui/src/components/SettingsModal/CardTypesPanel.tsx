@@ -25,7 +25,7 @@ import { validateJSON } from '../JSONEditor';
 import { CardTypeSchemaEditor } from './CardTypeSchemaEditor';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 
 interface CardTypesPanelProps {
   client: AgorClient | null;
@@ -43,6 +43,8 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
   const { openSettings } = useSettingsRoute();
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
+  // Opening a type seeds the form before the editor mounts.
+  const isDraftDirty = useDrillFormDraft(form, drill);
 
   const editingType =
     drill?.mode === 'edit' && drill.recordId ? (cardTypeById.get(drill.recordId) ?? null) : null;
@@ -206,7 +208,7 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
     return (
       <DrillInFrame
         title={editingType ? 'Edit Card Type' : 'Create Card Type'}
-        dirty={() => form.isFieldsTouched()}
+        dirty={isDraftDirty}
         saveLabel={editingType ? 'Save' : 'Create'}
         onSave={editingType ? handleUpdateType : handleCreateType}
       >

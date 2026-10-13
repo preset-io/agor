@@ -48,7 +48,7 @@ import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 import { UserAvatarsTab } from './UserAvatarsTab';
 import { UserSettingsModal } from './UserSettingsModal';
 
@@ -113,6 +113,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       form.resetFields();
     }
   }, [isCreating, form]);
+  const isCreateDirty = useDrillFormDraft(form, isCreating ? drill : null);
   const canDeleteUsers = isIdentityCapabilityAvailable(authConfig, identityContractState, 'delete');
   const passwordRequirements = passwordPolicyRequirements(authConfig?.passwordPolicy);
   const canManageAvatarSettings =
@@ -356,7 +357,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       <DrillInFrame
         title="Create User"
         saveLabel="Create"
-        dirty={() => form.isFieldsTouched()}
+        dirty={isCreateDirty}
         onSave={handleCreate}
         onBack={() => {
           form.resetFields();

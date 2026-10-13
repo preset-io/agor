@@ -12,6 +12,7 @@ import {
   buildConfigFromFormValues,
   getFormValuesFromConfig,
 } from '../AgenticToolConfigForm';
+import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 
 interface Props {
   client: AgorClient;
@@ -35,6 +36,9 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
   const [saving, setSaving] = useState(false);
   const operationGuard = useAuthorityOperationGuard(operationScope);
   const { showSuccess } = useThemedMessage();
+  // The inline editor reports its draft to the Settings leave guard.
+  const { confirmLeaveIfDirty } = useSettingsDrill();
+  const isDraftDirty = useDrillFormDraft(form, modalOpen ? (editing ?? 'new') : null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey intentionally erases the replacement caller's modal/form state
   useLayoutEffect(() => {
@@ -117,10 +121,12 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
   // modal ("no modal on modal"); the inline form avoids that.
   if (modalOpen) {
     return (
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Typography.Text strong>
-          {editing ? `Edit ${editing.name}` : `New ${tool} preset`}
-        </Typography.Text>
+      <DrillInFrame
+        title={editing ? `Edit ${editing.name}` : `New ${tool} preset`}
+        dirty={isDraftDirty}
+        onBack={() => setModalOpen(false)}
+        ownsFooter
+      >
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input />
@@ -138,14 +144,14 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
           <AgenticToolConfigForm agenticTool={tool} client={client} />
         </Form>
         <Space style={{ justifyContent: 'flex-end', width: '100%' }}>
-          <Button onClick={() => setModalOpen(false)} disabled={saving}>
+          <Button onClick={() => confirmLeaveIfDirty(() => setModalOpen(false))} disabled={saving}>
             Cancel
           </Button>
           <Button type="primary" loading={saving} onClick={() => void save()}>
             Save
           </Button>
         </Space>
-      </Space>
+      </DrillInFrame>
     );
   }
 

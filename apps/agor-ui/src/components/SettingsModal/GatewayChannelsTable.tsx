@@ -121,7 +121,7 @@ import { FIELD_WIDTHS } from './panelPrimitives';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 import { SettingsIdentity } from './SettingsIdentity';
 import { UserSelect } from './UserSelect';
 
@@ -3743,6 +3743,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
+  // Both forms are seeded by the open handlers, before the editor mounts.
+  const isCreateDirty = useDrillFormDraft(createForm, createModalOpen ? drill : null);
+  const isEditDirty = useDrillFormDraft(editForm, editModalOpen ? drill : null);
   const handleAgentChange = useCallback(
     (agent: AgenticToolName) => {
       const form = editModalOpen ? editForm : createForm;
@@ -4650,7 +4653,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     return (
       <DrillInFrame
         title="Add Gateway Channel"
-        dirty={() => createForm.isFieldsTouched()}
+        dirty={isCreateDirty}
         onBack={closeCreateModal}
         ownsFooter
       >
@@ -4718,7 +4721,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     return (
       <DrillInFrame
         title="Edit Gateway Channel"
-        dirty={() => editForm.isFieldsTouched()}
+        dirty={isEditDirty}
         onSave={handleUpdate}
         saveDisabled={requiresSupportedToolSelection}
         onBack={() => {

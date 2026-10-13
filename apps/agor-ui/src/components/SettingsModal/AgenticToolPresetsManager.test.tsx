@@ -2,6 +2,7 @@ import type { AgenticToolPreset, AgorClient } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AgenticToolPresetsManager } from './AgenticToolPresetsManager';
+import { renderWithSettingsShell } from './settingsDrillTestUtils';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -65,5 +66,38 @@ describe('AgenticToolPresetsManager authority lifetime', () => {
     // The obsolete save cannot close or overwrite the preserved draft.
     expect(screen.getByLabelText('Name')).toHaveValue('A reconnect draft');
     expect(find).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('AgenticToolPresetsManager unsaved-changes guard', () => {
+  it('asks before Cancel discards a preset draft, and leaves an untouched one at once', async () => {
+    const find = vi.fn().mockResolvedValue([]);
+    const client = {
+      service: vi.fn(() => ({ find, create: vi.fn(), patch: vi.fn(), remove: vi.fn() })),
+    } as unknown as AgorClient;
+    renderWithSettingsShell(
+      <AgenticToolPresetsManager
+        client={client}
+        tool="claude-code"
+        onError={vi.fn()}
+        identityKey="admin:admin"
+        operationScope={['admin:admin', client, 1]}
+      />,
+      'agentic-tools'
+    );
+    const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
+    await screen.findByText('No presets');
+
+    fireEvent.click(screen.getByRole('button', { name: /New preset$/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.getByText('No presets')).toBeInTheDocument());
+    expect(confirms()).toBe(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /New preset$/ }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Draft preset' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(confirms()).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByLabelText('Name')).toHaveValue('Draft preset');
   });
 });

@@ -16,7 +16,7 @@ import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormField
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BoardCapabilityPolicyModalEditor } from '../permissions/CapabilityPolicyEditor';
 import { OwnershipTransfer } from '../permissions/CapabilityPolicyEditor/OwnershipTransfer';
-import { DrillInFrame } from '../SettingsModal/SettingsDrill';
+import { DrillInFrame, useDrillFormDraft } from '../SettingsModal/SettingsDrill';
 
 export interface BoardEditModalProps {
   board: Board | null;
@@ -60,9 +60,6 @@ export function BoardEditModal({
   const [loadedBoard, setLoadedBoard] = useState<Board | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Drives the unsaved-changes guard when rendered as a drill-in. Set on form
-  // field edits and capability-policy edits; cleared on (re)load and close.
-  const [dirty, setDirty] = useState(false);
   const permissionUsers = useMemo(() => {
     const knownUsers = new Map(userById);
     for (const user of allUsers) knownUsers.set(user.user_id, user);
@@ -142,7 +139,6 @@ export function BoardEditModal({
         });
         // Expose the loaded board last: this is what un-gates the form render.
         setLoadedBoard(fresh);
-        setDirty(false);
       } catch (error) {
         if (!cancelled) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -175,9 +171,14 @@ export function BoardEditModal({
     setLoadedPolicy(saved);
   };
 
+  // Unsaved-changes guard for the drill-in: form values vs the loaded board
+  // (covers programmatic edits such as background presets) or a policy draft.
+  const isFormDirty = useDrillFormDraft(form, loadedBoard);
+  const isDirty = () =>
+    isFormDirty() || (policy !== null && JSON.stringify(policy) !== JSON.stringify(loadedPolicy));
+
   const close = () => {
     form.resetFields();
-    setDirty(false);
     onClose();
   };
 
@@ -209,13 +210,7 @@ export function BoardEditModal({
     // resetting on reopen).
     <Skeleton active paragraph={{ rows: 6 }} style={{ marginTop: 16 }} />
   ) : (
-    <Form
-      form={form}
-      layout="vertical"
-      preserve
-      style={{ marginTop: 16 }}
-      onValuesChange={() => setDirty(true)}
-    >
+    <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
       <BoardFormFields
         key={loadedBoard.board_id}
         form={form}
@@ -237,10 +232,7 @@ export function BoardEditModal({
                 />
               }
               value={policy}
-              onChange={(next) => {
-                setPolicy(next);
-                setDirty(true);
-              }}
+              onChange={setPolicy}
               client={client}
               users={permissionUsers}
               groups={allGroups}
@@ -277,7 +269,8 @@ export function BoardEditModal({
     return (
       <DrillInFrame
         title="Edit Board"
-        dirty={dirty}
+        dirty={isDirty}
+        onBack={close}
         saving={loading || saving}
         saveLabel="Save"
         saveDisabled={loading || saving || Boolean(loadError) || !canEditGeneral}

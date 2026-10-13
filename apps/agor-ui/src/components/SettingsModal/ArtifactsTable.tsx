@@ -14,7 +14,7 @@ import {
   Typography,
 } from 'antd';
 import type { CSSProperties } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { uiRouteHref } from '@/utils/uiRoutes';
@@ -25,7 +25,7 @@ import { HighlightMatch } from '../HighlightMatch';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 import { SettingsIdentity } from './SettingsIdentity';
 
 interface ArtifactsTableProps {
@@ -94,17 +94,20 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   const handleEdit = (artifact: Artifact) =>
     openDrill({ mode: 'edit', recordId: artifact.artifact_id });
 
-  // Seed the form whenever the drill-in targets an artifact.
-  useEffect(() => {
-    if (editingArtifact) {
-      form.resetFields();
-      form.setFieldsValue({
-        name: editingArtifact.name,
-        description: editingArtifact.description || '',
-        board_id: editingArtifact.board_id,
-      });
-    }
-  }, [editingArtifact, form]);
+  // Seeds an opened artifact; live patches refresh only fields the draft hasn't changed.
+  const isDraftDirty = useDrillFormDraft(
+    form,
+    drill,
+    useMemo(
+      () =>
+        editingArtifact && {
+          name: editingArtifact.name,
+          description: editingArtifact.description || '',
+          board_id: editingArtifact.board_id,
+        },
+      [editingArtifact]
+    )
+  );
 
   const handleUpdate = () => {
     if (!editingArtifact) return;
@@ -298,7 +301,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     return (
       <DrillInFrame
         title="Edit Artifact"
-        dirty={() => form.isFieldsTouched()}
+        dirty={isDraftDirty}
         onSave={handleUpdate}
         onBack={() => {
           form.resetFields();

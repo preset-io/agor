@@ -27,7 +27,7 @@ import { JSONEditor, validateJSON } from '../JSONEditor';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 import { useSessionCounts } from './useBranchPage';
 
 interface BoardsTableProps {
@@ -73,6 +73,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       form.resetFields();
     }
   }, [isCreating, form]);
+  const isCreateDirty = useDrillFormDraft(form, isCreating ? drill : null);
 
   const handleCreate = () => {
     // Validate all fields (not just 'name') so custom_context JSON rules run.
@@ -319,7 +320,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       <DrillInFrame
         title="Create Board"
         saveLabel="Create"
-        dirty={() => form.isFieldsTouched()}
+        dirty={isCreateDirty}
         onSave={handleCreate}
         onBack={() => {
           form.resetFields();

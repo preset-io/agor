@@ -83,3 +83,27 @@ describe('ArtifactsTable', () => {
     await waitFor(() => expect(onDelete).toHaveBeenCalledWith(artifact.artifact_id));
   });
 });
+
+describe('ArtifactsTable live updates', () => {
+  it('keeps a typed draft when the open artifact is patched, refreshing untouched fields', async () => {
+    const view = (row: Artifact) => (
+      <MemoryRouter>
+        <ArtifactsTable
+          artifactById={new Map([[row.artifact_id, row]])}
+          boardById={new Map([['board-1', { board_id: 'board-1', name: 'Engineering' } as Board]])}
+          branchById={new Map()}
+          userById={new Map()}
+        />
+      </MemoryRouter>
+    );
+    const rendered = renderWithSettingsShell(view(artifact));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit artifact' }));
+    fireEvent.change(await screen.findByLabelText('Description'), {
+      target: { value: 'My draft' },
+    });
+
+    rendered.rerender(view({ ...artifact, name: 'API explorer v2', description: 'Remote edit' }));
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('API explorer v2'));
+    expect(screen.getByLabelText('Description')).toHaveValue('My draft');
+  });
+});

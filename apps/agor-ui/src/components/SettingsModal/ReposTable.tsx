@@ -34,7 +34,7 @@ import { HighlightMatch } from '../HighlightMatch';
 import { Tag } from '../Tag';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 
 interface ReposTableProps {
   repoById: Map<string, Repo>;
@@ -120,18 +120,9 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     [repos, searchTerm]
   );
 
-  // Seed the form + mode whenever the drill-in targets an existing repo.
   useEffect(() => {
-    if (editingRepo) {
-      setRepoMode(editingRepo.repo_type ?? 'remote');
-      repoForm.resetFields();
-      repoForm.setFieldsValue({
-        slug: editingRepo.slug,
-        default_branch: editingRepo.default_branch || 'main',
-        cleanup_policy: resolveRepoCleanupPolicy(editingRepo.cleanup_policy),
-      });
-    }
-  }, [editingRepo, repoForm]);
+    if (editingRepo) setRepoMode(editingRepo.repo_type ?? 'remote');
+  }, [editingRepo]);
 
   // Reset the form to create defaults (remote mode, default_branch "main")
   // whenever the drill-in enters create mode.
@@ -142,6 +133,20 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       repoForm.setFieldsValue({ default_branch: 'main' });
     }
   }, [isCreating, repoForm]);
+  // Seeds an opened repo; live patches refresh only fields the draft hasn't changed.
+  const isDraftDirty = useDrillFormDraft(
+    repoForm,
+    drill,
+    useMemo(
+      () =>
+        editingRepo && {
+          slug: editingRepo.slug,
+          default_branch: editingRepo.default_branch || 'main',
+          cleanup_policy: resolveRepoCleanupPolicy(editingRepo.cleanup_policy),
+        },
+      [editingRepo]
+    )
+  );
 
   const handleOpenDeleteModal = (repo: Repo) => {
     setRepoToDelete(repo);
@@ -345,7 +350,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     return (
       <DrillInFrame
         title={drillTitle}
-        dirty={() => repoForm.isFieldsTouched()}
+        dirty={isDraftDirty}
         saveLabel={drillSaveLabel}
         onSave={handleSave}
       >

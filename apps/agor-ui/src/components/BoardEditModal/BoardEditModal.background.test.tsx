@@ -3,6 +3,7 @@ import type { AgorClient, Board } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { StandaloneSettingsDrillProvider } from '../SettingsModal/SettingsDrill';
 import { BoardEditModal } from './BoardEditModal';
 
 // Mock only peripheral deps; the REAL BoardFormFields + BoardBackgroundEditor
@@ -112,5 +113,44 @@ describe('BoardEditModal — background editor persistence across reopen', () =>
       </AntApp>
     );
     expect(await openCssTabAndReadBackground()).toBe(CUSTOM_GRADIENT);
+  });
+});
+
+describe('BoardEditModal — unsaved-changes guard in Settings', () => {
+  const board = { ...listedBoard, background_color: CUSTOM_GRADIENT } as Board;
+  const renderEmbedded = (onClose: () => void) =>
+    render(
+      <AntApp>
+        <StandaloneSettingsDrillProvider section="boards">
+          <BoardEditModal
+            embedded
+            board={listedBoard}
+            client={makeClient(board)}
+            open
+            onClose={onClose}
+          />
+        </StandaloneSettingsDrillProvider>
+      </AntApp>
+    );
+  const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
+
+  it('leaves an unchanged board at once, even after browsing the CSS tab', async () => {
+    const onClose = vi.fn();
+    renderEmbedded(onClose);
+    expect(await openCssTabAndReadBackground()).toBe(CUSTOM_GRADIENT);
+    fireEvent.click(screen.getByText('Boards'));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(confirms()).toBe(0);
+  });
+
+  it('asks before Back discards a background reset to Default', async () => {
+    const onClose = vi.fn();
+    renderEmbedded(onClose);
+    await openCssTabAndReadBackground();
+    // "Default" clears the stored background via setFieldsValue (no onValuesChange).
+    fireEvent.click(screen.getByText('Default'));
+    fireEvent.click(screen.getByText('Boards'));
+    await waitFor(() => expect(confirms()).toBe(1));
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

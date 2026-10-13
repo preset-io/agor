@@ -200,3 +200,43 @@ describe('repository setup status', () => {
     expect(onDelete).not.toHaveBeenCalled();
   });
 });
+
+describe('ReposTable live updates', () => {
+  it('keeps a typed draft when the open repo is patched, refreshing untouched fields', async () => {
+    const repo = makeRepo({ slug: 'org/repository', default_branch: 'main' });
+    const view = (row: Repo) => (
+      <ReposTable
+        repoById={new Map([[row.repo_id, row]])}
+        identityKey="admin:admin"
+        operationScope={['admin:admin', 1]}
+        onUpdate={vi.fn()}
+      />
+    );
+    const rendered = renderWithSettingsShell(view(repo));
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    fireEvent.change(screen.getByLabelText('Default Branch'), { target: { value: 'develop' } });
+
+    rendered.rerender(view({ ...repo, slug: 'org/renamed', default_branch: 'trunk' }));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Repository Slug')).toHaveValue('org/renamed')
+    );
+    expect(screen.getByLabelText('Default Branch')).toHaveValue('develop');
+  });
+
+  it('leaves a seeded but unchanged edit without asking to discard', async () => {
+    const repo = makeRepo({});
+    renderWithSettingsShell(
+      <ReposTable
+        repoById={new Map([[repo.repo_id, repo]])}
+        identityKey="admin:admin"
+        operationScope={['admin:admin', 1]}
+      />,
+      'repos'
+    );
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    await waitFor(() => expect(screen.getByLabelText('Default Branch')).toHaveValue('main'));
+    fireEvent.click(screen.getByText('Repositories'));
+    await waitFor(() => expect(screen.queryByLabelText('Default Branch')).not.toBeInTheDocument());
+    expect(document.querySelectorAll('.ant-modal-confirm')).toHaveLength(0);
+  });
+});

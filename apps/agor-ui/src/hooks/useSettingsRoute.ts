@@ -24,19 +24,16 @@ export const SETTINGS_SECTIONS = [
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 /**
- * Section shown when Settings opens without an explicit tab. People leads the
- * redesigned IA, so an admin lands on who-has-access first.
- */
-export const DEFAULT_SETTINGS_SECTION: SettingsSection = 'users';
-
-/**
  * Settings route state parsed from URL
  */
 export interface SettingsRouteState {
   /** Whether settings modal should be open */
   isOpen: boolean;
-  /** The current settings section (tab) */
-  section: SettingsSection;
+  /**
+   * The section the URL names, or null when it names none (or an unknown one):
+   * Settings then opens the first section the caller's role can see.
+   */
+  section: SettingsSection | null;
   /** Optional item ID for nested modals (e.g., user ID, MCP server ID) */
   itemId: string | null;
 }
@@ -45,7 +42,7 @@ export interface SettingsRouteState {
  * Hook to manage settings modal state via URL routing
  *
  * URL patterns:
- * - /settings/ → Settings modal open at default section (boards)
+ * - /settings/ → Settings modal open at the first section the caller can see
  * - /settings/users/ → Settings modal open at Users section
  * - /settings/users/:userId/ → Settings modal + User edit modal for specific user
  *
@@ -69,7 +66,7 @@ export function useSettingsRoute() {
     if (!settingsMatch) {
       return {
         isOpen: false,
-        section: DEFAULT_SETTINGS_SECTION,
+        section: null,
         itemId: null,
       };
     }
@@ -78,11 +75,9 @@ export function useSettingsRoute() {
     const section = rawSection === 'assistants' ? 'teammates' : rawSection;
 
     // Validate and normalize section
-    const normalizedSection: SettingsSection = SETTINGS_SECTIONS.includes(
-      section as SettingsSection
-    )
+    const normalizedSection = SETTINGS_SECTIONS.includes(section as SettingsSection)
       ? (section as SettingsSection)
-      : DEFAULT_SETTINGS_SECTION;
+      : null;
 
     return {
       isOpen: true,
@@ -108,8 +103,12 @@ export function useSettingsRoute() {
    * Open the settings modal to a specific section
    */
   const openSettings = useCallback(
-    (section: SettingsSection = DEFAULT_SETTINGS_SECTION, itemId?: string) => {
-      const path = itemId ? `/settings/${section}/${itemId}/` : `/settings/${section}/`;
+    (section?: SettingsSection, itemId?: string) => {
+      const path = section
+        ? itemId
+          ? `/settings/${section}/${itemId}/`
+          : `/settings/${section}/`
+        : '/settings/';
       const backgroundPath = location.pathname.startsWith('/settings')
         ? settingsBackgroundPath || '/'
         : `${location.pathname}${location.search}${location.hash}`;

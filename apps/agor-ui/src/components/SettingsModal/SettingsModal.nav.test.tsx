@@ -182,6 +182,22 @@ describe('SettingsModal deep-linked sections', () => {
     }
   });
 
+  it('opens Settings without a section on the first one the role can see', () => {
+    for (const [role, label] of [
+      ['viewer', 'Boards'],
+      ['member', 'Users'],
+    ]) {
+      const { unmount } = render(
+        <MemoryRouter initialEntries={['/settings/']}>
+          <RoutedSettings role={role} />
+        </MemoryRouter>
+      );
+      expect(contentPane(), `${role} should land on a visible section`).not.toBeNull();
+      expect(document.querySelector('.ant-menu-item-selected')?.textContent).toBe(label);
+      unmount();
+    }
+  });
+
   it('still renders the sections each role may open', () => {
     // The positive control: without it, a guard that hid everything would pass.
     const { unmount } = renderDeepLink('member', 'users');

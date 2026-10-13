@@ -34,7 +34,7 @@ import { renderEnvCell } from './BranchEnvColumn';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 import { useBranchPage, useSessionCounts } from './useBranchPage';
 
 interface BranchesTableProps {
@@ -226,6 +226,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     setSelectedRepoId(defaultRepoId);
     validateForm();
   }, [createModalOpen, repos, boards, form, validateForm]);
+  const isCreateDirty = useDrillFormDraft(form, createModalOpen ? drill : null);
 
   // Helper to get repo name from repo_id
   const getRepoName = (repoId: string): string => {
@@ -482,7 +483,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         title="Create Branch"
         saveLabel="Create"
         saveDisabled={!isFormValid}
-        dirty={() => form.isFieldsTouched()}
+        dirty={isCreateDirty}
         onSave={handleCreate}
         onBack={handleCancel}
       >

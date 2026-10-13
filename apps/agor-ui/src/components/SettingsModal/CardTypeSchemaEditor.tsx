@@ -18,9 +18,9 @@ import { JSONEditor } from '../JSONEditor';
  * Editor for a card type's `json_schema`, controlled as a JSON string so the
  * parent Form.Item and existing save path (JSON.parse) are unchanged.
  *
- * Default view is a repeatable field list (name / type / required) — the common
- * case for a flat object schema. "Edit as JSON" flips to the raw editor for
- * anything the field list can't express (nested objects, enums, constraints).
+ * Default view is a repeatable field list (name / type / required), the common
+ * case for a flat object schema. Any schema the list can't round-trip exactly
+ * (nested objects, enums, constraints) opens, and stays, in the raw JSON editor.
  */
 
 const FIELD_TYPES = ['string', 'number', 'integer', 'boolean'] as const;
@@ -34,8 +34,19 @@ interface SchemaField {
 
 interface ParsedSchema {
   fields: SchemaField[];
-  /** True when the schema is a plain object-of-primitives the field list covers. */
+  /** True when the field list round-trips the schema exactly (nothing would be dropped). */
   simple: boolean;
+}
+
+/** Key-order-independent form of a schema, with `required` compared as a set. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (key, v) =>
+    Array.isArray(v) && key === 'required'
+      ? [...v].sort()
+      : v && typeof v === 'object' && !Array.isArray(v)
+        ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b)))
+        : v
+  );
 }
 
 function parseSchema(raw: string | undefined): ParsedSchema {
@@ -47,25 +58,21 @@ function parseSchema(raw: string | undefined): ParsedSchema {
     return { fields: [], simple: false };
   }
   if (!parsed || typeof parsed !== 'object') return { fields: [], simple: false };
-  const obj = parsed as {
-    type?: unknown;
-    properties?: Record<string, { type?: unknown }>;
-    required?: unknown;
-  };
-  const props = obj.properties ?? {};
+  const obj = parsed as { properties?: Record<string, { type?: unknown }>; required?: unknown };
   const required = Array.isArray(obj.required) ? (obj.required as string[]) : [];
   const fields: SchemaField[] = [];
-  let simple = obj.type === undefined || obj.type === 'object';
-  for (const [name, def] of Object.entries(props)) {
+  for (const [name, def] of Object.entries(obj.properties ?? {})) {
     const type = def?.type;
-    if (typeof type === 'string' && (FIELD_TYPES as readonly string[]).includes(type)) {
-      fields.push({ name, type: type as FieldType, required: required.includes(name) });
-    } else {
-      // A property the field list can't represent (nested object, enum, union…).
-      simple = false;
+    if (typeof type !== 'string' || !(FIELD_TYPES as readonly string[]).includes(type)) {
+      return { fields: [], simple: false };
     }
+    fields.push({ name, type: type as FieldType, required: required.includes(name) });
   }
-  return { fields, simple };
+  // The list only shows name / type / required. Anything else (enum, bounds,
+  // additionalProperties, descriptions...) would be dropped on save, so such a
+  // schema stays in JSON mode.
+  const rebuilt = buildSchema(fields);
+  return { fields, simple: canonical(rebuilt ? JSON.parse(rebuilt) : {}) === canonical(parsed) };
 }
 
 function buildSchema(fields: SchemaField[]): string {
