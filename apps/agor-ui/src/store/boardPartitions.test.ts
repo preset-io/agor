@@ -1,5 +1,5 @@
 import type { Board, BoardEntityObject, Branch, CardWithType, Session } from '@agor-live/client';
-import { PAGINATION_CHURN_MESSAGE } from '@agor-live/client';
+import { createRestClient, PAGINATION } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BOARD,
@@ -33,7 +33,6 @@ import {
 import { agorStore } from './agorStore';
 import { holdBackgroundReads } from './backgroundReads';
 import {
-  BOARD_OBJECT_PAGE_LIMIT,
   evictUnloadedBoards,
   loadBoardPartition,
   makeBoardReadySelector,
@@ -307,48 +306,51 @@ describe('loadBoardPartition', () => {
     expect(ready()).toBe(true);
   });
 
-  it('reads only the placements of active branches, in bounded pages', async () => {
+  it('reads only the placements of active branches, with the default large page', async () => {
     const { client, release, queries } = makePartitionClient({});
     const load = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
     release();
     await load;
     expect(queries('board-objects', 'findAll')).toEqual([
-      { board_id: BOARD, exclude_archived_branches: true, $limit: BOARD_OBJECT_PAGE_LIMIT },
+      { board_id: BOARD, exclude_archived_branches: true, $limit: PAGINATION.DEFAULT_LIMIT },
     ]);
   });
 
-  it('restarts only the placement read when its pages churn, a bounded number of times', async () => {
-    const churn = () => Promise.reject(new Error(PAGINATION_CHURN_MESSAGE));
-    let failures = 1;
-    const { client, callsTo } = fakeFeathersClient(
-      {
-        'board-objects': {
-          findAll: () => (failures-- > 0 ? churn() : Promise.resolve([boardObject('o-1', 'br-1')])),
-        },
-        boards: { get: () => fullBoard() },
-      },
-      { fallback: async () => [] }
-    );
-    await expect(
-      loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true })
-    ).resolves.toBe(true);
-    expect(callsTo('board-objects', 'findAll')).toHaveLength(2);
-    expect(callsTo('sessions', 'findAll')).toHaveLength(1);
-    expect(agorStore.getState().boardObjectById.has('o-1')).toBe(true);
+  it('keeps the unchanged last placement on an in-place reload during equal-total churn', async () => {
+    // Use the real findAll helper: equal totals cannot detect an offset shift.
+    const client = await createRestClient('http://unused.test');
+    const branches = Array.from({ length: 102 }, (_, i) => branch(`br-${i}`));
+    let placements = branches.slice(0, 101).map((b, i) => boardObject(`o-${i}`, b.branch_id));
+    let churn = false;
+    vi.spyOn(client.service('branches'), 'find').mockResolvedValue(branches);
+    vi.spyOn(client.service('sessions'), 'find').mockResolvedValue([]);
+    vi.spyOn(client.service('cards'), 'find').mockResolvedValue([]);
+    vi.spyOn(client.service('boards'), 'get').mockResolvedValue(fullBoard());
+    const find = vi
+      .spyOn(client.service('board-objects'), 'find')
+      .mockImplementation(async (params) => {
+        const limit = Number(params?.query?.$limit);
+        const skip = Number(params?.query?.$skip ?? 0);
+        const data = placements.slice(skip, skip + limit);
+        const total = placements.length;
+        if (churn && skip === 0) {
+          // Archive a page-one branch and create a new placement sorting last.
+          placements = [...placements.slice(1), boardObject('o-new', 'br-101')];
+        }
+        return { total, skip, limit, data };
+      });
+    await loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
+    const saved = agorStore.getState().boardObjectById.get('o-100');
+    expect(saved).toBeDefined();
+    find.mockClear();
+    churn = true;
+    await loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true, inPlace: true });
+    expect(agorStore.getState().boardObjectById.get('o-100')).toEqual(saved);
     expect(ready()).toBe(true);
-
-    // Sustained churn fails the board with its retryable partition error.
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    failures = Number.POSITIVE_INFINITY;
-    agorStore.getState().setCoverage(boardScopeKey(BOARD), null);
-    await expect(
-      loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true })
-    ).resolves.toBe(false);
-    expect(callsTo('board-objects', 'findAll')).toHaveLength(5);
-    expect(selectBoardPartition(agorStore.getState(), BOARD)?.status).toBe('error');
+    expect(find).toHaveBeenCalledTimes(1);
   });
 
-  it('never retries a placement read that failed for any other reason', async () => {
+  it('surfaces a failed placement read through the existing partition error', async () => {
     const { client, callsTo } = fakeFeathersClient(
       {
         'board-objects': { findAll: () => Promise.reject(new Error('Forbidden')) },
@@ -363,12 +365,16 @@ describe('loadBoardPartition', () => {
   });
 
   it('drops the apply when the authority changes mid-load', async () => {
-    const { client, release } = makePartitionClient({ sessions: [session('s-1', 'br-1')] });
+    const { client, release } = makePartitionClient({
+      sessions: [session('s-1', 'br-1')],
+      boardObjects: [boardObject('o-old-authority', 'br-1')],
+    });
     const load = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
     setRealtimeAuthorityScope('user-b:member:1');
     release();
     await load;
     expect(agorStore.getState().sessionById.size).toBe(0);
+    expect(agorStore.getState().boardObjectById.has('o-old-authority')).toBe(false);
     // The stale load never settles its entry under the new authority; it
     // releases it, so the board loads again instead of staying 'loading'.
     expect(agorStore.getState().coverage.has(boardScopeKey(BOARD))).toBe(false);

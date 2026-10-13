@@ -195,6 +195,9 @@ export const HomeAskBox = memo(function HomeAskBox({
   const { token } = theme.useToken();
   const compact = useHomeCompact();
   const { authGeneration } = useConnectionState();
+  // Missing settings mean “enabled” to the fallback resolver. Wait for the
+  // current workspace snapshot before choosing a tool, without blocking drafts.
+  const settingsHydrated = useAgorStore((s) => s.agenticToolSettingsHydrated);
   const inputRef = useRef<TextAreaRef>(null);
   const [prompt, setPrompt] = useState('');
   const [target, setTarget] = useState<Branch | null>(null);
@@ -208,7 +211,8 @@ export const HomeAskBox = memo(function HomeAskBox({
     onCreateSession,
     onOpenSession,
     // Also gates a held send resumed by a pick after the box was emptied.
-    canSend: () => !disabled && prompt.trim().length > 0,
+    canSend: () =>
+      !disabled && agorStore.getState().agenticToolSettingsHydrated && prompt.trim().length > 0,
     buildConfig: (branch) => {
       sentRef.current = { prompt, target };
       return buildNewSessionConfig({
@@ -243,6 +247,7 @@ export const HomeAskBox = memo(function HomeAskBox({
   );
   const busy =
     disabled ||
+    !settingsHydrated ||
     compose.submitting !== null ||
     compose.resolving ||
     (!target && compose.resolveFailed);
