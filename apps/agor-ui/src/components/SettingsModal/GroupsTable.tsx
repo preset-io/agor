@@ -10,7 +10,6 @@ import {
   Popconfirm,
   Select,
   Space,
-  Table,
   Tag,
   Tooltip,
   Typography,
@@ -26,6 +25,7 @@ import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
 import { FIELD_WIDTHS, SectionDivider } from './panelPrimitives';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
@@ -301,7 +301,8 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
           )}
         </div>
       ) : (
-        <Table
+        <ResponsiveTable
+          primaryColumnKey="name"
           rowKey="group_id"
           size="small"
           pagination={false}
@@ -309,6 +310,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
           columns={[
             {
               title: 'Group',
+              key: 'name',
               dataIndex: 'name',
               render: (_: string, group: Group) => (
                 <Space>

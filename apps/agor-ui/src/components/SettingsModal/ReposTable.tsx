@@ -12,7 +12,6 @@ import {
   Input,
   Modal,
   Space,
-  Table,
   Tooltip,
   Typography,
 } from 'antd';
@@ -33,6 +32,7 @@ import { RepoFormFields } from '../forms/RepoFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { Tag } from '../Tag';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 
@@ -434,7 +434,8 @@ export const ReposTable: React.FC<ReposTableProps> = ({
           <Empty description={`No repositories match “${searchTerm}”`} />
         </div>
       ) : (
-        <Table
+        <ResponsiveTable
+          primaryColumnKey="name"
           dataSource={filteredRepos}
           columns={columns}
           rowKey="repo_id"

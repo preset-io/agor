@@ -1,6 +1,6 @@
 import type { AgorClient, Board, CardType, CardWithType } from '@agor-live/client';
 import { ExportOutlined, PushpinFilled } from '@ant-design/icons';
-import { Button, Empty, Input, Space, Table, Tag, Tooltip, Typography } from 'antd';
+import { Button, Empty, Input, Space, Tag, Tooltip, Typography } from 'antd';
 import { type Key, useCallback, useMemo, useState } from 'react';
 import { useAppNavigation } from '@/hooks/useAppNavigation';
 import { useSettingsRoute } from '@/hooks/useSettingsRoute';
@@ -11,6 +11,7 @@ import { getBoardEmoji } from '../BoardTile';
 import CardModal from '../CardModal/CardModal';
 import { HighlightMatch } from '../HighlightMatch';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { useSettingsDrill } from './SettingsDrill';
 import { useSettingsCards } from './useSettingsCards';
@@ -75,8 +76,13 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
   );
 
   const cards = useMemo(() => {
+    // The Type filter applies to the data itself, so it also works in the
+    // phone card layout (which has no column filters).
     const all = allCards
       .filter((c) => !c.archived)
+      .filter(
+        (c) => typeFilter.length === 0 || typeFilter.includes(c.card_type_id ?? '__untyped__')
+      )
       .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
     return filterBySettingsSearch(all, searchTerm, [
       (card) => card.title,
@@ -92,7 +98,7 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
       },
       (card) => JSON.stringify(card.data ?? {}),
     ]);
-  }, [allCards, searchTerm, boardById, cardZoneInfo, userById, cardTypeName]);
+  }, [allCards, typeFilter, searchTerm, boardById, cardZoneInfo, userById, cardTypeName]);
 
   // Type filter options come from the types actually in use, so the dropdown
   // never offers an empty bucket.
@@ -164,8 +170,6 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
       width: 160,
       filters: typeFilters,
       filteredValue: typeFilter.length ? typeFilter : null,
-      onFilter: (value: Key | boolean, card: CardWithType) =>
-        value === '__untyped__' ? !card.card_type_id : card.card_type_id === value,
       render: (_: unknown, card: CardWithType) => {
         const name = cardTypeName(card);
         if (!name) return <Typography.Text type="secondary">—</Typography.Text>;
@@ -319,7 +323,8 @@ export const AllCardsPanel: React.FC<AllCardsPanelProps> = ({
           Could not load cards. Close and reopen to retry.
         </Typography.Text>
       )}
-      <Table
+      <ResponsiveTable
+        primaryColumnKey="title"
         dataSource={cards}
         loading={!cardsData && !cardsError}
         columns={columns}

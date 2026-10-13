@@ -9,7 +9,6 @@ import {
   Input,
   Popconfirm,
   Space,
-  Table,
   Tag,
   Tooltip,
   Typography,
@@ -24,6 +23,7 @@ import { HighlightMatch } from '../HighlightMatch';
 import { validateJSON } from '../JSONEditor';
 import { CardTypeSchemaEditor } from './CardTypeSchemaEditor';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 
@@ -279,7 +279,8 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No card types yet" />
         </div>
       ) : (
-        <Table
+        <ResponsiveTable
+          primaryColumnKey="name"
           dataSource={filteredCardTypes}
           columns={columns}
           rowKey="card_type_id"
