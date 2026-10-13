@@ -17,7 +17,13 @@ export default defineConfig({
   format: ['esm'],
   dts: false,
   clean: true,
-  splitting: false,
+  // Every source file is an entry, so without splitting each one inlines its
+  // whole import graph (bundled deps included) — 40+ MiB of duplicates in
+  // agor-live. Splitting hoists shared code into chunks loaded once, which also
+  // keeps one module instance per process across dynamic imports.
+  // Caveat: esbuild can't resolve names through `export * from '<external>'`
+  // when splitting; import from the external package directly instead.
+  splitting: true,
   outDir: 'dist',
   // Bundle pure-JS feature trees that otherwise add many tiny packages to the
   // global install. Native and platform-selected dependencies stay external.
