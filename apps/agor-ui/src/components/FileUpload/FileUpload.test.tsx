@@ -86,7 +86,7 @@ describe('FileUpload errors', () => {
     const unconfirmed =
       'The connection to Agor dropped before this was confirmed. Refresh to see if it went through before you try to upload the files again.';
     expect(await screen.findByText(unconfirmed)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Upload' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: 'Upload' })).toBeDisabled();
 
     rerender(<FileUpload {...props} open={false} />);
     rerender(<FileUpload {...props} open />);
@@ -110,7 +110,7 @@ describe('FileUpload errors', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Upload' }));
 
     expect(await screen.findByText("Couldn't upload the files.")).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: 'Upload' })).toBeEnabled();
   });
 
   it('keeps the modal open with the server reason under Details', async () => {
