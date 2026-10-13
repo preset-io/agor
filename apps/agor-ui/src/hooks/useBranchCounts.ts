@@ -27,11 +27,15 @@ const onBranchEvents = (client: AgorClient, { invalidate }: { invalidate: () => 
  * visible branches on visible boards), for the board badges — the store holds
  * only the loaded scopes' branches. Read under the realtime authority (again
  * after a reconnect or identity change) and re-read after branch events
- * (`useServerRead`). A board missing from the map has no active branch.
+ * (`useServerRead`). A board missing from `counts` has no active branch, once
+ * `loaded` is true.
  */
-export function useBranchCounts(client: AgorClient | null): Map<string, number> {
-  return (
-    useServerRead(client, 'branch-counts', readCounts, { subscribe: onBranchEvents }).data ??
-    NO_COUNTS
-  );
+export function useBranchCounts(client: AgorClient | null): {
+  counts: Map<string, number>;
+  loaded: boolean;
+} {
+  const { data } = useServerRead(client, 'branch-counts', readCounts, {
+    subscribe: onBranchEvents,
+  });
+  return { counts: data ?? NO_COUNTS, loaded: data !== undefined };
 }

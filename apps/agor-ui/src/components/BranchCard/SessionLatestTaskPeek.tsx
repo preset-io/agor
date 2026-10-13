@@ -1,6 +1,6 @@
 import type { AgorClient, Message, Session, StreamingMessageState, User } from '@agor-live/client';
 import { TaskStatus } from '@agor-live/client';
-import { Alert, Button, Empty, Input, Spin, theme } from 'antd';
+import { Button, Empty, Input, Spin, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
@@ -8,6 +8,7 @@ import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { REACT_FLOW_NO_WHEEL_CLASS } from '../../utils/reactFlowDragClasses';
 import { canSessionStartTurn } from '../../utils/sessionTurn';
+import { CompactNotice } from '../CompactNotice';
 import { TaskBlock } from '../TaskBlock';
 import { chooseLatestSessionTask } from './latestSessionTask';
 
@@ -22,6 +23,24 @@ interface SessionLatestTaskPeekProps {
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_STREAMING_MESSAGES: Map<string, StreamingMessageState> = new Map();
+
+/** Set by ReactiveSession when a `removed` event arrives for the session. */
+const SESSION_REMOVED_ERROR = 'Session was removed';
+
+function describePeekError(error: string, terminal: boolean) {
+  if (error === SESSION_REMOVED_ERROR) {
+    return { type: 'neutral', message: 'This session was deleted.', canRetry: false } as const;
+  }
+  if (terminal) {
+    return {
+      type: 'neutral',
+      message:
+        "This session isn't available. It may have been deleted, or you may not have access.",
+      canRetry: false,
+    } as const;
+  }
+  return { type: 'error', message: "Couldn't load the latest activity.", canRetry: true } as const;
+}
 
 function isDisposedReactiveSessionError(error: unknown): boolean {
   return error instanceof Error && error.message.includes(' is disposed');
@@ -174,7 +193,7 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
 
     const loading = enabled && (!currentReactiveState || (currentReactiveState.loading && !task));
     const error = currentReactiveState?.error || null;
-    const isTerminalError = !!currentReactiveState?.terminal;
+    const errorNotice = error ? describePeekError(error, !!currentReactiveState?.terminal) : null;
     const trimmedPrompt = prompt.trim();
     const canPrompt = !!onSendPrompt && !connectionDisabled;
     const promptPermissionMode = currentSession.permission_config?.mode;
@@ -213,29 +232,33 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
             overflowY: 'auto',
           }}
         >
-          {error ? (
-            <Alert
-              type="error"
-              message="Failed to load session task"
-              description={error}
-              showIcon
-              action={
-                reactiveSession && currentReactiveState && !isTerminalError ? (
-                  <Button
-                    size="small"
-                    loading={isReloading}
-                    onClick={async () => {
-                      setIsReloading(true);
-                      try {
-                        await reactiveSession.resync();
-                      } finally {
-                        setIsReloading(false);
-                      }
-                    }}
-                  >
-                    Reload
-                  </Button>
-                ) : undefined
+          {error && errorNotice ? (
+            <CompactNotice
+              type={errorNotice.type}
+              role={errorNotice.type === 'error' ? 'alert' : 'status'}
+              message={errorNotice.message}
+              details={
+                error === SESSION_REMOVED_ERROR
+                  ? undefined
+                  : [{ label: 'Error', value: error, code: true }]
+              }
+              actions={
+                errorNotice.canRetry && reactiveSession
+                  ? [
+                      {
+                        label: 'Try again',
+                        loading: isReloading,
+                        onClick: async () => {
+                          setIsReloading(true);
+                          try {
+                            await reactiveSession.resync();
+                          } finally {
+                            setIsReloading(false);
+                          }
+                        },
+                      },
+                    ]
+                  : undefined
               }
             />
           ) : loading ? (
@@ -249,11 +272,12 @@ export const SessionLatestTaskPeek = React.memo<SessionLatestTaskPeekProps>(
               style={{ marginTop: token.sizeXL }}
             />
           ) : task.status === TaskStatus.QUEUED ? (
-            <Alert
+            <CompactNotice
               type="info"
-              showIcon
-              message="Latest task is queued"
-              description={task.full_prompt || 'Waiting for the session to become available.'}
+              message="This message is waiting in the queue."
+              details={
+                task.full_prompt ? [{ label: 'Message', value: task.full_prompt }] : undefined
+              }
             />
           ) : (
             <TaskBlock

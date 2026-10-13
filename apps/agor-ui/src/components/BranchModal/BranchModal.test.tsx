@@ -222,3 +222,35 @@ describe('BranchModal — permissions tab visibility', () => {
     });
   });
 });
+
+describe('BranchModal — repository not loaded', () => {
+  it.each([
+    { name: 'with a way to open repositories', onOpenSettings: vi.fn(), action: true },
+    { name: 'without one', onOpenSettings: undefined, action: false },
+  ])('shows the warning $name', ({ onOpenSettings, action }) => {
+    const user = makeUser({ user_id: 'user-1', role: 'member' });
+    const { client } = makeStubClient({ users: [user] });
+    renderWithApp(
+      <BranchModal
+        open
+        onClose={() => {}}
+        branch={makeBranch()}
+        repo={null}
+        sessions={[]}
+        client={client}
+        currentUser={user}
+        onOpenSettings={onOpenSettings}
+      />
+    );
+    expect(
+      screen.getByText("This branch's repository hasn't loaded, so you can't edit it yet.")
+    ).toBeInTheDocument();
+    const button = screen.queryByRole('button', { name: 'Open repositories' });
+    if (action) {
+      button?.click();
+      expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    } else {
+      expect(button).not.toBeInTheDocument();
+    }
+  });
+});

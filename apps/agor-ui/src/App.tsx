@@ -2258,6 +2258,7 @@ function AppContent() {
                   onToggleReaction={handleToggleReaction}
                   onDeleteComment={handleDeleteComment}
                   onLogout={logout}
+                  onRetryConnection={retryConnection}
                   externalAppLink={headerInstanceConfig?.externalAppLink}
                   externalAppLabel={headerInstanceConfig?.externalAppLabel}
                   onOpenWorkspaceSettings={setSettingsTabToOpen}
