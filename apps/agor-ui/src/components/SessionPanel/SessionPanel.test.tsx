@@ -144,6 +144,7 @@ function renderPanel({
   activeSession = session,
   open = true,
   onClose = vi.fn(),
+  onCloseOtherTabs,
   currentUserId,
 }: {
   onOpenTerminal?: ReturnType<typeof vi.fn>;
@@ -152,6 +153,7 @@ function renderPanel({
   activeSession?: Session;
   open?: boolean;
   onClose?: ReturnType<typeof vi.fn>;
+  onCloseOtherTabs?: ReturnType<typeof vi.fn>;
   currentUserId?: string;
 } = {}) {
   render(
@@ -164,6 +166,7 @@ function renderPanel({
             branch={branch}
             open={open}
             onClose={onClose}
+            onCloseOtherTabs={onCloseOtherTabs}
             currentUserId={currentUserId}
           />
         </AntApp>
@@ -691,6 +694,31 @@ describe('SessionPanel mobile header', () => {
     renderPanel();
     expect(screen.getByRole('button', { name: 'Close panel' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+  });
+});
+
+describe('SessionPanel with several open tabs', () => {
+  afterEach(() => {
+    reactive.tasks = [];
+    vi.restoreAllMocks();
+  });
+
+  it('closes just this tab and offers Close other tabs in More actions', async () => {
+    const onCloseOtherTabs = vi.fn();
+    const { onClose } = renderPanel({ onCloseOtherTabs });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close tab' }));
+    expect(onClose).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Close other tabs/ }));
+    expect(onCloseOtherTabs).toHaveBeenCalled();
+  });
+
+  it('keeps More actions unchanged with a single session', async () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await screen.findByRole('menuitem', { name: /Archive session/ });
+    expect(screen.queryByRole('menuitem', { name: /Close other tabs/ })).not.toBeInTheDocument();
   });
 });
 

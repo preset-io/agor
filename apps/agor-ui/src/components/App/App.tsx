@@ -20,6 +20,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
+import { DoubleLeftOutlined } from '@ant-design/icons';
 import { Flex, Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -44,6 +45,7 @@ import { usePermissionDecision } from '../../hooks/usePermissionDecision';
 import { usePinnedOpenRows } from '../../hooks/usePinnedRows';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
+import { useSessionTabs } from '../../hooks/useSessionTabs';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
@@ -68,6 +70,7 @@ import {
 import { SharedUserSettingsModal } from '../../surfaces/SharedUserSettingsModal';
 import type { AgenticToolOption, CreateRepoOptions } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
+import { boardIdForSession } from '../../utils/boardIdForSession';
 import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
@@ -89,6 +92,7 @@ import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
 import { PendingToolChoicePanel } from '../SessionPanel/PendingToolChoicePanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
+import { OpenSessionsButton, SessionTabs } from '../SessionTabs';
 import { SettingsModal } from '../SettingsModal';
 import { TeammatesDirectory } from '../TeammatesDirectory';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
@@ -542,6 +546,13 @@ export const App: React.FC<AppProps> = ({
     useMemo(() => makeBoardSelector(currentBoardId), [currentBoardId])
   );
   const isHomeSurface = isRootHomePath && !hasExplicitEntityTarget;
+  const sessionTabs = useSessionTabs(user?.user_id, isHomeSurface ? null : currentBoardId);
+  const {
+    open: openSessionTab,
+    close: closeSessionTab,
+    closeOthers: closeOtherSessionTabs,
+  } = sessionTabs;
+  const hasSessionTabs = sessionTabs.sessions.length > 1;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
   const isLeavingHomeSurface = wasHomeSurfaceRef.current && !isHomeSurface;
@@ -994,6 +1005,49 @@ export const App: React.FC<AppProps> = ({
     [client, navigation]
   );
 
+  // Every session shown on this board becomes a tab. A cross-board link can
+  // select the session a render before the board follows, so wait for it.
+  useEffect(() => {
+    if (!effectiveSelectedSessionId) return;
+    const { sessionById, branchById } = agorStore.getState();
+    const session = sessionById.get(effectiveSelectedSessionId);
+    if (boardIdForSession(session, branchById) === currentBoardId) {
+      openSessionTab(effectiveSelectedSessionId);
+    }
+  }, [currentBoardId, effectiveSelectedSessionId, openSessionTab]);
+
+  const handleCloseSessionTab = useCallback(
+    (sessionId: string) => {
+      const nextSessionId = closeSessionTab(sessionId);
+      if (sessionId !== effectiveSelectedSessionId) return;
+      if (nextSessionId) handleSessionClick(nextSessionId);
+      else handleCloseSessionPanel();
+    },
+    [closeSessionTab, effectiveSelectedSessionId, handleCloseSessionPanel, handleSessionClick]
+  );
+
+  const handleCloseOtherSessionTabs = useCallback(
+    (sessionId: string) => {
+      closeOtherSessionTabs(sessionId);
+      if (sessionId !== effectiveSelectedSessionId) handleSessionClick(sessionId);
+    },
+    [closeOtherSessionTabs, effectiveSelectedSessionId, handleSessionClick]
+  );
+
+  const handleCloseSelectedSessionTab = useCallback(() => {
+    if (effectiveSelectedSessionId) handleCloseSessionTab(effectiveSelectedSessionId);
+  }, [effectiveSelectedSessionId, handleCloseSessionTab]);
+
+  const handleCloseOtherSelectedSessionTabs = useCallback(() => {
+    if (effectiveSelectedSessionId) handleCloseOtherSessionTabs(effectiveSelectedSessionId);
+  }, [effectiveSelectedSessionId, handleCloseOtherSessionTabs]);
+
+  const handleShowSessionTabs = useCallback(() => {
+    const { sessions, selectedId } = sessionTabs;
+    const shown = sessions.find((session) => session.session_id === selectedId) ?? sessions[0];
+    if (shown) handleSessionClick(shown.session_id);
+  }, [handleSessionClick, sessionTabs]);
+
   const handlePermissionDecision = usePermissionDecision(client);
 
   // Narrow per-id subscriptions: only patches to the SELECTED session (and
@@ -1032,12 +1086,16 @@ export const App: React.FC<AppProps> = ({
   // the drawer and does not resurrect the card.
   useEffect(() => {
     if (selectedSessionId && !selectedSessionExists) {
-      if (routeParams.sessionShortId && currentBoardId) {
+      const nextSessionId = closeSessionTab(selectedSessionId);
+      if (routeParams.sessionShortId && nextSessionId) {
+        navigation.goToSession(nextSessionId, { replace: true });
+      } else if (routeParams.sessionShortId && currentBoardId) {
         navigation.goToBoard(currentBoardId, { replace: true });
       }
       setSelectedSessionId(null);
     }
   }, [
+    closeSessionTab,
     currentBoardId,
     navigation,
     routeParams.sessionShortId,
@@ -1501,6 +1559,26 @@ export const App: React.FC<AppProps> = ({
                         onCommentSelect={handleCommentSelect}
                       />
                     )}
+                    {!isHomeSurface &&
+                      !sessionPanelTargetOpen &&
+                      sessionTabs.sessions.length > 0 && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: token.marginSM,
+                            right: token.marginSM,
+                            zIndex: 10,
+                          }}
+                        >
+                          <OpenSessionsButton
+                            count={sessionTabs.sessions.length}
+                            offscreen={sessionTabs.sessions}
+                            tooltip="Show sessions"
+                            icon={<DoubleLeftOutlined />}
+                            onClick={handleShowSessionTabs}
+                          />
+                        </div>
+                      )}
                   </div>
                 </Panel>
                 {(sessionPanelTargetOpen || !eventStreamPanelCollapsed) && (
@@ -1534,6 +1612,16 @@ export const App: React.FC<AppProps> = ({
                     >
                       {effectiveSelectedSessionId ? (
                         <Flex vertical style={{ height: '100%' }}>
+                          {hasSessionTabs && (
+                            <SessionTabs
+                              sessions={sessionTabs.sessions}
+                              selectedId={effectiveSelectedSessionId}
+                              onSelect={handleSessionClick}
+                              onClose={handleCloseSessionTab}
+                              onCloseOthers={handleCloseOtherSessionTabs}
+                              onHide={handleCloseSessionPanel}
+                            />
+                          )}
                           <div style={{ flex: 1, minHeight: 0 }}>
                             <SessionPanel
                               client={client}
@@ -1542,7 +1630,10 @@ export const App: React.FC<AppProps> = ({
                               currentUserId={user?.user_id}
                               sessionMcpServerIds={selectedSessionMcpServerIds}
                               open={!!effectiveSelectedSessionId}
-                              onClose={handleCloseSessionPanel}
+                              onClose={handleCloseSelectedSessionTab}
+                              onCloseOtherTabs={
+                                hasSessionTabs ? handleCloseOtherSelectedSessionTabs : undefined
+                              }
                               uploadPolicy={uploadPolicy}
                             />
                           </div>
