@@ -11,7 +11,6 @@
 
 import {
   isAtLeastMemberRole,
-  isMcpMemberPolicyRefusal,
   mayMemberManageMCPServer,
   mayMemberUseMCPScope,
   mayMemberUseMCPTransport,
@@ -193,18 +192,11 @@ const READ_ONLY_RESTRICTION =
 
 /**
  * What a member can do when the policy keeps adding servers to administrators:
- * ask one. Information, not a failure — the member did nothing wrong.
+ * ask one. Information, not a failure — the member did nothing wrong. Also the
+ * answer to a daemon refusal carrying `isMcpMemberPolicyRefusal`.
  */
 export function askAdminToAddMcpServer(serverName?: string): string {
   return `Ask an administrator to add ${serverName || 'the server you need'} to this workspace.`;
-}
-
-/**
- * The same answer for a write the daemon refused under the policy — the
- * backstop for a click the UI expected to succeed. `null` for any other error.
- */
-export function askAdminIfPolicyRefused(error: unknown, serverName?: string): string | null {
-  return isMcpMemberPolicyRefusal(error) ? askAdminToAddMcpServer(serverName) : null;
 }
 
 /**

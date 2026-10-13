@@ -33,7 +33,7 @@ const props: CatalogDetailDrawerProps = {
   connecting: false,
   startingSession: false,
   startSessionError: null,
-  connectError: null,
+  connectNotice: null,
   connectCapability: {
     connectionReady: true,
     role: 'admin',

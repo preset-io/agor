@@ -44,7 +44,7 @@ function makeProps(
     connecting: false,
     startingSession: false,
     startSessionError: null,
-    connectError: null,
+    connectNotice: null,
     policyPending: false,
     policyPendingHint: '',
     onConnect: connect,

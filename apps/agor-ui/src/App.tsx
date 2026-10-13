@@ -1,4 +1,5 @@
 import { AgorLocalAuthMode } from '@agor/core/config/browser';
+import { isMcpMemberPolicyRefusal } from '@agor/core/mcp/member-policy';
 import type {
   AgenticToolName,
   Artifact,
@@ -45,7 +46,7 @@ import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal'
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
 import { MCPCatalogModalHost } from './components/Marketplace/MCPCatalogModalHost';
-import { askAdminIfPolicyRefused } from './components/MCPServer/memberPolicy';
+import { askAdminToAddMcpServer } from './components/MCPServer/memberPolicy';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { type OnboardingCompletionResult, OnboardingWizard } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
@@ -1698,9 +1699,8 @@ function AppContent() {
       showSuccess('MCP server added successfully!');
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
-      const askAdmin = askAdminIfPolicyRefused(error);
-      if (askAdmin) {
-        showInfo(askAdmin);
+      if (isMcpMemberPolicyRefusal(error)) {
+        showInfo(askAdminToAddMcpServer());
         return;
       }
       showError(

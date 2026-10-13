@@ -39,11 +39,15 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { stagePromptDraftSeed } from '../../utils/promptDrafts';
-import { type MCPServerCapabilityContext, policyPendingState } from '../MCPServer/memberPolicy';
+import {
+  askAdminToAddMcpServer,
+  type MCPServerCapabilityContext,
+  policyPendingState,
+} from '../MCPServer/memberPolicy';
 import { CatalogCard } from './CatalogCard';
-import { CatalogDetailDrawer } from './CatalogDetailDrawer';
+import { type CatalogConnectNotice, CatalogDetailDrawer } from './CatalogDetailDrawer';
 import { CatalogToolbar } from './CatalogToolbar';
-import { DEFAULT_SORT } from './catalogPresentation';
+import { DEFAULT_SORT, entryTitle } from './catalogPresentation';
 import {
   MARKETPLACE_DRAWER_FOCUS_FALLBACK_MS,
   MARKETPLACE_OAUTH_POLL_DELAYS_MS,
@@ -170,11 +174,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const [sessionSetupRequested, setSessionSetupRequested] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
   const [startSessionError, setStartSessionError] = useState<string | null>(null);
-  const [connectError, setConnectError] = useState<string | null>(null);
-  // The daemon refused this entry under the member policy although the UI
-  // offered Connect. Keyed by what that answer was about, so another entry,
-  // sharing choice or policy value asks again.
-  const [policyRefusedKey, setPolicyRefusedKey] = useState<string | null>(null);
+  const [connectNotice, setConnectNotice] = useState<CatalogConnectNotice | null>(null);
   const [connectSuccess, setConnectSuccess] = useState<{
     catalogKey: string;
     serverId: string;
@@ -212,7 +212,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     setStartingSession(false);
     setSessionSetupRequested(false);
     setStartSessionError(null);
-    setConnectError(null);
+    setConnectNotice(null);
     setConnectSuccess(null);
     setKeyRequirement(null);
     surpriseOAuthResultRef.current = null;
@@ -253,7 +253,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     authGeneration,
   });
   const { pending: policyPending, hint: policyPendingHint } = policyPendingState(memberPolicy);
-  const connectAttemptKey = selected ? `${selected.name}|${sharing}|${memberPolicy.policy}` : null;
   const connectCapability = useMemo<MCPServerCapabilityContext>(
     () => ({
       role: currentUser?.role,
@@ -283,6 +282,12 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         ]
       : null
   );
+  // A connect outcome answered the caller's authority at the time; a role,
+  // auth generation or policy change asks again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authority is the reset boundary
+  useEffect(() => {
+    setConnectNotice(null);
+  }, [currentUser?.role, authGeneration, memberPolicy.policy, memberPolicy.canConfigure]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: ownership consent resets at entry and caller boundaries
   useEffect(() => {
     setSharing('private');
@@ -446,7 +451,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     drawerTrigger.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setConnecting(false);
-    setConnectError(null);
+    setConnectNotice(null);
     setConnectSuccess(null);
     setStartSessionError(null);
     setStartingSession(false);
@@ -493,7 +498,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     setStartSessionError(null);
     setKeyRequirement(null);
     setSelected(null);
-    setConnectError(null);
+    setConnectNotice(null);
     setConnectSuccess(null);
     surpriseOAuthResultRef.current = null;
     // `afterOpenChange(false)` is the normal restoration boundary. Keep a
@@ -549,7 +554,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         return;
       }
       setConnecting(true);
-      setConnectError(null);
+      setConnectNotice(null);
       try {
         const result = await client.service('mcp-catalog/connect').create({
           catalog_key: selected.name,
@@ -620,16 +625,17 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       } catch (err: unknown) {
         oauthPopup?.close();
         if (!operation.isCurrent()) return;
-        if (isMcpMemberPolicyRefusal(err)) {
-          setPolicyRefusedKey(connectAttemptKey);
-          return;
-        }
-        setConnectError(
-          onboarding
-            ? 'Could not connect this server. Check your credentials and try again.'
-            : err instanceof Error
-              ? err.message
-              : 'Could not connect this server'
+        setConnectNotice(
+          isMcpMemberPolicyRefusal(err)
+            ? { tone: 'info', message: askAdminToAddMcpServer(entryTitle(selected)) }
+            : {
+                tone: 'error',
+                message: onboarding
+                  ? 'Could not connect this server. Check your credentials and try again.'
+                  : err instanceof Error
+                    ? err.message
+                    : 'Could not connect this server',
+              }
         );
         const requirement = readCredentialRequirement(err);
         if (requirement) setKeyRequirement(requirement);
@@ -637,7 +643,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, selected, onboarding, sharing, connectAttemptKey]
+    [client, operationGuard, selected, onboarding, sharing]
   );
 
   const continueSurpriseOAuth = useCallback(
@@ -785,7 +791,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         onRetryConnection={() => {
           interactionEpoch.current += 1;
           setConnectSuccess(null);
-          setConnectError(null);
+          setConnectNotice(null);
           surpriseOAuthResultRef.current = null;
         }}
         identityKey={currentUser?.user_id ?? null}
@@ -820,10 +826,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         startingSession={startingSession}
         startSessionError={startSessionError}
         connecting={connecting}
-        connectError={connectError}
-        connectRefusedByPolicy={
-          connectAttemptKey !== null && policyRefusedKey === connectAttemptKey
-        }
+        connectNotice={connectNotice}
         credentialRequirement={keyRequirement}
         connectCapability={connectCapability}
         policyPending={policyPending}
@@ -831,7 +834,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         sharing={sharing}
         onSharingChange={(value) => {
           setSharing(value);
-          setConnectError(null);
+          setConnectNotice(null);
         }}
         readiness={readiness.readiness}
         readinessLoading={readiness.loading}

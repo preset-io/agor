@@ -1,7 +1,5 @@
-import { MCP_MEMBER_POLICY_REFUSED_CODE } from '@agor/core/mcp/member-policy';
 import { describe, expect, it } from 'vitest';
 import {
-  askAdminIfPolicyRefused,
   askAdminToAddMcpServer,
   explainAddRestriction,
   type MCPServerCapabilityContext,
@@ -24,18 +22,6 @@ describe('askAdminToAddMcpServer', () => {
     expect(askAdminToAddMcpServer()).toBe(
       'Ask an administrator to add the server you need to this workspace.'
     );
-  });
-});
-
-describe('askAdminIfPolicyRefused', () => {
-  it('answers only the daemon refusal that carries the policy code', () => {
-    const refusal = Object.assign(new Error('raw daemon text'), {
-      data: { code: MCP_MEMBER_POLICY_REFUSED_CODE },
-    });
-    expect(askAdminIfPolicyRefused(refusal, 'Linear')).toBe(
-      'Ask an administrator to add Linear to this workspace.'
-    );
-    expect(askAdminIfPolicyRefused(new Error('Forbidden'))).toBeNull();
   });
 });
 

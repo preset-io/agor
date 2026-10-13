@@ -973,6 +973,56 @@ describe('connect capability reaches the drawer', () => {
     expect(connectCalls).toHaveLength(1);
   });
 
+  it('drops a policy refusal once the same user becomes an admin', async () => {
+    memberPolicyAnswer = { policy: 'allow_private_only', can_configure: true };
+    connectImpl = async () => {
+      throw Object.assign(new Error('refused'), {
+        name: 'Forbidden',
+        code: 403,
+        data: { code: MCP_MEMBER_POLICY_REFUSED_CODE },
+      });
+    };
+    const client = makeClient();
+    const view = (currentUser: User, authGeneration: number) => (
+      <MemoryRouter>
+        <CatalogTab
+          client={client}
+          connected
+          connecting={false}
+          authGeneration={authGeneration}
+          currentUser={currentUser}
+        />
+      </MemoryRouter>
+    );
+    const rendered = render(view(MEMBER, 1));
+    fireEvent.click(await findCard('DeepWiki'));
+    const drawer = await findDrawer();
+    fireEvent.click(drawer.getByRole('checkbox'));
+    const connect = await findNoAuthConnect(drawer);
+    await waitFor(() => expect(connect).toBeEnabled());
+    fireEvent.click(connect);
+    expect(
+      await drawer.findByText('Ask an administrator to add DeepWiki to this workspace.')
+    ).toBeVisible();
+    expect(connect).toBeDisabled();
+
+    memberPolicyAnswer = { policy: 'use_existing_only', can_configure: true };
+    // A promotion lands as a new authenticated generation carrying the new role.
+    rendered.rerender(view({ ...MEMBER, role: 'admin' } as User, 2));
+
+    await waitFor(() => expect(screen.queryByText(/Ask an administrator/)).toBeNull());
+    const promoted = await findDrawer();
+    const checkbox = promoted.getByRole('checkbox') as HTMLInputElement;
+    if (!checkbox.checked) fireEvent.click(checkbox);
+    await waitFor(() =>
+      expect(
+        promoted.getByText('Connect', { selector: 'button *' }).closest('button')
+      ).toBeEnabled()
+    );
+    expect(screen.queryByText(/Ask an administrator/)).toBeNull();
+    expect(connectCalls).toHaveLength(1);
+  });
+
   it('enables Connect when the server grants the member capability', async () => {
     memberPolicyAnswer = { policy: 'allow_private_only', can_configure: true };
 

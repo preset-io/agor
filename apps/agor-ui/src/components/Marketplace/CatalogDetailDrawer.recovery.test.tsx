@@ -52,7 +52,7 @@ function renderDrawer(overrides: Partial<ComponentProps<typeof CatalogDetailDraw
       connecting={false}
       startingSession={false}
       startSessionError={null}
-      connectError={null}
+      connectNotice={null}
       connectCapability={ALLOWED}
       policyPending={false}
       policyPendingHint={POLICY_LOADING_HINT}

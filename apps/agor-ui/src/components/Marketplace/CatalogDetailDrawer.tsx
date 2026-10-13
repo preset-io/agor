@@ -77,6 +77,11 @@ const AGENT_OPTIONS = AVAILABLE_AGENTS.map((agent) => ({
 const FALLBACK_DISCLOSURE =
   'This server has published no access statement. Anything it exposes becomes available to the agent in the session you connect it to.';
 
+export interface CatalogConnectNotice {
+  message: string;
+  tone: 'error' | 'info';
+}
+
 export interface CatalogDetailDrawerProps {
   /** Same auth presentation, different terminal action; never inferred from routing. */
   mode?: 'catalog' | 'onboarding';
@@ -97,9 +102,8 @@ export interface CatalogDetailDrawerProps {
   connecting: boolean;
   startingSession: boolean;
   startSessionError: string | null;
-  connectError: string | null;
-  /** The daemon refused the last Connect under the member policy; say who to ask instead. */
-  connectRefusedByPolicy?: boolean;
+  /** The last Connect's outcome: an error, or an info answer such as the member policy's. */
+  connectNotice: CatalogConnectNotice | null;
   /**
    * What the live endpoint said it wanted, if a previous connect was refused
    * over the bearer access token. Overrides the entry's `auth_type` for deciding whether
@@ -171,8 +175,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   connecting,
   startingSession,
   startSessionError,
-  connectError,
-  connectRefusedByPolicy = false,
+  connectNotice,
   credentialRequirement,
   connectCapability,
   policyPending,
@@ -401,15 +404,15 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             : canAddMcpServer(connectCapability) ||
               (reusable && canUseExistingMcpServer(connectCapability))
         )
-      ? connectRefusedByPolicy
-        ? askAdminToAddMcpServer(title)
-        : undefined
+      ? undefined
       : sharing === 'shared' && canUseExistingMcpServer(connectCapability)
         ? readinessLoading
           ? 'Checking whether an existing shared installation is available…'
           : readinessError
             ? 'Existing shared availability could not be verified. Reopen Catalog to try again.'
-            : 'No eligible shared installation is available. You cannot publish or repair shared configuration under the current policy. Choose Private if allowed, or ask an admin.'
+            : !canAddMcpServer(connectCapability)
+              ? askAdminToAddMcpServer(title)
+              : 'No eligible shared installation is available. You cannot publish or repair shared configuration under the current policy. Choose Private if allowed, or ask an admin.'
         : canUseShared
           ? 'Choose Use existing shared to connect without adding a private server.'
           : explainAddRestriction(connectCapability, title);
@@ -423,6 +426,8 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
     !(sharing === 'shared' && needsApiKey) &&
       !blockedReason &&
       !policyRefusal &&
+      // The daemon has already answered this attempt; asking again changes nothing.
+      connectNotice?.tone !== 'info' &&
       acknowledged &&
       !connecting &&
       (!needsApiKey || bearerToken) &&
@@ -918,7 +923,9 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   </Form.Item>
                 </Form>
               )}
-              {connectError && <Alert type="error" showIcon title={connectError} />}
+              {connectNotice && (
+                <Alert type={connectNotice.tone} showIcon title={connectNotice.message} />
+              )}
               {policyRefusal && <Alert type="info" showIcon title={policyRefusal} />}
 
               <Button

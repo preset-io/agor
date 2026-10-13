@@ -13,7 +13,8 @@ import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServer/memberPolicy';
-import { CatalogDetailDrawer } from './CatalogDetailDrawer';
+import { type CatalogConnectNotice, CatalogDetailDrawer } from './CatalogDetailDrawer';
+import { entryTitle } from './catalogPresentation';
 
 const ALLOWED: MCPServerCapabilityContext = {
   connectionReady: true,
@@ -56,7 +57,7 @@ function renderDrawer(
     readiness?: import('@agor/core/types').MCPCatalogReadiness;
     sharing?: import('@agor/core/types').MCPCatalogSharing;
     readinessError?: string;
-    connectRefusedByPolicy?: boolean;
+    connectNotice?: CatalogConnectNotice;
   } = {}
 ) {
   const { capability = ALLOWED, policyPending = false } = options;
@@ -73,8 +74,7 @@ function renderDrawer(
       startingSession={false}
       startSessionError={null}
       connecting={false}
-      connectError={null}
-      connectRefusedByPolicy={options.connectRefusedByPolicy}
+      connectNotice={options.connectNotice ?? null}
       connectCapability={capability}
       readiness={options.readiness}
       sharing={options.sharing}
@@ -98,7 +98,7 @@ function renderDrawer(
         startingSession={false}
         startSessionError={null}
         connecting={false}
-        connectError={null}
+        connectNotice={null}
         connectCapability={capability}
         policyPending={policyPending}
         policyPendingHint={POLICY_LOADING_HINT}
@@ -136,7 +136,7 @@ describe('CatalogDetailDrawer connected state', () => {
       startingSession: false,
       startSessionError: null,
       connecting: false,
-      connectError: null,
+      connectNotice: null,
       connectCapability: ALLOWED,
       policyPending: false,
       policyPendingHint: POLICY_LOADING_HINT,
@@ -186,7 +186,7 @@ describe('CatalogDetailDrawer connected state', () => {
         startingSession={false}
         startSessionError={null}
         connecting={false}
-        connectError={null}
+        connectNotice={null}
         connectCapability={ALLOWED}
         policyPending={false}
         policyPendingHint={POLICY_LOADING_HINT}
@@ -273,7 +273,7 @@ describe('CatalogDetailDrawer OAuth activation', () => {
         startingSession={false}
         startSessionError={null}
         connecting={false}
-        connectError={null}
+        connectNotice={null}
         readiness={
           options.readinessLoading
             ? null
@@ -419,13 +419,35 @@ describe('CatalogDetailDrawer connect capability', () => {
     expect(screen.queryByText(/Use existing servers only/)).not.toBeInTheDocument();
   });
 
+  it('asks an administrator, not to choose Private, when a use-only member picks Shared', () => {
+    renderDrawer(OAUTH_LINEAR, {
+      capability: RESTRICTED_MEMBER,
+      sharing: 'shared',
+      readiness: {
+        catalog_key: OAUTH_LINEAR.name,
+        state: 'oauth_required',
+        shared_configuration_available: false,
+      },
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(
+      screen.getByText(`Ask an administrator to add ${entryTitle(OAUTH_LINEAR)} to this workspace.`)
+    ).toBeVisible();
+    expect(screen.queryByText(/Choose Private if allowed/)).toBeNull();
+    expect(connectButton()).toBeDisabled();
+  });
+
   it('answers a Connect the daemon refused under the policy, as information', () => {
     // The UI offered Connect (an existing own install looked reusable), but
     // the daemon refused the write.
     renderDrawer(DEEPWIKI, {
       capability: RESTRICTED_MEMBER,
       readiness: { catalog_key: DEEPWIKI.name, state: 'installed_ready' },
-      connectRefusedByPolicy: true,
+      connectNotice: {
+        tone: 'info',
+        message: 'Ask an administrator to add DeepWiki to this workspace.',
+      },
     });
     fireEvent.click(screen.getByRole('checkbox'));
 
@@ -525,7 +547,7 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     teammatesError: null,
     defaultTeammateId: BRANCHES[0].branch_id,
     connecting: false,
-    connectError: null,
+    connectNotice: null,
     credentialRequirement,
     startingSession: false,
     startSessionError: null,

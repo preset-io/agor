@@ -1,3 +1,4 @@
+import { isMcpMemberPolicyRefusal } from '@agor/core/mcp/member-policy';
 import {
   type CreateMCPServerInput,
   hasMinimumRole,
@@ -54,7 +55,7 @@ import { buildAuthFromValues, parseEnvJSON, parseHeadersJSON } from '../MCPServe
 import {
   allowedMcpScopes,
   allowedMcpTransports,
-  askAdminIfPolicyRefused,
+  askAdminToAddMcpServer,
   canAddMcpServer,
   canAddSharedMcpServer,
   canDeleteMcpServer,
@@ -341,9 +342,8 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       return createdServerId;
     } catch (error) {
       if (!operation.isCurrent()) return null;
-      const askAdmin = askAdminIfPolicyRefused(error);
-      if (askAdmin) {
-        showInfo(askAdmin);
+      if (isMcpMemberPolicyRefusal(error)) {
+        showInfo(askAdminToAddMcpServer());
         return null;
       }
       // Say which field. Swallowing a validation rejection here left the OAuth
