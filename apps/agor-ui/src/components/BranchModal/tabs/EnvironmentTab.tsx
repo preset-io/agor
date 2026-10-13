@@ -160,7 +160,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const managedEnvsExecutionMode: ManagedEnvExecutionMode =
     featuresConfig?.managedEnvsExecutionMode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
   const isWebhookMode = managedEnvsExecutionMode === 'webhook-only';
-  const canTriggerEnv = canControlEnvironment ?? isAdmin;
+  // Unknown access keeps the controls; the server decides and its refusal reaches the toast.
+  const canTriggerEnv = canControlEnvironment ?? true;
   const triggerDisabledTooltip =
     canControlEnvironment === false ? ENVIRONMENT_NO_CONTROL : undefined;
   const lifecycleFieldHelp = isWebhookMode

@@ -66,7 +66,7 @@ export function BranchFilesystemRecovery({
   const [pending, setPending] = useState(false);
   const ownAccess = useBranchAccess(
     client,
-    branch.branch_id,
+    branch,
     currentUser,
     !accessFromParent && needsBranchAccess(branch)
   );

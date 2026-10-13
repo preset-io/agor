@@ -172,7 +172,7 @@ describe('EnvironmentLogsModal', () => {
         client={makeClient({ logs, timestamp: '2026-05-10T12:00:00Z', truncated: true })}
       />
     );
-    const note = await screen.findByText('Showing the last 3 lines.');
+    const note = await screen.findByText('The logs were too long, so only 3 lines are shown.');
     expect(note.closest('[data-notice-type]')).toHaveAttribute('data-notice-type', 'neutral');
   });
 

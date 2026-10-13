@@ -9,7 +9,6 @@ import {
   QuestionCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { theme } from 'antd';
 import type React from 'react';
 import {
   describeSessionStatus,
@@ -70,22 +69,3 @@ export function getSessionStatusPresentation(session: StatusSession): SessionSta
     Icon: STATUS_ICONS[session.status as SessionStatus] ?? MinusCircleOutlined,
   };
 }
-
-/** Standalone status icon (mobile nav rows), named by its label. */
-export const SessionStatusIcon: React.FC<{ session: StatusSession }> = ({ session }) => {
-  const { token } = theme.useToken();
-  const { label, description, color, Icon } = getSessionStatusPresentation(session);
-  return (
-    <span
-      role="img"
-      aria-label={label}
-      title={description ?? label}
-      style={{
-        color: color === 'default' ? token.colorTextTertiary : token[color],
-        display: 'inline-flex',
-      }}
-    >
-      <Icon aria-hidden />
-    </span>
-  );
-};

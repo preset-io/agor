@@ -27,6 +27,7 @@ import { useRef, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
+import type { SessionStatusInput } from '../../utils/sessionStatus';
 import { NeutralBoardIcon } from '../BoardTile/BoardTile';
 import { type SessionForIds, SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
@@ -684,8 +685,7 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
 };
 
 interface StatusPillProps extends BasePillProps {
-  session: Pick<Session, 'status' | 'ready_for_prompt'> &
-    Partial<Pick<Session, 'scheduler_init_failure_code' | 'scheduler_init_retry_at'>>;
+  session: SessionStatusInput & Pick<Session, 'ready_for_prompt'>;
 }
 
 /** Session status in the shared vocabulary from `utils/sessionStatus`. */

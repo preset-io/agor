@@ -300,7 +300,7 @@ const BranchCardComponent = ({
   // One cached read per card, only for notices whose actions depend on it.
   const branchAccess = useBranchAccess(
     client,
-    branch.branch_id,
+    branch,
     currentUser,
     !isOperating && (needsBranchAccess(branch) || canDismissBranchWorkspaceNotification(branch))
   );

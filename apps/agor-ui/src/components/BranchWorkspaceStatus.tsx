@@ -105,12 +105,7 @@ export function BranchWorkspaceStatus({
   const current = projectBranchWorkspaceOperation(operation, now);
   const overdue = current?.status === 'unknown' && operation?.status !== 'unknown';
   const dismissible = canDismissBranchWorkspaceNotification(branch);
-  const ownAccess = useBranchAccess(
-    client,
-    branch.branch_id,
-    currentUser,
-    !accessFromParent && dismissible
-  );
+  const ownAccess = useBranchAccess(client, branch, currentUser, !accessFromParent && dismissible);
   const authority = useAuthenticatedAuthorityScope(
     client,
     currentUser ? `${currentUser.user_id}:${currentUser.role}` : null

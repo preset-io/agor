@@ -57,7 +57,11 @@ export function getBranchStatusTag(branch: BranchStatusInput): BranchStatusTag |
 
 /** Whether this state's notice offers an action that depends on the viewer's access. */
 export function needsBranchAccess(branch: BranchStatusInput): boolean {
-  if (branch.deletion_status) return branch.deletion_status === 'deletion_failed';
+  if (branch.deletion_status)
+    return (
+      branch.deletion_status === 'deletion_failed' &&
+      !branch.deletion_error?.startsWith(DELETION_LOST_TRACK_PREFIX)
+    );
   if (branch.archived) return false;
   const readiness = classifyBranchFilesystemReadiness(branch);
   return readiness === 'failed' || readiness === 'unavailable';

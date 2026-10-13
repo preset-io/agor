@@ -192,7 +192,7 @@ const EnvironmentLogsContent: React.FC<EnvironmentLogsModalProps> = ({
           {logs.truncated && (
             <CompactNotice
               type="neutral"
-              message={`Showing the last ${logs.logs.replace(/\n$/, '').split('\n').length} lines.`}
+              message={`The logs were too long, so only ${logs.logs.replace(/\n$/, '').split('\n').length} lines are shown.`}
               style={{ marginTop: 8 }}
             />
           )}

@@ -1,4 +1,4 @@
-import { SessionStatus } from '@agor-live/client';
+import { SessionStatus, type TaskID } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import { describeSessionStatus, getSessionStatusTone } from './sessionStatus';
 
@@ -50,6 +50,16 @@ describe('describeSessionStatus', () => {
         status: SessionStatus.FAILED,
         scheduler_init_failure_code: 'initialization_transient',
         scheduler_init_retry_at: '2026-10-11T10:00:00.000Z',
+      }).label
+    ).toBe('Last run failed');
+  });
+
+  it('keeps "Last run failed" for a later run after the scheduled one never started', () => {
+    expect(
+      describeSessionStatus({
+        status: SessionStatus.FAILED,
+        scheduler_init_failure_code: 'mcp_server_not_usable',
+        tasks: ['task-1' as TaskID],
       }).label
     ).toBe('Last run failed');
   });

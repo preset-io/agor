@@ -487,6 +487,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
             type="warning"
             role="status"
             message={RECONNECTING_MESSAGE}
+            // Browser sockets retry forever, so without this a dead daemon leaves no action.
+            actions={
+              onRetryConnection ? [{ label: 'Reconnect', onClick: onRetryConnection }] : undefined
+            }
             style={connectionBannerStyle}
           />
         ) : (

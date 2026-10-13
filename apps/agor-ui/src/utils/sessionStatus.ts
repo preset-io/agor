@@ -70,17 +70,19 @@ export const READY_STATUS: SessionStatusCopy = {
 };
 
 export type SessionStatusInput = Pick<Session, 'status'> &
-  Partial<Pick<Session, 'scheduler_init_failure_code' | 'scheduler_init_retry_at'>>;
+  Partial<Pick<Session, 'scheduler_init_failure_code' | 'scheduler_init_retry_at' | 'tasks'>>;
 
 /**
  * A failure code without a retry time is the scheduler's permanent "never started" record;
  * a code with a retry time is transient and can coexist with a run that did start.
+ * The record is never cleared, so once the session has a Task a later failure is that run's.
  */
 export function describeSessionStatus(session: SessionStatusInput): SessionStatusCopy {
   if (
     isSessionFailed(session) &&
     session.scheduler_init_failure_code &&
-    !session.scheduler_init_retry_at
+    !session.scheduler_init_retry_at &&
+    !session.tasks?.length
   ) {
     return SCHEDULED_RUN_DIDNT_START;
   }

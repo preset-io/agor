@@ -118,10 +118,10 @@ describe('EnvironmentTab diagnostics', () => {
     );
   });
 
-  it('does not claim missing permission when access was not decided', () => {
+  it('keeps the controls and claims no missing permission when access was not decided', () => {
     permissions.isAdmin = false;
     setup(undefined);
-    expect(screen.getByText('Start').closest('button')!).toBeDisabled();
+    expect(screen.getByText('Start').closest('button')!).toBeEnabled();
     expect(screen.getByText('Start').closest('button')!).not.toHaveAttribute('title');
   });
 

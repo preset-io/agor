@@ -50,7 +50,7 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
   sessionsByBranch,
   currentUser,
   client,
-  primaryBranch,
+  primaryBranch: resolvedPrimaryBranch,
   primaryTeammateName,
   onForkSession,
   onSpawnSession,
@@ -61,6 +61,10 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
   const navigate = useNavigate();
   const { token } = theme.useToken();
   const [searchParams, setSearchParams] = useSearchParams();
+  // The resolve is a one-time read; the store copy carries later setup and retry changes.
+  const primaryBranch =
+    resolvedPrimaryBranch &&
+    (branchById.get(resolvedPrimaryBranch.branch_id) ?? resolvedPrimaryBranch);
 
   const assistantName = primaryTeammateName ?? 'Assistant';
   const canScopeAssistant = !!primaryBranch;

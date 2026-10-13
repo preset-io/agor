@@ -67,7 +67,11 @@ function usePrimaryTeammateLookup(
 ): { lookup: TeammateLookup; retry: () => void } {
   const [attempt, setAttempt] = useState(0);
   const key = `${teammateId}:${attempt}`;
-  const [result, setResult] = useState<{ key: string; lookup: TeammateLookup } | null>(null);
+  const [result, setResult] = useState<{
+    client: AgorClient;
+    key: string;
+    lookup: TeammateLookup;
+  } | null>(null);
 
   useEffect(() => {
     if (!enabled || !client || !teammateId) return;
@@ -79,6 +83,7 @@ function usePrimaryTeammateLookup(
         (branch: Branch) => {
           if (cancelled) return;
           setResult({
+            client,
             key,
             lookup: branch.archived ? { status: 'archived' } : { status: 'found', branch },
           });
@@ -87,6 +92,7 @@ function usePrimaryTeammateLookup(
           if (cancelled) return;
           const code = (error as { code?: unknown } | null)?.code;
           setResult({
+            client,
             key,
             lookup:
               code === 403 || code === 404
@@ -104,7 +110,8 @@ function usePrimaryTeammateLookup(
   }, [enabled, client, teammateId, key]);
 
   return {
-    lookup: result?.key === key ? result.lookup : { status: 'loading' },
+    // A new sign-in brings a new client, so the previous user's answer is never shown.
+    lookup: result?.client === client && result.key === key ? result.lookup : { status: 'loading' },
     retry: useCallback(() => setAttempt((n) => n + 1), []),
   };
 }

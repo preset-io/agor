@@ -427,7 +427,11 @@ const ONLINE = {
 
 describe('MobileApp connection banner', () => {
   it.each([
-    { state: { connected: false, connecting: true }, text: 'Reconnecting to Agor…', action: null },
+    {
+      state: { connected: false, connecting: true },
+      text: 'Reconnecting to Agor…',
+      action: 'Reconnect',
+    },
     {
       state: { connected: false },
       text: "Lost connection to Agor. You can't make changes until it's back.",

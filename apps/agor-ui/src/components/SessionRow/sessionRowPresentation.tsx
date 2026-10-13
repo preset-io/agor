@@ -88,8 +88,8 @@ export const SessionRowLogo: React.FC<{ tool: string }> = ({ tool }) => (
 );
 
 /**
- * Trailing status: spinner while running (green); pulsing dot while awaiting input
- * (primary) or awaiting permission/stopping (amber); amber dot when timed out,
+ * Trailing status: spinner while running (green); pulsing dot while awaiting input or
+ * permission (amber) or stopping (primary); amber dot when timed out,
  * primary dot when ready, exclamation when failed.
  */
 export const SessionStatusMark: React.FC<{ session: Session }> = ({ session }) => {
