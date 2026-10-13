@@ -1926,6 +1926,65 @@ describe('agor_sessions_prompt task callback', () => {
     );
   });
 
+  it('carries the trusted provenance stamp through to the admitted metadata', async () => {
+    const stamp = {
+      authenticated_by: 'session_token',
+      origin_user_id: 'user-1',
+      origin_user_label: 'user@example.test',
+      origin_session_id: 'sess-caller',
+      origin_branch_id: 'branch-caller',
+      origin_agentic_tool: 'claude-code',
+    } as const;
+    const promptCalls: any[] = [];
+    const app = makeFakeApp({
+      '/sessions/:id/prompt': {
+        create: async (...args: unknown[]) => {
+          promptCalls.push(args);
+          return { task_id: 'task-1', status: 'running' };
+        },
+      },
+    });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      {
+        app,
+        userId: 'user-1',
+        sessionId: 'sess-caller',
+        baseServiceParams: { provider: 'mcp', _promptProvenance: stamp },
+      },
+      ['agor_sessions_prompt']
+    );
+
+    await agor_sessions_prompt({
+      sessionId: 'sess-target',
+      prompt: 'continue exactly this task',
+      mode: 'continue',
+    });
+
+    const [data, params] = promptCalls[0];
+    expect(params.provider).toBeUndefined();
+    expect(params._promptProvenance).toEqual({
+      ...stamp,
+      tool: 'agor_sessions_prompt',
+      mode: 'continue',
+    });
+
+    // What the prompt route admits from exactly these params.
+    const { resolvePromptProvenance } = await import('../../utils/prompt-provenance.js');
+    const admitted = resolvePromptProvenance({
+      stamp: params._promptProvenance,
+      body: data.prompt,
+      escapedSentinels: 0,
+    });
+    expect(admitted.metadata).toMatchObject({
+      authenticated_by: 'session_token',
+      origin_session_id: 'sess-caller',
+      origin_user_id: 'user-1',
+      tool: 'agor_sessions_prompt',
+      mode: 'continue',
+    });
+    expect(admitted.prompt.endsWith('continue exactly this task')).toBe(true);
+  });
+
   it('rejects callback:true when the caller cannot prompt its callback session', async () => {
     const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
     vi.mocked(ensureCanPromptTargetSession).mockRejectedValueOnce(

@@ -32,10 +32,7 @@ interface MobileSessionsPageProps {
   onCreateSessionOnBranch: (branchId: string) => void;
   /** Starts a session with the primary assistant; omit when the caller can't create sessions. */
   onAskPrimary?: () => void;
-  /** Unread comments count for the header bell. */
-  commentsBadge?: number;
-  /** Opens comments/mentions from the header bell. */
-  onOpenComments?: () => void;
+  onBack: () => void;
 }
 
 /**
@@ -59,8 +56,7 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
   onSpawnSession,
   onCreateSessionOnBranch,
   onAskPrimary,
-  commentsBadge,
-  onOpenComments,
+  onBack,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -106,12 +102,7 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <MobileHeader
-        title="Sessions"
-        onSearch={() => navigate('/m/search')}
-        commentsBadge={commentsBadge}
-        onOpenComments={onOpenComments}
-      />
+      <MobileHeader title="Sessions" onBack={onBack} />
       {canScopeAssistant && (
         <div style={{ paddingInline: token.padding, paddingBottom: token.paddingSM }}>
           <Segmented<SessionScope>

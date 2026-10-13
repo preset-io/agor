@@ -33,6 +33,7 @@ import { uiRouteHref } from '@/utils/uiRoutes';
 import { ArtifactConsentModal } from '../components/ArtifactConsentModal/ArtifactConsentModal';
 import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
+import { useMobileBack } from '../components/mobile/useMobileBack';
 import {
   ArtifactLegacyNotice,
   ArtifactLoadErrorNotice,
@@ -64,6 +65,8 @@ interface ArtifactFullscreenNavbarProps {
   title: string;
   loading: boolean;
   currentUser?: User | null;
+  /** When set, the left control is an in-app Back to the mobile shell. */
+  onBackToShell?: () => void;
   onReload: () => void;
   onTrustClick: () => void;
   onHideNavbar: () => void;
@@ -79,6 +82,7 @@ function ArtifactFullscreenNavbar({
   title,
   loading,
   currentUser,
+  onBackToShell,
   onReload,
   onTrustClick,
   onHideNavbar,
@@ -102,14 +106,20 @@ function ArtifactFullscreenNavbar({
       }}
     >
       <Space size={12} style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
-        <Button
-          type="text"
-          icon={<ArrowLeftOutlined />}
-          href={artifact?.url ?? undefined}
-          disabled={!artifact?.url}
-        >
-          Board
-        </Button>
+        {onBackToShell ? (
+          <Button type="text" icon={<ArrowLeftOutlined />} onClick={onBackToShell}>
+            Back
+          </Button>
+        ) : (
+          <Button
+            type="text"
+            icon={<ArrowLeftOutlined />}
+            href={artifact?.url ?? undefined}
+            disabled={!artifact?.url}
+          >
+            Board
+          </Button>
+        )}
         <BrandLogo level={5} />
         <div
           style={{
@@ -194,6 +204,10 @@ export function ArtifactFullscreenPage({
   const { token } = theme.useToken();
   const { artifactShortId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
+  // Opened from the mobile shell (?from=m): the left control returns into /m via
+  // history rather than the desktop board link, which has no /m equivalent.
+  const cameFromMobileShell = searchParams.get('from') === 'm';
+  const onBackToShell = useMobileBack('/m');
   const showNavbar =
     searchParams.get('show_navbar') !== 'false' &&
     searchParams.get('chrome') !== '0' &&
@@ -375,6 +389,7 @@ export function ArtifactFullscreenPage({
           title={title}
           loading={loading}
           currentUser={currentUser}
+          onBackToShell={cameFromMobileShell ? onBackToShell : undefined}
           onReload={fetchArtifact}
           onTrustClick={() => setConsentOpen(true)}
           onHideNavbar={hideNavbar}

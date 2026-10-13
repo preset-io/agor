@@ -1,5 +1,5 @@
 import { resetAnalyticsLoggerForTests, setAnalyticsLoggerForTests } from '@agor/core/analytics';
-import { type Task, TaskStatus } from '@agor/core/types';
+import { SessionStatus, type Task, TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
 
@@ -36,8 +36,10 @@ function makeService(repository: {
       tasks: ['018f0000-0000-7000-8000-000000000001'],
     }),
     patch: vi.fn().mockResolvedValue({}),
+    emit: vi.fn(),
+    triggerQueueProcessing: vi.fn().mockResolvedValue(undefined),
   };
-  const service = Object.create(TasksService.prototype) as TasksService & {
+  const service = Object.create(TasksService.prototype) as {
     repository: typeof repository;
     id: string;
     emit: ReturnType<typeof vi.fn>;
@@ -47,7 +49,7 @@ function makeService(repository: {
   service.id = 'task_id';
   service.emit = vi.fn();
   service.app = { service: vi.fn(() => sessionsService) };
-  return { service, sessionsService };
+  return { service: service as unknown as TasksService, sessionsService, repository };
 }
 
 describe('TasksService analytics lifecycle events', () => {
@@ -91,7 +93,7 @@ describe('TasksService analytics lifecycle events', () => {
       status: TaskStatus.RUNNING,
       started_at: '2026-01-01T00:00:01.000Z',
     });
-    const { service } = makeService({
+    const { service, repository } = makeService({
       findById: vi.fn().mockResolvedValueOnce(currentTask).mockResolvedValueOnce(currentTask),
       update: vi.fn().mockResolvedValue(runningTask),
     });
@@ -105,7 +107,7 @@ describe('TasksService analytics lifecycle events', () => {
     );
 
     track.mockClear();
-    service.repository.findById = vi
+    repository.findById = vi
       .fn()
       .mockResolvedValueOnce(runningTask)
       .mockResolvedValueOnce(runningTask);
@@ -129,12 +131,33 @@ describe('TasksService analytics lifecycle events', () => {
       duration_ms: 5000,
       recorded_tool_count: 2,
     });
-    const { service, sessionsService } = makeService({
+    const { service, sessionsService, repository } = makeService({
       findById: vi.fn().mockResolvedValueOnce(runningTask).mockResolvedValueOnce(runningTask),
       update: vi.fn().mockResolvedValue(timedOutTask),
     });
 
-    await service.patch(runningTask.task_id, { status: TaskStatus.TIMED_OUT });
+    const projectedSession = {
+      session_id: runningTask.session_id,
+      tasks: [runningTask.task_id],
+      status: SessionStatus.TIMED_OUT,
+      ready_for_prompt: true,
+    };
+    sessionsService.get.mockResolvedValue(projectedSession);
+    const params = { suppressTerminalQueueProcessing: false };
+    await service.patch(runningTask.task_id, { status: TaskStatus.TIMED_OUT }, params);
+
+    expect(sessionsService.emit).toHaveBeenCalledTimes(1);
+    expect(sessionsService.emit).toHaveBeenCalledWith(
+      'patched',
+      projectedSession,
+      expect.objectContaining({ path: 'sessions', id: runningTask.session_id, params })
+    );
+    expect(sessionsService.triggerQueueProcessing).toHaveBeenCalledTimes(1);
+    expect(sessionsService.triggerQueueProcessing).toHaveBeenCalledWith(
+      runningTask.session_id,
+      params
+    );
+    expect(sessionsService.patch).not.toHaveBeenCalled();
 
     expect(track).toHaveBeenCalledWith(
       'task.completed',
@@ -146,15 +169,15 @@ describe('TasksService analytics lifecycle events', () => {
       }),
       { userId: runningTask.created_by }
     );
-    expect(sessionsService.patch).not.toHaveBeenCalled();
-
     track.mockClear();
-    service.repository.findById = vi
+    repository.findById = vi
       .fn()
       .mockResolvedValueOnce(timedOutTask)
       .mockResolvedValueOnce(timedOutTask);
     await service.patch(runningTask.task_id, { status: TaskStatus.TIMED_OUT });
 
     expect(track).not.toHaveBeenCalledWith('task.completed', expect.anything(), expect.anything());
+    expect(sessionsService.emit).toHaveBeenCalledTimes(1);
+    expect(sessionsService.triggerQueueProcessing).toHaveBeenCalledTimes(1);
   });
 });

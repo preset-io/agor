@@ -55,7 +55,7 @@ export interface HomeCommentNeed {
 
 export type HomeNeed = HomeSessionNeed | HomeCommentNeed;
 
-interface HomeBuckets {
+export interface HomeBuckets {
   /** Session needs only; comments come from `makeCommentsForYouSelector`. */
   needs: HomeSessionNeed[];
   needsCount: number;
@@ -332,10 +332,13 @@ export function makeHomeBucketsSelector(
       insertTopK(recent, session, recentLimit, updatedBefore);
     };
     // Needs you ignores the My work query and started-by-me filters on purpose.
+    // `needsLimit: 0` counts needs without building, grouping or ranking items.
     const addNeed = (session: Session, reason: HomeSessionNeed['reason'], earlier?: Session[]) => {
       needsCount++;
       needsByReason[reason]++;
-      insertTopK(needs, sessionNeed(session, reason, earlier), needsLimit, needBefore);
+      if (needsLimit > 0) {
+        insertTopK(needs, sessionNeed(session, reason, earlier), needsLimit, needBefore);
+      }
     };
 
     const failures: Session[] = [];
@@ -404,6 +407,10 @@ export function makeHomeBucketsSelector(
     }
     const addGroups = (groups: Map<string, Session[]>, reason: 'failed' | 'finished') => {
       for (const group of groups.values()) {
+        if (needsLimit <= 0) {
+          addNeed(group[0], reason);
+          continue;
+        }
         const [latest, ...earlier] = group.sort((a, b) => updatedAt(b) - updatedAt(a));
         addNeed(latest, reason, earlier.length ? earlier : undefined);
       }
