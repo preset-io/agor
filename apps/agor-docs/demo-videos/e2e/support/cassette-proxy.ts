@@ -20,6 +20,13 @@
 // /v1/messages calls, so a strict global sequence would misalign. Only a
 // path with no recording at all is an error (599).
 //
+// 'hold' (either mode, toggled at runtime with POST /__cassette_hold?on=1|0):
+// requests for model turns (POST /v1/messages) are parked and never answered
+// or recorded, so agents started while it's on stay "running" for as long as
+// a take needs. How a clip shows several sessions working at once: replay
+// matches by path, so concurrent turns can't replay faithfully, and a held
+// turn needs no recording at all. Parked requests close with the proxy.
+//
 // This is deliberately NOT wired into every E2E spec — only ones that
 // actually invoke a real agent turn opt in, via AGOR_E2E_AGENT_MODE.
 
@@ -134,6 +141,8 @@ export async function startCassetteProxy(options: {
   upstreamHost: string; // e.g. 'api.anthropic.com'
   port?: number;
   append?: boolean;
+  /** Start in hold mode (see above); a missing cassette is then fine. */
+  hold?: boolean;
 }): Promise<CassetteProxyHandle> {
   const { mode, cassettePath, upstreamHost } = options;
 
@@ -147,7 +156,11 @@ export async function startCassetteProxy(options: {
     console.log(`[cassette-proxy] append mode: preloaded ${prior.entries.length} entries`);
   }
   const replayCassette = mode === 'replay' ? loadCassette(cassettePath) : null;
-  if (mode === 'replay' && (!replayCassette || replayCassette.entries.length === 0)) {
+  if (
+    mode === 'replay' &&
+    !options.hold &&
+    (!replayCassette || replayCassette.entries.length === 0)
+  ) {
     throw new Error(
       `cassette-proxy: replay mode requested but no recorded cassette found at ${cassettePath}. ` +
         'Run with AGOR_E2E_AGENT_MODE=live first to record one.'
@@ -164,6 +177,9 @@ export async function startCassetteProxy(options: {
     else replayBuckets.set(key, [entry]);
   }
 
+  let holding = options.hold ?? false;
+  const parked = new Set<import('node:http').ServerResponse>();
+
   const server = createServer(async (req, res) => {
     // Harness readiness probe — never touches replay index or upstream.
     if (req.url === '/__cassette_health') {
@@ -171,8 +187,26 @@ export async function startCassetteProxy(options: {
       res.end('ok');
       return;
     }
+    if (req.url?.startsWith('/__cassette_hold')) {
+      holding = new URL(req.url, 'http://proxy').searchParams.get('on') === '1';
+      console.log(`[cassette-proxy] hold ${holding ? 'on' : 'off'}`);
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end(holding ? 'holding' : 'released');
+      return;
+    }
 
     const bodyBuf = await readBody(req);
+
+    if (holding && req.method === 'POST' && req.url?.startsWith('/v1/messages')) {
+      if (req.url.startsWith('/v1/messages/count_tokens')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"input_tokens":1000}');
+        return;
+      }
+      parked.add(res);
+      res.on('close', () => parked.delete(res));
+      return;
+    }
 
     if (mode === 'replay') {
       const key = `${req.method} ${req.url}`;
@@ -184,6 +218,13 @@ export async function startCassetteProxy(options: {
         if (entry) {
           console.warn(`[cassette-proxy] bucket exhausted, repeating last response: ${key}`);
         }
+      }
+      if (!entry && holding) {
+        // Holding with nothing recorded: answer side calls (the auth probe's
+        // model list) blandly so nothing on camera reports an error.
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"data":[],"has_more":false}');
+        return;
       }
       if (!entry) {
         console.error(`[cassette-proxy] no recording for: ${key}`);
@@ -311,6 +352,7 @@ export async function startCassetteProxy(options: {
             `[cassette-proxy] recorded ${recorded.length} interaction(s) → ${cassettePath}`
           );
         }
+        for (const res of parked) res.destroy();
         server.close((err) => (err ? reject(err) : resolve()));
       }),
   };

@@ -18,7 +18,7 @@ import {
 import type { SeedDef } from '../seeds.ts';
 
 export const SAASY_JIRA = 'https://saasy-co.atlassian.net/browse';
-const APP = 'saasy-co/app';
+export const APP = 'saasy-co/app';
 const ANALYTICS = 'saasy-co/analytics';
 const pr = (repo: string, n: number) => `https://github.com/${repo}/pull/${n}`;
 
@@ -42,7 +42,7 @@ const USER = `- **Name:** Sam Rivera
   repos is pre-approved; everything else, ask first.
 - **Style:** short answers, numbers over adjectives, tables when comparing.`;
 
-const APP_PULLS: FakePull[] = [
+export const APP_PULLS: FakePull[] = [
   {
     number: 318,
     title: 'SAASY-412: Route optimizer respects customer time windows',

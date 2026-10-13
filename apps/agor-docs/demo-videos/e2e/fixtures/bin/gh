@@ -9,7 +9,8 @@
 // seeded by Seeder.github() and appended to by `gh pr create`.
 //
 // Supported: auth status, repo view, pr create|list|view|status|diff|checks,
-// search prs. Anything else fails the way a missing permission would.
+// issue list|view, search prs. Anything else fails the way a missing
+// permission would. Issues live in the same file, under `issues`.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -152,7 +153,54 @@ if (cmd === 'search' && sub === 'prs') {
   process.exit(0);
 }
 
-if (cmd !== 'pr') fail(`gh ${args.join(' ')}: not available in this workspace (the demo GitHub supports pr, repo view, search prs, auth status)`);
+if (cmd === 'issue') {
+  const repo = repoName();
+  const issues = load(repo).data.issues || [];
+  const shapeIssue = (i) => ({
+    number: i.number,
+    title: i.title,
+    state: (i.state || 'open').toUpperCase(),
+    author: { login: i.author },
+    assignees: (i.assignees || []).map((login) => ({ login })),
+    labels: (i.labels || []).map((name) => ({ name })),
+    comments: i.comments || 0,
+    createdAt: i.createdAt,
+    updatedAt: i.updatedAt || i.createdAt,
+    body: i.body || '',
+    url: `https://github.com/${repo}/issues/${i.number}`,
+  });
+  if (sub === 'list') {
+    const state = (flag('state', 's') || 'open').toLowerCase();
+    const label = flag('label', 'l');
+    const assignee = flag('assignee', 'a');
+    const limit = Number(flag('limit', 'L') || 30);
+    const found = issues
+      .filter((i) => state === 'all' || (i.state || 'open') === state)
+      .filter((i) => !label || (i.labels || []).includes(label))
+      .filter((i) => !assignee || (i.assignees || []).includes(assignee === '@me' ? LOGIN : assignee))
+      .sort((a, b) => b.number - a.number)
+      .slice(0, limit);
+    if (has('json')) console.log(JSON.stringify(found.map((i) => pick(shapeIssue(i), flag('json')))));
+    else if (found.length === 0) console.log(`no issues match your search in ${repo}`);
+    else {
+      const rows = found.map((i) => `#${i.number}\t${(i.state || 'open').toUpperCase()}\t${i.title}\t${(i.labels || []).join(', ')}\t${ago(i.createdAt)}`);
+      console.log(`\nShowing ${found.length} of ${found.length} open issues in ${repo}\n\n${rows.join('\n')}`);
+    }
+    process.exit(0);
+  }
+  if (sub === 'view') {
+    const n = Number(String(args[2] || '').replace(/^.*\/issues\//, '').replace('#', ''));
+    const issue = issues.find((i) => i.number === n);
+    if (!issue) fail(`GraphQL: Could not resolve to an issue or pull request with the number of ${args[2]}.`);
+    const i = shapeIssue(issue);
+    if (has('json')) console.log(JSON.stringify(pick(i, flag('json'))));
+    else console.log(`${i.title} #${i.number}\n${i.state} • ${i.author.login} opened ${ago(i.createdAt)} • ${i.comments} comments\nLabels: ${i.labels.map((l) => l.name).join(', ')}\n\n${i.body}\n\nView this issue on GitHub: ${i.url}`);
+    process.exit(0);
+  }
+  fail(`gh issue ${sub || ''}: not available in this workspace`);
+}
+
+if (cmd !== 'pr') fail(`gh ${args.join(' ')}: not available in this workspace (the demo GitHub supports pr, issue, repo view, search prs, auth status)`);
 
 const repo = repoName();
 const { file, data } = load(repo);

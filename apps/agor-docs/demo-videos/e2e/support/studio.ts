@@ -22,7 +22,7 @@
 // - A clip that passes leaves a post-<id> checkpoint, so another clip can
 //   start where this one ended (ClipMeta.start = { after: '<id>' }).
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   type Browser,
@@ -212,7 +212,10 @@ export class Actor {
       const dpr = await p.evaluate(() => window.devicePixelRatio);
       const dir = path.join(this.timeline.dir, `${this.key}-stills`);
       mkdirSync(dir, { recursive: true });
-      const shoot = async (n: number) => {
+      // Number on from any earlier typing in this take (one sequence per actor).
+      const first = readdirSync(dir).filter((f) => f.endsWith('.jpg')).length;
+      const shoot = async (k: number) => {
+        const n = first + k;
         // Let the keystroke paint (the caret restarts its blink visible).
         await p.evaluate(
           () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))

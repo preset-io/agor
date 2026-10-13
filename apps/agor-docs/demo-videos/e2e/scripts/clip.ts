@@ -83,8 +83,13 @@ function record(clip: ClipMeta, flags: Flags): void {
   const env: NodeJS.ProcessEnv = { ...process.env, AGOR_E2E_CHECKPOINTS: '0' };
   delete env.AGOR_E2E_FROM_CHECKPOINT;
   delete env.AGOR_E2E_AGENT_MODE;
+  delete env.AGOR_E2E_HOLD_AGENTS;
   if (checkpoint) env.AGOR_E2E_FROM_CHECKPOINT = checkpoint;
-  if (clip.agent) {
+  if (clip.agent === 'hold') {
+    env.AGOR_E2E_CASSETTE_NAME = `clip-${clip.id}`;
+    env.AGOR_E2E_AGENT_MODE = 'replay';
+    env.AGOR_E2E_HOLD_AGENTS = '1';
+  } else if (clip.agent) {
     const cassette = `clip-${clip.id}`;
     env.AGOR_E2E_CASSETTE_NAME = cassette;
     const recorded = existsSync(path.join(CASSETTES_DIR, `${cassette}.json`));

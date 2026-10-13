@@ -19,6 +19,8 @@ import { CAST_KEYS } from './cast.ts';
 import { DEMO_REPO_PATH } from './harness.ts';
 import type { Seeder } from './seeder.ts';
 import { donutOps } from './seeds/donut-ops.ts';
+import { engBoard, engFlow } from './seeds/eng-flow.ts';
+import { engTeam } from './seeds/eng-team.ts';
 import { saasy } from './seeds/saasy.ts';
 import { teammatesTogether } from './seeds/teammates-together.ts';
 
@@ -34,6 +36,13 @@ export interface SeedDef {
    * cache key, so editing any of them rebuilds the seed.
    */
   inputs?: string[];
+  /**
+   * Keep one checkpoint for this seed instead of rebuilding it each day or
+   * on every edit: for seeds whose ids a recorded agent turn depends on (a
+   * replayed tool call names its board by id, and ids change every build).
+   * Bump it after changing the seed, then re-record the clips that use it.
+   */
+  pin?: string;
   run(s: Seeder): Promise<void>;
 }
 
@@ -107,6 +116,9 @@ export const SEEDS: SeedDef[] = [
   saasy,
   donutOps,
   teammatesTogether,
+  engTeam,
+  engBoard,
+  engFlow,
 ];
 
 export function seedByName(name: string): SeedDef {

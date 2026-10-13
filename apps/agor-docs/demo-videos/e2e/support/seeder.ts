@@ -95,6 +95,29 @@ async function poll<T>(
   }
 }
 
+/** Board objects for zones, with ids `zone-<name>` (comments anchor by them). */
+function zoneObjects(specs: Record<string, ZoneSpec>) {
+  const zones: Record<string, string> = {};
+  const objects: Record<string, unknown> = {};
+  for (const [zoneName, z] of Object.entries(specs)) {
+    const id = `zone-${zoneName}`;
+    zones[zoneName] = id;
+    const color = z.color ?? '#1677ff';
+    objects[id] = {
+      type: 'zone',
+      x: z.x,
+      y: z.y,
+      width: z.width,
+      height: z.height,
+      label: z.label,
+      borderColor: color,
+      backgroundColor: `${color}1a`,
+      ...(z.trigger ? { trigger: { behavior: 'show_picker', ...z.trigger } } : {}),
+    };
+  }
+  return { zones, objects };
+}
+
 export class Seeder {
   private readonly apis = new Map<CastKey, AgorApi>();
 
@@ -109,7 +132,7 @@ export class Seeder {
     return api;
   }
 
-  private async userId(key: CastKey): Promise<string> {
+  async userId(key: CastKey): Promise<string> {
     const known = this.world.data.users[key];
     if (known) return known.id;
     const admin = await this.as('sam');
@@ -198,25 +221,7 @@ export class Seeder {
     }
   ): Promise<BoardHandle> {
     const api = await this.as(spec.as ?? 'sam');
-    const zones: Record<string, string> = {};
-    const objects: Record<string, unknown> = {};
-    for (const [zoneName, z] of Object.entries(spec.zones ?? {})) {
-      // Comments anchor to zones by the id after the `zone-` prefix.
-      const id = `zone-${zoneName}`;
-      zones[zoneName] = id;
-      const color = z.color ?? '#1677ff';
-      objects[id] = {
-        type: 'zone',
-        x: z.x,
-        y: z.y,
-        width: z.width,
-        height: z.height,
-        label: z.label,
-        borderColor: color,
-        backgroundColor: `${color}1a`,
-        ...(z.trigger ? { trigger: { behavior: 'show_picker', ...z.trigger } } : {}),
-      };
-    }
+    const { zones, objects } = zoneObjects(spec.zones ?? {});
     const board = await api.post<{ board_id: string; slug: string }>('/boards', {
       name: spec.title,
       icon: spec.icon,
@@ -232,6 +237,17 @@ export class Seeder {
     };
     this.world.data.boards[name] = handle;
     return handle;
+  }
+
+  /** Add zones to an existing board (keyed like board()'s `zones`). */
+  async zones(board: string, specs: Record<string, ZoneSpec>, as: CastKey = 'sam'): Promise<void> {
+    const api = await this.as(as);
+    const handle = this.world.board(board);
+    const { zones, objects } = zoneObjects(specs);
+    for (const [objectId, objectData] of Object.entries(objects)) {
+      await api.patch(`/boards/${handle.id}`, { _action: 'upsertObject', objectId, objectData });
+    }
+    Object.assign(handle.zones, zones);
   }
 
   /** Let every workspace member edit the board and work on its branches. */

@@ -1,0 +1,68 @@
+{
+  "eng-build": {
+    "picker": 0.4,
+    "board": 3.067,
+    "kanban": 5.6,
+    "kanban-sent": 10.367,
+    "zones-start": 22.033,
+    "zones": 22.067,
+    "issues": 24.667,
+    "issues-sent": 28.367,
+    "tickets-start": 40.667,
+    "tickets": 54.7,
+    "stills": {
+      "rect": {
+        "x": 1194,
+        "y": 258.703125,
+        "w": 530,
+        "h": 114
+      },
+      "scale": 8,
+      "count": 68
+    }
+  },
+  "eng-fanout": {
+    "drag-0": 0.5,
+    "drop-0": 1.733,
+    "drag-1": 1.9,
+    "drop-1": 3.133,
+    "drag-2": 3.333,
+    "drop-2": 4.633,
+    "drag-3": 4.8,
+    "drop-3": 6.133,
+    "drag-4": 6.3,
+    "drop-4": 7.633,
+    "running": 9.1
+  },
+  "eng-flow": {
+    "zone-settings": 0.6,
+    "zone-prompt": 2.067,
+    "pr": 4.267,
+    "to-review": 4.833,
+    "changes": 6.067,
+    "back": 6.867,
+    "fixed": 8.033,
+    "approved": 9.367,
+    "to-qa": 10,
+    "qa-passed": 11.333,
+    "reframe": 12.2,
+    "ready": 15.867,
+    "deep": 15.9,
+    "deep-running": 17.333,
+    "deep-done": 19.5,
+    "merge": 20.267,
+    "merged": 21.667,
+    "more": 24.567,
+    "send": 29.4,
+    "stills": {
+      "rect": {
+        "x": 1194,
+        "y": 258.703125,
+        "w": 530,
+        "h": 114
+      },
+      "scale": 8,
+      "count": 39
+    }
+  }
+}

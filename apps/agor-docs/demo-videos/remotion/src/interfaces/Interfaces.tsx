@@ -1,4 +1,3 @@
-import logos from '@iconify-json/logos/icons.json';
 import { Video } from '@remotion/media';
 import type React from 'react';
 import {
@@ -11,6 +10,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
+import { BrandMark } from '../brand/BrandMark';
 import { type Act, CURSOR, type Pt as Point, Troupe } from '../brand/Cursors';
 import { fontFamily } from '../brand/fonts';
 import { Heading } from '../brand/Heading';
@@ -81,28 +81,6 @@ const PANELS: Record<Corner, Panel> = {
   },
 };
 const polygon = (pts: Pt[]) => `polygon(${pts.map(([x, y]) => `${x}px ${y}px`).join(', ')})`;
-
-/** An official brand mark from the CC0 `logos` icon set (unaltered). */
-const BrandMark: React.FC<{
-  icon: keyof typeof logos.icons;
-  size: number;
-  /** Crop a lockup to its symbol (e.g. the MCP mark without its wordmark). */
-  viewBox?: string;
-}> = ({ icon, size, viewBox }) => {
-  const data = logos.icons[icon] as { body: string; width?: number; height?: number };
-  const w = data.width ?? logos.width ?? 256;
-  const h = data.height ?? logos.height ?? 256;
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox={viewBox ?? `0 0 ${w} ${h}`}
-      aria-hidden="true"
-      // biome-ignore lint/security/noDangerouslySetInnerHtml: static SVG body from the logos icon set
-      dangerouslySetInnerHTML={{ __html: data.body }}
-    />
-  );
-};
 
 /** Label geometry: the name's type size and a rough width for it. */
 const LABEL_SIZE = 38;

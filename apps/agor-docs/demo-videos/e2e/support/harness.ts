@@ -79,10 +79,11 @@ export const DEMO_REPO_PATH = path.join(PROJECTS_DIR, 'donut-shop');
 // Committed demo material: fictional repos, datasets, documents, and the
 // GitHub stand-in (fixtures/bin/gh).
 export const FIXTURES_DIR = path.join(HERE, '../fixtures');
-// Agents' sessions find `gh` here first (the daemon's PATH starts with it),
-// and the stand-in keeps its pull requests in FAKE_GITHUB_DIR.
+// Agents' sessions find `gh` and `jira` here first (the daemon's PATH starts
+// with it); the stand-ins keep their data in FAKE_GITHUB_DIR and FAKE_JIRA_DIR.
 export const SCRATCH_BIN_DIR = path.join(SCRATCH_DIR, 'bin');
 export const FAKE_GITHUB_DIR = path.join(SCRATCH_DIR, 'fake-github');
+export const FAKE_JIRA_DIR = path.join(SCRATCH_DIR, 'fake-jira');
 export const DEMO_REPO_DEFAULT_BRANCH = 'master';
 
 // The teammate framework repo (preset-io/agor-teammate). The onboarding
@@ -141,6 +142,13 @@ export function resolveAgentMode(): AgentMode {
   const raw = process.env.AGOR_E2E_AGENT_MODE;
   return raw === 'live' || raw === 'replay' ? raw : null;
 }
+
+/**
+ * Agents started in this run never get an answer: the proxy parks their
+ * model calls (cassette-proxy.ts, "hold"), so their sessions stay running on
+ * camera. Needs no cassette.
+ */
+export const HOLD_AGENTS = process.env.AGOR_E2E_HOLD_AGENTS === '1';
 
 interface HarnessState {
   daemonPid: number;
@@ -472,11 +480,15 @@ export async function setupHarness(): Promise<void> {
   }
 
   materializeClone(DEMO_REPO_URL, DEMO_REPO_MIRROR, DEMO_REPO_PATH, 'donut-shop');
-  // The GitHub stand-in, refreshed every run (checkpoints may hold an older copy).
+  // The GitHub and Jira stand-ins, refreshed every run (checkpoints may hold
+  // an older copy).
   mkdirSync(SCRATCH_BIN_DIR, { recursive: true });
   mkdirSync(FAKE_GITHUB_DIR, { recursive: true });
-  copyFileSync(path.join(FIXTURES_DIR, 'bin', 'gh'), path.join(SCRATCH_BIN_DIR, 'gh'));
-  chmodSync(path.join(SCRATCH_BIN_DIR, 'gh'), 0o755);
+  mkdirSync(FAKE_JIRA_DIR, { recursive: true });
+  for (const bin of ['gh', 'jira']) {
+    copyFileSync(path.join(FIXTURES_DIR, 'bin', bin), path.join(SCRATCH_BIN_DIR, bin));
+    chmodSync(path.join(SCRATCH_BIN_DIR, bin), 0o755);
+  }
   materializeClone(FRAMEWORK_REPO_URL, FRAMEWORK_REPO_MIRROR, FRAMEWORK_REPO_PATH, 'agor-teammate');
 
   // Real agentic-tool keys (CLAUDE_CODE_OAUTH_TOKEN / OPENAI_API_KEY / ...)
@@ -543,7 +555,7 @@ export async function setupHarness(): Promise<void> {
   const state: HarnessState = { daemonPid: daemon.pid!, uiPid: ui.pid! };
 
   if (agentMode) {
-    if (agentMode === 'replay' && !existsSync(CASSETTE_PATH)) {
+    if (agentMode === 'replay' && !existsSync(CASSETTE_PATH) && !HOLD_AGENTS) {
       throw new Error(
         `[harness] AGOR_E2E_AGENT_MODE=replay but no cassette at ${CASSETTE_PATH}. ` +
           'Record one first with AGOR_E2E_AGENT_MODE=live.'
@@ -559,6 +571,7 @@ export async function setupHarness(): Promise<void> {
         AGOR_E2E_AGENT_MODE: agentMode,
         CASSETTE_PATH,
         AGOR_E2E_CASSETTE_APPEND: process.env.AGOR_E2E_CASSETTE_APPEND ?? '',
+        AGOR_E2E_HOLD_AGENTS: HOLD_AGENTS ? '1' : '',
         // Live mode only: swapped in for the seeded placeholder credential.
         AGOR_E2E_REAL_AUTH_TOKEN:
           agentMode === 'live' ? (secrets.CLAUDE_CODE_OAUTH_TOKEN ?? '') : '',

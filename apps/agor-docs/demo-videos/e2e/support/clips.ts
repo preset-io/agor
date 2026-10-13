@@ -43,9 +43,11 @@ export interface ClipMeta {
   start: ClipStart;
   /**
    * Films real agent turns on camera (recorded into cassettes/clip-<id>.json
-   * on the first --live take, replayed after).
+   * on the first --live take, replayed after). 'hold': agents started on
+   * camera keep running and never answer (no cassette, no keys), for shots
+   * of many sessions at work.
    */
-  agent?: boolean;
+  agent?: boolean | 'hold';
   /** 'split' puts two filmed actors side by side. Default 'single'. */
   layout?: 'single' | 'split';
   /**
@@ -192,6 +194,51 @@ export const CLIPS: ClipMeta[] = [
     script: [
       "EngBot's HEARTBEAT.md: what it does without being asked",
       'Its schedules, then a new hourly heartbeat',
+    ],
+    outputs: ['master', 'raw'],
+  },
+  {
+    id: 'eng-build',
+    title: 'Build me a kanban board',
+    purpose:
+      'Sizzle reel, Multiply engineering throughput: pick the EngTeam board, ask EngBot for the workflow board and for five issues.',
+    start: { seed: 'eng-team' },
+    agent: true,
+    script: [
+      'Sam switches to the empty EngTeam board',
+      'Compose: "Build me a kanban board for our workflow." The six workflow zones appear',
+      'Compose: "Find 5 issues to work on." Five tickets from GitHub and Jira land in Backlog',
+    ],
+    outputs: ['master', 'raw'],
+    timeoutMs: 30 * 60_000,
+  },
+  {
+    id: 'eng-fanout',
+    title: 'Fan out',
+    purpose:
+      'Sizzle reel, Multiply engineering throughput: five tickets dragged into In Progress, five agents at work.',
+    start: { seed: 'eng-board' },
+    agent: 'hold',
+    script: [
+      'The EngTeam board with five tickets in Backlog',
+      'Each is dragged into In Progress; each drop starts a Claude session',
+      'Five spinners at once',
+    ],
+    outputs: ['master', 'raw'],
+  },
+  {
+    id: 'eng-flow',
+    title: 'Review, QA, deep review, merge',
+    purpose:
+      'Sizzle reel, Multiply engineering throughput: the late-fee ticket from build to merge, with agents handing it along.',
+    start: { seed: 'eng-flow' },
+    agent: 'hold',
+    script: [
+      "The Review zone's prompt: Codex reviews Claude's PR",
+      'PR opened, Codex requests changes, Claude fixes them, Codex approves',
+      'QA: environment and Playwright checks pass',
+      'Deep review: Claude, Codex, Gemini and Copilot sub-sessions in parallel',
+      'Sam drags it to Merged, then asks Compose for 50 more tickets',
     ],
     outputs: ['master', 'raw'],
   },

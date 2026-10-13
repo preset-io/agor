@@ -59,6 +59,12 @@ export function seedCheckpoints(name: string): { seed: SeedDef; checkpoint: stri
   const lib = libHash();
   let parent = '';
   return seedChain(name).map((seed) => {
+    if (seed.pin) {
+      // Pinned: one checkpoint, kept across days and edits (see SeedDef.pin).
+      const checkpoint = `seed-${seed.name}-pin-${seed.pin}`;
+      parent = createHash('sha256').update(checkpoint).digest('hex');
+      return { seed, checkpoint };
+    }
     const h = createHash('sha256')
       .update(parent)
       .update(lib)

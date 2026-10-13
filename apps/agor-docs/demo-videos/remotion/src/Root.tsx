@@ -4,6 +4,7 @@ import { REEL_SECONDS, TeammatesReel } from './Reel';
 import { RAISE_SECONDS, RaiseTogether } from './raise/Raise';
 import { AiTeammates, DURATION_SECONDS } from './teammates/AiTeammates';
 import { AiTeammatesBebop, BEBOP_SECONDS } from './teammates/Bebop';
+import { MultiplyThroughput, THROUGHPUT_SECONDS } from './throughput/Throughput';
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -20,6 +21,14 @@ export const RemotionRoot: React.FC = () => {
         id="Interfaces"
         component={Interfaces}
         durationInFrames={Math.ceil(INTERFACES_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="MultiplyThroughput"
+        component={MultiplyThroughput}
+        durationInFrames={Math.ceil(THROUGHPUT_SECONDS * 30)}
         fps={30}
         width={1920}
         height={1080}

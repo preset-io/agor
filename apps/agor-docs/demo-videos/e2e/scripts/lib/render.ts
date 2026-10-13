@@ -266,17 +266,44 @@ export function cameraFilter(plan: CameraPlan, src: Probe): string | null {
   );
 }
 
+/** A JPEG's "WxH", read from its start-of-frame marker. */
+function jpegSize(file: string): string {
+  const d = readFileSync(file);
+  let i = 2;
+  while (i + 9 < d.length) {
+    const marker = d[i + 1];
+    const len = d.readUInt16BE(i + 2);
+    if (marker >= 0xc0 && marker <= 0xc3)
+      return `${d.readUInt16BE(i + 7)}x${d.readUInt16BE(i + 5)}`;
+    i += 2 + len;
+  }
+  return 'unknown';
+}
+
 /**
  * Write an ffconcat list for a frame-recorded actor covering [from, to] in
  * wall time: the frame on screen at `from` first, every later frame held
  * until the next was painted, the last held until `to`.
  */
 function framesConcatList(dir: string, from: number, to: number): { file: string; first: string } {
-  const index = readFileSync(path.join(dir, 'index.jsonl'), 'utf8')
+  const all = readFileSync(path.join(dir, 'index.jsonl'), 'utf8')
     .split('\n')
     .filter(Boolean)
     .map((line) => JSON.parse(line) as { file: string; wall: number })
     .sort((a, b) => a.wall - b.wall);
+  // A close-up still (studio typeStills: CDP captureScreenshot with a clip)
+  // makes the screencast emit a few frames at the clip's size. A size change
+  // mid-list cuts the encode short, so keep only full-size frames; the frame
+  // before holds over the gap.
+  const sizes = new Map<string, number>();
+  const sizeOf = new Map<string, string>();
+  for (const f of all) {
+    const size = jpegSize(path.join(dir, f.file));
+    sizeOf.set(f.file, size);
+    sizes.set(size, (sizes.get(size) ?? 0) + 1);
+  }
+  const main = [...sizes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const index = all.filter((f) => sizeOf.get(f.file) === main);
   if (index.length === 0) throw new Error(`no frames recorded in ${dir}`);
   let i = 0;
   while (i + 1 < index.length && index[i + 1].wall <= from) i++;

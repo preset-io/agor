@@ -1,12 +1,18 @@
 // Filesystem fixtures for seeds: the fictional companies' git repos,
-// their analytics warehouses, and the GitHub stand-in's pull requests.
+// their analytics warehouses, and the GitHub and Jira stand-ins' data.
 // Everything is built from committed material in fixtures/, so anyone can
 // change a dataset or a repo and reseed.
 
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { FAKE_GITHUB_DIR, FIXTURES_DIR, PROJECTS_DIR, SCRATCH_DIR } from './harness.ts';
+import {
+  FAKE_GITHUB_DIR,
+  FAKE_JIRA_DIR,
+  FIXTURES_DIR,
+  PROJECTS_DIR,
+  SCRATCH_DIR,
+} from './harness.ts';
 
 const REMOTES_DIR = path.join(SCRATCH_DIR, 'remotes');
 
@@ -83,20 +89,86 @@ export interface FakePull {
   labels?: string[];
 }
 
-/** Seed the GitHub stand-in with a repo's pull requests. */
-export function fakeGithub(github: string, description: string, pulls: FakePull[]): void {
+export interface FakeIssue {
+  number: number;
+  title: string;
+  author: string;
+  /** Days before today. */
+  ageDays: number;
+  state?: 'open' | 'closed';
+  body?: string;
+  assignees?: string[];
+  labels?: string[];
+  comments?: number;
+}
+
+const DAY = 86_400_000;
+const daysAgo = (days: number) => new Date(Date.now() - days * DAY).toISOString();
+
+/** Seed the GitHub stand-in with a repo's pull requests (and issues). */
+export function fakeGithub(
+  github: string,
+  description: string,
+  pulls: FakePull[],
+  issues: FakeIssue[] = []
+): void {
   mkdirSync(FAKE_GITHUB_DIR, { recursive: true });
-  const day = 86_400_000;
   const data = {
     description,
-    next: Math.max(100, ...pulls.map((p) => p.number)) + 1,
-    pulls: pulls.map(({ ageDays, ...p }) => {
-      const at = new Date(Date.now() - ageDays * day).toISOString();
-      return { ...p, createdAt: at, updatedAt: at };
-    }),
+    // PRs and issues share GitHub's numbering.
+    next: Math.max(100, ...pulls.map((p) => p.number), ...issues.map((i) => i.number)) + 1,
+    pulls: pulls.map(({ ageDays, ...p }) => ({
+      ...p,
+      createdAt: daysAgo(ageDays),
+      updatedAt: daysAgo(ageDays),
+    })),
+    issues: issues.map(({ ageDays, ...i }) => ({ ...i, createdAt: daysAgo(ageDays) })),
   };
   writeFileSync(
     path.join(FAKE_GITHUB_DIR, `${github.replace('/', '__')}.json`),
+    `${JSON.stringify(data, null, 2)}\n`
+  );
+}
+
+export interface FakeTicket {
+  /** e.g. SAASY-431 */
+  key: string;
+  summary: string;
+  type: 'Bug' | 'Story' | 'Task';
+  status: string;
+  priority: 'Highest' | 'High' | 'Medium' | 'Low';
+  /** Email of the assignee (a key of the project's people), if any. */
+  assignee?: string;
+  reporter: string;
+  /** Days before today. */
+  ageDays: number;
+  labels?: string[];
+  description?: string;
+}
+
+/** Seed the Jira stand-in (fixtures/bin/jira) with a project and its tickets. */
+export function fakeJira(project: {
+  key: string;
+  name: string;
+  lead: string;
+  statuses: string[];
+  /** Email to display name. */
+  people: Record<string, string>;
+  tickets: FakeTicket[];
+}): void {
+  mkdirSync(FAKE_JIRA_DIR, { recursive: true });
+  const { tickets, ...rest } = project;
+  const data = {
+    ...rest,
+    issues: tickets.map(({ ageDays, ...t }) => ({
+      ...t,
+      assigneeName: t.assignee ? project.people[t.assignee] : undefined,
+      reporterName: project.people[t.reporter] ?? t.reporter,
+      createdAt: daysAgo(ageDays),
+    })),
+  };
+  writeFileSync(
+    path.join(FAKE_JIRA_DIR, `${project.key}.json`),
     `${JSON.stringify(data, null, 2)}\n`
   );
 }

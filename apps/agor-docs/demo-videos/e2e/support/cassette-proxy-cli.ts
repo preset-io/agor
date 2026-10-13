@@ -6,7 +6,7 @@
 // teardown. A subprocess tracked by PID (see harness.ts) does.
 //
 // Env in: AGOR_E2E_AGENT_MODE ('live' | 'replay'), CASSETTE_PATH,
-// UPSTREAM_HOST, PROXY_PORT.
+// UPSTREAM_HOST, PROXY_PORT, AGOR_E2E_HOLD_AGENTS ('1': start holding).
 
 import { startCassetteProxy } from './cassette-proxy.ts';
 
@@ -20,6 +20,7 @@ const handle = await startCassetteProxy({
   cassettePath,
   upstreamHost: process.env.UPSTREAM_HOST ?? 'api.anthropic.com',
   port: process.env.PROXY_PORT ? Number(process.env.PROXY_PORT) : undefined,
+  hold: process.env.AGOR_E2E_HOLD_AGENTS === '1',
 });
 
 console.log(

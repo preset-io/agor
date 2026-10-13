@@ -92,3 +92,41 @@ writeFileSync(
   `${JSON.stringify(raiseMarks, null, 2)}\n`
 );
 writeFileSync(path.join(ROOT, 'src', 'raise', 'cursors.json'), `${JSON.stringify(raiseCursors)}\n`);
+
+// "Multiply engineering throughput": the EngTeam clips (snappy, untightened
+// raw), with every mark, the mouse path, and the typing stills.
+const ENG = ['eng-build', 'eng-fanout', 'eng-flow'];
+const engMarks = {};
+const engCursors = {};
+for (const id of ENG) {
+  const dir = path.join(CLIPS, id);
+  const video = path.join(dir, `${id}-snappy-raw.mp4`);
+  const markFile = path.join(dir, `${id}-snappy-marks.json`);
+  if (!existsSync(video) || !existsSync(markFile)) {
+    throw new Error(`missing ${video} (run: npm run clip -- ${id} --snappy in ../e2e)`);
+  }
+  copyFileSync(video, path.join(ROOT, 'public', 'clips', `${id}.mp4`));
+  engMarks[id] = Object.fromEntries(
+    JSON.parse(readFileSync(markFile, 'utf8')).map((m) => [m.label, m.seconds])
+  );
+  const cursorFile = path.join(dir, `${id}-snappy-cursor.json`);
+  if (existsSync(cursorFile)) engCursors[id] = JSON.parse(readFileSync(cursorFile, 'utf8'));
+  const stills = path.join(dir, `${id}-snappy-stills`);
+  if (existsSync(stills)) {
+    const to = path.join(ROOT, 'public', 'clips', `${id}-stills`);
+    rmSync(to, { recursive: true, force: true });
+    cpSync(stills, to, { recursive: true });
+    const index = JSON.parse(readFileSync(path.join(stills, 'index.json'), 'utf8'));
+    engMarks[id].stills = { rect: index.rect, scale: index.scale, count: index.files.length };
+  }
+  console.log(`${id}: ${JSON.stringify(engMarks[id])}`);
+}
+mkdirSync(path.join(ROOT, 'src', 'throughput'), { recursive: true });
+writeFileSync(
+  path.join(ROOT, 'src', 'throughput', 'marks.json'),
+  `${JSON.stringify(engMarks, null, 2)}\n`
+);
+writeFileSync(
+  path.join(ROOT, 'src', 'throughput', 'cursors.json'),
+  `${JSON.stringify(engCursors)}\n`
+);
