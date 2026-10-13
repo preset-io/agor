@@ -28,18 +28,21 @@ lockup; the mark itself is a frame-driven port of
 - **AiTeammatesBebop** (`src/teammates/Bebop.tsx`, `Slices.tsx`): "AI teammates
   that can do anything", Cowboy Bebop-style.
   - The Agor logo draws on and the "agor" letters crash in from the right,
-    shoving the mark left into the centered wordmark (`src/brand/`), then
-    four colored slanted slices slam in under the
-    title.
+    shoving the mark left into the centered wordmark (`src/brand/`); the
+    slogan rises in and the cursor troupe (`src/brand/Cursors.tsx`, after
+    agor.live's) swoops in to circle "together". Then four colored slanted
+    slices slam in under the title and their names pop on, left to right.
   - Each slice is a color with its teammate's name centered in it; the name
-    grows with the slice, and a strip too narrow for it shows just the emoji.
-  - Accordion: each slice opens in turn (to about 85% of the width) while its
-    question is typed. Its recording slides up from the bottom, pushing the
+    grows with the slice, and a strip too narrow for it is a plain bar.
+  - Accordion: a cursor clicks each slice open in turn (to about 85% of the
+    width) and taps along while its question is typed (sharp close-up stills
+    from the take, one per key). Its recording slides up from the bottom, pushing the
     name up into a header bar. As the next opens, the recording slides up
     and off, leaving a plain colored strip.
   - The slices even out and every recording slides back up into a band under
     its header, framed close on the left side of the reply while the answers
-    play. As each answer lands, a one-line takeaway wipes on below it.
+    play. While they pour in, terse takeaways slide up under them, one at a
+    time.
   - The slices slide off, alternately up and down, to black.
   - Standalone, ends on a logo-only sign-off.
 - **Interfaces** (`src/interfaces/`): "Access Agor from where you work".
@@ -47,7 +50,7 @@ lockup; the mark itself is a frame-driven port of
     segments (an off-axis cross of black gutters) spin in behind it, and each
     app's mark pops on, on a white tile (official marks from the CC0 `logos`
     icon set, unaltered).
-  - One by one each segment crops down to its name and slides it into the
+  - One by one a cursor clicks each app's mark and its segment crops down to its name and slides it into the
     panel's corner as its label, uncovering the same question to EngBot from
     Slack, Discord, Claude Desktop (through Agor's MCP server) and Agor.
   - Slack, Discord and Claude Desktop are hand-rolled stages (`stages.tsx`)
@@ -55,9 +58,10 @@ lockup; the mark itself is a frame-driven port of
     real EngBot clip. Fades to black.
 - **RaiseTogether** (`src/raise/Raise.tsx`): "Raise AI teammates together".
   - From black, the title rises in. Then four pillars, each a big word on
-    the left ("with personality", "integrity", "capability", "agency") that
-    rolls over to the next, and the real product on the right in a window,
-    the camera easing over the UI beat by beat.
+    the left ("with personality", "shared memory", "capability", "agency")
+    over a short line, rolling over to the next, and the real product on the
+    right in a window, the camera easing over the UI beat by beat. The takes
+    are cursorless; a troupe cursor rides each take's logged mouse path.
   - The clips are e2e `raise-<pillar>` (seed `teammates-together`: 13
     teammates, a ~200-page Handbook in Knowledge, EngBot's HEARTBEAT.md and
     schedules), captured with `npm run clip -- raise-<pillar> --snappy` and

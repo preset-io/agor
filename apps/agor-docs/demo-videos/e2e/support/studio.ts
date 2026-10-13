@@ -22,7 +22,7 @@
 // - A clip that passes leaves a post-<id> checkpoint, so another clip can
 //   start where this one ended (ClipMeta.start = { after: '<id>' }).
 
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   type Browser,
@@ -44,6 +44,7 @@ import {
   observePacing,
   paced,
   pacedMove,
+  pacedPath,
   setCursorPosition,
   settle,
   spotlight,
@@ -130,13 +131,25 @@ export class Actor {
     readonly page: Page,
     readonly context: BrowserContext,
     readonly filmed: boolean,
-    readonly timeline: Timeline
+    readonly timeline: Timeline,
+    /** Draw the in-page cursor (false: the edit draws its own from the logged path). */
+    readonly showCursor = true
   ) {
     this.camera = new Camera(this, timeline);
     this.name = CAST[key].name;
     observePacing(page, {
       rest: (x, y) => timeline.log({ type: 'cursor', actor: key, wall: Date.now(), x, y }),
       click: (x, y) => timeline.log({ type: 'click', actor: key, wall: Date.now(), x, y }),
+      sample: (x, y) => {
+        if (filmed)
+          timeline.log({
+            type: 'pointer',
+            actor: key,
+            wall: Date.now(),
+            x: Math.round(x * 10) / 10,
+            y: Math.round(y * 10) / 10,
+          });
+      },
     });
   }
 
@@ -152,7 +165,7 @@ export class Actor {
       quiet = (await loading.count().catch(() => 1)) === 0 ? quiet + 1 : 0;
       await this.page.waitForTimeout(400);
     }
-    await installCursor(this.page, { ripple: this.filmed });
+    if (this.showCursor) await installCursor(this.page, { ripple: this.filmed });
     await this.page.mouse.move(VIEWPORT.width / 2, VIEWPORT.height / 2);
     setCursorPosition(this.page, VIEWPORT.width / 2, VIEWPORT.height / 2);
     await this.page.waitForTimeout(600);
@@ -171,6 +184,62 @@ export class Actor {
 
   move(x: number, y: number, ms = 650): Promise<void> {
     return this.act((p) => pacedMove(p, x, y, ms));
+  }
+  /** One continuous sweep through `points` (viewport px) over `ms`, bending through each. */
+  path(points: Array<{ x: number; y: number }>, ms: number): Promise<void> {
+    return this.act((p) => pacedPath(p, points, ms));
+  }
+  /** Drift over `items` (their centers, in order) in one smooth motion over `ms`. */
+  async sweep(items: Locator[], ms: number): Promise<void> {
+    const boxes = await Promise.all(items.map((l) => l.boundingBox()));
+    const points = boxes
+      .filter((b): b is NonNullable<typeof b> => b !== null)
+      .map((b) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 }));
+    await this.path(points, ms);
+  }
+  /**
+   * Type into a field one key at a time, taking a sharp close-up still of
+   * `rect` (viewport px) before the first key and after each one, at
+   * `scale` image px per app px (well past the 4K capture's 2). The edit
+   * plays these stills for the typing instead of the video, so a tight
+   * zoom on the input stays crisp. The video still records the typing,
+   * just slowly (each still takes a moment).
+   */
+  async typeStills(field: Locator, text: string, rect: Rect, scale = 8): Promise<void> {
+    await this.click(field);
+    await this.act(async (p) => {
+      const cdp = await p.context().newCDPSession(p);
+      const dpr = await p.evaluate(() => window.devicePixelRatio);
+      const dir = path.join(this.timeline.dir, `${this.key}-stills`);
+      mkdirSync(dir, { recursive: true });
+      const shoot = async (n: number) => {
+        // Let the keystroke paint (the caret restarts its blink visible).
+        await p.evaluate(
+          () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+        );
+        const shot = await cdp.send('Page.captureScreenshot', {
+          format: 'jpeg',
+          quality: 94,
+          clip: { x: rect.x, y: rect.y, width: rect.w, height: rect.h, scale: scale / dpr },
+        });
+        const file = `${this.key}-stills/${String(n).padStart(3, '0')}.jpg`;
+        writeFileSync(path.join(this.timeline.dir, file), Buffer.from(shot.data, 'base64'));
+        this.timeline.log({
+          type: 'still',
+          actor: this.key,
+          wall: Date.now(),
+          file,
+          rect,
+          scale,
+        });
+      };
+      await shoot(0);
+      for (let i = 0; i < text.length; i++) {
+        await p.keyboard.type(text[i]);
+        await shoot(i + 1);
+      }
+      await cdp.detach().catch(() => undefined);
+    });
   }
   glideTo(target: Locator, ms?: number): Promise<void> {
     return this.act((p) => glideTo(p, target, ms));
@@ -305,6 +374,11 @@ export class Studio {
       presence?: boolean;
       /** The board's left panel (teammate, sessions, branches, comments). Default collapsed. */
       sidePanel?: 'open' | 'collapsed';
+      /**
+       * Draw the in-page cursor (default true). A cursorless take still logs
+       * every mouse sample, so the edit can draw its own cursor on the path.
+       */
+      cursor?: boolean;
     } = {}
   ): Promise<Actor> {
     if (this.actors.has(key)) throw new Error(`${key} is already on set`);
@@ -340,7 +414,7 @@ export class Studio {
       storageState: { cookies: [], origins: [{ origin: BASE_URL, localStorage: storage }] },
     });
     const page = await context.newPage();
-    const actor = new Actor(key, page, context, filmed, this.timeline);
+    const actor = new Actor(key, page, context, filmed, this.timeline, options.cursor !== false);
     this.actors.set(key, actor);
     if (filmed) {
       const recorder = new FrameRecorder(page, path.join(this.timeline.dir, `${key}-frames`), {

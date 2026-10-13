@@ -3,23 +3,33 @@ import type React from 'react';
 import {
   AbsoluteFill,
   Easing,
+  Freeze,
   interpolate,
   Sequence,
   staticFile,
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
+import {
+  CURSOR,
+  Cursor as CursorArrow,
+  type CursorTrack,
+  clickState,
+  pointerAt,
+} from '../brand/Cursors';
 import { fontFamily } from '../brand/fonts';
 import { Heading } from '../brand/Heading';
 import { BG, gradientText, INK } from '../brand/palette';
 import { FadeToBlack } from '../teammates/Bebop';
+import cursors from './cursors.json';
 
 // "Raise AI teammates together": from black, the title rises in; then four
 // pillars, each a big word on the left ("with personality", ...) and the
 // real product on the right in a window, the camera moving over the UI
 // beat by beat (clips: e2e raise-<pillar>, synced by `npm run sync`). The
 // word rolls over to the next pillar while the window cross-cuts. Ends on
-// black.
+// black. The takes are cursorless: one of the troupe's cursors plays the
+// person, riding the real mouse path each take logged.
 
 const ease = Easing.bezier(0.16, 1, 0.3, 1);
 const smooth = Easing.bezier(0.45, 0, 0.55, 1);
@@ -39,9 +49,13 @@ interface Beat {
   cam: [Cam, Cam];
 }
 interface Pillar {
-  key: 'personality' | 'integrity' | 'capability' | 'agency';
+  key: 'personality' | 'memory' | 'capability' | 'agency';
+  /** The e2e clip (raise-<clip>) and its cursor track. */
+  clip: 'personality' | 'integrity' | 'capability' | 'agency';
   word: string;
-  line: string;
+  /** A short line under the word, or a few bullets. */
+  line: string | string[];
+  cursor: string;
   /** The word's gradient (text), and the window's glow. */
   gradient: string;
   glow: string;
@@ -68,49 +82,56 @@ const beat = (
 const PILLARS: Pillar[] = [
   {
     key: 'personality',
+    clip: 'personality',
     word: 'personality',
-    line: 'Every teammate gets a name, a role and a persona. Start from a template or from scratch.',
+    line: 'Starter personas, or your own',
+    cursor: CURSOR.maya,
     gradient: 'linear-gradient(110deg, #34e6c4, #7ad9ff)',
     glow: '#34e6c4',
     beats: [
-      beat(1.0, 5.2, 1.6, [470, 400, 1.9], [470, 440, 2.1]), // the picker: a dozen teammates
-      beat(17.0, 22.4, 2, [960, 600, 1.35], [960, 820, 1.45]), // the starter personas
-      beat(26.8, 33.6, 2.4, [960, 560, 1.3], [960, 760, 1.4]), // naming one, giving it a job
+      beat(0.9, 3.6, 1.4, [470, 400, 1.9], [470, 440, 2.1]), // the picker: a dozen teammates
+      beat(10.5, 14.2, 1.5, [960, 600, 1.35], [960, 820, 1.45]), // the starter personas
+      beat(14.6, 21.8, 2.4, [960, 560, 1.3], [960, 760, 1.4]), // naming one, giving it a job
     ],
   },
   {
-    key: 'integrity',
-    word: 'integrity',
-    line: 'Grounded in what your company knows, with a knowledge base they read and write.',
+    key: 'memory',
+    clip: 'integrity',
+    word: 'shared memory',
+    line: "Your company's knowledge base",
+    cursor: CURSOR.ari,
     gradient: 'linear-gradient(110deg, #2ea78f, #5fe9d0)',
     glow: '#2ea78f',
     beats: [
-      beat(2.6, 8.2, 1.8, [900, 620, 1.45], [900, 660, 1.6]), // home namespace: the Handbook
-      beat(17.8, 20.8, 1, [1180, 560, 2.6], [1100, 540, 0.95]), // its graph, close in to all of it
+      beat(2.4, 7.6, 1.8, [900, 620, 1.45], [900, 660, 1.6]), // home namespace: the Handbook
+      beat(14.6, 17.1, 1, [1180, 560, 2.6], [1100, 540, 0.95]), // its graph, close in to all of it
     ],
   },
   {
     key: 'capability',
+    clip: 'capability',
     word: 'capability',
-    line: 'Plug into the tools your team already uses, from a catalog of MCP servers.',
+    line: 'Huge catalog of MCP servers',
+    cursor: CURSOR.sam,
     gradient: 'linear-gradient(110deg, #45c4bb, #7ad9ff)',
     glow: '#7ad9ff',
     beats: [
-      beat(2.1, 5.6, 1.5, [960, 420, 1.0], [960, 440, 1.15]), // the MCP Catalog (it closes at 5.7)
-      beat(9.8, 22.0, 2.8, [960, 300, 1.5], [960, 900, 1.5]), // wiring up Linear
+      beat(2.1, 5.7, 1.5, [960, 420, 1.0], [960, 440, 1.15]), // the MCP Catalog (it closes at 6.2)
+      beat(10.4, 22.0, 2.8, [960, 300, 1.5], [960, 900, 1.5]), // wiring up Linear
     ],
   },
   {
     key: 'agency',
+    clip: 'agency',
     word: 'agency',
-    line: 'A heartbeat and schedules, so they get work done without being asked.',
+    line: ['Heartbeat', 'Scheduler'],
+    cursor: CURSOR.kit,
     gradient: 'linear-gradient(110deg, #7ad9ff, #8b8cf5)',
     glow: '#8b8cf5',
     beats: [
-      beat(6.1, 7.4, 0.5, [960, 470, 1.05], [960, 430, 1.25]), // HEARTBEAT.md
-      beat(8.6, 10.4, 1.2, [960, 360, 1.6], [960, 360, 1.75]), // its schedules
-      beat(10.6, 16.6, 2.4, [965, 300, 1.35], [965, 620, 1.45]), // a new hourly heartbeat...
-      beat(18.4, 19.2, 0.6, [960, 380, 1.5], [960, 380, 1.65]), // ...and it's on the list
+      beat(2.0, 3.4, 1, [960, 360, 1.6], [960, 360, 1.75]), // its schedules
+      beat(3.7, 10.0, 2.4, [965, 300, 1.35], [965, 620, 1.45]), // a new hourly heartbeat...
+      beat(12.0, 12.9, 0.6, [960, 380, 1.5], [960, 380, 1.65]), // ...and it's on the list
     ],
   },
 ];
@@ -132,12 +153,12 @@ export const RAISE_SECONDS = BODY_END + 0.4 + FADE;
 const WIN = { x: 820, y: 170, w: 1000, h: 740 };
 
 /** One beat: the clip at its rate, framed by an eased camera move. */
-const BeatView: React.FC<{ clip: string; beat: Beat; seconds: number; fadeIn: boolean }> = ({
-  clip,
-  beat,
-  seconds,
-  fadeIn,
-}) => {
+const BeatView: React.FC<{
+  pillar: Pillar;
+  beat: Beat;
+  seconds: number;
+  fadeIn: boolean;
+}> = ({ pillar, beat, seconds, fadeIn }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps;
@@ -160,15 +181,57 @@ const BeatView: React.FC<{ clip: string; beat: Beat; seconds: number; fadeIn: bo
           height: 1080 * z,
         }}
       >
-        <Video
-          src={staticFile(`clips/${clip}`)}
-          trimBefore={Math.round(beat.from * fps)}
-          playbackRate={beat.rate}
-          muted
-          style={{ width: '100%', height: '100%' }}
-        />
+        <Sequence durationInFrames={Math.round(seconds * fps)} layout="none">
+          <Video
+            src={staticFile(`clips/raise-${pillar.clip}.mp4`)}
+            trimBefore={Math.round(beat.from * fps)}
+            playbackRate={beat.rate}
+            muted
+            style={{ width: '100%', height: '100%' }}
+          />
+        </Sequence>
+        {/* Hold the beat's last frame while the next fades in over it (the
+            take often navigates right after: a load screen mustn't show). */}
+        <Sequence from={Math.round(seconds * fps)} layout="none">
+          <Freeze frame={0}>
+            <Video
+              src={staticFile(`clips/raise-${pillar.clip}.mp4`)}
+              trimBefore={Math.round(beat.to * fps)}
+              muted
+              style={{ width: '100%', height: '100%' }}
+            />
+          </Freeze>
+        </Sequence>
       </div>
+      <TakeCursor
+        pillar={pillar}
+        src={beat.from + Math.min(t, seconds) * beat.rate}
+        rate={beat.rate}
+        cam={{ cx, cy, z }}
+      />
     </AbsoluteFill>
+  );
+};
+
+/** The take's mouse, drawn as one of the troupe, at source time `src`, framed by `cam`. */
+const TakeCursor: React.FC<{ pillar: Pillar; src: number; rate: number; cam: Cam }> = ({
+  pillar,
+  src,
+  rate,
+  cam,
+}) => {
+  const track = (cursors as unknown as Record<string, CursorTrack>)[pillar.clip];
+  if (!track) return null;
+  const p = pointerAt(track, src);
+  // Clicks in output seconds, relative to now (the ring spreads at output speed).
+  const clicks = track.clicks.map(([c]) => (c - src) / rate);
+  return (
+    <CursorArrow
+      x={WIN.w / 2 + (p.x - cam.cx) * cam.z}
+      y={WIN.h / 2 + (p.y - cam.cy) * cam.z}
+      color={pillar.cursor}
+      {...clickState(0, clicks)}
+    />
   );
 };
 
@@ -220,7 +283,8 @@ export const RaiseTogether: React.FC = () => {
                   position: 'absolute',
                   top: 0,
                   ...gradientText(p.gradient),
-                  fontSize: 116,
+                  // Long words ("shared memory") shrink to fit beside the window.
+                  fontSize: Math.min(116, 680 / (p.word.length * 0.53)),
                   fontWeight: 600,
                   letterSpacing: '-0.035em',
                   lineHeight: 1.1,
@@ -239,7 +303,7 @@ export const RaiseTogether: React.FC = () => {
               style={{
                 position: 'absolute',
                 color: INK,
-                fontSize: 36,
+                fontSize: 44,
                 fontWeight: 300,
                 lineHeight: 1.3,
                 opacity:
@@ -248,7 +312,22 @@ export const RaiseTogether: React.FC = () => {
                     : 0,
               }}
             >
-              {p.line}
+              {typeof p.line === 'string'
+                ? p.line
+                : p.line.map((item) => (
+                    <div key={item} style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+                      <span
+                        style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: 7,
+                          background: p.gradient,
+                          flex: 'none',
+                        }}
+                      />
+                      {item}
+                    </div>
+                  ))}
             </div>
           ))}
         </div>
@@ -284,7 +363,7 @@ export const RaiseTogether: React.FC = () => {
                 durationInFrames={f(seconds + XFADE) + (first ? f(0.6) : 0)}
                 premountFor={fps}
               >
-                <BeatView clip={`raise-${p.key}.mp4`} beat={b} seconds={seconds} fadeIn={!first} />
+                <BeatView pillar={p} beat={b} seconds={seconds} fadeIn={!first} />
               </Sequence>
             );
           });

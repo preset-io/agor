@@ -27,6 +27,8 @@ const cursorPos = new WeakMap<Page, { x: number; y: number }>();
 export interface PacingObserver {
   rest(x: number, y: number): void;
   click(x: number, y: number): void;
+  /** Each step of a glide (for cursorless takes, whose cursor the edit draws). */
+  sample(x: number, y: number): void;
 }
 const observers = new WeakMap<Page, PacingObserver>();
 
@@ -64,6 +66,21 @@ export function settle(page: Page): Promise<void> {
   return page.waitForTimeout(paced(1800));
 }
 
+/** The control point that bows a move from `a` to `b` up and to the left. */
+function bowControl(a: { x: number; y: number }, b: { x: number; y: number }) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dist = Math.hypot(dx, dy);
+  const bow = Math.min(80, dist * 0.1);
+  let nx = dist > 1 ? -dy / dist : 0;
+  let ny = dist > 1 ? dx / dist : 0;
+  if (nx + ny > 0) {
+    nx = -nx;
+    ny = -ny;
+  }
+  return { x: a.x + dx / 2 + nx * bow, y: a.y + dy / 2 + ny * bow };
+}
+
 function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
 }
@@ -75,9 +92,10 @@ function easeInOut(t: number): number {
  * glide is as smooth as the capture.
  *
  * The arc is a quadratic Bézier whose control point sits a little off the
- * straight line — bowing the way a right-handed wrist pivot does (a
- * rightward move bows gently upward). Subtle (8% of the distance, capped)
- * and deterministic: enough to stop reading as robotic, never a sweep.
+ * straight line, always bulging up and to the left: a right hand pivoting
+ * on its wrist (below and right of the pointer) sweeps arcs that way, and
+ * agor.live's cursor troupe bows its moves the same way. Subtle (10% of the
+ * distance, capped) and deterministic: never a sweep.
  */
 export async function pacedMove(
   page: Page,
@@ -87,15 +105,7 @@ export async function pacedMove(
 ): Promise<void> {
   const durationMs = paced(demoDurationMs);
   const from = cursorPos.get(page) ?? { x: 960, y: 540 };
-  const dx = x - from.x;
-  const dy = y - from.y;
-  const dist = Math.hypot(dx, dy);
-  const bow = Math.min(60, dist * 0.08);
-  const perp = dist > 1 ? { x: dy / dist, y: -dx / dist } : { x: 0, y: 0 };
-  const ctrl = {
-    x: from.x + dx / 2 + perp.x * bow,
-    y: from.y + dy / 2 + perp.y * bow,
-  };
+  const ctrl = bowControl(from, { x, y });
   // Sample the eased curve by WALL-CLOCK time, not by step count: a
   // fixed-delay step loop assumes each waitForTimeout takes exactly its
   // delay, but protocol jitter bunches steps up and the recorded cursor
@@ -107,15 +117,79 @@ export async function pacedMove(
     const t = Math.min(1, (Date.now() - start) / durationMs);
     const e = easeInOut(t);
     const u = 1 - e;
-    await page.mouse.move(
-      u * u * from.x + 2 * u * e * ctrl.x + e * e * x,
-      u * u * from.y + 2 * u * e * ctrl.y + e * e * y
-    );
+    const px = u * u * from.x + 2 * u * e * ctrl.x + e * e * x;
+    const py = u * u * from.y + 2 * u * e * ctrl.y + e * e * y;
+    await page.mouse.move(px, py);
+    observers.get(page)?.sample(px, py);
     if (t >= 1) break;
     await page.waitForTimeout(STEP_MS);
   }
   cursorPos.set(page, { x, y });
   observers.get(page)?.rest(x, y);
+}
+
+/**
+ * Sweep the mouse through `points` in one continuous, unhurried motion (a
+ * hand drifting down a list or across a row of cards, not hopping item to
+ * item): a Catmull-Rom curve through every point, walked at an even speed
+ * that eases in at the start and out at the end. Whatever it passes over
+ * lights up its hover state on the way.
+ */
+export async function pacedPath(
+  page: Page,
+  points: Array<{ x: number; y: number }>,
+  demoDurationMs: number
+): Promise<void> {
+  const from = cursorPos.get(page) ?? { x: 960, y: 540 };
+  const pts = [from, ...points];
+  // Dense samples along the spline, with their running length.
+  const curve: Array<{ x: number; y: number; d: number }> = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(pts.length - 1, i + 2)];
+    for (let k = 0; k < 40; k++) {
+      const u = k / 40;
+      const u2 = u * u;
+      const u3 = u2 * u;
+      const at = (a: number, b: number, c: number, d: number) =>
+        0.5 *
+        (2 * b + (-a + c) * u + (2 * a - 5 * b + 4 * c - d) * u2 + (-a + 3 * b - 3 * c + d) * u3);
+      const x = at(p0.x, p1.x, p2.x, p3.x);
+      const y = at(p0.y, p1.y, p2.y, p3.y);
+      const prev = curve[curve.length - 1];
+      curve.push({ x, y, d: prev ? prev.d + Math.hypot(x - prev.x, y - prev.y) : 0 });
+    }
+  }
+  const end = pts[pts.length - 1];
+  const last = curve[curve.length - 1];
+  curve.push({ ...end, d: last.d + Math.hypot(end.x - last.x, end.y - last.y) });
+  const total = curve[curve.length - 1].d;
+  const durationMs = paced(demoDurationMs);
+  // Even speed, speeding up over the first fifth and slowing over the last.
+  const r = 0.2;
+  const vmax = 1 / (1 - r);
+  const ease = (t: number): number =>
+    t < r ? (vmax * t * t) / (2 * r) : t > 1 - r ? 1 - ease(1 - t) : vmax * (t - r / 2);
+  const start = Date.now();
+  let j = 0;
+  for (;;) {
+    const t = Math.min(1, (Date.now() - start) / durationMs);
+    const d = ease(t) * total;
+    while (j < curve.length - 2 && curve[j + 1].d < d) j++;
+    const a = curve[j];
+    const b = curve[j + 1];
+    const f = b.d > a.d ? Math.min(1, Math.max(0, (d - a.d) / (b.d - a.d))) : 1;
+    const px = a.x + (b.x - a.x) * f;
+    const py = a.y + (b.y - a.y) * f;
+    await page.mouse.move(px, py);
+    observers.get(page)?.sample(px, py);
+    if (t >= 1) break;
+    await page.waitForTimeout(STEP_MS);
+  }
+  cursorPos.set(page, end);
+  observers.get(page)?.rest(end.x, end.y);
 }
 
 /** Smooth-scroll a target into the comfortable middle of the viewport. */

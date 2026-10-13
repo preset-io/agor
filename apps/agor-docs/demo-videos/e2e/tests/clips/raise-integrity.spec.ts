@@ -5,7 +5,7 @@ import { dropdownOptions, openTeammate, pickOption, skim } from '../../support/r
 import { clip } from '../../support/studio.ts';
 
 clip('raise-integrity', async ({ studio }) => {
-  const sam = await studio.actor('sam', { filmed: true });
+  const sam = await studio.actor('sam', { filmed: true, cursor: false });
   const p = sam.page;
   p.setDefaultTimeout(20_000);
   await sam.open('/settings/teammates');

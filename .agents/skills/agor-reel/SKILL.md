@@ -75,6 +75,27 @@ out/<file>.mp4`), then the reel. Copy finished renders to
 - **Copy**: Messaging & Positioning rules (no em-dashes; never "open
   source"). Takeaways and lines are short and concrete.
 
+## The cursor troupe
+
+agor.live's cursors (`components/landing/CursorTroupe.tsx`) perform in the
+reel too: `src/brand/Cursors.tsx` has the same arrow, colors (`CURSOR.maya`,
+`ari`, `sam`, `lee`, `kit`, `rho`) and motion.
+
+- **Every move curves like a right hand**: a damped spring with a sideways
+  pull that always bows up and to the left. Never straight lines, never
+  hops between items.
+- **Choreographed** (`<Troupe acts>`): each act is a start point, moves
+  (`{at, to, hz}`; `to` can be a function of time to orbit or ride along
+  with a moving target; `locked` follows stiffly), clicks (press plus a
+  ring) and taps (typing). Simulated deterministically at 240 Hz.
+- **On a recording** (`pointerAt(track, s)`): cursorless takes log the real
+  mouse path (demo-videos skill); draw a troupe cursor there, mapped through
+  the beat's camera, so the UI's hover states match it.
+- They have a story: they swoop in and circle "together" under the logo,
+  then each clicks open its teammate's slice and taps along at the input;
+  in section 2 each clicks its app's mark to open its panel; in section 3
+  one plays the person in each pillar. A cursor causes what happens.
+
 ## Camera on a recording
 
 Recordings are 4K captures of a 1920x1080 app. Frame them with a camera
@@ -88,6 +109,8 @@ cameras with `Easing.bezier(0.45, 0, 0.55, 1)` for pans and
   (`drawgrid=w=48:h=54` on a 960-wide frame = 96x108 app px cells).
 - Typing: zoom close (z 3.5-4.5 on a wide slice) on the input row, with the
   text starting near the left edge of the view. Readability beats context.
+  At that zoom even the 4K video is soft: play the take's typing stills
+  (one per key, 8 px per app px) over the view instead, at ~62 ms a key.
 - Answers: frame the left third of the reply, where its structure (tables,
   headings) shows; go straight there from the prompt close-up rather than
   through a wide shot.

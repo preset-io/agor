@@ -12,17 +12,41 @@ export function dropdownOptions(actor: Actor): Locator {
   );
 }
 
-/** Glide the cursor down a list, resting briefly on each item (highlighting it). */
+/**
+ * Drift the cursor over the first `count` items in one smooth, unhurried
+ * motion (about `msPerItem` each), lighting each one's hover state on the
+ * way, the way a hand browses: never hopping item to item. A grid is walked
+ * row by row, snaking (left to right, then back right to left).
+ */
 export async function skim(
   actor: Actor,
   items: Locator,
   count: number,
-  restMs = 260
+  msPerItem = 300
 ): Promise<void> {
   const n = Math.min(count, await items.count());
-  for (let i = 0; i < n; i++) {
-    await actor.glideTo(items.nth(i), 260);
-    await actor.hold(restMs);
+  const boxes = (await Promise.all(Array.from({ length: n }, (_, i) => items.nth(i).boundingBox())))
+    .filter((b): b is NonNullable<typeof b> => b !== null)
+    .map((b) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 }));
+  const rows: Array<typeof boxes> = [];
+  for (const c of boxes) {
+    const row = rows.find((r) => Math.abs(r[0].y - c.y) < 20);
+    if (row) row.push(c);
+    else rows.push([c]);
+  }
+  const points = rows.flatMap((r, i) => {
+    const sorted = [...r].sort((a, b) => a.x - b.x);
+    return i % 2 === 0 ? sorted : sorted.reverse();
+  });
+  await actor.path(points, n * msPerItem);
+}
+
+/** Scroll the page under the cursor smoothly: `dy` px in small wheel steps over `ms`. */
+export async function smoothWheel(actor: Actor, dy: number, ms = 600): Promise<void> {
+  const steps = 12;
+  for (let i = 0; i < steps; i++) {
+    await actor.page.mouse.wheel(0, dy / steps);
+    await actor.page.waitForTimeout(ms / steps);
   }
 }
 

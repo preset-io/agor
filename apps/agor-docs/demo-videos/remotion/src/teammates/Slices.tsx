@@ -4,6 +4,7 @@ import {
   AbsoluteFill,
   Easing,
   Freeze,
+  Img,
   interpolate,
   Sequence,
   staticFile,
@@ -17,17 +18,19 @@ import { INK } from '../brand/palette';
 // - Each slice is a color with its teammate's name centered in it; the name
 //   grows with the slice, and a strip too narrow for it is a plain color
 //   bar (never vertical text).
+// - The names pop up onto their slices one at a time, left to right.
 // - A slice opens (to about 85% of the width) while its question is typed:
 //   the recording slides up from the bottom, pushing the name up into a
-//   header bar.
+//   header bar. The typing plays from sharp close-up stills (one per key,
+//   e2e typeStills), not the video, so the tight zoom stays crisp.
 // - It closes as the next one opens: the recording slides up and off,
 //   leaving a plain colored strip.
 // - At the end the slices even out and every recording slides back up into
 //   a band under its header, framed close on the left side of the reply
 //   (where the telling part lands) while the answers play. The last slice
 //   goes straight from the prompt close-up to that framing.
-// - Once every answer has landed, the one-line takeaways wipe on below the
-//   bands, left to right.
+// - While the answers pour in, the one-line takeaways slide up under the
+//   bands, one at a time, left to right.
 // - Then the slices slide off, alternately up and down.
 
 export interface SliceSpec {
@@ -43,6 +46,9 @@ export interface SliceSpec {
   question0: number;
   sent: number;
   answered: number;
+  /** The typing's close-up stills (public/clips/<stillsDir>/NNN.jpg): region (app px) and count. */
+  stillsDir: string;
+  stills: { rect: { x: number; y: number; w: number; h: number }; count: number };
 }
 
 export interface SlicesTiming {
@@ -50,7 +56,6 @@ export interface SlicesTiming {
   openAt: number[];
   /** When the slices even out and the answers play. */
   revealAt: number;
-  promptRate: number;
   answerRate: number;
 }
 
@@ -86,19 +91,82 @@ const PROMPT_CAM: Cam = { cx: 1160, cy: 1000, z: 4.2 };
 const BAND_H = 540;
 const FOCUS_Z = 1.1;
 const TAKEAWAY_Y = HEADER + BAND_H + 34;
+/** The takeaways slide up this long after the answers start, one per stagger. */
+const TAKEAWAY_LEAD = 0.9;
+const TAKEAWAY_STAGGER = 0.4;
+/** The names pop on one at a time, this far apart. */
+export const NAME_STAGGER = 0.3;
 /** Slices slide off (alternately up and down) over this long. */
 export const EXIT = 0.75;
 const easeIn = Easing.bezier(0.7, 0, 0.84, 0);
 
-export const promptSeconds = (s: SliceSpec, rate: number) =>
-  (s.sent - Math.max(0, s.question0 - 0.2)) / rate;
+/** Seconds per typed character (a touch slower than the capture's snappy pace). */
+export const CHAR = 0.062;
+/** A beat on the finished question before it's sent. */
+const TYPE_TAIL = 0.35;
+export const promptSeconds = (s: SliceSpec) => (s.stills.count - 1) * CHAR + TYPE_TAIL;
+/** When character k (1-based) of slice i's question is typed. */
+export const keyAt = (timing: SlicesTiming, i: number, k: number) =>
+  timing.openAt[i] + PROMPT_LEAD + (k - 1) * CHAR;
+
+/** Each slice's left edge (at the top) and width at time t. */
+export function layoutAt(t: number, n: number, timing: SlicesTiming) {
+  const win = (a: number, d: number) =>
+    interpolate(t, [a, a + d], [0, 1], { ...clamp, easing: ease });
+  const closeAts = Array.from({ length: n }, (_, i) =>
+    i + 1 < n ? timing.openAt[i + 1] : timing.revealAt
+  );
+  const opened = closeAts.map((c, i) => win(timing.openAt[i], OPEN) * (1 - win(c, OPEN)));
+  const weights = opened.map((o) => 1 + OPEN_WEIGHT * o);
+  const sum = weights.reduce((a, b) => a + b, 0);
+  const total = 1920 + (n + 1) * SLANT;
+  const widths = weights.map((w) => (w / sum) * total);
+  const xs: number[] = [];
+  widths.forEach((_, i) => {
+    xs.push(i === 0 ? -SLANT : xs[i - 1] + widths[i - 1] - SLANT);
+  });
+  return { xs, widths, opened, closeAts };
+}
+
+/** A slice's center line at height y (it leans with the slant). */
+export const sliceCenter = (x: number, w: number, y: number) =>
+  x + w / 2 + SLANT * (0.5 - y / 1080);
+
+/** Where app point (ax, ay) of slice i's recording shows on screen while its question is typed. */
+export function promptPoint(
+  t: number,
+  n: number,
+  timing: SlicesTiming,
+  i: number,
+  ax: number,
+  ay: number
+) {
+  const { xs, widths } = layoutAt(t, n, timing);
+  const height = 1080 - HEADER;
+  const halfW = widths[i] / 2 / PROMPT_CAM.z;
+  const halfH = height / 2 / PROMPT_CAM.z;
+  const cx = Math.min(1920 - halfW, Math.max(halfW, PROMPT_CAM.cx));
+  const cy = Math.min(1080 - halfH, Math.max(halfH, PROMPT_CAM.cy));
+  const midY = HEADER + height / 2;
+  return {
+    x: sliceCenter(xs[i], widths[i], midY) + (ax - cx) * PROMPT_CAM.z,
+    y: midY + (ay - cy) * PROMPT_CAM.z,
+  };
+}
+
+/** Where slice i's name sits before any slice opens (for a cursor to click it). */
+export const NAME_SPOT = (i: number, n: number) => {
+  const w = (1920 + (n + 1) * SLANT) / n;
+  const x = -SLANT + i * (w - SLANT);
+  return { x: sliceCenter(x, w, NAME_REST), y: NAME_REST };
+};
 
 export const Slices: React.FC<{
   slices: SliceSpec[];
   timing: SlicesTiming;
   /** When each slice slides in at the start (staggered). */
   enterAt: number[];
-  /** When the names fade on (under the section title). */
+  /** When the names start popping on (under the section title), one per NAME_STAGGER. */
   namesAt: number;
   /** When the slices start sliding off. */
   exitAt: number;
@@ -112,24 +180,9 @@ export const Slices: React.FC<{
     interpolate(t, [a, a + d], [0, 1], { ...clamp, easing: ease });
 
   // How open each slice is (0..1); the last closes into the reveal.
-  const closeAts = slices.map((_, i) => (i + 1 < n ? timing.openAt[i + 1] : timing.revealAt));
-  const opened = slices.map((_, i) => win(timing.openAt[i], OPEN) * (1 - win(closeAts[i], OPEN)));
+  const { xs, widths, opened, closeAts } = layoutAt(t, n, timing);
   const reveal = win(timing.revealAt, REVEAL);
-  // The takeaways wipe on together (left to right) once the slowest answer lands.
-  const takeawaysAt =
-    timing.revealAt +
-    REVEAL * 0.5 +
-    Math.max(...slices.map((s) => (s.answered + 1.5 - s.sent) / timing.answerRate));
-
-  // Widths: share 1920 (+ the slants the outer slices hang past the edges).
-  const weights = opened.map((o) => 1 + OPEN_WEIGHT * o);
-  const sum = weights.reduce((a, b) => a + b, 0);
-  const total = 1920 + (n + 1) * SLANT;
-  const widths = weights.map((w) => (w / sum) * total);
-  const xs: number[] = [];
-  widths.forEach((_, i) => {
-    xs.push(i === 0 ? -SLANT : xs[i - 1] + widths[i - 1] - SLANT);
-  });
+  const answerAt = timing.revealAt + REVEAL * 0.5;
 
   return (
     <AbsoluteFill>
@@ -143,18 +196,17 @@ export const Slices: React.FC<{
         const right = (y: number) => x + w - SLANT * (y / 1080);
         const shape = (y0: number, y1: number) =>
           `polygon(${left(y0)}px ${y0}px, ${right(y0)}px ${y0}px, ${right(y1)}px ${y1}px, ${left(y1)}px ${y1}px)`;
-        const centerX = (y: number) => (left(y) + right(y)) / 2;
+        const centerX = (y: number) => sliceCenter(x, w, y);
 
         // The recording's phases.
-        const trimFrom = Math.max(0, s.question0 - 0.2);
         const arrive = win(timing.openAt[i], OPEN);
         const promptAt = timing.openAt[i] + PROMPT_LEAD;
-        const sentAt = promptAt + promptSeconds(s, timing.promptRate);
+        const sentAt = promptAt + promptSeconds(s);
         const leave = isLast ? 0 : win(closeAts[i], OPEN);
         const back = win(timing.revealAt, REVEAL);
-        const answerAt = timing.revealAt + REVEAL * 0.5;
         const playFor = (s.answered + 1.5 - s.sent) / timing.answerRate;
-        const focus = win(takeawaysAt + i * 0.12, 0.9);
+        // The takeaway slides up while the answers are still pouring in.
+        const takeaway = win(answerAt + TAKEAWAY_LEAD + i * TAKEAWAY_STAGGER, 0.6);
         const focusCam: Cam = { ...s.focus, z: FOCUS_Z };
         const exit = interpolate(t, [exitAt + i * 0.07, exitAt + i * 0.07 + EXIT], [0, 1], {
           ...clamp,
@@ -201,8 +253,15 @@ export const Slices: React.FC<{
         const settle = win(closeAts[i] + OPEN * 0.6, 0.45); // once the recording has cleared
         const nameY =
           leave > 0 && t < timing.revealAt ? lerp(HEADER / 2, NAME_REST, settle) : pushed;
-        const namesOn = win(namesAt, 0.5);
-        const fit = interpolate(w, [200, 260], [0, 1], clamp) * namesOn;
+        // Each name pops up onto its slice in turn, with a little overshoot.
+        const popAt = namesAt + i * NAME_STAGGER;
+        const pop = interpolate(t, [popAt, popAt + 0.45], [0, 1], {
+          ...clamp,
+          easing: Easing.bezier(0.34, 1.56, 0.64, 1),
+        });
+        const fit =
+          interpolate(w, [200, 260], [0, 1], clamp) *
+          interpolate(t, [popAt, popAt + 0.12], [0, 1], clamp);
         const nameSize = Math.min(92, Math.max(40, w * 0.1));
 
         return (
@@ -214,7 +273,7 @@ export const Slices: React.FC<{
             }}
           >
             <AbsoluteFill style={{ background: s.color, clipPath: shape(0, 1080) }} />
-            {/* The takeaway, under the band once the answer lands. */}
+            {/* The takeaway, sliding up under the band while the answer pours in. */}
             <div
               style={{
                 position: 'absolute',
@@ -223,15 +282,22 @@ export const Slices: React.FC<{
                   Math.min(1884, right(TAKEAWAY_Y + 200) - 24) -
                   Math.max(36, left(TAKEAWAY_Y) + 24),
                 top: TAKEAWAY_Y,
-                fontSize: 40,
-                fontWeight: 700,
-                letterSpacing: '-0.01em',
-                lineHeight: 1.12,
-                color: INK,
-                clipPath: `inset(0 ${100 * (1 - focus)}% 0 0)`,
+                overflow: 'hidden',
+                paddingBottom: 8,
               }}
             >
-              {s.insight}
+              <div
+                style={{
+                  fontSize: 44,
+                  fontWeight: 700,
+                  letterSpacing: '-0.015em',
+                  lineHeight: 1.1,
+                  color: INK,
+                  translate: `0px ${(1 - takeaway) * 120}%`,
+                }}
+              >
+                {s.insight}
+              </div>
             </div>
             {showVideo ? (
               <AbsoluteFill
@@ -247,20 +313,6 @@ export const Slices: React.FC<{
                   }}
                 >
                   <Sequence
-                    from={f(timing.openAt[i])}
-                    durationInFrames={f(PROMPT_LEAD)}
-                    premountFor={fps}
-                  >
-                    <Freeze frame={0}>{video({ trim: trimFrom })}</Freeze>
-                  </Sequence>
-                  <Sequence
-                    from={f(promptAt)}
-                    durationInFrames={f(sentAt) - f(promptAt)}
-                    premountFor={fps}
-                  >
-                    {video({ trim: trimFrom, rate: timing.promptRate })}
-                  </Sequence>
-                  <Sequence
                     from={f(sentAt)}
                     durationInFrames={f(answerAt) - f(sentAt)}
                     premountFor={fps}
@@ -273,6 +325,26 @@ export const Slices: React.FC<{
                   <Sequence from={f(answerAt) + f(playFor)} premountFor={fps}>
                     <Freeze frame={0}>{video({ trim: s.answered + 1.5 })}</Freeze>
                   </Sequence>
+                  {/* The typing, from the close-up stills (they cover the whole view). */}
+                  {t < (isLast ? sentAt : timing.revealAt) ? (
+                    <Img
+                      src={staticFile(
+                        `clips/${s.stillsDir}/${String(
+                          Math.min(
+                            s.stills.count - 1,
+                            Math.max(0, Math.floor((t - promptAt) / CHAR) + 1)
+                          )
+                        ).padStart(3, '0')}.jpg`
+                      )}
+                      style={{
+                        position: 'absolute',
+                        left: s.stills.rect.x * cam.z,
+                        top: s.stills.rect.y * cam.z,
+                        width: s.stills.rect.w * cam.z,
+                        height: s.stills.rect.h * cam.z,
+                      }}
+                    />
+                  ) : null}
                 </div>
               </AbsoluteFill>
             ) : null}
@@ -283,7 +355,8 @@ export const Slices: React.FC<{
                 position: 'absolute',
                 left: centerX(nameY) - 700,
                 width: 1400,
-                top: nameY - nameSize * 0.62,
+                top: nameY - nameSize * 0.62 + (1 - pop) * 90,
+                scale: String(0.6 + 0.4 * pop),
                 textAlign: 'center',
                 whiteSpace: 'nowrap',
                 fontSize: nameSize,

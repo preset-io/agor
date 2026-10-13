@@ -8,9 +8,14 @@ const clamp = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
 export const NAVY = BG_GRADIENT;
 
 /** When the slogan rises in under the wordmark (seconds into the intro). */
-const SLOGAN_AT = WORDMARK_SETTLED - 0.5;
-/** How long the intro runs: the wordmark lands, then the slogan, then a beat. */
-export const LOGO_INTRO_SECONDS = SLOGAN_AT + 1.9;
+export const SLOGAN_AT = WORDMARK_SETTLED - 0.5;
+/**
+ * How long the intro runs: the wordmark lands, then the slogan, then the
+ * cursors swoop in and circle "together" (Bebop.tsx) before heading off.
+ */
+export const LOGO_INTRO_SECONDS = SLOGAN_AT + 3.0;
+/** The middle of "together" in the slogan (px), which the cursors circle. */
+export const TOGETHER = { x: 952, y: 790 };
 
 /**
  * The Agor logo draws on, the wordmark crashes in (src/brand/AgorWordmark.tsx),

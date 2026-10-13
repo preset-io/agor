@@ -1,10 +1,11 @@
 // Clip: raise-capability (support/clips.ts). Agents with capability: the
 // MCP Catalog, then wiring up a server by hand.
 
+import { smoothWheel } from '../../support/raise.ts';
 import { clip } from '../../support/studio.ts';
 
 clip('raise-capability', async ({ studio }) => {
-  const sam = await studio.actor('sam', { filmed: true });
+  const sam = await studio.actor('sam', { filmed: true, cursor: false });
   const p = sam.page;
   p.setDefaultTimeout(20_000);
   await sam.open('/');
@@ -13,14 +14,11 @@ clip('raise-capability', async ({ studio }) => {
   studio.mark('catalog');
   await sam.click(p.getByLabel('Open MCP Catalog').first());
   await sam.hold(900);
-  for (const name of ['GitHub', 'Linear', 'Sentry', 'Notion']) {
-    await sam.glideTo(p.getByLabel(`Open ${name}`).first(), 320);
-    await sam.hold(300);
-  }
-  for (let i = 0; i < 6; i++) {
-    await p.mouse.wheel(0, 260);
-    await sam.hold(260);
-  }
+  await sam.sweep(
+    ['GitHub', 'Linear', 'Sentry', 'Notion'].map((name) => p.getByLabel(`Open ${name}`).first()),
+    1600
+  );
+  await smoothWheel(sam, 1560, 2000);
   await sam.hold(600);
   await sam.press('Escape');
 

@@ -25,7 +25,7 @@
 //          stretches squeezed to a beat (see planTighten in lib/render.ts)
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -148,6 +148,42 @@ function exportClip(clip: ClipMeta, open: boolean, pace?: 'snappy'): void {
       )}\n`
     );
 
+  // The cursor's path (every sample of every glide) and its clicks, for an
+  // edit that draws its own cursor over a cursorless take; and any close-up
+  // stills (studio typeStills), with when each was taken.
+  const at = (wall: number) => Math.round(((wall - (ready?.wall ?? wall)) * 30) / 1000);
+  const writeCursor = (file: string, map: (frame: number) => number = (f) => f) => {
+    const sec = (wall: number) => Number((map(at(wall)) / 30).toFixed(3));
+    const pointer = events.flatMap((e) =>
+      e.type === 'pointer' && ready && e.wall >= ready.wall ? [[sec(e.wall), e.x, e.y]] : []
+    );
+    const clicks = events.flatMap((e) =>
+      e.type === 'click' && ready && e.wall >= ready.wall ? [[sec(e.wall), e.x, e.y]] : []
+    );
+    if (pointer.length === 0) return;
+    writeFileSync(path.join(outDir, file), `${JSON.stringify({ pointer, clicks })}\n`);
+  };
+  const stills = events.flatMap((e) => (e.type === 'still' ? [e] : []));
+  if (stills.length > 0) {
+    const stillsDir = path.join(outDir, `${name}-stills`);
+    rmSync(stillsDir, { recursive: true, force: true });
+    mkdirSync(stillsDir, { recursive: true });
+    for (const st of stills)
+      cpSync(path.join(dir, st.file), path.join(stillsDir, path.basename(st.file)));
+    writeFileSync(
+      path.join(stillsDir, 'index.json'),
+      `${JSON.stringify(
+        {
+          rect: stills[0].rect,
+          scale: stills[0].scale,
+          files: stills.map((st) => path.basename(st.file)),
+        },
+        null,
+        2
+      )}\n`
+    );
+  }
+
   if (clip.outputs.includes('raw')) {
     console.log(`[clip] rendering the raw 4K cut...`);
     renderMaster({
@@ -159,6 +195,7 @@ function exportClip(clip: ClipMeta, open: boolean, pace?: 'snappy'): void {
       raw: true,
     });
     writeMarks(`${name}-marks.json`);
+    writeCursor(`${name}-cursor.json`);
   }
 
   if (clip.outputs.includes('tight')) {
@@ -188,6 +225,7 @@ function exportClip(clip: ClipMeta, open: boolean, pace?: 'snappy'): void {
       });
     }
     writeMarks(`${name}-tight-marks.json`, plan.map);
+    writeCursor(`${name}-tight-cursor.json`, plan.map);
   }
 
   const h264 = [

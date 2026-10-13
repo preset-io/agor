@@ -1,23 +1,22 @@
 {
   "personality": {
     "picker": 0.3,
-    "gallery": 15.867,
-    "configure": 26.7,
-    "create": 34.2
+    "gallery": 9.333,
+    "configure": 14.4,
+    "create": 21.8
   },
   "integrity": {
-    "kb-select": 2.367,
-    "graph": 17.633
+    "kb-select": 2.333,
+    "graph": 14.467
   },
   "capability": {
     "catalog": 0,
-    "configure": 9.733,
-    "filled": 21.967
+    "configure": 9.667,
+    "filled": 21.767
   },
   "agency": {
-    "heartbeat": 2.333,
-    "schedules": 7.9,
-    "new-schedule": 10.8,
-    "created": 18.6
+    "schedules": 2.433,
+    "new-schedule": 4.167,
+    "created": 11.9
   }
 }

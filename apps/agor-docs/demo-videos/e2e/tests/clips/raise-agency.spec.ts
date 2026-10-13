@@ -1,32 +1,19 @@
 // Clip: raise-agency (support/clips.ts). Agents with agency: EngBot's
-// HEARTBEAT.md (what it does unasked), its schedules, and a new hourly
-// heartbeat.
+// schedules, and a new hourly heartbeat (which reads its HEARTBEAT.md).
 
 import { openTeammate } from '../../support/raise.ts';
 import { clip } from '../../support/studio.ts';
 
 clip('raise-agency', async ({ studio }) => {
-  const sam = await studio.actor('sam', { filmed: true });
+  const sam = await studio.actor('sam', { filmed: true, cursor: false });
   const p = sam.page;
   p.setDefaultTimeout(20_000);
   await sam.open('/settings/teammates');
   await studio.action();
-  await openTeammate(sam, 'EngBot', 'Files');
-
-  studio.mark('heartbeat');
-  await sam.click(p.getByText('HEARTBEAT.md').first());
-  await sam.hold(2600);
-  await p.mouse.wheel(0, 300);
-  await sam.hold(1200);
-  // The preview's own Close (the teammate modal has one too).
-  await sam.click(
-    p.locator('.ant-modal:has-text("Copy Content")').getByRole('button', { name: 'Close' }).first()
-  );
-  await sam.hold(500);
+  await openTeammate(sam, 'EngBot', 'Schedules');
 
   studio.mark('schedules');
-  await sam.click(p.getByRole('tab', { name: 'Schedules' }).first());
-  await sam.hold(1600);
+  await sam.hold(1000);
   await sam.click(p.getByRole('button', { name: /New$/ }).first());
   await sam.hold(700);
   studio.mark('new-schedule');

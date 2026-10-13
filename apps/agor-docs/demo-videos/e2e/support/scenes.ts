@@ -22,7 +22,8 @@ export interface AskOptions {
  * Marks: 'question', 'sent', 'answered'.
  */
 export async function askTeammate(studio: Studio, options: AskOptions): Promise<void> {
-  const sam = await studio.actor('sam', { filmed: true });
+  // Cursorless: the edit's own cursors do the clicking and typing.
+  const sam = await studio.actor('sam', { filmed: true, cursor: false });
   const session = studio.world.session(options.session);
   // Full id: short ids are the first 8 hex chars of a time-based UUID, so
   // sessions a seed creates within the same minute share one (and the app
@@ -52,7 +53,14 @@ export async function askTeammate(studio: Studio, options: AskOptions): Promise<
     await (await chooser).setFiles(options.attach);
     await sam.hold(900);
   }
-  await sam.type(prompt, options.question);
+  // Sharp close-up stills of the input as it's typed (the edit zooms in
+  // tight on them): from just left of the box to well past the text.
+  await sam.typeStills(prompt, options.question, {
+    x: Math.max(0, (box?.x ?? 960) - 80),
+    y: viewport.height - 260,
+    w: 760,
+    h: 260,
+  });
   await sam.hold(500);
   studio.mark('sent');
   await sam.press('Enter');

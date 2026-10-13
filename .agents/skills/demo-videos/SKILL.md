@@ -119,7 +119,7 @@ them reliable:
     in the DOM. Type to filter (`showSearch` selects) with `pickOption()`,
     don't scroll and hope.
   - Open options: `.ant-select-dropdown:not(.ant-select-dropdown-hidden)
-.ant-select-item-option`; `skim()` glides the cursor down them.
+.ant-select-item-option`; `skim()` drifts the cursor over them.
   - `Escape` can close every stacked modal, not just the top one. Close a
     nested modal with its own button, scoped to it
     (`.ant-modal:has-text("...")`).
@@ -127,6 +127,23 @@ them reliable:
     pass `{ exact: true }`.
   - Buttons with icons have the icon in their accessible name: match
     `/New$/`, not `/^New$/`.
+- **Browse in one motion.** Evan found item-by-item hops (glide, rest,
+  glide) robotic. `skim()` and `actor.sweep()`/`actor.path()` move through
+  every item in one continuous Catmull-Rom curve at an even speed (a grid
+  snakes row by row); `smoothWheel()` scrolls in small steps.
+- **Cursorless takes for the edit**: `studio.actor(key, { filmed: true,
+cursor: false })` skips the in-page cursor but logs every mouse sample
+  (`pointer` events); export writes `<id>-snappy-cursor.json` (`{pointer:
+[[s, x, y]...], clicks: [...]}` in the cut's seconds) and the reel draws
+  its own troupe cursor on that exact path, so hovers line up.
+- **Sharp typing close-ups**: `actor.typeStills(field, text, rect, scale)`
+  types one key at a time and grabs a CDP `Page.captureScreenshot` of
+  `rect` at `scale` px per app px (8: 4x the 4K capture) after each key,
+  the caret visible. Export copies them to `<id>-snappy-stills/` with an
+  `index.json`; the reel plays them instead of the video for the typing,
+  at any speed it likes. The teammate Q&A scene (`askTeammate`) does this.
+- **Teammate files are read-only in the UI** (Files tab preview). There's
+  no on-camera way to edit `HEARTBEAT.md`; show schedules instead.
 - **Deep links** skip clicking through menus: `/settings/<section>`
   (`teammates`, `mcp`, ...), `/kb/<namespace>`. A teammate's tabs
   (Knowledge, Files, Schedules) open from Settings → Teammates → "Edit

@@ -68,6 +68,16 @@ export type TimelineEvent =
   /** Where an actor's cursor came to rest (used to check it stays in frame). */
   | { type: 'cursor'; actor: string; wall: number; x: number; y: number }
   | { type: 'click'; actor: string; wall: number; x: number; y: number }
+  /**
+   * Every sample of an actor's mouse on its way somewhere: a cursorless take
+   * exports these so the edit can draw its own cursor on the real path.
+   */
+  | { type: 'pointer'; actor: string; wall: number; x: number; y: number }
+  /**
+   * A close-up still (support/studio.ts typeStills): `file` inside the take
+   * dir, `rect` the app-px region it shows, `scale` its px per app px.
+   */
+  | { type: 'still'; actor: string; wall: number; file: string; rect: Rect; scale: number }
   /** A named point for editing clips together later (chapters, cut points). */
   | { type: 'mark'; label: string; wall: number }
   | { type: 'end'; wall: number };

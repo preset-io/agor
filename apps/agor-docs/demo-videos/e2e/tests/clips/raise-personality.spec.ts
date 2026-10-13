@@ -2,11 +2,11 @@
 // identity: the crew in the teammate picker, the starter personas, and a
 // new teammate taking shape.
 
-import { dropdownOptions, skim } from '../../support/raise.ts';
+import { dropdownOptions, skim, smoothWheel } from '../../support/raise.ts';
 import { clip } from '../../support/studio.ts';
 
 clip('raise-personality', async ({ studio }) => {
-  const sam = await studio.actor('sam', { filmed: true });
+  const sam = await studio.actor('sam', { filmed: true, cursor: false });
   const p = sam.page;
   p.setDefaultTimeout(20_000);
   await sam.open('/');
@@ -17,10 +17,9 @@ clip('raise-personality', async ({ studio }) => {
   studio.mark('picker');
   await sam.click(p.getByLabel('Teammate to ask').first());
   await sam.hold(400);
-  await skim(sam, dropdownOptions(sam), 8);
-  await p.mouse.wheel(0, 240);
-  await sam.hold(300);
-  await skim(sam, dropdownOptions(sam), 13, 180);
+  await skim(sam, dropdownOptions(sam), 8, 260);
+  await smoothWheel(sam, 240, 700);
+  await skim(sam, dropdownOptions(sam), 13, 140);
   await sam.press('Escape');
   await sam.hold(500);
 
@@ -31,7 +30,7 @@ clip('raise-personality', async ({ studio }) => {
   await sam.click(p.getByRole('button', { name: 'Create AI teammate' }).first());
   await sam.hold(800);
   const cards = p.locator('fieldset[aria-label="Teammate template"] [role="button"]');
-  await skim(sam, cards, 9, 320);
+  await skim(sam, cards, 9, 380);
   await sam.click(p.getByLabel('Filter templates by category').getByText('Grow'));
   await sam.hold(700);
   await sam.click(p.getByLabel('Filter templates by category').getByText('All'));

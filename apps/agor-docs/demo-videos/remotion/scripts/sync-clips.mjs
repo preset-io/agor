@@ -8,7 +8,15 @@
 // Videos stay out of git (public/clips/ is ignored); the marks are committed
 // so the edit is reviewable.
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +43,15 @@ for (const bot of BOTS) {
     JSON.parse(readFileSync(markFile, 'utf8')).map((m) => [m.label, m.seconds])
   );
   marks[bot] = { question: byLabel.question, sent: byLabel.sent, answered: byLabel.answered };
+  // The sharp close-up stills of the question being typed (one per key).
+  const stills = path.join(dir, `teammate-${bot}-snappy-stills`);
+  if (existsSync(stills)) {
+    const to = path.join(ROOT, 'public', 'clips', `${bot}-stills`);
+    rmSync(to, { recursive: true, force: true });
+    cpSync(stills, to, { recursive: true });
+    const index = JSON.parse(readFileSync(path.join(stills, 'index.json'), 'utf8'));
+    marks[bot].stills = { rect: index.rect, scale: index.scale, count: index.files.length };
+  }
   console.log(`${bot}: ${JSON.stringify(marks[bot])}`);
 }
 // The Agor logo draw-on (from the syllabus reel) opens the edits.
@@ -51,6 +68,7 @@ writeFileSync(
 // raw), with every mark it logged.
 const PILLARS = ['personality', 'integrity', 'capability', 'agency'];
 const raiseMarks = {};
+const raiseCursors = {};
 for (const pillar of PILLARS) {
   const id = `raise-${pillar}`;
   const dir = path.join(CLIPS, id);
@@ -63,6 +81,9 @@ for (const pillar of PILLARS) {
   raiseMarks[pillar] = Object.fromEntries(
     JSON.parse(readFileSync(markFile, 'utf8')).map((m) => [m.label, m.seconds])
   );
+  // The cursorless take's mouse path, for the edit's own cursor.
+  const cursorFile = path.join(dir, `${id}-snappy-cursor.json`);
+  if (existsSync(cursorFile)) raiseCursors[pillar] = JSON.parse(readFileSync(cursorFile, 'utf8'));
   console.log(`${id}: ${JSON.stringify(raiseMarks[pillar])}`);
 }
 mkdirSync(path.join(ROOT, 'src', 'raise'), { recursive: true });
@@ -70,3 +91,4 @@ writeFileSync(
   path.join(ROOT, 'src', 'raise', 'marks.json'),
   `${JSON.stringify(raiseMarks, null, 2)}\n`
 );
+writeFileSync(path.join(ROOT, 'src', 'raise', 'cursors.json'), `${JSON.stringify(raiseCursors)}\n`);

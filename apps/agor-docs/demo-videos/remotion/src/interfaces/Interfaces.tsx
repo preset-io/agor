@@ -11,6 +11,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
+import { type Act, CURSOR, type Pt as Point, Troupe } from '../brand/Cursors';
 import { fontFamily } from '../brand/fonts';
 import { Heading } from '../brand/Heading';
 import { BG, FILL_BLUE, FILL_GREEN, FILL_INDIGO, FILL_TEAL, INK } from '../brand/palette';
@@ -314,6 +315,42 @@ const AgorStage: React.FC<{ startAt: number }> = ({ startAt }) => {
   );
 };
 
+/** Where a panel's mark tile sits once it has spun in (see PanelFrame). */
+const tileCenter = (corner: Corner): Point => {
+  const { box } = PANELS[corner];
+  return {
+    x: box.x + box.w / 2 - 18,
+    y: box.y + box.h / 2 - (corner.startsWith('t') ? 90 : 20) - 14,
+  };
+};
+/**
+ * The troupe from the first section comes back: each cursor flies in from
+ * its side, clicks its app's mark (which crops the panel down to its
+ * label), and heads back out.
+ */
+const CLICKERS: { corner: Corner; color: string; side: Point }[] = [
+  { corner: 'tl', color: CURSOR.maya, side: { x: -90, y: 160 } },
+  { corner: 'tr', color: CURSOR.sam, side: { x: 2010, y: 120 } },
+  { corner: 'bl', color: CURSOR.ari, side: { x: -90, y: 1000 } },
+  { corner: 'br', color: CURSOR.lee, side: { x: 2010, y: 1040 } },
+];
+const ACTS: Act[] = CLICKERS.map((c, i) => {
+  const clickAt = WIPE_AT[i] - 0.05;
+  return {
+    color: c.color,
+    from: c.side,
+    moves: [
+      { at: clickAt - 1.0, to: tileCenter(c.corner), hz: 2.3 },
+      {
+        at: clickAt + 0.3,
+        to: { x: c.side.x, y: c.side.y + (c.side.y < 540 ? 60 : -60) },
+        hz: 1.7,
+      },
+    ],
+    clicks: [clickAt],
+  };
+});
+
 const beats = (wipeAt: number, reply: number): ChatBeats => ({
   askAt: wipeAt + 0.45,
   replyAt: wipeAt + reply,
@@ -388,6 +425,7 @@ export const Interfaces: React.FC = () => {
         <line x1={-10} y1={LEFT_Y} x2={1930} y2={RIGHT_Y} stroke={BG} strokeWidth={GUTTER} />
       </svg>
       <Title text="**Access Agor** from where you *work*" />
+      <Troupe acts={ACTS} />
       <FadeToBlack at={FADE_AT} seconds={FADE} />
     </AbsoluteFill>
   );
