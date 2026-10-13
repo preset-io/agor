@@ -44,6 +44,8 @@ export interface Act {
   clicks?: number[];
   /** Little presses with no ring (typing). */
   taps?: number[];
+  /** Stop drawing it from this time (another component takes over). */
+  until?: number;
 }
 
 const MAX_SPEED = 2600; // px/s, so long trips don't whip
@@ -99,6 +101,26 @@ function simulate(act: Act, frames: number, fps: number): Pt[] {
     }
   }
   return out;
+}
+
+/** A point on a move from `a` to `b` (u 0..1), bowed up and to the left like a right hand's arc. */
+export function bowed(a: Pt, b: Pt, u: number): Pt {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dist = Math.hypot(dx, dy);
+  let nx = dist > 1 ? -dy / dist : 0;
+  let ny = dist > 1 ? dx / dist : 0;
+  if (nx + ny > 0) {
+    nx = -nx;
+    ny = -ny;
+  }
+  const bow = Math.min(220, dist * 0.22);
+  const c = { x: a.x + dx / 2 + nx * bow, y: a.y + dy / 2 + ny * bow };
+  const v = 1 - u;
+  return {
+    x: v * v * a.x + 2 * v * u * c.x + u * u * b.x,
+    y: v * v * a.y + 2 * v * u * c.y + u * u * b.y,
+  };
 }
 
 const tracks = new WeakMap<Act, Pt[]>();
@@ -186,6 +208,7 @@ export const Troupe: React.FC<{ acts: Act[] }> = ({ acts }) => {
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 40 }}>
       {acts.map((act) => {
         const p = trackOf(act, durationInFrames, fps)[Math.min(frame, durationInFrames)];
+        if (act.until !== undefined && t >= act.until) return null;
         if (p.x < -120 || p.x > 2040 || p.y < -120 || p.y > 1200) return null;
         return (
           <Cursor

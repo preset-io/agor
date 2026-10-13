@@ -10,12 +10,17 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
+import { Aurora } from '../brand/Aurora';
 import {
+  type Act,
+  bowed,
   CURSOR,
   Cursor as CursorArrow,
   type CursorTrack,
   clickState,
+  type Pt,
   pointerAt,
+  Troupe,
 } from '../brand/Cursors';
 import { fontFamily } from '../brand/fonts';
 import { Heading } from '../brand/Heading';
@@ -116,8 +121,9 @@ const PILLARS: Pillar[] = [
     gradient: 'linear-gradient(110deg, #45c4bb, #7ad9ff)',
     glow: '#7ad9ff',
     beats: [
-      beat(2.1, 5.7, 1.5, [960, 420, 1.0], [960, 440, 1.15]), // the MCP Catalog (it closes at 6.2)
-      beat(10.4, 22.0, 2.8, [960, 300, 1.5], [960, 900, 1.5]), // wiring up Linear
+      beat(2.1, 6.3, 1.8, [960, 420, 1.0], [960, 440, 1.1]), // the MCP Catalog, scrolling
+      beat(7.3, 10.0, 1.1, [900, 430, 1.0], [1200, 420, 0.95]), // a drift across it, Postman opens
+      beat(16.9, 28.0, 2.8, [960, 300, 1.5], [960, 900, 1.5]), // wiring up Linear
     ],
   },
   {
@@ -136,7 +142,7 @@ const PILLARS: Pillar[] = [
   },
 ];
 
-const TITLE = 2.2; // the section title, alone
+const TITLE = 3.6; // the section title, alone (and the troupe's wave)
 const FADE = 0.6;
 const XFADE = 0.25; // cross-cut between beats
 const beatSeconds = (b: Beat) => (b.to - b.from) / b.rate;
@@ -152,6 +158,20 @@ export const RAISE_SECONDS = BODY_END + 0.4 + FADE;
 // The window the product plays in.
 const WIN = { x: 820, y: 170, w: 1000, h: 740 };
 
+/** A beat's camera `t` seconds in (eased over the beat, kept inside the recording). */
+function camAt(beat: Beat, t: number, seconds: number): Cam {
+  const p = interpolate(t, [0, seconds], [0, 1], { ...clamp, easing: smooth });
+  const [a, b] = beat.cam;
+  const z = a.z + (b.z - a.z) * p;
+  const halfW = WIN.w / 2 / z;
+  const halfH = WIN.h / 2 / z;
+  return {
+    cx: Math.min(1920 - halfW, Math.max(halfW, a.cx + (b.cx - a.cx) * p)),
+    cy: Math.min(1080 - halfH, Math.max(halfH, a.cy + (b.cy - a.cy) * p)),
+    z,
+  };
+}
+
 /** One beat: the clip at its rate, framed by an eased camera move. */
 const BeatView: React.FC<{
   pillar: Pillar;
@@ -162,14 +182,7 @@ const BeatView: React.FC<{
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const t = frame / fps;
-  const p = interpolate(t, [0, seconds], [0, 1], { ...clamp, easing: smooth });
-  const [a, b] = beat.cam;
-  const z = a.z + (b.z - a.z) * p;
-  // Keep the view inside the recording.
-  const halfW = WIN.w / 2 / z;
-  const halfH = WIN.h / 2 / z;
-  const cx = Math.min(1920 - halfW, Math.max(halfW, a.cx + (b.cx - a.cx) * p));
-  const cy = Math.min(1080 - halfH, Math.max(halfH, a.cy + (b.cy - a.cy) * p));
+  const { cx, cy, z } = camAt(beat, t, seconds);
   return (
     <AbsoluteFill style={{ opacity: fadeIn ? interpolate(t, [0, XFADE], [0, 1], clamp) : 1 }}>
       <div
@@ -203,35 +216,119 @@ const BeatView: React.FC<{
           </Freeze>
         </Sequence>
       </div>
-      <TakeCursor
-        pillar={pillar}
-        src={beat.from + Math.min(t, seconds) * beat.rate}
-        rate={beat.rate}
-        cam={{ cx, cy, z }}
-      />
     </AbsoluteFill>
   );
 };
 
-/** The take's mouse, drawn as one of the troupe, at source time `src`, framed by `cam`. */
-const TakeCursor: React.FC<{ pillar: Pillar; src: number; rate: number; cam: Cam }> = ({
-  pillar,
-  src,
-  rate,
-  cam,
-}) => {
-  const track = (cursors as unknown as Record<string, CursorTrack>)[pillar.clip];
-  if (!track) return null;
-  const p = pointerAt(track, src);
-  // Clicks in output seconds, relative to now (the ring spreads at output speed).
-  const clicks = track.clicks.map(([c]) => (c - src) / rate);
+// The troupe in this section. Under the title they come on and do the wave
+// beneath "together"; then they take turns: each pillar's cursor flies onto
+// the window, plays the person in the take (riding the real mouse path its
+// take logged), and leaves across the slide and off screen as the next one
+// comes on, so they pass each other.
+
+/** Under "together" in the title (px), where they line up for the wave. */
+const TOGETHER = { x: 1420, y: 652 };
+const WAVE_SLOTS: Pt[] = [0, 1, 2, 3].map((k) => ({
+  x: TOGETHER.x + (k - 1.5) * 92,
+  y: TOGETHER.y,
+}));
+const WAVE_AT = [1.55, 2.35]; // two passes, left to right
+const ENTER = 0.55; // a pillar's cursor starts in this long before its pillar
+const SETTLE = 0.45; // ...and is on the take's path this long after it starts
+const LEAVE = 0.9;
+/** A bump up as the wave passes (seconds since it reached this cursor). */
+const bump = (u: number) => (u < 0 || u > 0.36 ? 0 : -Math.sin((u / 0.36) * Math.PI) * 38);
+const WAVERS: { color: string; from: Pt; away: Pt }[] = [
+  { color: CURSOR.maya, from: { x: 600, y: 1180 }, away: { x: 0, y: 0 } },
+  { color: CURSOR.ari, from: { x: 1300, y: 1190 }, away: { x: -120, y: 980 } },
+  { color: CURSOR.sam, from: { x: 2040, y: 980 }, away: { x: 2060, y: 1120 } },
+  { color: CURSOR.kit, from: { x: 2040, y: 520 }, away: { x: 2060, y: 300 } },
+];
+const HANDOFF = TITLE - ENTER; // the first pillar's cursor takes over from its waver here
+const TITLE_ACTS: Act[] = WAVERS.map((w, k) => {
+  const slot = WAVE_SLOTS[k];
+  const waving = (t: number): Pt => ({
+    x: slot.x,
+    y: slot.y + WAVE_AT.reduce((y, at) => y + bump(t - at - k * 0.12), 0),
+  });
+  return {
+    color: w.color,
+    from: w.from,
+    moves: [
+      { at: 0.75 + k * 0.08, to: slot, hz: 2.2 },
+      { at: WAVE_AT[0] - 0.2, to: waving, locked: true },
+      ...(k === 0 ? [] : [{ at: TITLE - 0.75 + k * 0.06, to: w.away, hz: 1.8 }]),
+    ],
+    until: k === 0 ? HANDOFF : undefined,
+  };
+});
+/** Where each pillar's cursor comes on from, and leaves to (across the slide, off the left). */
+const PATHS: { from: Pt; away: Pt }[] = [
+  { from: WAVE_SLOTS[0], away: { x: -120, y: 900 } },
+  { from: { x: 1650, y: 1180 }, away: { x: -120, y: 760 } },
+  { from: { x: 2050, y: 1000 }, away: { x: -120, y: 960 } },
+  { from: { x: 1500, y: 1180 }, away: { x: -120, y: 820 } },
+];
+
+/** Pillar i's take at time t: its beat, the source second and the camera. */
+function takeAt(i: number, t: number) {
+  const p = PILLARS[i];
+  let at = PILLAR_AT[i];
+  for (const [j, b] of p.beats.entries()) {
+    const seconds = beatSeconds(b);
+    if (t < at + seconds || j === p.beats.length - 1) {
+      const local = Math.min(Math.max(0, t - at), seconds);
+      return { beat: b, src: b.from + local * b.rate, cam: camAt(b, local, seconds) };
+    }
+    at += seconds;
+  }
+  throw new Error('unreachable');
+}
+
+/** Pillar i's cursor on screen at t: on the take's path, or on its way on or off. */
+function pillarCursor(i: number, t: number) {
+  const p = PILLARS[i];
+  const track = (cursors as unknown as Record<string, CursorTrack>)[p.clip];
+  const start = PILLAR_AT[i];
+  const end = start + pillarSeconds(p);
+  if (!track || t < start - ENTER || t > end + LEAVE) return null;
+  const onPath = (tt: number) => {
+    const { beat, src, cam } = takeAt(i, tt);
+    const m = pointerAt(track, src);
+    // Kept to the window (the take's mouse can stray outside the framing).
+    const x = WIN.x + Math.min(WIN.w - 8, Math.max(8, WIN.w / 2 + (m.x - cam.cx) * cam.z));
+    const y = WIN.y + Math.min(WIN.h - 8, Math.max(8, WIN.h / 2 + (m.y - cam.cy) * cam.z));
+    const clicks = track.clicks.map(([c]) => (c - src) / beat.rate);
+    return { x, y, clicks };
+  };
+  const ease = Easing.bezier(0.45, 0, 0.3, 1);
+  if (t < start + SETTLE) {
+    const u = ease(Math.min(1, (t - (start - ENTER)) / (ENTER + SETTLE)));
+    const target = onPath(Math.max(start, t));
+    return { ...bowed(PATHS[i].from, target, u), clicks: [] as number[] };
+  }
+  if (t > end - 0.1) {
+    const last = onPath(end - 0.1);
+    const u = ease(Math.min(1, (t - (end - 0.1)) / (LEAVE + 0.1)));
+    return { ...bowed(last, PATHS[i].away, u), clicks: [] as number[] };
+  }
+  return onPath(t);
+}
+
+const PillarCursors: React.FC = () => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const t = frame / fps;
   return (
-    <CursorArrow
-      x={WIN.w / 2 + (p.x - cam.cx) * cam.z}
-      y={WIN.h / 2 + (p.y - cam.cy) * cam.z}
-      color={pillar.cursor}
-      {...clickState(0, clicks)}
-    />
+    <div style={{ position: 'absolute', inset: 0, zIndex: 40 }}>
+      {PILLARS.map((p, i) => {
+        const c = pillarCursor(i, t);
+        if (!c) return null;
+        return (
+          <CursorArrow key={p.key} x={c.x} y={c.y} color={p.cursor} {...clickState(0, c.clicks)} />
+        );
+      })}
+    </div>
   );
 };
 
@@ -248,6 +345,9 @@ export const RaiseTogether: React.FC = () => {
 
   return (
     <AbsoluteFill style={{ background: BG, fontFamily }}>
+      {/* agor.live's aurora: hanging from the top, and a fainter one rising from the bottom. */}
+      <Aurora />
+      <Aurora flip amplitude={0.7} style={{ opacity: 0.45 }} />
       {/* The section title: rises in, then lifts up and away as the pillars arrive. */}
       <AbsoluteFill
         style={{
@@ -370,6 +470,8 @@ export const RaiseTogether: React.FC = () => {
         })}
       </div>
 
+      <Troupe acts={TITLE_ACTS} />
+      <PillarCursors />
       <FadeToBlack at={BODY_END + 0.4} seconds={FADE} />
     </AbsoluteFill>
   );

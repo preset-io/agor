@@ -70,6 +70,13 @@ out/<file>.mp4`), then the reel. Copy finished renders to
   `public/wordmark/`. Letters crash in from the right like the problem
   cards on agor.live, overlap and squash, then spring back. Use
   `<AgorWordmark t={WORDMARK_SETTLED + 1} />` for a static sign-off.
+- **Backgrounds**: plain black reads as boring. `<Aurora />`
+  (`src/brand/Aurora.tsx`) is the site's React Bits aurora shader, ported
+  frame-driven (WebGL2 into a canvas each frame, so renders are identical);
+  colors `#2e9a92 → #34e6c4 → #7ad9ff` like the site. `flip` rises it from
+  the bottom.
+- **Line breaks**: `textWrap: 'balance'` on any multi-line caption (no
+  one-word orphans).
 - **Logos** of third-party apps: official marks from the CC0
   `@iconify-json/logos` set, unaltered, on white tiles.
 - **Copy**: Messaging & Positioning rules (no em-dashes; never "open
@@ -91,8 +98,17 @@ reel too: `src/brand/Cursors.tsx` has the same arrow, colors (`CURSOR.maya`,
 - **On a recording** (`pointerAt(track, s)`): cursorless takes log the real
   mouse path (demo-videos skill); draw a troupe cursor there, mapped through
   the beat's camera, so the UI's hover states match it.
+- **Take turns.** On a window of real UI, each cursor flies on from the
+  edge, does its part, then leaves the window across the slide and off
+  screen while the next comes on, so they pass each other
+  (`pillarCursor()` in `Raise.tsx`: bowed entry onto the take's path,
+  bowed exit after). Never leave one parked in the UI between shots.
+- UI motion in takes must be slow enough to read after the edit's speed-up:
+  one graceful diagonal drift and a click, not a fast zigzag (snappy pace
+  halves it, then the beat's `rate` speeds it again).
 - They have a story: they swoop in and circle "together" under the logo,
-  then each clicks open its teammate's slice and taps along at the input;
+  (and do the wave under "together" in section 3's title), then each clicks
+  open its teammate's slice and taps along at the input;
   in section 2 each clicks its app's mark to open its panel; in section 3
   one plays the person in each pillar. A cursor causes what happens.
 

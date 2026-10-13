@@ -11,8 +11,9 @@
   },
   "capability": {
     "catalog": 0,
-    "configure": 9.667,
-    "filled": 21.767
+    "pick": 9.533,
+    "configure": 15.967,
+    "filled": 28.033
   },
   "agency": {
     "schedules": 2.433,

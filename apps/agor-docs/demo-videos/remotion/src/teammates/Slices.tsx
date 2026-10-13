@@ -293,6 +293,8 @@ export const Slices: React.FC<{
                   letterSpacing: '-0.015em',
                   lineHeight: 1.1,
                   color: INK,
+                  // Even lines, no one-word orphan on the second.
+                  textWrap: 'balance',
                   translate: `0px ${(1 - takeaway) * 120}%`,
                 }}
               >

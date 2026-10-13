@@ -14,13 +14,27 @@ clip('raise-capability', async ({ studio }) => {
   studio.mark('catalog');
   await sam.click(p.getByLabel('Open MCP Catalog').first());
   await sam.hold(900);
+  // Browse: the grid scrolls by under a resting hand, and back.
+  await sam.move(1380, 640, 900);
+  await smoothWheel(sam, 1040, 2400);
+  await sam.hold(300);
+  await smoothWheel(sam, -1040, 1600);
+  await sam.hold(300);
+  // Then one graceful diagonal drift across the cards, settling on Postman
+  // and clicking it open.
+  await sam.move(860, 160, 900);
   await sam.sweep(
-    ['GitHub', 'Linear', 'Sentry', 'Notion'].map((name) => p.getByLabel(`Open ${name}`).first()),
-    1600
+    ['GitHub', 'Atlassian', 'Postman'].map((name) => p.getByLabel(`Open ${name}`).first()),
+    3200
   );
-  await smoothWheel(sam, 1560, 2000);
-  await sam.hold(600);
+  await sam.hold(500);
+  studio.mark('pick');
+  await sam.click(p.getByLabel('Open Postman').first(), 300);
+  await sam.hold(2200);
   await sam.press('Escape');
+  await sam.hold(400);
+  await sam.press('Escape');
+  await sam.hold(400);
 
   // Wire one up: Linear, over HTTP with OAuth.
   await sam.open('/settings/mcp');
