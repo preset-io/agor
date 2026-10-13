@@ -32,8 +32,9 @@ import {
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
-import { ScheduleModal } from '../../ScheduleModal';
+import { ScheduleForm } from '../../ScheduleForm';
 import { ScheduleRunsPanel } from '../../ScheduleRunsPanel';
+import { DrillCrumbs, useDiscardConfirm } from '../../SettingsModal/SettingsDrill';
 
 const { Text } = Typography;
 
@@ -44,6 +45,8 @@ interface ScheduleTabProps {
   currentUser?: User | null;
   userById?: Map<string, User>;
   onOpenSession?: (sessionId: string) => void;
+  /** Whether an open schedule form holds unsaved changes (for the branch editor's guard). */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const formatTimestamp = (ms: number | null | undefined) =>
@@ -134,12 +137,16 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   currentUser,
   userById = new Map(),
   onOpenSession,
+  onDirtyChange,
 }) => {
   const { showError, showSuccess } = useThemedMessage();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [scheduleSearch, setScheduleSearch] = useState('');
   const [loading, setLoading] = useState(false);
-  const [modalOpen, setModalOpen] = useState(false);
+  // New/Edit opens the form in place of the list (no dialog over the editor).
+  const [formOpen, setFormOpen] = useState(false);
+  const [formDirty, setFormDirty] = useState(false);
+  const confirmDiscard = useDiscardConfirm();
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [runsPanelSchedule, setRunsPanelSchedule] = useState<Schedule | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
@@ -205,13 +212,21 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 
   const handleNew = () => {
     setEditingSchedule(null);
-    setModalOpen(true);
+    setFormOpen(true);
   };
 
   const handleEdit = (schedule: Schedule) => {
     setEditingSchedule(schedule);
-    setModalOpen(true);
+    setFormOpen(true);
   };
+
+  const handleDirtyChange = useCallback(
+    (dirty: boolean) => {
+      setFormDirty(dirty);
+      onDirtyChange?.(dirty);
+    },
+    [onDirtyChange]
+  );
 
   const handleDelete = async (schedule: Schedule) => {
     if (!client) return;
@@ -427,6 +442,31 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       )
     : schedules;
 
+  if (formOpen) {
+    return (
+      <div style={{ padding: 16, minWidth: 0 }}>
+        <div style={{ marginBottom: 16 }}>
+          <DrillCrumbs
+            parent="Schedules"
+            onParent={() => confirmDiscard(formDirty, () => setFormOpen(false))}
+            current={editingSchedule ? editingSchedule.name || 'Untitled schedule' : 'New schedule'}
+          />
+        </div>
+        <ScheduleForm
+          onClose={() => setFormOpen(false)}
+          branchId={branch.branch_id}
+          schedule={editingSchedule}
+          mcpServerById={mcpServerById}
+          client={client}
+          executionOwner={executionOwner}
+          currentUser={currentUser}
+          onSaved={() => fetchSchedules()}
+          onDirtyChange={handleDirtyChange}
+        />
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: 16, minWidth: 0 }}>
       <div style={{ marginBottom: 8, minWidth: 0 }}>
@@ -496,19 +536,6 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
           style={{ width: '100%' }}
         />
       )}
-
-      <ScheduleModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        branchId={branch.branch_id}
-        branchName={branch.name}
-        schedule={editingSchedule}
-        mcpServerById={mcpServerById}
-        client={client}
-        executionOwner={executionOwner}
-        currentUser={currentUser}
-        onSaved={() => fetchSchedules()}
-      />
 
       <ScheduleRunsPanel
         open={runsPanelSchedule !== null}

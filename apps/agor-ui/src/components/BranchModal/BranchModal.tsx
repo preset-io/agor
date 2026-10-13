@@ -95,6 +95,9 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const screens = Grid.useBreakpoint();
   const compact = !screens.md;
   const { showSuccess, showError } = useThemedMessage();
+  // An open Schedules form with unsaved changes; joins the branch form in the
+  // drill-in leave guard (Back, nav switch, close).
+  const [scheduleDirty, setScheduleDirty] = useState(false);
   // Teammate records render a 'teammate' tab FIRST (see tabItems below), so the
   // default tab must follow the record kind — otherwise a teammate opens on its
   // second tab. Lazy init avoids a flash of 'general' before the open effect runs.
@@ -329,6 +332,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
             onSessionClick?.(sessionId);
             onClose();
           }}
+          onDirtyChange={setScheduleDirty}
         />
       ),
     },
@@ -395,7 +399,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     return (
       <DrillInFrame
         title={title}
-        dirty={form.hasChanges}
+        dirty={form.hasChanges || scheduleDirty}
         saving={form.saving}
         saveLabel="Save Changes"
         onSave={canSave ? handleSave : undefined}

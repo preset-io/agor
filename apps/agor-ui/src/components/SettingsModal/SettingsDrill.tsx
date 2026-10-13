@@ -94,8 +94,32 @@ export interface DrillShell extends SettingsDrillContextValue {
  * the Settings modal and by {@link StandaloneSettingsDrillProvider}, so tests run
  * the production wiring.
  */
-export function useDrillShell(section?: SettingsSection): DrillShell {
+/**
+ * The unsaved-changes confirm: runs `leave` at once when clean, else after the
+ * user chooses Discard. Works inside or outside the Settings shell.
+ */
+export function useDiscardConfirm(): (dirty: boolean, leave: () => void) => void {
   const { modal } = AntApp.useApp();
+  return useCallback(
+    (dirty, leave) => {
+      if (!dirty) {
+        leave();
+        return;
+      }
+      modal.confirm({
+        title: 'Discard unsaved changes?',
+        content: 'You have unsaved changes. Leaving now will discard them.',
+        okText: 'Discard',
+        okButtonProps: { danger: true },
+        cancelText: 'Keep editing',
+        onOk: leave,
+      });
+    },
+    [modal]
+  );
+}
+
+export function useDrillShell(section?: SettingsSection): DrillShell {
   const [state, setState] = useState<{ section?: SettingsSection; target: DrillTarget } | null>(
     null
   );
@@ -112,22 +136,10 @@ export function useDrillShell(section?: SettingsSection): DrillShell {
 
   // Stable identity (reads the controller through a ref), so DrillInFrame's
   // registration effect doesn't re-run on every register.
+  const confirmDiscard = useDiscardConfirm();
   const confirmLeaveIfDirty = useCallback(
-    (leave: () => void) => {
-      if (!controllerRef.current?.isDirty()) {
-        leave();
-        return;
-      }
-      modal.confirm({
-        title: 'Discard unsaved changes?',
-        content: 'You have unsaved changes. Leaving now will discard them.',
-        okText: 'Discard',
-        okButtonProps: { danger: true },
-        cancelText: 'Keep editing',
-        onOk: leave,
-      });
-    },
-    [modal]
+    (leave: () => void) => confirmDiscard(controllerRef.current?.isDirty() ?? false, leave),
+    [confirmDiscard]
   );
   const openDrill = useCallback((target: DrillTarget) => setState({ section, target }), [section]);
   const closeDrill = useCallback(() => {
@@ -288,31 +300,11 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
         wrap
         style={{ marginBottom: compact ? token.marginMD : token.marginLG }}
       >
-        {/* The section crumb goes back to the list through the guarded `back`;
-            the current-record crumb is the (non-clickable) page marker. */}
-        <Breadcrumb
-          items={[
-            ...(section
-              ? [
-                  {
-                    key: 'section',
-                    title: (
-                      <Typography.Link onClick={back} style={{ fontWeight: 500 }}>
-                        {settingsSectionLabel(section)}
-                      </Typography.Link>
-                    ),
-                  },
-                ]
-              : []),
-            {
-              key: 'current',
-              title: (
-                <Typography.Text style={{ fontWeight: 500, color: token.colorText }}>
-                  {title}
-                </Typography.Text>
-              ),
-            },
-          ]}
+        {/* The section crumb goes back to the list through the guarded `back`. */}
+        <DrillCrumbs
+          parent={section ? settingsSectionLabel(section) : undefined}
+          onParent={back}
+          current={title}
         />
         {extra}
       </Flex>
@@ -393,3 +385,42 @@ export function useDrillFormDraft(
     [form]
   );
 }
+
+/**
+ * "List › current" breadcrumb of a drill-in: the parent crumb links back, the
+ * current crumb is the page marker. Also used by in-place editors nested inside
+ * a drill-in (which can't own a second DrillInFrame).
+ */
+export const DrillCrumbs: React.FC<{
+  parent?: ReactNode;
+  onParent: () => void;
+  current: ReactNode;
+}> = ({ parent, onParent, current }) => {
+  const { token } = theme.useToken();
+  return (
+    <Breadcrumb
+      items={[
+        ...(parent
+          ? [
+              {
+                key: 'parent',
+                title: (
+                  <Typography.Link onClick={onParent} style={{ fontWeight: 500 }}>
+                    {parent}
+                  </Typography.Link>
+                ),
+              },
+            ]
+          : []),
+        {
+          key: 'current',
+          title: (
+            <Typography.Text style={{ fontWeight: 500, color: token.colorText }}>
+              {current}
+            </Typography.Text>
+          ),
+        },
+      ]}
+    />
+  );
+};

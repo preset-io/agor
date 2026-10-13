@@ -126,7 +126,9 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   const search = debouncedQuery.trim();
   // A new filter or search starts again on its first page, in the same
   // render: the page belongs to the filter and search it was chosen under.
-  const pageKey = `${archiveFilter}\u0000${search}`;
+  // Repo filter (server-side `repo_id`); undefined lists every repo.
+  const [repoFilter, setRepoFilter] = useState<string | undefined>();
+  const pageKey = `${archiveFilter}\u0000${search}\u0000${repoFilter ?? ''}`;
   const [paged, setPaged] = useState({ key: pageKey, page: 1 });
   // Forget the old page when the key changes, so returning to it starts on 1.
   if (paged.key !== pageKey) setPaged({ key: pageKey, page: 1 });
@@ -144,6 +146,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       : {
           ...(archiveFilter === 'all' ? {} : { archived: archiveFilter === 'archived' }),
           ...(search ? { search: serverSearchText(search) } : {}),
+          ...(repoFilter ? { repo_id: repoFilter } : {}),
         },
     page,
     pageSize
@@ -154,7 +157,9 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       teammatesFilter
         ? filterBySettingsSearch(
             Array.from(branchById.values())
-              .filter((b) => !b.archived && isTeammate(b))
+              .filter(
+                (b) => !b.archived && isTeammate(b) && (!repoFilter || b.repo_id === repoFilter)
+              )
               .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
             search,
             [
@@ -163,7 +168,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
             ]
           )
         : [],
-    [teammatesFilter, branchById, repoById, search]
+    [teammatesFilter, branchById, repoById, search, repoFilter]
   );
   const rows = teammatesFilter
     ? teammates.slice((page - 1) * pageSize, page * pageSize)
@@ -522,17 +527,32 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           />
         }
         filters={
-          <Select
-            value={archiveFilter}
-            onChange={(value) => setArchiveFilter(value)}
-            style={{ width: 120 }}
-            options={[
-              { value: 'active', label: 'Active' },
-              { value: 'teammates', label: 'Teammates' },
-              { value: 'all', label: 'All' },
-              { value: 'archived', label: 'Archived' },
-            ]}
-          />
+          <>
+            <Select
+              aria-label="Status"
+              value={archiveFilter}
+              onChange={(value) => setArchiveFilter(value)}
+              style={{ width: 120 }}
+              options={[
+                { value: 'active', label: 'Active' },
+                { value: 'teammates', label: 'Teammates' },
+                { value: 'all', label: 'All' },
+                { value: 'archived', label: 'Archived' },
+              ]}
+            />
+            <Select
+              aria-label="Repository"
+              allowClear
+              placeholder="All repos"
+              value={repoFilter}
+              onChange={setRepoFilter}
+              style={{ width: 200 }}
+              options={repos
+                .slice()
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((r) => ({ value: r.repo_id, label: r.name }))}
+            />
+          </>
         }
         primaryActions={
           <Button

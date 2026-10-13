@@ -4,8 +4,9 @@ import {
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { App as AntApp } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ScheduleModal } from './ScheduleModal';
+import { ScheduleForm } from './ScheduleForm';
 
 const messageMocks = vi.hoisted(() => ({ showError: vi.fn(), showSuccess: vi.fn() }));
 
@@ -87,10 +88,11 @@ function makeSchedule(): Schedule {
   } as Schedule;
 }
 
-function renderModal(
+function renderForm(
   patch: ReturnType<typeof vi.fn>,
   onClose = vi.fn(),
-  schedule = makeSchedule()
+  schedule = makeSchedule(),
+  onDirtyChange = vi.fn()
 ) {
   const client = {
     service: () => ({
@@ -98,27 +100,28 @@ function renderModal(
       create: vi.fn(),
     }),
   } as unknown as AgorClient;
-  render(
-    <ScheduleModal
-      open
-      onClose={onClose}
-      branchId={schedule.branch_id}
-      branchName="Feature"
-      schedule={schedule}
-      mcpServerById={new Map()}
-      client={client}
-    />
+  const view = render(
+    <AntApp>
+      <ScheduleForm
+        onClose={onClose}
+        branchId={schedule.branch_id}
+        schedule={schedule}
+        mcpServerById={new Map()}
+        client={client}
+        onDirtyChange={onDirtyChange}
+      />
+    </AntApp>
   );
-  return { schedule, onClose };
+  return { schedule, onClose, view };
 }
 
-describe('ScheduleModal agentic configuration payload', () => {
+describe('ScheduleForm agentic configuration payload', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('marks the shared picker as resolving schedule defaults per run', async () => {
-    renderModal(vi.fn());
+    renderForm(vi.fn());
     expect(await screen.findByTestId('configuration-picker')).toHaveAttribute(
       'data-default-resolution',
       'schedule-run'
@@ -126,7 +129,7 @@ describe('ScheduleModal agentic configuration payload', () => {
   });
 
   it('fails the model catalog closed when the schedule owner is not the caller', async () => {
-    renderModal(vi.fn());
+    renderForm(vi.fn());
     expect(await screen.findByTestId('configuration-picker')).toHaveAttribute(
       'data-model-catalog',
       'closed'
@@ -142,7 +145,7 @@ describe('ScheduleModal agentic configuration payload', () => {
       },
     } as Schedule;
 
-    renderModal(vi.fn(), vi.fn(), historicalSchedule);
+    renderForm(vi.fn(), vi.fn(), historicalSchedule);
 
     expect(
       await screen.findByText('This schedule uses a removed agentic tool')
@@ -157,7 +160,7 @@ describe('ScheduleModal agentic configuration payload', () => {
   ])('submits %s as a configuration reference', async (buttonName, reference) => {
     const schedule = makeSchedule();
     const patch = vi.fn(async (_id, payload) => ({ ...schedule, ...payload }));
-    renderModal(patch);
+    renderForm(patch);
 
     fireEvent.click(await screen.findByRole('button', { name: buttonName }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -173,7 +176,7 @@ describe('ScheduleModal agentic configuration payload', () => {
   it('removes stale source fields when switching a default-backed schedule to inline', async () => {
     const schedule = makeSchedule();
     const patch = vi.fn(async (_id, payload) => ({ ...schedule, ...payload }));
-    renderModal(patch);
+    renderForm(patch);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Choose inline' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -184,12 +187,12 @@ describe('ScheduleModal agentic configuration payload', () => {
     expect(config.preset_id).toBeUndefined();
   });
 
-  it('keeps form values and the modal open when patching is rejected', async () => {
+  it('keeps form values and the form open when patching is rejected', async () => {
     const patch = vi.fn(async () => {
       throw new Error('Selected agentic configuration is not available');
     });
     const onClose = vi.fn();
-    renderModal(patch, onClose);
+    renderForm(patch, onClose);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Choose workspace default' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -205,5 +208,35 @@ describe('ScheduleModal agentic configuration payload', () => {
       WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
     );
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe('ScheduleForm draft', () => {
+  const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
+
+  it('cancels a clean form at once', async () => {
+    const onClose = vi.fn();
+    renderForm(vi.fn(), onClose);
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(confirms()).toBe(0);
+  });
+
+  it('reports a dirty draft, asks before Cancel discards it, and reports clean on unmount', async () => {
+    const onClose = vi.fn();
+    const onDirtyChange = vi.fn();
+    const { view } = renderForm(vi.fn(), onClose, makeSchedule(), onDirtyChange);
+    fireEvent.change(await screen.findByDisplayValue('Daily review'), {
+      target: { value: 'Nightly review' },
+    });
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(confirms()).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(onClose).not.toHaveBeenCalled();
+
+    view.unmount();
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
   });
 });

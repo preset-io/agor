@@ -1,5 +1,6 @@
 /**
- * Schedule create / edit modal.
+ * Schedule create / edit form. The branch's Schedules tab renders it in place
+ * of the schedules list, with its own inline Save / Cancel (no dialog).
  *
  * Mirrors the structure of `NewSessionModal` for visual + ergonomic
  * consistency:
@@ -50,7 +51,6 @@ import {
   Form,
   Input,
   InputNumber,
-  Modal,
   Radio,
   Space,
   Switch,
@@ -71,6 +71,7 @@ import {
   INLINE_AGENTIC_CONFIGURATION,
 } from '../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
+import { useDiscardConfirm, useDrillFormDraft } from '../SettingsModal/SettingsDrill';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -102,12 +103,11 @@ function detectBrowserTz(): string {
   }
 }
 
-export interface ScheduleModalProps {
-  open: boolean;
+export interface ScheduleFormProps {
+  /** Leaves the form: after Cancel (once a dirty draft is confirmed) or a save. */
   onClose: () => void;
   /** The branch the schedule belongs to (required for create). */
   branchId: BranchID;
-  branchName: string;
   /** Existing schedule when editing; null/undefined when creating. */
   schedule?: Schedule | null;
   /** MCP server catalog. */
@@ -120,11 +120,13 @@ export interface ScheduleModalProps {
   currentUser?: User | null;
   /** Fires after a successful create OR patch with the saved schedule. */
   onSaved?: (schedule: Schedule) => void;
+  /** Reports whether the draft differs from the opened schedule (false on unmount). */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const DEFAULT_CRON = '0 * * * *';
 
-// ScheduleModal carries schedule-specific fields (cron/tz/retention/etc.)
+// ScheduleForm carries schedule-specific fields (cron/tz/retention/etc.)
 // plus the shared `AgenticFormValues` shape that AgenticToolConfigForm and
 // its helpers read/write. Spreading the shared interface keeps the field
 // names in lockstep with NewSessionModal and the agenticConfigHelpers.
@@ -143,17 +145,16 @@ interface ScheduleFormValues extends AgenticFormValues {
   allow_concurrent_runs?: boolean;
 }
 
-export const ScheduleModal: React.FC<ScheduleModalProps> = ({
-  open,
+export const ScheduleForm: React.FC<ScheduleFormProps> = ({
   onClose,
   branchId,
-  branchName,
   schedule,
   mcpServerById,
   client,
   executionOwner,
   currentUser,
   onSaved,
+  onDirtyChange,
 }) => {
   const isEditing = Boolean(schedule?.schedule_id);
   const { showError, showSuccess } = useThemedMessage();
@@ -180,9 +181,8 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   const executionOwnerResolved =
     !schedule?.created_by || executionOwner?.user_id === schedule.created_by;
 
-  // Initialize form when modal opens or the schedule prop changes.
+  // Initialize the form for the opened schedule (or a new one).
   useEffect(() => {
-    if (!open) return;
     const persistedConfig = schedule?.agentic_tool_config;
     const activeConfig = isActiveScheduleAgenticToolConfig(persistedConfig)
       ? persistedConfig
@@ -213,7 +213,19 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
       ...configValues,
       mcpServerIds: schedule?.mcp_server_ids ?? [],
     });
-  }, [open, schedule, form]);
+  }, [schedule, form]);
+
+  // Draft tracking (after the seeding effect above): drives the Cancel guard
+  // and is lifted to the branch editor's leave guard via onDirtyChange.
+  const isDraftDirty = useDrillFormDraft(form, schedule ?? 'new');
+  const confirmDiscard = useDiscardConfirm();
+  // Re-renders on every value change, programmatic ones included (cron picker).
+  const watchedValues = Form.useWatch((values) => values, { form, preserve: true });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: watchedValues re-checks the draft on each value change
+  useEffect(() => {
+    onDirtyChange?.(isDraftDirty());
+  }, [watchedValues, isDraftDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   // Reseed AgenticToolConfigForm fields ONLY when the user actually
   // changes the agent — not on mount/open. A useEffect keyed on
@@ -352,27 +364,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   };
 
   return (
-    <Modal
-      title={isEditing ? `Edit schedule — ${schedule?.name}` : `New schedule for ${branchName}`}
-      open={open}
-      onCancel={onClose}
-      width={760}
-      destroyOnClose
-      footer={[
-        <Button key="cancel" onClick={onClose} disabled={saving}>
-          Cancel
-        </Button>,
-        <Button
-          key="save"
-          type="primary"
-          loading={saving}
-          disabled={requiresSupportedToolSelection}
-          onClick={handleSave}
-        >
-          {isEditing ? 'Save' : 'Create'}
-        </Button>,
-      ]}
-    >
+    <div>
       {requiresSupportedToolSelection && (
         <Alert
           type="warning"
@@ -382,7 +374,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           style={{ marginTop: 16 }}
         />
       )}
-      <Form form={form} layout="vertical" preserve={false} style={{ marginTop: 16 }}>
+      <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
         <Form.Item name="enabled" label="Enabled" valuePropName="checked">
           <Switch />
         </Form.Item>
@@ -545,6 +537,19 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           />
         )}
       </Form>
-    </Modal>
+      <Space style={{ width: '100%', justifyContent: 'flex-end', marginTop: 16 }}>
+        <Button onClick={() => confirmDiscard(isDraftDirty(), onClose)} disabled={saving}>
+          Cancel
+        </Button>
+        <Button
+          type="primary"
+          loading={saving}
+          disabled={requiresSupportedToolSelection}
+          onClick={handleSave}
+        >
+          {isEditing ? 'Save' : 'Create'}
+        </Button>
+      </Space>
+    </div>
   );
 };

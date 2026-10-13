@@ -4,11 +4,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeBranch, renderWithApp } from '../testUtils';
 import { ScheduleTab } from './ScheduleTab';
 
-const scheduleModalProps = vi.hoisted(() => vi.fn());
-vi.mock('../../ScheduleModal', () => ({
-  ScheduleModal: (props: unknown) => {
-    scheduleModalProps(props);
-    return null;
+const scheduleFormProps = vi.hoisted(() => vi.fn());
+vi.mock('../../ScheduleForm', () => ({
+  ScheduleForm: (props: { onClose: () => void; onDirtyChange?: (dirty: boolean) => void }) => {
+    scheduleFormProps(props);
+    return (
+      <div data-testid="schedule-form">
+        <button type="button" onClick={() => props.onDirtyChange?.(true)}>
+          Make dirty
+        </button>
+        <button type="button" onClick={props.onClose}>
+          Close form
+        </button>
+      </div>
+    );
   },
 }));
 
@@ -68,12 +77,14 @@ function renderScheduleTab({
   onOpenSession = vi.fn(),
   currentUser,
   userById,
+  onDirtyChange,
 }: {
   branch?: Branch;
   schedules?: Schedule[];
   onOpenSession?: (sessionId: string) => void;
   currentUser?: User;
   userById?: Map<string, User>;
+  onDirtyChange?: (dirty: boolean) => void;
 } = {}) {
   renderWithApp(
     <ScheduleTab
@@ -82,6 +93,7 @@ function renderScheduleTab({
       onOpenSession={onOpenSession}
       currentUser={currentUser}
       userById={userById}
+      onDirtyChange={onDirtyChange}
     />
   );
   return { onOpenSession };
@@ -89,7 +101,7 @@ function renderScheduleTab({
 
 describe('ScheduleTab compact list', () => {
   beforeEach(() => {
-    scheduleModalProps.mockClear();
+    scheduleFormProps.mockClear();
   });
 
   it('keeps secondary schedule details out of full-width columns', async () => {
@@ -132,7 +144,7 @@ describe('ScheduleTab compact list', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /edit schedule/i }));
 
-    expect(scheduleModalProps.mock.lastCall?.[0]).toMatchObject({
+    expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({
       executionOwner: expectedOwnerId ? owner : null,
     });
   });
@@ -151,6 +163,49 @@ describe('ScheduleTab compact list', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /edit schedule/i }));
 
-    expect(scheduleModalProps.mock.lastCall?.[0]).toMatchObject({ executionOwner: null });
+    expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({ executionOwner: null });
+  });
+});
+
+describe('ScheduleTab in-place editor', () => {
+  beforeEach(() => scheduleFormProps.mockClear());
+
+  it('creates in place of the list, with a Schedules sub-header and no dialog', async () => {
+    renderScheduleTab();
+    await screen.findByRole('columnheader', { name: 'Title' });
+    fireEvent.click(screen.getByRole('button', { name: /New$/ }));
+
+    expect(screen.getByTestId('schedule-form')).toBeInTheDocument();
+    expect(screen.getByText('New schedule')).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({ schedule: null });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close form' }));
+    expect(await screen.findByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+  });
+
+  it('edits in place under the schedule name', async () => {
+    const schedule = makeSchedule({ name: 'Daily digest' });
+    renderScheduleTab({ schedules: [schedule] });
+    fireEvent.click(await screen.findByRole('button', { name: /edit schedule/i }));
+
+    expect(screen.getByTestId('schedule-form')).toBeInTheDocument();
+    expect(screen.getByText('Daily digest')).toBeInTheDocument();
+    expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({ schedule });
+  });
+
+  it('lifts a dirty draft and asks before the sub-header discards it', async () => {
+    const onDirtyChange = vi.fn();
+    renderScheduleTab({ onDirtyChange });
+    await screen.findByRole('columnheader', { name: 'Title' });
+    fireEvent.click(screen.getByRole('button', { name: /New$/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Make dirty' }));
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+    fireEvent.click(screen.getByText('Schedules'));
+    await waitFor(() => expect(document.querySelectorAll('.ant-modal-confirm')).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByTestId('schedule-form')).toBeInTheDocument();
   });
 });
