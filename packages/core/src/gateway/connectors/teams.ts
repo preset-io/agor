@@ -55,7 +55,7 @@ const TEAMS_PROBE_TIMEOUT_MS = 10_000;
 const TEAMS_MEMBER_LOOKUP_TIMEOUT_MS = 5_000;
 
 /** What a passing Teams credential probe cannot prove. */
-export const TEAMS_NOT_VERIFIABLE = [
+const TEAMS_NOT_VERIFIABLE = [
   'The Azure Bot messaging endpoint points at this channel callback URL',
   'The Teams app is installed in the team, group chat, or personal scope',
   'Inbound activities reach Agor through your public HTTPS ingress',

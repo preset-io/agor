@@ -31,8 +31,8 @@ import {
 import { RepositoryError } from './base';
 import { TaskRepository } from './tasks';
 
-export const DELIVERY_COMPLETED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-export const DELIVERY_FAILED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const DELIVERY_COMPLETED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const DELIVERY_FAILED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const MAX_DELIVERY_CHUNK_RECEIPTS = 1_000;
 
 export interface DeliveryOutbox {
@@ -104,7 +104,7 @@ export function deliveryMessageText(message: Message): string {
 }
 
 /** Only non-empty final assistant text is delivered; "Thinking..." placeholders are not. */
-export function isRoutableAssistantMessage(message: Message): boolean {
+function isRoutableAssistantMessage(message: Message): boolean {
   if (message.role !== 'assistant') return false;
   const text = deliveryMessageText(message).trim();
   return text.length > 0 && !/^thinking\s*\.{3}$/i.test(text);

@@ -4,7 +4,7 @@
  */
 
 /** Bot Connector hosts for commercial, GCC, GCC High, and DoD tenants. */
-export const TEAMS_SERVICE_URL_HOSTS = [
+const TEAMS_SERVICE_URL_HOSTS = [
   'smba.trafficmanager.net',
   'smba.infra.gcc.teams.microsoft.com',
   'smba.infra.gov.teams.microsoft.us',

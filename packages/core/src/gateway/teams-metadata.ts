@@ -1,5 +1,5 @@
 /** Teams activity metadata that may be stored or forwarded; everything else is dropped. */
-export const TEAMS_SAFE_METADATA_KEYS = [
+const TEAMS_SAFE_METADATA_KEYS = [
   'teams_conversation_type',
   'teams_channel_type',
   'teams_channel_name',
