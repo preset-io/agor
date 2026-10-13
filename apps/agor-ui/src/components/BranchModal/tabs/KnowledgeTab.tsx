@@ -6,7 +6,7 @@ import type {
   TeammateKnowledgeGrant,
   TeammateKnowledgeGrantAccess,
 } from '@agor-live/client';
-import { getTeammateConfig } from '@agor-live/client';
+import { getTeammateConfig, knowledgePath } from '@agor-live/client';
 import {
   Alert,
   Button,
@@ -27,6 +27,7 @@ import {
   formatActionError,
 } from '@/utils/connectionErrors';
 import { useThemedMessage } from '@/utils/message';
+import { uiRouteHref } from '@/utils/uiRoutes';
 import { ActionErrorNotice } from '../../CompactNotice';
 
 interface KnowledgeTabProps {
@@ -262,7 +263,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
           extra={
             <Space>
               {namespace?.slug && (
-                <Button href={`/kb/${encodeURIComponent(namespace.slug)}/`} target="_blank">
+                <Button href={uiRouteHref(knowledgePath(namespace.slug))} target="_blank">
                   Open in Knowledge
                 </Button>
               )}

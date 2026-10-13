@@ -1,7 +1,7 @@
-import type { AgorClient, KnowledgeNamespace } from '@agor-live/client';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeTeammateBranch, renderWithApp } from '../testUtils';
+import type { AgorClient, Branch, KnowledgeNamespace } from '@agor-live/client';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { makeBranch, makeTeammateBranch, renderWithApp } from '../testUtils';
 import { KnowledgeTab } from './KnowledgeTab';
 
 const messageMocks = vi.hoisted(() => ({ showError: vi.fn(), showSuccess: vi.fn() }));
@@ -83,5 +83,41 @@ describe('KnowledgeTab failures', () => {
         "Couldn't save the knowledge settings. You don't have permission to do this. (Forbidden)"
       )
     );
+  });
+});
+
+const SLUG = 'teammate-abc12345';
+
+async function renderOpenLink(): Promise<string | null> {
+  const namespace = { namespace_id: 'ns-1', slug: SLUG } as unknown as KnowledgeNamespace;
+  const client = {
+    service: () => ({
+      find: async () => [namespace],
+      get: async () => namespace,
+    }),
+  } as unknown as AgorClient;
+  const branch = makeBranch({
+    custom_context: {
+      teammate: { kind: 'teammate', kb: { primary_namespace_id: 'ns-1', grants: [] } },
+    },
+  } as Partial<Branch>);
+
+  render(<KnowledgeTab branch={branch} client={client} canEdit={false} />);
+  const link = await screen.findByRole('link', { name: /Open in Knowledge/ });
+  return link.getAttribute('href');
+}
+
+describe('KnowledgeTab Open in Knowledge link', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('prefixes the /ui mount when served by the daemon', async () => {
+    vi.stubEnv('BASE_URL', '/ui/');
+    expect(await renderOpenLink()).toBe(`/ui/kb/${SLUG}/`);
+  });
+
+  it('uses the plain route when mounted at the root', async () => {
+    expect(await renderOpenLink()).toBe(`/kb/${SLUG}/`);
   });
 });

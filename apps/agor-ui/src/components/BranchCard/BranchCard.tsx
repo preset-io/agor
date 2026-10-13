@@ -72,6 +72,8 @@ interface BranchCardProps {
   isPinned?: boolean;
   zoneName?: string;
   zoneColor?: string;
+  /** Off on the view-only canvas, where cards cannot be dragged. */
+  showDragHandle?: boolean;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
   panelMode?: boolean; // Render inside side panel instead of as a draggable canvas card
   progressiveMountKey?: string | number | null;
@@ -107,6 +109,7 @@ const BranchCardComponent = ({
   isPinned = false,
   zoneName,
   zoneColor,
+  showDragHandle = true,
   inPopover = false,
   panelMode = false,
   progressiveMountKey,
@@ -511,7 +514,7 @@ const BranchCardComponent = ({
               />
             </Tooltip>
           )}
-          {!inPopover && !panelMode && (
+          {!inPopover && !panelMode && showDragHandle && (
             <Button
               type="text"
               icon={<DragOutlined style={{ fontSize: 16 }} />}

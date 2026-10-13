@@ -1,7 +1,7 @@
 import type { AgorClient, Branch, UserID } from '@agor-live/client';
 import { isTeammate } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
-import { Button, Select, Space, Spin, Typography } from 'antd';
+import { Select, Space, Spin, Typography } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
@@ -105,7 +105,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
   // Skip the closing period when the sentence already ends in punctuation (e.g. "Ambient!").
   const currentEndsSentence = /[.!?…]$/.test(currentOption?.context ?? currentOption?.label ?? '');
 
-  const handleChange = async (branchId: string | null) => {
+  const handleChange = async (branchId: string) => {
     if (!client || !currentUserId) return;
     const operationUserId = currentUserId;
     setSaving(true);
@@ -151,12 +151,6 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
         </Typography.Text>
       )}
 
-      <Button
-        disabled={disabled || saving || !client || !currentUserId || loadFailed}
-        onClick={() => void handleChange(null)}
-      >
-        Clear primary assistant
-      </Button>
       <Select
         showSearch
         loading={saving}
