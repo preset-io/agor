@@ -79,7 +79,7 @@ Release preparation covers merged changes from `v0.26.10` (`cdb77a0a`) through `
 
 ### Chores
 
-- **Smaller `agor-live` package** — the published package drops from 126 MiB to 42 MiB unpacked, and from 28 MiB to 14 MiB packed. Configuration and behavior are unchanged; installs are smaller and faster. ([#PR](https://github.com/preset-io/agor/pull/PR))
+- **Smaller `agor-live` package** — the published package drops from 126 MiB to 42 MiB unpacked, and from 28 MiB to 14 MiB packed. Configuration and behavior are unchanged; installs are smaller and faster. ([#3084](https://github.com/preset-io/agor/pull/3084))
   - The daemon bundle no longer inlines zod, about 711 KB that was duplicated into 36 daemon entry files.
   - The daemon and `@agor/core` builds use code splitting, so shared code is loaded once from shared chunks instead of copied into each entry file. Modules shared across entry points are now a single instance, which removes a duplicate-module hazard that core previously worked around for tenant scope.
   - The internal bundled packages (`@agor/core`, `@agor/git`, `@agor/agentic-tools`, `@agor/agentic-tool-opencode`) ship ESM only; the CommonJS builds were dropped.
