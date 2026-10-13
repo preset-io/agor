@@ -37,7 +37,6 @@ import {
   selectRepoById,
   selectUserById,
 } from '../../store/selectors';
-import type { AgenticToolOption } from '../../types';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
@@ -128,7 +127,6 @@ export interface SettingsModalProps {
   onDeleteArtifact?: (artifactId: string) => void;
   /** Opens the teammate create flow (main's TeammatesTable triggers it directly). */
   onCreateTeammate?: () => void;
-  availableAgents?: AgenticToolOption[];
   branchStorageConfig?: BranchStorageConfig;
 }
 
@@ -163,7 +161,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onUpdateArtifact,
   onDeleteArtifact,
   onCreateTeammate,
-  availableAgents,
   branchStorageConfig,
 }) => {
   // Entity maps come straight from the store rather than through App props:
