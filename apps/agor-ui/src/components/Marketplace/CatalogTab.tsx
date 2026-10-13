@@ -174,7 +174,11 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const [sessionSetupRequested, setSessionSetupRequested] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
   const [startSessionError, setStartSessionError] = useState<string | null>(null);
-  const [connectNotice, setConnectNotice] = useState<CatalogConnectNotice | null>(null);
+  // Held with the authority it answered, so a role, auth generation or policy
+  // change hides it in the same render rather than one effect later.
+  const [connectNotice, setConnectNotice] = useState<
+    (CatalogConnectNotice & { authority: string }) | null
+  >(null);
   const [connectSuccess, setConnectSuccess] = useState<{
     catalogKey: string;
     serverId: string;
@@ -282,12 +286,8 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         ]
       : null
   );
-  // A connect outcome answered the caller's authority at the time; a role,
-  // auth generation or policy change asks again.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: authority is the reset boundary
-  useEffect(() => {
-    setConnectNotice(null);
-  }, [currentUser?.role, authGeneration, memberPolicy.policy, memberPolicy.canConfigure]);
+  const noticeAuthority = `${currentUser?.role}|${authGeneration}|${memberPolicy.policy}|${memberPolicy.canConfigure}`;
+  const visibleConnectNotice = connectNotice?.authority === noticeAuthority ? connectNotice : null;
   // biome-ignore lint/correctness/useExhaustiveDependencies: ownership consent resets at entry and caller boundaries
   useEffect(() => {
     setSharing('private');
@@ -555,6 +555,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       }
       setConnecting(true);
       setConnectNotice(null);
+      const attemptAuthority = noticeAuthority;
       try {
         const result = await client.service('mcp-catalog/connect').create({
           catalog_key: selected.name,
@@ -627,7 +628,11 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (!operation.isCurrent()) return;
         setConnectNotice(
           isMcpMemberPolicyRefusal(err)
-            ? { tone: 'info', message: askAdminToAddMcpServer(entryTitle(selected)) }
+            ? {
+                tone: 'info',
+                message: askAdminToAddMcpServer(entryTitle(selected)),
+                authority: attemptAuthority,
+              }
             : {
                 tone: 'error',
                 message: onboarding
@@ -635,6 +640,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
                   : err instanceof Error
                     ? err.message
                     : 'Could not connect this server',
+                authority: attemptAuthority,
               }
         );
         const requirement = readCredentialRequirement(err);
@@ -643,7 +649,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, selected, onboarding, sharing]
+    [client, operationGuard, selected, onboarding, sharing, noticeAuthority]
   );
 
   const continueSurpriseOAuth = useCallback(
@@ -826,7 +832,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         startingSession={startingSession}
         startSessionError={startSessionError}
         connecting={connecting}
-        connectNotice={connectNotice}
+        connectNotice={visibleConnectNotice}
         credentialRequirement={keyRequirement}
         connectCapability={connectCapability}
         policyPending={policyPending}

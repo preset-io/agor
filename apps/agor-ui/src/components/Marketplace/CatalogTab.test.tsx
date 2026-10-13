@@ -8,6 +8,22 @@ import { CatalogTab } from './CatalogTab';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
 
+// What the drawer was handed on each committed render; `rerender` flushes
+// effects inside act, so a DOM assertion after it cannot see a one-render flash.
+const drawerRenders = vi.hoisted(() => [] as Array<{ role: unknown; notice: unknown }>);
+
+vi.mock('./CatalogDetailDrawer', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./CatalogDetailDrawer')>();
+  const { createElement } = await import('react');
+  return {
+    ...actual,
+    CatalogDetailDrawer: (props: Parameters<typeof actual.CatalogDetailDrawer>[0]) => {
+      drawerRenders.push({ role: props.connectCapability.role, notice: props.connectNotice });
+      return createElement(actual.CatalogDetailDrawer, props);
+    },
+  };
+});
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
   return { ...actual, useNavigate: () => mockNavigate };
@@ -1007,10 +1023,15 @@ describe('connect capability reaches the drawer', () => {
     expect(connect).toBeDisabled();
 
     memberPolicyAnswer = { policy: 'use_existing_only', can_configure: true };
+    drawerRenders.length = 0;
     // A promotion lands as a new authenticated generation carrying the new role.
     rendered.rerender(view({ ...MEMBER, role: 'admin' } as User, 2));
 
-    await waitFor(() => expect(screen.queryByText(/Ask an administrator/)).toBeNull());
+    // The very first render as admin already carries no notice.
+    const adminRenders = drawerRenders.filter((r) => r.role === 'admin');
+    expect(adminRenders.length).toBeGreaterThan(0);
+    expect(adminRenders[0]?.notice).toBeNull();
+    expect(screen.queryByText(/Ask an administrator/)).toBeNull();
     const promoted = await findDrawer();
     const checkbox = promoted.getByRole('checkbox') as HTMLInputElement;
     if (!checkbox.checked) fireEvent.click(checkbox);
@@ -1020,6 +1041,7 @@ describe('connect capability reaches the drawer', () => {
       ).toBeEnabled()
     );
     expect(screen.queryByText(/Ask an administrator/)).toBeNull();
+    expect(drawerRenders.filter((r) => r.role === 'admin' && r.notice !== null)).toEqual([]);
     expect(connectCalls).toHaveLength(1);
   });
 
