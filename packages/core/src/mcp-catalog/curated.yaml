@@ -847,20 +847,6 @@ unpublished:
     transport: streamable-http
     auth_type: none
 
-  - name: com.microsoft.releasecommunications/mcp
-    title: Microsoft Release Communications
-    category: search
-    capabilities: [docs, web-search]
-    benefit: Search Microsoft 365 roadmap items and Azure updates from their official release feeds instead of relying on stale summaries.
-    starter_prompt: Show the most recent Microsoft 365 roadmap items about Teams and the latest Azure updates about managed identity, with source links.
-    permission_disclosure: Sends public release-feed searches to Microsoft. It requires no account, reads only public Microsoft 365 roadmap and Azure update data, and cannot access or change a tenant.
-    icon_url: https://www.google.com/s2/favicons?domain=microsoft.com&sz=64
-    website_url: https://learn.microsoft.com/en-us/microsoft-365/admin/manage/mrc-mcp
-    popularity_rank: 56
-    remote_url: https://www.microsoft.com/releasecommunications/mcp
-    transport: streamable-http
-    auth_type: none
-
   - name: com.amazonaws/knowledge-mcp
     title: AWS Knowledge
     category: search
