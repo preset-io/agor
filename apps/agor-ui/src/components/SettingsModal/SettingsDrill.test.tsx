@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  DrillCrumbs,
   DrillInFrame,
   SettingsDrillProvider,
   StandaloneSettingsDrillProvider,
@@ -74,5 +75,22 @@ describe('DrillInFrame', () => {
     fireEvent.click(screen.getByText('Card Types'));
     fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
     await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
+  });
+});
+
+describe('DrillCrumbs', () => {
+  // An in-place editor opens at the list's scroll offset; its crumbs must not
+  // start off screen.
+  it('brings itself into view when an editor opens', () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      render(<DrillCrumbs parent="Schedules" onParent={vi.fn()} current="Weekly retro" />);
+      expect(scrollIntoView).toHaveBeenCalledOnce();
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    } finally {
+      // jsdom has no scrollIntoView of its own.
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
   });
 });

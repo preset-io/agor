@@ -397,30 +397,38 @@ export const DrillCrumbs: React.FC<{
   current: ReactNode;
 }> = ({ parent, onParent, current }) => {
   const { token } = theme.useToken();
+  const ref = useRef<HTMLDivElement>(null);
+  // An editor opens in the list's scroll container, at the list's offset: bring
+  // the crumbs (the top of the editor) into view when it opens.
+  useEffect(() => {
+    ref.current?.scrollIntoView?.({ block: 'nearest' });
+  }, []);
   return (
-    <Breadcrumb
-      items={[
-        ...(parent
-          ? [
-              {
-                key: 'parent',
-                title: (
-                  <Typography.Link onClick={onParent} style={{ fontWeight: 500 }}>
-                    {parent}
-                  </Typography.Link>
-                ),
-              },
-            ]
-          : []),
-        {
-          key: 'current',
-          title: (
-            <Typography.Text style={{ fontWeight: 500, color: token.colorText }}>
-              {current}
-            </Typography.Text>
-          ),
-        },
-      ]}
-    />
+    <div ref={ref}>
+      <Breadcrumb
+        items={[
+          ...(parent
+            ? [
+                {
+                  key: 'parent',
+                  title: (
+                    <Typography.Link onClick={onParent} style={{ fontWeight: 500 }}>
+                      {parent}
+                    </Typography.Link>
+                  ),
+                },
+              ]
+            : []),
+          {
+            key: 'current',
+            title: (
+              <Typography.Text style={{ fontWeight: 500, color: token.colorText }}>
+                {current}
+              </Typography.Text>
+            ),
+          },
+        ]}
+      />
+    </div>
   );
 };
