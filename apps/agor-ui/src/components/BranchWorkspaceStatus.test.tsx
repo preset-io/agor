@@ -4,8 +4,9 @@ import { BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE } from '@agor-live/client
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../contexts/ConnectionContext';
+import { resetAccessCacheForTests } from '../utils/accessCache';
 import { makeBranch, makeUser } from './BranchModal/testUtils';
-import { BranchWorkspaceStatus } from './BranchWorkspaceStatus';
+import { BranchWorkspaceStatus, describeWorkspaceOperation } from './BranchWorkspaceStatus';
 
 const showError = vi.hoisted(() => vi.fn());
 vi.mock('../utils/message', () => ({ useThemedMessage: () => ({ showError }) }));
@@ -58,10 +59,15 @@ function view(client: AgorClient | null, row = branch, authGeneration = 0) {
     </ConnectionProvider>
   );
 }
-const dismissLabel = 'Dismiss notification for everyone';
-beforeEach(() => vi.clearAllMocks());
+const FAILED = "Agor couldn't clean up this branch's files.";
+const findDismissButton = () => screen.findByRole('button', { name: 'Dismiss for everyone' });
+const queryDismissButton = () => screen.queryByRole('button', { name: /Dismiss/ });
+beforeEach(() => {
+  vi.clearAllMocks();
+  resetAccessCacheForTests();
+});
 
-it('uses a short title and readable error instead of combining historical errors into the title', () => {
+it('keeps the raw error under Details and ignores historical errors', () => {
   render(
     view(null, {
       ...branch,
@@ -72,7 +78,9 @@ it('uses a short title and readable error instead of combining historical errors
       },
     })
   );
-  expect(screen.getByText('Branch cleanup failed')).not.toBeNull();
+  expect(screen.getByText(FAILED)).not.toBeNull();
+  expect(screen.queryByText(operation.error!)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
   expect(screen.getByText(operation.error!)).not.toBeNull();
   expect(screen.queryByText(/Earlier failure/)).toBeNull();
 });
@@ -80,34 +88,35 @@ it('uses a short title and readable error instead of combining historical errors
 it('only hides after persisted acknowledgement, stays dismissed on refresh, and shows new outcomes', async () => {
   const { client, create, request } = clientFixture();
   const mounted = render(view(client));
-  fireEvent.click(await screen.findByTitle(dismissLabel));
+  fireEvent.click(await findDismissButton());
+  fireEvent.click(await findDismissButton());
   expect(create).toHaveBeenCalledExactlyOnceWith(
     { operation_id: operation.operation_id },
     { route: { id: branch.branch_id } }
   );
-  expect(screen.getByText('Branch cleanup failed')).not.toBeNull();
-  expect(screen.getByTitle(dismissLabel).hasAttribute('disabled')).toBe(true);
+  expect(screen.getByText(FAILED)).not.toBeNull();
   await act(async () => request.resolve());
-  expect(screen.queryByText('Branch cleanup failed')).toBeNull();
+  expect(screen.queryByText(FAILED)).toBeNull();
   // Reload/other users receive a branch representation without the payload.
   mounted.unmount();
   const reload = render(view(client, { ...branch, workspace_operation: undefined }));
-  expect(screen.queryByText('Branch cleanup failed')).toBeNull();
+  expect(screen.queryByText(FAILED)).toBeNull();
   reload.rerender(
     view(client, { ...branch, workspace_operation: { ...operation, operation_id: generateId() } })
   );
-  expect(await screen.findByTitle(dismissLabel)).not.toBeNull();
-  expect(screen.getByText('Branch cleanup failed')).not.toBeNull();
+  expect(await findDismissButton()).not.toBeNull();
+  expect(screen.getByText(FAILED)).not.toBeNull();
 });
 
 it('keeps the notification and retry affordance when saving dismissal fails', async () => {
-  const { client, request } = clientFixture();
+  const { client, create, request } = clientFixture();
   render(view(client));
-  fireEvent.click(await screen.findByTitle(dismissLabel));
+  fireEvent.click(await findDismissButton());
   await act(async () => request.reject(new Error('Permission changed')));
-  expect(showError).toHaveBeenCalledWith('Permission changed');
-  expect(screen.getByText('Branch cleanup failed')).not.toBeNull();
-  expect(screen.getByTitle(dismissLabel).hasAttribute('disabled')).toBe(false);
+  expect(showError).toHaveBeenCalledWith('Failed to dismiss the notification: Permission changed');
+  expect(screen.getByText(FAILED)).not.toBeNull();
+  fireEvent.click(await findDismissButton());
+  expect(create).toHaveBeenCalledTimes(2);
 });
 
 it.each(['accepted', 'running', 'unknown'] as const)(
@@ -124,16 +133,30 @@ it.each(['accepted', 'running', 'unknown'] as const)(
         },
       })
     );
-    expect(screen.queryByTitle(dismissLabel)).toBeNull();
+    expect(queryDismissButton()).toBeNull();
     expect(find).not.toHaveBeenCalled();
   }
 );
 
-it('projects a timed-out operation as needs attention, never as a dismissible failure', () => {
+it('says an operation past its deadline by this clock has not reported yet, without claiming file loss', () => {
   render(view(null, { ...branch, workspace_operation: { ...operation, status: 'running' } }));
-  expect(screen.getByText('Branch cleanup needs attention')).not.toBeNull();
-  expect(screen.getByText(/Workspace operation stopped reporting/)).not.toBeNull();
-  expect(screen.queryByTitle(dismissLabel)).toBeNull();
+  expect(screen.getByText("Agor hasn't heard back about this cleanup yet.")).not.toBeNull();
+  expect(screen.queryByText(/lost track/)).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
+  expect(queryDismissButton()).toBeNull();
+});
+
+it('says Agor lost track only when the server wrote unknown', () => {
+  const error =
+    'Workspace operation stopped reporting. Its outcome requires reconciliation; do not retry.';
+  render(
+    view(null, { ...branch, workspace_operation: { ...operation, status: 'unknown', error } })
+  );
+  expect(
+    screen.getByText('Agor lost track of this cleanup, so some files may already be gone.')
+  ).not.toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+  expect(screen.getByText(error)).not.toBeNull();
 });
 
 it.each([
@@ -142,7 +165,7 @@ it.each([
 ] as Partial<Branch>[])('retains a notification when the branch is blocked: %j', (state) => {
   const { client, find } = clientFixture();
   render(view(client, { ...branch, ...state }));
-  expect(screen.queryByTitle(dismissLabel)).toBeNull();
+  expect(queryDismissButton()).toBeNull();
   expect(find).not.toHaveBeenCalled();
 });
 
@@ -151,11 +174,11 @@ it('does not offer dismissal to a non-manager or after a failed permission read'
   find.mockResolvedValue({ is_owner: false, can: 'session' });
   const mounted = render(view(client));
   await act(async () => {});
-  expect(screen.queryByTitle(dismissLabel)).toBeNull();
+  expect(queryDismissButton()).toBeNull();
   find.mockRejectedValue(new Error('Unavailable'));
   mounted.rerender(view(client, branch, 1));
   await act(async () => {});
-  expect(screen.queryByTitle(dismissLabel)).toBeNull();
+  expect(queryDismissButton()).toBeNull();
 });
 
 it.each(['new operation', 'new auth generation'] as const)(
@@ -163,7 +186,7 @@ it.each(['new operation', 'new auth generation'] as const)(
   async (change) => {
     const { client, request } = clientFixture();
     const mounted = render(view(client));
-    fireEvent.click(await screen.findByTitle(dismissLabel));
+    fireEvent.click(await findDismissButton());
     mounted.rerender(
       view(
         client,
@@ -174,10 +197,8 @@ it.each(['new operation', 'new auth generation'] as const)(
       )
     );
     await act(async () => request.resolve());
-    expect(screen.getByText('Branch cleanup failed')).not.toBeNull();
-    await waitFor(() =>
-      expect(screen.getByTitle(dismissLabel).hasAttribute('disabled')).toBe(false)
-    );
+    expect(screen.getByText(FAILED)).not.toBeNull();
+    await waitFor(() => expect(queryDismissButton()).not.toBeNull());
   }
 );
 
@@ -189,6 +210,59 @@ it('renders completion rather than a permanent error and keeps timestamp in hove
     })
   );
   expect(screen.queryByText(operation.error!)).toBeNull();
-  fireEvent.mouseEnter(screen.getByText('Branch cleanup completed'));
+  expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
+  fireEvent.mouseEnter(screen.getByText('Cleanup finished.'));
   expect((await screen.findByRole('tooltip')).textContent).toContain(operation.finished_at);
+});
+
+it.each([
+  ['clean', 'accepted', 'info', "Agor is cleaning up this branch's files…"],
+  ['clean', 'running', 'info', "Agor is cleaning up this branch's files…"],
+  ['clean', 'failed', 'error', "Agor couldn't clean up this branch's files."],
+  [
+    'clean',
+    'unknown',
+    'warning',
+    'Agor lost track of this cleanup, so some files may already be gone.',
+  ],
+  ['clean', 'succeeded', 'neutral', 'Cleanup finished.'],
+  ['archive', 'accepted', 'info', 'Agor is archiving this branch…'],
+  ['archive', 'running', 'info', 'Agor is archiving this branch…'],
+  ['archive', 'failed', 'error', "Agor couldn't archive this branch's files."],
+  [
+    'archive',
+    'unknown',
+    'warning',
+    'Agor lost track of this archive, so some files may already be gone.',
+  ],
+  ['archive', 'succeeded', 'neutral', 'Branch archived.'],
+] as const)('describes %s %s', (action, status, type, message) => {
+  expect(describeWorkspaceOperation({ ...operation, action, status })).toEqual({ type, message });
+});
+
+it.each([
+  ['failed', 'error', "Agor couldn't archive this branch."],
+  ['unknown', 'warning', 'Agor lost track of this archive.'],
+] as const)(
+  'describes an archive that keeps files as %s without a file claim',
+  (status, type, message) => {
+    expect(
+      describeWorkspaceOperation({
+        ...operation,
+        action: 'archive',
+        filesystem_action: 'preserved',
+        status,
+      })
+    ).toEqual({ type, message });
+  }
+);
+
+it.each([
+  ['clean', "Agor hasn't heard back about this cleanup yet."],
+  ['archive', "Agor hasn't heard back about this archive yet."],
+] as const)('describes an overdue %s', (action, message) => {
+  expect(describeWorkspaceOperation({ ...operation, action, status: 'unknown' }, true)).toEqual({
+    type: 'warning',
+    message,
+  });
 });

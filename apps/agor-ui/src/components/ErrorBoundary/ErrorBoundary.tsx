@@ -18,6 +18,8 @@ interface ErrorBoundaryProps {
   //     entire app.
   variant?: 'scoped' | 'global';
   fallbackTitle?: ReactNode;
+  // Scoped only: replaces the default <Alert> with a surface-specific notice.
+  fallback?: (error: Error) => ReactNode;
   // When this value changes, the boundary clears its error state and re-renders
   // children. Useful when fresh data may unblock the failed render (e.g. a
   // logs refresh after a transient bad payload). The global variant doesn't
@@ -82,13 +84,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   render() {
     const { error, errorInfo, reloading } = this.state;
-    const { variant = 'scoped', fallbackTitle, children } = this.props;
+    const { variant = 'scoped', fallbackTitle, fallback, children } = this.props;
 
     if (error) {
       if (variant === 'global') {
         if (reloading) return <InitialLoadingScreen message="Reloading…" />;
         return <GlobalCrashScreen error={error} errorInfo={errorInfo} />;
       }
+      if (fallback) return fallback(error);
       return (
         <Alert
           type="error"

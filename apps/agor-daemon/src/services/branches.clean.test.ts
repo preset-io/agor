@@ -137,7 +137,7 @@ test('clean rejects policy, protection, public overrides, and busy activity befo
       },
       archiveParams
     )
-  ).rejects.toThrow('already active');
+  ).rejects.toThrow('maintenance is already in progress');
   expect(spawnExecutor).toHaveBeenCalledOnce();
 });
 

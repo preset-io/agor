@@ -66,6 +66,15 @@ export function useOptionalConnectionState(): ConnectionContextValue | null {
  */
 export type MutationBlockReason = 'disconnected' | 'reconnecting' | 'out-of-sync';
 
+export const RECONNECTING_MESSAGE = 'Reconnecting to Agor…';
+export const CONNECTION_LOST_MESSAGE = 'Lost connection to Agor.';
+
+/** Shared by the desktop status tag and the mobile banner. */
+export function formatOutOfSyncMessage(capturedSha: string | null, currentSha: string | null) {
+  const versions = capturedSha && currentSha ? ` (${capturedSha} → ${currentSha})` : '';
+  return `Agor was updated since this tab opened. Reload to get the latest version, but anything you haven't saved will be lost.${versions}`;
+}
+
 export interface MutationGate {
   canMutate: boolean;
   reason: MutationBlockReason | null;
@@ -87,7 +96,7 @@ export function useMutationGate(): MutationGate {
     return {
       canMutate: false,
       reason: 'out-of-sync',
-      message: 'Daemon was upgraded — refresh the page to continue.',
+      message: 'Agor was updated. Reload the page to continue.',
     };
   }
   // `connecting` is set immediately on socket drop, while `connected` stays
@@ -98,14 +107,14 @@ export function useMutationGate(): MutationGate {
     return {
       canMutate: false,
       reason: 'reconnecting',
-      message: 'Reconnecting to daemon…',
+      message: RECONNECTING_MESSAGE,
     };
   }
   if (!connected) {
     return {
       canMutate: false,
       reason: 'disconnected',
-      message: 'Disconnected from daemon. Action unavailable.',
+      message: `${CONNECTION_LOST_MESSAGE} Try again once it's back.`,
     };
   }
   return { canMutate: true, reason: null, message: null };

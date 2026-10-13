@@ -64,7 +64,7 @@ export const SessionMetadataCard: React.FC<SessionMetadataCardProps> = ({
             <Text type="secondary" style={{ fontSize: '0.85em' }}>
               Status:
             </Text>
-            <StatusPill status={session.status} />
+            <StatusPill session={session} />
           </Space>
         </div>
       </div>

@@ -334,7 +334,7 @@ const SessionNode = React.memo(({ data }: { data: SessionNodeData }) => {
 
 interface BranchNodeData {
   branch: Branch;
-  repo: Repo;
+  repo?: Repo;
   boardId?: string | null;
   currentUserId?: string;
   onTaskClick?: (taskId: string) => void;
@@ -1374,12 +1374,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         const stackPresentation = zoneStackByNodeId.get(branch.branch_id);
         const calledOut = calledOutNodeIds.has(branch.branch_id);
 
-        // Get repo for this branch
+        // The card still renders while its repo loads; it labels the gap itself.
         const repo = repoById.get(branch.repo_id);
-        if (!repo) {
-          console.error(`Repo not found for branch ${branch.branch_id}`);
-          return;
-        }
 
         nodes.push({
           id: branch.branch_id,

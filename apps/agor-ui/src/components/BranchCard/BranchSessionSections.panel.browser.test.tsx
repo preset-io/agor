@@ -166,20 +166,20 @@ it('renders single-line rows with a selected inset border and trailing status ma
     .querySelector('.ant-tree-indent-unit')!;
   expect(getComputedStyle(guide, '::before').bottom).toBe(`${-rowGap}px`);
 
-  expect(within(row('Security agor')).getByRole('img', { name: 'Ready for prompt' })).toBeVisible();
+  expect(within(row('Security agor')).getByRole('img', { name: 'Ready' })).toBeVisible();
   // Running is a spinner, distinct from the pulsing dots that wait on the user.
   expect(within(row('Availability fixes')).getByRole('img', { name: 'Running' })).toHaveClass(
     'anticon-spin'
   );
   expect(
     within(row('Execution security — implementation')).getByRole('img', {
-      name: 'Latest task failed',
+      name: 'Last run failed',
     })
   ).toBeVisible();
   // Status marks are visual only; the row name carries the same state.
-  expect(row('Execution security — implementation')).toHaveAccessibleName(/; latest task failed$/);
+  expect(row('Execution security — implementation')).toHaveAccessibleName(/; last run failed$/);
   expect(row('Availability fixes')).toHaveAccessibleName(/; running$/);
-  expect(row('Security agor')).toHaveAccessibleName(/; ready for prompt$/);
+  expect(row('Security agor')).toHaveAccessibleName(/; ready$/);
   expect(row('Astra recheck — Abuse')).toHaveAccessibleName(
     'Open session Astra recheck — Abuse/availability'
   );
@@ -388,7 +388,7 @@ it('applies the same row treatment to scheduled runs and flat search results', a
 
   const scheduled = row('Nightly dependency audit');
   expect(getComputedStyle(scheduled).borderTopWidth).toBe('0px');
-  expect(within(scheduled).getByRole('img', { name: 'Ready for prompt' })).toBeVisible();
+  expect(within(scheduled).getByRole('img', { name: 'Ready' })).toBeVisible();
   expect(screen.getByText('Scheduled Runs')).toBeVisible();
 
   fireEvent.change(screen.getByPlaceholderText(/search sessions/i), {
@@ -396,7 +396,7 @@ it('applies the same row treatment to scheduled runs and flat search results', a
   });
   const result = await waitFor(() => row('Execution security — implementation'));
   expect(getComputedStyle(result).borderTopWidth).toBe('0px');
-  expect(within(result).getByRole('img', { name: 'Latest task failed' })).toBeVisible();
+  expect(within(result).getByRole('img', { name: 'Last run failed' })).toBeVisible();
   const wrapper = result.parentElement!;
   expect(getComputedStyle(wrapper).backgroundColor).toBe(TRANSPARENT);
   await act(async () => page.elementLocator(result).hover());
@@ -530,7 +530,7 @@ it('tints failed rows, drops the logo outline, and mirrors row insets', () => {
   // A failed session highlights its whole row and keeps the icon, so color isn't the only cue.
   const failed = row('Execution security — implementation');
   expect(getComputedStyle(failed).backgroundColor).toBe(resolve(token.colorErrorBg));
-  expect(within(failed).getByRole('img', { name: 'Latest task failed' })).toBeVisible();
+  expect(within(failed).getByRole('img', { name: 'Last run failed' })).toBeVisible();
   expect(getComputedStyle(row('Astra recheck — Abuse')).backgroundColor).toBe(TRANSPARENT);
 
   expect(getComputedStyle(row('Security agor').querySelector('.tool-icon')!).borderTopWidth).toBe(

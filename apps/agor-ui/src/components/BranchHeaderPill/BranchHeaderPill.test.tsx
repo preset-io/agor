@@ -1,5 +1,5 @@
 import type { Branch, Repo } from '@agor-live/client';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -23,9 +23,11 @@ vi.mock('antd', async () => {
     }) => React.createElement('span', props, indicator ?? 'loading'),
     Tooltip: ({
       children,
+      title,
       trigger,
     }: {
       children: React.ReactNode;
+      title?: React.ReactNode;
       trigger?: string | string[];
     }) => {
       if (!React.isValidElement(children)) {
@@ -34,6 +36,7 @@ vi.mock('antd', async () => {
 
       return React.cloneElement(children as React.ReactElement<Record<string, unknown>>, {
         'data-tooltip-trigger': Array.isArray(trigger) ? trigger.join(',') : trigger,
+        'data-tooltip-title': typeof title === 'string' ? title : undefined,
       });
     },
     Tag: Object.assign(
@@ -273,5 +276,68 @@ describe('BranchHeaderPill', () => {
       display: 'inline-flex',
       alignItems: 'center',
     });
+  });
+
+  const settled = (action: 'start' | 'stop' | 'nuke', outcome: 'failed' | 'unknown'): Branch =>
+    ({
+      ...branch,
+      environment_instance: {
+        status: 'error',
+        command_attempt: { id: 'attempt', action, finished_at: 'done' },
+        last_command: { action, status: outcome, timestamp: 'done', message: 'exit 1' },
+      },
+    }) as Branch;
+
+  it.each([
+    {
+      shape: 'failed start',
+      branch: settled('start', 'failed'),
+      icon: 'close-circle',
+      status: "The environment didn't start. Check the logs.",
+      stop: 'Stop environment',
+    },
+    {
+      shape: 'failed stop',
+      branch: settled('stop', 'failed'),
+      icon: 'close-circle',
+      status: "The environment didn't stop. Check the logs.",
+      stop: "Stop again. The environment didn't stop.",
+    },
+    {
+      shape: 'unconfirmed stop',
+      branch: settled('stop', 'unknown'),
+      icon: 'warning',
+      status: "Agor couldn't confirm the last stop. Check the logs before you try again.",
+      stop: "Stop again. Agor couldn't confirm the last stop.",
+    },
+    {
+      shape: 'failed nuke',
+      branch: settled('nuke', 'failed'),
+      icon: 'close-circle',
+      status: "The nuke didn't finish. Check the logs.",
+      stop: 'Stop environment',
+    },
+    {
+      shape: 'unhealthy',
+      branch: {
+        ...branch,
+        environment_instance: {
+          status: 'running',
+          last_health_check: { status: 'unhealthy', timestamp: 'now', message: 'HTTP 503' },
+        },
+      } as Branch,
+      icon: 'warning',
+      status: 'Running, but the health check failed. (HTTP 503)',
+      stop: 'Stop environment',
+    },
+  ])('describes a $shape environment by its last action', ({ branch, icon, status, stop }) => {
+    render(<BranchHeaderPill {...defaultProps} branch={branch} />);
+    const statusButton = screen.getByText('env').closest('button')!;
+    expect(statusButton).toHaveAttribute('data-tooltip-title', status);
+    expect(within(statusButton).getByRole('img')).toHaveAttribute('aria-label', icon);
+    expect(screen.getByRole('button', { name: 'Stop environment' })).toHaveAttribute(
+      'data-tooltip-title',
+      stop
+    );
   });
 });

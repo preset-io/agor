@@ -17,6 +17,7 @@ import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { useAgorStore } from '../../store/agorStore';
 import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
+import { CompactNotice } from '../CompactNotice';
 import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
 import { mobilePageStyle } from './constants';
@@ -144,7 +145,11 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   if (!sessionId) {
     return (
       <div style={{ padding: token.padding }}>
-        <Alert type="error" title="No session ID provided" />
+        <CompactNotice
+          type="neutral"
+          message="This link is missing a session."
+          actions={[{ label: 'Back to home', onClick: closeSession }]}
+        />
       </div>
     );
   }

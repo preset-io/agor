@@ -33,13 +33,15 @@ withTestAuthority('user-1:member:1', { dataAuthority: false });
 it('reads the per-board counts with the store empty', async () => {
   const { client } = makeClient();
   const { result } = renderHook(() => useBranchCounts(client));
-  await waitFor(() => expect(result.current.get('board-1')).toBe(2));
+  expect(result.current.loaded).toBe(false);
+  await waitFor(() => expect(result.current.counts.get('board-1')).toBe(2));
+  expect(result.current.loaded).toBe(true);
 });
 
 it('re-reads once, debounced, after a burst of branch events', async () => {
   const { client, find, emit, setCount } = makeClient();
   const { result } = renderHook(() => useBranchCounts(client));
-  await waitFor(() => expect(result.current.get('board-1')).toBe(2));
+  await waitFor(() => expect(result.current.counts.get('board-1')).toBe(2));
   vi.useFakeTimers();
   setCount(3);
   emit('created');
@@ -50,7 +52,7 @@ it('re-reads once, debounced, after a burst of branch events', async () => {
     await vi.advanceTimersByTimeAsync(SERVER_READ_DEBOUNCE_MS);
   });
   expect(find).toHaveBeenCalledTimes(2);
-  expect(result.current.get('board-1')).toBe(3);
+  expect(result.current.counts.get('board-1')).toBe(3);
 });
 
 it('reads nothing without a realtime authority, and unsubscribes on unmount', async () => {
@@ -67,7 +69,7 @@ it('reads nothing without a realtime authority, and unsubscribes on unmount', as
 it('never lets an older reply overwrite a newer one', async () => {
   const { client, find, emit } = makeClient();
   const { result } = renderHook(() => useBranchCounts(client));
-  await waitFor(() => expect(result.current.get('board-1')).toBe(2));
+  await waitFor(() => expect(result.current.counts.get('board-1')).toBe(2));
   vi.useFakeTimers();
   // Each read captures the server count when it starts; replies land newest first.
   let server = 2;
@@ -94,5 +96,5 @@ it('never lets an older reply overwrite a newer one', async () => {
       await vi.advanceTimersByTimeAsync(5000);
     });
   }
-  expect(result.current.get('board-1')).toBe(5);
+  expect(result.current.counts.get('board-1')).toBe(5);
 });
