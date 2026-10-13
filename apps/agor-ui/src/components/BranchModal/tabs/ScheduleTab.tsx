@@ -17,23 +17,13 @@ import {
   UnorderedListOutlined,
 } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
-import {
-  Button,
-  Empty,
-  Input,
-  Popconfirm,
-  Space,
-  Spin,
-  Switch,
-  Table,
-  Tooltip,
-  Typography,
-} from 'antd';
+import { Button, Empty, Input, Popconfirm, Space, Spin, Switch, Tooltip, Typography } from 'antd';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
 import { ScheduleForm } from '../../ScheduleForm';
 import { ScheduleRunsPanel } from '../../ScheduleRunsPanel';
+import { ResponsiveTable } from '../../SettingsModal/ResponsiveTable';
 import { DrillCrumbs, useDiscardConfirm } from '../../SettingsModal/SettingsDrill';
 
 const { Text } = Typography;
@@ -526,7 +516,10 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
       ) : visibleSchedules.length === 0 ? (
         <Empty description={`No schedules match "${scheduleSearch.trim()}"`} />
       ) : (
-        <Table<Schedule>
+        // Cards below md: the columns are wider than a phone, and Settings clips
+        // horizontal overflow rather than scrolling it.
+        <ResponsiveTable<Schedule>
+          primaryColumnKey="name"
           rowKey="schedule_id"
           dataSource={visibleSchedules}
           columns={columns}

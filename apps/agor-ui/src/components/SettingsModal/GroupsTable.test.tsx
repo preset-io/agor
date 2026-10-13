@@ -1,5 +1,5 @@
 import type { AgorClient, Group, User } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { GroupsTable } from './GroupsTable';
@@ -61,5 +61,47 @@ describe('GroupsTable membership authority', () => {
     const memberOption = await screen.findByText('member (member@example.test)');
     expect(superadminOption.closest('[aria-disabled]')).toHaveAttribute('aria-disabled', 'true');
     expect(memberOption.closest('[aria-disabled]')).toHaveAttribute('aria-disabled', 'false');
+  });
+});
+
+describe('GroupsTable archive under socket eviction', () => {
+  it('drops the archived row without a re-read, and reads again on reconnect', async () => {
+    const group = { group_id: 'group-1', name: 'Engineering', slug: 'engineering' } as Group;
+    const listeners = new Map<string, () => void>();
+    let groupReads = 0;
+    const patch = vi.fn(async () => ({ ...group, archived: true }));
+    const client = {
+      io: {
+        on: (event: string, fn: () => void) => listeners.set(event, fn),
+        off: (event: string) => listeners.delete(event),
+      },
+      service: vi.fn((path: string) => ({
+        patch,
+        findAll: vi.fn(() => {
+          if (path !== 'groups') return Promise.resolve([]);
+          groupReads += 1;
+          // After the first read, the daemon is evicting this socket: reads hang.
+          return groupReads === 1 ? Promise.resolve([group]) : new Promise(() => undefined);
+        }),
+      })),
+    } as unknown as AgorClient;
+    const admin = user('admin', 'admin');
+    render(
+      <AntApp>
+        <GroupsTable client={client} currentUser={admin} userById={new Map([['admin', admin]])} />
+      </AntApp>
+    );
+
+    expect(await screen.findByText('Engineering')).toBeInTheDocument();
+    fireEvent.click(document.querySelector('.anticon-inbox')?.closest('button') as HTMLElement);
+    fireEvent.click(await screen.findByRole('button', { name: 'OK' }));
+
+    await waitFor(() => expect(screen.queryByText('Engineering')).not.toBeInTheDocument());
+    expect(patch).toHaveBeenCalledWith('group-1', { archived: true });
+    await waitFor(() => expect(screen.queryByText('Archive group?')).not.toBeInTheDocument());
+
+    // The socket comes back: the list is read again.
+    listeners.get('connect')?.();
+    expect(groupReads).toBe(2);
   });
 });

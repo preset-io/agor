@@ -68,6 +68,19 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
     );
   }, [load, showError]);
 
+  // Revoking group changes (archive, removed members) make the daemon reconnect
+  // every socket in the tenant, which drops a read sent meanwhile: read again
+  // once the socket is back.
+  useEffect(() => {
+    const io = client?.io;
+    if (!io) return;
+    const reload = () => void load().catch(() => undefined);
+    io.on('connect', reload);
+    return () => {
+      io.off('connect', reload);
+    };
+  }, [client, load]);
+
   const membershipsByGroup = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const membership of memberships) {
@@ -162,7 +175,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
     }
     setDirty(false);
     closeDrill();
-    await load();
+    void load().catch(() => undefined);
   }, [
     client,
     form,
@@ -177,8 +190,9 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   const archiveGroup = async (group: Group) => {
     if (!client) return;
     await client.service('groups').patch(group.group_id, { archived: true });
+    // Not a re-read: the patch's socket is about to be reconnected (see above).
+    setGroups((previous) => previous.filter((g) => g.group_id !== group.group_id));
     showSuccess('Group archived');
-    await load();
   };
 
   if (!isAdmin) {

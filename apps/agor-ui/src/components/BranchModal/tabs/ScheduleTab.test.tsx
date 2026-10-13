@@ -1,6 +1,6 @@
 import type { AgorClient, Branch, Schedule, User } from '@agor-live/client';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeBranch, renderWithApp } from '../testUtils';
 import { ScheduleTab } from './ScheduleTab';
 
@@ -20,6 +20,10 @@ vi.mock('../../ScheduleForm', () => ({
     );
   },
 }));
+
+// The settings compact breakpoint; desktop unless a test says otherwise.
+const media = vi.hoisted(() => ({ compact: false }));
+vi.mock('../../../hooks/useMediaQuery', () => ({ useMediaQuery: () => media.compact }));
 
 vi.mock('../../ScheduleRunsPanel', () => ({
   ScheduleRunsPanel: () => null,
@@ -207,5 +211,21 @@ describe('ScheduleTab in-place editor', () => {
     await waitFor(() => expect(document.querySelectorAll('.ant-modal-confirm')).toHaveLength(1));
     fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
     expect(screen.getByTestId('schedule-form')).toBeInTheDocument();
+  });
+});
+
+describe('ScheduleTab on a phone', () => {
+  afterEach(() => {
+    media.compact = false;
+  });
+
+  it('lists schedules as cards with every row action reachable (no clipped table)', async () => {
+    media.compact = true;
+    renderScheduleTab({ schedules: [makeSchedule({ name: 'Daily digest' })] });
+    expect(await screen.findByLabelText('Edit schedule Daily digest')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    for (const action of ['Run schedule', 'View runs for schedule', 'Delete schedule']) {
+      expect(screen.getByLabelText(new RegExp(`^${action} Daily digest`))).toBeInTheDocument();
+    }
   });
 });
