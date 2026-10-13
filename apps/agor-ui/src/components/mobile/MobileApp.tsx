@@ -590,6 +590,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onToggleReaction={onToggleReaction}
                 onDeleteComment={onDeleteComment}
                 boardReady={boardReady}
+                settingsHydrated={settingsHydrated}
               />
             }
           />

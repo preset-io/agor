@@ -9,18 +9,22 @@ import { OPEN_CREATE_FLOW_EVENT, requestShellPicker } from '../../utils/shellEve
 import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { MobileApp } from './MobileApp';
 
+let boardSettingsHydrated: boolean | undefined;
 vi.mock('./MobileBoardPage', () => ({
   MobileBoardPage: ({
     onOpenBranch,
+    settingsHydrated,
   }: {
+    settingsHydrated: boolean;
     onOpenBranch: (branchId: string, tab: string) => void;
-  }) => (
-    <>
+  }) => {
+    boardSettingsHydrated = settingsHydrated;
+    return (
       <button type="button" onClick={() => onOpenBranch('branch-1', 'schedule')}>
         Open schedule
       </button>
-    </>
-  ),
+    );
+  },
 }));
 
 // Capture the props the sheet is actually handed, so a control that renders
@@ -147,7 +151,9 @@ describe('MobileApp branch actions', () => {
         onCreateSession,
       });
       await act(async () => {});
+      expect(boardSettingsHydrated).toBe(false);
       const button = screen.getByRole('button', { name: action });
+      expect(button).toHaveClass('ant-btn-loading');
       fireEvent.click(button);
       await act(async () => {});
       expect(onCreateSession).not.toHaveBeenCalled();
@@ -163,6 +169,8 @@ describe('MobileApp branch actions', () => {
           },
         ])
       );
+      expect(boardSettingsHydrated).toBe(true);
+      expect(button).not.toHaveClass('ant-btn-loading');
       fireEvent.click(button);
       await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
       expect(onCreateSession).toHaveBeenCalledWith(
@@ -170,6 +178,8 @@ describe('MobileApp branch actions', () => {
         'board-1'
       );
       act(() => agorStore.getState().resetMaps());
+      expect(boardSettingsHydrated).toBe(false);
+      expect(button).toHaveClass('ant-btn-loading');
       fireEvent.click(button);
       await act(async () => {});
       expect(onCreateSession).toHaveBeenCalledTimes(1);

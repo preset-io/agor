@@ -58,10 +58,11 @@ function Probe() {
 function renderPage(
   entry: string | { pathname: string; state: unknown },
   onOpenBranch = vi.fn(),
-  boardReady = true
+  boardReady = true,
+  settingsHydrated = true
 ) {
   // MobileApp re-renders on every session patch and passes fresh inline handlers.
-  const tree = (ready = boardReady) => (
+  const tree = (ready = boardReady, hydrated = settingsHydrated) => (
     <App>
       <MemoryRouter initialEntries={[entry]}>
         <Probe />
@@ -83,6 +84,7 @@ function renderPage(
                 onToggleReaction={vi.fn()}
                 onDeleteComment={vi.fn()}
                 boardReady={ready}
+                settingsHydrated={hydrated}
               />
             }
           />
@@ -91,7 +93,10 @@ function renderPage(
     </App>
   );
   const { rerender } = render(tree());
-  return { onOpenBranch, rerenderFromShell: (ready?: boolean) => rerender(tree(ready)) };
+  return {
+    onOpenBranch,
+    rerenderFromShell: (ready?: boolean, hydrated?: boolean) => rerender(tree(ready, hydrated)),
+  };
 }
 
 const location = () => screen.getByRole('status', { name: 'location' }).textContent;
@@ -115,6 +120,15 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('MobileBoardPage', () => {
+  it('shows tool availability loading until hydration and again after a workspace reset', () => {
+    const { rerenderFromShell } = renderPage('/m/board/board-1', vi.fn(), true, false);
+    expect(screen.getByText('Loading agentic tool availability')).toHaveAttribute('role', 'status');
+    rerenderFromShell(true, true);
+    expect(screen.queryByText('Loading agentic tool availability')).not.toBeInTheDocument();
+    rerenderFromShell(true, false);
+    expect(screen.getByText('Loading agentic tool availability')).toHaveAttribute('role', 'status');
+  });
+
   it('shows the board tabs, led by a read-only canvas of this board', async () => {
     renderPage('/m/board/board-1');
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);

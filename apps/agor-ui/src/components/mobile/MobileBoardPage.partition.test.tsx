@@ -41,6 +41,7 @@ function MobileBoardRoute({ client }: { client: AgorClient }) {
       onSpawnSession={vi.fn(async () => {})}
       onSendComment={vi.fn()}
       boardReady={boardReady}
+      settingsHydrated={state.agenticToolSettingsHydrated}
     />
   );
 }
