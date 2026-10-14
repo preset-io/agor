@@ -30,7 +30,6 @@ import { ActionErrorNotice } from '../../CompactNotice';
 import { ScheduleForm } from '../../ScheduleForm';
 import { ScheduleRunsPanel } from '../../ScheduleRunsPanel';
 import { ResponsiveTable } from '../../SettingsModal/ResponsiveTable';
-import { DrillCrumbs, useDiscardConfirm } from '../../SettingsModal/SettingsDrill';
 
 const { Text } = Typography;
 
@@ -42,7 +41,8 @@ interface ScheduleTabProps {
   userById?: Map<string, User>;
   onOpenSession?: (sessionId: string) => void;
   /** Whether an open schedule form holds unsaved changes (for the branch editor's guard). */
-  onDirtyChange?: (dirty: boolean) => void;
+  /** The open schedule form's dirty getter (null when closed), for the branch editor's leave guard. */
+  onDraftChange?: (isDirty: (() => boolean) | null) => void;
 }
 
 const formatTimestamp = (ms: number | null | undefined) =>
@@ -133,7 +133,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   currentUser,
   userById = new Map(),
   onOpenSession,
-  onDirtyChange,
+  onDraftChange,
 }) => {
   const { showError, showSuccess } = useThemedMessage();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -142,8 +142,6 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   const [loadError, setLoadError] = useState<ActionErrorCopy | null>(null);
   // New/Edit opens the form in place of the list (no dialog over the editor).
   const [formOpen, setFormOpen] = useState(false);
-  const [formDirty, setFormDirty] = useState(false);
-  const confirmDiscard = useDiscardConfirm();
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [runsPanelSchedule, setRunsPanelSchedule] = useState<Schedule | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
@@ -216,14 +214,6 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
     setEditingSchedule(schedule);
     setFormOpen(true);
   };
-
-  const handleDirtyChange = useCallback(
-    (dirty: boolean) => {
-      setFormDirty(dirty);
-      onDirtyChange?.(dirty);
-    },
-    [onDirtyChange]
-  );
 
   const handleDelete = async (schedule: Schedule) => {
     if (!client) return;
@@ -446,13 +436,6 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   if (formOpen) {
     return (
       <div style={{ padding: 16, minWidth: 0 }}>
-        <div style={{ marginBottom: 16 }}>
-          <DrillCrumbs
-            parent="Schedules"
-            onParent={() => confirmDiscard(formDirty, () => setFormOpen(false))}
-            current={editingSchedule ? editingSchedule.name || 'Untitled schedule' : 'New schedule'}
-          />
-        </div>
         <ScheduleForm
           onClose={() => setFormOpen(false)}
           branchId={branch.branch_id}
@@ -462,7 +445,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
           executionOwner={executionOwner}
           currentUser={currentUser}
           onSaved={() => fetchSchedules()}
-          onDirtyChange={handleDirtyChange}
+          onDraftChange={onDraftChange}
         />
       </div>
     );

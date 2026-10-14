@@ -95,11 +95,11 @@ function renderForm(
   {
     create = vi.fn(),
     noClient = false,
-    onDirtyChange = vi.fn(),
+    onDraftChange = vi.fn(),
   }: {
     create?: ReturnType<typeof vi.fn>;
     noClient?: boolean;
-    onDirtyChange?: ReturnType<typeof vi.fn>;
+    onDraftChange?: ReturnType<typeof vi.fn>;
   } = {}
 ) {
   const client = {
@@ -116,7 +116,7 @@ function renderForm(
         schedule={schedule}
         mcpServerById={new Map()}
         client={noClient ? null : client}
-        onDirtyChange={onDirtyChange}
+        onDraftChange={onDraftChange}
       />
     </AntApp>
   );
@@ -286,21 +286,26 @@ describe('ScheduleForm draft', () => {
     expect(confirms()).toBe(0);
   });
 
-  it('reports a dirty draft, asks before Cancel discards it, and reports clean on unmount', async () => {
+  it('hands up its draft getter, asks before Cancel or the crumb discard it, and clears it on unmount', async () => {
     const onClose = vi.fn();
-    const onDirtyChange = vi.fn();
-    const { view } = renderForm(vi.fn(), onClose, makeSchedule(), { onDirtyChange });
+    const onDraftChange = vi.fn();
+    const { view } = renderForm(vi.fn(), onClose, makeSchedule(), { onDraftChange });
     fireEvent.change(await screen.findByDisplayValue('Daily review'), {
       target: { value: 'Nightly review' },
     });
-    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(true));
+    const isDirty = onDraftChange.mock.lastCall?.[0] as () => boolean;
+    expect(isDirty()).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(confirms()).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    await waitFor(() => expect(confirms()).toBe(0));
+    fireEvent.click(screen.getByText('Schedules'));
     await waitFor(() => expect(confirms()).toBe(1));
     fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
     expect(onClose).not.toHaveBeenCalled();
 
     view.unmount();
-    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+    expect(onDraftChange).toHaveBeenLastCalledWith(null);
   });
 });

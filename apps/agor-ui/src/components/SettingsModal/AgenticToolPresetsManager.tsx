@@ -12,7 +12,7 @@ import {
   buildConfigFromFormValues,
   getFormValuesFromConfig,
 } from '../AgenticToolConfigForm';
-import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
+import { DrillInFrame, useDrillFormDraft } from './SettingsDrill';
 
 interface Props {
   client: AgorClient;
@@ -20,6 +20,9 @@ interface Props {
   onError(message: string): void;
   identityKey: string | null;
   operationScope: readonly unknown[] | null;
+  /** Controlled by AgenticToolsSection so only one tool has an open editor. */
+  editorOpen?: boolean;
+  onEditorOpenChange?(open: boolean): void;
 }
 
 export const AgenticToolPresetsManager: React.FC<Props> = ({
@@ -28,16 +31,25 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
   onError,
   identityKey,
   operationScope,
+  editorOpen,
+  onEditorOpenChange,
 }) => {
   const [form] = Form.useForm();
   const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
   const [editing, setEditing] = useState<AgenticToolPreset | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const modalOpen = editorOpen ?? localOpen;
+  const setModalOpen = useCallback(
+    (next: boolean) => {
+      setLocalOpen(next);
+      onEditorOpenChange?.(next);
+    },
+    [onEditorOpenChange]
+  );
   const [saving, setSaving] = useState(false);
   const operationGuard = useAuthorityOperationGuard(operationScope);
   const { showSuccess } = useThemedMessage();
   // The inline editor reports its draft to the Settings leave guard.
-  const { confirmLeaveIfDirty } = useSettingsDrill();
   const isDraftDirty = useDrillFormDraft(form, modalOpen ? (editing ?? 'new') : null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey intentionally erases the replacement caller's modal/form state
@@ -124,8 +136,9 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
       <DrillInFrame
         title={editing ? `Edit ${editing.name}` : `New ${tool} preset`}
         dirty={isDraftDirty}
+        saving={saving}
+        onSave={save}
         onBack={() => setModalOpen(false)}
-        ownsFooter
       >
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
@@ -143,14 +156,6 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
           </Form.Item>
           <AgenticToolConfigForm agenticTool={tool} client={client} />
         </Form>
-        <Space style={{ justifyContent: 'flex-end', width: '100%' }}>
-          <Button onClick={() => confirmLeaveIfDirty(() => setModalOpen(false))} disabled={saving}>
-            Cancel
-          </Button>
-          <Button type="primary" loading={saving} onClick={() => void save()}>
-            Save
-          </Button>
-        </Space>
       </DrillInFrame>
     );
   }

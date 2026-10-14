@@ -9,7 +9,7 @@ import type {
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { Badge, Button, Drawer, Grid, Modal, Space, Tabs, theme } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById, selectUserById } from '../../store/selectors';
@@ -20,7 +20,7 @@ import {
 } from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
 import { ActionErrorNotice, CompactNotice } from '../CompactNotice';
-import { DrillInFrame } from '../SettingsModal/SettingsDrill';
+import { DrillInFrame, useDiscardConfirm } from '../SettingsModal/SettingsDrill';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab } from './tabs/GeneralTab';
@@ -106,9 +106,14 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const compact = !screens.md;
   const { showSuccess } = useThemedMessage();
   const [saveError, setSaveError] = useState<ActionErrorCopy | null>(null);
-  // An open Schedules form with unsaved changes; joins the branch form in the
-  // drill-in leave guard (Back, nav switch, close).
-  const [scheduleDirty, setScheduleDirty] = useState(false);
+  // The open Schedules form's dirty getter; joins the branch form in the
+  // drill-in leave guard (Back, nav switch, close) and gates Save's close.
+  const scheduleDraftRef = useRef<(() => boolean) | null>(null);
+  const setScheduleDraft = useCallback((isDirty: (() => boolean) | null) => {
+    scheduleDraftRef.current = isDirty;
+  }, []);
+  const isScheduleDirty = () => scheduleDraftRef.current?.() ?? false;
+  const confirmDiscard = useDiscardConfirm();
   // Teammate records render a 'teammate' tab FIRST (see tabItems below), so the
   // default tab must follow the record kind — otherwise a teammate opens on its
   // second tab. Lazy init avoids a flash of 'general' before the open effect runs.
@@ -209,7 +214,15 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     const current = session === formSessionRef.current;
     if (result.ok) {
       showSuccess(isATeammate ? 'Teammate updated.' : 'Branch updated.');
-      if (current) onClose();
+      if (!current) return;
+      // The branch is saved, but an open schedule draft is not part of it: show
+      // the draft and ask before closing; Keep editing stays on it.
+      if (isScheduleDirty()) {
+        setActiveTab('schedule');
+        confirmDiscard(true, onClose);
+      } else {
+        onClose();
+      }
     } else if (current) {
       setSaveError(
         describeSaveFailure(result, isATeammate ? 'save the teammate' : 'save the branch')
@@ -342,7 +355,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
             onSessionClick?.(sessionId);
             onClose();
           }}
-          onDirtyChange={setScheduleDirty}
+          onDraftChange={setScheduleDraft}
         />
       ),
     },
@@ -428,7 +441,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     return (
       <DrillInFrame
         title={title}
-        dirty={form.hasChanges || scheduleDirty}
+        dirty={() => form.hasChanges || isScheduleDirty()}
         saving={form.saving}
         saveLabel="Save Changes"
         onSave={canSave ? handleSave : undefined}

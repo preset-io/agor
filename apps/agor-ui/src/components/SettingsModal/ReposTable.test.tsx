@@ -202,7 +202,7 @@ describe('repository setup status', () => {
 });
 
 describe('ReposTable live updates', () => {
-  it('keeps a typed draft when the open repo is patched, refreshing untouched fields', async () => {
+  it('keeps a typed draft when the open repo is patched, seeding only once per open', async () => {
     const repo = makeRepo({ slug: 'org/repository', default_branch: 'main' });
     const view = (row: Repo) => (
       <ReposTable
@@ -217,10 +217,9 @@ describe('ReposTable live updates', () => {
     fireEvent.change(screen.getByLabelText('Default Branch'), { target: { value: 'develop' } });
 
     rendered.rerender(view({ ...repo, slug: 'org/renamed', default_branch: 'trunk' }));
-    await waitFor(() =>
-      expect(screen.getByLabelText('Repository Slug')).toHaveValue('org/renamed')
-    );
-    expect(screen.getByLabelText('Default Branch')).toHaveValue('develop');
+    // Neither the draft nor an untouched field follows the record while it is open.
+    await waitFor(() => expect(screen.getByLabelText('Default Branch')).toHaveValue('develop'));
+    expect(screen.getByLabelText('Repository Slug')).toHaveValue('org/repository');
   });
 
   it('leaves a seeded but unchanged edit without asking to discard', async () => {

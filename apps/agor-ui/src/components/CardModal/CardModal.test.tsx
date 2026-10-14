@@ -132,6 +132,37 @@ describe('CardModal permission gating', () => {
     );
   });
 
+  it('keeps an unsaved note when the open card is updated live, and saving resets the baseline', async () => {
+    const { client, patch, effectiveAccessFind } = makeClient(['board.view', 'board.edit']);
+    const view = (row: CardWithType) =>
+      withApp(<CardModal open card={row} board={board} client={client} onClose={vi.fn()} />);
+    const rendered = render(view(card));
+    await waitFor(() => expect(effectiveAccessFind).toHaveBeenCalled());
+
+    fireEvent.click(screen.getAllByText('Edit')[0].closest('button') as HTMLButtonElement);
+    fireEvent.change(screen.getByPlaceholderText("Agent's live commentary..."), {
+      target: { value: 'My unsaved note' },
+    });
+    // Someone else renames the card: a new card object with the old note.
+    rendered.rerender(view({ ...card, title: 'Renamed card' }));
+    expect(await screen.findByText('Renamed card')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Agent's live commentary...")).toHaveValue(
+      'My unsaved note'
+    );
+
+    const save = () => screen.getByText('Save').closest('button') as HTMLButtonElement;
+    expect(save()).toBeEnabled();
+    fireEvent.click(save());
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(
+        'card-1',
+        expect.objectContaining({ note: 'My unsaved note' })
+      )
+    );
+    // The saved note is the new baseline, even before the live card catches up.
+    await waitFor(() => expect(save()).toBeDisabled());
+  });
+
   it('is read-only while its board is still loading, even with board.edit', async () => {
     const { client, effectiveAccessFind } = makeClient(['board.view', 'board.edit']);
     renderWithApp(

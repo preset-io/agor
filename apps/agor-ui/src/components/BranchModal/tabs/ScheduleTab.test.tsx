@@ -10,13 +10,10 @@ vi.mock('../../../utils/message', () => ({
 }));
 const scheduleFormProps = vi.hoisted(() => vi.fn());
 vi.mock('../../ScheduleForm', () => ({
-  ScheduleForm: (props: { onClose: () => void; onDirtyChange?: (dirty: boolean) => void }) => {
+  ScheduleForm: (props: { onClose: () => void }) => {
     scheduleFormProps(props);
     return (
       <div data-testid="schedule-form">
-        <button type="button" onClick={() => props.onDirtyChange?.(true)}>
-          Make dirty
-        </button>
         <button type="button" onClick={props.onClose}>
           Close form
         </button>
@@ -96,7 +93,7 @@ function renderScheduleTab({
   onOpenSession = vi.fn(),
   currentUser,
   userById,
-  onDirtyChange,
+  onDraftChange,
   overrides,
 }: {
   branch?: Branch;
@@ -104,7 +101,7 @@ function renderScheduleTab({
   onOpenSession?: (sessionId: string) => void;
   currentUser?: User;
   userById?: Map<string, User>;
-  onDirtyChange?: (dirty: boolean) => void;
+  onDraftChange?: (isDirty: (() => boolean) | null) => void;
   overrides?: ScheduleClientOverrides;
 } = {}) {
   renderWithApp(
@@ -114,7 +111,7 @@ function renderScheduleTab({
       onOpenSession={onOpenSession}
       currentUser={currentUser}
       userById={userById}
-      onDirtyChange={onDirtyChange}
+      onDraftChange={onDraftChange}
     />
   );
   return { onOpenSession };
@@ -198,7 +195,6 @@ describe('ScheduleTab in-place editor', () => {
     fireEvent.click(screen.getByRole('button', { name: /New$/ }));
 
     expect(screen.getByTestId('schedule-form')).toBeInTheDocument();
-    expect(screen.getByText('New schedule')).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({ schedule: null });
@@ -207,28 +203,21 @@ describe('ScheduleTab in-place editor', () => {
     expect(await screen.findByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
   });
 
-  it('edits in place under the schedule name', async () => {
+  it('edits in place', async () => {
     const schedule = makeSchedule({ name: 'Daily digest' });
     renderScheduleTab({ schedules: [schedule] });
     fireEvent.click(await screen.findByRole('button', { name: /edit schedule/i }));
 
     expect(screen.getByTestId('schedule-form')).toBeInTheDocument();
-    expect(screen.getByText('Daily digest')).toBeInTheDocument();
     expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({ schedule });
   });
 
-  it('lifts a dirty draft and asks before the sub-header discards it', async () => {
-    const onDirtyChange = vi.fn();
-    renderScheduleTab({ onDirtyChange });
+  it('hands the open form its draft reporter for the branch editor', async () => {
+    const onDraftChange = vi.fn();
+    renderScheduleTab({ onDraftChange });
     await screen.findByRole('columnheader', { name: 'Title' });
     fireEvent.click(screen.getByRole('button', { name: /New$/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Make dirty' }));
-    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
-
-    fireEvent.click(screen.getByText('Schedules'));
-    await waitFor(() => expect(document.querySelectorAll('.ant-modal-confirm')).toHaveLength(1));
-    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
-    expect(screen.getByTestId('schedule-form')).toBeInTheDocument();
+    expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({ onDraftChange });
   });
 });
 

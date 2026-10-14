@@ -1,5 +1,5 @@
 import type { AgenticToolPreset, AgorClient } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AgenticToolPresetsManager } from './AgenticToolPresetsManager';
 import { renderWithSettingsShell } from './settingsDrillTestUtils';
@@ -31,7 +31,7 @@ describe('AgenticToolPresetsManager authority lifetime', () => {
         operationScope={['admin-a:admin', client, generation]}
       />
     );
-    const rendered = render(view(1));
+    const rendered = renderWithSettingsShell(view(1), 'agentic-tools');
     await screen.findByText('No presets');
     fireEvent.click(screen.getByRole('button', { name: /New preset$/ }));
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'A reconnect draft' } });

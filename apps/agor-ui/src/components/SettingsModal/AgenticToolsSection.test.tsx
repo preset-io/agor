@@ -3,9 +3,10 @@ import type {
   TenantAgenticToolName,
   TenantAgenticToolSettings,
 } from '@agor-live/client';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AgenticToolsSection } from './AgenticToolsSection';
+import { renderWithSettingsShell } from './settingsDrillTestUtils';
 
 const tools: TenantAgenticToolName[] = [
   'claude-code',
@@ -92,5 +93,52 @@ describe('AgenticToolsSection deployment availability', () => {
       await oldRead;
     });
     expect(screen.queryByText('Not installed by this deployment')).not.toBeInTheDocument();
+  });
+});
+
+describe('AgenticToolsSection preset editor', () => {
+  it('keeps one preset editor open across tools and guards a tool switch with a draft', async () => {
+    const settings: TenantAgenticToolSettings[] = tools.map((tool) => ({
+      tool,
+      deployment_available: true,
+      enabled: true,
+      resolution_policy: 'user_preferred',
+      inline_configuration_allowed: true,
+      connection: {},
+    }));
+    const client = {
+      service: vi.fn((path: string) => ({
+        find: vi.fn().mockResolvedValue(path === 'agentic-tool-presets' ? [] : settings),
+        create: vi.fn(),
+        patch: vi.fn(),
+        remove: vi.fn(),
+      })),
+    } as unknown as AgorClient;
+    renderWithSettingsShell(
+      <AgenticToolsSection
+        client={client}
+        identityKey="admin:admin"
+        operationScope={['admin:admin', client, 1]}
+      />,
+      'agentic-tools'
+    );
+    const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
+    // Text queries: role queries over every mounted tool pane are slow in jsdom.
+    const tab = (label: string) => screen.getByText(label).closest('[role="tab"]') as HTMLElement;
+
+    fireEvent.click(await screen.findByText('Presets'));
+    fireEvent.click(await screen.findByText('New preset'));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Claude draft' } });
+
+    fireEvent.click(tab('Codex'));
+    await waitFor(() => expect(confirms()).toBe(1));
+    fireEvent.click(screen.getByText('Keep editing'));
+    expect(screen.getByLabelText('Name')).toHaveValue('Claude draft');
+    expect(tab('Claude Code')).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(tab('Codex'));
+    fireEvent.click(await screen.findByText('Discard'));
+    await waitFor(() => expect(tab('Codex')).toHaveAttribute('aria-selected', 'true'));
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
   });
 });

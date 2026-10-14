@@ -85,7 +85,7 @@ describe('ArtifactsTable', () => {
 });
 
 describe('ArtifactsTable live updates', () => {
-  it('keeps a typed draft when the open artifact is patched, refreshing untouched fields', async () => {
+  it('keeps a typed draft when the open artifact is patched, seeding only once per open', async () => {
     const view = (row: Artifact) => (
       <MemoryRouter>
         <ArtifactsTable
@@ -103,7 +103,8 @@ describe('ArtifactsTable live updates', () => {
     });
 
     rendered.rerender(view({ ...artifact, name: 'API explorer v2', description: 'Remote edit' }));
-    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('API explorer v2'));
-    expect(screen.getByLabelText('Description')).toHaveValue('My draft');
+    // Neither the draft nor an untouched field follows the record while it is open.
+    await waitFor(() => expect(screen.getByLabelText('Description')).toHaveValue('My draft'));
+    expect(screen.getByLabelText('Name')).toHaveValue(artifact.name);
   });
 });

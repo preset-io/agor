@@ -94,7 +94,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   const handleEdit = (artifact: Artifact) =>
     openDrill({ mode: 'edit', recordId: artifact.artifact_id });
 
-  // Seeds an opened artifact; live patches refresh only fields the draft hasn't changed.
+  // Seeds an opened artifact once; later record updates never overwrite the draft.
   const isDraftDirty = useDrillFormDraft(
     form,
     drill,

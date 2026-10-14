@@ -108,15 +108,23 @@ const CardModalComponent = ({
   const [saving, setSaving] = useState(false);
   const [boardAccess, setBoardAccess] = useState<EffectiveCapabilityPolicyAccess | null>(null);
 
-  // Sync local state when card changes
+  // Seeded once per opened card: a live update to the card (someone else
+  // renaming it) never resets an unsaved note or description.
+  const [baseline, setBaseline] = useState({ note: '', description: '' });
+  const cardId = card?.card_id;
+  const cardRef = useRef(card);
+  cardRef.current = card;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: seeded per open card
   useEffect(() => {
-    if (card) {
-      setNoteValue(card.note || '');
-      setDescValue(card.description || '');
-      setEditingNote(false);
-      setEditingDesc(false);
-    }
-  }, [card]);
+    const opened = cardRef.current;
+    if (!open || !opened) return;
+    const seed = { note: opened.note || '', description: opened.description || '' };
+    setBaseline(seed);
+    setNoteValue(seed.note);
+    setDescValue(seed.description);
+    setEditingNote(false);
+    setEditingDesc(false);
+  }, [open, cardId]);
 
   // Mirrors the daemon's card-mutation check (`cardAccess('mutate', ...)`),
   // which resolves to the same `board.edit` capability as the board itself.
@@ -157,7 +165,6 @@ const CardModalComponent = ({
   // modal on this card, so closing it, switching cards or unmounting destroys
   // every one still open.
   const confirmsRef = useRef(new Set<{ destroy: () => void }>());
-  const cardId = card?.card_id;
   // Captured after the commit, once the connection snapshot is published.
   // biome-ignore lint/correctness/useExhaustiveDependencies: captured on open, per card
   useEffect(() => {
@@ -207,7 +214,7 @@ const CardModalComponent = ({
           ? 'This board is unavailable for edits right now.'
           : 'This board reloaded while the card was open. Reopen it to edit.'));
 
-  const hasChanges = noteValue !== (card?.note || '') || descValue !== (card?.description || '');
+  const hasChanges = noteValue !== baseline.note || descValue !== baseline.description;
 
   const handleSave = useCallback(async () => {
     if (!card || !client || !hasChanges || !canEdit || !isOpenTicketCurrent(ticket)) return;
@@ -218,6 +225,7 @@ const CardModalComponent = ({
         description: descValue,
       });
       onCardUpdated?.(updated as CardWithType);
+      setBaseline({ note: noteValue, description: descValue });
       setEditingNote(false);
       setEditingDesc(false);
       showSuccess('Card saved.');

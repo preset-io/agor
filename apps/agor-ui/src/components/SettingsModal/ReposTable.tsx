@@ -100,6 +100,12 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     drill?.mode === 'edit' && drill.recordId ? (repoById.get(drill.recordId) ?? null) : null;
   const isCreating = drill?.mode === 'create';
   const isEditing = !!editingRepo;
+  // The repo as first seen by this open, i.e. what the form was seeded from.
+  // Saves diff against it, so a concurrent edit to an untouched field survives.
+  const openedRepoRef = useRef<{ drill: unknown; repo: Repo } | null>(null);
+  if (editingRepo && openedRepoRef.current?.drill !== drill) {
+    openedRepoRef.current = { drill, repo: editingRepo };
+  }
 
   const openEdit = useCallback(
     (repo: Repo) => openDrill({ mode: 'edit', recordId: repo.repo_id }),
@@ -133,7 +139,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       repoForm.setFieldsValue({ default_branch: 'main' });
     }
   }, [isCreating, repoForm]);
-  // Seeds an opened repo; live patches refresh only fields the draft hasn't changed.
+  // Seeds an opened repo once; later record updates never overwrite the draft.
   const isDraftDirty = useDrillFormDraft(
     repoForm,
     drill,
@@ -178,9 +184,9 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         if (
           canConfigureCleanup &&
           values.cleanup_policy &&
-          Object.entries(resolveRepoCleanupPolicy(editingRepo.cleanup_policy)).some(
-            ([key, value]) => values.cleanup_policy[key] !== value
-          )
+          Object.entries(
+            resolveRepoCleanupPolicy((openedRepoRef.current?.repo ?? editingRepo).cleanup_policy)
+          ).some(([key, value]) => values.cleanup_policy[key] !== value)
         ) {
           updates.cleanup_policy = values.cleanup_policy;
         }

@@ -10,8 +10,8 @@ import { BranchModal } from './BranchModal';
 import { makeBranch, makeRepo, makeStubClient, makeUser, renderWithApp } from './testUtils';
 
 vi.mock('../ScheduleForm', () => ({
-  ScheduleForm: (props: { onDirtyChange?: (dirty: boolean) => void }) => (
-    <button type="button" onClick={() => props.onDirtyChange?.(true)}>
+  ScheduleForm: (props: { onDraftChange?: (isDirty: (() => boolean) | null) => void }) => (
+    <button type="button" onClick={() => props.onDraftChange?.(() => true)}>
       Make schedule dirty
     </button>
   ),
@@ -26,17 +26,17 @@ const withRealtime = (client: AgorClient) =>
 
 const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
 
-function branchModal(embedded: boolean) {
+function branchModal(embedded: boolean, onClose = vi.fn()) {
   const owner = makeUser({ user_id: 'user-1', role: 'admin' });
   return (
     <BranchModal
       embedded={embedded}
       open
-      onClose={vi.fn()}
+      onClose={onClose}
       branch={makeBranch({ created_by: owner.user_id })}
       repo={makeRepo()}
       sessions={[]}
-      client={withRealtime(makeStubClient({ owners: [owner] }).client)}
+      client={withRealtime(makeStubClient({ owners: [owner], users: [owner] }).client)}
       currentUser={owner}
       defaultTab="schedule"
     />
@@ -66,6 +66,45 @@ describe('BranchModal schedules', () => {
     renderWithApp(branchModal(false));
     await openNewSchedule();
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
-    expect(screen.getByText('New schedule')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Make schedule dirty' })).toBeInTheDocument();
   });
+
+  async function saveBranchChange() {
+    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
+    const notes = await screen.findByPlaceholderText<HTMLTextAreaElement>(
+      'Freeform notes about this branch...'
+    );
+    await waitFor(() => expect(notes.disabled).toBe(false));
+    fireEvent.change(notes, { target: { value: 'Saved note' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+  }
+
+  it('saves the branch but asks before Save closes over a schedule draft', async () => {
+    const onClose = vi.fn();
+    renderWithApp(
+      <StandaloneSettingsDrillProvider section="branches">
+        {branchModal(true, onClose)}
+      </StandaloneSettingsDrillProvider>
+    );
+    await openNewSchedule();
+    await saveBranchChange();
+
+    await waitFor(() => expect(confirms()).toBe(1));
+    // The draft is shown behind the question; Keep editing stays on it.
+    expect(screen.getByRole('tab', { name: 'Schedules' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    await waitFor(() => expect(confirms()).toBe(0));
+    expect(screen.getByRole('button', { name: 'Make schedule dirty' })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it('closes after the branch save once the schedule draft is discarded', async () => {
+    const onClose = vi.fn();
+    renderWithApp(branchModal(false, onClose));
+    await openNewSchedule();
+    await saveBranchChange();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  }, 30_000);
 });

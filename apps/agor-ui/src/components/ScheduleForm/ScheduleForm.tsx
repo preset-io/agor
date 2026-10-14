@@ -78,7 +78,7 @@ import {
 } from '../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { ActionErrorNotice } from '../CompactNotice';
-import { useDiscardConfirm, useDrillFormDraft } from '../SettingsModal/SettingsDrill';
+import { DrillCrumbs, useDiscardConfirm, useDrillFormDraft } from '../SettingsModal/SettingsDrill';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -127,8 +127,8 @@ export interface ScheduleFormProps {
   currentUser?: User | null;
   /** Fires after a successful create OR patch with the saved schedule. */
   onSaved?: (schedule: Schedule) => void;
-  /** Reports whether the draft differs from the opened schedule (false on unmount). */
-  onDirtyChange?: (dirty: boolean) => void;
+  /** Hands up the draft's dirty getter while open (null on unmount) for an outer leave guard. */
+  onDraftChange?: (isDirty: (() => boolean) | null) => void;
 }
 
 const DEFAULT_CRON = '0 * * * *';
@@ -162,7 +162,7 @@ export const ScheduleForm: React.FC<ScheduleFormProps> = ({
   executionOwner,
   currentUser,
   onSaved,
-  onDirtyChange,
+  onDraftChange,
 }) => {
   const isEditing = Boolean(schedule?.schedule_id);
   const { showSuccess } = useThemedMessage();
@@ -229,17 +229,15 @@ export const ScheduleForm: React.FC<ScheduleFormProps> = ({
     });
   }, [schedule, form]);
 
-  // Draft tracking (after the seeding effect above): drives the Cancel guard
-  // and is lifted to the branch editor's leave guard via onDirtyChange.
+  // Draft tracking (after the seeding effect above): guards the crumb and
+  // Cancel, and is handed up to the branch editor's leave guard.
   const isDraftDirty = useDrillFormDraft(form, schedule ?? 'new');
   const confirmDiscard = useDiscardConfirm();
-  // Re-renders on every value change, programmatic ones included (cron picker).
-  const watchedValues = Form.useWatch((values) => values, { form, preserve: true });
-  // biome-ignore lint/correctness/useExhaustiveDependencies: watchedValues re-checks the draft on each value change
+  const leave = () => confirmDiscard(isDraftDirty(), onClose);
   useEffect(() => {
-    onDirtyChange?.(isDraftDirty());
-  }, [watchedValues, isDraftDirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+    onDraftChange?.(isDraftDirty);
+    return () => onDraftChange?.(null);
+  }, [isDraftDirty, onDraftChange]);
 
   // The banner sits at the end of a long form; bring it into view next to the footer.
   useEffect(() => {
@@ -381,6 +379,13 @@ export const ScheduleForm: React.FC<ScheduleFormProps> = ({
 
   return (
     <div>
+      <div style={{ marginBottom: 16 }}>
+        <DrillCrumbs
+          parent="Schedules"
+          onParent={leave}
+          current={schedule ? schedule.name || 'Untitled schedule' : 'New schedule'}
+        />
+      </div>
       {requiresSupportedToolSelection && (
         <Alert
           type="warning"
@@ -564,7 +569,7 @@ export const ScheduleForm: React.FC<ScheduleFormProps> = ({
         )}
       </Form>
       <Space style={{ width: '100%', justifyContent: 'flex-end', marginTop: 16 }}>
-        <Button onClick={() => confirmDiscard(isDraftDirty(), onClose)} disabled={saving}>
+        <Button onClick={leave} disabled={saving}>
           Cancel
         </Button>
         <Button

@@ -313,29 +313,12 @@ export const DrillInFrame: React.FC<DrillInFrameProps> = ({
   );
 };
 
-type FieldPath = (string | number)[];
-
-/** Leaf field paths of a nested form value (plain objects recurse; arrays are leaves). */
-function leafPaths(value: Record<string, unknown>, prefix: FieldPath = []): FieldPath[] {
-  return Object.entries(value).flatMap(([key, child]) =>
-    child && typeof child === 'object' && !Array.isArray(child)
-      ? leafPaths(child as Record<string, unknown>, [...prefix, key])
-      : [[...prefix, key]]
-  );
-}
-
 /** Key-order-independent JSON of a form value. */
 const snapshot = (value: unknown) =>
   JSON.stringify(value, (_, v) =>
     v && typeof v === 'object' && !Array.isArray(v)
       ? Object.fromEntries(Object.entries(v).sort(([x], [y]) => x.localeCompare(y)))
       : v
-  );
-
-const valueAt = (node: unknown, path: FieldPath) =>
-  path.reduce<unknown>(
-    (parent, key) => (parent as Record<string, unknown> | undefined)?.[key],
-    node
   );
 
 /**
@@ -346,9 +329,9 @@ const valueAt = (node: unknown, path: FieldPath) =>
  * instead "values differ from the baseline" taken when `openKey` changes, after
  * the editor and its seeding effects have mounted (call this after them).
  *
- * With `live` (the open record's form values, memoized on the record) the form
- * is seeded from it on open, and a patched record refreshes only the fields
- * still at their baseline, so a realtime update never overwrites a draft.
+ * With `live` (the open record's form values) the form is seeded from it once
+ * per open. Later updates to the record are ignored, so a draft is never
+ * overwritten; a record that loads after the editor opened still seeds it.
  */
 export function useDrillFormDraft(
   form: FormInstance,
@@ -356,34 +339,29 @@ export function useDrillFormDraft(
   live?: Record<string, unknown> | null
 ): () => boolean {
   const baseline = useRef<Record<string, unknown> | null>(null);
-  const liveRef = useRef(live);
-  liveRef.current = live;
-  useEffect(() => {
-    const seed = liveRef.current;
-    if (openKey && seed) {
-      form.resetFields();
-      form.setFieldsValue(seed);
-    }
-    baseline.current = openKey ? JSON.parse(snapshot(form.getFieldsValue(true))) : null;
-  }, [openKey, form]);
-  useEffect(() => {
-    const base = baseline.current;
-    if (!live || !base) return;
-    const current = form.getFieldsValue(true);
-    for (const path of leafPaths(live)) {
-      if (snapshot(valueAt(current, path)) !== snapshot(valueAt(base, path))) continue;
-      const next = valueAt(live, path);
-      form.setFieldValue(path, next);
-      const parent = valueAt(base, path.slice(0, -1)) as Record<string | number, unknown>;
-      if (parent) parent[path[path.length - 1]] = next;
-    }
-  }, [form, live]);
-  return useCallback(
+  const seeded = useRef<{ key: unknown; fromLive: boolean } | null>(null);
+  const isDirty = useCallback(
     () =>
       baseline.current !== null &&
       snapshot(form.getFieldsValue(true)) !== snapshot(baseline.current),
     [form]
   );
+  useEffect(() => {
+    if (!openKey) {
+      seeded.current = null;
+      baseline.current = null;
+      return;
+    }
+    const prev = seeded.current;
+    if (prev?.key === openKey && (prev.fromLive || !live || isDirty())) return;
+    if (live) {
+      form.resetFields();
+      form.setFieldsValue(live);
+    }
+    baseline.current = JSON.parse(snapshot(form.getFieldsValue(true)));
+    seeded.current = { key: openKey, fromLive: Boolean(live) };
+  }, [openKey, live, form, isDirty]);
+  return isDirty;
 }
 
 /**
