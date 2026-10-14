@@ -101,6 +101,20 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     setKeyboardTooltipBoardId(null);
   }, []);
 
+  // The Dropdown closes on an outside mousedown, which iOS Safari never fires
+  // for a tap on a non-clickable element (the board tabs, the canvas). Every
+  // tap does fire pointerdown, so close on that too.
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (popupRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      closeDropdown();
+    };
+    window.addEventListener('pointerdown', closeOnOutsidePointer, true);
+    return () => window.removeEventListener('pointerdown', closeOnOutsidePointer, true);
+  }, [dropdownOpen, closeDropdown]);
+
   const handleHomeClick = useCallback(() => {
     onHomeClick?.();
     closeDropdown();

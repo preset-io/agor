@@ -9,6 +9,7 @@ import {
 import { Tooltip } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { useIsTouchInput } from '@/hooks/useCanHover';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { formatActionError } from '@/utils/connectionErrors';
 import { refreshAndRefetchMCPOAuthGrant } from '../../utils/mcpOAuthAttempt';
@@ -110,6 +111,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
   onEdit,
 }) => {
   const { showSuccess, showInfo, showWarning, showError } = useThemedMessage();
+  const touchInput = useIsTouchInput();
   const [refreshing, setRefreshing] = useState(false);
   // Local override so the tooltip reflects a just-refreshed expiry without
   // waiting for a full MCPServer re-fetch from the parent.
@@ -267,7 +269,8 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
       <Tooltip
         // The label is a button for actionable pills, so the same explanation
         // keyboard users receive on focus is available to pointer users on hover.
-        trigger={['hover', 'focus']}
+        // A tap emulates hover, so touch keeps focus only.
+        trigger={touchInput ? 'focus' : ['hover', 'focus']}
         title={
           needsConfiguration && !configureAllowed
             ? configureBlockedReason

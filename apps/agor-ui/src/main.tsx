@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import { installClipboardPolyfill } from './utils/clipboard-polyfill';
+import { preventIosInputZoom } from './utils/deviceDetection';
 
 declare global {
   interface Window {
@@ -13,6 +14,9 @@ declare global {
 // Install clipboard polyfill for non-HTTPS environments
 // This ensures Streamdown's copy buttons work on HTTP and local network IPs
 installClipboardPolyfill();
+
+// Lets phone inputs use body-size text without iOS zooming in on focus.
+preventIosInputZoom();
 
 // Cleanup WebSocket connections on Vite HMR
 if (import.meta.hot) {

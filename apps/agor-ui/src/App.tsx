@@ -53,6 +53,7 @@ import { buildPromptWithAttachments } from './components/SessionPanel/composerAt
 import { sendPromptWithReconciliation } from './components/SessionPanel/promptReconciliation';
 import { SettingsModal } from './components/SettingsModal';
 import { StreamdownPortalApp } from './components/StreamdownPortalApp';
+import { TouchTooltipConfig } from './components/TouchTooltipConfig';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
@@ -2328,31 +2329,33 @@ function AppWrapper() {
 
   return (
     <ConfigProvider theme={getCurrentThemeConfig()}>
-      <StreamdownPortalApp>
-        <ErrorBoundary variant="global">
-          {/* CanvasNavigationProvider lives outside the agor `App` body so
+      <TouchTooltipConfig>
+        <StreamdownPortalApp>
+          <ErrorBoundary variant="global">
+            {/* CanvasNavigationProvider lives outside the agor `App` body so
               hooks called in that body (useUrlState, useAppNavigation) can
               read the canvas-nav context. The inner App component used to
               wrap its own JSX in this provider; that's been removed. */}
-          <CanvasNavigationProvider>
-            {isMarketingScreenshotRoute ? (
-              <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
-                <MarketingScreenshotPage />
-              </Suspense>
-            ) : isMarketingVideoRoute ? (
-              <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
-                <MarketingVideoPage />
-              </Suspense>
-            ) : isRbacPolicyPrototypeRoute && RbacPolicyPrototypePage ? (
-              <Suspense fallback={<InitialLoadingScreen message="Loading RBAC prototype…" />}>
-                <RbacPolicyPrototypePage />
-              </Suspense>
-            ) : (
-              <AppContent />
-            )}
-          </CanvasNavigationProvider>
-        </ErrorBoundary>
-      </StreamdownPortalApp>
+            <CanvasNavigationProvider>
+              {isMarketingScreenshotRoute ? (
+                <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
+                  <MarketingScreenshotPage />
+                </Suspense>
+              ) : isMarketingVideoRoute ? (
+                <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
+                  <MarketingVideoPage />
+                </Suspense>
+              ) : isRbacPolicyPrototypeRoute && RbacPolicyPrototypePage ? (
+                <Suspense fallback={<InitialLoadingScreen message="Loading RBAC prototype…" />}>
+                  <RbacPolicyPrototypePage />
+                </Suspense>
+              ) : (
+                <AppContent />
+              )}
+            </CanvasNavigationProvider>
+          </ErrorBoundary>
+        </StreamdownPortalApp>
+      </TouchTooltipConfig>
     </ConfigProvider>
   );
 }
