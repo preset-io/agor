@@ -43,13 +43,16 @@ export function isPermissionNonDefault(
   return mode !== defaultMode;
 }
 
-/** Splits pins into those shown in the row and those folded back into "+". */
+/**
+ * Splits pins into those shown in the row and those folded back into "+".
+ * Pins follow the "+" menu order (`available`), not the order they were pinned in.
+ */
 export function splitPinnedActions(
   pinned: string[],
   available: string[],
   limit = Number.POSITIVE_INFINITY
 ): { row: string[]; folded: string[] } {
-  const visible = pinned.filter((id) => available.includes(id));
+  const visible = available.filter((id) => pinned.includes(id));
   return { row: visible.slice(0, limit), folded: visible.slice(limit) };
 }
 

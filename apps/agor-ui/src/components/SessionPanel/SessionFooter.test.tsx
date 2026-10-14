@@ -283,10 +283,11 @@ describe('model chip', () => {
 });
 
 describe('"+" menu and pins', () => {
-  it('shows the desktop default pins, Attach files and Fork session', () => {
+  it('shows the desktop default pins in "+" menu order: Attach files, then Fork session', () => {
     renderFooter();
-    expect(screen.getByTestId('upload-bar-btn')).toBeInTheDocument();
-    expect(screen.getByTestId('fork-bar-btn')).toBeInTheDocument();
+    const attach = screen.getByTestId('upload-bar-btn');
+    const fork = screen.getByTestId('fork-bar-btn');
+    expect(attach.compareDocumentPosition(fork) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('pins an action into the row from the "+" menu', async () => {
