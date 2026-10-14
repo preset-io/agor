@@ -1,3 +1,4 @@
+import { GEMINI_MANUAL_MESSAGE } from '@agor/core/utils/permission-mode-mapper';
 import type { AgorClient, Session, TenantAgenticToolSettings } from '@agor-live/client';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider, Form, theme } from 'antd';
@@ -68,24 +69,52 @@ function footerProps(managed: boolean, tool = 'gemini'): SessionFooterProps {
     promptInputSlot: <textarea aria-label="Fixture composer" />,
   };
 }
-it('actual SessionFooter legacy Manual warning fits its permissions row', async () => {
+it('actual SessionFooter legacy Manual warning fits its permissions drill-in', async () => {
   const props = footerProps(true);
   render(
     <Shell>
       <SessionFooter {...props} />
     </Shell>
   );
-  await userEvent.click(screen.getByRole('button', { name: 'More options' }));
-  const warning = await screen.findByText(/ask a workspace admin to update the preset/);
+  // Legacy Manual differs from Gemini's default, so the permission chip shows
+  // and opens the model menu straight on its Permissions page.
+  const chip = screen.getByTestId('permission-chip');
+  expect(chip).toHaveTextContent('Manual (unavailable)');
+  expect(chip).toHaveAccessibleName('Permissions: Manual (unavailable). Change');
+  await userEvent.click(chip);
+  const menu = await screen.findByRole('dialog', { name: 'Permissions' });
+  const warning = await within(menu).findByText((text) => text.startsWith(GEMINI_MANUAL_MESSAGE));
+  expect(warning).toHaveTextContent('ask a workspace admin to update the preset');
   await waitFor(() => expect(warning).toBeVisible());
-  const row = screen.getByText('Permissions', { exact: true }).closest('fieldset > div')!;
-  const select = screen.getByText('Manual (unavailable)').closest('.ant-select')!;
-  expect(warning.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-    row.getBoundingClientRect().top - 1
+  expect(within(menu).getByText(/Managed by preset/)).toBeVisible();
+  expect(within(menu).getByRole('button', { name: 'Back to model' })).toBeVisible();
+  const group = within(menu).getByRole('radiogroup', { name: 'Permissions' });
+  const rows = within(group).getAllByRole('radio');
+  expect(rows.map((row) => row.textContent)).toEqual([
+    expect.stringContaining('Accept edits'),
+    expect.stringContaining('Bypass permissions'),
+  ]);
+  // A preset owns the setting, and legacy Manual is not one of the choices.
+  for (const row of rows) {
+    expect(row).toBeDisabled();
+    expect(row).toHaveAttribute('aria-checked', 'false');
+  }
+  await userEvent.click(rows[0], { force: true });
+  expect(props.onPermissionModeChange).not.toHaveBeenCalled();
+  // The note sits above the choices, and the whole page stays on screen.
+  expect(warning.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    group.getBoundingClientRect().top + 1
   );
-  expect(select.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-    row.getBoundingClientRect().bottom + 1
-  );
+  await waitFor(() => {
+    const panel = (menu.closest('.ant-drawer-content') ?? menu).getBoundingClientRect();
+    for (const element of [warning, ...rows]) {
+      const bounds = element.getBoundingClientRect();
+      expect(bounds.left).toBeGreaterThanOrEqual(Math.max(0, panel.left) - 1);
+      expect(bounds.right).toBeLessThanOrEqual(Math.min(window.innerWidth, panel.right) + 1);
+    }
+    expect(panel.top).toBeGreaterThanOrEqual(0);
+    expect(panel.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
+  });
 });
 it('actual SessionFooter non-Gemini permissions can change', async () => {
   const props = footerProps(false, 'claude-code');
@@ -94,13 +123,22 @@ it('actual SessionFooter non-Gemini permissions can change', async () => {
       <SessionFooter {...props} />
     </Shell>
   );
-  await userEvent.click(screen.getByRole('button', { name: 'More options' }));
-  const manual = await screen.findByText('Manual', { exact: true });
-  await userEvent.click(within(manual.closest('.ant-select') as HTMLElement).getByRole('combobox'));
-  const popup = document.querySelector('.ant-select-dropdown:not(.ant-select-dropdown-hidden)')!;
-  await userEvent.click(within(popup as HTMLElement).getByText('Accept edits'));
+  // Permissions live behind the model chip's drill-in.
+  await userEvent.click(screen.getByTestId('model-chip'));
+  const menu = await screen.findByRole('dialog', { name: 'Model' });
+  await userEvent.click(
+    within(menu).getByText('Permissions', { exact: true }).closest('button') as HTMLElement
+  );
+  const group = await within(menu).findByRole('radiogroup', { name: 'Permissions' });
+  expect(within(group).getByRole('radio', { checked: true })).toHaveTextContent('Manual');
+  await userEvent.click(
+    within(group).getByText('Accept edits', { exact: true }).closest('button') as HTMLElement
+  );
   expect(props.onPermissionModeChange).toHaveBeenCalledTimes(1);
   expect(vi.mocked(props.onPermissionModeChange).mock.calls[0][0]).toBe('acceptEdits');
+  // Back returns to the model page within the same menu.
+  await userEvent.click(within(menu).getByRole('button', { name: 'Back to model' }));
+  expect(await within(menu).findByRole('radiogroup', { name: 'Model' })).toBeVisible();
 });
 it.each([
   [320, 568],
