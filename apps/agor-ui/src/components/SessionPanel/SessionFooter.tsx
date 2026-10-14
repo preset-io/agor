@@ -146,6 +146,9 @@ type ComposerMenuId = 'plus' | 'model' | 'permissions' | 'details' | 'details-co
 const formatTokenCount = (count: number) =>
   count >= 1000 ? `${(count / 1000).toFixed(count >= 100_000 ? 0 : 1)}k` : String(count);
 
+/** Visible size of the phone circle; its touch target stays 44px. */
+const CIRCLE_VISUAL_COMPACT = 36;
+
 const PINNABLE_ACTIONS = ['upload', 'advanced-upload', 'fork', 'btw-fork', 'spawn'];
 
 // Memoized: the panel re-renders once per animation frame while its session
@@ -1264,6 +1267,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   minWidth: controlSize,
                   flexShrink: 0,
                   boxShadow: 'none',
+                  // Phones: a 36px fill inside the 44px target keeps the circle clear of the card edge.
+                  ...(isMobile && {
+                    border: 'none',
+                    padding: (MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2,
+                    backgroundClip: 'content-box',
+                  }),
                   transition: reducedMotion ? 'none' : undefined,
                   cursor: circleDisabled ? 'not-allowed' : undefined,
                 }}
