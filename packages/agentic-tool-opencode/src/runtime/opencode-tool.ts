@@ -9,6 +9,11 @@
 import type { SpawnOptions } from 'node:child_process';
 import type { randomBytes as nodeRandomBytes } from 'node:crypto';
 import {
+  type MCPServerWithSource,
+  MCPSignInNoticeCollector,
+  resolveScopedMCPAuthHeaders,
+} from '@agor/core/mcp';
+import {
   renderAgorSessionIdentity,
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
@@ -16,7 +21,6 @@ import {
   hasPrescribedMCPAuthHeader,
   mergeMCPRemoteHeaders,
 } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import {
   type ContentBlock,
   type EffortLevel,
@@ -134,6 +138,8 @@ export type OpenCodeInvocationConfig = {
    * alongside the `mcp` block above so the keys cannot disagree with it.
    */
   mcpToolPermissions?: ReadonlyMap<string, ToolPermission>;
+  /** Agor-only: servers withheld for missing credentials, told to the agent. */
+  mcpSignInNotice?: string;
   [key: string]: unknown;
 };
 
@@ -180,7 +186,14 @@ export type OpenCodeToolDependencies = {
   resolveInvocationConfig?: (input: RunOpenCodeTurnInput) => Promise<OpenCodeInvocationConfig>;
   resolveMcpServers?: (
     sessionId: SessionID
-  ) => Promise<Array<{ server: MCPServer; source: 'session-assigned' | 'global' }>>;
+  ) => Promise<
+    Array<
+      { server: MCPServer; source: 'session-assigned' | 'global' } & Pick<
+        MCPServerWithSource,
+        'oauthAuthResolution' | 'configuredOAuthGrantType' | 'missingUserEnvKeys'
+      >
+    >
+  >;
   getDaemonUrl?: () => Promise<string>;
   createPermissionCallback?: (
     sessionId: SessionID,
@@ -246,6 +259,7 @@ interface TurnContext {
    * Absent when nothing is gated. See `buildOpenCodeMcpToolPermissions`.
    */
   mcpToolPermissions?: ReadonlyMap<string, ToolPermission>;
+  mcpSignInNotice?: string;
 }
 
 /**
@@ -682,7 +696,11 @@ export class OpenCodeTool {
     // OpenCode process parses. Dropping it here keeps a key OpenCode has no
     // schema for out of its config — and a Map would serialise to `{}` anyway,
     // so leaving it in would be a confusing no-op rather than a useful one.
-    const { mcpToolPermissions: _agorOnly, ...serialisable } = resolved;
+    const {
+      mcpToolPermissions: _agorOnly,
+      mcpSignInNotice: _agorNotice,
+      ...serialisable
+    } = resolved;
     resolved = serialisable as OpenCodeInvocationConfig;
     const configuredAgents =
       typeof resolved.agent === 'object' && resolved.agent !== null
@@ -865,6 +883,7 @@ export class OpenCodeTool {
           provider,
           branchPath: input.directory,
           mcpToolPermissions: resolvedInvocationConfig.mcpToolPermissions,
+          mcpSignInNotice: resolvedInvocationConfig.mcpSignInNotice,
         },
         streamingCallbacks,
         (stop) => {
@@ -1041,8 +1060,13 @@ export class OpenCodeTool {
     };
 
     const servers = await this.dependencies.resolveMcpServers(sessionId as SessionID);
+    // OpenCode fails the turn on a server it cannot authenticate, so every
+    // server the acting user has no credential for (DCR ones included) is
+    // withheld and named in the notice instead.
+    const signIn = new MCPSignInNoticeCollector({ withholdDynamicRegistration: true });
 
-    for (const { server } of servers) {
+    for (const scoped of servers) {
+      const { server } = scoped;
       const name = openCodeMcpServerKey(sessionId, server);
       if (server.transport === 'stdio') {
         if (!server.command) {
@@ -1060,11 +1084,14 @@ export class OpenCodeTool {
         }
         let authHeaders: Record<string, string> | undefined;
         try {
-          authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+          authHeaders = await resolveScopedMCPAuthHeaders(scoped, { surfaceAuthorityError: true });
         } catch {
+          // A failed credential lookup is not a missing sign-in: retry advice.
+          if (signIn.recordResolutionFailure(scoped)) continue;
           throw new Error(`Attached MCP server ${server.name} authentication failed`);
         }
         if (!hasPrescribedMCPAuthHeader(server.auth, authHeaders)) {
+          if (signIn.recordMissingGrant(scoped)) continue;
           throw new Error(
             `Attached MCP server ${server.name} did not resolve its authentication header`
           );
@@ -1086,6 +1113,7 @@ export class OpenCodeTool {
       mcp,
       permission: AGOR_PERMISSION_INTERCEPTION,
       mcpToolPermissions: buildOpenCodeMcpToolPermissions(sessionId, servers),
+      mcpSignInNotice: signIn.render(),
     };
   }
 
@@ -1122,9 +1150,13 @@ export class OpenCodeTool {
     // OpenCode's provider baseline; the managed agent's own prompt would
     // replace it.
     const agorSystemPrompt = await renderAgorSystemPrompt();
-    const system = input.agorSessionId
-      ? `${agorSystemPrompt}\n\n${renderAgorSessionIdentity(input.agorSessionId)}`
-      : agorSystemPrompt;
+    const system = [
+      agorSystemPrompt,
+      input.agorSessionId ? renderAgorSessionIdentity(input.agorSessionId) : undefined,
+      context.mcpSignInNotice,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     const request = {
       path: { id: context.opencodeSessionId },
       signal: input.signal,

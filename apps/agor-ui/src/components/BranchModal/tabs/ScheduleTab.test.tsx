@@ -1,20 +1,30 @@
 import type { AgorClient, Branch, Schedule, User } from '@agor-live/client';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeBranch, renderWithApp } from '../testUtils';
 import { ScheduleTab } from './ScheduleTab';
 
-const scheduleModalProps = vi.hoisted(() => vi.fn());
 const messageMocks = vi.hoisted(() => ({ showError: vi.fn(), showSuccess: vi.fn() }));
 vi.mock('../../../utils/message', () => ({
   useThemedMessage: () => messageMocks,
 }));
-vi.mock('../../ScheduleModal', () => ({
-  ScheduleModal: (props: unknown) => {
-    scheduleModalProps(props);
-    return null;
+const scheduleFormProps = vi.hoisted(() => vi.fn());
+vi.mock('../../ScheduleForm', () => ({
+  ScheduleForm: (props: { onClose: () => void }) => {
+    scheduleFormProps(props);
+    return (
+      <div data-testid="schedule-form">
+        <button type="button" onClick={props.onClose}>
+          Close form
+        </button>
+      </div>
+    );
   },
 }));
+
+// The settings compact breakpoint; desktop unless a test says otherwise.
+const media = vi.hoisted(() => ({ compact: false }));
+vi.mock('../../../hooks/useMediaQuery', () => ({ useMediaQuery: () => media.compact }));
 
 vi.mock('../../ScheduleRunsPanel', () => ({
   ScheduleRunsPanel: () => null,
@@ -83,6 +93,7 @@ function renderScheduleTab({
   onOpenSession = vi.fn(),
   currentUser,
   userById,
+  onDraftChange,
   overrides,
 }: {
   branch?: Branch;
@@ -90,6 +101,7 @@ function renderScheduleTab({
   onOpenSession?: (sessionId: string) => void;
   currentUser?: User;
   userById?: Map<string, User>;
+  onDraftChange?: (isDirty: (() => boolean) | null) => void;
   overrides?: ScheduleClientOverrides;
 } = {}) {
   renderWithApp(
@@ -99,6 +111,7 @@ function renderScheduleTab({
       onOpenSession={onOpenSession}
       currentUser={currentUser}
       userById={userById}
+      onDraftChange={onDraftChange}
     />
   );
   return { onOpenSession };
@@ -106,7 +119,7 @@ function renderScheduleTab({
 
 describe('ScheduleTab compact list', () => {
   beforeEach(() => {
-    scheduleModalProps.mockClear();
+    scheduleFormProps.mockClear();
     vi.clearAllMocks();
   });
 
@@ -150,7 +163,7 @@ describe('ScheduleTab compact list', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /edit schedule/i }));
 
-    expect(scheduleModalProps.mock.lastCall?.[0]).toMatchObject({
+    expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({
       executionOwner: expectedOwnerId ? owner : null,
     });
   });
@@ -169,7 +182,58 @@ describe('ScheduleTab compact list', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /edit schedule/i }));
 
-    expect(scheduleModalProps.mock.lastCall?.[0]).toMatchObject({ executionOwner: null });
+    expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({ executionOwner: null });
+  });
+});
+
+describe('ScheduleTab in-place editor', () => {
+  beforeEach(() => scheduleFormProps.mockClear());
+
+  it('creates in place of the list, with a Schedules sub-header and no dialog', async () => {
+    renderScheduleTab();
+    await screen.findByRole('columnheader', { name: 'Title' });
+    fireEvent.click(screen.getByRole('button', { name: /New$/ }));
+
+    expect(screen.getByTestId('schedule-form')).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Title' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({ schedule: null });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close form' }));
+    expect(await screen.findByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+  });
+
+  it('edits in place', async () => {
+    const schedule = makeSchedule({ name: 'Daily digest' });
+    renderScheduleTab({ schedules: [schedule] });
+    fireEvent.click(await screen.findByRole('button', { name: /edit schedule/i }));
+
+    expect(screen.getByTestId('schedule-form')).toBeInTheDocument();
+    expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({ schedule });
+  });
+
+  it('hands the open form its draft reporter for the branch editor', async () => {
+    const onDraftChange = vi.fn();
+    renderScheduleTab({ onDraftChange });
+    await screen.findByRole('columnheader', { name: 'Title' });
+    fireEvent.click(screen.getByRole('button', { name: /New$/ }));
+    expect(scheduleFormProps.mock.lastCall?.[0]).toMatchObject({ onDraftChange });
+  });
+});
+
+describe('ScheduleTab on a phone', () => {
+  afterEach(() => {
+    media.compact = false;
+  });
+
+  it('lists schedules as cards with every row action reachable (no clipped table)', async () => {
+    media.compact = true;
+    renderScheduleTab({ schedules: [makeSchedule({ name: 'Daily digest' })] });
+    expect(await screen.findByLabelText('Edit schedule Daily digest')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    for (const action of ['Run schedule', 'View runs for schedule', 'Delete schedule']) {
+      expect(screen.getByLabelText(new RegExp(`^${action} Daily digest`))).toBeInTheDocument();
+    }
   });
 });
 

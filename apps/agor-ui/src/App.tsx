@@ -1576,7 +1576,10 @@ function AppContent() {
       position?: { x: number; y: number };
       storage_mode?: 'worktree' | 'clone';
       clone_depth?: number;
-    }
+    },
+    // Teammate creation composes this with its own success toast, so it opts out
+    // of the generic "Branch created" message to avoid a misleading double toast.
+    options: { silent?: boolean } = {}
   ): Promise<Branch | null> => {
     if (!client) return null;
     try {
@@ -1600,8 +1603,13 @@ function AppContent() {
         clone_depth: data.clone_depth,
       })) as Branch;
 
-      // Dismiss loading message - branch will appear on board via WebSocket broadcast
-      destroy('create-branch');
+      // Branch appears on the board via WebSocket broadcast; confirm the action
+      // (silent for composed flows like teammate creation, which toast their own).
+      if (options.silent) {
+        destroy('create-branch');
+      } else {
+        showSuccess('Branch created successfully!', { key: 'create-branch' });
+      }
       return branch;
     } catch (error) {
       showError(formatActionError('create the branch', error, { idempotent: false }), {

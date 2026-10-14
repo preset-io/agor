@@ -4,6 +4,7 @@ import { App as AntdApp } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
+import { StandaloneSettingsDrillProvider } from './SettingsDrill';
 
 vi.mock('./BranchSelect', () => ({
   BranchSelect: ({ value, onChange }: { value?: string; onChange?: (value: string) => void }) => (
@@ -136,14 +137,16 @@ describe('GatewayChannelsTable Discord manual connection test', () => {
     render(
       <MemoryRouter>
         <AntdApp>
-          <GatewayChannelsTable
-            client={client}
-            gatewayChannelById={new Map([[channel.id, channel]])}
-            branchById={new Map([[branch.branch_id, branch]])}
-            userById={new Map([[user.user_id, user]])}
-            mcpServerById={new Map<string, MCPServer>()}
-            currentUser={user}
-          />
+          <StandaloneSettingsDrillProvider>
+            <GatewayChannelsTable
+              client={client}
+              gatewayChannelById={new Map([[channel.id, channel]])}
+              branchById={new Map([[branch.branch_id, branch]])}
+              userById={new Map([[user.user_id, user]])}
+              mcpServerById={new Map<string, MCPServer>()}
+              currentUser={user}
+            />
+          </StandaloneSettingsDrillProvider>
         </AntdApp>
       </MemoryRouter>
     );

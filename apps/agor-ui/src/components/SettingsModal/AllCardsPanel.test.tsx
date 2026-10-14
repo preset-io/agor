@@ -1,5 +1,6 @@
 import type { AgorClient, Board, CardType, CardWithType } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 import {
   boardObjectCreated,
@@ -8,27 +9,7 @@ import {
 } from '../../store/agorRealtimeActions';
 import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { fakeFeathersClient, withTestAuthority } from '../../test/harness';
-import { CardsTable } from './CardsTable';
-
-// The real editor needs the app ThemeProvider; a textarea is enough for form behaviour.
-vi.mock('../JSONEditor', async () => ({
-  ...(await vi.importActual<typeof import('../JSONEditor')>('../JSONEditor')),
-  JSONEditor: ({
-    value,
-    onChange,
-    placeholder,
-  }: {
-    value?: string;
-    onChange?: (value: string) => void;
-    placeholder?: string;
-  }) => (
-    <textarea
-      placeholder={placeholder}
-      value={value ?? ''}
-      onChange={(event) => onChange?.(event.target.value)}
-    />
-  ),
-}));
+import { AllCardsPanel } from './AllCardsPanel';
 
 vi.mock('@/utils/message', () => ({
   useThemedMessage: () => ({ showSuccess: vi.fn(), showError: vi.fn() }),
@@ -75,17 +56,18 @@ function makeClient(cards: CardWithType[]) {
 
 function renderTable(client: AgorClient) {
   render(
-    <CardsTable
-      client={client}
-      cardTypeById={new Map([['type-1', cardType]])}
-      boardById={new Map([['board-unloaded', leanBoard]])}
-      canReadPlacements
-    />
+    <MemoryRouter>
+      <AllCardsPanel
+        client={client}
+        cardTypeById={new Map([['type-1', cardType]])}
+        boardById={new Map([['board-unloaded', leanBoard]])}
+        canReadPlacements
+      />
+    </MemoryRouter>
   );
-  fireEvent.click(screen.getByText('Ticket'));
 }
 
-describe('CardsTable', () => {
+describe('AllCardsPanel', () => {
   withTestAuthority('user-a:admin:1', { dataAuthority: false });
   /** Past every debounce: a read that was going to happen has happened. */
   const settle = () => act(() => vi.advanceTimersByTimeAsync(600));
@@ -122,15 +104,16 @@ describe('CardsTable', () => {
   ])('stops showing placements on a capability loss while the read is %s', async (_, next) => {
     const { client, cardsFindAll } = makeClient([card('k-1', 'Fix login')]);
     const table = (canReadPlacements: boolean) => (
-      <CardsTable
-        client={client}
-        cardTypeById={new Map([['type-1', cardType]])}
-        boardById={new Map([['board-unloaded', leanBoard]])}
-        canReadPlacements={canReadPlacements}
-      />
+      <MemoryRouter>
+        <AllCardsPanel
+          client={client}
+          cardTypeById={new Map([['type-1', cardType]])}
+          boardById={new Map([['board-unloaded', leanBoard]])}
+          canReadPlacements={canReadPlacements}
+        />
+      </MemoryRouter>
     );
     const view = render(table(true));
-    fireEvent.click(screen.getByText('Ticket'));
     expect(await screen.findByText('Review')).toBeVisible();
 
     cardsFindAll.mockImplementation(next);
@@ -366,63 +349,5 @@ describe('CardsTable', () => {
     // The trailing read covered the pending request: one active, one trailing.
     expect(cardsFindAll).toHaveBeenCalledTimes(3);
     expect(stats.max).toBe(1);
-  });
-  it('keeps the create form open with the failure inline and flags invalid schema JSON', async () => {
-    const fake = fakeFeathersClient({
-      cards: { findAll: () => [] },
-      'board-objects': { findAll: () => [] },
-      'card-types': {
-        create: () => {
-          throw new Error('Failed to create card type: SQLITE_BUSY: database is locked');
-        },
-      },
-    });
-    renderTable(fake.client);
-    fireEvent.click(screen.getByRole('button', { name: /New/ }));
-    const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByPlaceholderText('e.g. Support Ticket'), {
-      target: { value: 'Bug' },
-    });
-    const schema = within(dialog).getByPlaceholderText('{"type": "object", "properties": {...}}');
-    fireEvent.change(schema, { target: { value: '{"type":' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
-    expect(await within(dialog).findByText("The schema isn't valid JSON.")).toBeVisible();
-
-    fireEvent.change(schema, { target: { value: '' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
-    expect(await within(dialog).findByText("Couldn't create the card type.")).toBeVisible();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Details' }));
-    expect(
-      within(dialog).getByText('Failed to create card type: SQLITE_BUSY: database is locked')
-    ).toBeVisible();
-    expect(within(dialog).getByPlaceholderText('e.g. Support Ticket')).toHaveValue('Bug');
-  });
-
-  it('blocks a second create after a lost reply until the form changes', async () => {
-    const create = vi.fn(() => {
-      throw new Error('socket has been disconnected');
-    });
-    const fake = fakeFeathersClient({
-      cards: { findAll: () => [] },
-      'board-objects': { findAll: () => [] },
-      'card-types': { create },
-    });
-    renderTable(fake.client);
-    fireEvent.click(screen.getByRole('button', { name: /New/ }));
-    const dialog = await screen.findByRole('dialog');
-    const name = within(dialog).getByPlaceholderText('e.g. Support Ticket');
-    fireEvent.change(name, { target: { value: 'Bug' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }));
-    expect(
-      await within(dialog).findByText(
-        'The connection to Agor dropped before this was confirmed. Refresh to see if it went through before you try to create the card type again.'
-      )
-    ).toBeVisible();
-    const createButton = within(dialog).getByRole('button', { name: 'Create' });
-    expect(createButton).toBeDisabled();
-    fireEvent.click(createButton);
-    expect(create).toHaveBeenCalledOnce();
-    fireEvent.change(name, { target: { value: 'Bug 2' } });
-    expect(within(dialog).getByRole('button', { name: 'Create' })).toBeEnabled();
   });
 });

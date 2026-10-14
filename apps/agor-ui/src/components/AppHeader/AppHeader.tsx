@@ -359,7 +359,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           currentUserId={currentUserId}
           branchById={branchById}
           boardById={boardById}
-          onSettingsClick={onSettingsClick}
         />
         {onCreate && hasMinimumRole(user?.role, ROLES.MEMBER) && (
           <Tooltip title={mutationGate.message ?? 'Create new'}>

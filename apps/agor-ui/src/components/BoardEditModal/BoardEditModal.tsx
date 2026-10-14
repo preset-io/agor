@@ -16,6 +16,7 @@ import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormField
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BoardCapabilityPolicyModalEditor } from '../permissions/CapabilityPolicyEditor';
 import { OwnershipTransfer } from '../permissions/CapabilityPolicyEditor/OwnershipTransfer';
+import { DrillInFrame, useDrillFormDraft } from '../SettingsModal/SettingsDrill';
 
 export interface BoardEditModalProps {
   board: Board | null;
@@ -24,6 +25,13 @@ export interface BoardEditModalProps {
   onClose: () => void;
   onUpdate?: (boardId: string, updates: Partial<Board>) => unknown;
   currentUser?: User | null;
+  /**
+   * Render the body as an in-place drill-in (no outer Modal) for the Workspace
+   * Settings shell: the shared drill footer drives Save/Cancel and the
+   * unsaved-changes guard. Default false → the standalone Modal used by the
+   * navbar board-settings shortcut is unchanged.
+   */
+  embedded?: boolean;
 }
 
 /** The single board-settings editor used by Settings and the navbar shortcut. */
@@ -34,6 +42,7 @@ export function BoardEditModal({
   onClose,
   onUpdate,
   currentUser,
+  embedded = false,
 }: BoardEditModalProps) {
   const userById = useAgorStore(selectUserById);
   const [form] = Form.useForm();
@@ -162,6 +171,12 @@ export function BoardEditModal({
     setLoadedPolicy(saved);
   };
 
+  // Unsaved-changes guard for the drill-in: form values vs the loaded board
+  // (covers programmatic edits such as background presets) or a policy draft.
+  const isFormDirty = useDrillFormDraft(form, loadedBoard);
+  const isDirty = () =>
+    isFormDirty() || (policy !== null && JSON.stringify(policy) !== JSON.stringify(loadedPolicy));
+
   const close = () => {
     form.resetFields();
     onClose();
@@ -186,6 +201,86 @@ export function BoardEditModal({
     }
   };
 
+  const body = loadError ? (
+    <Alert type="error" showIcon title="Board settings unavailable" description={loadError} />
+  ) : !loadedBoard ? (
+    // Render the form only once the full board has loaded, so its fields —
+    // including the background editor's mode — initialize from real values
+    // rather than the empty pre-load state (the cause of the mode/checkbox
+    // resetting on reopen).
+    <Skeleton active paragraph={{ rows: 6 }} style={{ marginTop: 16 }} />
+  ) : (
+    <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
+      <BoardFormFields
+        key={loadedBoard.board_id}
+        form={form}
+        backgroundResetSignal={loadedBoard.board_id}
+        canEditGeneral={canEditGeneral}
+        capabilityPolicyEditor={
+          policy ? (
+            <BoardCapabilityPolicyModalEditor
+              ownershipAction={
+                <OwnershipTransfer
+                  kind="board"
+                  resourceId={loadedBoard.board_id}
+                  ownerUserId={policy.primary_owner_user_id}
+                  client={client}
+                  users={permissionUsers}
+                  currentUser={currentUser}
+                  disabled={saving || loading}
+                  onTransferred={close}
+                />
+              }
+              value={policy}
+              onChange={setPolicy}
+              client={client}
+              users={permissionUsers}
+              groups={allGroups}
+              currentUser={currentUser}
+              workspacePreferences={workspacePreferences}
+            />
+          ) : (
+            <Alert type="error" showIcon description="Permissions are unavailable." />
+          )
+        }
+        extra={
+          <Form.Item
+            label="Custom Context (JSON)"
+            name="custom_context"
+            help="Add custom fields for use in zone trigger templates (e.g., {{ board.context.yourField }})"
+            rules={[{ validator: validateJSON }]}
+          >
+            <JSONEditor
+              placeholder='{"team": "Backend", "sprint": 42}'
+              rows={4}
+              disabled={!canEditGeneral}
+            />
+          </Form.Item>
+        }
+      />
+    </Form>
+  );
+
+  // Drill-in mode for the Workspace Settings shell: no outer Modal. The shared
+  // shell footer drives Save/Cancel and the unsaved-changes guard; the caller
+  // gates this on its drill state and early-returns it in place of the list.
+  if (embedded) {
+    if (!open) return null;
+    return (
+      <DrillInFrame
+        title="Edit Board"
+        dirty={isDirty}
+        onBack={close}
+        saving={loading || saving}
+        saveLabel="Save"
+        saveDisabled={loading || saving || Boolean(loadError) || !canEditGeneral}
+        onSave={() => void save()}
+      >
+        {body}
+      </DrillInFrame>
+    );
+  }
+
   return (
     <Modal
       title="Edit Board"
@@ -198,65 +293,7 @@ export function BoardEditModal({
       okText="Save"
       destroyOnHidden
     >
-      {loadError ? (
-        <Alert type="error" showIcon title="Board settings unavailable" description={loadError} />
-      ) : !loadedBoard ? (
-        // Render the form only once the full board has loaded, so its fields —
-        // including the background editor's mode — initialize from real values
-        // rather than the empty pre-load state (the cause of the mode/checkbox
-        // resetting on reopen).
-        <Skeleton active paragraph={{ rows: 6 }} style={{ marginTop: 16 }} />
-      ) : (
-        <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
-          <BoardFormFields
-            key={loadedBoard.board_id}
-            form={form}
-            backgroundResetSignal={loadedBoard.board_id}
-            canEditGeneral={canEditGeneral}
-            capabilityPolicyEditor={
-              policy ? (
-                <BoardCapabilityPolicyModalEditor
-                  ownershipAction={
-                    <OwnershipTransfer
-                      kind="board"
-                      resourceId={loadedBoard.board_id}
-                      ownerUserId={policy.primary_owner_user_id}
-                      client={client}
-                      users={permissionUsers}
-                      currentUser={currentUser}
-                      disabled={saving || loading}
-                      onTransferred={close}
-                    />
-                  }
-                  value={policy}
-                  onChange={setPolicy}
-                  client={client}
-                  users={permissionUsers}
-                  groups={allGroups}
-                  currentUser={currentUser}
-                  workspacePreferences={workspacePreferences}
-                />
-              ) : (
-                <Alert type="error" showIcon description="Permissions are unavailable." />
-              )
-            }
-            extra={
-              <Form.Item
-                label="Custom Context (JSON)"
-                name="custom_context"
-                help="Add custom fields for use in zone trigger templates (e.g., {{ board.context.yourField }})"
-                rules={[{ validator: validateJSON }]}
-              >
-                <JSONEditor
-                  placeholder='{"team": "Backend", "sprint": 42}'
-                  rows={4}
-                  disabled={!canEditGeneral}
-                />
-              </Form.Item>
-            }
-          />
-        </Form>
-      )}
+      {body}
     </Modal>
   );
 }

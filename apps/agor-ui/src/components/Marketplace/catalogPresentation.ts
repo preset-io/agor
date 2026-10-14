@@ -218,13 +218,13 @@ const CONNECT_STATUSES = {
     readiness: 'api-key',
     label: 'Needs a bearer access token',
     detail:
-      'This server needs a bearer access token from your own account. Paste one when you connect — Agor stores it for you alone, and never shows it again.',
+      'This server needs a bearer access token from your own account. Paste one when you connect. Agor stores it for you alone, and never shows it again.',
   },
   unchecked: {
     readiness: 'unchecked',
     label: 'Not checked yet',
     detail:
-      'Agor has not checked this endpoint, so it may ask for an account. Connecting checks it — and stops there if it does.',
+      'Agor has not checked this endpoint, so it may ask for an account. Connecting checks it, and stops there if it does.',
   },
   declaredOpen: {
     readiness: 'unchecked',

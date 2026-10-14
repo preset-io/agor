@@ -25,6 +25,7 @@ import { Bubble } from '@ant-design/x';
 import { Alert, Button, Flex, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
+import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { TaskDetailRetention, useRetainTurnOverlays } from '../../hooks/useTaskDetailRetention';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
@@ -228,6 +229,8 @@ export function MCPRecoveryNotice({
   client?: AgorClient | null;
   canRequestReconnect?: boolean;
 }) {
+  // MCP sign-in lives in the MCP Marketplace (My Servers), not in Settings.
+  const catalog = useMCPCatalogModal();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
   const [now, setNow] = useState(() => Date.now());
@@ -335,11 +338,11 @@ export function MCPRecoveryNotice({
       message={title}
       description={description}
       action={
-        recovery.action === 'reauthenticate' && recovery.mcp_server_id ? (
+        recovery.action === 'reauthenticate' && recovery.mcp_server_id && catalog ? (
           <Button
             size="small"
             type="primary"
-            href={`/settings/mcp/${encodeURIComponent(recovery.mcp_server_id)}/`}
+            onClick={(event) => catalog.openCatalog(event.currentTarget)}
             aria-label={`Sign in to ${recovery.mcp_server_name ?? 'the affected MCP server'}`}
           >
             Sign in to {recovery.mcp_server_name ?? 'MCP server'}

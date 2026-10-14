@@ -31,7 +31,6 @@ import { useMobileBack } from './useMobileBack';
 interface MobileSearchPageProps {
   client?: AgorClient | null;
   currentUser?: User | null;
-  onOpenWorkspaceSettings: (section: string) => void;
   onOpenBranch: (branchId: string) => void;
 }
 
@@ -54,7 +53,6 @@ interface Row {
 export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
   client,
   currentUser,
-  onOpenWorkspaceSettings,
   onOpenBranch,
 }) => {
   const navigate = useNavigate();
@@ -106,10 +104,11 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
           // Back into the mobile shell instead of only a desktop board link.
           return navigate(`${artifactFullscreenPath(result.item.artifact_id)}?from=m`);
         case 'mcp':
-          return onOpenWorkspaceSettings('mcp');
+          // MCP servers are managed in the MCP Marketplace, not in Settings.
+          return navigate('/m/marketplace');
       }
     },
-    [navigate, onOpenBranch, onOpenWorkspaceSettings]
+    [navigate, onOpenBranch]
   );
 
   const sections: { title: string; rows: Row[] }[] = useMemo(() => {

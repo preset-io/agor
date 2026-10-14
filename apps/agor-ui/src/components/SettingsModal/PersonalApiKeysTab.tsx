@@ -30,7 +30,6 @@ import { useThemedMessage } from '../../utils/message';
 import { filterBySettingsSearch } from '../../utils/settingsSearch';
 import { ActionErrorNotice } from '../CompactNotice';
 import { HighlightMatch } from '../HighlightMatch';
-import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 
 const API_KEY_CREATE_UNCONFIRMED =
@@ -251,62 +250,14 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
     [keys, searchTerm]
   );
 
-  return (
-    <div>
-      <ResponsiveSettingsHeader
-        description="Manage personal API keys."
-        actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
-            <Input
-              allowClear
-              placeholder="Search name, prefix, or dates"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              style={{
-                width: compact ? '100%' : 300,
-                flex: compact ? '1 1 100%' : undefined,
-              }}
-            />
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreateModal(true)}>
-              Create New Key
-            </Button>
-          </Space>
-        )}
-      />
-
-      {loadError && (
-        <ActionErrorNotice
-          error={loadError}
-          action={{ label: 'Try again', onClick: () => void fetchKeys() }}
-          style={{ marginBottom: 8 }}
-        />
-      )}
-
-      <Table
-        dataSource={filteredKeys}
-        columns={columns}
-        scroll={{ x: 560 }}
-        rowKey="id"
-        loading={loading}
-        pagination={false}
-        size="small"
-        locale={{ emptyText: loadError ? ' ' : 'No API keys yet' }}
-      />
-
-      {/* Create key modal */}
-      <AdaptiveSettingsModal
-        title="Create API Key"
-        open={showCreateModal && !newlyCreatedKey}
-        onOk={handleCreate}
-        onCancel={() => {
-          setShowCreateModal(false);
-          setNewKeyName('');
-          setCreateError(null);
-          setCreateUnconfirmed(false);
-        }}
-        okText="Create"
-        okButtonProps={{ disabled: !newKeyName.trim() || createUnconfirmed, loading: creating }}
-      >
+  // Create/reveal render in place of the key list (this tab lives inside the
+  // User Settings editor, so a modal here would stack on the Settings modal).
+  if (showCreateModal && !newlyCreatedKey) {
+    return (
+      <div>
+        <Typography.Title level={5} style={{ marginTop: 0 }}>
+          Create API Key
+        </Typography.Title>
         {createError && <ActionErrorNotice error={createError} style={{ marginBottom: 8 }} />}
         <Typography.Paragraph type="secondary">
           Give your key a descriptive name so you can identify it later.
@@ -322,28 +273,39 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
           maxLength={100}
           autoFocus
         />
-      </AdaptiveSettingsModal>
+        <Space style={{ marginTop: 16, width: '100%', justifyContent: 'flex-end' }}>
+          <Button
+            onClick={() => {
+              setShowCreateModal(false);
+              setNewKeyName('');
+              setCreateError(null);
+              setCreateUnconfirmed(false);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="primary"
+            onClick={handleCreate}
+            disabled={!newKeyName.trim() || createUnconfirmed}
+            loading={creating}
+          >
+            Create
+          </Button>
+        </Space>
+      </div>
+    );
+  }
 
-      {/* Show key once modal */}
-      <AdaptiveSettingsModal
-        title={
+  if (newlyCreatedKey) {
+    return (
+      <div>
+        <Typography.Title level={5} style={{ marginTop: 0 }}>
           <Space>
             <KeyOutlined />
             API Key Created
           </Space>
-        }
-        open={!!newlyCreatedKey}
-        onOk={() => {
-          setNewlyCreatedKey(null);
-          setShowCreateModal(false);
-        }}
-        onCancel={() => {
-          setNewlyCreatedKey(null);
-          setShowCreateModal(false);
-        }}
-        okText="Done"
-        cancelButtonProps={{ style: { display: 'none' } }}
-      >
+        </Typography.Title>
         <Alert
           type="warning"
           showIcon
@@ -375,7 +337,59 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
         <Typography.Text code copyable style={{ fontSize: 12 }}>
           {`agor login --url ${getDaemonUrl()} --api-key`}
         </Typography.Text>
-      </AdaptiveSettingsModal>
+        <Space style={{ marginTop: 16, width: '100%', justifyContent: 'flex-end' }}>
+          <Button
+            type="primary"
+            onClick={() => {
+              setNewlyCreatedKey(null);
+              setShowCreateModal(false);
+            }}
+          >
+            Done
+          </Button>
+        </Space>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <ResponsiveSettingsHeader
+        description="Manage personal API keys."
+        search={
+          <Input
+            allowClear
+            placeholder="Search name, prefix, or dates"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        }
+        count={`${filteredKeys.length} ${filteredKeys.length === 1 ? 'key' : 'keys'}`}
+        primaryActions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreateModal(true)}>
+            Create New Key
+          </Button>
+        }
+      />
+
+      {loadError && (
+        <ActionErrorNotice
+          error={loadError}
+          action={{ label: 'Try again', onClick: () => void fetchKeys() }}
+          style={{ marginBottom: 8 }}
+        />
+      )}
+
+      <Table
+        dataSource={filteredKeys}
+        columns={columns}
+        scroll={{ x: 560 }}
+        rowKey="id"
+        loading={loading}
+        pagination={false}
+        size="small"
+        locale={{ emptyText: loadError ? ' ' : 'No API keys yet' }}
+      />
     </div>
   );
 };

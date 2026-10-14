@@ -516,7 +516,7 @@ export const App: React.FC<AppProps> = ({
   // Combine route-based and prop-based settings state
   // Props take precedence for backward compatibility with onboarding flow
   const settingsOpen = settingsRouteOpen || !!openSettingsTab;
-  const effectiveSettingsTab = openSettingsTab || settingsRouteSection;
+  const effectiveSettingsTab = openSettingsTab || settingsRouteSection || undefined;
 
   // Handle external user settings modal control (e.g., from onboarding "Configure API Keys")
   const effectiveUserSettingsOpen = userSettingsOpen || !!openUserSettings;

@@ -1,5 +1,6 @@
 /**
- * Schedule create / edit modal.
+ * Schedule create / edit form. The branch's Schedules tab renders it in place
+ * of the schedules list, with its own inline Save / Cancel (no dialog).
  *
  * Mirrors the structure of `NewSessionModal` for visual + ergonomic
  * consistency:
@@ -50,7 +51,6 @@ import {
   Form,
   Input,
   InputNumber,
-  Modal,
   Radio,
   Space,
   Switch,
@@ -78,6 +78,7 @@ import {
 } from '../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { ActionErrorNotice } from '../CompactNotice';
+import { DrillCrumbs, useDiscardConfirm, useDrillFormDraft } from '../SettingsModal/SettingsDrill';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -109,12 +110,11 @@ function detectBrowserTz(): string {
   }
 }
 
-export interface ScheduleModalProps {
-  open: boolean;
+export interface ScheduleFormProps {
+  /** Leaves the form: after Cancel (once a dirty draft is confirmed) or a save. */
   onClose: () => void;
   /** The branch the schedule belongs to (required for create). */
   branchId: BranchID;
-  branchName: string;
   /** Existing schedule when editing; null/undefined when creating. */
   schedule?: Schedule | null;
   /** MCP server catalog. */
@@ -127,12 +127,14 @@ export interface ScheduleModalProps {
   currentUser?: User | null;
   /** Fires after a successful create OR patch with the saved schedule. */
   onSaved?: (schedule: Schedule) => void;
+  /** Hands up the draft's dirty getter while open (null on unmount) for an outer leave guard. */
+  onDraftChange?: (isDirty: (() => boolean) | null) => void;
 }
 
 const DEFAULT_CRON = '0 * * * *';
 const TIMEZONE_REQUIRED = 'Choose a timezone.';
 
-// ScheduleModal carries schedule-specific fields (cron/tz/retention/etc.)
+// ScheduleForm carries schedule-specific fields (cron/tz/retention/etc.)
 // plus the shared `AgenticFormValues` shape that AgenticToolConfigForm and
 // its helpers read/write. Spreading the shared interface keeps the field
 // names in lockstep with NewSessionModal and the agenticConfigHelpers.
@@ -151,17 +153,16 @@ interface ScheduleFormValues extends AgenticFormValues {
   allow_concurrent_runs?: boolean;
 }
 
-export const ScheduleModal: React.FC<ScheduleModalProps> = ({
-  open,
+export const ScheduleForm: React.FC<ScheduleFormProps> = ({
   onClose,
   branchId,
-  branchName,
   schedule,
   mcpServerById,
   client,
   executionOwner,
   currentUser,
   onSaved,
+  onDraftChange,
 }) => {
   const isEditing = Boolean(schedule?.schedule_id);
   const { showSuccess } = useThemedMessage();
@@ -192,9 +193,8 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   const executionOwnerResolved =
     !schedule?.created_by || executionOwner?.user_id === schedule.created_by;
 
-  // Initialize form when modal opens or the schedule prop changes.
+  // Initialize the form for the opened schedule (or a new one).
   useEffect(() => {
-    if (!open) return;
     const persistedConfig = schedule?.agentic_tool_config;
     const activeConfig = isActiveScheduleAgenticToolConfig(persistedConfig)
       ? persistedConfig
@@ -227,7 +227,17 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
       ...configValues,
       mcpServerIds: schedule?.mcp_server_ids ?? [],
     });
-  }, [open, schedule, form]);
+  }, [schedule, form]);
+
+  // Draft tracking (after the seeding effect above): guards the crumb and
+  // Cancel, and is handed up to the branch editor's leave guard.
+  const isDraftDirty = useDrillFormDraft(form, schedule ?? 'new');
+  const confirmDiscard = useDiscardConfirm();
+  const leave = () => confirmDiscard(isDraftDirty(), onClose);
+  useEffect(() => {
+    onDraftChange?.(isDraftDirty);
+    return () => onDraftChange?.(null);
+  }, [isDraftDirty, onDraftChange]);
 
   // The banner sits at the end of a long form; bring it into view next to the footer.
   useEffect(() => {
@@ -368,27 +378,14 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
   };
 
   return (
-    <Modal
-      title={isEditing ? `Edit schedule — ${schedule?.name}` : `New schedule for ${branchName}`}
-      open={open}
-      onCancel={onClose}
-      width={760}
-      destroyOnClose
-      footer={[
-        <Button key="cancel" onClick={onClose} disabled={saving}>
-          Cancel
-        </Button>,
-        <Button
-          key="save"
-          type="primary"
-          loading={saving}
-          disabled={requiresSupportedToolSelection || createUnconfirmed}
-          onClick={handleSave}
-        >
-          {isEditing ? 'Save' : 'Create'}
-        </Button>,
-      ]}
-    >
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <DrillCrumbs
+          parent="Schedules"
+          onParent={leave}
+          current={schedule ? schedule.name || 'Untitled schedule' : 'New schedule'}
+        />
+      </div>
       {requiresSupportedToolSelection && (
         <Alert
           type="warning"
@@ -401,7 +398,6 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
       <Form
         form={form}
         layout="vertical"
-        preserve={false}
         style={{ marginTop: 16 }}
         onValuesChange={() => setCreateUnconfirmed(false)}
       >
@@ -572,6 +568,19 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
           </div>
         )}
       </Form>
-    </Modal>
+      <Space style={{ width: '100%', justifyContent: 'flex-end', marginTop: 16 }}>
+        <Button onClick={leave} disabled={saving}>
+          Cancel
+        </Button>
+        <Button
+          type="primary"
+          loading={saving}
+          disabled={requiresSupportedToolSelection || createUnconfirmed}
+          onClick={handleSave}
+        >
+          {isEditing ? 'Save' : 'Create'}
+        </Button>
+      </Space>
+    </div>
   );
 };
