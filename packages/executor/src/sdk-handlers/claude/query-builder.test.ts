@@ -61,7 +61,11 @@ vi.mock('../base/permission-hooks.js', () => ({
 import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import * as Claude from '@anthropic-ai/claude-agent-sdk';
-import { realMcpScoping, shippedAsanaInstall } from '../../../test/helpers/real-mcp-scoping.js';
+import {
+  realMcpScoping,
+  shippedAsanaInstall,
+  userEnvBearerInstall,
+} from '../../../test/helpers/real-mcp-scoping.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS, CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
@@ -1076,6 +1080,9 @@ describe('setupQuery - Local Settings Support', () => {
       });
       expect(mcpServers.dcrRemote.alwaysLoad).toBeUndefined();
       expect(append).toContain('- mcpServerId: dcr-id, label: "dcrRemote"');
+      // Claude Code marks it as needing auth and carries on; the agent is
+      // still told plainly that it is unavailable.
+      expect(append).toContain('unavailable until the user connects them');
       expect(append).not.toContain('tools are not loaded');
     });
 
@@ -1162,6 +1169,38 @@ describe('setupQuery - Local Settings Support', () => {
         expect(options.systemPrompt.append).not.toContain('machine (client-credentials)');
       }
     );
+
+    it('withholds a user-env bearer server in a gateway session, through real scoping', async () => {
+      vi.stubEnv('AGOR_USER_ENV_KEYS', '');
+      const real = await realMcpScoping([userEnvBearerInstall()]);
+      vi.mocked(getMcpServersForSession).mockImplementationOnce(real.getMcpServersForSession);
+      vi.mocked(resolveScopedMCPAuthHeaders).mockImplementationOnce(
+        real.resolveScopedMCPAuthHeaders
+      );
+      vi.mocked(resolveMCPAuthHeaders).mockImplementationOnce(real.resolveMCPAuthHeaders);
+      const deps = createMockDeps();
+      // Slack-originated prompt: same session path, same notice.
+      vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
+        session_id: 'test-session' as SessionID,
+        branch_id: 'test-branch' as BranchID,
+        mcp_token: 'test-token',
+        custom_context: { gateway_source: { channel_id: 'channel-1' } },
+      } as any);
+      deps.sessionMCPRepo = {} as any;
+      deps.mcpServerRepo = {} as any;
+
+      try {
+        await setupQuery('test-session' as SessionID, 'test prompt', deps);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      const options = claudeQuery.mock.calls[0][0].options;
+      expect(options.mcpServers.linear).toBeUndefined();
+      expect(options.systemPrompt.append).toContain(
+        '- mcpServerId: linear-id, label: "Linear", missing environment variables: LINEAR_API_KEY'
+      );
+    });
 
     it('adds no notice when every OAuth server has a grant', async () => {
       const deps = createMockDeps();

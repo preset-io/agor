@@ -62,7 +62,8 @@ async function submittedPrompt(
   identity: { agorSessionId?: SessionID; existingOpenCodeSessionId?: string } = {
     agorSessionId: 'session-1' as SessionID,
   },
-  userPrompt = 'Continue'
+  userPrompt = 'Continue',
+  mcpSignInNotice?: string
 ) {
   type PromptRequest = Parameters<ReturnType<typeof createOpencodeClient>['session']['prompt']>[0];
   const prompt = vi.fn(async (_request: PromptRequest) => ({ error: { name: 'PromptError' } }));
@@ -116,6 +117,7 @@ async function submittedPrompt(
         provider: 'openai',
         model: 'gpt-test',
         branchPath: '/workspace',
+        mcpSignInNotice,
       },
       undefined,
       () => undefined,
@@ -238,6 +240,19 @@ describe('OpenCodeTool prompt variants', () => {
         expect(request?.body?.system).not.toContain('tenant-A-session');
       }
     }
+  });
+
+  it('appends the MCP sign-in notice to the per-turn system context, not the user text', async () => {
+    const request = await submittedPrompt(
+      undefined,
+      { agorSessionId: 'session-1' as SessionID },
+      'Continue',
+      '## MCP servers that need sign-in'
+    );
+    expect(request?.body?.system).toBe(
+      `${await renderAgorSystemPrompt()}\n\n${renderAgorSessionIdentity('session-1' as SessionID)}\n\n## MCP servers that need sign-in`
+    );
+    expect(request?.body?.parts).toEqual([{ type: 'text', text: 'Continue' }]);
   });
 
   it('retains only static orientation when runtime identity is absent', async () => {

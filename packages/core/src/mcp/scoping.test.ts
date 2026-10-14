@@ -209,6 +209,41 @@ describe('getMcpServersForSession', () => {
     }
   });
 
+  it('names (never values) the unset user env var behind a bearer secret, per acting user', async () => {
+    const pat = {
+      ...makeServer('pat-server', 'global', 'pat'),
+      auth: { type: 'bearer', token: '{{ user.env.PAT_TOKEN }}' },
+      headers: { 'X-Team': '{{ user.env.TEAM }}' },
+    } as MCPServer;
+    const scope = async (userEnv: Record<string, string>) => {
+      vi.stubEnv('AGOR_USER_ENV_KEYS', Object.keys(userEnv).join(','));
+      for (const [key, value] of Object.entries(userEnv)) vi.stubEnv(key, value);
+      try {
+        const [scoped] = await getMcpServersForSession(
+          'session-a' as SessionID,
+          {
+            mcpServerRepo: { findAll: vi.fn() } as never,
+            sessionMCPRepo: { listEffectiveServers: vi.fn().mockResolvedValue([pat]) } as never,
+          },
+          ENFORCING
+        );
+        return scoped;
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    };
+
+    // User A has no token: it is reported by name only; the header variable
+    // is not an auth secret and is not reported.
+    const userA = await scope({ TEAM: 'team-a' });
+    expect(userA.missingUserEnvKeys).toEqual(['PAT_TOKEN']);
+    expect(userA.server.auth?.token).toBeUndefined();
+    // User B set it: nothing is missing, and A's state never leaks into B's.
+    const userB = await scope({ PAT_TOKEN: 'b-token' });
+    expect(userB.missingUserEnvKeys).toBeUndefined();
+    expect(userB.server.auth?.token).toBe('b-token');
+  });
+
   it('hydrates OAuth access tokens through the trusted executor auth-header route', async () => {
     const oauthServer = {
       ...makeServer('oauth-server', 'session', 'oauth'),

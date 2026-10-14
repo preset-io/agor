@@ -455,7 +455,10 @@ export class GeminiPromptService {
       );
     // Fetch and configure MCP servers for this session (hierarchical scoping)
     const mcpServersConfig: Record<string, InstanceType<typeof Gemini.MCPServerConfig>> = {};
-    const signIn = new MCPSignInNoticeCollector();
+    // Gemini answers a 401 by starting its own OAuth flow (Dynamic Client
+    // Registration, then a consent prompt that can wait on stdin), so grantless
+    // DCR servers are withheld too instead of passed through.
+    const signIn = new MCPSignInNoticeCollector({ withholdDynamicRegistration: true });
 
     // Configure Agor MCP server (self-access to daemon) - only if MCP is enabled
     if (this.mcpEnabled !== false) {
@@ -519,9 +522,8 @@ export class GeminiPromptService {
               !authHeaders?.Authorization
             ) {
               authDiagnostics.recordUnavailable();
-              // A pre-registered OAuth client with no grant is withheld, so
-              // Gemini never runs its own OAuth discovery / Dynamic Client
-              // Registration against it.
+              // Withheld, so Gemini never runs its own OAuth discovery / Dynamic
+              // Client Registration against it.
               if (signIn.recordMissingGrant(scoped)) continue;
             }
           } catch {

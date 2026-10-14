@@ -1,5 +1,12 @@
+import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
 import type { SessionID, TaskID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  dcrAndMachineInstalls,
+  realMcpScoping,
+  shippedAsanaInstall,
+  userEnvBearerInstall,
+} from '../../../test/helpers/real-mcp-scoping.js';
 import {
   isExecutorCleanupUnverified,
   markCoordinatorTerminationAbort,
@@ -113,6 +120,99 @@ it('refreshes Cursor request identity without persisting the identity block as u
     );
   }
 });
+
+it('withholds MCP servers the acting user has no credential for and tells the agent', async () => {
+  mocks.send.mockResolvedValue({
+    stream: async function* () {},
+    wait: async () => ({ status: 'completed', result: '' }),
+  });
+  vi.stubEnv('AGOR_USER_ENV_KEYS', '');
+  const real = await realMcpScoping([await shippedAsanaInstall('shared'), userEnvBearerInstall()]);
+  vi.mocked(getMcpServersForSession).mockImplementationOnce(real.getMcpServersForSession);
+  vi.mocked(resolveScopedMCPAuthHeaders)
+    .mockImplementationOnce(real.resolveScopedMCPAuthHeaders)
+    .mockImplementationOnce(real.resolveScopedMCPAuthHeaders);
+  const services = {
+    'config/resolve-api-key': { create: async () => ({ apiKey: 'test-key' }) },
+    sessions: {
+      get: async (id: string) => ({
+        session_id: id,
+        branch_id: 'branch-1',
+        sdk_session_id: 'provider-thread-A',
+      }),
+    },
+    branches: { get: async () => ({ path: '/workspace' }) },
+    messages: { find: async () => [], create: vi.fn() },
+    tasks: { patch: vi.fn() },
+  };
+  try {
+    await executeCursorTask({
+      client: { service: (name: keyof typeof services) => services[name] } as never,
+      sessionId: 'session-1' as SessionID,
+      taskId: 'task-1' as TaskID,
+      prompt: 'hi',
+      abortController: new AbortController(),
+    });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+
+  // Nothing left to load: Cursor gets no MCP config at all.
+  expect(mocks.configured.mock.lastCall?.[0].mcpServers).toBeUndefined();
+  const prompt = mocks.send.mock.lastCall?.[0] as string;
+  expect(prompt).toMatch(/^hi\n\n<agor_session_identity>/);
+  expect(prompt).toContain('- mcpServerId: asana-id, label: "Asana"');
+  expect(prompt).toContain('agor_widgets_request_oauth');
+  expect(prompt).toContain('missing environment variables: LINEAR_API_KEY');
+});
+
+it.each(['per_user', 'shared'] as const)(
+  'asks to retry, not to Connect, when the credential lookup fails (%s)',
+  async (mode) => {
+    mocks.send.mockResolvedValue({
+      stream: async function* () {},
+      wait: async () => ({ status: 'completed', result: '' }),
+    });
+    const real = await realMcpScoping(
+      [await shippedAsanaInstall(mode), ...dcrAndMachineInstalls()],
+      { lookupFails: true }
+    );
+    vi.mocked(getMcpServersForSession).mockImplementationOnce(real.getMcpServersForSession);
+    for (let i = 0; i < 3; i++) {
+      vi.mocked(resolveScopedMCPAuthHeaders).mockImplementationOnce(
+        real.resolveScopedMCPAuthHeaders
+      );
+    }
+    const services = {
+      'config/resolve-api-key': { create: async () => ({ apiKey: 'test-key' }) },
+      sessions: {
+        get: async (id: string) => ({
+          session_id: id,
+          branch_id: 'branch-1',
+          sdk_session_id: 'provider-thread-A',
+        }),
+      },
+      branches: { get: async () => ({ path: '/workspace' }) },
+      messages: { find: async () => [], create: vi.fn() },
+      tasks: { patch: vi.fn() },
+    };
+    await executeCursorTask({
+      client: { service: (name: keyof typeof services) => services[name] } as never,
+      sessionId: 'session-1' as SessionID,
+      taskId: 'task-1' as TaskID,
+      prompt: 'hi',
+      abortController: new AbortController(),
+    });
+
+    const { mcpServers } = mocks.configured.mock.lastCall![0];
+    expect(Object.keys(mcpServers)).toEqual(['dcr']);
+    const prompt = mocks.send.mock.lastCall?.[0] as string;
+    expect(prompt).toMatch(/couldn't load the sign-in[^#]*asana-id/);
+    expect(prompt).toMatch(/machine \(client-credentials\)[^#]*m2m-id/);
+    expect(prompt).not.toContain('never connected');
+    expect(prompt).not.toContain('dcr-id');
+  }
+);
 
 describe('Cursor Stop and teardown evidence', () => {
   function cursorClient() {

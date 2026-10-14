@@ -119,7 +119,11 @@ vi.mock('@agor/core/agentic-integrations', () => ({
   })),
 }));
 
-import { realMcpScoping, shippedAsanaInstall } from '../../../test/helpers/real-mcp-scoping.js';
+import {
+  realMcpScoping,
+  shippedAsanaInstall,
+  userEnvBearerInstall,
+} from '../../../test/helpers/real-mcp-scoping.js';
 import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
 import { GeminiPromptService, resolveGeminiInvocationModel } from './prompt-service.js';
 import { findGeminiRecording } from './runtime.js';
@@ -553,12 +557,25 @@ describe('Gemini MCP servers without an OAuth grant', () => {
     expect(config.userMemory).toContain('tools are not loaded');
   });
 
-  it('keeps passing a DCR server through, with the Connect note', async () => {
+  it('withholds a grantless DCR server too: Gemini would start its own OAuth flow', async () => {
     mcp.servers = [remote('dcr', { type: 'oauth' })];
     const config = await configure();
-    expect(config.mcpServers.dcr).toBeDefined();
+    expect(config.mcpServers.dcr).toBeUndefined();
     expect(config.userMemory).toContain('- mcpServerId: dcr-id, label: "dcr"');
-    expect(config.userMemory).not.toContain('tools are not loaded');
+    expect(config.userMemory).toContain('unavailable until the user connects them');
+  });
+
+  it('withholds a bearer server whose user-env token is unset, through real scoping', async () => {
+    vi.stubEnv('AGOR_USER_ENV_KEYS', '');
+    mcp.real = await realMcpScoping([userEnvBearerInstall()]);
+    try {
+      const config = await configure();
+      expect(config.mcpServers.linear).toBeUndefined();
+      expect(config.userMemory).toContain('missing environment variables: LINEAR_API_KEY');
+      expect(config.userMemory).toContain('agor_widgets_request_env_vars');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it.each(['per_user', 'shared'] as const)(
@@ -583,9 +600,9 @@ describe('Gemini MCP servers without an OAuth grant', () => {
     expect(config.mcpServers.asana).toBeUndefined();
     expect(config.userMemory).toContain("couldn't load the sign-in");
     expect(config.userMemory).toContain('mcpServerId: asana-id');
-    // DCR keeps today's catch behavior: dispatched, no notice.
-    expect(config.mcpServers.dcr).toBeDefined();
-    expect(config.userMemory).not.toContain('dcr-id');
+    // Withheld on Gemini too, which would otherwise start its own OAuth flow.
+    expect(config.mcpServers.dcr).toBeUndefined();
+    expect(config.userMemory).toContain('mcpServerId: dcr-id');
   });
 
   it('adds no notice when the grant is present', async () => {

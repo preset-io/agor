@@ -48,7 +48,26 @@ describe('renderMCPSignInRequiredNotice', () => {
     expect(notice).toContain('- mcpServerId: id-manual, label: "manual"');
     expect(notice).toContain('agor_widgets_request_oauth');
     expect(notice).toContain('an administrator must save one');
+    expect(notice).toContain('unavailable until the user connects them');
     expect(notice).not.toContain('tools are not loaded');
+  });
+
+  it('tells the agent to relay a session_url, for users replying from a chat app', () => {
+    const notice = renderMCPSignInRequiredNotice({ withheld: [server('asana')] });
+    expect(notice).toContain('If the result includes a session_url, share it');
+  });
+
+  it('names missing environment variables, points at the env-var widget, never values', () => {
+    const notice = renderMCPSignInRequiredNotice({
+      withheld: [],
+      credentials: [{ ...server('linear', 'Linear'), missingUserEnvKeys: ['LINEAR_API_KEY'] }],
+    });
+    expect(notice).toContain(
+      '- mcpServerId: id-linear, label: "Linear", missing environment variables: LINEAR_API_KEY'
+    );
+    expect(notice).toContain('agor_widgets_request_env_vars');
+    expect(notice).toContain('Never ask the user to paste a token or secret');
+    expect(notice).not.toContain('agor_widgets_request_oauth');
   });
 
   const labelLine = (notice: string | undefined) =>
@@ -173,6 +192,32 @@ describe('MCPSignInNoticeCollector', () => {
     expect(notice).not.toContain("couldn't load the sign-in");
     expect(notice).not.toContain('agor_widgets_request_oauth');
     expect(notice).not.toContain('Refresh auth');
+  });
+
+  it('withholds DCR servers too when the runtime cannot degrade on a 401', () => {
+    const signIn = new MCPSignInNoticeCollector({ withholdDynamicRegistration: true });
+    expect(signIn.recordMissingGrant(scoped('dcr', { type: 'oauth' }))).toBe(true);
+    expect(signIn.recordResolutionFailure(scoped('dcr2', { type: 'oauth' }))).toBe(true);
+    expect(signIn.recordResolutionFailure(scoped('jwt', { type: 'jwt' }))).toBe(false);
+    const notice = signIn.render();
+    expect(notice).toContain('- mcpServerId: id-dcr, label: "dcr"');
+    expect(notice).toContain('unavailable until the user connects them');
+    expect(notice).toMatch(/couldn't load the sign-in[^#]*id-dcr2/);
+  });
+
+  it('withholds a bearer server whose user-env secret is unset, naming the variable', () => {
+    const signIn = new MCPSignInNoticeCollector();
+    expect(
+      signIn.recordMissingGrant({
+        server: { ...server('linear', 'Linear'), auth: { type: 'bearer' } },
+        missingUserEnvKeys: ['LINEAR_API_KEY'],
+      })
+    ).toBe(true);
+    // No unset variable explains it: not ours to classify, runtime as today.
+    expect(signIn.recordMissingGrant(scoped('pat', { type: 'bearer' }))).toBe(false);
+    const notice = signIn.render();
+    expect(notice).toContain('missing environment variables: LINEAR_API_KEY');
+    expect(notice).not.toContain('id-pat');
   });
 
   it('renders nothing when nothing was recorded', () => {

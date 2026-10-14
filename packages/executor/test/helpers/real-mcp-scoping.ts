@@ -42,11 +42,51 @@ export async function shippedAsanaInstall(oauthMode: 'per_user' | 'shared'): Pro
   } as MCPServer;
 }
 
+/** A DCR OAuth server and an explicit client-credentials one, neither with a grant. */
+export function dcrAndMachineInstalls(): MCPServer[] {
+  const base = { scope: 'global', enabled: true, transport: 'http' } as const;
+  return [
+    {
+      ...base,
+      mcp_server_id: 'dcr-id' as MCPServerID,
+      name: 'dcr',
+      url: 'https://mcp.dcr.test/mcp',
+      auth: { type: 'oauth' },
+    },
+    {
+      ...base,
+      mcp_server_id: 'm2m-id' as MCPServerID,
+      name: 'm2m',
+      url: 'https://mcp.m2m.test/mcp',
+      auth: { type: 'oauth', oauth_grant_type: 'client_credentials', oauth_client_id: 'svc' },
+    },
+  ] as MCPServer[];
+}
+
+/** A PAT server whose bearer token comes from the acting user's `LINEAR_API_KEY`. */
+export function userEnvBearerInstall(): MCPServer {
+  return {
+    mcp_server_id: 'linear-id' as MCPServerID,
+    name: 'linear',
+    display_name: 'Linear',
+    scope: 'global',
+    enabled: true,
+    transport: 'http',
+    url: 'https://mcp.linear.test/mcp',
+    auth: { type: 'bearer', token: '{{ user.env.LINEAR_API_KEY }}' },
+  } as MCPServer;
+}
+
 /**
  * Real implementations to install into a test file's mocks. Scoping sees only
- * `servers`, and the executor auth-header authority returns no grant for any.
+ * `servers`. The executor auth-header authority returns the grants listed for
+ * the acting user (`forUserId`) in `grantsByUser`, and none otherwise; with
+ * `lookupFails` it throws, as when the credential repository is unreachable.
  */
-export async function realMcpScoping(servers: MCPServer[]) {
+export async function realMcpScoping(
+  servers: MCPServer[],
+  options: { grantsByUser?: Record<string, Record<string, string>>; lookupFails?: boolean } = {}
+) {
   const mcp = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
   const jwt = await vi.importActual<typeof import('@agor/core/tools/mcp/jwt-auth')>(
     '@agor/core/tools/mcp/jwt-auth'
@@ -61,7 +101,15 @@ export async function realMcpScoping(servers: MCPServer[]) {
           listEffectiveServers: async () => servers,
         },
         mcpServerRepo: { findAll: async () => [] },
-        mcpOAuthAuthHeadersRepo: { getAuthHeaders: async () => ({}) },
+        mcpOAuthAuthHeadersRepo: {
+          getAuthHeaders: async (ids: string[]) => {
+            if (options.lookupFails) throw new Error('credential repository unavailable');
+            const grants = options.grantsByUser?.[deps.forUserId ?? ''] ?? {};
+            return Object.fromEntries(
+              ids.filter((id) => grants[id]).map((id) => [id, { authorization: grants[id] }])
+            );
+          },
+        },
       } as Parameters<typeof mcp.getMcpServersForSession>[1],
       caps
     );

@@ -48,7 +48,11 @@ const configMocks = vi.hoisted(() => ({
 }));
 
 import { resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
-import { realMcpScoping, shippedAsanaInstall } from '../../../test/helpers/real-mcp-scoping.js';
+import {
+  realMcpScoping,
+  shippedAsanaInstall,
+  userEnvBearerInstall,
+} from '../../../test/helpers/real-mcp-scoping.js';
 import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
 import { isExecutorCleanupUnverified } from '../../termination-state.js';
 import { CodexTool } from './codex-tool.js';
@@ -3412,7 +3416,56 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       expect(servers.dcr.bearer_token_env_var).toBeUndefined();
       expect(total).toBe(1);
       expect(signInNotice).toContain('- mcpServerId: dcr-id, label: "dcr"');
+      // Codex skips an optional server that fails to start and carries on;
+      // the agent is still told plainly that it is unavailable.
+      expect(signInNotice).toContain('unavailable until the user connects them');
       expect(signInNotice).not.toContain('tools are not loaded');
+    });
+
+    it("uses only the acting user's grant: user A gets the server, user B the notice", async () => {
+      const real = await realMcpScoping([await shippedAsanaInstall('per_user')], {
+        grantsByUser: { 'user-a': { 'asana-id': 'Bearer a-token' } },
+      });
+      const buildFor = (forUserId: string) => {
+        mcpScopingMocks.getMcpServersForSession.mockImplementationOnce(
+          real.getMcpServersForSession
+        );
+        vi.mocked(resolveScopedMCPAuthHeaders).mockImplementationOnce(
+          real.resolveScopedMCPAuthHeaders
+        );
+        mcpAuthMocks.resolveMCPAuthHeaders.mockImplementationOnce(real.resolveMCPAuthHeaders);
+        return (makeService() as any).buildMcpServersConfig(
+          '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+          undefined,
+          { forUserId }
+        );
+      };
+
+      const userA = await buildFor('user-a');
+      expect(userA.servers.asana.bearer_token_env_var).toBeDefined();
+      expect(userA.signInNotice).toBeUndefined();
+
+      const userB = await buildFor('user-b');
+      expect(userB.servers.asana).toBeUndefined();
+      expect(userB.signInNotice).toContain('- mcpServerId: asana-id, label: "Asana"');
+      expect(JSON.stringify(userB)).not.toContain('a-token');
+    });
+
+    it('withholds a user-env bearer server, naming the variable, through real scoping', async () => {
+      vi.stubEnv('AGOR_USER_ENV_KEYS', '');
+      const real = await realMcpScoping([userEnvBearerInstall()]);
+      mcpScopingMocks.getMcpServersForSession.mockImplementationOnce(real.getMcpServersForSession);
+      vi.mocked(resolveScopedMCPAuthHeaders).mockImplementationOnce(
+        real.resolveScopedMCPAuthHeaders
+      );
+      mcpAuthMocks.resolveMCPAuthHeaders.mockImplementationOnce(real.resolveMCPAuthHeaders);
+      try {
+        const { servers, signInNotice } = await build();
+        expect(servers.linear).toBeUndefined();
+        expect(signInNotice).toContain('missing environment variables: LINEAR_API_KEY');
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     it.each(['per_user', 'shared'] as const)(
