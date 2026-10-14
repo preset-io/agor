@@ -49,7 +49,7 @@ export function MCPCatalogModalHost(
             authGeneration={props.authGeneration}
             currentUser={props.currentUser}
             context={{
-              mode: 'onboarding',
+              mode: 'handoff',
               entryName: handoff.entryName,
               returnTo: handoff.returnTo,
               onClose: () => {

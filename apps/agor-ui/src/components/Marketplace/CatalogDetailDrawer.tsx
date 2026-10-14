@@ -80,8 +80,8 @@ const FALLBACK_DISCLOSURE =
 
 export interface CatalogDetailDrawerProps {
   /** Same auth presentation, different terminal action; never inferred from routing. */
-  mode?: 'catalog' | 'onboarding';
-  /** Where an `onboarding`-mode handoff returns to, as read in its copy. */
+  mode?: 'catalog' | 'handoff';
+  /** Where a `handoff`-mode drawer returns to, as read in its copy. */
   returnTarget?: string;
   onRetryConnection?: () => void;
   /** Authenticated identity that owns consent, selections, and pasted credentials. */
@@ -187,7 +187,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   onConnect,
 }) => {
   const { token } = theme.useToken();
-  const onboarding = mode === 'onboarding';
+  const handoff = mode === 'handoff';
   const titleId = useId();
   const successActionRef = useRef<HTMLButtonElement | null>(null);
   const [teammateId, setTeammateId] = useState<BranchID | undefined>();
@@ -257,7 +257,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
         return {
           readiness: 'ready' as const,
           label: 'Ready to use',
-          detail: onboarding
+          detail: handoff
             ? `Your existing connection is ready for ${returnTarget}.`
             : 'Your existing connection can be used in a new session.',
         };
@@ -265,7 +265,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
         return {
           readiness: 'ready' as const,
           label: 'Existing sign-in available',
-          detail: onboarding
+          detail: handoff
             ? 'Reuse your existing connection without signing in again.'
             : 'Reuse your existing connection in a new session without signing in again.',
         };
@@ -507,7 +507,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 textAlign: 'center',
               }}
             >
-              {onboarding && success.authentication !== 'ready' ? (
+              {handoff && success.authentication !== 'ready' ? (
                 <ClockCircleOutlined
                   aria-hidden
                   style={{ color: token.colorWarning, fontSize: token.fontSizeHeading2 }}
@@ -520,7 +520,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
               )}
               <div>
                 <Title level={4} style={{ margin: 0 }}>
-                  {onboarding
+                  {handoff
                     ? success.authentication === 'ready'
                       ? 'Connected and ready'
                       : success.authentication === 'pending'
@@ -533,7 +533,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     : 'Added to My Servers'}
                 </Title>
                 <Paragraph type="secondary" style={{ margin: `${token.marginXXS}px 0 0` }}>
-                  {onboarding
+                  {handoff
                     ? success.authentication === 'ready'
                       ? `${title} is connected. Return to ${returnTarget} to continue.`
                       : success.authentication === 'pending'
@@ -578,7 +578,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 </Text>
               )}
 
-              {onboarding ? (
+              {handoff ? (
                 <Flex gap={token.marginXS} wrap justify="center">
                   {['failed', 'unknown'].includes(success.authentication) && (
                     <Button onClick={onRetryConnection} disabled={connecting}>

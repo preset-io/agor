@@ -14,13 +14,14 @@
  */
 
 import type { AgorClient, WidgetMessageMetadata } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
-import type { ReactElement } from 'react';
+import { type ReactElement, useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type MCPCatalogEntryHandoff,
-  MCPCatalogModalContext,
+  MCPCatalogModalProvider,
+  useMCPCatalogModal,
 } from '@/contexts/MCPCatalogModalContext';
 import { agorStore } from '@/store/agorStore';
 import { OAuthConnectWidget } from './OAuthConnectWidget';
@@ -534,38 +535,48 @@ describe('OAuthConnectWidget — catalog-connect lane', () => {
   };
   const catalogWidget = () => widget({ params: CATALOG_PARAMS } as Partial<WidgetMessageMetadata>);
 
-  function renderWithCatalog(client: AgorClient, catalog = catalogController()) {
+  /** The real catalog context; the probe exposes what the card asked it to open. */
+  function renderWithCatalog(client: AgorClient) {
+    const seen: MCPCatalogEntryHandoff[] = [];
+    function Probe() {
+      const handoff = useMCPCatalogModal()?.entryHandoff;
+      useEffect(() => {
+        if (handoff) seen.push(handoff);
+      }, [handoff]);
+      return null;
+    }
     renderWidget(
-      <MCPCatalogModalContext.Provider value={catalog.value}>
+      <MCPCatalogModalProvider>
+        <Probe />
         <OAuthConnectWidget message={message} widget={catalogWidget()} client={client} />
-      </MCPCatalogModalContext.Provider>
+      </MCPCatalogModalProvider>
     );
-    return catalog;
+    return seen;
   }
 
-  it('opens the catalog drawer for the entry instead of a sign-in popup', () => {
+  it('opens the catalog drawer for the entry instead of a sign-in popup', async () => {
     const calls: string[] = [];
-    const catalog = renderWithCatalog(makeClient({ onCall: (path) => calls.push(path) }));
+    const seen = renderWithCatalog(makeClient({ onCall: (path) => calls.push(path) }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
-    expect(catalog.openCatalogEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entryName: 'io.github.github/github-mcp-server',
-        returnTo: 'the conversation',
-      })
-    );
+    await waitFor(() => expect(seen).toHaveLength(1));
+    expect(seen[0]).toMatchObject({
+      entryName: 'io.github.github/github-mcp-server',
+      returnTo: 'the conversation',
+    });
     expect(calls).toEqual([]);
   });
 
   it('resolves with the install the drawer made', async () => {
     const calls: Array<{ path: string; body: unknown }> = [];
-    const catalog = renderWithCatalog(
+    const seen = renderWithCatalog(
       makeClient({ onCall: (path, body) => calls.push({ path, body }) })
     );
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(seen).toHaveLength(1));
 
-    catalog.openCatalogEntry.mock.calls[0][0].onConnected('srv-github');
+    act(() => seen[0].onConnected('srv-github'));
 
     await waitFor(() =>
       expect(calls).toEqual([
@@ -574,22 +585,30 @@ describe('OAuthConnectWidget — catalog-connect lane', () => {
     );
     expect(await screen.findByText(/Connected "GitHub"/)).toBeVisible();
   });
-});
 
-function catalogController() {
-  const openCatalogEntry = vi.fn<(handoff: MCPCatalogEntryHandoff) => void>();
-  return {
-    openCatalogEntry,
-    value: {
-      mounted: false,
-      open: false,
-      openCatalog: vi.fn(),
-      closeCatalog: vi.fn(),
-      afterClose: vi.fn(),
-      dismissForNavigation: vi.fn(),
-      entryHandoff: null,
-      openCatalogEntry,
-      closeCatalogEntry: vi.fn(),
-    },
-  };
-}
+  it('after a failed finish, Connect opens a fresh drawer whose ready install resolves', async () => {
+    const calls: Array<{ path: string; body: unknown }> = [];
+    let refuse = true;
+    const client = makeClient({
+      onCall: (path, body) => {
+        calls.push({ path, body });
+        if (path.endsWith('/oauth-resolve') && refuse) {
+          refuse = false;
+          throw new Error('Agor could not verify the install');
+        }
+      },
+    });
+    const seen = renderWithCatalog(client);
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    await waitFor(() => expect(seen).toHaveLength(1));
+    act(() => seen[0].onConnected('srv-github'));
+    expect(await screen.findByText('Connection was not completed')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(seen).toHaveLength(2));
+    act(() => seen[1].onConnected('srv-github'));
+
+    expect(await screen.findByText(/Connected "GitHub"/)).toBeVisible();
+    expect(calls.filter((call) => call.path.endsWith('/oauth-resolve'))).toHaveLength(2);
+  });
+});

@@ -160,8 +160,9 @@ function ToolsForIdentity(props: Props) {
           connecting={!connected}
           authGeneration={authGeneration}
           context={{
-            mode: 'onboarding',
+            mode: 'handoff',
             entryName: entry,
+            returnTo: 'onboarding',
             onClose: close,
             onConnected: (serverId) => {
               props.onConnected(serverId);

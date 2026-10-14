@@ -319,6 +319,41 @@ it('can connect again after closing a drawer with a pending installation', async
 });
 
 describe('explicit onboarding context', () => {
+  it('re-reports an already-ready install from a fresh handoff, as a reopened drawer is', async () => {
+    // The catalog host mounts a new handoff each time the Connect card asks;
+    // a card whose finish failed must get its ready install reported again.
+    const api = buildClient();
+    const onConnected = vi.fn();
+    const mount = () =>
+      render(
+        <MemoryRouter>
+          <CatalogTab
+            client={api.client}
+            connected
+            connecting={false}
+            authGeneration={1}
+            currentUser={USER}
+            context={{
+              mode: 'handoff',
+              entryName: ENTRY.name,
+              returnTo: 'the conversation',
+              onConnected,
+              onClose: vi.fn(),
+            }}
+          />
+        </MemoryRouter>
+      );
+    for (const attempt of [1, 2]) {
+      const view = mount();
+      const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
+      await dialog.findByText('No account expected');
+      fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+      await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(attempt));
+      view.unmount();
+    }
+    expect(onConnected).toHaveBeenNthCalledWith(2, 'server-1');
+  });
+
   it('installs without teammate reads, sessions, navigation or prompt staging and returns locally', async () => {
     const api = buildClient();
     const onConnected = vi.fn();
@@ -331,7 +366,13 @@ describe('explicit onboarding context', () => {
           connecting={false}
           authGeneration={1}
           currentUser={USER}
-          context={{ mode: 'onboarding', entryName: ENTRY.name, onConnected, onClose }}
+          context={{
+            mode: 'handoff',
+            entryName: ENTRY.name,
+            returnTo: 'onboarding',
+            onConnected,
+            onClose,
+          }}
         />
       </MemoryRouter>
     );
@@ -368,7 +409,13 @@ describe('explicit onboarding context', () => {
           connecting={false}
           authGeneration={1}
           currentUser={USER}
-          context={{ mode: 'onboarding', entryName: ENTRY.name, onConnected, onClose: vi.fn() }}
+          context={{
+            mode: 'handoff',
+            entryName: ENTRY.name,
+            returnTo: 'onboarding',
+            onConnected,
+            onClose: vi.fn(),
+          }}
         />
       </MemoryRouter>
     );
@@ -406,8 +453,9 @@ it.each(['missing', 'error'] as const)(
           authGeneration={1}
           currentUser={USER}
           context={{
-            mode: 'onboarding',
+            mode: 'handoff',
             entryName: ENTRY.name,
+            returnTo: 'onboarding',
             onConnected: vi.fn(),
             onClose: vi.fn(),
           }}
@@ -428,7 +476,7 @@ it.each(['missing', 'error'] as const)(
   }
 );
 
-describe.each(['catalog', 'onboarding'] as const)('fresh Connect OAuth authority in %s', (mode) => {
+describe.each(['catalog', 'handoff'] as const)('fresh Connect OAuth authority in %s', (mode) => {
   it.each([
     {
       name: 'stale positive badge, no live grant',
@@ -486,8 +534,14 @@ describe.each(['catalog', 'onboarding'] as const)('fresh Connect OAuth authority
           authGeneration={1}
           currentUser={USER}
           context={
-            mode === 'onboarding'
-              ? { mode, entryName: ENTRY.name, onConnected, onClose: vi.fn() }
+            mode === 'handoff'
+              ? {
+                  mode,
+                  entryName: ENTRY.name,
+                  returnTo: 'onboarding',
+                  onConnected,
+                  onClose: vi.fn(),
+                }
               : undefined
           }
         />
@@ -498,15 +552,13 @@ describe.each(['catalog', 'onboarding'] as const)('fresh Connect OAuth authority
     await dialog.findByText('No account expected');
     fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
     if (ready) {
-      await dialog.findByText(
-        mode === 'onboarding' ? 'Connected and ready' : 'Added to My Servers'
-      );
+      await dialog.findByText(mode === 'handoff' ? 'Connected and ready' : 'Added to My Servers');
       expect(dialog.queryByRole('button', { name: /Continue sign-in/ })).not.toBeInTheDocument();
     } else {
       await dialog.findByRole('button', { name: /Continue sign-in/ });
       expect(dialog.queryByText('Connected and ready')).not.toBeInTheDocument();
     }
-    expect(onConnected).toHaveBeenCalledTimes(mode === 'onboarding' && ready ? 1 : 0);
+    expect(onConnected).toHaveBeenCalledTimes(mode === 'handoff' && ready ? 1 : 0);
     expect(api.client.service).not.toHaveBeenCalledWith('mcp-servers/oauth-start');
     expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
     expect(api.startSession).not.toHaveBeenCalled();

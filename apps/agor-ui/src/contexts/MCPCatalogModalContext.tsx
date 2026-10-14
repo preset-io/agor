@@ -25,7 +25,7 @@ interface MCPCatalogModalController {
   closeCatalogEntry: () => void;
 }
 
-export const MCPCatalogModalContext = createContext<MCPCatalogModalController | null>(null);
+const MCPCatalogModalContext = createContext<MCPCatalogModalController | null>(null);
 
 /** Provider-free marketing fixtures omit Catalog actions instead of owning a second host. */
 export const useMCPCatalogModal = () => useContext(MCPCatalogModalContext);
