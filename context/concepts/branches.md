@@ -46,6 +46,10 @@ unknown upload or a claimed legacy invocation without this evidence stays blocke
 see the guide's **Deletion recovery** section. Failed, never-claimed dispatches
 can instead be replaced atomically, fencing any late old claim by generation.
 `db/branch-admission.ts` supplies the Branch-first lock for producer admission.
+Deletion's reference scrub (`db/branch-deletion-references.ts`) reads pages
+without row locks and locks only rows it rewrites. That relies on this fence: a
+new reference to a deleting branch's sessions, tasks or namespaces must be
+admitted under that branch's row lock, never written around it.
 Do not expose maintenance methods or internal claim JSON as generic CRUD.
 
 `db/branch-deletion-manifest.ts` declares ownership-review dispositions for inbound
