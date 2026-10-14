@@ -997,6 +997,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       useBoardObjects({
         board,
         client,
+        nodes,
         boardObjectsForBoard,
         setNodes,
         deletedObjectsRef,
