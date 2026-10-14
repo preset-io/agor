@@ -151,6 +151,11 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+/** Streamed words fade in as separate spans; match an element's whole text. */
+const wholeText = (text: string) => (_: string, element: Element | null) =>
+  element?.textContent === text &&
+  !Array.from(element.children).some((child) => child.textContent === text);
+
 it('renders continuous history without detail fetching and anchors an upward page at every viewport', async () => {
   render(
     <div style={{ height: 'calc(100dvh - 32px)', display: 'flex', flexDirection: 'column' }}>
@@ -803,7 +808,7 @@ it('follows a long live response without clamping the current prompt or losing p
         ]),
       })
     );
-    expect(screen.getByText(`Live answer ${length - 1}`)).toBeInTheDocument();
+    expect(await screen.findByText(wholeText(`Live answer ${length - 1}`))).toBeInTheDocument();
     expect(screen.getByText('Live prompt 19')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
     await waitFor(
@@ -962,7 +967,7 @@ it('keeps synthetic streamed and persisted text visible while settling the think
     ).toBeVisible();
     emit('streaming:start', textId);
     emit('streaming:chunk', textId, { chunk: 'Invented amber square' });
-    expect(screen.getByText('Invented amber square')).toBeVisible();
+    expect(await screen.findByText(wholeText('Invented amber square'))).toBeVisible();
     emit('streaming:end', textId);
     const message = {
       ...messages.get(task.task_id)![1],
@@ -973,8 +978,8 @@ it('keeps synthetic streamed and persisted text visible while settling the think
     act(() => handlers.get('messages:created')?.(message));
     act(() => handlers.get('tasks:patched')?.({ ...task, status: TaskStatus.COMPLETED }));
     expect(live.state.streamingMessages.size).toBe(0);
-    expect(screen.getByText('Invented amber square')).toBeVisible();
-    expect(screen.queryByText(/^Thought for/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/^Thought for/)).not.toBeInTheDocument());
+    expect(screen.getByText(wholeText('Invented amber square'))).toBeVisible();
     await page.screenshot({
       path: `./.vitest/synthetic-stream-lifecycle-${window.innerWidth}.png`,
     });
