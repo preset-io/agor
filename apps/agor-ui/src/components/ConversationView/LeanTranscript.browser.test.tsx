@@ -406,8 +406,11 @@ it('shows live tool events before persistence and preserves the group through co
   const activeHeader = screen.getByRole('button', { name: 'Running: Read', expanded: false });
   expect(activeHeader).toBeVisible();
   expect(activeHeader).toHaveAttribute('aria-busy', 'true');
-  const shimmer = activeHeader.querySelector('.ant-thought-chain-motion-blink')!;
-  expect(getComputedStyle(shimmer).animationName).not.toBe('none');
+  // The working line names the running tool and carries the turn's one shimmer.
+  const shimmers = document.querySelectorAll('.ant-thought-chain-motion-blink');
+  expect(shimmers).toHaveLength(1);
+  expect(shimmers[0].closest('[role="status"]')).toHaveTextContent('Running: Read');
+  expect(getComputedStyle(shimmers[0]).animationName).not.toBe('none');
   expect(document.querySelector('[data-task-block] > .ant-spin')).toBeNull();
   const tool: Message = {
     message_id: generateId(),

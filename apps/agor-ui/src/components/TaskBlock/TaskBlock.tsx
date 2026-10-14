@@ -20,16 +20,14 @@ import {
   type User,
 } from '@agor-live/client';
 // TODO: Move normalization to DB or daemon API
-import { FileTextOutlined, GithubOutlined, RobotOutlined } from '@ant-design/icons';
-import { Bubble } from '@ant-design/x';
+import { FileTextOutlined, GithubOutlined } from '@ant-design/icons';
 import { Alert, Button, Flex, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
 import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { TaskDetailRetention, useRetainTurnOverlays } from '../../hooks/useTaskDetailRetention';
 import { AgentChain } from '../AgentChain';
-import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
+import { WorkingLine, workingStep } from '../LiveStatus';
 import { getMessageSpeaker, hasRevealableInlineDetail, MessageBlock } from '../MessageBlock';
 import { historyTextKey } from '../MessageBlock/HistoryMarkdown';
 import { CreatedByTag } from '../metadata/CreatedByTag';
@@ -45,7 +43,6 @@ import { RateLimitBlock } from '../RateLimitBlock';
 import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { Tag } from '../Tag';
 import { ToolDisclosureHeader } from '../ToolBlock/ToolBlock';
-import { ToolIcon } from '../ToolIcon';
 import { ContextUsageRule } from './ContextUsageRule';
 import { describeTurnOutcome, type TurnOutcomeContext } from './describeTurnOutcome';
 import { TurnOutcome } from './TurnOutcome';
@@ -907,13 +904,21 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       (typeof task.computed_context_window === 'number' && task.computed_context_window > 0);
     const contextWindowUsed = task.computed_context_window ?? contextSnapshot?.totalTokens ?? 0;
     const contextWindowLimit = contextSnapshot?.maxTokens ?? normalized?.contextWindowLimit ?? 0;
+    const pendingPermission = messages.find(
+      (message) =>
+        message.type === 'permission_request' &&
+        (message.content as PermissionRequestContent)?.status === PermissionStatus.PENDING
+    )?.content as PermissionRequestContent | undefined;
     const hasPendingApproval =
-      task.status === TaskStatus.AWAITING_PERMISSION ||
-      messages.some(
-        (message) =>
-          message.type === 'permission_request' &&
-          (message.content as PermissionRequestContent)?.status === PermissionStatus.PENDING
-      );
+      task.status === TaskStatus.AWAITING_PERMISSION || !!pendingPermission;
+    const awaiting =
+      task.status === TaskStatus.AWAITING_INPUT
+        ? ('input' as const)
+        : hasPendingApproval
+          ? ('approval' as const)
+          : undefined;
+    // Live thinking carries its own shimmering line; one live line at a time.
+    const thinkingLive = streamingForTask.some((stream) => stream.isThinking);
 
     // The turn's values read as dimmed inline text, not a row of filled tags.
     const plainPillStyle = {
@@ -1314,29 +1319,22 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         {/* Keep latest TODO visible even after completion (Claude parity). */}
         <StickyTodoRenderer messages={messages} taskStatus={task.status} />
 
-        {/* Show typing only during active work, not recovery or a failed cleanup.
-                      Marked as a conversation block so its unmount at stream
-                      end gives search one final structural re-scan that picks
-                      up the finished message text. */}
-        {task.status === TaskStatus.RUNNING && (
-          <div data-conversation-block style={{ margin: `${token.marginSM}px 0` }}>
-            <Bubble
-              placement="start"
-              avatar={
-                teammateEmoji ? (
-                  <AgorAvatar>{teammateEmoji}</AgorAvatar>
-                ) : agentic_tool ? (
-                  <ToolIcon tool={agentic_tool} size={IDENTITY_AVATAR_SIZE} />
-                ) : (
-                  <AgorAvatar
-                    icon={<RobotOutlined />}
-                    style={{ backgroundColor: token.colorSuccess }}
-                  />
-                )
-              }
-              loading={true}
-              content=""
-              variant="borderless"
+        {/* One live status line during active work or a wait on the reader.
+            Marked as a conversation block so its unmount at stream end gives
+            search one final structural re-scan of the finished text. */}
+        {(task.status === TaskStatus.RUNNING || awaiting) && !thinkingLive && (
+          <div data-conversation-block>
+            <WorkingLine
+              step={workingStep({
+                awaiting,
+                tool: awaiting
+                  ? pendingPermission?.tool_name
+                  : latestActivity?.status === 'executing'
+                    ? latestActivity.toolName
+                    : undefined,
+              })}
+              startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
+              waiting={!!awaiting}
             />
           </div>
         )}

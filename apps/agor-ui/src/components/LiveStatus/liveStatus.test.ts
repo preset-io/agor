@@ -47,9 +47,10 @@ describe('thoughtForLabel', () => {
 
 describe('workingStep', () => {
   it('names the ask, then the running tool, then falls back to working', () => {
-    expect(workingStep({ awaiting: 'approval', runningTool: 'Bash' })).toBe('Waiting for approval');
-    expect(workingStep({ awaiting: 'input' })).toBe('Asked a question');
-    expect(workingStep({ runningTool: 'Bash' })).toBe('Running: Bash');
+    expect(workingStep({ awaiting: 'approval', tool: 'Bash' })).toBe('Waiting for approval · Bash');
+    expect(workingStep({ awaiting: 'approval' })).toBe('Waiting for approval');
+    expect(workingStep({ awaiting: 'input', tool: 'Bash' })).toBe('Asked a question');
+    expect(workingStep({ tool: 'Bash' })).toBe('Running: Bash');
     expect(workingStep({})).toBe('Working…');
   });
 });
