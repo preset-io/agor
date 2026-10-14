@@ -185,18 +185,18 @@ describe('user-scope reads through transport hooks', () => {
     expect(sessionCounted).not.toContain(privateId);
     await expect(
       app.service('session-counts').find(asViewer({ group_by: 'session_id' }) as never)
-    ).rejects.toThrow(/validation failed/);
+    ).rejects.toThrow(/Invalid query: /);
     // A filter the counts don't model is rejected, never ignored.
     await expect(
       app.service('branch-counts').find(asViewer({ board_id: fixture.boardIds[0] }) as never)
-    ).rejects.toThrow(/validation failed/);
+    ).rejects.toThrow(/Invalid query: /);
     // So are session and branch filters the services don't model.
     for (const [service, query] of [
       ['sessions', { $or: [{ created_by: fixture.owner }] }],
       ['branches', { $or: [{ board_id: fixture.boardIds[0] }] }],
     ] as const) {
       await expect(app.service(service).find(asViewer(query) as never)).rejects.toThrow(
-        /validation failed/
+        /Invalid query: /
       );
     }
   });
@@ -313,7 +313,7 @@ describe('user-scope reads through transport hooks', () => {
           user: viewer,
           query: { search: '\u0000', archived: false, $limit: 10 },
         } as never)
-      ).rejects.toThrow(/validation failed/);
+      ).rejects.toThrow(/Invalid query: /);
     }
     // A search is at most MAX_SEARCH_TOKENS distinct terms; repeats count once.
     const nine = 'a b c d e f g h i';
@@ -345,13 +345,13 @@ describe('user-scope reads through transport hooks', () => {
         user: viewer,
         query: { session_id: { $in: tooMany } },
       } as never)
-    ).rejects.toThrow(/validation failed/);
+    ).rejects.toThrow(/Invalid query: /);
     await expect(
       app.service('branches').find({
         provider: 'rest',
         user: viewer,
         query: { branch_id: { $in: tooMany } },
       } as never)
-    ).rejects.toThrow(/validation failed/);
+    ).rejects.toThrow(/Invalid query: /);
   });
 });

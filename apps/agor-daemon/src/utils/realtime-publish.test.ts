@@ -1775,6 +1775,45 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections).toEqual([{ user: allowed }]);
   });
 
+  it('projects layout placements to each board viewer by the placement audience', async () => {
+    const allowed = { user: user('allowed') };
+    const denied = { user: user('denied') };
+    const viewer = { user: user('viewer', ROLES.VIEWER) };
+    const outsider = { user: user('outsider') };
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp([allowed, denied, viewer, outsider, service]);
+    const r = repos({
+      branch: branch('b1', 'none'),
+      permissions: { allowed: 'view', denied: 'none', viewer: 'view' },
+      boardPermissions: { allowed: true, denied: true, viewer: true, outsider: false },
+    });
+    configureRealtimePublish({ app, ...r });
+    const hidden = { object_id: 'hidden', board_id: 'board-1', branch_id: 'b1' };
+    const loose = { object_id: 'loose', board_id: 'board-1', card_id: 'card-1' };
+    const unresolved = { object_id: 'gone', board_id: 'board-1', branch_id: 'missing' };
+    const board = { board_id: 'board-1', objects: {} };
+
+    const result = (await app.runPublish(
+      { board_id: 'board-1', board, placements: [hidden, loose, unresolved] },
+      { path: 'boards', method: 'patch', event: 'layout-applied', id: 'board-1' }
+    )) as unknown as FakeChannel[];
+
+    const payloadFor = (connection: unknown) =>
+      result.find((channel) => channel.connections.includes(connection))?.data as
+        | { board: unknown; placements: unknown[] }
+        | undefined;
+    expect(payloadFor(allowed)).toEqual({
+      board_id: 'board-1',
+      board,
+      placements: [hidden, loose],
+    });
+    expect(payloadFor(denied)?.placements).toEqual([loose]);
+    // Below the board-objects read floor: the board row, no placement rows.
+    expect(payloadFor(viewer)).toEqual({ board_id: 'board-1', board, placements: [] });
+    expect(payloadFor(outsider)).toBeUndefined();
+    expect(payloadFor(service)?.placements).toEqual([hidden, loose, unresolved]);
+  });
+
   it('filters optional branch-scoped events when they carry branch_id', async () => {
     const allowed = user('allowed');
     const denied = user('denied');
