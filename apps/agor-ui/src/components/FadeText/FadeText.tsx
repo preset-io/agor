@@ -43,6 +43,8 @@ export type FadeTextProps = Omit<React.ComponentProps<typeof Typography.Text>, '
   /** Wrap to this many lines and fade the last one. */
   lines?: number;
   tooltipProps?: Pick<TooltipProps, 'placement' | 'mouseEnterDelay'>;
+  /** Suppress the tooltip while something else already shows the full text. */
+  hideTooltip?: boolean;
   onOverflowChange?: (overflowing: boolean) => void;
 };
 
@@ -57,6 +59,7 @@ export function FadeText({
   dense = false,
   lines = 1,
   tooltipProps,
+  hideTooltip = false,
   onOverflowChange,
   style,
   children,
@@ -141,7 +144,7 @@ export function FadeText({
     <Tooltip
       {...tooltipProps}
       title={text}
-      open={overflowing && !touch && (hovered || focused)}
+      open={!hideTooltip && overflowing && !touch && (hovered || focused)}
       onOpenChange={setHovered}
     >
       {label}

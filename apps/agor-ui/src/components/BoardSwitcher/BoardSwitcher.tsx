@@ -344,7 +344,12 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
               ) : (
                 <HomeOutlined style={{ fontSize: 18 }} />
               )}
-              <FadeText strong style={{ flex: 1 }} data-current-board-name>
+              <FadeText
+                strong
+                hideTooltip={dropdownOpen}
+                style={{ flex: 1 }}
+                data-current-board-name
+              >
                 {currentBoard?.name || 'Home'}
               </FadeText>
             </Flex>
