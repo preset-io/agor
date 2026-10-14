@@ -804,8 +804,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         trailing={
           <ComposerPinToggle
             pinned={pinned}
-            label={`${pinned ? 'Unpin' : 'Pin'} ${row.label}`}
-            tooltip={pinned ? 'Unpin from bar' : 'Pin to bar'}
+            label={
+              pinned ? `Unpin ${row.label} from the composer` : `Pin ${row.label} to the composer`
+            }
+            tooltip={pinned ? 'Unpin from the composer' : 'Pin to the composer'}
             disabled={!pinned && pinsFull}
             onToggle={() => togglePin(id)}
           />

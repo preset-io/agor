@@ -291,7 +291,7 @@ export function ComposerMenuBack({ label, onBack }: { label: string; onBack: () 
 
 interface ComposerPinToggleProps {
   pinned: boolean;
-  /** Accessible name, such as "Pin Fork session". */
+  /** Accessible name, such as "Pin Fork session to the composer". */
   label: string;
   tooltip: string;
   onToggle: () => void;
