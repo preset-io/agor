@@ -1,6 +1,6 @@
 import type { AgorClient, Board } from '@agor-live/client';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import { App } from 'antd';
+import { App, ConfigProvider } from 'antd';
 import { afterEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
@@ -63,28 +63,32 @@ function mount(
   const client = {
     service: (name: string) => services[name as keyof typeof services],
   } as unknown as AgorClient;
+  // No AntD motion: an entrance animation is visible only once the browser
+  // paints a frame of it, which a loaded CI runner can delay past `waitFor`.
   render(
-    <App>
-      <ConnectionProvider
-        value={{
-          connected: true,
-          connecting: false,
-          authGeneration: 0,
-          outOfSync: false,
-          capturedSha: null,
-          currentSha: null,
-        }}
-      >
-        <ArchiveDeleteBranchModal
-          client={client}
-          currentUser={user}
-          branch={branch}
-          open
-          onCancel={cancel}
-          onConfirm={confirm}
-        />
-      </ConnectionProvider>
-    </App>
+    <ConfigProvider theme={{ token: { motion: false } }}>
+      <App>
+        <ConnectionProvider
+          value={{
+            connected: true,
+            connecting: false,
+            authGeneration: 0,
+            outOfSync: false,
+            capturedSha: null,
+            currentSha: null,
+          }}
+        >
+          <ArchiveDeleteBranchModal
+            client={client}
+            currentUser={user}
+            branch={branch}
+            open
+            onCancel={cancel}
+            onConfirm={confirm}
+          />
+        </ConnectionProvider>
+      </App>
+    </ConfigProvider>
   );
   return { clear, retire, cancel, confirm };
 }
@@ -98,6 +102,24 @@ async function waitForConfirmationClosed() {
     );
     expect(visible).toHaveLength(1);
   });
+}
+async function expectTeammateError(
+  message: string,
+  raw?: string,
+  type: 'error' | 'warning' = 'error'
+) {
+  const notice = await waitFor(() => {
+    const node = screen.getByText(message).closest('[data-notice-type]');
+    expect(node).toHaveAttribute('data-notice-type', type);
+    expect(node).toHaveAttribute('role', 'alert');
+    return node as HTMLElement;
+  });
+  if (!raw) {
+    expect(within(notice).queryByRole('button', { name: /Details/ })).toBeNull();
+    return;
+  }
+  await click(within(notice).getByRole('button', { name: /Details/ }));
+  await waitFor(() => expect(within(notice).getByText(raw)).toBeVisible());
 }
 for (const width of [1280, 390]) {
   it(`Archive explains primary protection, confirms clear/retire, and retains actionable errors at ${width}px`, async () => {
@@ -137,10 +159,9 @@ for (const width of [1280, 390]) {
       expect(screen.getByRole('button', { name: 'Retire teammate' })).toBeVisible()
     );
     await click(screen.getByRole('button', { name: 'Retire teammate' }));
-    await waitFor(() =>
-      expect(screen.getByRole('alert', { name: 'Teammate action failed' }).textContent).toContain(
-        'unfinished tasks'
-      )
+    await expectTeammateError(
+      "Couldn't retire the teammate.",
+      'Branch has unfinished tasks; stop or cancel them before maintenance'
     );
     expect(f.cancel).not.toHaveBeenCalled();
     expect(f.confirm).not.toHaveBeenCalled();
@@ -174,7 +195,6 @@ for (const boardRead of ['absent', 'forbidden', 'failed', 'access-failed'] as co
     expect(screen.queryByText('Branch permissions could not be loaded.')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Clear board primary' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Open board', exact: true })).toBeNull();
-    // Data can resolve before AntD's entrance animation makes the modal visible.
     await waitFor(() =>
       expect(
         screen.getByText(/Any active teammate may be someone else's private primary/)
@@ -190,10 +210,9 @@ for (const boardRead of ['absent', 'forbidden', 'failed', 'access-failed'] as co
     const confirm = await screen.findByRole('button', { name: 'Retire teammate' });
     await waitFor(() => expect(confirm).toBeVisible());
     await click(confirm);
-    await waitFor(() =>
-      expect(screen.getByRole('alert', { name: 'Teammate action failed' }).textContent).toContain(
-        'Clear or replace the board primary'
-      )
+    await expectTeammateError(
+      "Couldn't retire the teammate.",
+      'Clear or replace the board primary before retirement'
     );
     expect(f.clear).not.toHaveBeenCalled();
     expect(f.cancel).not.toHaveBeenCalled();
@@ -246,4 +265,52 @@ it('confirmation can be cancelled and an admitted retirement stays pending witho
   expect(f.cancel).not.toHaveBeenCalled();
   await act(async () => complete());
   await waitFor(() => expect(f.cancel).toHaveBeenCalledOnce());
+});
+
+for (const { rejection, message, raw, type } of [
+  {
+    rejection: new Error('Board changed'),
+    message: "Couldn't remove this board's primary teammate.",
+    raw: 'Board changed',
+    type: 'error',
+  },
+  {
+    rejection: new Error('socket has been disconnected'),
+    message:
+      "The connection to Agor dropped before this was confirmed. If it didn't go through, try to remove the primary teammate again once the connection is back. (socket has been disconnected)",
+    raw: undefined,
+    type: 'warning',
+  },
+  { rejection: 'offline', message: "Couldn't update the teammate.", raw: undefined, type: 'error' },
+] as const) {
+  it(`shows a clear-primary failure as "${message}"`, async () => {
+    const f = mount();
+    f.clear.mockRejectedValueOnce(rejection);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Clear board primary' })).toBeEnabled()
+    );
+    await click(screen.getByRole('button', { name: 'Clear board primary' }));
+    const confirm = await screen.findByRole('button', { name: 'Clear primary' });
+    await waitFor(() => expect(confirm).toBeVisible());
+    await click(confirm);
+    await expectTeammateError(message, raw, type);
+  });
+}
+
+it('a retire whose connection drops after sending is unconfirmed, not "Couldn\'t"', async () => {
+  const f = mount(true, true, false, 'absent');
+  f.retire.mockRejectedValueOnce(new Error('socket has been disconnected'));
+  const trigger = await screen.findByRole('button', { name: 'Retire teammate — keep files' });
+  await waitFor(() => expect(trigger).toBeEnabled());
+  await click(trigger);
+  const confirm = await screen.findByRole('button', { name: 'Retire teammate' });
+  await waitFor(() => expect(confirm).toBeVisible());
+  await click(confirm);
+  await expectTeammateError(
+    "The connection to Agor dropped before this was confirmed. If it didn't go through, try to retire the teammate again once the connection is back. (socket has been disconnected)",
+    undefined,
+    'warning'
+  );
+  expect(screen.queryByText("Couldn't retire the teammate.")).toBeNull();
+  expect(f.cancel).not.toHaveBeenCalled();
 });

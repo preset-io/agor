@@ -1,17 +1,44 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import { configDefaults, defineConfig } from 'vitest/config';
+
+/**
+ * Exact-match aliases from every workspace package's exports to their `source`
+ * entries. `resolve.conditions` covers the jsdom tests, but
+ * `@vitest-environment node` tests resolve through SSR, and Vitest passes the
+ * SSR conditions to Node as `--conditions`, which would apply `source` to
+ * third-party packages too (some ship raw TypeScript under it). CI's unit
+ * shards don't build workspace dist, so these tests must load source.
+ */
+function workspaceSourceAliases() {
+  const packages = path.resolve(__dirname, '../../packages');
+  return readdirSync(packages).flatMap((dir) => {
+    const root = path.join(packages, dir);
+    let manifest: { name: string; exports?: Record<string, unknown> };
+    try {
+      manifest = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+    } catch {
+      return [];
+    }
+    return Object.entries(manifest.exports ?? {}).flatMap(([subpath, target]) => {
+      const source = (target as { source?: string } | null)?.source;
+      if (typeof source !== 'string') return [];
+      const id = subpath === '.' ? manifest.name : `${manifest.name}/${subpath.slice(2)}`;
+      const exact = new RegExp(`^${id.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}$`);
+      return [{ find: exact, replacement: path.join(root, source) }];
+    });
+  });
+}
 
 export default defineConfig({
   plugins: [react()],
   resolve: {
     conditions: ['source'],
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-      // The repository-backed archive regression imports core source, whose
-      // self-imports Vitest otherwise externalizes to unbuilt dist exports.
-      '@agor/core/types': path.resolve(__dirname, '../../packages/core/src/types/index.ts'),
-    },
+    alias: [
+      { find: '@', replacement: path.resolve(__dirname, './src') },
+      ...workspaceSourceAliases(),
+    ],
   },
   test: {
     globals: true,

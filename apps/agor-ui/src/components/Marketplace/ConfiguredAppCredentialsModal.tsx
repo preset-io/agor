@@ -1,7 +1,9 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
 import { Alert, Form, Input, Modal, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+import { type ActionErrorCopy, describeActionError } from '@/utils/connectionErrors';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
+import { ActionErrorNotice } from '../CompactNotice';
 
 const { Text } = Typography;
 
@@ -33,7 +35,7 @@ export const ConfiguredAppCredentialsModal: React.FC<ConfiguredAppCredentialsMod
   const [clientId, setClientId] = useState(savedClientId);
   const [secret, setSecret] = useState('');
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ActionErrorCopy | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset per opened server
   useEffect(() => {
     setClientId(savedClientId);
@@ -71,7 +73,7 @@ export const ConfiguredAppCredentialsModal: React.FC<ConfiguredAppCredentialsMod
       setSecret('');
       onClose(true);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not update the OAuth app');
+      setError(describeActionError('update the OAuth app', cause, { idempotent: true }));
     } finally {
       setSaving(false);
     }
@@ -130,7 +132,7 @@ export const ConfiguredAppCredentialsModal: React.FC<ConfiguredAppCredentialsMod
             onChange={(event) => setSecret(event.target.value)}
           />
         </Form.Item>
-        {error && <Alert type="error" showIcon title={error} />}
+        {error && <ActionErrorNotice error={error} />}
       </Form>
     </Modal>
   );

@@ -41,8 +41,9 @@ describe('useAuthConfig', () => {
           auth: {
             requireAuth: true,
             identity: {
-              contractVersion: 1,
+              contractVersion: 2,
               userLifecycle: 'internal',
+              avatarAuthority: 'internal',
               roleAuthority: 'internal',
               localAuth: 'enabled',
               capabilities: {
@@ -52,6 +53,7 @@ describe('useAuthConfig', () => {
                   identityWrite: true,
                   roleWrite: true,
                   passwordWrite: true,
+                  avatarWrite: true,
                   avatarSettingsWrite: true,
                   selfConfigurationWrite: true,
                 },
@@ -90,8 +92,9 @@ describe('useAuthConfig', () => {
           auth: {
             requireAuth: true,
             identity: {
-              contractVersion: 1,
+              contractVersion: 2,
               userLifecycle: 'external',
+              avatarAuthority: 'external',
               roleAuthority: 'claims',
               localAuth: 'disabled',
               external: { provider: 'external_launch', provisioning: 'jit' },
@@ -102,6 +105,7 @@ describe('useAuthConfig', () => {
                   identityWrite: false,
                   roleWrite: false,
                   passwordWrite: false,
+                  avatarWrite: false,
                   avatarSettingsWrite: false,
                   selfConfigurationWrite: true,
                 },
@@ -141,8 +145,9 @@ describe('useAuthConfig', () => {
           auth: {
             requireAuth: true,
             identity: {
-              contractVersion: 1,
+              contractVersion: 2,
               userLifecycle: 'external',
+              avatarAuthority: 'external',
               roleAuthority: 'claims',
               localAuth: 'disabled',
               external: { provider: 'external_launch', provisioning: 'jit' },
@@ -153,6 +158,7 @@ describe('useAuthConfig', () => {
                   identityWrite: false,
                   roleWrite: false,
                   passwordWrite: false,
+                  avatarWrite: false,
                   avatarSettingsWrite: false,
                   selfConfigurationWrite: true,
                 },
@@ -179,8 +185,9 @@ describe('useAuthConfig', () => {
       loginRedirectUrl: 'https://workspace.example.com/open',
     });
     expect(result.current[0].config?.identity).toMatchObject({
-      contractVersion: 1,
+      contractVersion: 2,
       userLifecycle: 'external',
+      avatarAuthority: 'external',
       roleAuthority: 'claims',
       localAuth: 'disabled',
       external: { provider: 'external_launch', provisioning: 'jit' },
@@ -188,6 +195,64 @@ describe('useAuthConfig', () => {
     });
     expect(result.current[0].identityContractState).toBe(IdentityContractState.SUPPORTED);
   });
+
+  it.each([
+    ['Agor-owned avatars', 'internal', true, true, true],
+    ['provider-owned avatars', 'external', false, false, true],
+    ['provider ownership with avatar writes', 'external', true, true, false],
+    ['inconsistent settings capability', 'internal', true, false, false],
+    ['unknown avatar owner', 'slack', true, true, false],
+  ] as const)(
+    'validates the independent avatar contract: %s',
+    async (_label, avatarAuthority, avatarWrite, avatarSettingsWrite, valid) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => ({
+          ok: true,
+          json: async () => ({
+            auth: {
+              requireAuth: true,
+              identity: {
+                contractVersion: 2,
+                userLifecycle: 'external',
+                avatarAuthority,
+                roleAuthority: 'claims',
+                localAuth: 'disabled',
+                external: { provider: 'external_launch', provisioning: 'jit' },
+                capabilities: {
+                  users: {
+                    create: false,
+                    delete: false,
+                    identityWrite: false,
+                    roleWrite: false,
+                    passwordWrite: false,
+                    avatarWrite,
+                    avatarSettingsWrite,
+                    selfConfigurationWrite: true,
+                  },
+                },
+              },
+            },
+          }),
+        }))
+      );
+      const { result } = renderHook(() => useAuthConfig());
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.identityContractState).toBe(
+        valid ? IdentityContractState.SUPPORTED : IdentityContractState.UNSUPPORTED
+      );
+      if (valid) {
+        expect(result.current.config?.identity?.capabilities.users).toMatchObject({
+          avatarWrite,
+          avatarSettingsWrite,
+          identityWrite: false,
+          roleWrite: false,
+        });
+      } else {
+        expect(result.current.config).toBeNull();
+      }
+    }
+  );
 
   it('exposes the branch RBAC feature gate from public health', async () => {
     vi.stubGlobal(
@@ -225,12 +290,14 @@ describe('useAuthConfig', () => {
   });
 
   it.each([
-    ['future', { contractVersion: 2 }],
+    ['future', { contractVersion: 3 }],
+    ['previous', { contractVersion: 1 }],
     [
       'malformed',
       {
-        contractVersion: 1,
+        contractVersion: 2,
         userLifecycle: 'external',
+        avatarAuthority: 'external',
         roleAuthority: 'claims',
         localAuth: 'disabled',
         capabilities: { users: { create: false } },

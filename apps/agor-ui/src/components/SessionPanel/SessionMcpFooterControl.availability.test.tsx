@@ -2,6 +2,7 @@ import type { AgorClient, MCPServer } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ConfigProvider } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 
 vi.mock('@/hooks/usePermissions', () => ({
@@ -59,7 +60,11 @@ function selectedLabel() {
 }
 
 describe('session picker readable labels and refresh interaction', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    agorStore.getState().reset();
+    for (const id of ['session-a', 'session-b']) agorStore.getState().markSessionMcpLoaded(id);
+  });
 
   it('keeps readable attached names during fetch, denial and reopen without offering other private rows', async () => {
     const { find, props, view, trigger } = fixture();

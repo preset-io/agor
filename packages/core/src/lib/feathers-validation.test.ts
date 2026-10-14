@@ -4,6 +4,7 @@ import { MAX_PRESENCE_BOARD_SUBSCRIPTIONS } from '../types/presence';
 import {
   boardObjectQueryValidator,
   boardQueryValidator,
+  branchCountsQueryValidator,
   branchQueryValidator,
   knowledgeDocumentQueryValidator,
   mcpCatalogQueryValidator,
@@ -96,14 +97,7 @@ describe('boardObjectQueryValidator', () => {
 describe('branchQueryValidator', () => {
   it('preserves zone_id for service-level virtual zone filtering', async () => {
     const context = {
-      params: {
-        query: {
-          repo_id: '019e8e1c',
-          zone_id: 'zone-review',
-          archived: 'false',
-          unknown: 'removed',
-        },
-      },
+      params: { query: { repo_id: '019e8e1c', zone_id: 'zone-review', archived: 'false' } },
     };
 
     await typedValidateQuery(branchQueryValidator)(context);
@@ -113,6 +107,44 @@ describe('branchQueryValidator', () => {
       zone_id: 'zone-review',
       archived: false,
     });
+  });
+
+  it('rejects filters it does not model instead of dropping them', async () => {
+    for (const query of [
+      { archived: false, unknown: 'value' },
+      { $or: [{ board_id: '019e8e1c' }] },
+      { name: { $ne: 'main' } },
+    ]) {
+      await expect(branchQueryValidator(query)).rejects.toThrow(/validation failed/);
+    }
+  });
+
+  it("keeps remove's deleteFromFilesystem so the service sees it", async () => {
+    expect(await branchQueryValidator({ deleteFromFilesystem: 'false' })).toEqual({
+      deleteFromFilesystem: false,
+    });
+  });
+});
+
+describe('search text', () => {
+  it('rejects NUL and other control characters; whitespace stays a separator', async () => {
+    for (const validator of [sessionQueryValidator, branchQueryValidator]) {
+      for (const search of ['zz\u0000', 'a\u0001b', 'a\u001bb', 'a\u007fb']) {
+        await expect(validator({ search })).rejects.toThrow(/validation failed/);
+      }
+      expect(await validator({ search: 'login\tfix\nflow' })).toEqual({
+        search: 'login\tfix\nflow',
+      });
+    }
+  });
+});
+
+describe('branchCountsQueryValidator', () => {
+  it('takes no query: a filter it would ignore is rejected', async () => {
+    expect(await branchCountsQueryValidator({})).toEqual({});
+    await expect(branchCountsQueryValidator({ board_id: '019e8e1c' })).rejects.toThrow(
+      /validation failed/
+    );
   });
 });
 
@@ -163,24 +195,24 @@ describe('sessionQueryValidator', () => {
   it('preserves the _swapReplace marker so the switch-tool guard can see it', async () => {
     // Regression: `removeAdditional: 'all'` silently stripped `_swapReplace`
     // before it reached SessionsService.remove, making the swap-safety guard
-    // dead on the external client path. It must now survive validation (and
-    // coerce the REST string form) while genuinely unknown props are dropped.
-    const context = {
-      params: {
-        query: {
-          session_id: '019e8e1c',
-          _swapReplace: 'true',
-          unknown: 'removed',
-        },
-      },
-    };
+    // dead on the external client path. It must survive validation (and
+    // coerce the REST string form).
+    const context = { params: { query: { session_id: '019e8e1c', _swapReplace: 'true' } } };
 
     await typedValidateQuery(sessionQueryValidator)(context);
 
-    expect(context.params.query).toEqual({
-      session_id: '019e8e1c',
-      _swapReplace: true,
-    });
+    expect(context.params.query).toEqual({ session_id: '019e8e1c', _swapReplace: true });
+  });
+
+  it('rejects filters it does not model instead of dropping them', async () => {
+    for (const query of [
+      { session_id: '019e8e1c', unknown: 'value' },
+      { $or: [{ created_by: '019e8e1c' }, { status: 'idle' }] },
+      { archived_reason: 'branch_archived' },
+      { status: { $ne: 'idle' } },
+    ]) {
+      await expect(sessionQueryValidator(query)).rejects.toThrow(/validation failed/);
+    }
   });
 });
 

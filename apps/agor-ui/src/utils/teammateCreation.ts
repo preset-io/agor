@@ -1,4 +1,14 @@
-import type { AgorClient, Board, BoardID, Branch, Repo, TeammateConfig } from '@agor-live/client';
+import {
+  type AgorClient,
+  type Board,
+  type BoardID,
+  type Branch,
+  defaultsToPublicTeammateTemplate,
+  type Repo,
+  TEAMMATE_FRAMEWORK_DEFAULT_BRANCH,
+  TEAMMATE_FRAMEWORK_REPO_URL,
+  type TeammateConfig,
+} from '@agor-live/client';
 import { slugify } from '@/utils/repoSlug';
 import { ensureTeammateWelcomeNote } from '@/utils/teammateWelcomeNote';
 
@@ -7,6 +17,8 @@ export interface TeammateCreationInput {
   description?: string;
   emoji?: string;
   repoId: string;
+  /** Resolved destination repo, when the caller already holds it; otherwise looked up by repoId. */
+  repo?: Repo;
   branchName?: string;
   sourceBranch?: string;
   /** Remote that owns sourceBranch when it differs from the destination repo. */
@@ -52,6 +64,26 @@ export interface TeammateCreationDeps {
 }
 
 /**
+ * Whether `boardId` holds no active branch the caller can see, from a
+ * count-only read (the store holds only the loaded scopes' branches). An
+ * unknown count is false, so a welcome note never lands on a board with work.
+ */
+export async function boardHasNoActiveBranches(
+  client: AgorClient | null,
+  boardId: string
+): Promise<boolean> {
+  if (!client) return false;
+  try {
+    const found = await client
+      .service('branches')
+      .find({ query: { board_id: boardId, archived: false, $limit: 0 } });
+    return !Array.isArray(found) && found.total === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Shared teammate creation logic used by CreateDialog (via App.tsx).
  *
  * Flow: resolve repo → create board → create branch → tag branch with
@@ -64,11 +96,27 @@ export async function createTeammateBranch(
   const shouldContinue = deps.shouldContinue ?? (() => true);
   if (!shouldContinue()) return null;
 
-  const repo = deps.repoById.get(input.repoId);
+  const repo =
+    (input.repo?.repo_id === input.repoId ? input.repo : undefined) ??
+    deps.repoById.get(input.repoId);
   const branchName = input.branchName || `private-${slugify(input.displayName)}`;
-  // Preserve omission: the executor distinguishes a template default from an
-  // explicit user ref (even when the user typed the default branch name).
-  const sourceBranch = input.sourceBranch || undefined;
+  // Like personas, a blank teammate on a github.com private fork starts from the public template, readable without a token.
+  const readPublicTemplate =
+    !input.sourceBranch?.trim() &&
+    !input.sourceRemoteUrl &&
+    !!repo &&
+    defaultsToPublicTeammateTemplate(repo);
+  // Otherwise preserve omission: the executor distinguishes a template default
+  // from an explicit user ref (even when the user typed the default branch name).
+  const source = readPublicTemplate
+    ? {
+        sourceBranch: TEAMMATE_FRAMEWORK_DEFAULT_BRANCH,
+        sourceRemoteUrl: TEAMMATE_FRAMEWORK_REPO_URL,
+      }
+    : {
+        sourceBranch: input.sourceBranch?.trim() || undefined,
+        ...(input.sourceRemoteUrl ? { sourceRemoteUrl: input.sourceRemoteUrl } : {}),
+      };
 
   if (!deps.client) {
     throw new Error('Not connected');
@@ -115,8 +163,7 @@ export async function createTeammateBranch(
     name: branchName,
     ref: branchName,
     createBranch: true,
-    sourceBranch,
-    ...(input.sourceRemoteUrl ? { sourceRemoteUrl: input.sourceRemoteUrl } : {}),
+    ...source,
     pullLatest: true,
     boardId,
     custom_context: { teammate: teammateConfig },

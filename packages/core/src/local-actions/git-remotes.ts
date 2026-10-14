@@ -1,3 +1,4 @@
+import { scanGitConfigRemoteCredentials, scrubGitConfigRemoteCredentials } from '@agor/git';
 import {
   BranchRepository,
   createDatabase,
@@ -5,7 +6,6 @@ import {
   RepoRepository,
   shortId,
 } from '../db/index.js';
-import { scanGitConfigRemoteCredentials, scrubGitConfigRemoteCredentials } from '../git/exec.js';
 import { getReporter, type LocalActionOptions } from './types.js';
 
 export interface ScrubGitRemotesParams extends LocalActionOptions {

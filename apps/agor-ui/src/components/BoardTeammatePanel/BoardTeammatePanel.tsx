@@ -6,10 +6,9 @@ import type {
   Repo,
   SpawnConfig,
 } from '@agor-live/client';
-import { getTeammateConfig, isTeammate } from '@agor-live/client';
+import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
 import { LeftOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
-  Alert,
   Badge,
   Button,
   Empty,
@@ -24,8 +23,10 @@ import {
 } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
-import { useAgorStore } from '../../store/agorStore';
+import { type AgorState, useAgorStore } from '../../store/agorStore';
+import { makeBoardPartitionSelector } from '../../store/boardPartitions';
 import {
   selectBranchById,
   selectCommentById,
@@ -33,6 +34,8 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import { selectTeammatesLoaded } from '../../store/userScope';
+import { formatActionError } from '../../utils/connectionErrors';
 import { mapToArray } from '../../utils/mapHelpers';
 import { useThemedMessage } from '../../utils/message';
 import { BranchSessionSections } from '../BranchCard';
@@ -42,24 +45,112 @@ import { BoardBranchList, BoardSessionList } from '../BranchListDrawer';
 import { BranchMetadataRow } from '../BranchMetadataRow';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
+import { CompactNotice } from '../CompactNotice';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { BoardPartitionError } from '../SessionCanvas/BoardPartitionStatus';
 
-export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'all-branches' | 'comments';
+type TeammateLookup =
+  | { status: 'loading' }
+  | { status: 'found'; branch: Branch }
+  | { status: 'archived' }
+  | { status: 'denied' }
+  | { status: 'failed'; error: string };
+
+/**
+ * A board's primary teammate missing from the store may be archived, hidden from
+ * this viewer, or just outside the loaded teammate list; ask the server which.
+ */
+function usePrimaryTeammateLookup(
+  client: AgorClient | null,
+  teammateId: string | undefined,
+  enabled: boolean
+): { lookup: TeammateLookup; retry: () => void } {
+  const [attempt, setAttempt] = useState(0);
+  const key = `${teammateId}:${attempt}`;
+  const [result, setResult] = useState<{
+    client: AgorClient;
+    key: string;
+    lookup: TeammateLookup;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !client || !teammateId) return;
+    let cancelled = false;
+    client
+      .service('branches')
+      .get(teammateId)
+      .then(
+        (branch: Branch) => {
+          if (cancelled) return;
+          setResult({
+            client,
+            key,
+            lookup: branch.archived ? { status: 'archived' } : { status: 'found', branch },
+          });
+        },
+        (error: unknown) => {
+          if (cancelled) return;
+          const code = (error as { code?: unknown } | null)?.code;
+          setResult({
+            client,
+            key,
+            lookup:
+              code === 403 || code === 404
+                ? { status: 'denied' }
+                : {
+                    status: 'failed',
+                    error: error instanceof Error ? error.message : String(error),
+                  },
+          });
+        }
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, client, teammateId, key]);
+
+  return {
+    // A new sign-in brings a new client, so the previous user's answer is never shown.
+    lookup: result?.client === client && result.key === key ? result.lookup : { status: 'loading' },
+    retry: useCallback(() => setAttempt((n) => n + 1), []),
+  };
+}
+
+export type BoardTeammatePanelTab =
+  | 'board'
+  | 'teammate'
+  | 'all-sessions'
+  | 'all-branches'
+  | 'comments';
 
 interface BoardTeammatePanelProps {
   board: Board | null;
+  /** Content of a leading "Board" tab (the mobile board view). */
+  boardTab?: React.ReactNode;
+  showBranchesTab?: boolean;
+  /** Touch-size tabs (44px, 14px labels) for the mobile board screen. */
+  touch?: boolean;
   activeTab?: BoardTeammatePanelTab;
   onTabChange?: (tab: BoardTeammatePanelTab) => void;
   primaryTeammateBranch?: Branch;
   primaryTeammateRepo?: Repo;
   primaryTeammateInaccessible: boolean;
+  /**
+   * Whether the board's partition is complete. Until it is, an absent teammate
+   * branch or empty session list means "not loaded yet", so both tabs show a
+   * skeleton instead of empty/inaccessible states. Defaults to ready.
+   */
+  boardReady?: boolean;
   currentUserId?: string;
   selectedSessionId?: string | null;
   onSessionClick: (sessionId: string) => void;
   onCreateSession?: (branchId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
-  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDelete?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   onOpenSettings?: (branchId: string, tab?: BranchModalTab) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onOpenTerminal?: (commands: string[], branchId?: string) => void;
@@ -87,11 +178,15 @@ interface BoardTeammatePanelProps {
 
 const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   board,
+  boardTab,
+  showBranchesTab = true,
+  touch = false,
   activeTab: controlledActiveTab,
   onTabChange,
-  primaryTeammateBranch,
-  primaryTeammateRepo,
+  primaryTeammateBranch: storedTeammateBranch,
+  primaryTeammateRepo: storedTeammateRepo,
   primaryTeammateInaccessible,
+  boardReady = true,
   currentUserId,
   selectedSessionId,
   onSessionClick,
@@ -121,15 +216,27 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   // this panel when its own slice changes.
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const branchById = useAgorStore(selectBranchById);
+  // The assign list is the user scope's teammates (U3): empty means none only once it lands.
+  const teammatesLoaded = useAgorStore(selectTeammatesLoaded);
   const repoById = useAgorStore(selectRepoById);
   const userById = useAgorStore(selectUserById);
   const commentById = useAgorStore(selectCommentById);
   const boardObjects = board?.objects;
-  const canEditBoard = useCanManageBoard(
+  const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
+  const canEditBoard = useCanManageBoard(client, board ?? undefined, currentUser);
+  const { lookup: teammateLookup, retry: retryTeammateLookup } = usePrimaryTeammateLookup(
     client,
-    board ?? undefined,
-    currentUserId ? userById.get(currentUserId) : undefined
+    board?.primary_teammate_id,
+    primaryTeammateInaccessible
   );
+  const primaryTeammateBranch =
+    storedTeammateBranch ??
+    (primaryTeammateInaccessible && teammateLookup.status === 'found'
+      ? teammateLookup.branch
+      : undefined);
+  const primaryTeammateRepo =
+    storedTeammateRepo ??
+    (primaryTeammateBranch ? repoById.get(primaryTeammateBranch.repo_id) : undefined);
   // A primary whose branch or repo is not loaded yet must not be offered for replacement.
   const canCreateTeammate =
     canEditBoard && !!onCreateTeammate && !board?.primary_teammate_id && !primaryTeammateBranch;
@@ -255,21 +362,72 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       });
       showSuccess('Teammate assigned');
     } catch (error) {
-      showError(
-        `Failed to assign teammate: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('assign the teammate', error, { idempotent: true }));
     } finally {
       setAssigningTeammate(false);
     }
   };
 
+  // A primary teammate on another board: its sessions come with that board's
+  // partition, loaded in the background (the shown board stays displayed).
+  const teammateBoardId = primaryTeammateBranch?.board_id;
+  const { boardReady: teammateBoardReady, status: teammateBoardStatus } = useBoardPartition(
+    client,
+    teammateBoardId !== board?.board_id ? teammateBoardId : null,
+    {
+      canUseMemberWorkspaceServices: hasMinimumRole(
+        currentUserId ? userById.get(currentUserId)?.role : undefined,
+        ROLES.MEMBER
+      ),
+      background: true,
+    }
+  );
   const teammateSessions = useMemo(
     () =>
       primaryTeammateBranch ? sessionsByBranch.get(primaryTeammateBranch.branch_id) || [] : [],
     [primaryTeammateBranch, sessionsByBranch]
   );
 
+  // Subscribes to the failed flag only, so other partition entry changes don't re-render the panel.
+  const boardFailed = useAgorStore(
+    useMemo(() => {
+      const selectPartition = makeBoardPartitionSelector(board?.board_id);
+      return (s: AgorState) => selectPartition(s)?.status === 'error';
+    }, [board?.board_id])
+  );
+  /** A board still loading; a failed load offers Retry instead of loading forever. */
+  const boardLoading = (failedBoardId?: string) =>
+    failedBoardId ? (
+      <BoardPartitionError
+        boardId={failedBoardId}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: token.marginXS,
+          padding: token.padding,
+        }}
+      />
+    ) : (
+      boardLoadingSkeleton
+    );
+  const boardLoadingSkeleton = (
+    <div style={{ padding: 16 }} data-testid="board-partition-skeleton">
+      <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          Loading board…
+        </Typography.Text>
+        <Skeleton active paragraph={{ rows: 4 }} title={false} />
+      </Space>
+    </div>
+  );
+
   const teammateContent = (() => {
+    // No board (or one that doesn't exist): nothing is loading.
+    if (board && !boardReady) return boardLoading(boardFailed ? board.board_id : undefined);
+    if (board && !teammateBoardReady) {
+      return boardLoading(teammateBoardStatus === 'error' ? teammateBoardId : undefined);
+    }
+
     if (primaryTeammateBranch && primaryTeammateRepo) {
       const teammateConfig = getTeammateConfig(primaryTeammateBranch);
       const teammateDescription = primaryTeammateBranch.notes?.trim();
@@ -337,7 +495,11 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </div>
             </div>
 
-            <BranchFilesystemRecovery branch={primaryTeammateBranch} client={client} />
+            <BranchFilesystemRecovery
+              branch={primaryTeammateBranch}
+              client={client}
+              currentUser={currentUser}
+            />
             <BranchMetadataRow
               branch={primaryTeammateBranch}
               repo={primaryTeammateRepo}
@@ -400,15 +562,34 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       );
     }
 
+    // The branch is known but its repo hasn't loaded: not the empty state.
+    if (primaryTeammateBranch) return boardLoadingSkeleton;
+
     if (primaryTeammateInaccessible) {
+      if (teammateLookup.status === 'loading' || teammateLookup.status === 'found') {
+        return boardLoadingSkeleton;
+      }
       return (
         <div style={{ padding: 16 }}>
-          <Alert
-            type="info"
-            showIcon
-            message="Teammate unavailable"
-            description="This board has a primary teammate, but you do not have access to that teammate branch."
-          />
+          {teammateLookup.status === 'failed' ? (
+            <CompactNotice
+              type="error"
+              role="alert"
+              message="Couldn't load this board's teammate."
+              actions={[{ label: 'Try again', onClick: retryTeammateLookup }]}
+              details={[{ label: 'Error', value: teammateLookup.error, code: true }]}
+            />
+          ) : (
+            <CompactNotice
+              type="neutral"
+              role="status"
+              message={
+                teammateLookup.status === 'archived'
+                  ? "This board's teammate is archived."
+                  : "This board's teammate isn't available. It may have been deleted, or you may not have access."
+              }
+            />
+          )}
         </div>
       );
     }
@@ -419,7 +600,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description={
             <Typography.Text type="secondary">
-              This board does not have a primary teammate yet.
+              This board doesn't have a primary teammate yet.
             </Typography.Text>
           }
           style={{ padding: '24px 0 16px' }}
@@ -444,9 +625,10 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               options={teammateOptions}
               optionFilterProp="searchText"
               disabled={assigningTeammate || teammateOptions.length === 0}
+              loading={!teammatesLoaded}
               style={{ width: '100%' }}
             />
-            {teammateOptions.length === 0 && (
+            {teammateOptions.length === 0 && teammatesLoaded && (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 No existing teammates are available to assign.
               </Typography.Text>
@@ -470,7 +652,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       style={{
         height: '100%',
         background: token.colorBgContainer,
-        borderRight: `1px solid ${token.colorBorderSecondary}`,
+        borderRight: touch ? undefined : `1px solid ${token.colorBorderSecondary}`,
         overflow: 'hidden',
       }}
     >
@@ -478,6 +660,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as BoardTeammatePanelTab)}
         items={[
+          ...(boardTab ? [{ key: 'board', label: 'Board', children: boardTab }] : []),
           {
             key: 'teammate',
             label: 'Teammate',
@@ -487,8 +670,10 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             key: 'all-sessions',
             label: 'Sessions',
             children: board ? (
-              <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
-                {sessionDetailsHydrated ? (
+              <div style={{ height: '100%', overflow: 'auto' }}>
+                {!boardReady ? (
+                  boardLoading(boardFailed ? board.board_id : undefined)
+                ) : sessionDetailsHydrated ? (
                   <BoardSessionList
                     board={board}
                     currentBoardId={board.board_id}
@@ -511,9 +696,14 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             key: 'all-branches',
             label: 'Branches',
             children: board ? (
-              <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
+              <div style={{ height: '100%', overflow: 'auto' }}>
                 {sessionDetailsHydrated ? (
-                  <BoardBranchList board={board} repoById={repoById} client={client} />
+                  <BoardBranchList
+                    key={board.board_id}
+                    board={board}
+                    repoById={repoById}
+                    client={client}
+                  />
                 ) : (
                   <div style={{ padding: 16 }}>
                     <Skeleton active paragraph={{ rows: 4 }} title={false} />
@@ -540,7 +730,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                       top: -token.paddingXS,
                       // An empty badge still has a root; do not subtract from
                       // the measured label width after the unread count clears.
-                      marginInlineStart: unreadCommentsCount > 0 ? -token.marginXS : 0,
+                      // Touch tabs have room (no Branches tab), so the badge clears the label.
+                      marginInlineStart:
+                        unreadCommentsCount > 0 ? (touch ? token.marginXXS : -token.marginXS) : 0,
                     },
                     indicator: {
                       paddingInline: token.paddingXXS,
@@ -553,7 +745,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </span>
             ),
             children: board ? (
-              <div style={{ height: 'calc(100vh - 112px)' }}>
+              <div style={{ height: '100%' }}>
                 <CommentsPanel
                   client={client}
                   boardId={board.board_id}
@@ -575,14 +767,16 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No board selected" />
             ),
           },
-        ]}
+        ].filter((item) => showBranchesTab || item.key !== 'all-branches')}
         rootClassName="agor-panel-tabs"
         tabBarGutter={token.marginSM}
         style={{ height: '100%' }}
         styles={{
           body: { height: '100%' },
           content: { height: '100%' },
-          item: { fontSize: token.fontSizeSM, padding: `${token.paddingXS}px 0` },
+          item: touch
+            ? { fontSize: token.fontSize, padding: `${token.paddingSM}px 0` }
+            : { fontSize: token.fontSizeSM, padding: `${token.paddingXS}px 0` },
         }}
         tabBarStyle={{ margin: 0 }}
         // Insets live in the extra slots, not tab-bar padding: rc-tabs measures the bar

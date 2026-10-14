@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BranchName, RepoSlug } from '../types';
 import {
+  defaultsToPublicTeammateTemplate,
   extractGitHubSlugFromUrl,
   extractSlugFromUrl,
   formatRepoReference,
@@ -757,5 +758,22 @@ describe('integration scenarios', () => {
 
     expect(pathParsed.type).toBe('path');
     expect(slugParsed.type).toBe('managed');
+  });
+});
+
+describe('defaultsToPublicTeammateTemplate', () => {
+  it.each([
+    ['https://github.com/acme/agor-teammate-private.git', true],
+    ['git@github.com:acme/agor-teammate-private.git', true],
+    ['ssh://git@github.com/acme/agor-assistant-private.git', true],
+    ['http://github.com/acme/agor-teammate-private.git', true],
+    ['org-123@github.com:acme/Agor-Teammate-Private.git', true],
+    ['https://github.acme.internal/acme/agor-teammate-private.git', false],
+    ['https://gitlab.com/acme/agor-teammate-private.git', false],
+    ['https://github.com/agor-teammate-private-labs/handbook.git', false],
+    ['https://github.com/acme/agor-teammate-private-archive.git', false],
+    ['https://github.com/acme/handbook.git', false],
+  ])('%s → %s', (remote_url, expected) => {
+    expect(defaultsToPublicTeammateTemplate({ remote_url })).toBe(expected);
   });
 });

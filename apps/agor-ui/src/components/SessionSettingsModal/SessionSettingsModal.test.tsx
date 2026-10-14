@@ -5,9 +5,9 @@ import { SESSION_LIST_ROW_SHAPE } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
 import type React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
-import { SessionSettingsModal } from './SessionSettingsModal';
+import { SessionSettingsModal, type SessionSettingsModalProps } from './SessionSettingsModal';
 
 const persistUserDefaultFromForm = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
@@ -16,22 +16,42 @@ vi.mock('../../store/agorStore', () => ({
 }));
 vi.mock('../../store/selectors', () => ({
   selectMcpServerById: () => new Map(),
-  selectSessionMcpServerIds: () => new Map(),
+}));
+// This session's MCP links as the per-session loader reports them.
+const mcpLinks = vi.hoisted(() => ({ value: { ids: [] as string[], loaded: true } }));
+vi.mock('../../hooks/useSessionMcpServerIds', () => ({
+  useSessionMcpServerIds: () => mcpLinks.value,
 }));
 vi.mock('../../utils/message', () => ({ useThemedMessage: () => ({ showError: vi.fn() }) }));
 vi.mock('../AgenticToolConfigurationPicker', () => ({
   INLINE_AGENTIC_CONFIGURATION: '__inline__',
   persistUserDefaultFromForm,
 }));
+const HiddenField = (_props: { value?: unknown; onChange?: (value: unknown) => void }) => null;
 // Chip-row stub that drives the shared `agenticToolPresetId` field.
 vi.mock('../AgenticConfigChipRow', () => ({
-  AgenticConfigChipRow: ({ showEffort = true }: { showEffort?: boolean }) => {
+  AgenticConfigChipRow: ({
+    showEffort = true,
+    mcpLoading = false,
+  }: {
+    showEffort?: boolean;
+    mcpLoading?: boolean;
+  }) => {
     const form = Form.useFormInstance();
+    const mcp = Form.useWatch('mcpServerIds', form) as string[] | undefined;
     return (
-      <div>
+      <div
+        data-mcp-loading={String(mcpLoading)}
+        data-mcp={(mcp ?? []).join(',')}
+        data-testid="chip-row"
+      >
         {showEffort && <div data-testid="effort-chip" />}
         <Form.Item name="agenticToolPresetId" hidden>
           <input />
+        </Form.Item>
+        {/* Registers the field like the real chip row, so useWatch sees it. */}
+        <Form.Item name="mcpServerIds" noStyle>
+          <HiddenField />
         </Form.Item>
         <button
           type="button"
@@ -74,7 +94,11 @@ vi.mock('../AgenticConfigChipRow', () => ({
 }));
 // Light stubs for the always-rendered primary-zone children.
 vi.mock('../SessionMetadataForm', () => ({
-  SessionMetadataForm: () => <div data-testid="meta" />,
+  SessionMetadataForm: () => (
+    <Form.Item name="title" label="Title">
+      <input />
+    </Form.Item>
+  ),
 }));
 vi.mock('../SessionIds', () => ({ SessionIdsList: () => <div data-testid="ids" /> }));
 // Secondary-collapse children (lazy, but stub to avoid heavy module work).
@@ -92,7 +116,6 @@ vi.mock('../CodexSettingsForm', () => ({
     );
   },
 }));
-vi.mock('../CallbackConfigForm', () => ({ CallbackConfigForm: () => null }));
 vi.mock('../CallbackToggleButton', () => ({ CallbackTargetDisplay: () => null }));
 vi.mock('../AdvancedSettingsForm', () => ({
   AdvancedSettingsForm: ({ disabled }: { disabled?: boolean }) => (
@@ -121,6 +144,191 @@ const codexSession = {
 } as unknown as Session;
 
 describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
+  beforeEach(() => {
+    mcpLinks.value = { ids: [], loaded: true };
+  });
+
+  describe('callback_config on save', () => {
+    const callbackSession: Session = {
+      ...claudeSession,
+      callback_config: {
+        enabled: true,
+        callback_mode: 'once',
+        include_last_message: true,
+        include_original_prompt: true,
+        callback_session_id: 'target-1' as Session['session_id'],
+        callback_created_by: 'u1',
+        template: 'Received {{childSessionTitle}}',
+      },
+    };
+
+    it.each([false, true])(
+      'omits untouched callbacks after server changes (store caught up: %s)',
+      async (storeCaughtUp) => {
+        const onUpdate = vi.fn();
+        const props = { open: true, onClose: vi.fn(), onUpdate };
+        const { rerender } = render(<SessionSettingsModal {...props} session={callbackSession} />);
+        // A concurrent target/mode edit and a consumed Once callback must not
+        // be reversed, even if the UI still holds the old store snapshot.
+        const serverSession: Session = {
+          ...callbackSession,
+          callback_config: {
+            ...callbackSession.callback_config,
+            enabled: false,
+            callback_mode: 'persistent',
+            callback_session_id: 'target-2' as Session['session_id'],
+            callback_created_by: 'u2',
+            include_original_prompt: false,
+            include_last_message: false,
+            template: 'New server template',
+          },
+        };
+        rerender(
+          <SessionSettingsModal
+            {...props}
+            session={storeCaughtUp ? serverSession : callbackSession}
+          />
+        );
+        fireEvent.change(screen.getByRole('textbox', { name: 'Title' }), {
+          target: { value: 'Edited title' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+        await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+        expect(onUpdate.mock.calls[0][1]).toMatchObject({ title: 'Edited title' });
+        expect(onUpdate.mock.calls[0][1]).not.toHaveProperty('callback_config');
+      }
+    );
+
+    it.each([
+      { label: 'Enable Completion Callbacks', patch: { enabled: false } },
+      { label: "Include Child's Final Answer", patch: { include_last_message: false } },
+      {
+        label: 'Custom Template',
+        template: 'Edited template',
+        patch: { template: 'Edited template' },
+      },
+      { label: 'Custom Template', template: '', patch: { template: '' } },
+    ])('sends only the edited callback field: $patch', async ({ label, template, patch }) => {
+      const onUpdate = vi.fn();
+      render(
+        <SessionSettingsModal
+          open
+          onClose={vi.fn()}
+          session={callbackSession}
+          onUpdate={onUpdate}
+        />
+      );
+      fireEvent.click(screen.getByText('Callbacks'));
+      if (template !== undefined) {
+        fireEvent.change(screen.getByRole('textbox', { name: /Custom Template/ }), {
+          target: { value: template },
+        });
+      } else {
+        fireEvent.click(screen.getByRole('switch', { name: label }));
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+      expect(onUpdate.mock.calls[0][1].callback_config).toEqual(patch);
+    });
+  });
+
+  it('never sends an MCP diff while the session links are loading', async () => {
+    // Only a realtime event's link is in the store; the server has more.
+    mcpLinks.value = { ids: ['partial'], loaded: false };
+    const onClose = vi.fn();
+    const onUpdateSessionMcpServers = vi.fn();
+    render(
+      <SessionSettingsModal
+        open
+        onClose={onClose}
+        session={claudeSession}
+        client={null}
+        currentUser={null}
+        onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+      />
+    );
+    expect(screen.getByTestId('chip-row')).toHaveAttribute('data-mcp-loading', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onUpdateSessionMcpServers).not.toHaveBeenCalled();
+  });
+
+  it('seeds the MCP field when the links load while open, and sends nothing unless edited', async () => {
+    mcpLinks.value = { ids: [], loaded: false };
+    const onClose = vi.fn();
+    const onUpdateSessionMcpServers = vi.fn();
+    const props = {
+      open: true,
+      onClose,
+      session: claudeSession,
+      client: null,
+      currentUser: null,
+      onUpdateSessionMcpServers,
+    };
+    const { rerender } = render(<SessionSettingsModal {...props} />);
+
+    mcpLinks.value = { ids: ['a', 'b'], loaded: true };
+    rerender(<SessionSettingsModal {...props} />);
+    expect(screen.getByTestId('chip-row')).toHaveAttribute('data-mcp-loading', 'false');
+    await waitFor(() => expect(screen.getByTestId('chip-row')).toHaveAttribute('data-mcp', 'a,b'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onUpdateSessionMcpServers).not.toHaveBeenCalled();
+  });
+
+  it('reseeds an untouched selection when the links reload, so Save never detaches unseen links', async () => {
+    mcpLinks.value = { ids: ['a'], loaded: true };
+    const onClose = vi.fn();
+    const onUpdateSessionMcpServers = vi.fn();
+    const props = {
+      open: true,
+      onClose,
+      session: claudeSession,
+      client: null,
+      currentUser: null,
+      onUpdateSessionMcpServers,
+    };
+    const { rerender } = render(<SessionSettingsModal {...props} />);
+    // A reconnect unloads the links; they reload with a link added meanwhile.
+    mcpLinks.value = { ids: ['a'], loaded: false };
+    rerender(<SessionSettingsModal {...props} />);
+    mcpLinks.value = { ids: ['a', 'b'], loaded: true };
+    rerender(<SessionSettingsModal {...props} />);
+    await waitFor(() => expect(screen.getByTestId('chip-row')).toHaveAttribute('data-mcp', 'a,b'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onUpdateSessionMcpServers).not.toHaveBeenCalled();
+  });
+
+  it('keeps an edit across a reload and diffs it against the links the user saw', async () => {
+    mcpLinks.value = { ids: ['a'], loaded: true };
+    const onUpdateSessionMcpServers = vi.fn();
+    const props = {
+      open: true,
+      onClose: vi.fn(),
+      session: claudeSession,
+      client: null,
+      currentUser: null,
+      onUpdateSessionMcpServers,
+    };
+    const { rerender } = render(<SessionSettingsModal {...props} />);
+    fireEvent.click(screen.getByTestId('pick-mcp')); // ['a'] -> ['mcp-1']
+    mcpLinks.value = { ids: ['a', 'b'], loaded: true };
+    rerender(<SessionSettingsModal {...props} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('chip-row')).toHaveAttribute('data-mcp', 'mcp-1')
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    // Baseline ['a']: attach mcp-1, detach a; b was never shown, so it stays.
+    await waitFor(() =>
+      expect(onUpdateSessionMcpServers).toHaveBeenCalledWith('s1', ['mcp-1'], ['a'])
+    );
+  });
+
   it('shows historical removed-runtime sessions as read-only', () => {
     render(
       <SessionSettingsModal
@@ -154,7 +362,7 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
-      expect(onUpdateSessionMcpServers).toHaveBeenCalledWith('s1', ['mcp-1']);
+      expect(onUpdateSessionMcpServers).toHaveBeenCalledWith('s1', ['mcp-1'], []);
     });
   });
 
@@ -227,7 +435,7 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
         updated_at: '2026-09-01T00:00:00.000Z',
       },
     } as unknown as Session;
-    const renderModal = (onUpdate: ReturnType<typeof vi.fn>) =>
+    const renderModal = (onUpdate: NonNullable<SessionSettingsModalProps['onUpdate']>) =>
       render(
         <SessionSettingsModal
           open
@@ -264,7 +472,7 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
   describe('custom_context from a lean session row', () => {
     const fullContext = {
       teamName: 'Backend',
-      scheduled_run: { schedule_id: 'sched-1' },
+      scheduled_run: { schedule_id: 'sched-1', rendered_prompt: 'Scheduled prompt', run_index: 1 },
       slash_commands: ['/review'],
     };
     const leanSession = {
@@ -331,7 +539,9 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
       expect(await screen.findByText('(details unavailable)')).toBeInTheDocument();
       fireEvent.click(screen.getByText('Advanced'));
       const field = (await screen.findByTestId('custom-context')) as HTMLTextAreaElement;
-      expect(screen.getByText(/Could not load full session details: offline/)).toBeInTheDocument();
+      expect(
+        screen.getByText("Couldn't load this session's details. (offline)")
+      ).toBeInTheDocument();
       expect(field.readOnly).toBe(true);
 
       // Saving other settings while degraded never sends the lean context.
@@ -339,7 +549,7 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
       await waitFor(() => expect(onUpdate).toHaveBeenCalled());
       expect(onUpdate.mock.calls[0][1]).not.toHaveProperty('custom_context');
 
-      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
       await waitFor(() => expect(field.readOnly).toBe(false));
       expect(JSON.parse(field.value)).toEqual(fullContext);
       expect(screen.queryByText('(details unavailable)')).not.toBeInTheDocument();

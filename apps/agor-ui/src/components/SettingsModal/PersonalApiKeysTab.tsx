@@ -20,11 +20,21 @@ import {
   useAuthorityOperationGuard,
 } from '../../hooks/useAuthorityOperationGuard';
 import { copyToClipboard } from '../../utils/clipboard';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  formatActionError,
+  isInFlightConnectionLossError,
+} from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
 import { filterBySettingsSearch } from '../../utils/settingsSearch';
+import { ActionErrorNotice } from '../CompactNotice';
 import { HighlightMatch } from '../HighlightMatch';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+
+const API_KEY_CREATE_UNCONFIRMED =
+  "The connection to Agor dropped before this was confirmed. If a new key appears in the list, revoke it and create another. Its secret can't be shown again.";
 
 interface ApiKeyEntry {
   id: string;
@@ -55,6 +65,10 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [loadError, setLoadError] = useState<ActionErrorCopy | null>(null);
+  const [createError, setCreateError] = useState<ActionErrorCopy | null>(null);
+  // A create whose reply was lost may have minted a key; block a second click until the name changes.
+  const [createUnconfirmed, setCreateUnconfirmed] = useState(false);
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const operationGuard = useAuthorityOperationGuard(operationScope);
@@ -68,6 +82,9 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
     setShowCreateModal(false);
     setNewlyCreatedKey(null);
     setDeletingId(null);
+    setLoadError(null);
+    setCreateError(null);
+    setCreateUnconfirmed(false);
   }, [identityKey]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
@@ -86,9 +103,10 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
         const result = await client.service(USER_API_KEYS_SERVICE_PATH).findAll({});
         if (!request.isCurrent()) return;
         setKeys(result as ApiKeyEntry[]);
+        setLoadError(null);
       } catch (err) {
         if (!request.isCurrent()) return;
-        console.error('Failed to fetch API keys:', err);
+        setLoadError(describeActionError('load your API keys', err, { idempotent: true }));
       } finally {
         if (request.isCurrent()) setLoading(false);
       }
@@ -102,9 +120,11 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
 
   const handleCreate = async () => {
     const operation = operationGuard.begin();
-    if (!client || !newKeyName.trim() || !operation.isCurrent()) return;
+    if (!client || !newKeyName.trim() || creating || createUnconfirmed || !operation.isCurrent())
+      return;
     const name = newKeyName.trim();
     setCreating(true);
+    setCreateError(null);
     try {
       const result = (await client.service(USER_API_KEYS_SERVICE_PATH).create({ name })) as {
         rawKey: string;
@@ -116,7 +136,12 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
       await fetchKeys(operation);
     } catch (err: unknown) {
       if (!operation.isCurrent()) return;
-      showError((err as Error)?.message || 'Failed to create API key');
+      if (isInFlightConnectionLossError(err)) {
+        setCreateError({ message: API_KEY_CREATE_UNCONFIRMED, raw: null });
+        setCreateUnconfirmed(true);
+        return;
+      }
+      setCreateError(describeActionError('create the API key', err, { idempotent: false }));
     } finally {
       if (operation.isCurrent()) setCreating(false);
     }
@@ -129,11 +154,11 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
     try {
       await client.service(USER_API_KEYS_SERVICE_PATH).remove(id);
       if (!operation.isCurrent()) return;
-      showSuccess('API key revoked');
+      showSuccess('API key revoked.');
       await fetchKeys(operation);
     } catch (err: unknown) {
       if (!operation.isCurrent()) return;
-      showError((err as Error)?.message || 'Failed to delete API key');
+      showError(formatActionError('revoke the API key', err, { idempotent: true }));
     } finally {
       if (operation.isCurrent()) setDeletingId(null);
     }
@@ -145,9 +170,9 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
     const ok = await copyToClipboard(text);
     if (!operation.isCurrent()) return;
     if (ok) {
-      showSuccess('Copied to clipboard');
+      showSuccess('API key copied.');
     } else {
-      showError('Failed to copy to clipboard');
+      showError("Couldn't copy. Select the key and copy it manually.");
     }
   };
 
@@ -249,6 +274,14 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
         )}
       />
 
+      {loadError && (
+        <ActionErrorNotice
+          error={loadError}
+          action={{ label: 'Try again', onClick: () => void fetchKeys() }}
+          style={{ marginBottom: 8 }}
+        />
+      )}
+
       <Table
         dataSource={filteredKeys}
         columns={columns}
@@ -257,7 +290,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
         loading={loading}
         pagination={false}
         size="small"
-        locale={{ emptyText: 'No API keys yet' }}
+        locale={{ emptyText: loadError ? ' ' : 'No API keys yet' }}
       />
 
       {/* Create key modal */}
@@ -268,17 +301,23 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
         onCancel={() => {
           setShowCreateModal(false);
           setNewKeyName('');
+          setCreateError(null);
+          setCreateUnconfirmed(false);
         }}
         okText="Create"
-        okButtonProps={{ disabled: !newKeyName.trim(), loading: creating }}
+        okButtonProps={{ disabled: !newKeyName.trim() || createUnconfirmed, loading: creating }}
       >
+        {createError && <ActionErrorNotice error={createError} style={{ marginBottom: 8 }} />}
         <Typography.Paragraph type="secondary">
           Give your key a descriptive name so you can identify it later.
         </Typography.Paragraph>
         <Input
           placeholder="e.g., CI Pipeline, Local Development"
           value={newKeyName}
-          onChange={(e) => setNewKeyName(e.target.value)}
+          onChange={(e) => {
+            setNewKeyName(e.target.value);
+            setCreateUnconfirmed(false);
+          }}
           onPressEnter={handleCreate}
           maxLength={100}
           autoFocus

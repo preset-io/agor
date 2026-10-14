@@ -1,6 +1,7 @@
 import type { AgorClient } from '@agor-live/client';
 import { renderHook } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
+import { backgroundReadsClear } from '../store/backgroundReads';
 import { useSharedReactiveSession } from './useSharedReactiveSession';
 
 const { retain, release, handle, handleFor } = vi.hoisted(() => {
@@ -48,6 +49,28 @@ it('does not bootstrap an inactive conversation', () => {
   );
   expect(retain).not.toHaveBeenCalled();
   expect(result.current.handle).toBeNull();
+});
+
+it("holds background reads until the open session's first page lands", async () => {
+  let landed!: () => void;
+  handle.ready.mockImplementationOnce(() => new Promise<void>((resolve) => (landed = resolve)));
+  renderHook(() => useSharedReactiveSession({} as AgorClient, 'session-id', { foreground: true }));
+  let clear = false;
+  void backgroundReadsClear().then(() => (clear = true));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(clear).toBe(false);
+  landed();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(clear).toBe(true);
+});
+
+it('a peek (not the open session) holds nothing', async () => {
+  handle.ready.mockImplementationOnce(() => new Promise<void>(() => {}));
+  renderHook(() => useSharedReactiveSession({} as AgorClient, 'session-id'));
+  let clear = false;
+  void backgroundReadsClear().then(() => (clear = true));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(clear).toBe(true);
 });
 
 it("never shows the previous session's context-window projection after a switch", () => {

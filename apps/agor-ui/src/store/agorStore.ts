@@ -30,6 +30,14 @@ import { immer } from 'zustand/middleware/immer';
 import { createStore } from 'zustand/vanilla';
 import type { InitialLoadItemKey, InitialLoadingStage } from '../hooks/useAgorData';
 import { type DataMaps, EMPTY_MAPS, isSessionRowRemovedWith, MAP_KEYS, pickMaps } from './agorMaps';
+import {
+  type Coverage,
+  type CoverageUpdate,
+  type ScopeCoverage,
+  type ScopeKey,
+  withCoverage,
+  withoutBoardPartitions,
+} from './scopeMerge';
 
 // Immer needs this to draft Map/Set state. Called once at module load; the
 // store's state is entirely Maps and one Set.
@@ -39,11 +47,30 @@ enableMapSet();
 export type ItemCounts = Partial<Record<InitialLoadItemKey, number>>;
 
 /** Background-hydrated collections that gate UI reads on their first apply. */
-export type GatedHydrationFlag =
-  | 'sessionsHydrated'
-  | 'branchesHydrated'
-  | 'mcpServersHydrated'
-  | 'gatewayChannelsHydrated';
+export type GatedHydrationFlag = 'mcpServersHydrated' | 'gatewayChannelsHydrated';
+
+/**
+ * User-scope state outside its coverage entries (`userScope.ts`); whether each
+ * piece is loaded or capped lives in `coverage` (`USER_SCOPE_KEYS`).
+ */
+export interface UserScopeMeta {
+  /**
+   * Referenced branch ids the server did not return (archived, deleted or
+   * invisible); a mark leaves once nothing references the branch.
+   */
+  absentBranchIds: Set<string>;
+  /**
+   * The deep-link target (`/s/`, `/m/session/`, `/w/` token) whose targeted
+   * read returned nothing displayable, if any: "not found" is shown only for
+   * it. Holds the current link's miss only.
+   */
+  missingLinkTargets: Set<string>;
+}
+
+const INITIAL_USER_SCOPE: UserScopeMeta = {
+  absentBranchIds: new Set(),
+  missingLinkTargets: new Set(),
+};
 
 /** Load/meta fields that ride alongside the data maps. */
 interface AgorMeta {
@@ -53,10 +80,6 @@ interface AgorMeta {
   loadingStage: InitialLoadingStage;
   error: string | null;
   itemCounts: ItemCounts;
-  /** Set once the full active-session set replaces the recent first-paint slice. */
-  sessionsHydrated: boolean;
-  /** Set once the full active-branch set lands (Home starts with none). */
-  branchesHydrated: boolean;
   /** Set once the background mcp-servers hydration first applies (empty result included). */
   mcpServersHydrated: boolean;
   /** Set once the background gateway-channels hydration first applies (empty result included). */
@@ -64,7 +87,33 @@ interface AgorMeta {
   agenticToolSettingsByName: Map<TenantAgenticToolName, TenantAgenticToolSettings>;
   /** Set once the background agentic-tool-settings hydration first applies (empty result included). */
   agenticToolSettingsHydrated: boolean;
+  /**
+   * Every load scope's coverage, by scope key: board partitions
+   * (`boardScopeKey`) and the user scope's pieces (`USER_SCOPE_KEYS`).
+   */
+  coverage: Coverage;
+  /**
+   * Bumped (monotonically) by every reset of the board partitions or of the
+   * session↔MCP loaded marks. A partition or link load in flight across a
+   * reset is orphaned: it applies nothing, loads dedupe per epoch, and
+   * mounted readers request again.
+   */
+  scopeEpoch: number;
+  /**
+   * Sessions whose MCP links are loaded (`sessionMcpLinks.ts`). For any other
+   * session `sessionMcpServerIds` may be partial: "not loaded" is not "none".
+   */
+  sessionMcpLoaded: Set<string>;
+  /**
+   * The realtime authority scope (identity, role, auth generation) loads run
+   * under, or null while there is none (signed out, disconnected, reauth).
+   * Mirrored from `setRealtimeAuthorityScope` so on-demand loaders (board
+   * partitions, session MCP links) re-run when it becomes valid again.
+   */
+  dataAuthority: string | null;
 }
+
+type AgorMetaWithUserScope = AgorMeta & UserScopeMeta;
 
 /** Store actions: foundational primitives + named branch lifecycle cascades. */
 interface AgorActions {
@@ -113,16 +162,61 @@ interface AgorActions {
    * …)`). Runs the reducer against a fresh projection of the current slices,
    * then commits ONLY the slices whose reference actually changed — so the
    * reducer's existing per-slice reference preservation carries through, and an
-   * all-no-op reducer leaves the outer state object untouched.
+   * all-no-op reducer leaves the outer state object untouched. `coverage`
+   * publishes the coverage change that goes with it (a load's commit, live
+   * membership) in the same update, and `meta` the load meta that describes
+   * the same rows.
    */
-  applyMaps: (updater: (prev: DataMaps) => DataMaps) => void;
+  applyMaps: (
+    updater: (prev: DataMaps) => DataMaps,
+    coverage?: CoverageUpdate,
+    meta?: LoadMetaUpdate
+  ) => void;
+  /** Set (or clear, with `null`) one scope's coverage; a no-op when nothing changes. */
+  setCoverage: (key: ScopeKey, entry: ScopeCoverage | null) => void;
+  /** Merge user-scope meta; a no-op when nothing changes. */
+  setUserScope: (partial: Partial<UserScopeMeta>) => void;
+  /**
+   * Forget every board partition's coverage (authority transitions orphan
+   * their loads) and bump `scopeEpoch`; the `keep` boards' entries survive
+   * (a reconnect resync keeps the board it reads again in place).
+   * User-scope entries are kept: they belong to the identity.
+   */
+  resetBoardPartitions: (keep?: readonly string[]) => void;
+  /** Record that one session's MCP links are loaded. */
+  markSessionMcpLoaded: (sessionId: string) => void;
+  /** Forget which sessions' MCP links are loaded and bump `scopeEpoch`. */
+  resetSessionMcpLoaded: () => void;
+  /** Drop deleted sessions' MCP links and loaded marks. */
+  forgetSessionMcp: (sessionIds: readonly string[]) => void;
+  /** Mirror the realtime authority scope (see `dataAuthority`). */
+  setDataAuthority: (authority: string | null) => void;
   /** Mirror archive visibility while retaining the persisted board placement. */
-  evictArchivedBranch: (branchId: string) => void;
+  evictArchivedBranch: (branchId: string, coverage?: CoverageUpdate) => void;
   /** Atomically mirror every normalized FK cascade/SET NULL from a hard delete. */
-  applyBranchHardDeleteCascade: (branchId: string) => void;
+  applyBranchHardDeleteCascade: (branchId: string, coverage?: CoverageUpdate) => void;
 }
 
-export type AgorState = DataMaps & AgorMeta & AgorActions;
+export type AgorState = DataMaps & AgorMetaWithUserScope & AgorActions;
+
+/**
+ * Load meta that describes rows the way coverage does: referenced branches
+ * that are absent, the scope epoch, and the sessions whose MCP links are
+ * loaded. A load publishes it with its rows.
+ */
+export type LoadMeta = Pick<AgorState, 'absentBranchIds' | 'scopeEpoch' | 'sessionMcpLoaded'>;
+/** A load-meta change published in the same store update as a maps change. */
+export type LoadMetaUpdate = (maps: DataMaps, state: AgorState) => Partial<LoadMeta>;
+
+/** Publish a cascade's coverage change in the cascade's own update. */
+function updateCoverage(
+  draft: Draft<AgorState>,
+  prev: Coverage,
+  coverage: CoverageUpdate | undefined
+): void {
+  const next = coverage?.(draft as unknown as DataMaps, prev) ?? prev;
+  if (next !== prev) draft.coverage = next as Draft<Coverage>;
+}
 
 function evictBranchAndSessions(draft: Draft<AgorState>, branchId: string): Set<string> {
   if (draft.branchById.has(branchId)) draft.branchById.delete(branchId);
@@ -162,18 +256,21 @@ function removeRelationshipsToDeletedSessions(
 }
 
 /** Initial meta values — identical to `useAgorData`'s `useState` defaults. */
-const INITIAL_META: AgorMeta = {
+const INITIAL_META: AgorMetaWithUserScope = {
+  ...INITIAL_USER_SCOPE,
   deletedMcpServerIds: new Set(),
   loading: true,
   loadingStage: 'idle',
   error: null,
   itemCounts: {},
-  sessionsHydrated: false,
-  branchesHydrated: false,
   mcpServersHydrated: false,
   gatewayChannelsHydrated: false,
   agenticToolSettingsByName: new Map(),
   agenticToolSettingsHydrated: false,
+  coverage: new Map(),
+  scopeEpoch: 0,
+  sessionMcpLoaded: new Set(),
+  dataAuthority: null,
 };
 
 export const agorStore = createStore<AgorState>()(
@@ -181,7 +278,16 @@ export const agorStore = createStore<AgorState>()(
     ...EMPTY_MAPS,
     ...INITIAL_META,
 
-    reset: () => set({ ...EMPTY_MAPS, ...INITIAL_META }),
+    reset: () =>
+      set({
+        ...EMPTY_MAPS,
+        ...INITIAL_META,
+        coverage: new Map(),
+        scopeEpoch: get().scopeEpoch + 1,
+        absentBranchIds: new Set(),
+        missingLinkTargets: new Set(),
+        sessionMcpLoaded: new Set(),
+      }),
 
     // Also clear the tenant-specific tool-settings map AND its hydration flag:
     // both are meta (not in EMPTY_MAPS), so without this they'd persist across a
@@ -191,10 +297,15 @@ export const agorStore = createStore<AgorState>()(
       set({
         ...EMPTY_MAPS,
         deletedMcpServerIds: new Set(),
-        sessionsHydrated: false,
-        branchesHydrated: false,
         agenticToolSettingsByName: new Map(),
         agenticToolSettingsHydrated: false,
+        // Coverage describes the maps being cleared, so it resets with them.
+        coverage: new Map(),
+        scopeEpoch: get().scopeEpoch + 1,
+        sessionMcpLoaded: new Set(),
+        ...INITIAL_USER_SCOPE,
+        absentBranchIds: new Set(),
+        missingLinkTargets: new Set(),
       }),
 
     // Meta setters mirror `useState`'s bail-out: a write equal to the current
@@ -233,6 +344,45 @@ export const agorStore = createStore<AgorState>()(
       set({ agenticToolSettingsByName: next });
     },
 
+    setCoverage: (key, entry) => {
+      const coverage = withCoverage(get().coverage, key, entry);
+      if (coverage !== get().coverage) set({ coverage });
+    },
+    setUserScope: (partial) => {
+      const state = get();
+      const changed = (Object.keys(partial) as (keyof UserScopeMeta)[]).some(
+        (key) => !Object.is(partial[key], state[key])
+      );
+      if (changed) set(partial as Partial<AgorState>);
+    },
+    resetBoardPartitions: (keep = []) => {
+      set({
+        coverage: withoutBoardPartitions(get().coverage, keep),
+        scopeEpoch: get().scopeEpoch + 1,
+      });
+    },
+    markSessionMcpLoaded: (sessionId) => {
+      const current = get().sessionMcpLoaded;
+      if (current.has(sessionId)) return;
+      set({ sessionMcpLoaded: new Set(current).add(sessionId) });
+    },
+    resetSessionMcpLoaded: () =>
+      set({ sessionMcpLoaded: new Set(), scopeEpoch: get().scopeEpoch + 1 }),
+    forgetSessionMcp: (sessionIds) => {
+      const { sessionMcpLoaded, sessionMcpServerIds } = get();
+      const loaded = sessionIds.filter((id) => sessionMcpLoaded.has(id));
+      const linked = sessionIds.filter((id) => sessionMcpServerIds.has(id));
+      if (loaded.length === 0 && linked.length === 0) return;
+      const nextLoaded = new Set(sessionMcpLoaded);
+      for (const id of loaded) nextLoaded.delete(id);
+      const nextLinks = new Map(sessionMcpServerIds);
+      for (const id of linked) nextLinks.delete(id);
+      set({ sessionMcpLoaded: nextLoaded, sessionMcpServerIds: nextLinks });
+    },
+    setDataAuthority: (authority) => {
+      if (authority !== get().dataAuthority) set({ dataAuthority: authority });
+    },
+
     setMap: (key, value) => {
       const prev = get()[key];
       const next =
@@ -259,29 +409,37 @@ export const agorStore = createStore<AgorState>()(
       set(changed as Partial<AgorState>);
     },
 
-    applyMaps: (updater) => {
+    applyMaps: (updater, coverage, meta) => {
       const prev = pickMaps(get());
       const next = updater(prev);
-      // Whole-object short-circuit: the ported reducers return their `prev`
-      // argument unchanged on a no-op.
-      if (next === prev) return;
-      const changed: Partial<DataMaps> = {};
-      for (const k of MAP_KEYS) {
-        if (!Object.is(next[k], prev[k])) {
-          // biome-ignore lint/suspicious/noExplicitAny: heterogeneous map union; per-key types are sound.
-          changed[k] = next[k] as any;
+      const changed: Partial<AgorState> = {};
+      // The ported reducers return their `prev` argument unchanged on a no-op.
+      if (next !== prev) {
+        for (const k of MAP_KEYS) {
+          if (!Object.is(next[k], prev[k])) {
+            // biome-ignore lint/suspicious/noExplicitAny: heterogeneous map union; per-key types are sound.
+            changed[k] = next[k] as any;
+          }
         }
       }
+      const nextCoverage = coverage?.(next, get().coverage);
+      if (nextCoverage && nextCoverage !== get().coverage) changed.coverage = nextCoverage;
+      const nextMeta = meta?.(next, get()) ?? {};
+      for (const k of Object.keys(nextMeta) as (keyof LoadMeta)[]) {
+        // biome-ignore lint/suspicious/noExplicitAny: heterogeneous meta union; per-key types are sound.
+        if (!Object.is(nextMeta[k], get()[k])) changed[k] = nextMeta[k] as any;
+      }
       if (Object.keys(changed).length === 0) return;
-      set(changed as Partial<AgorState>);
+      set(changed);
     },
 
-    evictArchivedBranch: (branchId) =>
+    evictArchivedBranch: (branchId, coverage) =>
       set((draft) => {
         evictBranchAndSessions(draft, branchId);
+        updateCoverage(draft, get().coverage, coverage);
       }),
 
-    applyBranchHardDeleteCascade: (branchId) =>
+    applyBranchHardDeleteCascade: (branchId, coverage) =>
       set((draft) => {
         const removedSessionIds = evictBranchAndSessions(draft, branchId);
 
@@ -295,11 +453,6 @@ export const agorStore = createStore<AgorState>()(
             removedObjectIds.add(objectId);
             draft.boardObjectById.delete(objectId);
           }
-        }
-        const indexedBoardObject = draft.boardObjectByBranchId.get(branchId);
-        if (indexedBoardObject) removedObjectIds.add(indexedBoardObject.object_id);
-        if (draft.boardObjectByBranchId.has(branchId)) {
-          draft.boardObjectByBranchId.delete(branchId);
         }
         for (const [boardId, boardObjects] of draft.boardObjectsByBoardId) {
           const remaining = boardObjects.filter(
@@ -370,6 +523,7 @@ export const agorStore = createStore<AgorState>()(
             artifact.source_session_id = null;
           }
         }
+        updateCoverage(draft, get().coverage, coverage);
       }),
   }))
 );

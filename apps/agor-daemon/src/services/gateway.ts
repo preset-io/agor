@@ -53,8 +53,10 @@ import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathe
 import type {
   GatewayConnector,
   GatewayContext,
+  GatewayInboundResult,
   InboundFile,
   InboundMessage,
+  InboundSkippedFile,
   SlackThreadHistoryRequest,
   SlackThreadHistoryResult,
 } from '@agor/core/gateway';
@@ -76,9 +78,11 @@ import {
   getConnector,
   hasConnector,
   isPermanentProviderRefusal,
+  isSlackInboundReactionEventType,
   isSlackWriteTargetAllowed,
   normalizeOutbound,
   normalizeSendReceipt,
+  normalizeSlackReactionName,
   parseDiscordAuthorityMetadata,
   parseDiscordThreadKey,
   parseGitHubThreadId,
@@ -219,6 +223,8 @@ interface PostMessageData {
   text: string;
   user_name?: string;
   files?: InboundFile[];
+  /** Attachments the connector did not pass on (Discord), named so the user can be told. */
+  skipped_files?: InboundSkippedFile[];
   metadata?: Record<string, unknown>;
   /** Daemon-internal durable identities for a claimed provider occurrence. */
   idempotency_task_id?: TaskID;
@@ -777,6 +783,36 @@ const SLACK_GATEWAY_REPLY_NOTE =
 const GATEWAY_STARTUP_BOOTSTRAP_HINT =
   'Startup/bootstrap note: Follow any startup/bootstrap instructions defined by the working directory before answering the gateway message above.';
 
+const DISCORD_SKIPPED_FILE_REASON: Record<InboundSkippedFile['reason'], string> = {
+  unsupported_type: 'unsupported file type',
+  files_disabled: 'attachments are turned off for this channel',
+  invalid: 'could not be read',
+};
+
+/**
+ * Attachment names are user-controlled and the note sits outside the
+ * untrusted-data wrapper, so quote them as bounded JSON strings without
+ * control or markup characters.
+ */
+function formatDiscordUnreadAttachment(name: string, reason: string): string {
+  const safeName = name
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}<>`]/gu, ' ')
+    .trim()
+    .slice(0, 100);
+  return `${JSON.stringify(safeName || 'attachment')} (${reason})`;
+}
+
+/**
+ * Prompt note naming the attachments the agent could not read. The user must
+ * hear about them, so it overrides the option to stay silent.
+ */
+function formatDiscordUnreadAttachmentsNote(unread: string[], filesEnabled: boolean): string {
+  const hint = filesEnabled
+    ? 'Images (PNG, JPEG, GIF, WebP) and text files (.txt, .log, .md, .csv, .json) can be read; suggest one of those or pasting the text.'
+    : 'Attachments are turned off for this channel; suggest pasting the text instead.';
+  return `(Attachments you could not read: ${unread.join('; ')}. Tell the user which files you could not read, even if you would otherwise stay silent. ${hint})`;
+}
+
 /** Prompt note for a Discord message admitted by a response mode without a mention. */
 const DISCORD_UNADDRESSED_NOTE = `This Discord message did not mention you; the channel is set to let you answer anyway, and every message you write is posted. Reply only if you can genuinely help. If people are already handling it or you have nothing useful to add, write nothing else at all: your only message must be exactly ${DISCORD_NO_REPLY_SENTINEL}, and nothing will be posted.`;
 
@@ -850,6 +886,61 @@ function formatSlackCatchUpPrompt(args: {
   }
 
   lines.push(args.currentText);
+  return lines.join('\n');
+}
+
+/**
+ * Prompt for one Slack emoji reaction admitted into a mapped thread
+ * (`config.inbound_reactions`). The emoji name is shape-checked; the reactor's
+ * display name and the reacted message text are untrusted Slack content.
+ * Returns null when the metadata does not describe a well-formed reaction.
+ */
+function formatSlackReactionPrompt(metadata?: Record<string, unknown>): string | null {
+  if (!isSlackInboundReactionEventType(metadata?.slack_event_type)) return null;
+  const reaction = normalizeSlackReactionName(metadata.slack_reaction);
+  if (!reaction) return null;
+  const removed = metadata.slack_event_type === 'reaction_removed';
+  const senderName =
+    typeof metadata.slack_user_name === 'string'
+      ? oneLineForPrompt(metadata.slack_user_name, 80)
+      : null;
+  const senderEmail =
+    typeof metadata.slack_user_email === 'string'
+      ? oneLineForPrompt(metadata.slack_user_email, 120)
+      : null;
+  const who = senderName
+    ? `${senderName}${senderEmail && senderEmail !== senderName ? ` (${senderEmail})` : ''}`
+    : (senderEmail ?? 'A Slack user');
+  const itemTs =
+    typeof metadata.slack_reaction_item_ts === 'string' &&
+    /^\d+\.\d+$/.test(metadata.slack_reaction_item_ts)
+      ? metadata.slack_reaction_item_ts
+      : undefined;
+  const itemTime = formatUtcLabel(itemTs);
+  const botUserId =
+    typeof metadata.slack_bot_user_id === 'string' ? metadata.slack_bot_user_id : undefined;
+  const target =
+    botUserId && metadata.slack_reaction_item_user_id === botUserId ? 'your message' : 'a message';
+  const where = itemTs ? ` (ts ${itemTs}${itemTime ? `, ${itemTime}` : ''})` : '';
+  const lines = [
+    removed
+      ? `[Slack reaction] ${who} removed their :${reaction}: reaction from ${target} in this thread${where}.`
+      : `[Slack reaction] ${who} reacted :${reaction}: to ${target} in this thread${where}.`,
+  ];
+  if (
+    typeof metadata.slack_reaction_item_text === 'string' &&
+    metadata.slack_reaction_item_text.trim()
+  ) {
+    lines.push(
+      '',
+      'Reacted message (untrusted Slack content):',
+      quoteForPrompt(oneLineForPrompt(metadata.slack_reaction_item_text, 300))
+    );
+  }
+  lines.push(
+    '',
+    'This is a lightweight signal, not a new request. Act on it only if it clearly answers something you asked (for example, approval to proceed); otherwise acknowledge it in at most one short line.'
+  );
   return lines.join('\n');
 }
 
@@ -4829,6 +4920,26 @@ export class GatewayService {
         (channel.config as DiscordGatewayConfig).response_modes?.[discordParentChannelId] ===
           'all');
 
+    // Slack emoji reactions are a mapped-thread-only signal gated by the
+    // channel's inbound_reactions flag. The connector filters them already;
+    // re-check against the freshly loaded config because connector metadata
+    // is untrusted here. A reaction never creates a session, consumes an
+    // outbound seed, or posts a rejection notice (that would spam threads).
+    const isSlackReaction =
+      channel.channel_type === 'slack' &&
+      isSlackInboundReactionEventType(data.metadata?.slack_event_type);
+    const slackReactionPrompt = isSlackReaction ? formatSlackReactionPrompt(data.metadata) : null;
+    if (
+      isSlackReaction &&
+      ((channel.config as Record<string, unknown> | null)?.inbound_reactions !== true ||
+        !slackReactionPrompt)
+    ) {
+      console.debug(
+        `[gateway] IGNORED: Slack reaction not admitted (inbound_reactions off or malformed): channel=${shortId(channel.id)}`
+      );
+      return { success: false, sessionId: '', created: false };
+    }
+
     // 2. Look up existing thread mapping. New Discord admissions use the raw
     // provider thread Snowflake; a legacy composite is consulted only to
     // adopt mappings written before DG-02.
@@ -4864,6 +4975,12 @@ export class GatewayService {
       console.log(
         `[gateway] Slack inbound thread ${data.thread_id} → session ${shortId(existingMapping.session_id)} (root ${existingMapping.thread_id})`
       );
+    }
+    if (isSlackReaction && !existingMapping) {
+      console.debug(
+        `[gateway] IGNORED: Slack reaction in unmapped thread: channel=${shortId(channel.id)}, thread=${data.thread_id}`
+      );
+      return { success: false, sessionId: '', created: false };
     }
     let recoveringInitialDelivery = false;
     let outboundSeed: GatewayOutboundMessage | null = null;
@@ -4960,7 +5077,7 @@ export class GatewayService {
         typeof data.metadata?.channel_type === 'string' ? data.metadata.channel_type : undefined;
       const isSlackDm = slackConversationType === 'im';
       const hasExplicitMention = data.metadata?.slack_has_mention === true;
-      if (!isSlackDm && !hasExplicitMention) {
+      if (!isSlackDm && !hasExplicitMention && !isSlackReaction) {
         console.debug(
           `[gateway] IGNORED: Slack channel-like message without explicit mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
         );
@@ -5099,11 +5216,13 @@ export class GatewayService {
           user = await usersService.get(matchedUser.user_id);
         } else {
           console.log('[gateway] Slack user alignment failed: result=agor_user_not_found');
-          this.sendSystemMessage(
-            channel,
-            data.thread_id,
-            `User ${email} doesn't have an Agor account. Ask an admin to create an account with this email, or disable user alignment.`
-          );
+          if (!isSlackReaction) {
+            this.sendSystemMessage(
+              channel,
+              data.thread_id,
+              `User ${email} doesn't have an Agor account. Ask an admin to create an account with this email, or disable user alignment.`
+            );
+          }
           return {
             success: false,
             sessionId: '',
@@ -5115,11 +5234,13 @@ export class GatewayService {
         // users:read.email scope, Slack API error, or no email on profile).
         // Reject instead of silently falling back to channel owner.
         console.log('[gateway] Slack user alignment failed: result=identity_email_unavailable');
-        this.sendSystemMessage(
-          channel,
-          data.thread_id,
-          "Couldn't resolve your Slack identity. The bot may be missing the `users:read.email` scope, or your Slack profile has no email. Ask an admin to check the bot's scopes."
-        );
+        if (!isSlackReaction) {
+          this.sendSystemMessage(
+            channel,
+            data.thread_id,
+            "Couldn't resolve your Slack identity. The bot may be missing the `users:read.email` scope, or your Slack profile has no email. Ask an admin to check the bot's scopes."
+          );
+        }
         return {
           success: false,
           sessionId: '',
@@ -5220,7 +5341,7 @@ export class GatewayService {
         await this.requireInboundPromptAuthority(channel, existingMapping.session_id, user.user_id);
       } catch (error) {
         if (!(error instanceof GatewayPromptAuthorizationError)) throw error;
-        if (!discordUnaddressed) {
+        if (!isSlackReaction && !discordUnaddressed) {
           await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
         }
         return { success: false, sessionId: '', created: false };
@@ -5287,6 +5408,7 @@ export class GatewayService {
     if (
       (channel.channel_type === 'slack' || channel.channel_type === 'discord') &&
       !threadOwnedByUnseededMapping &&
+      !isSlackReaction &&
       !discordDm
     ) {
       outboundAdmission = await this.outboundRepo.admitReplySession(channel.id, data.thread_id);
@@ -5856,7 +5978,7 @@ export class GatewayService {
       // requires explicit mentions for channel-like Slack conversations, so each
       // delivered prompt advances the last-delivered cursor. Non-mention replies
       // are picked up here the next time the bot is summoned.
-      let promptText = data.text;
+      let promptText = slackReactionPrompt ?? data.text;
       let slackCursorTsToWrite: string | undefined;
       let discordCursorToWrite: string | undefined;
       if (channel.channel_type === 'discord' && !outboundSeed) {
@@ -5944,7 +6066,9 @@ export class GatewayService {
           throw new GatewayCatchUpError('unsupported', 'Discord history is unavailable');
         }
       }
-      if (channel.channel_type === 'slack' && !outboundSeed) {
+      // A reaction carries no message of its own, so it neither reads nor
+      // advances the catch-up cursor; the next mention still sees everything.
+      if (channel.channel_type === 'slack' && !outboundSeed && !isSlackReaction) {
         const currentTs = getSlackMessageTs(data.metadata);
         const mappingMetadata = ((mappingForCursor?.metadata as Record<string, unknown>) ?? {}) as
           | Record<string, unknown>
@@ -6055,32 +6179,43 @@ export class GatewayService {
         }
       }
 
-      // Discord inbound images use the provider's signed CDN URL and the
+      // Discord inbound attachments use the provider's signed CDN URL and the
       // same tenant/session/branch-scoped staging plus executor materializer
-      // as browser and Slack uploads. The capability is opt-in; unsupported
-      // or mixed rich payloads are rejected by the connector before reaching
-      // this boundary, while individual download failures degrade the prompt.
-      if (
-        channel.channel_type === 'discord' &&
-        channelConfig.files === true &&
-        data.files &&
-        data.files.length > 0
-      ) {
-        const ingestion = await ingestDiscordInboundImages({
-          files: data.files,
-          tenantId: requireCurrentTenantId() as TenantID,
-          sessionId,
-          branchId: channel.target_branch_id,
-          createdBy: channel.agor_user_id ?? user.user_id,
-        });
-        if (ingestion.uploads.length > 0) {
-          promptText = buildPromptWithAttachments(promptText, ingestion.uploads);
-          console.log(
-            `[gateway] Ingested ${ingestion.uploads.length} Discord image attachment(s) for session ${shortId(sessionId)}`
-          );
+      // as browser and Slack uploads. The capability is opt-in. Every
+      // attachment the agent cannot read (skipped by the connector, or failed
+      // here) is named in the prompt so the agent tells the user.
+      if (channel.channel_type === 'discord') {
+        const unread = (data.skipped_files ?? []).map((file) =>
+          formatDiscordUnreadAttachment(file.name, DISCORD_SKIPPED_FILE_REASON[file.reason])
+        );
+        if (channelConfig.files !== true) {
+          for (const file of data.files ?? []) {
+            unread.push(
+              formatDiscordUnreadAttachment(file.name, DISCORD_SKIPPED_FILE_REASON.files_disabled)
+            );
+          }
+        } else if (data.files && data.files.length > 0) {
+          const ingestion = await ingestDiscordInboundImages({
+            files: data.files,
+            tenantId: requireCurrentTenantId() as TenantID,
+            sessionId,
+            branchId: channel.target_branch_id,
+            createdBy: channel.agor_user_id ?? user.user_id,
+          });
+          if (ingestion.uploads.length > 0) {
+            promptText = buildPromptWithAttachments(promptText, ingestion.uploads);
+            console.log(
+              `[gateway] Ingested ${ingestion.uploads.length} Discord attachment(s) for session ${shortId(sessionId)}`
+            );
+          }
+          for (const name of ingestion.failedNames ?? []) {
+            unread.push(
+              formatDiscordUnreadAttachment(name, 'could not be downloaded or is too large')
+            );
+          }
         }
-        if (ingestion.failed > 0) {
-          promptText = `${promptText}\n\n(an attachment could not be fetched)`;
+        if (unread.length > 0) {
+          promptText = `${promptText}\n\n${formatDiscordUnreadAttachmentsNote(unread, channelConfig.files === true)}`;
         }
       }
 
@@ -6256,9 +6391,16 @@ export class GatewayService {
         });
       }
     } catch (error) {
-      if (error instanceof GatewayPromptAuthorizationError) {
-        if (!discordUnaddressed) {
-          await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+      if (
+        error instanceof GatewayPromptAuthorizationError ||
+        (isSlackReaction && error instanceof Forbidden)
+      ) {
+        if (!isSlackReaction && !discordUnaddressed) {
+          await this.sendPromptAuthorizationDenied(
+            channel,
+            data,
+            error instanceof GatewayPromptAuthorizationError ? error.userMessage : error.message
+          );
         }
         this.updateProgressAfterCommit({
           session_id: sessionId,
@@ -6274,7 +6416,7 @@ export class GatewayService {
       console.error(
         `[gateway] Failed to send prompt to session: channel_id=${channel.id} code=${safeError}`
       );
-      if (!discordUnaddressed) {
+      if (!isSlackReaction && !discordUnaddressed) {
         this.sendSystemMessage(channel, data.thread_id, `Error sending prompt: ${safeError}`);
       }
       this.updateProgressAfterCommit({
@@ -7313,11 +7455,12 @@ export class GatewayService {
     tenantId: TenantID | string | undefined,
     msg: InboundMessage,
     lease?: GatewayListenerLease
-  ): Promise<void> {
+  ): Promise<GatewayInboundResult | undefined> {
     if (!tenantId) {
       throw new Error(`Missing tenant context for gateway listener channel ${channel.id}`);
     }
 
+    let accepted = true;
     const queueKey = this.listenerKey(tenantId, `${channel.id}\0${msg.threadId}`);
     const prior = this.inboundThreadQueues.get(queueKey) ?? Promise.resolve();
     const current = prior
@@ -7344,7 +7487,10 @@ export class GatewayService {
               leaseDurationMs: GATEWAY_EVENT_PROCESSING_LEASE_MS,
               requireListenerClaim: true,
             });
-            if (admitted.outcome === 'completed_duplicate') return;
+            if (admitted.outcome === 'completed_duplicate') {
+              accepted = !!admitted.event.task_id;
+              return;
+            }
             if (admitted.outcome === 'in_progress_elsewhere') {
               throw new Error(
                 'Gateway inbound event is still being processed by the previous listener owner'
@@ -7470,6 +7616,7 @@ export class GatewayService {
                 text: msg.text,
                 user_name: msg.userId,
                 ...(msg.files ? { files: msg.files } : {}),
+                ...(msg.skippedFiles ? { skipped_files: msg.skippedFiles } : {}),
                 metadata,
                 ...(eventId && lease
                   ? {
@@ -7482,6 +7629,7 @@ export class GatewayService {
                   : {}),
               });
 
+          accepted = result.success;
           if (eventId && lease) {
             const completed = await this.inboundEventRepo.complete({
               eventId,
@@ -7500,6 +7648,12 @@ export class GatewayService {
     this.inboundThreadQueues.set(queueKey, current);
     try {
       await current;
+      if (
+        channel.channel_type === 'slack' &&
+        isSlackInboundReactionEventType(msg.metadata?.slack_event_type)
+      ) {
+        return { accepted };
+      }
     } finally {
       if (this.inboundThreadQueues.get(queueKey) === current) {
         this.inboundThreadQueues.delete(queueKey);

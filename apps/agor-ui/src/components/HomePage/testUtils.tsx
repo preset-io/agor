@@ -7,6 +7,7 @@ import { vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { buildSessionMaps, EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { userScopeCoverage } from '../../test/userScopeCoverage';
 import { resetAccessCacheForTests } from '../../utils/accessCache';
 import { HomePage, type HomePageProps } from './HomePage';
 
@@ -96,13 +97,13 @@ export function seed({
 }) {
   agorStore.setState({
     ...EMPTY_MAPS,
+    agenticToolSettingsHydrated: hydrated,
     ...buildSessionMaps(sessions),
     commentById: new Map(comments.map((c) => [c.comment_id, c])),
     branchById: new Map(branches.map((b) => [b.branch_id, b])),
     boardById: new Map(boards.map((b) => [b.board_id, b])),
     userById: new Map([[ME, user]]),
-    sessionsHydrated: hydrated,
-    branchesHydrated: hydrated,
+    coverage: userScopeCoverage({ sessions: hydrated, references: hydrated, teammates: hydrated }),
   } as never);
 }
 

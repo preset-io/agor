@@ -21,12 +21,19 @@ import {
 } from '../../store/agorStore';
 import {
   compareHomeNeeds,
+  HOME_RECENT_BOARDS,
   type HomeCommentNeed,
   type HomeSessionNeed,
   isUnreadResult,
   lastRunStartedAt,
+  liveBoardIds,
   makeHomeBucketsSelector,
 } from '../../store/selectors';
+import {
+  selectHomeBranchesLoaded,
+  selectMySessionsLoaded,
+  selectMySessionsTruncated,
+} from '../../store/userScope';
 import { useThemedMessage } from '../../utils/message';
 import { runWithLimit } from '../../utils/promisePool';
 import {
@@ -43,32 +50,28 @@ import { HomeNeedsYou, NEEDS_MAX, NEEDS_PREVIEW, type NeedsFilter } from './Home
 import { HomeRecentBoards } from './HomeRecentBoards';
 import { HomeFrame } from './HomeSection';
 import { HomeTeammatesSection } from './HomeTeammates';
-import { HOME_MAIN_COLUMN_BASIS, HOME_PAGE_TITLE_LEVEL, HOME_RAIL_BASIS } from './homeLayout';
+import {
+  formatCount,
+  HOME_MAIN_COLUMN_BASIS,
+  HOME_PAGE_TITLE_LEVEL,
+  HOME_RAIL_BASIS,
+} from './homeLayout';
 import { OnboardingCard } from './OnboardingCard';
+import {
+  asOpenedFailures,
+  NO_OPENED_FAILURES,
+  OPENED_FAILURES_KEY,
+  openedAt,
+  openedRunsOf,
+} from './openedFailures';
+import type { HomeNeeds } from './useHomeNeeds';
 
-const RECENT_BOARDS = 5;
 const ONBOARDING_HIDDEN_KEY = 'agor:onboarding-card-hidden';
 // Longer than the 7-day failure window, since a later patch can keep an old failure in view.
 const OPENED_FAILURES_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 /** Mark all as read patches a few sessions at a time, not the whole backlog at once. */
 const MARK_ALL_CONCURRENCY = 4;
 const NO_BOARD_IDS: string[] = [];
-/** Opened failure → the run it showed (server clock) and when it was opened; a bare number is the older click-time form. */
-type OpenedFailure = number | { run: number; at: number };
-const NO_OPENED_FAILURES: Record<string, OpenedFailure> = {};
-const openedField = (entry: unknown, field: 'run' | 'at'): number => {
-  if (typeof entry === 'number') return entry;
-  const value = entry && typeof entry === 'object' ? (entry as Record<string, unknown>)[field] : 0;
-  return typeof value === 'number' ? value : 0;
-};
-const openedAt = (entry: OpenedFailure) => openedField(entry, 'at');
-const openedRun = (entry: OpenedFailure) => openedField(entry, 'run');
-// A stored container that isn't a plain object (null, a list, a number) reads as empty.
-const asOpenedFailures = (stored: unknown): Record<string, OpenedFailure> =>
-  stored && typeof stored === 'object' && !Array.isArray(stored)
-    ? (stored as Record<string, OpenedFailure>)
-    : NO_OPENED_FAILURES;
-
 const isHomeWorkView = (value: unknown): value is HomeWorkView =>
   HOME_WORK_VIEWS.includes(value as HomeWorkView);
 
@@ -99,6 +102,12 @@ export interface HomePageProps {
   onSeeAllSessions?: () => void;
   /** Opens the teammates directory; the rail's "See all" hides without it. */
   onSeeAllTeammates?: () => void;
+  /**
+   * The shell's "need you" result and clock (`useHomeNeeds`), so Home and the
+   * mobile tab bar badge show one number and Home skips its own needs pass.
+   * Without it Home computes its own.
+   */
+  homeNeeds?: HomeNeeds;
 }
 
 const scrollToSection = (id: string) =>
@@ -114,7 +123,11 @@ function greeting(date = new Date()) {
   return hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
 }
 
-const selectHydrated = (s: AgorState) => s.sessionsHydrated && s.branchesHydrated;
+// Counts wait for the user scope: all of my sessions and every branch they or
+// my comment threads reference (never for the whole workspace).
+const selectHydrated = (s: AgorState) => selectMySessionsLoaded(s) && selectHomeBranchesLoaded(s);
+// My sessions hit the single read's cap: session counts are lower bounds ("N+").
+const selectTruncated = selectMySessionsTruncated;
 
 /** Onboarding steps the caller can perform, subscribed only while the card can still show. */
 const HomeOnboarding: React.FC<{
@@ -201,6 +214,7 @@ export const HomePage = memo(function HomePage({
   onAllBoards,
   onSeeAllSessions,
   onSeeAllTeammates,
+  homeNeeds,
 }: HomePageProps) {
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
@@ -246,38 +260,26 @@ export const HomePage = memo(function HomePage({
   );
   const [storedOpenedFailures, setOpenedFailures] = useUserLocalStorage(
     userId,
-    'home-opened-failures',
+    OPENED_FAILURES_KEY,
     NO_OPENED_FAILURES
   );
-  const openedRuns = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(asOpenedFailures(storedOpenedFailures)).map(([id, entry]) => [
-          id,
-          openedRun(entry),
-        ])
-      ),
-    [storedOpenedFailures]
-  );
+  const openedRuns = useMemo(() => openedRunsOf(storedOpenedFailures), [storedOpenedFailures]);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [workLimit, setWorkLimit] = useState(MY_WORK_PAGE);
   // Frozen at mount: Home unmounts on navigation, so the 7-day failure window stays fresh enough.
-  const [now] = useState(Date.now);
+  // With the shell's needs, its clock, so a failure is never a need there and recent here.
+  const [mountedAt] = useState(Date.now);
+  const now = homeNeeds?.now ?? mountedAt;
+  const hasShellNeeds = homeNeeds !== undefined;
   const [onboardingHidden, setOnboardingHidden] = useLocalStorage(ONBOARDING_HIDDEN_KEY, false);
 
   const hydrated = useAgorStore(selectHydrated);
+  const truncated = useAgorStore(selectTruncated);
   // Visit history that still names live boards; when none do, recent sessions stand in.
   const visitedBoardIds = useStoreWithEqualityFn(
     agorStore,
-    useMemo(
-      () => (s: AgorState) =>
-        recentBoardIds.filter((id) => {
-          const board = s.boardById.get(id);
-          return !!board && !board.archived;
-        }),
-      [recentBoardIds]
-    ),
+    useMemo(() => (s: AgorState) => liveBoardIds(s, recentBoardIds), [recentBoardIds]),
     shallow
   );
   const buckets = useStoreWithEqualityFn(
@@ -287,9 +289,10 @@ export const HomePage = memo(function HomePage({
         makeHomeBucketsSelector({
           userId,
           now,
-          needsLimit: needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW,
+          // With the shell's needs, Home only counts (no need items): My work still needs the split.
+          needsLimit: hasShellNeeds ? 0 : needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW,
           recentLimit: workLimit,
-          boardsLimit: visitedBoardIds.length ? 0 : RECENT_BOARDS,
+          boardsLimit: visitedBoardIds.length ? 0 : HOME_RECENT_BOARDS,
           query: deferredQuery,
           onlyStartedByMe,
           openedFailures: openedRuns,
@@ -297,6 +300,7 @@ export const HomePage = memo(function HomePage({
       [
         userId,
         now,
+        hasShellNeeds,
         needsExpanded,
         workLimit,
         visitedBoardIds.length,
@@ -308,16 +312,17 @@ export const HomePage = memo(function HomePage({
     shallow
   );
   const comments = useCommentsForYou(client, currentUser);
+  const sessionNeeds = homeNeeds ?? buckets;
   const needsLimit = needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW;
   const needs = useMemo(
     () =>
       (needsFilter === 'comments'
         ? comments
-        : [...buckets.needs, ...comments].sort(compareHomeNeeds)
+        : [...sessionNeeds.needs, ...comments].sort(compareHomeNeeds)
       ).slice(0, needsLimit),
-    [needsFilter, comments, buckets.needs, needsLimit]
+    [needsFilter, comments, sessionNeeds.needs, needsLimit]
   );
-  const needsCount = buckets.needsCount + comments.length;
+  const needsCount = sessionNeeds.needsCount + comments.length;
   const newUser = hydrated && !buckets.hasSessions && comments.length === 0;
 
   useEffect(() => {
@@ -443,23 +448,32 @@ export const HomePage = memo(function HomePage({
         ) : (
           !newUser && (
             <Flex align="center" gap={token.marginXS} wrap>
-              <Button type="text" size="small" style={textButton} onClick={jumpToNeeds}>
-                {needsCount ? (
-                  <span>
-                    <Typography.Text strong>{needsCount}</Typography.Text> need you
-                  </span>
-                ) : (
-                  'All caught up'
-                )}
-              </Button>
+              {/* Truncated with nothing found: not provably caught up, so no zero state. */}
+              {(needsCount > 0 || !truncated) && (
+                <Button type="text" size="small" style={textButton} onClick={jumpToNeeds}>
+                  {needsCount ? (
+                    <span>
+                      <Typography.Text strong>{formatCount(needsCount, truncated)}</Typography.Text>{' '}
+                      need you
+                    </span>
+                  ) : (
+                    'All caught up'
+                  )}
+                </Button>
+              )}
               {buckets.runningCount > 0 && (
                 <>
-                  <Typography.Text type="secondary" aria-hidden>
-                    ·
-                  </Typography.Text>
+                  {(needsCount > 0 || !truncated) && (
+                    <Typography.Text type="secondary" aria-hidden>
+                      ·
+                    </Typography.Text>
+                  )}
                   <Button type="text" size="small" style={textButton} onClick={showRunning}>
                     <span>
-                      <Typography.Text strong>{buckets.runningCount}</Typography.Text> running
+                      <Typography.Text strong>
+                        {formatCount(buckets.runningCount, truncated)}
+                      </Typography.Text>{' '}
+                      running
                     </span>
                   </Button>
                 </>
@@ -470,6 +484,7 @@ export const HomePage = memo(function HomePage({
       </div>
       <HomeRecentBoards
         recentBoardIds={visitedBoardIds.length ? visitedBoardIds : buckets.boardIds}
+        userId={userId}
         onBoardClick={onBoardClick}
         onAllBoards={allBoards}
       />
@@ -496,13 +511,14 @@ export const HomePage = memo(function HomePage({
               client={client}
               needs={needs}
               needsCount={needsCount}
-              needsByReason={buckets.needsByReason}
+              needsByReason={sessionNeeds.needsByReason}
               commentCount={comments.length}
               filter={needsFilter}
               onFilterChange={setNeedsFilter}
               expanded={needsExpanded}
               onExpandedChange={setNeedsExpanded}
               hydrated={hydrated}
+              truncated={truncated}
               onOpenSession={onSessionClick}
               onOpenFailure={openFailure}
               onOpenComment={openComment}
@@ -521,6 +537,7 @@ export const HomePage = memo(function HomePage({
             runningCount={buckets.runningCount}
             runningMatchCount={buckets.runningMatchCount}
             hydrated={hydrated}
+            truncated={truncated}
             tab={tab}
             onTabChange={setTab}
             view={workView}

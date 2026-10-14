@@ -17,6 +17,7 @@
  */
 
 import { join } from 'node:path';
+import type { CodexAuthSummary } from '@agor/core/codex/auth-file';
 import {
   type AgorConfig,
   hasCrossReplicaExecutorCredentialLock,
@@ -35,7 +36,6 @@ import type {
   DeepReadonly,
   UserID,
 } from '@agor/core/types';
-import type { CodexAuthSummary } from '../utils/codex-auth-file.js';
 import {
   CodexAuthCredentialWriteError,
   writeCodexAuthCredential,

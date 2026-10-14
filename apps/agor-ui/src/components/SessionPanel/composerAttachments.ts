@@ -5,7 +5,9 @@ import {
   UPLOAD_PREVIEW_IMAGE_MIME_TYPES,
   type UploadIngressPolicy,
 } from '@agor/core/types';
+import { formatActionError, unconfirmedMessage, withRawDetail } from '../../utils/connectionErrors';
 import type { UploadedFile } from '../FileUpload';
+import { UploadConnectionError } from '../FileUpload/upload';
 
 const COMPOSER_UPLOAD_EXTENSION_MIME_TYPES = new Map<string, string>([
   ['.png', 'image/png'],
@@ -148,6 +150,25 @@ export function summarizeComposerFileRejections(rejections: ComposerFileRejectio
 
 export function isBlockingComposerAttachment(attachment: ComposerAttachment): boolean {
   return attachment.status === 'failed';
+}
+
+/** Thrown when a send is refused because an attachment didn't upload; its message is already user copy. */
+export class BlockingAttachmentError extends Error {
+  constructor(attachment: ComposerAttachment) {
+    const reason = attachment.error?.trim();
+    super(
+      `Couldn't send, because ${attachment.file.name} didn't upload${reason ? ` (${reason})` : ''}. Remove it, then send again.`
+    );
+    this.name = 'BlockingAttachmentError';
+  }
+}
+
+/** Composer uploads don't notify the agent, so repeating one only stages another copy. */
+export function formatComposerUploadError(files: File[], error: unknown): string {
+  const action = files.length === 1 ? `upload ${files[0].name}` : 'upload the files';
+  return error instanceof UploadConnectionError
+    ? withRawDetail(unconfirmedMessage(action, { idempotent: true }), error)
+    : formatActionError(action, error, { idempotent: true });
 }
 
 export function getComposerAttachmentFailureMessage(attachment: ComposerAttachment): string {

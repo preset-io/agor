@@ -1,4 +1,4 @@
-import type { User } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
 import { artifactFullscreenPath } from '@agor-live/client';
 import { ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button, Empty, Input, List, Typography, theme } from 'antd';
@@ -29,6 +29,7 @@ import { MobileListRow } from './MobileListRow';
 import { useMobileBack } from './useMobileBack';
 
 interface MobileSearchPageProps {
+  client?: AgorClient | null;
   currentUser?: User | null;
   onOpenWorkspaceSettings: (section: string) => void;
   onOpenBranch: (branchId: string) => void;
@@ -51,6 +52,7 @@ interface Row {
  * navigation targets, branch board-name subtitle and Comments section are mobile's own.
  */
 export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
+  client,
   currentUser,
   onOpenWorkspaceSettings,
   onOpenBranch,
@@ -70,6 +72,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
   const commentById = useAgorStore(selectCommentById);
 
   const { results, hasAnyResults } = useGlobalSearch({
+    client,
     query: deferredQuery,
     ownedByMe: false, // global scope
     activeTypeChip: 'all',
@@ -99,7 +102,9 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
         case 'board':
           return navigate(`/m/board/${result.item.board_id}`);
         case 'artifact':
-          return navigate(artifactFullscreenPath(result.item.artifact_id));
+          // Mark the origin so the fullscreen surface (a non-/m route) offers a
+          // Back into the mobile shell instead of only a desktop board link.
+          return navigate(`${artifactFullscreenPath(result.item.artifact_id)}?from=m`);
         case 'mcp':
           return onOpenWorkspaceSettings('mcp');
       }
@@ -133,7 +138,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
           key: comment.comment_id,
           title: comment.content,
           subtitle: boardById.get(comment.board_id)?.name,
-          onClick: () => navigate(`/m/comments/${comment.board_id}`),
+          onClick: () => navigate(`/m/board/${comment.board_id}?tab=comments`),
         })),
       },
     ];
@@ -197,7 +202,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
               justifyContent: 'center',
             }}
           >
-            <Empty description={`No results for "${query.trim()}"`} />
+            <Empty description={`No results for “${query.trim()}”.`} />
           </div>
         ) : (
           sections.map((section) => (

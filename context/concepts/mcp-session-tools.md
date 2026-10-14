@@ -38,7 +38,7 @@ into SDK-private registration state.
 ## Three workflow tools
 
 1. **`agor_sessions_prompt`** — continue, fork, or spawn from an existing session. `mode: 'continue' | 'fork' | 'subsession'`.
-2. **`agor_sessions_create`** — new session in a specified branch. Optional `initialPrompt`, agent override, permission mode.
+2. **`agor_sessions_create`** — new session in a specified branch. Optional `initialPrompt` and `agenticTool` override. Omitting `agenticTool` uses the authenticated caller’s saved primary coding agent; an unset preference fails rather than falling back to Claude Code. Configuration still resolves through the session service’s normal per-tool user/preset/workspace defaults.
 3. **`agor_sessions_update`** — rename, change status, refresh description. Archive state is rejected here; use `agor_sessions_archive` or `agor_sessions_unarchive` so branch-local descendant and permission rules are applied.
 
 `agor_sessions_bulk_archive` is dry-run-first. Its filters select roots; callers
@@ -66,6 +66,13 @@ Callbacks enabled by `agor_sessions_create` default to `persistent`; use
 `callbackMode: "once"` for a single report. Durable remote relationships can
 be muted or resumed with `agor_session_relationships_set_callback` without
 deleting the relationship. Spawned child and `btw` callbacks remain one-shot.
+
+For multi-hop coordination, keep the intermediate session's callback persistent:
+C completes → B processes its callback → B completes → A receives B's report.
+Use `agor_sessions_update` with `callbackMode: "persistent"` for an existing
+coordinator. Its initial delegation turn may also report. Neither `once` nor
+an exact-task callback covers a later processing turn; no descendant takes
+over completion ownership. The UI selector is in Session Settings → Callbacks.
 
 ## Overrides at create/spawn/subsession time
 

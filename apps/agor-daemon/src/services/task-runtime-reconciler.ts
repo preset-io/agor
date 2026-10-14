@@ -23,7 +23,7 @@ import { requestExecutorTermination } from '../termination-coordinator.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 
 export const EXECUTOR_HEARTBEAT_LOST_MESSAGE =
-  'Executor heartbeat lost; the executor may have crashed or disconnected.';
+  'Executor heartbeat lost; the executor may have crashed or disconnected. This can happen when the agent hits its memory limit.';
 
 type RuntimeCandidateKind = 'dispatch_timeout' | 'heartbeat_stale' | 'termination_stranded';
 

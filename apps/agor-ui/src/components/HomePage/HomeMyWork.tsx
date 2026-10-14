@@ -22,6 +22,7 @@ import {
   useStoreWithEqualityFn,
 } from '../../store/agorStore';
 import { makeBoardSelector } from '../../store/selectors';
+import { boardIdForSession } from '../../utils/boardIdForSession';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { sameName, teammateLabel } from '../../utils/teammateLabels';
 import { BoardTile, getBoardEmoji } from '../BoardTile';
@@ -35,7 +36,13 @@ import {
   HomeSkeleton,
   useHomeCompact,
 } from './HomeSection';
-import { HOME_ROW_LEAD, homeDivider, homeGroupIndent, homeNestedIndent } from './homeLayout';
+import {
+  formatCount,
+  HOME_ROW_LEAD,
+  homeDivider,
+  homeGroupIndent,
+  homeNestedIndent,
+} from './homeLayout';
 
 export const MY_WORK_PAGE = 20;
 
@@ -53,6 +60,8 @@ interface HomeMyWorkProps {
   /** Running sessions that pass the filters, uncapped. */
   runningMatchCount: number;
   hydrated: boolean;
+  /** My sessions were read only up to the cap: counts are lower bounds ("N+"). */
+  truncated?: boolean;
   tab: MyWorkTab;
   onTabChange: (tab: MyWorkTab) => void;
   view: HomeWorkView;
@@ -119,7 +128,7 @@ const NO_HOMES: never[] = [];
 const makeHomesSelector = (sessions: Session[]) => (s: AgorState) =>
   sessions.flatMap((session) => {
     const branch = s.branchById.get(session.branch_id);
-    return [branch, s.boardById.get(session.branch_board_id ?? branch?.board_id ?? '')];
+    return [branch, s.boardById.get(boardIdForSession(session, s.branchById) ?? '')];
   });
 
 /** Board → branch or teammate → sessions, in the order the sessions arrive. */
@@ -152,6 +161,7 @@ export const HomeMyWork = memo(function HomeMyWork({
   runningCount,
   runningMatchCount,
   hydrated,
+  truncated = false,
   tab,
   onTabChange,
   view,
@@ -264,7 +274,10 @@ export const HomeMyWork = memo(function HomeMyWork({
                 { value: 'recent', label: 'Recent' },
                 {
                   value: 'running',
-                  label: hydrated && runningCount ? `Running ${runningCount}` : 'Running',
+                  label:
+                    hydrated && runningCount
+                      ? `Running ${formatCount(runningCount, truncated)}`
+                      : 'Running',
                 },
               ]}
             />

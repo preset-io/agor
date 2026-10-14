@@ -10,6 +10,7 @@ import {
   normalizeAgenticToolModelConfiguration,
 } from '@agor/agentic-tools/config';
 import {
+  AgorAvatarAuthority,
   type AgorConfig,
   type AgorIdentityCapability,
   AgorLocalAuthMode,
@@ -547,16 +548,7 @@ export class UsersService {
       this.externallyManaged(IdentityCapability.USER_ROLE_WRITE, AgorRoleAuthority.CLAIMS);
     }
 
-    const identityFields: Array<keyof UpdateUserData> = [
-      'email',
-      'name',
-      'unix_username',
-      'avatar_url',
-      'avatar',
-      'avatar_source',
-      'avatar_source_id',
-      'avatar_synced_at',
-    ];
+    const identityFields: Array<keyof UpdateUserData> = ['email', 'name', 'unix_username'];
     if (
       identityFields.some((field) => data[field] !== undefined) &&
       !this.identityAuthority.capabilities.users.identityWrite
@@ -565,6 +557,20 @@ export class UsersService {
         IdentityCapability.USER_IDENTITY_WRITE,
         AgorUserLifecycleAuthority.EXTERNAL
       );
+    }
+
+    const avatarFields: Array<keyof UpdateUserData> = [
+      'avatar_url',
+      'avatar',
+      'avatar_source',
+      'avatar_source_id',
+      'avatar_synced_at',
+    ];
+    if (
+      avatarFields.some((field) => data[field] !== undefined) &&
+      !this.identityAuthority.capabilities.users.avatarWrite
+    ) {
+      this.externallyManaged(IdentityCapability.USER_AVATAR_WRITE, AgorAvatarAuthority.EXTERNAL);
     }
 
     if (
@@ -1668,7 +1674,7 @@ export class UsersService {
     if (!this.identityAuthority.capabilities.users.avatarSettingsWrite) {
       this.externallyManaged(
         IdentityCapability.USER_AVATAR_SETTINGS_WRITE,
-        AgorUserLifecycleAuthority.EXTERNAL
+        AgorAvatarAuthority.EXTERNAL
       );
     }
     return this.requireAvatarSync().updateSettings(data, params);
@@ -1681,7 +1687,7 @@ export class UsersService {
     if (!this.identityAuthority.capabilities.users.avatarSettingsWrite) {
       this.externallyManaged(
         IdentityCapability.USER_AVATAR_SETTINGS_WRITE,
-        AgorUserLifecycleAuthority.EXTERNAL
+        AgorAvatarAuthority.EXTERNAL
       );
     }
     return this.requireAvatarSync().syncAvatars(data, params);

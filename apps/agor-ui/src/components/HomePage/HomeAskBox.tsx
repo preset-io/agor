@@ -118,16 +118,19 @@ function AskTargetSelect({
     return (
       <>
         <Button
-          type="text"
           aria-label={value ? `Teammate to ask: ${teammateLabel(value)}` : 'Pick an assistant'}
+          icon={
+            <DownOutlined style={{ fontSize: token.fontSizeSM, color: token.colorTextTertiary }} />
+          }
+          iconPlacement="end"
           onClick={() => {
             openList();
             setSheetOpen(true);
           }}
-          style={{ flex: '0 0 auto', paddingInline: token.paddingXS }}
+          styles={{ content: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }}
+          style={{ flex: '0 1 auto', minWidth: 0, maxWidth: HOME_ASK_TARGET_MAX_WIDTH }}
         >
-          {value ? (teammateEmoji(value) ?? '🤖') : 'Pick an assistant'}
-          <DownOutlined style={{ fontSize: token.fontSizeSM, color: token.colorTextTertiary }} />
+          {label ?? 'Pick an assistant'}
         </Button>
         <HomeSheet open={sheetOpen} title="Ask" onClose={() => setSheetOpen(false)}>
           <HomeList
@@ -154,7 +157,6 @@ function AskTargetSelect({
   return (
     <Select
       showSearch
-      variant="borderless"
       value={value?.branch_id}
       placeholder="Pick an assistant"
       aria-label="Teammate to ask"
@@ -195,6 +197,9 @@ export const HomeAskBox = memo(function HomeAskBox({
   const { token } = theme.useToken();
   const compact = useHomeCompact();
   const { authGeneration } = useConnectionState();
+  // Missing settings mean “enabled” to the fallback resolver. Wait for the
+  // current workspace snapshot before choosing a tool, without blocking drafts.
+  const settingsHydrated = useAgorStore((s) => s.agenticToolSettingsHydrated);
   const inputRef = useRef<TextAreaRef>(null);
   const [prompt, setPrompt] = useState('');
   const [target, setTarget] = useState<Branch | null>(null);
@@ -208,7 +213,8 @@ export const HomeAskBox = memo(function HomeAskBox({
     onCreateSession,
     onOpenSession,
     // Also gates a held send resumed by a pick after the box was emptied.
-    canSend: () => !disabled && prompt.trim().length > 0,
+    canSend: () =>
+      !disabled && agorStore.getState().agenticToolSettingsHydrated && prompt.trim().length > 0,
     buildConfig: (branch) => {
       sentRef.current = { prompt, target };
       return buildNewSessionConfig({
@@ -243,6 +249,7 @@ export const HomeAskBox = memo(function HomeAskBox({
   );
   const busy =
     disabled ||
+    !settingsHydrated ||
     compose.submitting !== null ||
     compose.resolving ||
     (!target && compose.resolveFailed);
@@ -260,18 +267,23 @@ export const HomeAskBox = memo(function HomeAskBox({
   const continueLink = hasSessions && latest && !target && (
     <HomeLink
       size="middle"
-      icon={<RightOutlined />}
+      icon={<RightOutlined aria-hidden />}
       iconPlacement="end"
       onClick={() => onOpenSession(latest.sessionId)}
       styles={{ content: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }}
-      style={{ minWidth: 0, maxWidth: '100%', justifyContent: 'flex-start' }}
+      style={{
+        alignSelf: compact ? 'stretch' : 'flex-start',
+        maxWidth: '100%',
+        paddingInline: 0,
+        justifyContent: 'space-between',
+      }}
     >
       Continue “{latest.title}”
     </HomeLink>
   );
 
-  // Composer layout: the input on its own row, then one toolbar row whose controls share
-  // a height (32px, or 44px on phones through HomeFrame's touch theme).
+  // Composer layout: the input, one toolbar row whose controls share a height (32px, or
+  // 44px on phones through HomeFrame's touch theme), then the continue row.
   return (
     <HomeCard padded>
       <Flex vertical gap={token.marginXS}>
@@ -286,10 +298,17 @@ export const HomeAskBox = memo(function HomeAskBox({
             e.preventDefault();
             send(e.metaKey || e.ctrlKey ? 'open' : 'background');
           }}
-          placeholder={`Ask ${name}…`}
+          // The chip names the teammate, so the placeholder stays short enough for one line.
+          placeholder="Ask anything…"
           aria-label={`Ask ${name}`}
+          // Default input inline padding keeps typed text and the placeholder off the focus ring.
           style={{ fontSize: token.fontSizeLG }}
         />
+        {!settingsHydrated && (
+          <Typography.Text role="status" type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            Loading agentic tool availability
+          </Typography.Text>
+        )}
         <Flex align="center" gap={token.marginXS} data-home-ask-toolbar>
           <AskTargetSelect
             client={client}
@@ -301,7 +320,6 @@ export const HomeAskBox = memo(function HomeAskBox({
               setTarget(branch && branch.branch_id !== primary?.branch_id ? branch : null)
             }
           />
-          {!compact && continueLink}
           <Flex gap={token.marginXS} style={{ flex: '0 0 auto', marginInlineStart: 'auto' }}>
             <ComposeSendButtons
               branch={assistant}
@@ -312,7 +330,7 @@ export const HomeAskBox = memo(function HomeAskBox({
             />
           </Flex>
         </Flex>
-        {compact && continueLink}
+        {continueLink}
         {!target && compose.resolveFailed && (
           <HomeSectionError
             message="Couldn’t load your primary assistant."

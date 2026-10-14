@@ -1,10 +1,10 @@
 import type { AgorClient, Branch, User } from '@agor-live/client';
-import { App as AntApp } from 'antd';
 import { useCallback, useRef, useState } from 'react';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { usePrimaryTeammate } from '../../hooks/usePrimaryTeammate';
+import { useThemedMessage } from '../../utils/message';
 import { teammateLabel } from '../../utils/teammateLabels';
 
 export type ComposeSendMode = 'open' | 'background';
@@ -42,7 +42,7 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
   const latest = useRef(options);
   latest.current = options;
   const { client, currentUser, authenticationGeneration = 0, refreshKey } = options;
-  const { message } = AntApp.useApp();
+  const { showSuccess } = useThemedMessage();
   const navigation = useAppNavigation();
   const primary = usePrimaryTeammate(
     client,
@@ -50,8 +50,8 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
     authenticationGeneration,
     refreshKey
   );
-  const runtime = useRef({ primary, message, navigation });
-  runtime.current = { primary, message, navigation };
+  const runtime = useRef({ primary, showSuccess, navigation });
+  runtime.current = { primary, showSuccess, navigation };
 
   const [pendingSend, setPendingSendState] = useState<ComposeSendMode | null>(null);
   const pendingSendRef = useRef<ComposeSendMode | null>(null);
@@ -74,7 +74,7 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
   const send = useCallback(
     async (mode: ComposeSendMode, explicitBranch?: Branch) => {
       if (inFlightRef.current || latest.current.canSend?.() === false) return;
-      const { primary: resolved, message: toast, navigation: nav } = runtime.current;
+      const { primary: resolved, showSuccess: toastSuccess, navigation: nav } = runtime.current;
       if (!explicitBranch && (resolved.resolving || resolved.failed)) return;
       // A primary resolved for a previous caller is never sent to.
       const branch = explicitBranch ?? (resolved.ownedByCaller ? resolved.branch : null);
@@ -98,7 +98,7 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
         if (!outcome || opts.isAuthenticationGenerationCurrent?.(generation) === false) return;
         opts.onSent?.();
         if (mode === 'background') {
-          toast.success(`Sent to ${teammateLabel(branch)} in the background`);
+          toastSuccess(`Sent to ${teammateLabel(branch)} in the background.`);
         } else {
           (opts.onOpenSession ?? nav.goToSession)(outcome.sessionId);
         }

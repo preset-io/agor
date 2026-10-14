@@ -1,4 +1,4 @@
-import type { Artifact, ArtifactID, Board, Branch, User } from '@agor-live/client';
+import type { AgorClient, Artifact, ArtifactID, Board, Branch, User } from '@agor-live/client';
 import { artifactFullscreenPath, shortId } from '@agor-live/client';
 import { AimOutlined, DeleteOutlined, EditOutlined, ExportOutlined } from '@ant-design/icons';
 import {
@@ -19,6 +19,7 @@ import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { useEnsureBranches } from '../../hooks/useEnsureRows';
 import { boardSelectFilter, boardSelectOptions, getBoardEmoji } from '../BoardTile';
 import { HighlightMatch } from '../HighlightMatch';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
@@ -28,6 +29,7 @@ import { SettingsActionGroup } from './SettingsActionGroup';
 import { SettingsIdentity } from './SettingsIdentity';
 
 interface ArtifactsTableProps {
+  client?: AgorClient | null;
   artifactById: Map<string, Artifact>;
   branchById: Map<string, Branch>;
   boardById: Map<string, Board>;
@@ -53,6 +55,7 @@ const artifactTextStyle: CSSProperties = {
 };
 
 export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
+  client = null,
   artifactById,
   branchById,
   boardById,
@@ -65,6 +68,11 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   const [editingArtifact, setEditingArtifact] = useState<Artifact | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
+  // The store holds only the loaded scopes' branches: read the ones artifacts name.
+  useEnsureBranches(
+    client,
+    Array.from(artifactById.values(), (artifact) => artifact.branch_id ?? '')
+  );
 
   // Reuses the `artifactById` prop so we don't read the same data via
   // both props and context. Only goToArtifact is used from this table.

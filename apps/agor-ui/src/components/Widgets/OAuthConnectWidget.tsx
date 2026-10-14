@@ -54,9 +54,12 @@ import {
 import { useAgorStore } from '@/store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '@/store/selectors';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
+import { formatActionError, notConnectedMessage } from '@/utils/connectionErrors';
 import { oauthAttemptFailureMessage, waitForMCPOAuthAttempt } from '@/utils/mcpOAuthAttempt';
 import { useThemedMessage } from '@/utils/message';
+import { CompactNotice } from '../CompactNotice';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
+import { useWidgetReplay, WIDGET_ALREADY_ANSWERED_MESSAGE } from './widgetReplay';
 
 const { Text, Paragraph } = Typography;
 
@@ -128,9 +131,27 @@ interface PendingCardProps {
 
 const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) => {
   const { token } = theme.useToken();
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess } = useThemedMessage();
   const [state, setState] = useState<ConnectState>('idle');
   const [failure, setFailure] = useState<string | null>(null);
+  const [answeredElsewhere, setAnsweredElsewhere] = useState(false);
+  const classifyFailure = useWidgetReplay<'connected' | 'declined'>();
+  /** Handles a failure the server reports as already answered; returns false for a real failure. */
+  const resolveFailure = (
+    action: 'submit' | 'dismiss',
+    resolution: 'connected' | 'declined',
+    err: unknown
+  ): boolean => {
+    const outcome = classifyFailure(action, resolution, err);
+    if (outcome.kind === 'failed') return false;
+    if (outcome.kind === 'answered') {
+      setState('idle');
+      setAnsweredElsewhere(true);
+      return true;
+    }
+    setState(outcome.resolution);
+    return true;
+  };
   // Has this user already signed in to this server?
   //
   // The same last-observed snapshot the rest of the UI reads
@@ -186,8 +207,9 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
       if (operationOwner.current !== owner) return;
       setState('connected');
       if (resolved.status === 'submitted') showSuccess(`Connected ${params.serverName}`);
-    } catch {
+    } catch (err) {
       if (operationOwner.current !== owner) return;
+      if (resolveFailure('submit', 'connected', err)) return;
       // The snapshot said there was a grant and the daemon disagrees — it may
       // have been revoked, or it may belong to someone else. Fall back to the
       // ordinary sign-in rather than leaving a button that cannot work.
@@ -202,7 +224,7 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
   const connect = async () => {
     if (state === 'starting' || state === 'pending' || state === 'connected') return;
     if (!client) {
-      setFailure('Not connected to Agor — refresh and try again.');
+      setFailure(notConnectedMessage('connect'));
       return;
     }
     // Reserve the popup synchronously, while the click still has user
@@ -249,7 +271,6 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
         setState('idle');
         const message = attempt.recovery?.message ?? oauthAttemptFailureMessage(attempt.status);
         setFailure(message);
-        showError(message);
         return;
       }
 
@@ -265,10 +286,9 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
       popup.close();
       if (!isCurrent()) return;
       if (err instanceof DOMException && err.name === 'AbortError') return;
-      const message = err instanceof Error ? err.message : String(err);
+      if (resolveFailure('submit', 'connected', err)) return;
       setState('idle');
-      setFailure(message);
-      showError(`Connect failed: ${message}`);
+      setFailure(formatActionError('connect', err, { idempotent: true }));
     }
   };
 
@@ -278,9 +298,8 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
       await client.service(`widgets/${encodeURIComponent(widgetId)}/dismiss`).create({});
       setState('declined');
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setFailure(`Dismiss failed: ${message}`);
-      showError(`Dismiss failed: ${message}`);
+      if (resolveFailure('dismiss', 'declined', err)) return;
+      setFailure(formatActionError('dismiss this request', err, { idempotent: true }));
     }
   };
 
@@ -399,7 +418,9 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
           />
         ) : null}
 
-        {failure ? (
+        {answeredElsewhere ? (
+          <CompactNotice type="neutral" role="status" message={WIDGET_ALREADY_ANSWERED_MESSAGE} />
+        ) : failure ? (
           <Alert
             role="presentation"
             type="error"
@@ -410,15 +431,27 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
         ) : null}
 
         <Space style={{ width: '100%', justifyContent: 'flex-end' }} size="small">
-          <Button size="small" onClick={decline} disabled={busy}>
+          <Button size="small" onClick={decline} disabled={busy || answeredElsewhere}>
             Not now
           </Button>
           {canFinish ? (
-            <Button size="small" type="primary" onClick={finish} loading={busy}>
+            <Button
+              size="small"
+              type="primary"
+              onClick={finish}
+              loading={busy}
+              disabled={answeredElsewhere}
+            >
               Finish connecting
             </Button>
           ) : (
-            <Button size="small" type="primary" onClick={connect} loading={busy}>
+            <Button
+              size="small"
+              type="primary"
+              onClick={connect}
+              loading={busy}
+              disabled={answeredElsewhere}
+            >
               {failure ? 'Try again' : 'Connect'}
             </Button>
           )}

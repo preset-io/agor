@@ -13,6 +13,7 @@ import { vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { MCPCatalogModalProvider } from '../../contexts/MCPCatalogModalContext';
 import { ThemeProvider } from '../../contexts/ThemeContext';
+import { agorStore } from '../../store/agorStore';
 import { AppHeader } from '../AppHeader';
 import { SessionMcpFooterControl } from '../SessionPanel/SessionMcpFooterControl';
 import { MCPCatalogModalHost } from './MCPCatalogModalHost';
@@ -188,6 +189,9 @@ export function CatalogHarness({
   children?: ReactNode;
 }) {
   auth.user = user;
+  // The footer edits only a session whose MCP links are loaded; this fixture's
+  // session has none attached, and they count as loaded (idempotent).
+  agorStore.getState().markSessionMcpLoaded('current-session');
   return (
     <ThemeProvider>
       <ConfigProvider>

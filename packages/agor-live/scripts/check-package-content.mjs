@@ -8,10 +8,14 @@ import { join, resolve } from 'node:path';
 // Ceilings are kept generous (~25% over actuals) so legit additions don't
 // block a deploy; a real bloat accident overshoots by an order of magnitude
 // and still trips these.
+//
+// Actuals at 0.26.10 after code splitting + ESM-only internals: 2710 files,
+// 42.2 MiB unpacked, 13.8 MiB packed. Before that, per-entry duplication
+// (e.g. zod inlined into 36 daemon files) silently grew the package to 126 MiB.
 const limits = {
-  files: 3250,
-  unpackedBytes: 120 * 1024 * 1024,
-  packedBytes: 30 * 1024 * 1024,
+  files: 3400,
+  unpackedBytes: 55 * 1024 * 1024,
+  packedBytes: 18 * 1024 * 1024,
 };
 
 function measureDirectory(directory) {

@@ -379,3 +379,87 @@ describe('MCPServerFormFields OAuth start', () => {
     ).toBeVisible();
   });
 });
+
+describe('MCPServerFormFields Test Authentication results', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const renderAuthTest = (
+    authType: 'bearer' | 'jwt' | 'oauth',
+    values: Record<string, unknown>,
+    services: Record<string, ReturnType<typeof vi.fn>> = {}
+  ) => {
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((path: string) => ({ create: services[path] ?? vi.fn() })),
+    } as unknown as AgorClient;
+    const Harness = () => {
+      const [form] = Form.useForm();
+      const [formRevision, bumpFormRevision] = useFormRevision();
+      useEffect(() => {
+        form.setFieldsValue({ name: 'a-server', auth_type: authType, ...values });
+      }, [form]);
+      return (
+        <Form form={form} onValuesChange={bumpFormRevision}>
+          <MCPServerFormFields
+            mode="create"
+            transport="http"
+            authType={authType}
+            form={form}
+            client={client}
+            authorityKey="user-a:admin:1"
+            onPrepareOAuthStart={vi.fn()}
+            formRevision={formRevision}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    fireEvent.click(buttonLabeled('Test Authentication'));
+  };
+
+  it('asks for a token inline, and drops the notice once the draft changes', async () => {
+    renderAuthTest('bearer', { url: 'https://a.example/mcp' });
+    expect(await screen.findByText('Enter a token to test.')).toBeVisible();
+    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://b.example/mcp' } });
+    await waitFor(() =>
+      expect(screen.queryByText('Enter a token to test.')).not.toBeInTheDocument()
+    );
+    expect(showError).not.toHaveBeenCalled();
+  });
+
+  it('says the provider rejected the unsaved JWT credentials', async () => {
+    const testJwt = vi.fn().mockResolvedValue({
+      success: false,
+      error:
+        'The provider rejected the MCP authentication request. Review the saved credentials or sign in again.',
+      category: 'provider_rejected',
+    });
+    renderAuthTest(
+      'jwt',
+      { jwt_api_url: 'https://jwt.example', jwt_api_token: 'token', jwt_api_secret: 'secret' },
+      { 'mcp-servers/test-jwt': testJwt }
+    );
+    expect(
+      await screen.findByText('The provider rejected these credentials. Check them and test again.')
+    ).toBeVisible();
+    expect(showError).not.toHaveBeenCalled();
+  });
+
+  it('moves the OAuth test error and hint under Details', async () => {
+    const testOAuth = vi.fn().mockResolvedValue({
+      success: false,
+      error: 'Token endpoint returned 400',
+      hint: 'Check the client ID.',
+    });
+    renderAuthTest(
+      'oauth',
+      { url: 'https://a.example/mcp' },
+      { 'mcp-servers/test-oauth': testOAuth }
+    );
+    expect(await screen.findByText("Couldn't sign in to this server.")).toBeVisible();
+    fireEvent.click(buttonLabeled('Details'));
+    expect(screen.getByText('Token endpoint returned 400')).toBeInTheDocument();
+    expect(screen.getByText('Check the client ID.')).toBeInTheDocument();
+    expect(showError).not.toHaveBeenCalled();
+  });
+});

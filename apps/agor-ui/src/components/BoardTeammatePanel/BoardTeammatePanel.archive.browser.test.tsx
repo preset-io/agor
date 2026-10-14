@@ -31,6 +31,8 @@ function session(id: string, genealogy: Session['genealogy'] = { children: [] })
     agentic_tool: 'codex',
     status: 'idle',
     archived: false,
+    // The fixture authority's own sessions: its user scope holds them.
+    created_by: 'browser-fixture',
     created_at: '2026-09-01T00:00:00.000Z',
     last_updated: '2026-09-01T00:00:00.000Z',
     genealogy,
@@ -209,22 +211,16 @@ describe('teammate drawer archive reconciliation', () => {
         await waitFor(
           () =>
             expect(
-              screen.getByText(
-                'Session and same-branch children archived; refresh required to update the session list.'
-              )
+              screen.getByText('Session and its subsessions archived. Refresh to update the list.')
             ).toBeVisible(),
           { timeout: 5_000 }
         );
-        expect(screen.queryByText('Failed to archive session')).not.toBeInTheDocument();
-        expect(
-          screen.queryByText('Session and same-branch children archived')
-        ).not.toBeInTheDocument();
+        expect(screen.queryByText(/^Couldn't archive the session\./)).not.toBeInTheDocument();
+        expect(screen.queryByText('Session archived.')).not.toBeInTheDocument();
         expect(create).toHaveBeenCalledTimes(1);
         if (race === 'churn') expect(get).toHaveBeenCalledTimes(6 * affected.length);
       } else {
-        await waitFor(() =>
-          expect(screen.getByText('Session and same-branch children archived')).toBeVisible()
-        );
+        await waitFor(() => expect(screen.getByText('Session archived.')).toBeVisible());
       }
     }
   );

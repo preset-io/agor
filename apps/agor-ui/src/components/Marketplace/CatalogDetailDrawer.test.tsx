@@ -411,7 +411,7 @@ describe('CatalogDetailDrawer connect capability', () => {
     fireEvent.click(screen.getByRole('checkbox'));
 
     expect(connectButton()).toBeDisabled();
-    expect(screen.getByText(/Use existing servers only/)).toBeInTheDocument();
+    expect(screen.getByText(/doesn't let you add servers/)).toBeInTheDocument();
   });
 
   it('enables the action for a member with server-provided capability', () => {

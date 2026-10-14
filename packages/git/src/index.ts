@@ -734,6 +734,8 @@ export function categorizeGitError(stderr: string): RepoCloneErrorCategory {
     s.includes('authentication failed') ||
     s.includes('could not read username') ||
     s.includes('could not read password') ||
+    // Git with credential.interactive=false and no credential, e.g. a private remote without a token.
+    s.includes('unable to get password from user') ||
     s.includes('terminal prompts disabled') ||
     s.includes('fatal: authentication') ||
     s.includes('http basic') ||
@@ -2156,9 +2158,14 @@ export async function createBranchAsClone(
   }
 
   // Refuse a NON-EMPTY target only. `git clone <url> <dir>` accepts an empty
-  // existing directory, and a prior failed provisioning attempt leaves exactly
-  // such an empty directory behind — allowing it through is what makes retry
-  // idempotent and repairable rather than permanently wedged.
+  // existing directory, so a leftover empty dir from an attempt that failed
+  // before writing anything doesn't wedge retries. A non-empty target means
+  // either a real adoptable checkout (handled earlier by the caller via
+  // `isBranchAlreadyMaterialized`) or debris from a prior attempt that failed
+  // mid-materialization (this function pre-creates `targetPath` and can write
+  // real content via `reset --hard HEAD` before a later step, e.g. the
+  // post-clone branch/remote setup, can still fail) — refuse rather than
+  // clone over either case.
   if (directoryHasEntries(targetPath)) {
     throw new Error(
       `Target directory '${targetPath}' already exists and is not empty. ` +

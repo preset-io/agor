@@ -354,7 +354,7 @@ it.each(['Resume queue', 'Run next'])(
     expect(patch).toHaveBeenCalledExactlyOnceWith(session.session_id, { ready_for_prompt: true });
     remove.mockRejectedValueOnce(new Error('Try again'));
     await userEvent.click(screen.getByRole('button', { name: 'Remove queued task 25' }));
-    await screen.findByText('Failed to remove queued task: Try again');
+    await screen.findByText("Couldn't remove the queued message. (Try again)");
     expect(find).not.toHaveBeenCalled();
     expect(screen.getByText('Queued tasks (25)')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Remove queued task 25' })).toBeInTheDocument();
@@ -395,7 +395,7 @@ it.each([390, 220])(
       expect(conversation().clientHeight).toBeGreaterThan(100);
       expect(queueList().clientHeight).toBeGreaterThan(25);
     });
-    const composer = screen.getByPlaceholderText('Prompt here… @ for mentions, : for emoji');
+    const composer = screen.getByPlaceholderText(/^Prompt here…/);
     // Position the pointer once. userEvent.wheel() re-hovers before every input,
     // scrolling the queue back into view and potentially undoing outer scrolling.
     // Keep native wheel input at that point while observing asynchronous scrolling;

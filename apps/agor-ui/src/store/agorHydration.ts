@@ -45,9 +45,10 @@ const HYDRATION_IMMEDIATE_RETRIES = 4;
 const HYDRATION_BACKOFF_BASE_MS = 200;
 const HYDRATION_BACKOFF_CAP_MS = 5000;
 
-// Hydrated collections that the background hydration replaces wholesale. Each
-// has its own live-write revision counter (`liveRevisions`) so a write to one
-// collection never blocks another's hydration from applying.
+// Collections with a live-write revision counter (`liveRevisions`): the ones a
+// background hydration (`runHydration`) still replaces wholesale, and the ones
+// first paint, a resync or a partition load fence per id. Each has its own
+// counter so a write to one collection never blocks another's load.
 export type HydratedCollection =
   | 'sessions'
   | 'branches'
@@ -103,6 +104,13 @@ const makeZeroCounters = (): Record<HydratedCollection, number> => ({
 // removed entity: a remove would have bumped the counter, so no apply happens.
 let liveRevisions = makeZeroCounters();
 
+// The collections `runHydration` still replaces wholesale; only they carry a
+// generation token.
+export type BackgroundHydratedCollection = Extract<
+  HydratedCollection,
+  'agenticToolSettings' | 'mcpServers' | 'gatewayChannels' | 'artifacts' | 'comments'
+>;
+
 // Per-collection hydration generation tokens. Each `runHydration` call bumps the
 // generation for the collection(s) it owns and captures it; its retry loop stops
 // (without applying a snapshot or scheduling another timer) the moment a newer
@@ -110,62 +118,176 @@ let liveRevisions = makeZeroCounters();
 // unmounts, or a logout reset fires — all of which bump these counters. This is
 // CANCELLATION, not race reconciliation: clobber-safety still comes entirely
 // from the quiet-window check against `liveRevisions`. Kept strictly monotonic.
-const hydrationGeneration = makeZeroCounters();
+const hydrationGeneration: Record<BackgroundHydratedCollection, number> = {
+  agenticToolSettings: 0,
+  mcpServers: 0,
+  gatewayChannels: 0,
+  artifacts: 0,
+  comments: 0,
+};
 
-// Per-collection high-water mark of the live-write revision that the most recent
-// wholesale hydration apply was proven quiet against. A hydration applies its
-// full-set server snapshot only when no live write raced the fetch, so the
-// applied rows reflect every write up to this revision. The frame-coalesced
-// session-patch queue reads this to DROP any queued patch whose enqueue-time
-// revision is at-or-below it: that patch's effect is already contained in the
-// fresher server snapshot, so replaying it would overwrite newer state with
-// older. Any patch enqueued AFTER a hydration snapshots its baseline bumps the
-// revision during the fetch and forces that hydration to discard — so a queued
-// patch can only ever be at-or-below (stale relative to), never ahead of, an
-// apply. Reset to zero with `liveRevisions` on (re)mount.
-let lastAppliedRevision = makeZeroCounters();
+// ── Per-ID touched fence (board partition loads) ──────────────────────────
+// A board partition load never discards its snapshot (that is what lets
+// `runHydration` starve under churn). Instead it fills only rows that are
+// ABSENT from the store and that no live event has touched since the load
+// started. Each realtime write therefore stamps the entity id with the
+// collection revision it produced. Stamps are only retained while at least one
+// partition load is in flight: a load captures its start revisions first, so a
+// stamp recorded before any load started can never be newer than that load's
+// start revision and is irrelevant.
+let partitionLoadsInFlight = 0;
+let touchedIds = new Map<HydratedCollection, Map<string, number>>();
+
+// Wholesale (non-per-ID) replacement epoch. First paint replaces whole
+// collections, and a reconnect resync replaces whatever a read that began
+// before it saw while disconnected; a load that spans one cannot tell which
+// rows that replacement removed, so it restarts instead of applying (see
+// `fencedRead`). Wholesale replacements are rare, so restarting cannot starve.
+let wholesaleEpoch = 0;
+
+const stampTouched = (collection: HydratedCollection, id: string): void => {
+  if (partitionLoadsInFlight === 0) return;
+  let ids = touchedIds.get(collection);
+  if (!ids) {
+    ids = new Map();
+    touchedIds.set(collection, ids);
+  }
+  ids.set(id, liveRevisions[collection]);
+};
 
 /**
  * Bump the live-write revision for a collection. Called by every realtime entity
  * action (and the hook's deep-link heal / OAuth handlers) that mutates one of the
  * hydrated collection Maps, so an in-flight hydration discards its snapshot
- * rather than clobbering the write.
+ * rather than clobbering the write. Pass the written entity's id so a load in
+ * flight (first paint, a resync, a partition) keeps that row (see `touchedSince`).
  */
-export const bumpRevision = (collection: HydratedCollection): void => {
+export const bumpRevision = (collection: HydratedCollection, id?: string): void => {
   liveRevisions[collection] += 1;
+  if (id) stampTouched(collection, id);
 };
 
 /**
- * Current live-write revision for a collection. The session-patch queue stamps
- * each enqueued entry with this (captured right after the synchronous bump) so a
- * later hydration apply can tell which queued patches it has already subsumed.
+ * Stamp an id as touched at the CURRENT revision without bumping it. Used where
+ * the bump already happened synchronously (the frame-batched session queue
+ * stamps at enqueue time, right after the subscription's bump).
  */
-export const getRevision = (collection: HydratedCollection): number => liveRevisions[collection];
+export const markTouched = (collection: HydratedCollection, id: string): void => {
+  stampTouched(collection, id);
+};
+
+/** Whether a live event wrote `id` after the given start revision. */
+export const touchedSince = (
+  collection: HydratedCollection,
+  id: string,
+  startRevision: number
+): boolean => (touchedIds.get(collection)?.get(id) ?? Number.NEGATIVE_INFINITY) > startRevision;
+
+/** Every id a live event wrote in `collection` after the given start revision. */
+export const touchedIdsSince = (
+  collection: HydratedCollection,
+  startRevision: number
+): string[] => {
+  const ids: string[] = [];
+  for (const [id, revision] of touchedIds.get(collection) ?? []) {
+    if (revision > startRevision) ids.push(id);
+  }
+  return ids;
+};
+
+export interface PartitionLoadFence {
+  /** Per-collection revisions captured when the load started. */
+  startRevisions: Record<HydratedCollection, number>;
+  /** Wholesale epoch captured when the load started. */
+  epoch: number;
+}
 
 /**
- * Revision that the last quiet-window hydration apply for a collection was
- * proven against. The session-patch queue drops queued entries stamped at-or-
- * below this — their effect already lives in the fresher applied snapshot.
+ * Start retaining touched stamps for a partition load and capture its fence.
+ * Every call MUST be paired with `endPartitionLoad()` (use try/finally).
  */
-export const getLastAppliedRevision = (collection: HydratedCollection): number =>
-  lastAppliedRevision[collection];
+export const beginPartitionLoad = (): PartitionLoadFence => {
+  partitionLoadsInFlight += 1;
+  return { startRevisions: { ...liveRevisions }, epoch: wholesaleEpoch };
+};
+
+/** Release a partition load's hold on the touched stamps. */
+export const endPartitionLoad = (): void => {
+  partitionLoadsInFlight = Math.max(0, partitionLoadsInFlight - 1);
+  if (partitionLoadsInFlight === 0) touchedIds = new Map();
+};
+
+/** A reconnect resync begins: every read in flight restarts (`fencedRead`). */
+export const markWholesaleReplacement = (): void => {
+  wholesaleEpoch += 1;
+};
+
+/** Restarts a read gets when wholesale replacements keep landing mid-read. */
+export const MAX_WHOLESALE_RESTARTS = 3;
 
 /**
- * Record that a wholesale hydration apply for `collections` landed against the
- * given per-collection baseline revisions (the counters snapshotted before the
- * fetch, re-proven unchanged after). Monotonic — only advances the high-water
- * mark. Called from `runHydration` at the moment it applies.
+ * A read whose every attempt spanned a wholesale replacement. Its snapshot is
+ * never applied (it could resurrect rows the replacement removed); the caller
+ * surfaces a retryable failure instead.
  */
-export const recordHydrationApply = (
-  collections: readonly HydratedCollection[],
-  baselineRevisions: readonly number[]
-): void => {
-  collections.forEach((c, i) => {
-    if (baselineRevisions[i] > lastAppliedRevision[c]) {
-      lastAppliedRevision[c] = baselineRevisions[i];
+export class WholesaleReplacementError extends Error {
+  constructor() {
+    super('Data was replaced while loading; retry');
+    this.name = 'WholesaleReplacementError';
+  }
+}
+
+/** Returned by a `fencedRead` apply to send the read again. */
+export const RESTART_READ: unique symbol = Symbol('restart read');
+
+/** The touched fence of one `fencedRead` attempt. */
+export interface ReadFence {
+  readonly startRevisions: Record<HydratedCollection, number>;
+  /** Whether a live event wrote `id` since the read began. */
+  touched(collection: HydratedCollection, id: string): boolean;
+  /** Every id a live event wrote in `collection` since the read began. */
+  touchedIds(collection: HydratedCollection): string[];
+  /** Whether a wholesale replacement landed since the read began. */
+  replaced(): boolean;
+}
+
+/**
+ * The one fenced read every store load uses: capture the touched fence, read,
+ * drop the result once `isCurrent` turns false, and otherwise `apply` it with
+ * the fence, so rows written live since the read began keep their live value.
+ * A read that spanned a wholesale replacement is sent again — an `apply`
+ * that awaits returns `RESTART_READ` when `fence.replaced()` — and after
+ * `MAX_WHOLESALE_RESTARTS` fails with `WholesaleReplacementError`. Resolves
+ * the apply's result, or `null` once no longer current; read errors propagate.
+ */
+export async function fencedRead<T, R>(
+  read: () => Promise<T>,
+  apply: (rows: T, fence: ReadFence) => R | typeof RESTART_READ | Promise<R | typeof RESTART_READ>,
+  isCurrent: () => boolean
+): Promise<R | null> {
+  for (let attempt = 0; ; attempt++) {
+    const { startRevisions, epoch } = beginPartitionLoad();
+    try {
+      const rows = await read();
+      if (!isCurrent()) return null;
+      const fence: ReadFence = {
+        startRevisions,
+        touched: (collection, id) => touchedSince(collection, id, startRevisions[collection]),
+        touchedIds: (collection) => touchedIdsSince(collection, startRevisions[collection]),
+        replaced: () => wholesaleEpoch !== epoch,
+      };
+      const result = fence.replaced() ? RESTART_READ : await apply(rows, fence);
+      if (result !== RESTART_READ) return result;
+      if (!isCurrent()) return null;
+      if (attempt >= MAX_WHOLESALE_RESTARTS) throw new WholesaleReplacementError();
+    } finally {
+      endPartitionLoad();
     }
-  });
-};
+  }
+}
+
+/** Current live-write revision for a collection. */
+export const getRevision = (collection: HydratedCollection): number => liveRevisions[collection];
 
 /**
  * Bump the revisions of every collection a non-runHydration wholesale merge
@@ -175,6 +297,7 @@ export const recordHydrationApply = (
  */
 export const bumpFirstPaintMergeRevisions = (): void => {
   for (const c of FIRST_PAINT_MERGE_COLLECTIONS) liveRevisions[c] += 1;
+  wholesaleEpoch += 1;
 };
 
 /**
@@ -184,13 +307,13 @@ export const bumpFirstPaintMergeRevisions = (): void => {
  */
 export const resetHydrationRevisions = (): void => {
   liveRevisions = makeZeroCounters();
-  lastAppliedRevision = makeZeroCounters();
+  touchedIds = new Map();
+  wholesaleEpoch += 1;
 };
 
-// Monotonic epoch for hydrations that are SCHEDULED but not yet started (the
-// global full-set hydration deferred behind the opened session's transcript).
-// Every cancellation path bumps it, so a deferred start that outlives its load
-// (unmount, authority change, logout) is skipped instead of starting loops.
+// Monotonic epoch of load lifetimes (`loadLifetime.ts`). Every cancellation
+// path bumps it, so work deferred past an await that outlives its load
+// (unmount, authority change, logout) is skipped instead of applying.
 let cancellationEpoch = 0;
 
 /** Current cancellation epoch; capture before deferring a hydration start. */
@@ -203,7 +326,7 @@ export const getHydrationCancellationEpoch = (): number => cancellationEpoch;
  */
 export const cancelAllHydrations = (): void => {
   cancellationEpoch += 1;
-  for (const c of Object.keys(hydrationGeneration) as HydratedCollection[]) {
+  for (const c of Object.keys(hydrationGeneration) as BackgroundHydratedCollection[]) {
     hydrationGeneration[c] += 1;
   }
 };
@@ -218,10 +341,11 @@ export const cancelAllHydrations = (): void => {
  */
 export const cancelAndFailAllHydrations = (): void => {
   cancellationEpoch += 1;
-  for (const c of Object.keys(hydrationGeneration) as HydratedCollection[]) {
+  for (const c of Object.keys(liveRevisions) as HydratedCollection[]) liveRevisions[c] += 1;
+  for (const c of Object.keys(hydrationGeneration) as BackgroundHydratedCollection[]) {
     hydrationGeneration[c] += 1;
-    liveRevisions[c] += 1;
   }
+  wholesaleEpoch += 1;
 };
 
 /**
@@ -240,7 +364,7 @@ export const cancelAndFailAllHydrations = (): void => {
  */
 export async function runHydration<T>(
   label: string,
-  collections: readonly HydratedCollection[],
+  collections: readonly BackgroundHydratedCollection[],
   fetchFn: () => Promise<T>,
   apply: (result: T) => void
 ): Promise<void> {
@@ -284,10 +408,6 @@ export async function runHydration<T>(
     if (!isCurrent()) return; // superseded while fetching
     const raced = collections.some((c, i) => liveRevisions[c] !== before[i]);
     if (!raced) {
-      // The snapshot is provably quiet against `before` — record it as the
-      // high-water mark so the session-patch queue discards any queued patch it
-      // has already subsumed, THEN apply.
-      recordHydrationApply(collections, before);
       apply(result);
       return;
     }

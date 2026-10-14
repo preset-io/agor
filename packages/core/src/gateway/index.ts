@@ -7,6 +7,7 @@
 
 export type {
   GatewayConnector,
+  GatewayInboundResult,
   GatewayProviderHistoryMessage,
   GatewayProviderHistoryRequest,
   GatewayProviderHistoryResult,
@@ -15,6 +16,7 @@ export type {
   InboundFile,
   InboundMessage,
   InboundPreparationContext,
+  InboundSkippedFile,
   OutboundPayload,
 } from './connector';
 export { normalizeOutbound, normalizeSendReceipt } from './connector';
@@ -24,8 +26,8 @@ export {
   DiscordConnector,
   DiscordDirectMessageError,
   DiscordThreadUnavailableError,
-  extractDiscordInboundFiles,
   isAllowedDiscordAttachmentUrl,
+  partitionDiscordInboundFiles,
   stripDiscordBotMention,
 } from './connectors/discord';
 export type {
@@ -70,6 +72,8 @@ export type {
   SlackChannelHistoryResult,
   SlackFileInfo,
   SlackHistoryFile,
+  SlackInboundReactionEventType,
+  SlackInboundSurfaces,
   SlackThreadHistoryMessage,
   SlackThreadHistoryRequest,
   SlackThreadHistoryResult,
@@ -79,10 +83,14 @@ export {
   isChannelAllowedByWhitelist,
   isSlackDirectMessageId,
   isSlackFileSourceAllowed,
+  isSlackInboundReactionEventType,
+  isSlackInboundSurfaceAllowed,
   isSlackWriteTargetAllowed,
   markdownToMrkdwn,
+  normalizeSlackReactionName,
   parseThreadId as parseSlackThreadId,
   SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES,
+  SLACK_INBOUND_REACTION_EVENT_TYPES,
   SLACK_REQUEST_TIMEOUT_METADATA_KEY,
   SlackConnector,
 } from './connectors/slack';

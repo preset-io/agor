@@ -6,6 +6,7 @@
  */
 
 import {
+  AgorAvatarAuthority,
   AgorExternalIdentityProvider,
   AgorExternalIdentityProvisioning,
   AgorLocalAuthMode,
@@ -195,6 +196,7 @@ const USER_IDENTITY_CAPABILITIES = {
   identityWrite: true,
   roleWrite: true,
   passwordWrite: true,
+  avatarWrite: true,
   avatarSettingsWrite: true,
   selfConfigurationWrite: true,
 } as const satisfies Record<UserIdentityCapability, true>;
@@ -211,6 +213,8 @@ function isResolvedIdentityAuthority(value: unknown): value is ResolvedIdentityA
   }
   if (!isEnumValue(Object.values(AgorRoleAuthority), value.roleAuthority)) return false;
   if (!isEnumValue(Object.values(AgorLocalAuthMode), value.localAuth)) return false;
+
+  if (!isEnumValue(Object.values(AgorAvatarAuthority), value.avatarAuthority)) return false;
 
   const capabilities = value.capabilities;
   if (!isRecord(capabilities) || !isRecord(capabilities.users)) return false;
@@ -229,6 +233,7 @@ function isResolvedIdentityAuthority(value: unknown): value is ResolvedIdentityA
     if (value.external.provisioning !== AgorExternalIdentityProvisioning.JIT) return false;
   } else {
     if (value.roleAuthority !== AgorRoleAuthority.INTERNAL) return false;
+    if (value.avatarAuthority !== AgorAvatarAuthority.INTERNAL) return false;
     if (value.localAuth !== AgorLocalAuthMode.ENABLED) return false;
     if (value.external !== undefined) return false;
   }
@@ -239,7 +244,8 @@ function isResolvedIdentityAuthority(value: unknown): value is ResolvedIdentityA
     users.identityWrite === !externallyManaged &&
     users.roleWrite === (value.roleAuthority === AgorRoleAuthority.INTERNAL) &&
     users.passwordWrite === (value.localAuth === AgorLocalAuthMode.ENABLED && !externallyManaged) &&
-    users.avatarSettingsWrite === !externallyManaged
+    users.avatarWrite === (value.avatarAuthority === AgorAvatarAuthority.INTERNAL) &&
+    users.avatarSettingsWrite === users.avatarWrite
   );
 }
 

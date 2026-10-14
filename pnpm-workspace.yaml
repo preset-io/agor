@@ -35,7 +35,7 @@ overrides:
   fast-xml-parser: '>=5.5.7 <6'
   follow-redirects: '>=1.16.0 <2'
   glob: ^11.1.0
-  handlebars: '>=4.7.9 <5'
+  handlebars: '>=4.7.10 <5'
   hono: '>=4.12.34 <5'
   jws: '>=4.0.1 <5'
   # Keep the v4 schema/options used by config and browser consumers; v5 changes

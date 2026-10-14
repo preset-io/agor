@@ -39,6 +39,57 @@ describe('useBranchModalForm normalized permission package', () => {
     expect(result.current.canEditGeneral).toBe(true);
   });
 
+  it.each([
+    { shape: 'administrator with view access', role: 'admin', can: 'view', want: true },
+    { shape: 'member with all access', role: 'member', can: 'all', want: true },
+    { shape: 'member with session access', role: 'member', can: 'session', want: false },
+    { shape: 'member whose access lookup failed', role: 'member', can: null, want: undefined },
+    {
+      shape: 'member whose permission package failed',
+      role: 'member',
+      can: 'all',
+      failPermissionsFind: true,
+      want: undefined,
+    },
+    {
+      shape: 'administrator whose access lookups failed',
+      role: 'admin',
+      can: null,
+      failPermissionsFind: true,
+      want: true,
+    },
+  ] satisfies Array<{
+    shape: string;
+    role: 'admin' | 'member';
+    can: string | null;
+    failPermissionsFind?: boolean;
+    want: boolean | undefined;
+  }>)(
+    'resolves environment control for a $shape',
+    async ({ role, can, failPermissionsFind = false, want }) => {
+      const user = makeUser({ user_id: 'user-2', role });
+      const branch = makeBranch();
+      const options = {
+        users: [user],
+        failPermissionsFind,
+        // A getter so the failed lookup rejects only when the hook asks for it.
+        get effectiveAccess() {
+          return can === null
+            ? Promise.reject(new Error('unavailable'))
+            : { can, is_owner: false, source: 'others' };
+        },
+      };
+      const { client } = makeStubClient(options);
+      const { result } = renderHook(
+        () => useBranchModalForm({ branch, client, currentUser: user, open: true }),
+        { wrapper }
+      );
+      if (role === 'member') expect(result.current.canControlEnvironment).toBeUndefined();
+      await waitFor(() => expect(result.current.permissionsLoading).toBe(false));
+      expect(result.current.canControlEnvironment).toBe(want);
+    }
+  );
+
   it('lets a branch viewer edit only their personal sharing rule', async () => {
     const viewer = makeUser({ user_id: 'viewer-1', role: 'member' });
     const branch = makeBranch();
@@ -109,6 +160,55 @@ describe('useBranchModalForm normalized permission package', () => {
     if (!saved) throw new Error('Expected save result');
     expect(saved.ok).toBe(false);
     if (!saved.ok) expect(saved.error.message).toBe('daemon exploded');
+  });
+
+  it('reports a partial save when permissions land but the branch update fails', async () => {
+    const owner = makeUser({ user_id: 'user-1', role: 'member' });
+    const branch = makeBranch();
+    const { client } = makeStubClient({ users: [owner], failBranchPatch: true });
+    const { result, rerender } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: owner, open: true }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.permissionsLoading).toBe(false));
+    act(() => {
+      result.current.setGeneral('notes', 'Will fail');
+      const changed = structuredClone(result.current.capabilityPolicy!);
+      changed.override_config!.access.others = {
+        preset: 'viewer',
+        capabilities: ['branch.view'],
+        fs_access: 'none',
+      };
+      result.current.setCapabilityPolicy(changed);
+    });
+
+    let saved: Awaited<ReturnType<typeof result.current.save>> | undefined;
+    await act(async () => {
+      saved = await result.current.save();
+    });
+    expect(saved).toMatchObject({ ok: false, permissionsSaved: true });
+    rerender();
+    expect(result.current.permissionsChanged).toBe(false);
+    expect(result.current.generalChanged).toBe(true);
+  });
+
+  it('reloads the permission package on request', async () => {
+    const admin = makeUser({ user_id: 'admin-1', role: 'superadmin' });
+    const branch = makeBranch();
+    const { client, calls } = makeStubClient({ failPermissionsFind: true });
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: admin, open: true }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.permissionsLoadError).not.toBeNull());
+    const finds = () =>
+      calls.filter((call) => call.service === 'branches/:id/permissions' && call.method === 'find')
+        .length;
+    const before = finds();
+
+    act(() => result.current.reloadPermissions());
+
+    await waitFor(() => expect(finds()).toBe(before + 1));
   });
 
   it('fails closed when the canonical permission package cannot load', async () => {

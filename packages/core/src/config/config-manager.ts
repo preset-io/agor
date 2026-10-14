@@ -7,7 +7,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
@@ -42,6 +41,7 @@ import { AgorPasswordPolicyProfile } from './password-policy';
 import { isPlainConfigRecord } from './plain-record';
 import {
   type AgorApmSettings,
+  AgorAvatarAuthority,
   type AgorConfig,
   AgorExternalIdentityProvider,
   AgorExternalIdentityProvisioning,
@@ -57,9 +57,6 @@ import {
   type UnixUserMode,
   type UnknownJson,
 } from './types';
-
-// Set only by the core artifact build; source execution uses ESM imports.
-declare const __AGOR_CORE_CJS__: boolean;
 
 export const RETIRED_CONFIG_KEYS = {
   daemon: ['allowAnonymous', 'requireAuth'],
@@ -771,6 +768,7 @@ function validateConfig(config: AgorConfig): void {
   only(config.mcp_oauth_relay, 'mcp_oauth_relay', ['callback_origin']);
   only(config.identity, 'identity', [
     'user_lifecycle',
+    'avatar_authority',
     'role_authority',
     'local_auth',
     'password_policy',
@@ -782,6 +780,12 @@ function validateConfig(config: AgorConfig): void {
     !Object.values(AgorUserLifecycleAuthority).includes(config.identity.user_lifecycle)
   ) {
     throw new Error('Config error: identity.user_lifecycle must be internal or external');
+  }
+  if (
+    config.identity?.avatar_authority !== undefined &&
+    !Object.values(AgorAvatarAuthority).includes(config.identity.avatar_authority)
+  ) {
+    throw new Error('Config error: identity.avatar_authority must be internal or external');
   }
   if (
     config.identity?.role_authority !== undefined &&
@@ -2051,12 +2055,7 @@ export async function getBaseUrl(db: Database): Promise<string> {
   if (config.multi_tenancy?.mode === 'required_from_auth') {
     // Use the canonical DB entrypoint: separately bundled config/DB artifacts
     // must not create separate AsyncLocalStorage instances for tenant identity.
-    // Native import() in CJS would select the ESM DB and lose the CJS caller's
-    // scope. Keep loading lazy, but select the matching package export format.
-    const { getTenantPublicBaseUrl } =
-      typeof __AGOR_CORE_CJS__ !== 'undefined' && __AGOR_CORE_CJS__
-        ? (createRequire(import.meta.url)('@agor/core/db') as typeof import('@agor/core/db'))
-        : await import('@agor/core/db');
+    const { getTenantPublicBaseUrl } = await import('@agor/core/db');
     return getTenantPublicBaseUrl(db);
   }
   if (process.env.AGOR_BASE_URL) {

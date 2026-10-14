@@ -1249,6 +1249,7 @@ describe('loadConfig', () => {
       yaml.dump({
         identity: {
           user_lifecycle: 'external',
+          avatar_authority: 'internal',
           role_authority: 'claims',
           local_auth: 'disabled',
           external: { provider: 'external_launch', provisioning: 'jit' },
@@ -1260,6 +1261,7 @@ describe('loadConfig', () => {
     await expect(loadConfig()).resolves.toMatchObject({
       identity: {
         user_lifecycle: 'external',
+        avatar_authority: 'internal',
         role_authority: 'claims',
         local_auth: 'disabled',
         external: { provider: 'external_launch', provisioning: 'jit' },

@@ -18,7 +18,8 @@ const uploadMockState = vi.hoisted(() => ({
 
 // Accounting transport has dedicated hook tests; these suites exercise panel actions/composer.
 
-vi.mock('../FileUpload/upload', () => ({
+vi.mock('../FileUpload/upload', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../FileUpload/upload')>()),
   uploadFilesToSession: uploadMockState.uploadFilesToSession,
 }));
 
@@ -400,6 +401,41 @@ describe('SessionPanel composer send', () => {
     expect(screen.getByLabelText('Preview user-b.txt')).toBeInTheDocument();
   });
 
+  it('drops the sent prompt but keeps text typed on while admission was pending', async () => {
+    const send = deferred<boolean>();
+    const onSendPrompt = vi.fn().mockReturnValue(send.promise);
+    renderSessionPanel({ onSendPrompt });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+
+    fireEvent.change(textarea, { target: { value: 'First prompt' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledOnce());
+    fireEvent.change(textarea, { target: { value: 'First prompt\nand a follow-up' } });
+    await act(async () => {
+      send.resolve(true);
+    });
+
+    expect(textarea).toHaveValue('and a follow-up');
+    await waitFor(() => expect(getPromptDraft('user-a', 'session-1')).toBe('and a follow-up'));
+  });
+
+  it('keeps an edited prompt intact when admission completes', async () => {
+    const send = deferred<boolean>();
+    const onSendPrompt = vi.fn().mockReturnValue(send.promise);
+    renderSessionPanel({ onSendPrompt });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+
+    fireEvent.change(textarea, { target: { value: 'First prompt' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledOnce());
+    fireEvent.change(textarea, { target: { value: 'First draft, rewritten' } });
+    await act(async () => {
+      send.resolve(true);
+    });
+
+    expect(textarea).toHaveValue('First draft, rewritten');
+  });
+
   it('ignores a rapid second send while the first attachment upload is still in flight', async () => {
     const upload = deferred<UploadFilesToSessionResult>();
     const onSendPrompt = vi.fn();
@@ -527,9 +563,12 @@ describe('SessionPanel composer send', () => {
     fireEvent.click(sendButton as HTMLButtonElement);
 
     expect(await screen.findByText(`chart.png: ${reason}`)).toBeVisible();
+    expect(await screen.findByText(`Couldn't upload chart.png. (${reason})`)).toBeVisible();
     fireEvent.click(sendButton as HTMLButtonElement);
     expect(
-      await screen.findByText(`chart.png: ${reason}. Remove failed files before sending.`)
+      await screen.findByText(
+        `Couldn't send, because chart.png didn't upload (${reason}). Remove it, then send again.`
+      )
     ).toBeVisible();
     expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledTimes(1);
     expect(onSendPrompt).not.toHaveBeenCalled();

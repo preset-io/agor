@@ -92,6 +92,22 @@ describe('OnboardingBanners real-browser UX', () => {
     }
   );
 
+  it('keeps the dismiss tooltip inside the viewport so the close button does not move', async () => {
+    render(
+      <ConfigProvider theme={{ token: { motion: false } }}>
+        <OnboardingBanners {...baseProps()} />
+      </ConfigProvider>
+    );
+    await screen.findByText('Claude Code rejected the configured credential.');
+    await userEvent.hover(
+      screen.getByRole('button', { name: "Don't remind me about Claude Code" })
+    );
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      "Don't remind me about Claude Code"
+    );
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
+  });
+
   it('wraps the workspace-fallback action without narrowing the message to single words', async () => {
     agorStore.getState().setAgenticToolSettings([
       {

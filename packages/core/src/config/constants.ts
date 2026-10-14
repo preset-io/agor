@@ -134,7 +134,22 @@ export const PAGINATION = {
    * Default limit for CLI list commands - reasonable for terminal display
    */
   CLI_DEFAULT_LIMIT: 50,
+
+  /**
+   * Maximum ids in one `{ $in: [...] }` id-list read (`session_id`,
+   * `branch_id`). Larger sets are split into chunks by the caller.
+   */
+  MAX_ID_LIST: 200,
+
+  /** Maximum rows returned by one `branches.find({ teammate: true })` read. */
+  MAX_TEAMMATE_BRANCHES: 1_000,
 } as const;
+
+/**
+ * Error message thrown by the client `findAll()` helper when offset pagination
+ * sees the collection change between pages.
+ */
+export const PAGINATION_CHURN_MESSAGE = 'Paginated findAll() changed while pages were being read';
 
 /**
  * Knowledge document list pages. Access, sort and paging are evaluated in SQL,

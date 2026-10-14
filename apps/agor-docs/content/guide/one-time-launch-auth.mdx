@@ -89,6 +89,43 @@ Agor-owned preferences, onboarding state, AI-provider credentials and defaults,
 environment variables, personal API keys, and MCP selections/OAuth grants stay
 editable.
 
+Avatar ownership can be configured independently with
+`identity.avatar_authority: internal | external`. When omitted, it follows
+`user_lifecycle`: the external profile above keeps provider-owned avatars and
+disables Agor avatar writes and Slack sync. This restriction is independent of
+HA and multi-tenant mode.
+
+If the launch provider owns accounts but Agor should own avatars, use:
+
+```yaml
+identity:
+  user_lifecycle: external
+  avatar_authority: internal
+  role_authority: claims
+  local_auth: disabled
+  external:
+    provider: external_launch
+    provisioning: jit
+```
+
+With `avatar_authority: internal`, users can edit their own avatars and admins
+can manage Slack avatar settings, subject to normal user-management permissions.
+Email, name, execution-home keys, account lifecycle, and roles remain externally
+managed. Launch `avatar` and `picture` claims are ignored, including on first
+login, so later logins cannot overwrite manual or Slack avatars or repopulate
+an avatar that was cleared. This setting permits Slack sync; it does not enable
+it or run a sync during login. Admins still select a Slack gateway and enable
+sync in the Avatars tab. Existing avatars are retained when changing this
+setting. Selecting `external` resumes provider projection on subsequent launches
+and requires the external account profile.
+
+The public health identity contract is version 2 and reports `avatarAuthority`,
+`capabilities.users.avatarWrite`, and `capabilities.users.avatarSettingsWrite`.
+Upgrade the UI and all daemon replicas together before enabling the new setting;
+clients reject unsupported contract versions rather than guessing permissions.
+A Cloud deployment must set `avatar_authority: internal` in its generated daemon
+configuration to opt in. Do not change `user_lifecycle` to enable avatars.
+
 The trusted `(tenant, provider, issuer, subject)` binding is stored in a
 tenant-owned relation with database uniqueness enforcement. PostgreSQL JIT
 projection is one tenant-scoped transaction and serializes the same subject

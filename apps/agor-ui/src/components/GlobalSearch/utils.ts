@@ -84,3 +84,14 @@ export function searchResultKey(result: SearchResultItem): string {
       return `mcp-${result.item.mcp_server_id}`;
   }
 }
+
+/**
+ * Branch ids the shown session and artifact rows label as their parent: what
+ * the store must hold for those labels (bounded by the section caps).
+ */
+export function parentBranchIds(results: ResultsByType): string[] {
+  return [
+    ...results.session.map((row) => row.item.branch_id),
+    ...results.artifact.map((row) => row.item.branch_id ?? ''),
+  ];
+}

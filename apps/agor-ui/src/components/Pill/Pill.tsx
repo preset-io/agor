@@ -1,13 +1,10 @@
 import type { ContextUsageSnapshot } from '@agor/core/types';
-import type { SessionStatus, TaskStatus } from '@agor-live/client';
-import { shortId } from '@agor-live/client';
+import { type Session, shortId } from '@agor-live/client';
 // TODO: Move normalization to DB or daemon API
 import {
   ApartmentOutlined,
   BranchesOutlined,
-  CheckCircleOutlined,
   ClockCircleOutlined,
-  CloseCircleOutlined,
   CodeOutlined,
   CopyOutlined,
   EditOutlined,
@@ -30,10 +27,12 @@ import { useRef, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
+import type { SessionStatusInput } from '../../utils/sessionStatus';
 import { NeutralBoardIcon } from '../BoardTile/BoardTile';
 import { type SessionForIds, SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
 import { getModelDisplayName } from './modelDisplay';
+import { getSessionStatusPresentation } from './SessionStatusIcon';
 import { getUrlDisplayLabel, isGitHubUrl, type UrlDisplayRepo } from './url-helpers';
 
 /**
@@ -348,7 +347,7 @@ const ContextWindowPopoverContent: React.FC<{
     <div
       onKeyDown={(event) => {
         if (event.key !== 'Escape') return;
-        event.stopPropagation();
+        // Let AntD handle dismissal so it also cancels pending hover timers.
         onEscape();
       }}
       style={{ width: 400, maxWidth: '90vw' }}
@@ -438,8 +437,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   // Restore focus only for keyboard dismissal, never for hover or outside clicks.
-  const closeWithKeyboard = () => {
-    setOpen(false);
+  const restoreTriggerFocus = () => {
     triggerRef.current?.focus();
   };
   // Prefer the executor-supplied snapshot — its totalTokens/maxTokens are
@@ -477,7 +475,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
           limit={effectiveLimit}
           percentage={percentage}
           taskMetadata={taskMetadata}
-          onEscape={closeWithKeyboard}
+          onEscape={restoreTriggerFocus}
         />
       }
       title={null}
@@ -492,12 +490,6 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
         type="text"
         aria-label={`Context window ${hasLimit ? `${percentage}% used` : 'usage unknown'}; show token breakdown`}
         aria-expanded={open}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.stopPropagation();
-            closeWithKeyboard();
-          }
-        }}
         style={{
           padding: 0,
           height: 'auto',
@@ -686,57 +678,15 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
 };
 
 interface StatusPillProps extends BasePillProps {
-  status:
-    | (typeof TaskStatus)[keyof typeof TaskStatus]
-    | (typeof SessionStatus)[keyof typeof SessionStatus]
-    | 'pending';
+  session: SessionStatusInput & Pick<Session, 'ready_for_prompt'>;
 }
 
-export const StatusPill: React.FC<StatusPillProps> = ({ status, style }) => {
-  // Both TaskStatus and SessionStatus share the same values (completed, failed, running)
-  // So we can use a single config object without duplicates
-  const config: Record<string, { icon: React.ReactElement; color: string; text: string }> = {
-    completed: {
-      icon: <CheckCircleOutlined />,
-      color: PILL_COLORS.success,
-      text: 'Completed',
-    },
-    failed: {
-      icon: <CloseCircleOutlined />,
-      color: PILL_COLORS.error,
-      text: 'Failed',
-    },
-    running: {
-      icon: <ToolOutlined />,
-      color: PILL_COLORS.processing,
-      text: 'Running',
-    },
-    timed_out: {
-      icon: <ClockCircleOutlined />,
-      color: PILL_COLORS.warning,
-      text: 'Timed Out',
-    },
-    idle: {
-      icon: <ToolOutlined />,
-      color: PILL_COLORS.session,
-      text: 'Idle',
-    },
-    pending: { icon: <ToolOutlined />, color: PILL_COLORS.session, text: 'Pending' },
-  };
-
-  const statusConfig = config[status];
-  if (!statusConfig) {
-    // Fallback for unknown status
-    return (
-      <Tag icon={<ToolOutlined />} color={PILL_COLORS.session} style={style}>
-        {status}
-      </Tag>
-    );
-  }
-
+/** Session status in the shared vocabulary from `utils/sessionStatus`. */
+export const StatusPill: React.FC<StatusPillProps> = ({ session, style }) => {
+  const { label, description, color, Icon } = getSessionStatusPresentation(session);
   return (
-    <Tag icon={statusConfig.icon} color={statusConfig.color} style={style}>
-      {statusConfig.text}
+    <Tag icon={<Icon aria-hidden />} color={color} title={description} style={style}>
+      {label}
     </Tag>
   );
 };

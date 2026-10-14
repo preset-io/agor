@@ -1,12 +1,14 @@
 import type { AgorClient, Branch, UserID } from '@agor-live/client';
 import { isTeammate } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
-import { App as AntApp, Button, Select, Space, Spin, Typography } from 'antd';
+import { Select, Space, Spin, Typography } from 'antd';
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectRepoById } from '../../store/selectors';
+import { formatActionError } from '../../utils/connectionErrors';
+import { useThemedMessage } from '../../utils/message';
 import { type TeammateOption, teammateLabel, teammateOption } from '../../utils/teammateLabels';
 import { TeammateOptionLabel } from '../PrimaryAssistantCompose';
 
@@ -37,7 +39,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
   disabled = false,
   onPicked,
 }) => {
-  const { message } = AntApp.useApp();
+  const { showSuccess, showError } = useThemedMessage();
   const boardById = useAgorStore(selectBoardById);
   const repoById = useAgorStore(selectRepoById);
 
@@ -103,7 +105,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
   // Skip the closing period when the sentence already ends in punctuation (e.g. "Ambient!").
   const currentEndsSentence = /[.!?…]$/.test(currentOption?.context ?? currentOption?.label ?? '');
 
-  const handleChange = async (branchId: string | null) => {
+  const handleChange = async (branchId: string) => {
     if (!client || !currentUserId) return;
     const operationUserId = currentUserId;
     setSaving(true);
@@ -113,13 +115,11 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
       );
       setCurrent(branch);
       if (branch) {
-        message.success(`Primary assistant set to ${teammateLabel(branch)}`);
+        showSuccess(`Primary assistant set to ${teammateLabel(branch)}.`);
         onPicked?.(branch);
       }
     } catch (error) {
-      message.error(
-        `Failed to update primary assistant: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('change your primary assistant', error, { idempotent: true }));
     } finally {
       setSaving(false);
     }
@@ -151,12 +151,6 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
         </Typography.Text>
       )}
 
-      <Button
-        disabled={disabled || saving || !client || !currentUserId || loadFailed}
-        onClick={() => void handleChange(null)}
-      >
-        Clear primary assistant
-      </Button>
       <Select
         showSearch
         loading={saving}

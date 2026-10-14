@@ -16,6 +16,7 @@ import type {
   AgenticToolPreset,
   Artifact,
   Board,
+  BoardBranchCount,
   BoardCapabilityPolicies,
   BoardComment,
   BoardCommentCreate,
@@ -81,6 +82,7 @@ import type {
   SchedulePatchData,
   SdkHealthFailureInput,
   Session,
+  SessionCount,
   SessionID,
   SessionUpdate,
   Task,
@@ -108,6 +110,7 @@ import {
   DAEMON,
   MESSAGE_PAGINATION,
   PAGINATION,
+  PAGINATION_CHURN_MESSAGE,
 } from '../config/constants';
 
 /**
@@ -274,6 +277,16 @@ export interface BranchPermissionsService {
   ): Promise<BranchCapabilityPolicy>;
 }
 
+/** Per-board active branch counts (find only; RBAC-scoped, never published). */
+export interface BranchCountsService {
+  find(params?: Params): Promise<BoardBranchCount[]>;
+}
+
+/** Active session counts per branch or board (find only; RBAC-scoped, never published). */
+export interface SessionCountsService {
+  find(params: { query: { group_by: 'branch_id' | 'board_id' } }): Promise<SessionCount[]>;
+}
+
 export interface WorkspacePreferencesService {
   find(params?: Params): Promise<CapabilityPolicyWorkspacePreferences>;
   patch(
@@ -295,6 +308,8 @@ export interface ServiceTypes {
   'repos/clone': Repo;
   'repos/local': Repo;
   branches: Branch;
+  'branch-counts': BoardBranchCount;
+  'session-counts': SessionCount;
   schedules: Schedule;
   'gateway-channels': GatewayChannel;
   users: User;
@@ -874,6 +889,8 @@ export interface AgorClient
   service(path: 'repos/clone'): ReposCloneService;
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
+  service(path: 'branch-counts'): BranchCountsService;
+  service(path: 'session-counts'): SessionCountsService;
   service(path: 'boards'): BoardsService;
   service(path: 'boards/:id/ownership' | 'branches/:id/ownership'): OwnershipTransferService;
   service(path: 'boards/:id/permissions'): BoardPermissionsService;
@@ -1324,7 +1341,7 @@ function extendFindAllOnService(service: AgorService<unknown>, rawPath: string):
       }
 
       if (nextResult.total !== total || nextResult.skip !== nextSkip) {
-        throw new Error('Paginated findAll() changed while pages were being read');
+        throw new Error(PAGINATION_CHURN_MESSAGE);
       }
       if (nextResult.data.length === 0) {
         throw new Error('Paginated findAll() ended before the advertised total');

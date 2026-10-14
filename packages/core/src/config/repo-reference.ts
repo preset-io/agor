@@ -7,7 +7,8 @@
  * 3. Slug + branch: anthropics/agor:feat-auth
  */
 
-import type { BranchName, RepoSlug, UUID } from '../types';
+import type { BranchName, Repo, RepoSlug, UUID } from '../types';
+import { TEAMMATE_FRAMEWORK_PRIVATE_FORK_NAMES } from '../types/branch';
 
 /**
  * Parsed repo reference
@@ -151,6 +152,14 @@ export function extractGitHubSlugFromUrl(url: string): RepoSlug | undefined {
 
   const slug = remotePath.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
   return isValidSlug(slug) ? (slug as RepoSlug) : undefined;
+}
+
+/** Exact-name content rule (selection uses isPrivateTeammateFrameworkFork): github.com private forks start from the public template. */
+export function defaultsToPublicTeammateTemplate(repo: Pick<Repo, 'remote_url'>): boolean {
+  const name = extractGitHubSlugFromUrl(repo.remote_url ?? '')
+    ?.split('/')[1]
+    ?.toLowerCase();
+  return (TEAMMATE_FRAMEWORK_PRIVATE_FORK_NAMES as readonly string[]).includes(name ?? '');
 }
 
 /**

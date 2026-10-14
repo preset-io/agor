@@ -333,6 +333,19 @@ describe('seedOnboardingTeammate', () => {
     );
   });
 
+  it('passes the resolved framework repo so its source rule does not depend on the map snapshot', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
+
+    const { input } = setup({ repoById: new Map() });
+    await seedOnboardingTeammate(input);
+
+    expect(createTeammateBranchMock.mock.calls[0][0].repo).toBe(input.frameworkRepo);
+  });
+
   it('warns (non-fatal) and returns no session when teammate creation throws', async () => {
     createTeammateBranchMock.mockRejectedValue(new Error('boom'));
     const { input, onWarn } = setup();
@@ -341,7 +354,9 @@ describe('seedOnboardingTeammate', () => {
 
     expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
     expect(onWarn).toHaveBeenCalledTimes(1);
-    expect(onWarn.mock.calls[0][0]).toMatch(/couldn't start your AI teammate/i);
+    expect(onWarn.mock.calls[0][0]).toBe(
+      "Your board is ready, but your AI teammate didn't start. You can create one from the board anytime. (boom)"
+    );
     expect(result).toEqual({});
   });
 

@@ -23,6 +23,7 @@ import {
   type Board,
   type BranchID,
   getSessionType,
+  getUserPrimaryAgenticTool,
   type Session,
   type SessionID,
   type SpawnConfig,
@@ -37,6 +38,7 @@ import type { SessionBulkArchiveResult, SessionParams } from '../../services/ses
 import { requireActiveAgenticTool } from '../../utils/agentic-tool-runtime.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
+import { withPromptProvenanceTool } from '../../utils/prompt-provenance.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -711,7 +713,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           metadata: { system_authored: true },
         },
         {
-          ...ctx.baseServiceParams,
+          ...withPromptProvenanceTool(ctx.baseServiceParams, 'agor_sessions_spawn'),
           provider: undefined,
           route: { id: childSession.session_id },
         }
@@ -781,16 +783,24 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           )
         );
       }
+      // Name the delivering tool on the inherited server-stamped origin. The
+      // stamp itself rides on `ctx.baseServiceParams`, so forgetting this line
+      // would only blur a label, never drop the block.
+      const provenanceParams = withPromptProvenanceTool(
+        ctx.baseServiceParams,
+        'agor_sessions_prompt',
+        mode
+      );
       const callbackParams = args.callback
         ? {
-            ...ctx.baseServiceParams,
+            ...provenanceParams,
             _taskCompletionCallback: {
               target_session_id: ctx.sessionId!,
               requested_from_session_id: ctx.sessionId!,
               requested_by_user_id: ctx.userId,
             },
           }
-        : ctx.baseServiceParams;
+        : provenanceParams;
 
       if (mode === 'continue') {
         // The prompt route returns the Task entity directly. Whether it ran
@@ -1021,7 +1031,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing branch. When called from an MCP session context in the same target branch (the default for branch-local orchestrator agents), the new session is automatically linked to the calling session as its parent — pass `parentSessionId: null` to create an unlinked root session instead. Cross-branch sessions are not genealogy-linked automatically; use callbacks for remote completion routing. Use for starting work on a new task in the same codebase (e.g., new feature branch, separate investigation). MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
+        'Create a new session in an existing branch. Prefer omitting agenticTool unless a specific tool is needed: omission uses the authenticated caller’s saved primary coding agent, not the calling session’s tool. If no primary coding agent is set, creation fails; pass agenticTool explicitly or set the preference. The selected tool uses the caller’s normal saved configuration (user default/preset/workspace default), with explicit overrides handled as usual. When called from an MCP session context in the same target branch (the default for branch-local orchestrator agents), the new session is automatically linked to the calling session as its parent — pass `parentSessionId: null` to create an unlinked root session instead. Cross-branch sessions are not genealogy-linked automatically; use callbacks for remote completion routing. Use for starting work on a new task in the same codebase (e.g., new feature branch, separate investigation). MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',
@@ -1030,7 +1040,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         ),
         agenticTool: z
           .enum(AGENTIC_TOOL_NAMES)
-          .describe('Which agent to use for this session (required)'),
+          .optional()
+          .describe(
+            'Optional tool override. Omit to use the authenticated caller’s saved primary coding agent and its normal configuration defaults. Fails if omitted and no primary coding agent is set. Specify only when a particular tool is needed.'
+          ),
         title: mcpOptionalNonEmptyString('title', 'Session title (optional)'),
         description: mcpOptionalString('description', 'Session description (optional)'),
         contextFiles: z
@@ -1068,7 +1081,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .enum(['once', 'persistent'])
           .optional()
           .describe(
-            'Callback firing mode: "persistent" (default) fires on every completion until unlinked, "once" fires on the first completion then auto-disables'
+            'Callback firing mode: "persistent" (default) fires on every completion until unlinked, including turns processing child results. Use it for coordinators: C completes -> B processes -> B completes -> A. "once" is consumed by the first completion, which may only be the delegation turn. No descendant ownership transfer.'
           ),
         parentSessionId: z
           .string()
@@ -1091,10 +1104,17 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const agenticTool = args.agenticTool as AgenticToolName;
-
-      // Fetch user data to get unix_username
+      // Resolve from the actual caller through the tenant-scoped users service,
+      // never from the parent session owner or the UI's unset-preference fallback.
       const user = await ctx.app.service('users').get(ctx.userId, ctx.baseServiceParams);
+      const agenticTool = args.agenticTool ?? getUserPrimaryAgenticTool(user);
+      if (!agenticTool) {
+        throw new Error(
+          'No primary coding agent is set. Specify agenticTool or choose a Primary coding agent in Settings → Preferences.'
+        );
+      }
+      // Leave configuration materialization to SessionsService so implicit and
+      // explicit tools share user/preset/workspace defaults and policy checks.
 
       // Get branch to extract repo context
       const branch = await ctx.app.service('branches').get(args.branchId, ctx.baseServiceParams);
@@ -1305,7 +1325,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             stream: true,
             metadata: { system_authored: true },
           },
-          { ...ctx.baseServiceParams, provider: undefined, route: { id: session.session_id } }
+          {
+            ...withPromptProvenanceTool(ctx.baseServiceParams, 'agor_sessions_create'),
+            provider: undefined,
+            route: { id: session.session_id },
+          }
         );
       }
 
@@ -1368,7 +1392,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .enum(['once', 'persistent'])
           .optional()
           .describe(
-            'Callback mode: "once" fires once then auto-disables, "persistent" fires every time (optional)'
+            'Callback mode: "persistent" fires on every completion, including processing child results; use for multi-hop coordinators. "once" auto-disables after the first completion (even an initial delegation turn). Does not change exact-task callback scope (optional)'
           ),
       }),
     },

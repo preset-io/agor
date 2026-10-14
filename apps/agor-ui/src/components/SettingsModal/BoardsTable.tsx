@@ -2,7 +2,6 @@ import {
   type AgorClient,
   type Board,
   type Branch,
-  type Session,
   summarizeBoardImportSkips,
   type User,
 } from '@agor-live/client';
@@ -16,6 +15,7 @@ import {
 } from '@ant-design/icons';
 import { App, Button, Form, Input, Popconfirm, Select, Space, Tooltip, Typography } from 'antd';
 import { useMemo, useState } from 'react';
+import { formatActionError, notConnectedMessage } from '@/utils/connectionErrors';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
@@ -29,11 +29,11 @@ import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { useSessionCounts } from './useBranchPage';
 
 interface BoardsTableProps {
   client: AgorClient | null;
   boardById: Map<string, Board>;
-  sessionsByBranch: Map<string, Session[]>;
   branchById: Map<string, Branch>;
   currentUser?: User | null;
   onCreate?: (board: Partial<Board>) => void;
@@ -46,7 +46,6 @@ interface BoardsTableProps {
 export const BoardsTable: React.FC<BoardsTableProps> = ({
   client,
   boardById,
-  sessionsByBranch,
   branchById,
   currentUser,
   onCreate,
@@ -62,27 +61,6 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const [archiveFilter, setArchiveFilter] = useState<'active' | 'archived' | 'all'>('active');
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
-
-  // Calculate session count per board (branch-centric model). Build the
-  // board buckets once so opening Settings is O(branches + sessions) instead
-  // of O(boards × branches).
-  const boardSessionCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-
-    for (const branch of branchById.values()) {
-      if (!branch.board_id) continue;
-      counts.set(
-        branch.board_id,
-        (counts.get(branch.board_id) ?? 0) + (sessionsByBranch.get(branch.branch_id)?.length ?? 0)
-      );
-    }
-
-    for (const board of boardById.values()) {
-      if (!counts.has(board.board_id)) counts.set(board.board_id, 0);
-    }
-
-    return counts;
-  }, [boardById, sessionsByBranch, branchById]);
 
   const handleCreate = () => {
     // Validate all fields (not just 'name') so custom_context JSON rules run.
@@ -125,19 +103,20 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       ),
       onOk: () => {
         if (!client) {
-          showError('Not connected to daemon');
-          return Promise.reject(new Error('Not connected to daemon'));
+          const message = notConnectedMessage('clone the board');
+          showError(message);
+          return Promise.reject(new Error(message));
         }
 
         const boardsService = client.service('boards');
         return boardsService
           .clone({ id: board.board_id, name: newName })
           .then((clonedBoard) => {
-            showSuccess(`Board cloned: ${clonedBoard.name}`);
+            showSuccess(`Board cloned as ${clonedBoard.name}.`);
             onCreate?.(clonedBoard);
           })
           .catch((error) => {
-            showError(`Clone failed: ${error instanceof Error ? error.message : String(error)}`);
+            showError(formatActionError('clone the board', error, { idempotent: false }));
             return Promise.reject(error);
           });
       },
@@ -146,7 +125,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 
   const handleExport = async (board: Board) => {
     if (!client) {
-      showError('Not connected to daemon');
+      showError(notConnectedMessage('export the board'));
       return;
     }
     try {
@@ -161,9 +140,9 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       a.click();
       URL.revokeObjectURL(url);
 
-      showSuccess('Board exported');
+      showSuccess('Board exported.');
     } catch (error) {
-      showError(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+      showError(formatActionError('export the board', error, { idempotent: true }));
     }
   };
 
@@ -178,27 +157,40 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const handleImportFile = async (file: File | undefined) => {
     if (!file) return;
     if (!client) {
-      showError('Not connected to daemon');
+      showError(notConnectedMessage('import the board'));
       return;
     }
 
     const content = await file.text();
+    const isJson = file.name.endsWith('.json');
+    let blob: unknown;
+    if (isJson) {
+      try {
+        blob = JSON.parse(content);
+      } catch {
+        showError("Couldn't import the board. The file isn't valid JSON.");
+        return;
+      }
+    }
 
     try {
       const boardsService = client.service('boards');
-      const board = file.name.endsWith('.json')
-        ? await boardsService.fromBlob(JSON.parse(content))
+      const board = isJson
+        ? await boardsService.fromBlob(blob as Parameters<typeof boardsService.fromBlob>[0])
         : await boardsService.fromYaml({ yaml: content });
 
       const skippedSummary = summarizeBoardImportSkips(board.import_skipped);
       if (skippedSummary) {
-        showWarning(`Board imported: ${board.name}. ${skippedSummary}`, { duration: 8 });
+        // Persistent so the skipped list stays readable.
+        showWarning(`Imported ${board.name}, but not everything came across: ${skippedSummary}`, {
+          duration: 0,
+        });
       } else {
-        showSuccess(`Board imported: ${board.name}`);
+        showSuccess(`Board imported as ${board.name}.`);
       }
       onCreate?.(board);
     } catch (error) {
-      showError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
+      showError(formatActionError('import the board', error, { idempotent: false }));
     }
   };
 
@@ -229,6 +221,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       (board) => board.board_id,
     ]);
   }, [boardById, archiveFilter, searchTerm]);
+  const boardSessionCounts = useSessionCounts(client, 'board_id');
 
   const columns = [
     {
@@ -259,7 +252,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       title: 'Sessions',
       key: 'sessions',
       width: 100,
-      render: (_: unknown, board: Board) => boardSessionCounts.get(board.board_id) || 0,
+      render: (_: unknown, board: Board) => boardSessionCounts.get(board.board_id) ?? null,
     },
     {
       title: 'Actions',

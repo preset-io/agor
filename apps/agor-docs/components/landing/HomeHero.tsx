@@ -109,60 +109,62 @@ export function HomeHero() {
       <div className={styles.homeHeroScrim} aria-hidden="true" />
 
       <section className={styles.homePitch}>
-        {/* The troupe emerges from behind this (it anchors on .homeBadge). */}
-        <HeroLogo className={styles.homeBadge} />
-        <h1>
-          {HOME_HERO.headline.split('\n').map((line, index) => (
-            <span key={line} className={index > 0 ? styles.homePromise : undefined}>
-              <HighlightedText text={line} />
-            </span>
-          ))}
-        </h1>
-        <p className={styles.homeSub}>
-          <HighlightedText text={HOME_HERO.subheadline} />
-        </p>
-        <div className={styles.homeTiers}>
-          <div className={styles.homeTier}>
-            <p className={styles.homeKicker}>Agor Cloud</p>
-            <div className={styles.homeCtaRow}>
-              <CloudCtaLink
-                placement="landing-hero"
-                labels={TIER_CTA_LABELS}
-                className={styles.homePrimary}
-              />
-              <DemoButton className={styles.homeSecondary}>Book a demo</DemoButton>
+        <div className={styles.homePitchContent}>
+          {/* The troupe emerges from behind this (it anchors on .homeBadge). */}
+          <HeroLogo className={styles.homeBadge} />
+          <h1>
+            {HOME_HERO.headline.split('\n').map((line, index) => (
+              <span key={line} className={index > 0 ? styles.homePromise : undefined}>
+                <HighlightedText text={line} />
+              </span>
+            ))}
+          </h1>
+          <p className={styles.homeSub}>
+            <HighlightedText text={HOME_HERO.subheadline} />
+          </p>
+          <div className={styles.homeTiers}>
+            <div className={styles.homeTier}>
+              <p className={styles.homeKicker}>Agor Cloud</p>
+              <div className={styles.homeCtaRow}>
+                <CloudCtaLink
+                  placement="landing-hero"
+                  labels={TIER_CTA_LABELS}
+                  className={styles.homePrimary}
+                />
+                <DemoButton className={styles.homeSecondary}>Book a demo</DemoButton>
+              </div>
             </div>
-          </div>
-          <div className={`${styles.homeTier} ${styles.homeTierCe}`}>
-            <p className={`${styles.homeKicker} ${styles.homeKickerMuted}`}>
-              Agor Community Edition
-            </p>
-            <div className={styles.homeCeRow}>
-              <Link
-                href="/guide/getting-started"
-                className={styles.homeCeBtn}
-                onClick={() =>
-                  trackEvent('nav_click', {
-                    target: '/guide/getting-started',
-                    placement: 'home-hero-ce',
-                  })
-                }
-              >
-                <Download size={16} aria-hidden />
-                Install locally
-              </Link>
-              <a
-                href={GITHUB_REPO_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={styles.homeCeBtn}
-                onClick={() =>
-                  trackEvent('nav_click', { target: GITHUB_REPO_URL, placement: 'home-hero-ce' })
-                }
-              >
-                <GitHubIcon size={16} />
-                Star on GitHub
-              </a>
+            <div className={`${styles.homeTier} ${styles.homeTierCe}`}>
+              <p className={`${styles.homeKicker} ${styles.homeKickerMuted}`}>
+                Agor Community Edition
+              </p>
+              <div className={styles.homeCeRow}>
+                <Link
+                  href="/guide/getting-started"
+                  className={styles.homeCeBtn}
+                  onClick={() =>
+                    trackEvent('nav_click', {
+                      target: '/guide/getting-started',
+                      placement: 'home-hero-ce',
+                    })
+                  }
+                >
+                  <Download size={16} aria-hidden />
+                  Install locally
+                </Link>
+                <a
+                  href={GITHUB_REPO_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={styles.homeCeBtn}
+                  onClick={() =>
+                    trackEvent('nav_click', { target: GITHUB_REPO_URL, placement: 'home-hero-ce' })
+                  }
+                >
+                  <GitHubIcon size={16} />
+                  Star on GitHub
+                </a>
+              </div>
             </div>
           </div>
         </div>

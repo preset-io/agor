@@ -125,7 +125,7 @@ export interface DiscordSetupDecisions {
   agorUserId?: string | null;
   alignUsers?: boolean;
   userMap?: Record<string, string>;
-  /** Opt in to bounded PNG/JPEG ingestion for live Discord messages. */
+  /** Opt in to bounded image and text attachment ingestion for live Discord messages. */
   files?: boolean;
   /** Opt in to agent reads of allowlisted channel history. */
   channelHistory?: boolean;

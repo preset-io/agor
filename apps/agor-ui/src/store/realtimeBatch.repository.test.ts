@@ -55,7 +55,8 @@ for (const restoreAfterArchive of [false, true]) {
       });
       const rows = [parent, child];
       agorStore.getState().applyMaps((prev) => ({ ...prev, ...buildSessionMaps(rows) }));
-      setRealtimeAuthorityScope('tenant-a:user-a:1');
+      // The caller's own sessions: the user scope holds them.
+      setRealtimeAuthorityScope('test-user:member:1');
       const commit = captureSessionPatchCommit();
 
       // Delay entry to the real transaction, AFTER the repository captures `now`.

@@ -208,7 +208,7 @@ export interface DiscordGatewayConfig {
   align_discord_users?: boolean;
   user_map?: Record<string, string>;
   catch_up?: DiscordCatchUpConfig;
-  /** Opt-in bounded PNG/JPEG ingestion for live Discord messages. */
+  /** Opt-in bounded image and text attachment ingestion for live Discord messages. */
   files?: boolean;
   /**
    * Agent-callable MCP tool toggles. `[]` is the legacy all-off value and

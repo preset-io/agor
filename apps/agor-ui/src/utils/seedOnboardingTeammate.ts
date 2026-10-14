@@ -23,8 +23,9 @@ export interface SeedOnboardingTeammateInput {
   teammateEmoji?: string;
   /**
    * Framework source branch from the chosen gallery template. Undefined falls
-   * back to the framework repo's default branch (createTeammateBranch). A
-   * missing template branch leaves setup incomplete and retryable.
+   * back to the framework repo's default branch, or the public template's for a
+   * github.com private fork (createTeammateBranch). A missing template branch
+   * leaves setup incomplete and retryable.
    */
   sourceBranch?: string;
   /** Remote that owns sourceBranch when a built-in template is not on the destination remote. */
@@ -204,6 +205,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
             displayName: teammateName,
             emoji: input.teammateEmoji,
             repoId: input.frameworkRepo.repo_id,
+            repo: input.frameworkRepo,
             sourceBranch: input.sourceBranch,
             sourceRemoteUrl: input.sourceRemoteUrl,
             boardId: input.boardId,
@@ -233,7 +235,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
     // the bootstrap session below.
     if (!input.client) {
       warn(
-        `${teammateName}'s workspace is saved, but it could not be saved as your primary assistant yet.`
+        `${teammateName}'s workspace is ready, but it couldn't be set as your primary assistant yet.`
       );
     } else {
       try {
@@ -243,9 +245,9 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
         });
       } catch (error) {
         warn(
-          `${teammateName}'s workspace is saved, but it could not be saved as your primary assistant: ${
+          `${teammateName}'s workspace is ready, but it couldn't be set as your primary assistant. (${
             error instanceof Error ? error.message : String(error)
-          }.`
+          })`
         );
       }
     }
@@ -322,12 +324,12 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
     };
   } catch (error) {
     const recovery = branch
-      ? 'Your teammate is saved. Open it on the board for details. If provisioning failed, ask an admin to check template setup and Git access, then use Retry on that same teammate.'
+      ? 'Your teammate is saved. Open it on the board for details. If provisioning failed, ask an administrator to check template setup and Git access, then use Retry on that same teammate.'
       : 'You can create one from the board anytime.';
     warn(
-      `Your board is ready, but we couldn't start your AI teammate. ${recovery} Details: ${
+      `Your board is ready, but your AI teammate didn't start. ${recovery} (${
         error instanceof Error ? error.message : String(error)
-      }`
+      })`
     );
     return isCurrentUser() && branch ? { branchId: branch.branch_id } : {};
   }

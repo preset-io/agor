@@ -9,23 +9,24 @@ issue or PR; git history keeps deleted docs.
 
 ## `concepts/` — how the system works and what must stay true
 
-| File                                                                      | Covers                                                                    |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| [`core.md`](concepts/core.md)                                             | The primitives (Branch, Board, Session, Task, Report).                    |
-| [`architecture.md`](concepts/architecture.md)                             | System shape and where to look first.                                     |
-| [`branches.md`](concepts/branches.md)                                     | Branch-centric boards (read before touching boards).                      |
-| [`id-management.md`](concepts/id-management.md)                           | UUIDv7, branded ID types, short-ID resolution.                            |
-| [`multitenancy.md`](concepts/multitenancy.md)                             | Tenant triggers, resource classification, code owners, proof.             |
-| [`security.md`](concepts/security.md)                                     | CSP, CORS, and daemon-wide git config hardening.                          |
-| [`daemon-filesystem-boundary.md`](concepts/daemon-filesystem-boundary.md) | Daemon-host filesystem capability guard.                                  |
-| [`task-queueing.md`](concepts/task-queueing.md)                           | Task lifecycle and queue-on-busy semantics.                               |
-| [`task-runtime-state.md`](concepts/task-runtime-state.md)                 | Task states, executor liveness, pulses, watchdogs, and containment.       |
-| [`session-sharing.md`](concepts/session-sharing.md)                       | Shared session prompting: gates, compatibility, caller identity.          |
-| [`mcp-session-tools.md`](concepts/mcp-session-tools.md)                   | `agor_sessions_*` MCP tool surface and override semantics.                |
-| [`mcp-catalog.md`](concepts/mcp-catalog.md)                               | Curated catalog, Connect probes, OAuth/bearer reuse, disclosure contract. |
-| [`mcp-egress-gateway.md`](concepts/mcp-egress-gateway.md)                 | Daemon-owned MCP egress: credential boundary and admission contract.      |
-| [`discord-gateway.md`](concepts/discord-gateway.md)                       | Discord gateway: provider-owned history, cursor, and admission contract.  |
-| [`opencode-hosted.md`](concepts/opencode-hosted.md)                       | Hosted OpenCode capability gate and checkpointed native state.            |
+| File                                                                        | Covers                                                                    |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [`core.md`](concepts/core.md)                                               | The primitives (Branch, Board, Session, Task, Report).                    |
+| [`architecture.md`](concepts/architecture.md)                               | System shape and where to look first.                                     |
+| [`branches.md`](concepts/branches.md)                                       | Branch-centric boards (read before touching boards).                      |
+| [`id-management.md`](concepts/id-management.md)                             | UUIDv7, branded ID types, short-ID resolution.                            |
+| [`multitenancy.md`](concepts/multitenancy.md)                               | Tenant triggers, resource classification, code owners, proof.             |
+| [`security.md`](concepts/security.md)                                       | CSP, CORS, and daemon-wide git config hardening.                          |
+| [`daemon-filesystem-boundary.md`](concepts/daemon-filesystem-boundary.md)   | Daemon-host filesystem capability guard.                                  |
+| [`task-queueing.md`](concepts/task-queueing.md)                             | Task lifecycle and queue-on-busy semantics.                               |
+| [`task-runtime-state.md`](concepts/task-runtime-state.md)                   | Task states, executor liveness, pulses, watchdogs, and containment.       |
+| [`session-sharing.md`](concepts/session-sharing.md)                         | Shared session prompting: gates, compatibility, caller identity.          |
+| [`mcp-session-tools.md`](concepts/mcp-session-tools.md)                     | `agor_sessions_*` MCP tool surface and override semantics.                |
+| [`mcp-catalog.md`](concepts/mcp-catalog.md)                                 | Curated catalog, Connect probes, OAuth/bearer reuse, disclosure contract. |
+| [`mcp-egress-gateway.md`](concepts/mcp-egress-gateway.md)                   | Daemon-owned MCP egress: credential boundary and admission contract.      |
+| [`discord-gateway.md`](concepts/discord-gateway.md)                         | Discord gateway: provider-owned history, cursor, and admission contract.  |
+| [`opencode-hosted.md`](concepts/opencode-hosted.md)                         | Hosted OpenCode capability gate and checkpointed native state.            |
+| [`user-first-scoped-hydration.md`](concepts/user-first-scoped-hydration.md) | Browser data layers: user scope, board partitions, on-demand reads.       |
 
 ## `guides/` — procedures
 

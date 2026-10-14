@@ -1,5 +1,5 @@
 import type { AgenticToolName, AgorClient, UpdateUserInput, User } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntApp, ConfigProvider, type FormInstance, Grid } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -349,7 +349,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
           },
           default_mcp_server_ids: [],
         },
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -500,7 +501,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
           },
           default_mcp_server_ids: [],
         },
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
 
@@ -534,7 +536,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       expect(onUpdate).toHaveBeenCalledWith(
         'user-1',
         expect.objectContaining({ password: 'new-secure-password' }),
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
 
@@ -547,77 +550,82 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps externally managed identity read-only while saving Agor preferences', async () => {
-    __resetAuthConfigForTests();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          auth: {
-            requireAuth: true,
-            identity: {
-              contractVersion: 1,
-              userLifecycle: 'external',
-              roleAuthority: 'claims',
-              localAuth: 'disabled',
-              external: { provider: 'external_launch', provisioning: 'jit' },
-              capabilities: {
-                users: {
-                  create: false,
-                  delete: false,
-                  identityWrite: false,
-                  roleWrite: false,
-                  passwordWrite: false,
-                  avatarSettingsWrite: false,
-                  selfConfigurationWrite: true,
+  it.each(['internal', 'external'] as const)(
+    'keeps external identity read-only with %s avatars while saving Agor preferences',
+    async (avatarAuthority) => {
+      __resetAuthConfigForTests();
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            auth: {
+              requireAuth: true,
+              identity: {
+                contractVersion: 2,
+                userLifecycle: 'external',
+                avatarAuthority,
+                roleAuthority: 'claims',
+                localAuth: 'disabled',
+                external: { provider: 'external_launch', provisioning: 'jit' },
+                capabilities: {
+                  users: {
+                    create: false,
+                    delete: false,
+                    identityWrite: false,
+                    roleWrite: false,
+                    passwordWrite: false,
+                    avatarWrite: avatarAuthority === 'internal',
+                    avatarSettingsWrite: avatarAuthority === 'internal',
+                    selfConfigurationWrite: true,
+                  },
                 },
               },
             },
-          },
-        }),
-      })
-    );
-    const user = makeUser({ role: 'admin' });
-    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
+          }),
+        })
+      );
+      const user = makeUser({ role: 'admin' });
+      const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
 
-    renderWithApp(
-      <UserSettingsModal
-        open
-        onClose={vi.fn()}
-        user={user}
-        currentUser={user}
-        client={null}
-        onUpdate={onUpdate}
-      />
-    );
+      renderWithApp(
+        <UserSettingsModal
+          open
+          onClose={vi.fn()}
+          user={user}
+          currentUser={user}
+          client={null}
+          onUpdate={onUpdate}
+        />
+      );
 
-    await screen.findByText('Identity and role are managed by your workspace');
-    expect(screen.getByPlaceholderText('John Doe')).toBeDisabled();
-    expect(screen.getByPlaceholderText('user@example.com')).toBeDisabled();
-    expect(screen.queryByRole('menuitem', { name: /security/i })).not.toBeInTheDocument();
-    const useSlackAvatar = screen.getByRole('switch');
-    expect(useSlackAvatar).toBeEnabled();
-    fireEvent.click(useSlackAvatar);
+      await screen.findByText('Identity and role are managed by your workspace');
+      expect(screen.getByPlaceholderText('John Doe')).toBeDisabled();
+      expect(screen.getByPlaceholderText('user@example.com')).toBeDisabled();
+      expect(screen.queryByRole('menuitem', { name: /security/i })).not.toBeInTheDocument();
+      const useSlackAvatar = screen.getByRole('switch');
+      expect(useSlackAvatar).toBeEnabled();
+      fireEvent.click(useSlackAvatar);
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
-    await screen.findByRole('heading', { name: 'Preferences' });
-    const enableChimes = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Enable chimes"]'
-    );
-    expect(enableChimes).not.toBeNull();
-    fireEvent.click(enableChimes as HTMLInputElement);
-    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
+      await screen.findByRole('heading', { name: 'Preferences' });
+      const enableChimes = document.querySelector<HTMLInputElement>(
+        'input[aria-label="Enable chimes"]'
+      );
+      expect(enableChimes).not.toBeNull();
+      fireEvent.click(enableChimes as HTMLInputElement);
+      fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
-    await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
-    const patch = onUpdate.mock.calls[0][1];
-    expect(patch.preferences?.audio?.enabled).toBe(true);
-    expect(patch.preferences?.use_slack_avatar).toBe(false);
-    expect(patch).not.toHaveProperty('email');
-    expect(patch).not.toHaveProperty('name');
-    expect(patch).not.toHaveProperty('role');
-    expect(patch).not.toHaveProperty('password');
-  });
+      await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
+      const patch = onUpdate.mock.calls[0][1];
+      expect(patch.preferences?.audio?.enabled).toBe(true);
+      expect(patch.preferences?.use_slack_avatar).toBe(false);
+      expect(patch).not.toHaveProperty('email');
+      expect(patch).not.toHaveProperty('name');
+      expect(patch).not.toHaveProperty('role');
+      expect(patch).not.toHaveProperty('password');
+    }
+  );
 
   it('keeps the modal open when saving Profile settings fails', async () => {
     const user = makeUser();
@@ -641,8 +649,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledTimes(1);
-      expect(screen.getByRole('alert')).toHaveTextContent('save failed');
+      expect(screen.getByRole('alert')).toHaveTextContent("Couldn't save your settings.");
     }, ASYNC);
+    fireEvent.click(within(screen.getByRole('alert')).getByText('Details'));
+    expect(screen.getByRole('region', { name: 'Technical details' })).toHaveTextContent(
+      'save failed'
+    );
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -670,8 +682,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledTimes(1);
-      expect(screen.getByRole('alert')).toHaveTextContent('save failed');
+      expect(screen.getByRole('alert')).toHaveTextContent("Couldn't save your settings.");
     }, ASYNC);
+    fireEvent.click(within(screen.getByRole('alert')).getByText('Details'));
+    expect(screen.getByRole('region', { name: 'Technical details' })).toHaveTextContent(
+      'save failed'
+    );
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -1195,6 +1211,37 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.queryByRole('menuitem', { name: /gemini/i })).not.toBeInTheDocument();
   });
 
+  it('shows a failed delete of the saved personal configuration next to its button', async () => {
+    agorStore
+      .getState()
+      .setAgenticToolSettings([
+        { tool: 'gemini', enabled: true, resolution_policy: 'tenant_required' },
+      ] as never);
+    const user = makeUser({ agentic_tools: { gemini: { GEMINI_API_KEY: true } } });
+    const onUpdate = vi.fn().mockRejectedValue(new Error('boom'));
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+        initialTab="gemini"
+      />
+    );
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Delete saved personal configuration' })
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'OK' }));
+    expect(
+      await screen.findByText("Couldn't delete the saved configuration.", undefined, ASYNC)
+    ).toBeInTheDocument();
+    expect(onUpdate).toHaveBeenCalledOnce();
+  });
+
   it('preserves an in-progress audio edit across navigation (no draft loss)', async () => {
     const user = makeUser();
     const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
@@ -1237,6 +1284,38 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     }, ASYNC);
   });
 
+  it.each(['codex', undefined] as const)(
+    'explains primary coding agent quick-start usage when the preference is %s',
+    async (primaryAgenticTool) => {
+      const user = makeUser({ primary_agentic_tool: primaryAgenticTool });
+      renderWithApp(
+        <UserSettingsModal
+          open
+          onClose={vi.fn()}
+          user={user}
+          currentUser={user}
+          client={null}
+          onUpdate={vi.fn()}
+          initialTab="preferences"
+        />
+      );
+
+      await screen.findByRole('combobox', { name: 'Primary coding agent' });
+      expect(
+        screen.getByText(
+          /Used to quick-start “Ask your primary assistant” and when an agent creates a session via MCP without specifying a coding agent\./
+        )
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Preselected for new sessions/)).not.toBeInTheDocument();
+      if (!primaryAgenticTool) {
+        expect(screen.getByText('Not set')).toBeInTheDocument();
+        expect(
+          screen.getByText(/Once you successfully use a coding agent, Agor will remember it here\./)
+        ).toBeInTheDocument();
+      }
+    }
+  );
+
   it('shows and saves the primary coding agent from Preferences', async () => {
     const user = makeUser({ primary_agentic_tool: 'codex' });
     const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
@@ -1267,7 +1346,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       expect(onUpdate).toHaveBeenCalledWith(
         user.user_id,
         expect.objectContaining({ primary_agentic_tool: 'gemini' }),
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
     const [, , shouldApply] = onUpdate.mock.calls[0] as unknown as [string, unknown, () => boolean];

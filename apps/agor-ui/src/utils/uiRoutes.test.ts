@@ -111,6 +111,14 @@ describe('responsiveRoutePath', () => {
       responsiveRoutePath('/m/board/01a012d8-9999-7909-b6f4-2024dfc7c51e', 'desktop', entities)
     ).toBe('/b/01a012d899997909b6f42024/');
   });
+
+  // Search and the MCP catalog are desktop modals with no route; Home is enough.
+  it('sends mobile-only tabs (search, marketplace, sessions) to desktop Home', () => {
+    expect(responsiveRoutePath('/m/search', 'desktop', entities)).toBe('/');
+    expect(responsiveRoutePath('/m/marketplace', 'desktop', entities)).toBe('/');
+    expect(responsiveRoutePath('/m/sessions', 'desktop', entities)).toBe('/');
+    expect(responsiveRoutePath('/m', 'desktop', entities)).toBe('/');
+  });
 });
 
 describe('hasInAppHistory', () => {

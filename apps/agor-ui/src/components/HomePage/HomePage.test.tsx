@@ -3,6 +3,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildSessionMaps } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { userScopeCoverage } from '../../test/userScopeCoverage';
 import {
   OPEN_BOARD_SWITCHER_EVENT,
   OPEN_GLOBAL_SEARCH_EVENT,
@@ -34,9 +35,39 @@ describe('HomePage', () => {
     expect(screen.queryByText(/caught up/i)).not.toBeInTheDocument();
     expect(screen.getByText('Session idle')).toBeInTheDocument();
 
-    act(() => agorStore.setState({ sessionsHydrated: true, branchesHydrated: true }));
+    act(() =>
+      agorStore.setState({ coverage: userScopeCoverage({ sessions: true, references: true }) })
+    );
     expect(screen.getByText('You’re all caught up.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /All caught up/ })).toBeInTheDocument();
+  });
+
+  it('renders truncated counts as N+ and never claims “all caught up”', () => {
+    seed({
+      sessions: [
+        session('perm', { status: 'awaiting_permission' }),
+        session('run', { status: 'running' }),
+      ],
+    });
+    act(() =>
+      agorStore.setState({
+        coverage: userScopeCoverage({ sessions: 'capped', references: true, teammates: true }),
+      })
+    );
+    renderHome();
+    expect(screen.getByRole('button', { name: '1+ need you' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '1+ running' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Running 1+' })).toBeInTheDocument();
+
+    // Nothing found in the capped read is not proof that nothing needs me.
+    act(() => {
+      seed({ sessions: [session('idle')] });
+      agorStore.setState({
+        coverage: userScopeCoverage({ sessions: 'capped', references: true, teammates: true }),
+      });
+    });
+    expect(screen.queryByText(/caught up/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Nothing needs you in your most recent sessions.')).toBeInTheDocument();
   });
 
   it('hides Needs you and the status line for new users', () => {
@@ -277,7 +308,7 @@ describe('HomePage', () => {
     const dialog = await screen.findByRole('dialog');
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
     expect(
-      within(dialog).getAllByText('Archive session and same-branch children?')[0]
+      within(dialog).getAllByText('Archive this session and its subsessions?')[0]
     ).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
     await waitFor(() => expect(archived).toEqual(['f0']));
@@ -579,6 +610,45 @@ describe('HomePage', () => {
     expect(within(recentBoards).getByRole('button', { name: 'Launch board' })).toBeInTheDocument();
   });
 
+  it('shows the fallback at first paint, before the user scope completes', () => {
+    // Only the gated page of my sessions is in the store; no branch is loaded.
+    seed({
+      sessions: [session('a', { branch_board_id: 'b-a' } as Partial<Session>)],
+      boards: [{ board_id: 'b-a', name: 'Launch board', archived: false } as Board],
+      hydrated: false,
+    });
+    renderHome();
+    const recentBoards = screen.getByRole('group', { name: 'Recent boards' });
+    expect(within(recentBoards).getByRole('button', { name: 'Launch board' })).toBeInTheDocument();
+  });
+
+  it('marks recent boards only with my running or needs-you sessions', () => {
+    seed({
+      sessions: [
+        session('mine-ready', {
+          branch_board_id: 'b-a',
+          ready_for_prompt: true,
+        } as Partial<Session>),
+        session('theirs-running', {
+          branch_id: 'branch-2',
+          branch_board_id: 'b-b',
+          created_by: 'someone',
+          status: 'running',
+        } as Partial<Session>),
+      ],
+      boards: [
+        { board_id: 'b-a', name: 'Launch board', archived: false } as Board,
+        { board_id: 'b-b', name: 'Team board', archived: false } as Board,
+      ],
+    });
+    renderHome({ recentBoardIds: ['b-a', 'b-b'] });
+    const recentBoards = screen.getByRole('group', { name: 'Recent boards' });
+    expect(
+      within(recentBoards).getByRole('button', { name: 'Launch board, needs you' })
+    ).toBeInTheDocument();
+    expect(within(recentBoards).getByRole('button', { name: 'Team board' })).toBeInTheDocument();
+  });
+
   it('falls back too when every visited board is gone or archived', () => {
     seed({
       sessions: [session('a', { branch_board_id: 'b-a' } as Partial<Session>)],
@@ -710,6 +780,70 @@ describe('HomePage', () => {
     expect(screen.getByText('Mark all as read').closest('button')).toBeEnabled();
     expect(screen.getByText('Archive')).toBeInTheDocument();
   });
+
+  it.each(['desktop', 'phone'])(
+    'holds %s Home sends until tool settings hydrate, preserving the draft',
+    async (viewport) => {
+      if (viewport === 'desktop') asDesktop();
+      const primary = teammate('primary', 'b-primary');
+      const onCreateSession = vi.fn(async () => null);
+      const client = {
+        service: () => ({ getPrimaryTeammate: async () => primary, find: async () => [] }),
+      } as unknown as AgorClient;
+      seed({ sessions: [session('idle')], branches: [primary] });
+      agorStore.setState({ agenticToolSettingsHydrated: false });
+      renderHome({
+        client,
+        onCreateSession,
+        currentUser: { ...user, primary_agentic_tool: 'claude-code' },
+      });
+      const input = (await screen.findByRole('textbox', {
+        name: 'Ask Teammate primary',
+      })) as HTMLTextAreaElement;
+      fireEvent.change(input, { target: { value: 'Keep this draft' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      const send =
+        viewport === 'phone'
+          ? screen.getByRole('button', { name: 'Send in background' })
+          : screen.getByText('Send in background').closest('button');
+      expect((send as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(send!);
+      expect(onCreateSession).not.toHaveBeenCalled();
+      expect(input.value).toBe('Keep this draft');
+      expect(screen.getByText('Loading agentic tool availability')).toHaveAttribute(
+        'role',
+        'status'
+      );
+
+      act(() =>
+        agorStore.getState().setAgenticToolSettings([
+          {
+            tool: 'claude-code',
+            enabled: false,
+            deployment_available: true,
+            resolution_policy: 'user_preferred',
+            inline_configuration_allowed: true,
+            connection: {},
+          },
+        ])
+      );
+      expect(screen.queryByText('Loading agentic tool availability')).not.toBeInTheDocument();
+      expect((send as HTMLButtonElement).disabled).toBe(false);
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+      expect(onCreateSession.mock.calls[0]).toEqual([
+        expect.objectContaining({ agent: 'codex', initialPrompt: 'Keep this draft' }),
+        'b-primary',
+      ]);
+      // A workspace switch must close the gate again, not reuse its old snapshot.
+      act(() => agorStore.getState().resetMaps());
+      expect((send as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(onCreateSession).toHaveBeenCalledTimes(1);
+      expect(input.value).toBe('Keep this draft');
+    }
+  );
 
   it('does not send twice while a send is in flight', async () => {
     let finish!: (result: { sessionId: string }) => void;

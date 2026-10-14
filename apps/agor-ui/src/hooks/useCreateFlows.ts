@@ -24,7 +24,7 @@ import {
   buildTeammateBootstrapPrompt,
   buildTeammateFirstSessionTitle,
 } from '../utils/teammateBootstrapPrompt';
-import { createTeammateBranch } from '../utils/teammateCreation';
+import { boardHasNoActiveBranches, createTeammateBranch } from '../utils/teammateCreation';
 
 type Position = { x: number; y: number };
 
@@ -198,9 +198,7 @@ export function useCreateFlows(options: UseCreateFlowsOptions): UseCreateFlowsRe
               boardId: teammateTargetBoardId,
               keepExistingPrimary: true,
               // A board that already has branches has its own layout; skip the welcome note.
-              welcomeNote: ![...agorStore.getState().branchById.values()].some(
-                (b) => b.board_id === teammateTargetBoardId
-              ),
+              welcomeNote: await boardHasNoActiveBranches(client, teammateTargetBoardId),
             }
           : {}),
       },

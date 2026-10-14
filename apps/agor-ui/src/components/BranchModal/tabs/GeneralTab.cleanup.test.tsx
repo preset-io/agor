@@ -42,3 +42,56 @@ it('saves protection with the parent branch form after its section is collapsed'
     ])
   );
 });
+
+it.each([
+  {
+    name: 'deleting',
+    branch: { deletion_status: 'deleting' as const },
+    message: 'Agor is deleting this branch…',
+    raw: undefined,
+  },
+  {
+    name: 'retryable failure',
+    branch: {
+      deletion_status: 'deletion_failed' as const,
+      deletion_error: 'Permanent deletion failed during filesystem. EACCES',
+    },
+    message: "Agor couldn't finish deleting this branch.",
+    raw: 'Permanent deletion failed during filesystem. EACCES',
+  },
+  {
+    name: 'lost track',
+    branch: {
+      deletion_status: 'deletion_failed' as const,
+      deletion_error:
+        'Deletion executor stopped reporting; its outcome is unknown. Inspect manually.',
+    },
+    message:
+      'Agor lost track of this deletion, so some files may already be gone. An administrator needs to finish it.',
+    raw: 'Deletion executor stopped reporting; its outcome is unknown. Inspect manually.',
+  },
+])('shows the shared deletion notice when $name', ({ branch: overrides, message, raw }) => {
+  const branch = makeBranch(overrides);
+  const user = makeUser({ user_id: 'user-1', role: 'member' });
+  const { client } = makeStubClient({ users: [user] });
+  function Editor() {
+    const form = useBranchModalForm({ branch, client, currentUser: user, open: true });
+    return (
+      <GeneralTab
+        branch={branch}
+        repo={makeRepo()}
+        sessions={[]}
+        canEdit={form.canEditGeneral}
+        state={form.general}
+        setField={form.setGeneral}
+      />
+    );
+  }
+  render(<Editor />, { wrapper });
+  expect(screen.getByText(message)).toBeInTheDocument();
+  expect(screen.queryByText('Try again')).not.toBeInTheDocument();
+  if (raw) {
+    fireEvent.click(screen.getByText('Details'));
+    expect(screen.getByText(raw)).toBeInTheDocument();
+  }
+});

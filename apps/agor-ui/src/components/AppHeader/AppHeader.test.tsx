@@ -16,7 +16,7 @@ vi.mock('react-router-dom', async () => {
 });
 
 vi.mock('../../contexts/ConnectionContext', () => ({
-  useConnectionDisabled: () => false,
+  useMutationGate: () => ({ canMutate: true, reason: null, message: null }),
 }));
 
 vi.mock('../../contexts/ThemeContext', () => ({

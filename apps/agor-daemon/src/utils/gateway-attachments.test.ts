@@ -677,6 +677,27 @@ describe('ingestDiscordInboundImages', () => {
     expect(result.uploads[0]).toMatchObject({ mimeType, size: bytes.byteLength });
   });
 
+  it('stages a text attachment like Slack does', async () => {
+    const bytes = Buffer.from('error: connection refused\n');
+    const fetchImpl = vi.fn(async () =>
+      makeImageResponse(bytes, { 'content-type': 'text/plain; charset=utf-8' })
+    );
+
+    const result = await ingestDiscordInboundImages({
+      files: [makeDiscordFile({ mimetype: 'text/plain', name: 'daemon.log' })],
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId,
+      createdBy,
+      store,
+    });
+
+    expect(result.failed).toBe(0);
+    expect(result.uploads).toHaveLength(1);
+    expect(result.uploads[0]).toMatchObject({ mimeType: 'text/plain', size: bytes.byteLength });
+  });
+
   it('rejects empty image downloads, cleans them, and continues with a valid image', async () => {
     const emptyBody = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -876,7 +897,8 @@ describe('ingestDiscordInboundImages', () => {
       store,
     });
 
-    expect(result).toEqual({ uploads: [], failed: 3 });
+    expect(result).toMatchObject({ uploads: [], failed: 3 });
+    expect(result.failedNames).toEqual(['screenshot.png', 'screenshot.png', 'screenshot.png']);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl.mock.calls[0]?.[0]).toBe(DISCORD_SIGNED_URL);
   });
@@ -929,7 +951,7 @@ describe('ingestDiscordInboundImages', () => {
       store,
     });
 
-    expect(result).toEqual({ uploads: [], failed: 1 });
+    expect(result).toMatchObject({ uploads: [], failed: 1 });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0]?.[0]).toBe(DISCORD_SIGNED_URL);
     expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({
@@ -1094,7 +1116,7 @@ describe('ingestDiscordInboundImages', () => {
         store,
       });
 
-      expect(result).toEqual({ uploads: [], failed: 1 });
+      expect(result).toMatchObject({ uploads: [], failed: 1 });
       // A stream may already have one high-water-mark of data queued, but it
       // must stop near the bounded aggregate ceiling rather than buffering
       // the untrusted response indefinitely.

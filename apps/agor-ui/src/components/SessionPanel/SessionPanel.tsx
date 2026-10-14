@@ -59,6 +59,7 @@ import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
+import { useSessionGenealogyTargets } from '../../hooks/useSessionGenealogyTargets';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
@@ -67,6 +68,12 @@ import {
   selectUserAuthenticatedMcpServerIds,
   selectUserById,
 } from '../../store/selectors';
+import {
+  formatActionError,
+  notConnectedMessage,
+  unconfirmedMessage,
+  withRawDetail,
+} from '../../utils/connectionErrors';
 import { getContextWindowGradient, selectLatestContextWindow } from '../../utils/contextWindow';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
@@ -79,7 +86,7 @@ import {
   readPromptDraftSeed,
   savePromptDraft,
 } from '../../utils/promptDrafts';
-import { getSessionStatusLabel } from '../../utils/sessionStatus';
+import { describeSessionStatus } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
@@ -90,8 +97,9 @@ import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import {
+  BlockingAttachmentError,
   buildPromptWithAttachments,
-  getComposerAttachmentFailureMessage,
+  formatComposerUploadError,
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
 } from './composerAttachments';
@@ -119,9 +127,13 @@ export type { PermissionMode };
 // The parent reads/clears the value imperatively via a ref.
 // ---------------------------------------------------------------------------
 
+// iOS Safari zooms into inputs below 16px.
+const MOBILE_COMPOSER_FONT_SIZE = 16;
+
 export interface PromptInputHandle {
   getValue: () => string;
-  clear: () => void;
+  /** Empty the composer, or leave only `remainder` (text typed after a send began). */
+  clear: (remainder?: string) => void;
   insertText: (text: string) => void;
 }
 
@@ -179,6 +191,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     ref
   ) => {
     const isMobile = useIsMobileViewport();
+    const { token } = theme.useToken();
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
     const textareaElementRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -239,15 +252,16 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       ref,
       () => ({
         getValue: () => textareaElementRef.current?.value ?? valueRef.current,
-        clear: () => {
+        clear: (remainder = '') => {
           untouchedSeedRef.current = false;
           discardDraftSeed(sessionId);
-          valueRef.current = '';
-          inputValueRef.current = '';
+          valueRef.current = remainder;
+          inputValueRef.current = remainder;
           if (textareaElementRef.current) {
-            textareaElementRef.current.value = '';
+            textareaElementRef.current.value = remainder;
           }
-          setValue('');
+          setValue(remainder);
+          // A remainder is re-persisted by the debounced draft save.
           deleteDraft(sessionId);
         },
         insertText: (text: string) => {
@@ -325,7 +339,19 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         highlightWhenEmpty
         // Preserve the mobile composer's iOS no-autozoom threshold. The shared
         // textarea also applies these metrics to its mention highlight overlay.
-        textareaStyle={isMobile ? { fontSize: 16 } : undefined}
+        // Block padding makes one line a full touch-target tall.
+        textareaStyle={
+          isMobile
+            ? {
+                fontSize: MOBILE_COMPOSER_FONT_SIZE,
+                paddingBlock:
+                  (MOBILE_TOUCH_TARGET -
+                    2 * token.lineWidth -
+                    MOBILE_COMPOSER_FONT_SIZE * token.lineHeight) /
+                  2,
+              }
+            : undefined
+        }
       />
     );
   }
@@ -368,7 +394,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const mobileHeaderButtonStyle: React.CSSProperties | undefined = isMobileShell
     ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
     : undefined;
-  const { showSuccess, showInfo, showError } = useThemedMessage();
+  const { showInfo, showError, showWarning } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const recenterMap = useRecenterMap();
 
@@ -547,11 +573,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
+    // The open session: background partition reads wait for its first page.
+    foreground: true,
     // ConversationView retains the same lean handle. Keeping the cache key
     // identical collapses duplicate Session bootstrap/reconnect reads while
     // preserving paged history without eager historical tool hydration.
     reactiveOptions: { taskHydration: 'lean' },
   });
+  // Parent, fork, callback and children links resolve without global data.
+  useSessionGenealogyTargets(client, open ? session : null);
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
   const queuedTasks = reactiveSessionState?.queuedTasks ?? EMPTY_TASKS;
@@ -871,11 +901,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onSubmit={stableFooterHandlers.onSendPrompt}
           hasExternalInput={hasComposerAttachments}
           placeholder={
-            isRunning
-              ? 'Queue here… @ for mentions, : for emoji'
-              : 'Prompt here… @ for mentions, : for emoji'
+            isMobileShell
+              ? isRunning
+                ? 'Queue here…'
+                : 'Prompt here…'
+              : isRunning
+                ? 'Queue here… @ for mentions, : for emoji'
+                : 'Prompt here… @ for mentions, : for emoji'
           }
-          autoSize={{ minRows: 1, maxRows: isMobileShell ? 4 : 10 }}
+          autoSize={{ minRows: 1, maxRows: isMobileShell ? 5 : 10 }}
           client={client}
           userById={userById}
           onFilesDrop={addComposerAttachments}
@@ -941,14 +975,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleArchive = () => {
     if (!client || connectionDisabled) {
-      showError('Cannot archive while disconnected from the daemon.');
+      showError(notConnectedMessage('archive the session'));
       return;
     }
 
     confirmArchive(session.session_id, { onArchived: onClose });
   };
 
-  const hasBranchActions = !!branch;
+  // The mobile canvas lives on a separate Board tab, so there is no map to center from here.
+  const showCenterMap = !!branch && !isMobileShell;
+  const hasBranchActions = showCenterMap || !!(onOpenTerminal && branch);
   const canSwitchTool =
     hasActiveAgenticTool && !!branch && !!onChooseAgenticTool && (session.tasks?.length ?? 0) === 0;
   const handleSwitchTool = async (tool: string) => {
@@ -962,7 +998,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
   const moreMenuItems: MenuProps['items'] = [
-    ...(branch
+    ...(showCenterMap && branch
       ? [
           {
             key: 'center-map',
@@ -1029,6 +1065,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
 
     composerSendInFlightRef.current = sendStartComposerIdentity;
+    let uploadingFiles: File[] | null = null;
     try {
       const sendStartSessionId = session.session_id;
       const value = promptRef.current?.getValue() ?? '';
@@ -1038,21 +1075,23 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
       const blockingAttachment = attachmentsAtSendStart.find(isBlockingComposerAttachment);
       if (blockingAttachment) {
-        showError(
-          `${getComposerAttachmentFailureMessage(blockingAttachment)}. Remove failed files before sending.`
-        );
+        showError(new BlockingAttachmentError(blockingAttachment).message);
         return;
       }
 
       if (!onSendPrompt) {
-        showError('Cannot send prompt from this view.');
+        showError("You can't send messages from this view.");
         return;
       }
 
+      uploadingFiles = attachmentsAtSendStart
+        .filter((attachment) => attachment.status !== 'uploaded')
+        .map((attachment) => attachment.file);
       const uploadedFiles = await uploadComposerAttachments(
         attachmentsAtSendStart,
         sendStartSessionId
       );
+      uploadingFiles = null;
       const currentComposerIdentity = composerSessionIdentityRef.current;
       if (
         currentComposerIdentity.ownerId !== sendStartComposerIdentity.ownerId ||
@@ -1090,10 +1129,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // may have typed identical text and selected different attachments.
       const composerOwnsAdmissionCompletion =
         composerSessionIdentityRef.current === sendStartComposerIdentity;
-      const composerStillOwnsSentText =
-        composerOwnsAdmissionCompletion && promptRef.current?.getValue() === latestValue;
-      if (composerStillOwnsSentText) {
-        promptRef.current?.clear();
+      const textAfterAdmission = composerOwnsAdmissionCompletion
+        ? promptRef.current?.getValue()
+        : undefined;
+      // Typing on after Enter appends to the sent text while admission is
+      // pending. Remove the sent part and keep what was added, so a quick
+      // follow-up never leaves the already-sent prompt in the box.
+      if (textAfterAdmission?.startsWith(latestValue)) {
+        const typedAfterSend = textAfterAdmission.slice(latestValue.length);
+        promptRef.current?.clear(latestValue ? typedAfterSend.trimStart() : typedAfterSend);
         clearComposerAttachments();
         setComposerAttachmentValidationError(null);
       } else {
@@ -1109,8 +1153,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       if (composerOwnsAdmissionCompletion) scrollToBottom?.();
     } catch (error) {
       if (composerSessionIdentityRef.current !== sendStartComposerIdentity) return;
-      console.error('Composer send failed — keeping prompt and files in composer:', error);
-      showError(error instanceof Error ? error.message : 'Failed to send prompt');
+      // The message and files stay in the composer.
+      showError(
+        error instanceof BlockingAttachmentError
+          ? error.message
+          : uploadingFiles
+            ? formatComposerUploadError(uploadingFiles, error)
+            : formatActionError('send your message', error, { idempotent: false })
+      );
     } finally {
       if (composerSendInFlightRef.current === sendStartComposerIdentity) {
         composerSendInFlightRef.current = null;
@@ -1207,7 +1257,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           task.status === TaskStatus.AWAITING_INPUT
       );
     if (!stopTarget) {
-      showError('Execution state is still syncing. Try again.');
+      showInfo("Couldn't find running work to stop. Refresh to see the latest state.");
       return;
     }
 
@@ -1222,7 +1272,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         showInfo(result.reason ?? 'Stop requested; waiting for executor termination.');
       }
     } catch (error) {
-      console.error('Failed to stop execution:', error);
       const reconciliation = isStopTransportAmbiguous(error)
         ? await reconcileStopTransportFailure(
             () => currentClientRef.current,
@@ -1232,8 +1281,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         : { outcome: 'unresolved' as const };
       if (reconciliation.outcome === 'accepted' || reconciliation.outcome === 'ended') {
         showInfo(reconciliation.reason);
+      } else if (isStopTransportAmbiguous(error)) {
+        showError(withRawDetail(unconfirmedMessage('stop the agent', { idempotent: true }), error));
       } else {
-        showError('Failed to stop execution. You can try again.');
+        showError(formatActionError('stop the agent', error, { idempotent: true }));
       }
     } finally {
       setStopRequestInFlight(false);
@@ -1262,9 +1313,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       setForceFailTarget(null);
       setForceFailConfirmation('');
     } catch (error) {
-      console.error('Failed to force-fail execution:', error);
       setRecoveryError(
-        'Could not reopen this session. You may need the branch owner or an administrator to help.'
+        withRawDetail(
+          "Couldn't reopen this session. Ask a branch owner or administrator to help.",
+          error
+        )
       );
     } finally {
       setStopRequestInFlight(false);
@@ -1274,9 +1327,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const handleFork = async () => {
     if (!session) return;
     if (composerAttachmentsRef.current.length > 0) {
-      showError(
-        'Attachments are only supported for normal Send for now. Remove attachments to fork.'
-      );
+      showWarning('Remove attachments to fork. Attachments only work with Send.');
       return;
     }
     const value = promptRef.current?.getValue() ?? '';
@@ -1290,8 +1341,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // Only clear the compose box + draft on success, so a failed fork
       // leaves the typed prompt intact for the user to retry.
       promptRef.current?.clear();
-    } catch (error) {
-      console.error('Fork failed — keeping prompt in compose box:', error);
+    } catch {
+      // The fork handler shows why; the message stays in the compose box.
     }
   };
 
@@ -1304,9 +1355,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleBtwSend = async () => {
     if (composerAttachmentsRef.current.length > 0) {
-      showError(
-        'Attachments are only supported for normal Send for now. Remove attachments to send BTW.'
-      );
+      showWarning('Remove attachments to ask a side question. Attachments only work with Send.');
       return;
     }
     const value = promptRef.current?.getValue() ?? '';
@@ -1315,16 +1364,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     try {
       await onBtwFork?.(session.session_id, promptToSend);
       promptRef.current?.clear();
-    } catch (error) {
-      console.error('BTW fork failed — keeping prompt in compose box:', error);
+    } catch {
+      // The side-question handler shows why; the message stays in the compose box.
     }
   };
 
   const handleSpawnOpen = () => {
     if (composerAttachmentsRef.current.length > 0) {
-      showError(
-        'Attachments are only supported for normal Send for now. Remove attachments to spawn.'
-      );
+      showWarning('Remove attachments to start a subsession. Attachments only work with Send.');
       return;
     }
     setSpawnModalOpen(true);
@@ -1634,7 +1681,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               <Flex align="center" gap={token.marginXXS} wrap>
                 <Badge status={getStatusColor()} />
                 <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                  {getSessionStatusLabel(session.status)}
+                  {describeSessionStatus(session).label}
                 </Typography.Text>
                 {session.created_by && session.created_by !== currentUserId && (
                   <>
@@ -1914,9 +1961,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             setAdvancedUploadInitialFiles([]);
           }}
           initialFiles={advancedUploadInitialFiles}
-          onUploadComplete={(files) => {
-            showSuccess(`Uploaded ${files.length} file(s)`);
-          }}
           onInsertMention={(filepath) => {
             promptRef.current?.insertText(`@${filepath}`);
           }}

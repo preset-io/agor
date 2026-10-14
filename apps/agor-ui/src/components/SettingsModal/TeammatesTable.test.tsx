@@ -1,12 +1,17 @@
-import type { Board, Branch, Repo, Session, User } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
+import type { AgorClient, Board, Branch, Repo, User } from '@agor-live/client';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
+import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { userScopeCoverage } from '../../test/userScopeCoverage';
 import { TeammatesTable } from './TeammatesTable';
 
 function renderWithProviders(ui: React.ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
 }
+
+afterEach(() => setRealtimeAuthorityScope(null));
 
 function makeRepo(overrides: Partial<Repo> = {}): Repo {
   return {
@@ -51,7 +56,6 @@ describe('TeammatesTable', () => {
         branchById={new Map<string, Branch>()}
         repoById={new Map([[repo.repo_id, repo]])}
         boardById={new Map<string, Board>()}
-        sessionsByBranch={new Map<string, Session[]>()}
         userById={new Map<string, User>()}
         onCreateTeammate={onCreateTeammate}
       />
@@ -62,6 +66,21 @@ describe('TeammatesTable', () => {
     expect(onCreateTeammate).toHaveBeenCalledTimes(1);
   });
 
+  it('disables creation when no create flow is wired (viewers)', () => {
+    const repo = makeRepo();
+
+    renderWithProviders(
+      <TeammatesTable
+        branchById={new Map<string, Branch>()}
+        repoById={new Map([[repo.repo_id, repo]])}
+        boardById={new Map<string, Board>()}
+        userById={new Map<string, User>()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: /Create AI teammate/i })).toBeDisabled();
+  });
+
   it('applies a page size picked from the pagination size changer', async () => {
     const repo = makeRepo();
 
@@ -70,7 +89,6 @@ describe('TeammatesTable', () => {
         branchById={makeTeammates(60)}
         repoById={new Map([[repo.repo_id, repo]])}
         boardById={new Map<string, Board>()}
-        sessionsByBranch={new Map<string, Session[]>()}
         userById={new Map<string, User>()}
       />
     );
@@ -96,7 +114,6 @@ it('resets the inventory page on search and distinguishes primary owner from cre
       branchById={branches}
       repoById={new Map()}
       boardById={new Map()}
-      sessionsByBranch={new Map()}
       userById={new Map([[user.user_id, user]])}
     />
   );
@@ -120,7 +137,6 @@ it('searches tokens across teammate, board and email-only owner using the shared
       branchById={new Map([[branch.branch_id, branch]])}
       repoById={new Map()}
       boardById={new Map([['board-1', { board_id: 'board-1', name: 'Engineering' } as Board]])}
-      sessionsByBranch={new Map()}
       userById={new Map([['owner-1', { user_id: 'owner-1', email: 'owner@example.test' } as User]])}
     />
   );
@@ -132,4 +148,42 @@ it('searches tokens across teammate, board and email-only owner using the shared
     target: { value: 'Teammate Finance owner@example.test' },
   });
   expect(screen.queryByRole('button', { name: 'Edit teammate' })).not.toBeInTheDocument();
+});
+
+it('waits for the user scope before saying "No teammates yet", and counts sessions on the server', async () => {
+  // Step 3: the store holds only the user scope; nothing global backs this table.
+  agorStore.getState().reset();
+  setRealtimeAuthorityScope('me:member:1');
+  const sessionsFind = vi.fn(async () => [{ id: 'branch-1', session_count: 4 }]);
+  const client = {
+    service: () => ({ find: sessionsFind, on: () => {}, off: () => {} }),
+  } as unknown as AgorClient;
+  const { rerender } = renderWithProviders(
+    <TeammatesTable
+      client={client}
+      branchById={new Map()}
+      repoById={new Map()}
+      boardById={new Map()}
+      userById={new Map()}
+    />
+  );
+  expect(screen.queryByText('No teammates yet')).not.toBeInTheDocument();
+  act(() => agorStore.setState({ coverage: userScopeCoverage({ teammates: true }) }));
+  expect(screen.getByText('No teammates yet')).toBeInTheDocument();
+
+  // U3 delivered a teammate: its delete warning counts sessions with the aggregate.
+  const teammate = makeTeammate(1);
+  rerender(
+    <MemoryRouter>
+      <TeammatesTable
+        client={client}
+        branchById={new Map([[teammate.branch_id, teammate]])}
+        repoById={new Map()}
+        boardById={new Map()}
+        userById={new Map()}
+      />
+    </MemoryRouter>
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Archive or delete teammate' }));
+  expect(sessionsFind).toHaveBeenCalledWith({ query: { group_by: 'branch_id' } });
 });

@@ -16,6 +16,7 @@ import {
 } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useBranchCounts } from '../../hooks/useBranchCounts';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { OPEN_BOARD_SWITCHER_EVENT, onShellPicker } from '../../utils/shellEvents';
 import { BoardEditModal } from '../BoardEditModal';
@@ -80,18 +81,10 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   const currentBoard = boards.find((b) => b.board_id === currentBoardId);
   const canManage = useCanManageBoard(client, currentBoard, currentUser);
 
-  const branchCountByBoard = useMemo(() => {
-    const counts = new Map<string, number>();
-    boards.forEach((board) => {
-      counts.set(board.board_id, 0);
-    });
-    for (const branch of branchById.values()) {
-      if (branch.board_id) counts.set(branch.board_id, (counts.get(branch.board_id) || 0) + 1);
-    }
-    return counts;
-  }, [boards, branchById]);
+  const { counts: branchCountByBoard, loaded: branchCountsLoaded } = useBranchCounts(client);
 
-  const showFilter = boards.length >= FILTER_THRESHOLD;
+  // Touch has no type-ahead, so phones and tablets always get the search box.
+  const showFilter = boards.length >= FILTER_THRESHOLD || coarsePointer;
 
   useEffect(
     () =>
@@ -129,13 +122,13 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
       ? sortedBoards.filter((board) => board.name.toLowerCase().includes(filterText.toLowerCase()))
       : sortedBoards;
 
-    if (showFilter && filteredBoards.length === 0) {
+    if (filteredBoards.length === 0) {
       return [
         {
           key: '__empty__',
           label: (
             <Text type="secondary" style={{ fontStyle: 'italic' }}>
-              No boards found
+              {sortedBoards.length > 0 ? `No boards match “${filterText}”.` : 'No boards yet.'}
             </Text>
           ),
           disabled: true,
@@ -144,7 +137,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     }
 
     return filteredBoards.map((board) => {
-      const branchCount = branchCountByBoard.get(board.board_id) || 0;
+      const branchCount = branchCountByBoard.get(board.board_id) ?? 0;
       const isActive = board.board_id === currentBoardId;
       return {
         key: board.board_id,
@@ -169,7 +162,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
             </Flex>
             <Badge
               count={branchCount}
-              showZero
+              showZero={branchCountsLoaded}
               styles={{
                 root: { flexShrink: 0 },
                 indicator: {
@@ -193,11 +186,11 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     boards,
     currentBoardId,
     branchCountByBoard,
+    branchCountsLoaded,
     branchById,
     handleBoardClick,
     token,
     filterText,
-    showFilter,
     keyboardTooltipBoardId,
   ]);
 
@@ -316,9 +309,10 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
                       prefix={<SearchOutlined style={{ color: token.colorTextQuaternary }} />}
                       value={filterText}
                       onChange={(e) => setFilterText(e.target.value)}
-                      size="small"
+                      // Large keeps 16px text on touch so iOS does not zoom on focus.
+                      size={coarsePointer ? 'large' : 'small'}
                       allowClear
-                      autoFocus
+                      autoFocus={!coarsePointer}
                       aria-label="Filter boards"
                     />
                   </div>

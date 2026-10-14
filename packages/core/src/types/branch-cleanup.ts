@@ -86,6 +86,8 @@ export function getBranchCleanupBlockReason(
 }
 
 export const BRANCH_CLEANUP_REPORT_SERVICE = 'branch-cleanup-steps';
+export const BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE =
+  'branches/:id/dismiss-workspace-notification';
 export const branchCleanupCommandId = (executionId: string) =>
   `${BRANCH_CLEANUP_COMMAND}:${executionId}`;
 export const BRANCH_WORKSPACE_OPERATION_BUDGET_MS = BRANCH_CLEANUP_TIMEOUT_MS + 60_000;
@@ -157,6 +159,27 @@ export function projectBranchWorkspaceOperation(
     };
   }
   return operation;
+}
+
+/** A past outcome may be forgotten; an unresolved branch condition may not.
+ * The storage owner additionally checks its private maintenance claim under lock.
+ */
+export function canDismissBranchWorkspaceNotification(
+  branch: Pick<
+    import('./branch').Branch,
+    'workspace_operation' | 'filesystem_status' | 'deletion_status' | 'archived'
+  >
+): boolean {
+  const status = branch.workspace_operation?.status;
+  const filesystemReady =
+    branch.filesystem_status === undefined || branch.filesystem_status === 'ready';
+  const archivedWorkspace =
+    branch.archived && ['preserved', 'cleaned', 'deleted'].includes(branch.filesystem_status ?? '');
+  return (
+    (status === 'succeeded' || status === 'failed') &&
+    !branch.deletion_status &&
+    (filesystemReady || archivedWorkspace)
+  );
 }
 
 export const BRANCH_WORKSPACE_SERVER_FIELDS = [

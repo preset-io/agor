@@ -10,7 +10,78 @@ import {
   flushRealtimeNow,
   setRealtimeAuthorityScope,
 } from '../store/realtimeBatch';
+import { runSessionUpdateWithLatestNotification } from '../utils/sessionUpdateNotifications';
 import { useSessionActions } from './useSessionActions';
+
+describe('session update failure feedback', () => {
+  const failures = [
+    new Error('Preset-backed session configuration can only be changed by selecting a preset'),
+    { message: 'Permission denied', data: { diagnostic: 'not toast content' } },
+  ];
+
+  it.each(failures)('rejects with the original PATCH failure object', async (failure) => {
+    const patch = vi.fn().mockRejectedValue(failure);
+    const { result } = renderHook(() => useSessionActions(makeClient({ sessions: { patch } })));
+
+    await act(async () => {
+      await expect(
+        result.current.updateSession('session-1' as Session['session_id'], { title: 'New title' })
+      ).rejects.toBe(failure);
+    });
+  });
+
+  it.each(failures)(
+    'preserves the PATCH failure message through the hook and notification boundary',
+    async (failure) => {
+      const patch = vi.fn().mockRejectedValue(failure);
+      const { result } = renderHook(() => useSessionActions(makeClient({ sessions: { patch } })));
+      const showError = vi.fn();
+      const showSuccess = vi.fn();
+      const updates: Partial<Session> = {
+        model_config: { mode: 'alias', model: 'sonnet', updated_at: new Date().toISOString() },
+      };
+
+      await act(async () => {
+        await runSessionUpdateWithLatestNotification({
+          sessionId: 'session-1' as Session['session_id'],
+          updates,
+          latestRequests: new Map(),
+          authority: { isCurrent: () => true },
+          updateSession: result.current.updateSession,
+          showSuccess,
+          showError,
+        });
+      });
+
+      expect(patch).toHaveBeenCalledExactlyOnceWith('session-1', updates);
+      expect(showError).toHaveBeenCalledExactlyOnceWith(
+        `Couldn't update the session. (${failure.message})`
+      );
+      expect(showSuccess).not.toHaveBeenCalled();
+    }
+  );
+
+  it('reports a disconnected client instead of losing the reason', async () => {
+    const { result } = renderHook(() => useSessionActions(null));
+    const showError = vi.fn();
+    const showSuccess = vi.fn();
+    await act(async () => {
+      await runSessionUpdateWithLatestNotification({
+        sessionId: 'session-1' as Session['session_id'],
+        updates: { title: 'New title' },
+        latestRequests: new Map(),
+        authority: { isCurrent: () => true },
+        updateSession: result.current.updateSession,
+        showSuccess,
+        showError,
+      });
+    });
+    expect(showError).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't update the session. The connection to Agor dropped. Try again once it's back. (Client not connected)"
+    );
+    expect(showSuccess).not.toHaveBeenCalled();
+  });
+});
 
 describe('useSessionActions MCP selection', () => {
   it.each([[['selected-server']], [[]], [undefined]])(
@@ -98,7 +169,6 @@ it('preserves the session create failure for its caller', async () => {
       result.current.createSession({ branch_id: 'branch-1', agent: 'opencode' })
     ).rejects.toBe(failure);
   });
-  expect(result.current.error).toBe(failure.message);
 });
 
 describe('archive response reconciliation', () => {
@@ -132,7 +202,8 @@ describe('archive response reconciliation', () => {
   beforeEach(() => {
     agorStore.getState().reset();
     agorStore.getState().applyMaps((prev) => ({ ...prev, ...buildSessionMaps(sessions) }));
-    setRealtimeAuthorityScope('tenant-a:user-a:1');
+    // The caller is the sessions' author: the user scope holds them.
+    setRealtimeAuthorityScope('user-a:member:1');
   });
   afterEach(() => {
     setRealtimeAuthorityScope(null);
@@ -257,8 +328,8 @@ describe('archive response reconciliation', () => {
       if (newerRoot !== 'none') {
         act(() => {
           bumpRevision('sessions');
-          enqueueSessionPatch('tenant-a:user-a:1', restored);
-          if (newerRoot === 'applied') flushRealtimeNow('tenant-a:user-a:1');
+          enqueueSessionPatch('user-a:member:1', restored);
+          if (newerRoot === 'applied') flushRealtimeNow('user-a:member:1');
         });
       }
       await act(async () => {
@@ -295,10 +366,9 @@ describe('archive response reconciliation', () => {
     expectActive(sessions);
     await act(async () => {
       reject(new Error('Archive denied'));
-      expect(await request).toBeNull();
+      await expect(request).rejects.toThrow('Archive denied');
     });
     expectActive(sessions);
-    expect(result.current.error).toBe('Archive denied');
     consoleError.mockRestore();
   });
 
@@ -329,7 +399,6 @@ describe('archive response reconciliation', () => {
       expect(await request).toEqual({ session: archived, reconciliation: 'refresh-required' });
     });
     expectActive(sessions);
-    expect(result.current.error).toBeNull();
     consoleError.mockRestore();
   });
 

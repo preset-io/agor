@@ -270,9 +270,9 @@ function deferredList() {
 describe('workspace authority generation ordering', () => {
   it('discards delayed member responses after demotion', async () => {
     const seam = transitionClient();
-    const objects = deferredList();
-    seam.queueUsers(Promise.resolve([{ ...VIEWER, user_id: 'same-user', role: 'member' }]));
-    seam.queueBoardObjects(objects.promise);
+    // Users are member-only; their read is held across the demotion.
+    const users = deferredList();
+    seam.queueUsers(users.promise);
     const { result, rerender } = renderHook(
       ({ role, ready, generation }: { role: string; ready: boolean; generation: number }) =>
         useAgorData(seam.client, {
@@ -283,15 +283,15 @@ describe('workspace authority generation ordering', () => {
         }),
       { initialProps: { role: 'member', ready: true, generation: 1 } }
     );
-    await waitFor(() => expect(seam.boardObjectsFindAll).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(seam.usersFindAll).toHaveBeenCalledTimes(1));
 
     // The role can render before useAgorClient publishes its reauthenticated
     // generation. Even with a still-true connection bit, the old member fetch
     // is invalid and no viewer-era resync may start.
     rerender({ role: 'viewer', ready: true, generation: 1 });
     await act(async () => {
-      objects.resolve([{ object_id: 'old-object', board_id: 'board-1' }]);
-      await objects.promise;
+      users.resolve([{ ...VIEWER, user_id: 'same-user', role: 'member' }]);
+      await users.promise;
     });
     expect(agorStore.getState().userById.size).toBe(0);
     expect(agorStore.getState().boardObjectById.size).toBe(0);
@@ -332,7 +332,12 @@ describe('workspace authority generation ordering', () => {
     rerender({ role: 'member', ready: true, generation: 2 });
     await waitFor(() => expect(seam.usersFindAll).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(agorStore.getState().userById.get('same-user')).toBeDefined());
-    expect(agorStore.getState().boardObjectById.has('member-object')).toBe(true);
+    // On Home the resync reads no board objects: they load with a board's
+    // partition, which the promotion unloaded (and which may read them now).
+    expect(seam.boardObjectsFindAll).not.toHaveBeenCalled();
+    expect(
+      [...agorStore.getState().coverage.keys()].filter((key) => key.startsWith('board:'))
+    ).toEqual([]);
     expect(result.current.error).toBeNull();
   });
 
@@ -398,9 +403,11 @@ describe('workspace authority generation ordering', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     await waitFor(() => expect(seam.serviceListenerCount('sessions', 'patched')).toBe(1));
 
+    // Each patch is its author's own session, so only the authority fence keeps it out.
     const fromA = {
       session_id: 'session-from-a',
       branch_id: 'branch-a',
+      created_by: 'user-a',
       status: 'running',
       archived: false,
       created_at: '2026-08-20T00:00:00.000Z',
@@ -409,24 +416,25 @@ describe('workspace authority generation ordering', () => {
 
     // B's essential silent resync fails. The identity layout reset must remain
     // empty even when A's old passive cleanup runs after that reset.
-    const beforeFailedResync = seam.findAllCallCount('sessions');
-    seam.setServiceFailure('sessions', true);
+    const beforeFailedResync = seam.findAllCallCount('boards');
+    seam.setServiceFailure('boards', true);
     rerender({ userId: 'user-b', role: 'member', ready: true, generation: 2 });
     await waitFor(() =>
-      expect(seam.findAllCallCount('sessions')).toBeGreaterThan(beforeFailedResync)
+      expect(seam.findAllCallCount('boards')).toBeGreaterThan(beforeFailedResync)
     );
     expect(agorStore.getState().sessionById.has('session-from-a')).toBe(false);
     expect(agorStore.getState().sessionsByBranch.has('branch-a')).toBe(false);
 
     // Let B re-establish a healthy generation, then queue one of B's patches
     // and disconnect before the frame flushes. Reconnect must not replay it.
-    seam.setServiceFailure('sessions', false);
+    seam.setServiceFailure('boards', false);
     rerender({ userId: 'user-b', role: 'member', ready: true, generation: 3 });
     await waitFor(() => expect(seam.serviceListenerCount('sessions', 'patched')).toBe(1));
     const beforeDisconnect = {
       ...fromA,
       session_id: 'session-before-disconnect',
       branch_id: 'branch-b',
+      created_by: 'user-b',
     } as Session;
     act(() => seam.emitService('sessions', 'patched', beforeDisconnect));
     rerender({ userId: 'user-b', role: 'member', ready: false, generation: 3 });
@@ -442,6 +450,7 @@ describe('workspace authority generation ordering', () => {
       ...fromA,
       session_id: 'session-before-demotion',
       branch_id: 'branch-b',
+      created_by: 'user-b',
     } as Session;
     act(() => seam.emitService('sessions', 'patched', beforeDemotion));
     rerender({ userId: 'user-b', role: 'viewer', ready: true, generation: 4 });

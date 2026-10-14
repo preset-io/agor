@@ -1,6 +1,7 @@
 import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { OPEN_BOARD_SWITCHER_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { BoardSwitcher } from './BoardSwitcher';
 
@@ -36,11 +37,23 @@ function clientFor({ reject, findResult }: { reject?: unknown; findResult?: unkn
   } as unknown as AgorClient;
 }
 
-function renderSwitcher(client = clientFor(), user: User = owner) {
+function countsClient(branchCount: number) {
+  return {
+    service: (name: string) => ({
+      find: vi.fn(async () =>
+        name === 'branch-counts' ? [{ board_id: board.board_id, branch_count: branchCount }] : []
+      ),
+      on: vi.fn(),
+      off: vi.fn(),
+    }),
+  } as unknown as AgorClient;
+}
+
+function renderSwitcher(client = clientFor(), user: User = owner, boards: Board[] = [board]) {
   const onBoardChange = vi.fn();
   const view = render(
     <BoardSwitcher
-      boards={[board]}
+      boards={boards}
       currentBoardId={board.board_id}
       onBoardChange={onBoardChange}
       branchById={new Map()}
@@ -53,8 +66,11 @@ function renderSwitcher(client = clientFor(), user: User = owner) {
 }
 
 describe('BoardSwitcher long-name layout', () => {
+  afterEach(() => setRealtimeAuthorityScope(null));
+
   it('constrains every generated wrapper while keeping the name flexible and badge fixed', async () => {
-    const { container } = renderSwitcher();
+    setRealtimeAuthorityScope('owner-1:member:1');
+    const { container } = renderSwitcher(countsClient(3));
     const trigger = container.querySelector<HTMLButtonElement>('button.ant-dropdown-trigger');
     expect(trigger).not.toBeNull();
 
@@ -67,6 +83,7 @@ describe('BoardSwitcher long-name layout', () => {
     fireEvent.click(trigger as HTMLButtonElement);
 
     const item = await screen.findByRole('menuitem');
+    await waitFor(() => expect(item.querySelector('.ant-badge-count')).not.toBeNull());
     const itemContent = item.querySelector<HTMLElement>('.ant-dropdown-menu-title-content');
     const name = item.querySelector<HTMLElement>('[data-board-name]');
     const badgeRoot = item.querySelector<HTMLElement>('.ant-badge');
@@ -212,5 +229,45 @@ describe('BoardSwitcher current-board edit shortcut', () => {
     renderSwitcher();
     const edit = await screen.findByRole('button', { name: /Edit current board:/ });
     expect(edit).toBeVisible();
+  });
+});
+
+describe('BoardSwitcher branch-count badges (Step 3)', () => {
+  afterEach(() => setRealtimeAuthorityScope(null));
+
+  it('reads each board count from the branch-counts aggregate with the store empty', async () => {
+    setRealtimeAuthorityScope('owner-1:member:1');
+    const { container } = renderSwitcher(countsClient(7));
+    fireEvent.click(container.querySelector('button.ant-dropdown-trigger') as HTMLButtonElement);
+    const item = await screen.findByRole('menuitem');
+    await waitFor(() => expect(item.querySelector('.ant-badge-count')).toHaveTextContent('7'));
+  });
+
+  it('shows no zero count before any count has loaded', async () => {
+    const { container } = renderSwitcher();
+    fireEvent.click(container.querySelector('button.ant-dropdown-trigger') as HTMLButtonElement);
+    const item = await screen.findByRole('menuitem');
+    expect(item.querySelector('.ant-badge-count')).toBeNull();
+  });
+});
+
+describe('BoardSwitcher empty states', () => {
+  const manyBoards = Array.from(
+    { length: 8 },
+    (_, index) => ({ ...board, board_id: `board-${index}`, name: `Board ${index}` }) as Board
+  );
+
+  it.each([
+    { boards: [], filter: null, text: 'No boards yet.' },
+    { boards: manyBoards, filter: 'zebra', text: 'No boards match “zebra”.' },
+  ])('says "$text"', async ({ boards, filter, text }) => {
+    const { container } = renderSwitcher(clientFor(), owner, boards);
+    fireEvent.click(container.querySelector('button.ant-dropdown-trigger') as HTMLButtonElement);
+    if (filter) {
+      fireEvent.change(await screen.findByRole('textbox', { name: 'Filter boards' }), {
+        target: { value: filter },
+      });
+    }
+    expect(await screen.findByText(text)).toBeInTheDocument();
   });
 });

@@ -1,4 +1,8 @@
-import { isCanonicalTeammateFrameworkRepo, type Repo } from '@agor-live/client';
+import {
+  defaultsToPublicTeammateTemplate,
+  isCanonicalTeammateFrameworkRepo,
+  type Repo,
+} from '@agor-live/client';
 import { DownOutlined, InfoCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Collapse, Form, Input, Select, Space, Tooltip, Typography, theme } from 'antd';
@@ -198,7 +202,11 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
 
                 <Form.Item name="sourceBranch" label="Source Branch">
                   <Input
-                    placeholder={selectedRepo?.default_branch || 'Repository default'}
+                    placeholder={
+                      selectedRepo && defaultsToPublicTeammateTemplate(selectedRepo)
+                        ? 'Public template default'
+                        : selectedRepo?.default_branch || 'Repository default'
+                    }
                     onChange={() => {
                       form.setFieldsValue({ templateId: null, sourceRemoteUrl: undefined });
                     }}

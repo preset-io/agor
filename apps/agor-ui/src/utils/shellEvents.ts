@@ -1,14 +1,18 @@
+import type { CreateModalKind } from '../components/CreateMenu';
 import type { ChipFilter } from '../components/GlobalSearch/types';
 
 /** Window events that let a page open header-owned pickers without prop plumbing. */
 export const OPEN_BOARD_SWITCHER_EVENT = 'agor:open-board-switcher';
 /** `detail` optionally names the GlobalSearch type chip to preselect. */
 export const OPEN_GLOBAL_SEARCH_EVENT = 'agor:open-global-search';
+/** `detail` names the shared create flow to open (the mobile shell owns its create modals). */
+export const OPEN_CREATE_FLOW_EVENT = 'agor:open-create-flow';
 
 /** Each shell picker event and the `detail` it carries. */
 export interface ShellPickerEvents {
   [OPEN_BOARD_SWITCHER_EVENT]: undefined;
   [OPEN_GLOBAL_SEARCH_EVENT]: ChipFilter | undefined;
+  [OPEN_CREATE_FLOW_EVENT]: CreateModalKind;
 }
 
 type ShellPickerEvent = keyof ShellPickerEvents;

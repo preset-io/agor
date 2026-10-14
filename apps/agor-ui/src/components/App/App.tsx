@@ -34,13 +34,16 @@ import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useCreateFlows } from '../../hooks/useCreateFlows';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { usePermissionDecision } from '../../hooks/usePermissionDecision';
+import { usePinnedOpenRows } from '../../hooks/usePinnedRows';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
+import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
@@ -51,13 +54,10 @@ import {
   makeBoardSelector,
   makeBranchesForBoardSelector,
   makeBranchSelector,
-  makeCommentMentionSelector,
   makeRepoSelector,
   makeSessionExistsSelector,
-  makeSessionMcpServerIdsSelector,
   makeSessionSelector,
   makeSessionsForBranchSelector,
-  makeUnreadCommentCountSelector,
   selectArtifactById,
   selectBoardById,
   selectBoardCount,
@@ -77,6 +77,7 @@ import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPi
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
+import { useBoardTeammatePanelData } from '../BoardTeammatePanel/useBoardTeammatePanelData';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CreateModals } from '../CreateModals';
@@ -197,7 +198,10 @@ export interface AppProps {
   ) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>, shouldApply?: () => boolean) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean, shouldApply?: () => boolean) => void;
-  onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDeleteBranch?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
   onCreateBranch?: (
@@ -253,7 +257,12 @@ export interface AppProps {
   onDeleteGatewayChannel?: (channelId: string, shouldApply?: () => boolean) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
-  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionMcpServers?: (
+    sessionId: string,
+    mcpServerIds: string[],
+    /** The links the user was shown; the change is diffed against them. */
+    baselineIds?: string[]
+  ) => void;
   onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
   onSendComment?: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
@@ -275,10 +284,7 @@ export interface AppProps {
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
-// Stable empty-array sentinel: keeps prop refs equal across renders for the
-// common no-MCP case so that downstream React.memo bailouts are not defeated.
-// Frozen at runtime; the consuming components only read it.
-const EMPTY_STRING_ARRAY: string[] = Object.freeze([] as string[]) as string[];
+// Stable empty-array sentinel; frozen at runtime, consumers only read it.
 const EMPTY_BOARDS: Board[] = Object.freeze([] as Board[]) as Board[];
 const EMPTY_SESSIONS: Session[] = Object.freeze([] as Session[]) as Session[];
 
@@ -441,6 +447,9 @@ export const App: React.FC<AppProps> = ({
   );
   const effectiveSelectedSessionId =
     !isRootHomePath && selectedSessionId && selectedSessionExists ? selectedSessionId : null;
+  // The open session, its branch and the URL's branch target stay while
+  // shown, whatever scope evicts (`rowPins.ts`).
+  usePinnedOpenRows({ sessions: [selectedSessionId], branches: [activeUrlTargetBranchId] });
 
   // A real selected session always wins; the pending tool-choice empty state
   // only matters when there's no real session to show yet (see
@@ -999,13 +1008,11 @@ export const App: React.FC<AppProps> = ({
     useAgorStore(
       useMemo(() => makeBranchSelector(selectedSessionBranchId), [selectedSessionBranchId])
     ) ?? null;
-  const selectedSessionMcpServerIds =
-    useAgorStore(
-      useMemo(
-        () => makeSessionMcpServerIdsSelector(effectiveSelectedSessionId),
-        [effectiveSelectedSessionId]
-      )
-    ) ?? EMPTY_STRING_ARRAY;
+  // Loaded on first need; the footer's edit control waits for it.
+  const { ids: selectedSessionMcpServerIds } = useSessionMcpServerIds(
+    client,
+    effectiveSelectedSessionId
+  );
 
   // Narrow per-id subscription for the quick-start picker's branch — only
   // patches to that specific branch (or a socket-in-flight arrival) wake the
@@ -1041,15 +1048,20 @@ export const App: React.FC<AppProps> = ({
   const sessionSettingsSession =
     useAgorStore(useMemo(() => makeSessionSelector(sessionSettingsId), [sessionSettingsId])) ??
     null;
-  const primaryTeammateId = currentBoard?.primary_teammate_id ?? null;
-  const primaryTeammateBranch = useAgorStore(
-    useMemo(() => makeBranchSelector(primaryTeammateId), [primaryTeammateId])
-  );
-  const primaryTeammateRepoId = primaryTeammateBranch?.repo_id;
-  const primaryTeammateRepo = useAgorStore(
-    useMemo(() => makeRepoSelector(primaryTeammateRepoId), [primaryTeammateRepoId])
-  );
-  const primaryTeammateInaccessible = Boolean(primaryTeammateId && !primaryTeammateBranch);
+  // Load the displayed board's partition when it is not complete yet.
+  const { boardReady } = useBoardPartition(client, isHomeSurface ? null : currentBoardId, {
+    canUseMemberWorkspaceServices: hasMinimumRole(user?.role, ROLES.MEMBER),
+  });
+  // Shared with the mobile board page. The comment badges are shared between
+  // the expanded panel's Comments tab and the collapsed rail's Comments item.
+  const {
+    primaryTeammateId,
+    primaryTeammateBranch,
+    primaryTeammateRepo,
+    primaryTeammateInaccessible,
+    unreadCommentsCount,
+    hasUserMentions,
+  } = useBoardTeammatePanelData(currentBoard, user, boardReady);
 
   // Preserve the historical board-switch behavior now that the panel itself
   // no longer pushes a default tab into controlled parent state on mount.
@@ -1095,22 +1107,6 @@ export const App: React.FC<AppProps> = ({
     useMemo(() => makeBranchesForBoardSelector(currentBoardId), [currentBoardId]),
     shallow
   );
-  // Comment-derived header scalars. Subscribing to the derived number/boolean
-  // (instead of the comment map) keeps comment edits that don't change them —
-  // and all comments on other boards — from waking the shell. Shared between
-  // the expanded panel's Comments tab and the collapsed rail's Comments item
-  // so both surfaces carry the same badge.
-  const currentUserName = user?.name || user?.email?.split('@')[0] || '';
-  const unreadCommentsCount = useAgorStore(
-    useMemo(() => makeUnreadCommentCountSelector(currentBoardId), [currentBoardId])
-  );
-  const hasUserMentions = useAgorStore(
-    useMemo(
-      () => makeCommentMentionSelector(currentBoardId, currentUserName || undefined, user?.email),
-      [currentBoardId, currentUserName, user?.email]
-    )
-  );
-
   // Web terminal is gated by both the instance-level feature flag and the
   // user's role (`WEB_TERMINAL_MIN_ROLE`, shared with TerminalModal so the
   // threshold lives in one place). When disabled, we pass `undefined` so
@@ -1267,7 +1263,15 @@ export const App: React.FC<AppProps> = ({
         onSessionChange={setSelectedSessionId}
         onActiveUrlTargetChange={setActiveUrlTarget}
       />
-      <Layout style={{ height: '100vh' }}>
+      {/* `viewport-fit=cover` (index.html, for the phone shell) lets a tablet's home
+          indicator overlap the page, so keep the workspace above it. */}
+      <Layout
+        style={{
+          height: '100vh',
+          boxSizing: 'border-box',
+          paddingBottom: 'env(safe-area-inset-bottom)',
+        }}
+      >
         <AppHeader
           user={user}
           authenticationGeneration={authenticationGeneration}
@@ -1349,6 +1353,7 @@ export const App: React.FC<AppProps> = ({
                   primaryTeammateBranch={primaryTeammateBranch}
                   primaryTeammateRepo={primaryTeammateRepo}
                   primaryTeammateInaccessible={primaryTeammateInaccessible}
+                  boardReady={boardReady}
                   currentUserId={user?.user_id}
                   selectedSessionId={effectiveSelectedSessionId}
                   onSessionClick={handleSessionClick}
@@ -1636,11 +1641,16 @@ export const App: React.FC<AppProps> = ({
           onDeleteGatewayChannel={onDeleteGatewayChannel}
           onUpdateArtifact={onUpdateArtifact}
           onDeleteArtifact={onDeleteArtifact}
-          onCreateTeammate={() => {
-            closeSettings();
-            onSettingsClose?.();
-            createFlows.openCreate('teammate');
-          }}
+          // Creating a teammate creates a board and branch, which require member.
+          onCreateTeammate={
+            hasMinimumRole(user?.role, ROLES.MEMBER)
+              ? () => {
+                  closeSettings();
+                  onSettingsClose?.();
+                  createFlows.openCreate('teammate');
+                }
+              : undefined
+          }
           branchStorageConfig={branchStorageConfig}
         />
         {sessionSettingsSession && (

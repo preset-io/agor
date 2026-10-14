@@ -10,19 +10,19 @@
       "source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "default": "./dist/index.js"
     },
     "./ui": {
       "source": "./src/ui.ts",
       "types": "./dist/ui.d.ts",
       "import": "./dist/ui.js",
-      "require": "./dist/ui.cjs"
+      "default": "./dist/ui.js"
     },
     "./config": {
       "source": "./src/config.ts",
       "types": "./dist/config.d.ts",
       "import": "./dist/config.js",
-      "require": "./dist/config.cjs"
+      "default": "./dist/config.js"
     }
   },
   "files": [

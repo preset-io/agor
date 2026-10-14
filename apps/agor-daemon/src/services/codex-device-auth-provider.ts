@@ -1,6 +1,6 @@
 /** Provider-only pieces of Codex device authorization. No tenant state lives here. */
 
-import { codexIdTokenClaims } from '../utils/codex-auth-file.js';
+import { codexIdTokenClaims } from '@agor/core/codex/auth-file';
 
 export const CODEX_AUTH_ISSUER = 'https://auth.openai.com';
 /** Codex CLI's public OAuth client id. */

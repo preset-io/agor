@@ -1,13 +1,14 @@
 import type { AgorClient, Board, Branch, Repo, User } from '@agor-live/client';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { App } from 'antd';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import '../../index.css';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { boardPatched, branchPatched } from '../../store/agorRealtimeActions';
 import { agorStore, useAgorStore } from '../../store/agorStore';
+import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { makeTeammateBranch } from '../BranchModal/testUtils';
 import { BoardTeammatePanel } from './BoardTeammatePanel';
 
@@ -52,7 +53,10 @@ beforeEach(() => {
     repoById: new Map([[repo.repo_id, repo]]),
     userById: new Map([[user.user_id, user]]),
   });
+  // The caller's user scope holds every teammate branch: realtime writes to them land.
+  setRealtimeAuthorityScope(`${user.user_id}:member:1`);
 });
+afterEach(() => setRealtimeAuthorityScope(null));
 function mount(role: 'editor' | 'manager' | 'viewer' | 'error' = 'editor', inaccessible = false) {
   const retryProvisioning = vi.fn().mockResolvedValue(old);
   const setPrimaryTeammate = vi.fn().mockResolvedValue(board);
@@ -64,13 +68,21 @@ function mount(role: 'editor' | 'manager' | 'viewer' | 'error' = 'editor', inacc
           role,
           capabilities: role === 'viewer' ? ['board.view'] : ['board.view', 'board.edit'],
         });
+  const branchAccess = vi
+    .fn()
+    .mockResolvedValue({ can: 'all', is_owner: false, fs_access: 'write' });
+  const getBranch = vi.fn().mockRejectedValue(Object.assign(new Error('Forbidden'), { code: 403 }));
   const client = {
     service: (path: string) =>
       path === 'boards/:id/effective-access'
         ? { find }
-        : path === `branches/${old.branch_id}/retry-provisioning`
-          ? { create: retryProvisioning }
-          : { setPrimaryTeammate, clearPrimaryTeammate },
+        : path === 'branches/:id/effective-access'
+          ? { find: branchAccess }
+          : path === 'branches'
+            ? { get: getBranch }
+            : path === `branches/${old.branch_id}/retry-provisioning`
+              ? { create: retryProvisioning }
+              : { setPrimaryTeammate, clearPrimaryTeammate },
   } as unknown as AgorClient;
   function Panel() {
     const current = useAgorStore((state) => state.boardById.get(board.board_id))!;
@@ -150,7 +162,11 @@ it.each(['editor', 'manager'] as const)(
   async (role) => {
     const api = mount(role, true);
     await waitFor(() => expect(api.find).toHaveBeenCalled());
-    expect(screen.getByText('Teammate unavailable')).toBeVisible();
+    expect(
+      await screen.findByText(
+        "This board's teammate isn't available. It may have been deleted, or you may not have access."
+      )
+    ).toBeVisible();
     expectNoPrimaryActions();
     expect(screen.queryByRole('button', { name: 'Assign' })).toBeNull();
     expect(api.setPrimaryTeammate).not.toHaveBeenCalled();
@@ -190,35 +206,43 @@ it('still assigns a teammate from another board when the board has no primary', 
 });
 
 it.each([
-  { status: 'failed', title: 'Provisioning failed', action: 'Retry' },
-  { status: 'deleted', title: 'Filesystem unavailable', action: 'Recover' },
+  {
+    status: 'failed',
+    message: "Agor couldn't set up your teammate's workspace.",
+    action: 'Try again',
+  },
+  {
+    status: 'deleted',
+    message: "This branch's files aren't available. Restore them to start a session.",
+    action: 'Restore files',
+  },
 ] as const)(
   'preserves $action for the primary teammate filesystem',
-  async ({ status, title, action }) => {
+  async ({ status, message, action }) => {
     const api = mount();
     await act(async () =>
       branchPatched({ ...old, filesystem_status: status, error_message: 'Template fetch failed' })
     );
-    expect(await screen.findByText(title)).toBeVisible();
+    expect(await screen.findByText(message)).toBeVisible();
     if (status === 'failed') {
-      expect(screen.getByText(/Ask a workspace admin to check/)).toBeVisible();
-      expect(screen.getByText(/no need to create another one/)).toBeVisible();
-      const details = screen.getByText('Technical details').closest('details')!;
-      expect(details).not.toHaveAttribute('open');
-      await click(screen.getByText('Technical details'));
-      expect(details).toHaveAttribute('open');
-      expect(details).toHaveTextContent('Template fetch failed');
+      await click(screen.getByRole('button', { name: 'Details' }));
+      expect(
+        screen.getByText("Try again here. You don't need to create another teammate.")
+      ).toBeVisible();
+      expect(screen.getByText('Template fetch failed')).toBeVisible();
     }
     expectNoPrimaryActions();
-    await click(screen.getByRole('button', { name: action }));
+    const button = await screen.findByRole('button', { name: action });
+    await waitFor(() => expect(button).not.toHaveClass('ant-btn-loading'));
+    await click(button);
     await waitFor(() => expect(api.retryProvisioning).toHaveBeenCalledExactlyOnceWith({}));
     await act(async () =>
       branchPatched({ ...old, filesystem_status: 'creating', provisioning_operation: 'restore' })
     );
-    expect(screen.getByText('Filesystem recovery in progress')).toBeVisible();
+    expect(screen.getByText("Agor is restoring this branch's files…")).toBeVisible();
     expect(screen.queryByRole('button', { name: action })).toBeNull();
     await act(async () => branchPatched(old));
-    expect(screen.queryByText('Filesystem recovery in progress')).toBeNull();
+    expect(screen.queryByText("Agor is restoring this branch's files…")).toBeNull();
     expect(screen.getByRole('heading', { name: 'Old teammate' })).toBeVisible();
     expectNoPrimaryActions();
     expect(api.setPrimaryTeammate).not.toHaveBeenCalled();

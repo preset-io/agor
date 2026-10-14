@@ -17,6 +17,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { createTenantBoundDataAccess } from '../utils/tenant-bound-data-access.js';
 import { markTrustedUserMutation } from './user-mutation-trust.js';
 
 const NAMESPACE = 'user_avatars';
@@ -66,9 +67,12 @@ export class UserAvatarSyncManager {
     db: TenantScopeAwareDatabase,
     private app: Application
   ) {
-    this.variables = new AppVariableRepository(db);
-    this.gatewayChannels = new GatewayChannelRepository(db);
-    this.users = new UsersRepository(db);
+    // Manual sync and post-commit refresh carry tenant identity, not a
+    // request-long transaction. Provider I/O must remain outside these units.
+    const data = createTenantBoundDataAccess(db);
+    this.variables = data.repository(new AppVariableRepository(db));
+    this.gatewayChannels = data.repository(new GatewayChannelRepository(db));
+    this.users = data.repository(new UsersRepository(db));
   }
 
   async getSettings(params?: Params): Promise<UserAvatarSettings> {
