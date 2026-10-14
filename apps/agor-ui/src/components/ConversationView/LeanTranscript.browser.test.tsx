@@ -949,13 +949,14 @@ it('keeps synthetic streamed and persisted text visible while settling the think
     const textId = generateId();
     emit('thinking:start', thoughtId);
     emit('thinking:chunk', thoughtId, { chunk: 'Invented violet pebble' });
-    // Thinking-only live payloads are not currently rendered by AgentChain /
-    // MessageBlock (empty text). This fixture proves client activity and the
-    // real transcript text handoff, not thinking-only UI visibility.
     expect(live.getStreamingMessage(thoughtId)?.isThinking).toBe(true);
     emit('thinking:end', thoughtId);
     expect(live.getStreamingMessage(thoughtId)?.isStreaming).toBe(false);
     render(<ConversationView client={null} sessionId={sessionId} />);
+    // Thinking-only activity renders as one collapsed line until the turn settles.
+    expect(
+      screen.getByRole('button', { name: /^Thought for \d+s$/, expanded: false })
+    ).toBeVisible();
     emit('streaming:start', textId);
     emit('streaming:chunk', textId, { chunk: 'Invented amber square' });
     expect(screen.getByText('Invented amber square')).toBeVisible();
@@ -970,7 +971,7 @@ it('keeps synthetic streamed and persisted text visible while settling the think
     act(() => handlers.get('tasks:patched')?.({ ...task, status: TaskStatus.COMPLETED }));
     expect(live.state.streamingMessages.size).toBe(0);
     expect(screen.getByText('Invented amber square')).toBeVisible();
-    expect(screen.queryByText(/Extended Thinking/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Thought for/)).not.toBeInTheDocument();
     await page.screenshot({
       path: `./.vitest/synthetic-stream-lifecycle-${window.innerWidth}.png`,
     });
@@ -1026,9 +1027,9 @@ it('pins turn detail only while a reader expands it and releases on collapse and
   expect(retain).toHaveBeenCalledWith(tasks[0].task_id);
   await userEvent.click(chain);
   await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
-  await userEvent.click(screen.getByText('Extended Thinking'));
+  await userEvent.click(screen.getByText('Thought for a while'));
   await waitFor(() => expect(retain).toHaveBeenCalledTimes(2));
-  await userEvent.click(screen.getByText('Extended Thinking'));
+  await userEvent.click(screen.getByText('Thought for a while'));
   await waitFor(() => expect(release).toHaveBeenCalledTimes(2));
   // The default-open edit stays beside the answer with the chain collapsed.
   // Collapsing it pins nothing; a reader's reopening does.
