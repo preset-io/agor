@@ -209,25 +209,30 @@ describe('Teams provider history', () => {
     expect(kept[0]?.providerMessageId).toBe(String(trigger - 50n));
   });
 
-  it('is incomplete when newer replies fill every page before the queued mention', async () => {
+  it('is incomplete when newer replies use up the pages before a full window under the mention', async () => {
     const trigger = BigInt(TRIGGER_ID);
     // Replies posted after the mention while it waited in the queue come first, newest first.
-    const fetchImpl = fakeFetch((url) => {
-      if (!url.startsWith(`${GRAPH_BASE}/replies`)) return undefined;
-      const offset = Number(new URL(url).searchParams.get('$skiptoken') ?? '0');
-      return json({
-        value: Array.from({ length: 50 }, (_, index) =>
-          graphMessage(String(trigger + 1000n - BigInt(offset + index)))
-        ),
-        '@odata.nextLink': `${GRAPH_BASE}/replies?$skiptoken=${offset + 50}`,
+    for (const newer of [100, 99, 95]) {
+      const ids = [
+        ...Array.from({ length: newer }, (_, index) => trigger + 1000n - BigInt(index)),
+        trigger,
+        ...Array.from({ length: 200 }, (_, index) => trigger - 1n - BigInt(index)),
+      ];
+      const fetchImpl = fakeFetch((url) => {
+        if (!url.startsWith(`${GRAPH_BASE}/replies`)) return undefined;
+        const offset = Number(new URL(url).searchParams.get('$skiptoken') ?? '0');
+        return json({
+          value: ids.slice(offset, offset + 50).map((id) => graphMessage(String(id))),
+          '@odata.nextLink': `${GRAPH_BASE}/replies?$skiptoken=${offset + 50}`,
+        });
       });
-    });
-    const result = await fetchTeamsProviderHistory(
-      config,
-      request({ afterProviderCursor: '1616980000000' }),
-      { fetchImpl }
-    );
-    expect(result.complete).toBe(false);
+      const result = await fetchTeamsProviderHistory(
+        config,
+        request({ afterProviderCursor: '1616980000000' }),
+        { fetchImpl }
+      );
+      expect(result.complete).toBe(false);
+    }
   });
 
   it('reports an interval it could not cover as incomplete', async () => {

@@ -198,6 +198,8 @@ export async function fetchTeamsProviderHistory(
         (after === undefined || compareIds(message.providerMessageId, after) > 0)
     )
     .sort((left, right) => compareIds(left.providerMessageId, right.providerMessageId));
+  // A capped read is complete only with a full window before the mention; otherwise it skipped some.
+  if (earlierOmitted && interval.length < limit) return incomplete;
   if (interval.length > limit) earlierOmitted = true;
   return {
     threadId: req.threadId,
