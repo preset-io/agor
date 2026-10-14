@@ -431,7 +431,12 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // while the reader is scrolled up or paging. In-session search only walks
     // mounted turns, so a trimmed turn is found again once paged back in, like
     // any not-yet-loaded history.
-    const trimAnchor = useRef<{ element: HTMLElement; top: number; tasks: unknown } | null>(null);
+    const trimAnchor = useRef<{
+      element: HTMLElement;
+      top: number;
+      scrollTop: number;
+      tasks: unknown;
+    } | null>(null);
     // Declared before the trim so it sees the trim's own commit, not the one that requested it.
     useLayoutEffect(() => {
       const anchor = trimAnchor.current;
@@ -453,9 +458,12 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           if (state.resizeDifference === guard) state.resizeDifference = 0;
         }, 1);
       });
-      // Record the position even without a shift: a clamp from the removal is
-      // programmatic too, and a stale record reads it as the reader scrolling up.
-      state.scrollTop = viewport.scrollTop + shift;
+      // A browser clamp or anchoring move from the removal is programmatic too;
+      // a stale record reads it as the reader scrolling up. Leave an unmoved
+      // position alone: it may be a reader's scroll whose event is still pending.
+      if (shift || viewport.scrollTop !== anchor.scrollTop) {
+        state.scrollTop = viewport.scrollTop + shift;
+      }
       // Removal can outweigh a turn appended in the same frame; a negative resize
       // does not re-pin, so follow the lock explicitly.
       if (state.isAtBottom) void scrollToBottom({ animation: 'instant' });
@@ -483,6 +491,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       trimAnchor.current = {
         element: anchor,
         top: anchor.getBoundingClientRect().top,
+        scrollTop: viewport.scrollTop,
         tasks: reactiveTasks,
       };
       if (!reactiveSession.trimOlderTasks(anchor.dataset.taskBlock)) trimAnchor.current = null;
