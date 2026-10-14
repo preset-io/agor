@@ -57,39 +57,43 @@ export class BranchDeletionRepository {
     );
   }
 
+  /** Returns undefined once every reference page has completed. */
   private async reconcileReferencesPage(
     tx: Database,
     row: typeof branches.$inferSelect
-  ): Promise<boolean> {
+  ): Promise<{ scanned: number; updated: number } | undefined> {
     const current = row.data.maintenance!;
-    if (!current.references_done) {
-      const page = await reconcileBranchDeletionReferencesBatch(
-        tx,
-        row.branch_id as BranchID,
-        current.reference_cursor
-      );
-      await update(tx, branches)
-        .set({
-          data: {
-            ...row.data,
-            maintenance: {
-              ...current,
-              reference_cursor: page.cursor,
-              references_done: page.done,
-            },
+    if (current.references_done) return undefined;
+    const page = await reconcileBranchDeletionReferencesBatch(
+      tx,
+      row.branch_id as BranchID,
+      current.reference_cursor
+    );
+    await update(tx, branches)
+      .set({
+        data: {
+          ...row.data,
+          maintenance: {
+            ...current,
+            reference_cursor: page.cursor,
+            references_done: page.done,
           },
-        })
-        .where(eq(branches.branch_id, row.branch_id))
-        .run();
-      return true;
-    }
-    return false;
+        },
+      })
+      .where(eq(branches.branch_id, row.branch_id))
+      .run();
+    return { scanned: page.scanned, updated: page.updated };
   }
 
+  /**
+   * One short page in the caller's transaction. Callers wanting more progress
+   * per request must run further pages in SEPARATE transactions so the tenant
+   * reference lock is released between pages (see branch-deletion-steps).
+   */
   async quiescePage(
     claim: BranchMaintenanceClaim,
     invocation: UUID
-  ): Promise<{ remaining: boolean }> {
+  ): Promise<{ remaining: boolean; scanned: number; updated: number }> {
     return this.referenceStep(claim, invocation, async (tx, row) => {
       // Disable durable producers in bounded pages before touching storage.
       for (const [table, key, owner] of [
@@ -105,10 +109,11 @@ export class BranchDeletionRepository {
           ORDER BY ${sql.identifier(key)} LIMIT 100) RETURNING ${sql.identifier(key)}`
           )
         );
-        if (changed.length) return { remaining: true };
+        if (changed.length) return { remaining: true, scanned: 0, updated: 0 };
       }
       // Resolve dependency blockers while locator rows and files still exist.
-      return { remaining: await this.reconcileReferencesPage(tx, row) };
+      const page = await this.reconcileReferencesPage(tx, row);
+      return page ? { remaining: true, ...page } : { remaining: false, scanned: 0, updated: 0 };
     });
   }
 
