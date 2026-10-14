@@ -1,14 +1,22 @@
-import type { AgorClient, Board } from '@agor-live/client';
+import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeFeathersClient, mount, withTestAuthority } from '../../test/harness';
 import { BoardsTable } from './BoardsTable';
 import { renderWithSettingsShell } from './settingsDrillTestUtils';
 
+const member = { user_id: 'me', email: 'me@example.test', role: 'member' } as User;
+const viewer = { user_id: 'viewer', email: 'viewer@example.test', role: 'viewer' } as User;
+
 describe('BoardsTable create guard', () => {
   it('asks before Back discards a picked background preset', async () => {
     renderWithSettingsShell(
-      <BoardsTable client={null} boardById={new Map()} branchById={new Map()} />,
+      <BoardsTable
+        client={null}
+        boardById={new Map()}
+        branchById={new Map()}
+        currentUser={member}
+      />,
       'boards'
     );
     const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
@@ -28,7 +36,7 @@ withTestAuthority('me:member:1', { dataAuthority: false });
 
 afterEach(() => vi.restoreAllMocks());
 
-function renderTable(boards: Record<string, unknown>) {
+function renderTable(boards: Record<string, unknown>, currentUser: User = member) {
   const fake = fakeFeathersClient({ 'session-counts': { find: () => [] } });
   const client = Object.create(fake.client) as AgorClient;
   client.service = ((path: string) =>
@@ -38,6 +46,7 @@ function renderTable(boards: Record<string, unknown>) {
       client={client}
       boardById={new Map([[board.board_id, board]])}
       branchById={new Map()}
+      currentUser={currentUser}
     />
   );
 }
@@ -95,4 +104,19 @@ it('keeps the skipped-items summary on screen after an import', async () => {
       'Imported Imported, but not everything came across: 1 object was unsupported or malformed and was skipped.'
     )
   ).toBeInTheDocument();
+});
+
+it('shows a viewer the board actions disabled, keeping Export', async () => {
+  renderTable({}, viewer);
+  const row = (await screen.findByText('Roadmap')).closest('tr') as HTMLElement;
+  // DOM queries: role queries trip jsdom's border-shorthand parser on disabled antd buttons.
+  const button = (label: string) => screen.getByText(label).closest('button') as HTMLElement;
+  expect(button('New Board')).toBeDisabled();
+  expect(button('Import Board')).toBeDisabled();
+  const rowButton = (icon: string) =>
+    row.querySelector(`.anticon-${icon}`)?.closest('button') as HTMLElement;
+  for (const icon of ['inbox', 'copy', 'edit', 'delete']) {
+    expect(rowButton(icon)).toBeDisabled();
+  }
+  expect(rowButton('download')).toBeEnabled();
 });
