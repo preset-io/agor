@@ -1501,6 +1501,8 @@ export const AutocompleteTextarea = React.forwardRef<
           className="agor-textarea agor-textarea-with-highlights"
           variant={variant}
           style={{
+            // A borderless field sits in a card that draws the focus ring.
+            ...(variant === 'borderless' && { outline: 'none' }),
             ...(variant === 'outlined' && {
               borderColor:
                 shouldHighlightEmpty && !suppressEmptyHighlight
