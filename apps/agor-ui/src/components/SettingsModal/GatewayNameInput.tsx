@@ -6,6 +6,8 @@ interface GatewayNameInputProps
   targetName?: string;
   channelTypeLabel: string;
   value?: string;
+  /** Programmatic suggestions must not trigger user-edit validation. */
+  onSuggest: (value: string) => void;
   onChange?: (value: string) => void;
 }
 
@@ -15,6 +17,7 @@ export function GatewayNameInput({
   targetName,
   channelTypeLabel,
   value,
+  onSuggest,
   onChange,
   ...accessibilityProps
 }: GatewayNameInputProps) {
@@ -24,14 +27,14 @@ export function GatewayNameInput({
   const suggestedName = targetName ? `${targetName} · ${channelTypeLabel}` : '';
 
   useEffect(() => {
-    if (!customized && value !== suggestedName) onChange?.(suggestedName);
-  }, [customized, onChange, suggestedName, value]);
+    if (!customized && value !== suggestedName) onSuggest(suggestedName);
+  }, [customized, onSuggest, suggestedName, value]);
 
   if (editing) {
     return (
       <Input
         {...accessibilityProps}
-        aria-label="Display name"
+        aria-label="Channel name"
         value={value}
         autoFocus
         onChange={(event) => {
@@ -43,7 +46,14 @@ export function GatewayNameInput({
   }
 
   return (
-    <Flex align="center" gap={token.marginXS} style={{ minWidth: 0 }}>
+    <Flex
+      {...accessibilityProps}
+      role="group"
+      aria-label="Channel name"
+      align="center"
+      gap={token.marginXS}
+      style={{ minWidth: 0 }}
+    >
       <Typography.Text type="secondary" ellipsis={{ tooltip: value }} style={{ minWidth: 0 }}>
         {value}
       </Typography.Text>

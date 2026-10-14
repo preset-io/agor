@@ -265,7 +265,7 @@ async function advanceToOptions(displayName?: string) {
   });
   if (displayName !== undefined) {
     fireEvent.click(screen.getByLabelText('Rename gateway'));
-    fireEvent.change(screen.getByLabelText('Display name'), {
+    fireEvent.change(screen.getByLabelText('Channel name'), {
       target: { value: displayName },
     });
   }

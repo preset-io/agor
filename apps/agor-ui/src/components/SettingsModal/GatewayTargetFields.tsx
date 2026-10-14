@@ -1,5 +1,5 @@
 import type { AgorClient, Branch } from '@agor-live/client';
-import { Form, Radio } from 'antd';
+import { Form, Radio, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { teammateLabel } from '@/utils/teammateLabels';
 import { BranchSelect } from './BranchSelect';
@@ -14,6 +14,7 @@ export function GatewayTargetFields({
   channelTypeLabel: string;
 }) {
   const form = Form.useFormInstance();
+  const { token } = theme.useToken();
   const targetKind = Form.useWatch('target_kind', form) ?? 'teammate';
   const teammatesOnly = targetKind === 'teammate';
   const targetId = Form.useWatch('target_branch_id', form);
@@ -73,11 +74,25 @@ export function GatewayTargetFields({
         />
       </Form.Item>
       <Form.Item
+        label={
+          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            Channel name
+          </Typography.Text>
+        }
+        required={false}
         name="name"
         hidden={!targetId}
-        rules={[{ required: true, whitespace: true, message: 'Please enter a display name' }]}
+        rules={
+          targetId
+            ? [{ required: true, whitespace: true, message: 'Please enter a channel name' }]
+            : []
+        }
       >
-        <GatewayNameInput targetName={targetName} channelTypeLabel={channelTypeLabel} />
+        <GatewayNameInput
+          targetName={targetName}
+          channelTypeLabel={channelTypeLabel}
+          onSuggest={(name) => form.setFieldValue('name', name)}
+        />
       </Form.Item>
     </>
   );
