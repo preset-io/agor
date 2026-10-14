@@ -108,6 +108,16 @@ A later request naming the installed server re-reads the entry's disclosure
 and refuses if the entry left the catalog. If such installs ever stop being
 inert, redesign this first.
 
+An entry that needs a key (`auth_type: credentials`, or a probe answering
+`credential_requirement: 'required'`) installs nothing at mint. Its card pins
+only `catalogEntryName`, and Connect opens this drawer for that entry
+(`openCatalogEntry` on the catalog modal context, mounting `CatalogTab` in its
+handoff mode), so policy, the key field, egress and storage are the drawer's
+one connect path. The card then resolves with the install's id, which
+`oauth-resolve` accepts only for a caller-usable `source: 'catalog'` install of
+that entry. A gateway link carries `?mcp_connect=<widget id>` to open the
+drawer on arrival; there is no Slack card for these.
+
 ## Retired config
 
 The `mcp_catalog:` config section is ignored but still accepted, because

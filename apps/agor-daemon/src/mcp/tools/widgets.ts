@@ -9,7 +9,8 @@
  *
  *  - `agor_widgets_request_env_vars`    — collect env vars / API keys.
  *  - `agor_widgets_request_gateway_token` — collect a gateway channel's tokens.
- *  - `agor_widgets_request_oauth`       — connect a third-party MCP account.
+ *  - `agor_widgets_request_oauth`       — connect a third-party MCP account
+ *    (OAuth sign-in, or the catalog drawer's key form for an API-key entry).
  *
  * Security contract (§5.1 of the design doc): the agent never sees resolved
  * values. Tool inputs accept only NAMES and identities; secrets reach the
@@ -42,8 +43,10 @@ import {
   getRequiredSecretFields,
   hasMinimumRole,
   isGatewaySession,
+  MCP_CONNECT_WIDGET_QUERY_PARAM,
   MessageRole,
   ROLES,
+  readCredentialRequirement,
 } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -342,7 +345,12 @@ type OAuthWidgetTarget =
       disclosureRefusal?: string;
     }
   /** The endpoint turned out to need no sign-in; there is nothing to authorize. */
-  | { short_circuit: true; server: MCPServer; label: string };
+  | { short_circuit: true; server: MCPServer; label: string }
+  /**
+   * The entry needs a credential the user must enter (an API key). Nothing is
+   * installed: the card opens the catalog drawer, whose Connect is the install.
+   */
+  | { catalog_connect: true; entry: MCPCatalogEntry };
 
 /** Load and validate an MCP server the agent named directly. */
 async function loadExistingOAuthServer(
@@ -368,7 +376,9 @@ async function loadExistingOAuthServer(
   if (authType !== 'oauth') {
     throw new Error(
       `MCP server "${server.display_name || server.name}" uses ${authType} auth, not OAuth. ` +
-        `Use agor_widgets_request_env_vars for a key the user must paste, or connect it from the MCP Catalog.`
+        (server.catalog_entry_name
+          ? `To have the user enter a new key, pass catalogEntryName "${server.catalog_entry_name}" instead.`
+          : 'Ask the user to update it in Agor → Settings → MCP Servers.')
     );
   }
   if (!server.catalog_entry_name) return { server };
@@ -428,7 +438,9 @@ function disclosureTooLongMessage(entry: MCPCatalogEntry): string {
 }
 
 /**
- * Turn a catalog entry name into an installed, inert server row.
+ * Turn a catalog entry name into an installed, inert server row — or, for an
+ * entry that needs a key the user must type, into a catalog-connect target
+ * with nothing installed (see {@link mintCatalogConnectWidget}).
  *
  * Goes through `mcp-catalog/connect`, which is the only reviewed path that
  * probes the endpoint, derives the auth prescription from the live answer
@@ -465,11 +477,6 @@ async function installCatalogOAuthServer(
       `"${catalogDisplayName(entry)}" has no remote endpoint; locally-run MCP servers are configured by an admin.`
     );
   }
-  if (entry.auth_type === 'credentials') {
-    throw new Error(
-      `"${catalogDisplayName(entry)}" is connected with an API key, not OAuth. Connect it from the MCP Catalog in Agor.`
-    );
-  }
   // Everything the widget row will carry from this entry is checked BEFORE the
   // install, because the install is the first durable effect: an entry whose
   // fields exceed `oauthParamsSchema`'s limits used to leave an installed
@@ -491,6 +498,9 @@ async function installCatalogOAuthServer(
     throw new Error(disclosureTooLongMessage(entry));
   }
   const permissionDisclosure = entry.permission_disclosure || undefined;
+  // A key the user types can only go through the catalog drawer's own Connect,
+  // so there is nothing to install here.
+  if (entry.auth_type === 'credentials') return { catalog_connect: true, entry };
 
   // Caller params verbatim — in particular, KEEP `provider`. Connect stamps
   // catalog provenance only for a transport-bearing caller:
@@ -499,9 +509,17 @@ async function installCatalogOAuthServer(
   // one delegates instead. An agent calling this tool IS an authenticated
   // external caller acting for a user, so it should meet exactly the
   // authorization the browser meets.
-  const result = (await ctx.app
-    .service('mcp-catalog/connect')
-    .create({ catalog_key: entry.name }, ctx.baseServiceParams)) as MCPCatalogConnectResult;
+  let result: MCPCatalogConnectResult;
+  try {
+    result = (await ctx.app
+      .service('mcp-catalog/connect')
+      .create({ catalog_key: entry.name }, ctx.baseServiceParams)) as MCPCatalogConnectResult;
+  } catch (error) {
+    // The live endpoint asked for a key the entry did not advertise. Same
+    // answer as a `credentials` entry: the user enters it in the drawer.
+    if (readCredentialRequirement(error) === 'required') return { catalog_connect: true, entry };
+    throw error;
+  }
   const server = result.mcp_server;
 
   const authType = server.auth?.type ?? 'none';
@@ -607,6 +625,85 @@ const GATEWAY_SESSION_LINK_UNAVAILABLE_TEXT =
   'I could not get a link to this Agor session, so there is nothing for you to click here yet. ' +
   "Ask an Agor administrator to check this workspace's public link setup, then ask me again.";
 
+/** The `session_url` / `link_unavailable` fields a gateway mint hands the agent. */
+function gatewayRelayFields(
+  link: GatewaySessionConnectLink,
+  relay: (url: string) => string
+): Record<string, unknown> {
+  if (link.kind === 'url') return { session_url: link.url, relay_to_user: relay(link.url) };
+  if (link.kind === 'unavailable') {
+    return { link_unavailable: true, relay_to_user: GATEWAY_SESSION_LINK_UNAVAILABLE_TEXT };
+  }
+  return {};
+}
+
+/** The card's one-line reason; the widget schema requires a non-empty one. */
+function widgetReason(reason: string | undefined, serverName: string): string {
+  // `?? default` does not substitute for an empty string, so fall back on
+  // anything blank. The fallback interpolates a name that is itself only
+  // bounded at 200, so it is clamped too rather than trusted to fit.
+  return clampToSchemaMax(
+    reason?.trim() || `Connect ${serverName} so its tools are available in this session.`,
+    REASON_MAX
+  );
+}
+
+/**
+ * Mint a Connect card for a catalog entry the user connects through the
+ * catalog drawer — an entry that needs a key the user types.
+ *
+ * Nothing is installed or attached here. The card opens the same drawer the
+ * MCP Catalog uses, whose Connect calls `mcp-catalog/connect` straight from the
+ * browser, so member policy, egress, and secret storage are that path's and
+ * the key never reaches this tool or the agent. The card then resolves with
+ * the install it made, which the resolve handler accepts only if it is a
+ * caller-usable install of this entry.
+ *
+ * No Slack card, because a key cannot be typed into Slack: a gateway user gets
+ * a session link that opens the drawer on arrival.
+ */
+async function mintCatalogConnectWidget(
+  ctx: McpContext,
+  session: Session,
+  entry: MCPCatalogEntry,
+  reason: string | undefined
+) {
+  const sessionId = session.session_id as SessionID;
+  const serverName = clampToSchemaMax(catalogDisplayName(entry), SERVER_NAME_MAX);
+  const params: OAuthWidgetParams = oauthParamsSchema.parse({
+    serverName,
+    oauthMode: 'per_user',
+    reason: widgetReason(reason, serverName),
+    catalogEntryName: entry.name,
+    ...(entry.permission_disclosure ? { permissionDisclosure: entry.permission_disclosure } : {}),
+  });
+  await supersedePendingOAuthWidgets(ctx, sessionId, { catalogEntryName: entry.name });
+  const widgetId = await mintWidgetMessage(ctx, {
+    sessionId,
+    widgetType: 'oauth',
+    params,
+    content: `Connect "${serverName}": ${params.reason}`,
+    contentPreview: `Widget: oauth (${serverName})`,
+    status: 'pending',
+    autoResume: true,
+  });
+  const link = await gatewaySessionConnectUrl(ctx, session, sessionId);
+  if (link.kind === 'url') {
+    const deepLink = new URL(link.url);
+    deepLink.searchParams.set(MCP_CONNECT_WIDGET_QUERY_PARAM, widgetId);
+    link.url = deepLink.toString();
+  }
+  return textResult({
+    widget_id: widgetId,
+    status: 'requested',
+    ...gatewayRelayFields(
+      link,
+      (url) =>
+        `Open ${url} to connect "${serverName}" with your own key. Please don't paste the key into this chat.`
+    ),
+  });
+}
+
 /**
  * Attach a server that needs no further authorization and wake the agent.
  *
@@ -668,7 +765,7 @@ async function attachAndResume(
       attached,
     } satisfies OAuthWidgetResultMeta,
   });
-  await supersedePendingOAuthWidgets(ctx, sessionId, server.mcp_server_id);
+  await supersedePendingOAuthWidgets(ctx, sessionId, { mcpServerId: server.mcp_server_id });
   await queueWidgetAutoResume(
     ctx,
     sessionId,
@@ -715,8 +812,12 @@ const OAUTH_SUPERSEDE_SCAN_LIMIT = 200;
 async function supersedePendingOAuthWidgets(
   ctx: McpContext,
   sessionId: SessionID,
-  mcpServerId: string
+  target: { mcpServerId: string } | { catalogEntryName: string }
 ): Promise<void> {
+  const matches = (params: OAuthWidgetParams | undefined) =>
+    'mcpServerId' in target
+      ? params?.mcpServerId === target.mcpServerId
+      : !params?.mcpServerId && params?.catalogEntryName === target.catalogEntryName;
   try {
     const store = (ctx.app as unknown as { get?: (key: string) => unknown }).get?.(
       WIDGET_RESOLUTION_STORE_KEY
@@ -737,16 +838,13 @@ async function supersedePendingOAuthWidgets(
     for (const row of rows) {
       const widget = row.metadata?.widget;
       if (widget?.widget_type !== 'oauth' || widget.status !== 'pending') continue;
-      if ((widget.params as OAuthWidgetParams | undefined)?.mcpServerId !== mcpServerId) continue;
+      if (!matches(widget.params as OAuthWidgetParams | undefined)) continue;
       // The store re-reads `pending` under the row lock, so a widget another
       // daemon claimed in the meantime is left alone.
       await store.supersede(row.message_id, resolvedAt);
     }
   } catch (err) {
-    console.warn(
-      `[widgets] failed to supersede pending oauth widgets for server ${mcpServerId}:`,
-      err
-    );
+    console.warn('[widgets] failed to supersede pending oauth widgets:', err);
   }
 }
 
@@ -824,7 +922,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
     'agor_widgets_request_oauth',
     {
       description:
-        'Ask the user to connect a third-party MCP server account (Notion, Linear, Sentry, ...) by rendering an inline Connect button that runs the real OAuth sign-in in their browser. ' +
+        "Ask the user to connect a third-party MCP server account (Notion, Linear, GitHub, ...) by rendering an inline Connect card. For an OAuth server it runs the real sign-in in their browser; for a catalog entry that needs an API key or token it opens the MCP Catalog's own secure key form, so the key goes straight from the browser to Agor. " +
         'PREFER this tool whenever the user asks you to "connect me to X" or a task needs an MCP server they have not authorized: call it instead of telling them to open Settings or the MCP Catalog. ' +
         'Resolve the server FIRST: use `agor_mcp_catalog_list` to turn a product name into a `catalogEntryName` (e.g. "Notion" -> "com.notion/mcp"), or `agor_mcp_servers_list` for a server that already exists. NEVER invent a URL — pass exactly one of `mcpServerId` or `catalogEntryName`. ' +
         'FIRE-AND-FORGET: the widget renders inline at the end of your turn; end your turn after calling. You will receive a user-role message when it resolves. ' +
@@ -834,7 +932,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         'If it contains neither, you are on the Agor canvas and the user is already looking at the card. ' +
         'This tool NEVER promises a message in the thread itself: a Slack card, where one is posted at all, is sent separately and may not arrive, so never say one is coming. A link is the only thing it can promise. ' +
         'If the account is already connected the tool attaches it and resumes you immediately (status "already_present") — no button is shown. Only the session owner or an admin can attach; otherwise the result says `attached: false` and you should ask them to attach it. ' +
-        'Tokens never enter your context: only the server name and OAuth mode do. The server is attached to this session only AFTER the grant lands, so its tools appear on a later turn, not this one. ' +
+        "Tokens and keys never enter your context or this tool's arguments: only the server name and OAuth mode do. Do NOT use agor_widgets_request_env_vars for an MCP server's key, and never ask for one in chat. The server is attached to this session only AFTER the user connects, so its tools appear on a later turn, not this one. " +
         'Keep `reason` to ONE short sentence (<=200 chars).',
       annotations: { destructiveHint: false, openWorldHint: false },
       inputSchema: z.strictObject({
@@ -848,7 +946,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
           .min(1)
           .optional()
           .describe(
-            'Reverse-DNS catalog name from `agor_mcp_catalog_list`, e.g. "com.notion/mcp". Installs the entry if the user does not have it yet.'
+            'Reverse-DNS catalog name from `agor_mcp_catalog_list`, e.g. "com.notion/mcp". Works for OAuth and API-key entries; the user adds the entry if they do not have it yet.'
           ),
         reason: z
           .string()
@@ -908,6 +1006,9 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       const resolved = args.mcpServerId
         ? await loadExistingOAuthServer(ctx, args.mcpServerId)
         : await installCatalogOAuthServer(ctx, args.catalogEntryName as string);
+      if ('catalog_connect' in resolved) {
+        return mintCatalogConnectWidget(ctx, session, resolved.entry, args.reason);
+      }
       if ('short_circuit' in resolved) {
         // The entry needs no sign-in at all. Attach and resume rather than
         // rendering a Connect button that would open a flow nobody asked for.
@@ -923,15 +1024,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         mcpServerId: server.mcp_server_id,
         serverName,
         oauthMode,
-        // `?? default` does not substitute for an empty string, and the widget
-        // schema requires a non-empty reason — so fall back on anything blank.
-        // The fallback interpolates a name that is itself only bounded at 200,
-        // so it is clamped too rather than trusted to fit.
-        reason: clampToSchemaMax(
-          args.reason?.trim() ||
-            `Connect ${serverName} so its tools are available in this session.`,
-          REASON_MAX
-        ),
+        reason: widgetReason(args.reason, serverName),
         ...(catalogEntryName ? { catalogEntryName } : {}),
         ...(permissionDisclosure ? { permissionDisclosure } : {}),
       });
@@ -969,7 +1062,9 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // One live Connect button per (session, server). A second request
       // supersedes the first rather than stacking buttons that all drive the
       // same flow and would each queue their own auto-resume.
-      await supersedePendingOAuthWidgets(ctx, targetSessionId, server.mcp_server_id);
+      await supersedePendingOAuthWidgets(ctx, targetSessionId, {
+        mcpServerId: server.mcp_server_id,
+      });
 
       const widgetId = await mintWidgetMessage(ctx, {
         sessionId: targetSessionId,
@@ -1007,18 +1102,10 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       return textResult({
         widget_id: widgetId,
         status: 'requested',
-        ...(link.kind === 'url'
-          ? {
-              session_url: link.url,
-              relay_to_user: `Open ${link.url} and click Connect to sign in to "${serverName}".`,
-            }
-          : {}),
-        ...(link.kind === 'unavailable'
-          ? {
-              link_unavailable: true,
-              relay_to_user: GATEWAY_SESSION_LINK_UNAVAILABLE_TEXT,
-            }
-          : {}),
+        ...gatewayRelayFields(
+          link,
+          (url) => `Open ${url} and click Connect to sign in to "${serverName}".`
+        ),
       });
     }
   );

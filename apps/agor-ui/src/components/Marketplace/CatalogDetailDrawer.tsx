@@ -81,6 +81,8 @@ const FALLBACK_DISCLOSURE =
 export interface CatalogDetailDrawerProps {
   /** Same auth presentation, different terminal action; never inferred from routing. */
   mode?: 'catalog' | 'onboarding';
+  /** Where an `onboarding`-mode handoff returns to, as read in its copy. */
+  returnTarget?: string;
   onRetryConnection?: () => void;
   /** Authenticated identity that owns consent, selections, and pasted credentials. */
   identityKey: string | null;
@@ -153,6 +155,7 @@ export interface CatalogDetailDrawerProps {
 const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   identityKey: _identityKey,
   mode = 'catalog',
+  returnTarget = 'onboarding',
   onRetryConnection,
   entry,
   open,
@@ -255,7 +258,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           readiness: 'ready' as const,
           label: 'Ready to use',
           detail: onboarding
-            ? 'Your existing connection is ready for onboarding.'
+            ? `Your existing connection is ready for ${returnTarget}.`
             : 'Your existing connection can be used in a new session.',
         };
       case 'reusable_oauth':
@@ -532,12 +535,12 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 <Paragraph type="secondary" style={{ margin: `${token.marginXXS}px 0 0` }}>
                   {onboarding
                     ? success.authentication === 'ready'
-                      ? `${title} is connected. Return to onboarding to continue setup.`
+                      ? `${title} is connected. Return to ${returnTarget} to continue.`
                       : success.authentication === 'pending'
                         ? 'Finish sign-in in the provider window. This drawer will confirm your connection.'
                         : success.authentication === 'action_required'
                           ? 'Continue to the provider to complete sign-in.'
-                          : 'Sign-in was not confirmed. Retry here or return to onboarding and connect later.'
+                          : `Sign-in was not confirmed. Retry here or return to ${returnTarget} and connect later.`
                     : success.authentication === 'ready'
                       ? `${title} is ready. Start a session now or keep browsing the MCP Catalog.`
                       : success.authentication === 'action_required'
@@ -583,7 +586,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     </Button>
                   )}
                   <Button ref={successActionRef} type="primary" onClick={onKeepBrowsing}>
-                    Return to onboarding
+                    Return to {returnTarget}
                   </Button>
                 </Flex>
               ) : showSessionSetup ? (

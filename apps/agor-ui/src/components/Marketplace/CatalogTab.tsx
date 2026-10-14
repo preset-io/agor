@@ -112,6 +112,8 @@ export interface CatalogTabProps {
     | {
         mode: 'onboarding';
         entryName: string;
+        /** What the handoff returns to, as read in its copy. Defaults to onboarding. */
+        returnTo?: string;
         onClose: () => void;
         onConnected: (serverId: string) => void;
       };
@@ -143,6 +145,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   onOpenSession,
 }) => {
   const onboarding = context?.mode === 'onboarding' ? context : undefined;
+  const returnTarget = onboarding?.returnTo ?? 'onboarding';
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const [filters, setFilters] = useState<CatalogFilterState>(INITIAL_FILTERS);
@@ -580,7 +583,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
               authentication = 'failed';
               showError(
                 onboarding
-                  ? "Couldn't open sign-in. Go back to onboarding or try again here."
+                  ? `Couldn't open sign-in. Go back to ${returnTarget} or try again here.`
                   : formatActionError('open sign-in', cause, { idempotent: true })
               );
             }
@@ -614,7 +617,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, selected, onboarding, sharing, showError, showWarning]
+    [client, operationGuard, selected, onboarding, returnTarget, sharing, showError, showWarning]
   );
 
   const continueSurpriseOAuth = useCallback(
@@ -672,14 +675,14 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         );
         showError(
           onboarding
-            ? "Couldn't open sign-in. Go back to onboarding or try again here."
+            ? `Couldn't open sign-in. Go back to ${returnTarget} or try again here.`
             : formatActionError('open sign-in', cause, { idempotent: true })
         );
       } finally {
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, onboarding, showError]
+    [client, operationGuard, onboarding, returnTarget, showError]
   );
 
   const handleStartSession = useCallback(
@@ -757,6 +760,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     <>
       <CatalogDetailDrawer
         mode={onboarding ? 'onboarding' : 'catalog'}
+        returnTarget={returnTarget}
         onRetryConnection={() => {
           interactionEpoch.current += 1;
           setConnectSuccess(null);
@@ -782,7 +786,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
                   action={<Button onClick={retry}>Retry</Button>}
                 />
               )}
-              <Button onClick={onboarding.onClose}>Return to onboarding</Button>
+              <Button onClick={onboarding.onClose}>Return to {returnTarget}</Button>
             </>
           )
         }

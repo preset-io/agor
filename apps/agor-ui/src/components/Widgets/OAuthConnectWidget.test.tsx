@@ -13,11 +13,16 @@
  *     grant landed but the attach was refused
  */
 
+import { MCP_CONNECT_WIDGET_QUERY_PARAM } from '@agor/core/types';
 import type { AgorClient, WidgetMessageMetadata } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactElement } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  type MCPCatalogEntryHandoff,
+  MCPCatalogModalContext,
+} from '@/contexts/MCPCatalogModalContext';
 import { agorStore } from '@/store/agorStore';
 import { OAuthConnectWidget } from './OAuthConnectWidget';
 
@@ -516,3 +521,90 @@ describe('OAuthConnectWidget — finishing a sign-in that already happened', () 
     expect(screen.queryByText('You are already signed in')).toBeNull();
   });
 });
+
+/**
+ * A widget pinned only to a catalog entry (an API-key server). Connect hands
+ * off to the app's MCP Catalog drawer for that entry; the card resolves with
+ * the install the drawer reports, and never runs a popup of its own.
+ */
+describe('OAuthConnectWidget — catalog-connect lane', () => {
+  const { mcpServerId: _pinned, ...CATALOG_PARAMS } = {
+    ...PARAMS,
+    serverName: 'GitHub',
+    catalogEntryName: 'io.github.github/github-mcp-server',
+  };
+  const catalogWidget = () => widget({ params: CATALOG_PARAMS } as Partial<WidgetMessageMetadata>);
+
+  function renderWithCatalog(client: AgorClient, catalog = catalogController()) {
+    renderWidget(
+      <MCPCatalogModalContext.Provider value={catalog.value}>
+        <OAuthConnectWidget message={message} widget={catalogWidget()} client={client} />
+      </MCPCatalogModalContext.Provider>
+    );
+    return catalog;
+  }
+
+  afterEach(() => window.history.replaceState(null, '', '/'));
+
+  it('opens the catalog drawer for the entry instead of a sign-in popup', () => {
+    const calls: string[] = [];
+    const catalog = renderWithCatalog(makeClient({ onCall: (path) => calls.push(path) }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+    expect(catalog.openCatalogEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entryName: 'io.github.github/github-mcp-server',
+        returnTo: 'the conversation',
+      })
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it('resolves with the install the drawer made', async () => {
+    const calls: Array<{ path: string; body: unknown }> = [];
+    const catalog = renderWithCatalog(
+      makeClient({ onCall: (path, body) => calls.push({ path, body }) })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+    catalog.openCatalogEntry.mock.calls[0][0].onConnected('srv-github');
+
+    await waitFor(() =>
+      expect(calls).toEqual([
+        { path: 'widgets/widget-1/oauth-resolve', body: { mcp_server_id: 'srv-github' } },
+      ])
+    );
+    expect(await screen.findByText(/Connected "GitHub"/)).toBeVisible();
+  });
+
+  it('opens the drawer on arrival from a link naming this widget', async () => {
+    window.history.replaceState(null, '', `/s/abc/?${MCP_CONNECT_WIDGET_QUERY_PARAM}=widget-1`);
+    const catalog = renderWithCatalog(makeClient());
+    await waitFor(() => expect(catalog.openCatalogEntry).toHaveBeenCalledOnce());
+  });
+
+  it('does not open on arrival for a link naming another widget', () => {
+    window.history.replaceState(null, '', `/s/abc/?${MCP_CONNECT_WIDGET_QUERY_PARAM}=widget-2`);
+    const catalog = renderWithCatalog(makeClient());
+    expect(catalog.openCatalogEntry).not.toHaveBeenCalled();
+  });
+});
+
+function catalogController() {
+  const openCatalogEntry = vi.fn<(handoff: MCPCatalogEntryHandoff) => void>();
+  return {
+    openCatalogEntry,
+    value: {
+      mounted: false,
+      open: false,
+      openCatalog: vi.fn(),
+      closeCatalog: vi.fn(),
+      afterClose: vi.fn(),
+      dismissForNavigation: vi.fn(),
+      entryHandoff: null,
+      openCatalogEntry,
+      closeCatalogEntry: vi.fn(),
+    },
+  };
+}

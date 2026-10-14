@@ -76,11 +76,15 @@ const GRANT_REFRESH_SETTLE_MS = 400;
  * Agent-provided params, validated when the MCP tool fires and then frozen
  * onto the widget row.
  *
- * `mcpServerId` is pinned here at mint time and is the ONLY destination this
- * widget can ever resolve against. That is the whole anti-confused-deputy
- * story for the resolve endpoint: the request carries no server id, no URL,
- * and no catalog key, so a tampered client cannot aim a resolution at a
- * different server it happens to hold a grant for.
+ * The pin is the whole anti-confused-deputy story for the resolve endpoint.
+ * When `mcpServerId` is pinned it is the ONLY destination this widget can ever
+ * resolve against, and the request's server id is ignored. When only
+ * `catalogEntryName` is pinned (an entry the user connects through the catalog
+ * drawer, e.g. with an API key, so no row exists at mint time), the request
+ * names the install the drawer just made and the daemon accepts it only if it
+ * is a caller-usable catalog install of exactly that entry — whose URL,
+ * transport and auth recipe the catalog fixes — so a tampered client cannot aim
+ * the resolution anywhere the entry does not already point.
  *
  * Everything else is presentational. Nothing here is secret — see §5.1 of the
  * widgets design doc.
@@ -90,9 +94,10 @@ const GRANT_REFRESH_SETTLE_MS = 400;
  *
  * Generous rather than tight, and the difference matters: this field is the
  * CONSENT: the text travels onto the widget and is rendered above the Connect
- * button, so the person reads it before the only moment anything is granted. A bound that silently shortened it would take
- * that justification away one sentence at a time — quietly, since the tail of
- * a paragraph is exactly where "and can delete" tends to live.
+ * button, so the person reads it before the only moment anything is granted.
+ * A bound that silently shortened it would take that away one sentence at a
+ * time — quietly, since the tail of a paragraph is exactly where "and can
+ * delete" tends to live.
  *
  * So the bound exists only to stop an unbounded blob reaching a message row,
  * and a catalog entry that exceeds it is REFUSED before anything is installed
@@ -106,7 +111,10 @@ export const oauthParamsSchema = z
     mcpServerId: z
       .string()
       .min(1)
-      .describe('MCP server row this widget authorizes. Pinned by the daemon at mint time.'),
+      .optional()
+      .describe(
+        'MCP server row this widget authorizes, pinned by the daemon at mint time. Absent when the user connects a catalog entry through the catalog drawer, where `catalogEntryName` is the pin.'
+      ),
     serverName: z
       .string()
       .min(1)
@@ -132,7 +140,10 @@ export const oauthParamsSchema = z
       .optional()
       .describe('The catalog entry’s plain-language statement of what connecting grants.'),
   })
-  .strict();
+  .strict()
+  .refine((params) => params.mcpServerId || params.catalogEntryName, {
+    message: 'An oauth widget must pin an MCP server or a catalog entry',
+  });
 
 export type OAuthWidgetParams = z.infer<typeof oauthParamsSchema>;
 
@@ -324,10 +335,13 @@ async function attachToSession(
 }
 
 /**
- * Resolve the widget from a completed browser OAuth flow.
+ * Resolve the widget from a completed browser connect — an OAuth sign-in, or a
+ * catalog-drawer connect for an entry pinned by name.
  *
- * `evidence.attempt_id` is logged for correlation and otherwise unused: the
- * decision below comes entirely from rows this daemon owns.
+ * `evidence.attempt_id` is logged for correlation and otherwise unused.
+ * `evidence.mcp_server_id` is read only when no server is pinned, and then only
+ * names a candidate the checks below accept or refuse: the decision comes
+ * entirely from rows this daemon owns.
  */
 async function resolveOAuthWidgetFromCallback(
   ctx: WidgetSubmitCtx,
@@ -340,11 +354,16 @@ async function resolveOAuthWidgetFromCallback(
   // directly (tests do) and costs nothing.
   assertOAuthWidgetRoleFloor(ctx.submitterRole, params.oauthMode);
 
-  // a. The pinned server must still exist, still be usable by this caller, and
-  // still be an enabled OAuth server. A server that was disabled or converted
-  // to bearer auth between mint and resolve is not something to attach.
+  // a. The server must still exist, still be usable by this caller, and still
+  // be enabled. A pinned server must still be an OAuth server in the mode it
+  // was minted for; a catalog-drawer connect must have produced an install of
+  // the pinned entry.
+  const mcpServerId = (params.mcpServerId ?? evidence.mcp_server_id) as MCPServerID | undefined;
+  if (!mcpServerId) {
+    throw new Forbidden(`Connect "${params.serverName}" from the card first, then try again.`);
+  }
   const serversService = ctx.app.service('mcp-servers') as unknown as McpServersGetService;
-  const server = await serversService.get(params.mcpServerId, {
+  const server = await serversService.get(mcpServerId, {
     user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
   });
   // The pure ownership predicate, not the params-shaped `isMcpServerUsableByCaller`:
@@ -356,16 +375,37 @@ async function resolveOAuthWidgetFromCallback(
   if (!isAdmin && !isMCPServerUsableBy(server, ctx.submitterUserId)) {
     throw new Forbidden('That MCP server is not available to you');
   }
-  if (!server.enabled || server.auth?.type !== 'oauth') {
+  if (
+    !params.mcpServerId &&
+    (server.source !== 'catalog' || server.catalog_entry_name !== params.catalogEntryName)
+  ) {
+    throw new Forbidden(`That MCP server is not a catalog install of "${params.serverName}"`);
+  }
+  const authType = server.auth?.type ?? 'none';
+  if (!server.enabled || (params.mcpServerId && authType !== 'oauth')) {
     throw new Forbidden(
       `"${params.serverName}" is no longer an enabled OAuth MCP server; reconfigure it and ask again.`
     );
   }
-  if ((server.auth.oauth_mode ?? 'per_user') !== params.oauthMode) {
+  const oauthMode = (server.auth?.oauth_mode ?? 'per_user') as OAuthWidgetParams['oauthMode'];
+  if (params.mcpServerId && oauthMode !== params.oauthMode) {
     throw new Forbidden(
       `"${params.serverName}" changed OAuth mode since this request was made; ask again.`
     );
   }
+  // Catalog connect writes a bearer or open row only after the live endpoint
+  // accepted it, so such an install is ready as it stands. Only OAuth still
+  // needs the grant read below.
+  if (authType !== 'oauth') {
+    const { attached } = await attachToSession(ctx, mcpServerId);
+    return {
+      mcp_server_id: mcpServerId,
+      name: server.display_name || server.name || params.serverName,
+      oauth_mode: params.oauthMode,
+      attached,
+    };
+  }
+  assertOAuthWidgetRoleFloor(ctx.submitterRole, oauthMode);
 
   // b. THE check. Credentials belong to the prompt actor resolving this
   // widget, not to the Session owner (`mcp-egress/gateway.ts`,
@@ -382,7 +422,7 @@ async function resolveOAuthWidgetFromCallback(
   }
   const readLiveness = () =>
     ctx.runInTenantDatabaseScope(() =>
-      resolveMCPOAuthGrantLiveness(db, params.mcpServerId as MCPServerID, ctx.submitterUserId)
+      resolveMCPOAuthGrantLiveness(db, mcpServerId, ctx.submitterUserId)
     );
   let liveness = await readLiveness();
 
@@ -412,7 +452,7 @@ async function resolveOAuthWidgetFromCallback(
 
   if (!mcpOAuthGrantIsConnected(liveness)) {
     console.info(
-      `[widgets] event=oauth_widget_unverified server_id=${params.mcpServerId} reason=${liveness.reason} attempt_id=${evidence.attempt_id ?? 'none'}`
+      `[widgets] event=oauth_widget_unverified server_id=${mcpServerId} reason=${liveness.reason} attempt_id=${evidence.attempt_id ?? 'none'}`
     );
     // The copy has to distinguish "you have not signed in" from "you have, and
     // Agor is still finishing". Telling the user who just completed a provider
@@ -428,12 +468,12 @@ async function resolveOAuthWidgetFromCallback(
 
   // c. Only now — the grant exists, so the server is useful the moment the
   // agent sees it.
-  const { attached } = await attachToSession(ctx, params.mcpServerId);
+  const { attached } = await attachToSession(ctx, mcpServerId);
 
   return {
-    mcp_server_id: params.mcpServerId,
+    mcp_server_id: mcpServerId,
     name: server.display_name || server.name || params.serverName,
-    oauth_mode: params.oauthMode,
+    oauth_mode: oauthMode,
     attached,
   };
 }

@@ -12,6 +12,7 @@
  *   - the already-connected short-circuit attaches and resumes instead of
  *     rendering a button with nothing behind it
  *   - the catalog install is inert: created, NOT attached, until a grant lands
+ *   - an API-key entry installs nothing: the card opens the catalog drawer
  *   - widget params carry names and identities only — no credential
  */
 
@@ -19,6 +20,7 @@ import { getBaseUrl } from '@agor/core/config';
 import { runWithTenantContext } from '@agor/core/db';
 import { loadCatalog } from '@agor/core/mcp-catalog';
 import type { MCPCatalogEntry, MessageID, SessionID } from '@agor/core/types';
+import { MCP_CONNECT_WIDGET_QUERY_PARAM } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -377,7 +379,21 @@ describe('agor_widgets_request_oauth — destination selection', () => {
     const tools = registerAndCapture({ app });
     await expect(
       tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
-    ).rejects.toThrow(/agor_widgets_request_env_vars|MCP Catalog/);
+    ).rejects.toThrow(/Settings → MCP Servers/);
+  });
+
+  it('points a catalog API-key install at its catalog entry for a new key', async () => {
+    const { app } = makeApp({
+      server: {
+        ...OAUTH_SERVER,
+        auth: { type: 'bearer', token: 'x' },
+        catalog_entry_name: 'io.github.github/github-mcp-server',
+      },
+    });
+    const tools = registerAndCapture({ app });
+    await expect(
+      tools.agor_widgets_request_oauth.cb({ mcpServerId: 'srv-notion' })
+    ).rejects.toThrow(/catalogEntryName "io\.github\.github\/github-mcp-server"/);
   });
 
   it('refuses a server private to somebody else without confirming it exists', async () => {
@@ -428,14 +444,88 @@ describe('agor_widgets_request_oauth — catalog install', () => {
     ).rejects.toThrow(/agor_mcp_catalog_list/);
   });
 
-  it('refuses an API-key entry rather than opening an OAuth flow it cannot finish', async () => {
-    const { app } = makeApp({
+  it('mints a catalog-connect card for an API-key entry, installing nothing', async () => {
+    // The key can only be typed into the catalog drawer, whose own Connect is
+    // the install, so the tool neither installs nor attaches anything.
+    const { app, calls } = makeApp({
       catalogEntry: { ...NOTION_ENTRY, auth_type: 'credentials' },
     });
     const tools = registerAndCapture({ app });
-    await expect(
-      tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.notion/mcp' })
-    ).rejects.toThrow(/API key/i);
+
+    const result = payload(
+      await tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.notion/mcp' })
+    );
+
+    expect(result.status).toBe('requested');
+    expect(calls.find((c) => c.service === 'mcp-catalog/connect')).toBeUndefined();
+    expect(calls.find((c) => c.service === '/sessions/:id/mcp-servers')).toBeUndefined();
+    const widget = appendStub.mock.calls[0][0].metadata.widget;
+    expect(widget.status).toBe('pending');
+    expect(widget.params).toEqual({
+      serverName: 'Notion',
+      oauthMode: 'per_user',
+      reason: 'Connect Notion so its tools are available in this session.',
+      catalogEntryName: 'com.notion/mcp',
+      permissionDisclosure: NOTION_ENTRY.permission_disclosure,
+    });
+    // No Slack card: a key cannot be entered in Slack.
+    expect(widget.slack_connect_due_at).toBeUndefined();
+  });
+
+  it('falls back to a catalog-connect card when the live endpoint asks for a key', async () => {
+    const { app, calls } = makeApp({ catalogEntry: { ...NOTION_ENTRY, auth_type: undefined } });
+    (app.service('mcp-catalog/connect') as { create: unknown }).create = async (
+      ...args: unknown[]
+    ) => {
+      calls.push({ service: 'mcp-catalog/connect', method: 'create', args });
+      throw Object.assign(new Error('This endpoint requires credentials'), {
+        data: { credential_requirement: 'required' },
+      });
+    };
+    const tools = registerAndCapture({ app });
+
+    const result = payload(
+      await tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.notion/mcp' })
+    );
+
+    expect(result.status).toBe('requested');
+    const params = appendStub.mock.calls[0][0].metadata.widget.params;
+    expect(params.mcpServerId).toBeUndefined();
+    expect(params.catalogEntryName).toBe('com.notion/mcp');
+  });
+
+  it('supersedes an older catalog-connect card for the same entry only', async () => {
+    superseded.rows = [
+      {
+        message_id: 'old-entry-card',
+        metadata: {
+          widget: {
+            widget_type: 'oauth',
+            status: 'pending',
+            params: { catalogEntryName: 'com.notion/mcp' },
+          },
+        },
+      },
+      {
+        message_id: 'other-entry-card',
+        metadata: {
+          widget: {
+            widget_type: 'oauth',
+            status: 'pending',
+            params: { catalogEntryName: 'com.linear/mcp' },
+          },
+        },
+      },
+      pendingOAuthWidget('pinned-server-card', 'srv-notion'),
+    ];
+    const { app, supersedeSpy } = makeApp({
+      catalogEntry: { ...NOTION_ENTRY, auth_type: 'credentials' },
+    });
+    const tools = registerAndCapture({ app });
+
+    await tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.notion/mcp' });
+
+    expect(supersedeSpy.mock.calls.map((call) => call[0])).toEqual(['old-entry-card']);
   });
 
   it('attaches and resumes immediately when the probe found no auth at all', async () => {
@@ -1068,6 +1158,26 @@ describe('agor_widgets_request_oauth — what a gateway agent can relay', () => 
     );
     expect(result.relay_to_user).toContain(result.session_url);
     expect(result.relay_to_user).toContain('Notion');
+  });
+
+  it('deep-links an API-key card to its catalog drawer', async () => {
+    const { app } = makeApp({
+      ...gatewaySession('discord'),
+      gatewayChannel: { channel_type: 'discord', config: { align_discord_users: true } },
+      catalogEntry: { ...NOTION_ENTRY, auth_type: 'credentials' },
+    });
+    const tools = registerAndCapture({ app, sessionId: 'sess-1' });
+
+    const result = payload(
+      await tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.notion/mcp' })
+    );
+    const url = new URL(result.session_url);
+    expect(`${url.origin}${url.pathname}`).toBe(
+      getSessionUrl('sess-1' as SessionID, 'https://agor.example.test')
+    );
+    expect(url.searchParams.get(MCP_CONNECT_WIDGET_QUERY_PARAM)).toBe(result.widget_id);
+    expect(result.relay_to_user).toContain(result.session_url);
+    expect(result.relay_to_user).toMatch(/don't paste the key/);
   });
 
   /**
