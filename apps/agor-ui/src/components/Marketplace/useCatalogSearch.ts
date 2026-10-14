@@ -59,6 +59,8 @@ export interface CatalogSearchResult {
   entries: MCPCatalogEntry[];
   /** Every matching entry, unpaged. */
   matches: MCPCatalogEntry[];
+  /** Visible reviewed inventory for identity-based navigation, independent of filters. */
+  allEntries: MCPCatalogEntry[];
   status: CatalogStatus;
   /** Entries matching the active filters. Meaningful only when `ready`. */
   matchCount: number;
@@ -141,6 +143,7 @@ export function useCatalogSearch(
   return {
     entries,
     matches: matched,
+    allEntries: catalog ?? [],
     status,
     matchCount: matched.length,
     catalogSize: catalog?.length ?? null,

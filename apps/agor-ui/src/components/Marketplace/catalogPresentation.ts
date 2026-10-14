@@ -117,6 +117,32 @@ export const DEFAULT_SORT: MCPCatalogSort = 'popularity';
  */
 export const entryTitle = catalogDisplayName;
 
+/** A period here ends an abbreviation (`Inc.`, `U.S.`, `e.g.`), not a sentence. */
+const ABBREVIATION_BEFORE_PERIOD =
+  /(?:\b(?:Inc|Ltd|Co|Corp|LLC|etc|vs|No|St|approx)|\b(?:[A-Za-z]\.)+[A-Za-z])$/;
+
+/** Shorter than this, a first sentence ("Read-only.") says too little alone. */
+const MIN_SUMMARY_LENGTH = 40;
+
+/**
+ * The always-visible line beside Connect that makes pressing it informed
+ * consent. Curated disclosures lead with what the server can reach ("Reads and
+ * writes issues … you authorise."), so the summary is the first sentence —
+ * extended while it is too short to stand alone — and the full statement stays
+ * under "What this can access". Derived rather than curated so the two can
+ * never disagree.
+ */
+export function accessSummary(disclosure: string): string {
+  const text = disclosure.trim();
+  const boundary = /[.!?](?=\s+[A-Z])/g;
+  for (let match = boundary.exec(text); match; match = boundary.exec(text)) {
+    const candidate = text.slice(0, match.index + 1);
+    if (ABBREVIATION_BEFORE_PERIOD.test(text.slice(0, match.index))) continue;
+    if (candidate.length >= MIN_SUMMARY_LENGTH) return candidate;
+  }
+  return text;
+}
+
 /**
  * Technical authentication copy follows the live endpoint verdict whenever
  * Connect has one. Catalog metadata is explicitly labelled as an unchecked

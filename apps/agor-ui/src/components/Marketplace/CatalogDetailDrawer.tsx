@@ -2,9 +2,9 @@ import { ToolBetaBadge } from '../ToolIcon/ToolBetaBadge';
 /**
  * Detail view for one catalog entry, and the only place a connect starts.
  *
- * The access disclosure is the first expanded details section and the connect
- * control stays disabled until it is acknowledged. The disclosure controls
- * remain keyboard-operable without weakening the server-side text match.
+ * Consent is implied: a one-line access summary sits directly above Connect,
+ * so pressing it is informed, and the full statement stays one click away
+ * under "What this can access" (collapsed by default).
  */
 
 import type {
@@ -19,13 +19,13 @@ import type {
 import { getTeammateConfig } from '@agor-live/client';
 import {
   CheckCircleFilled,
+  ClockCircleOutlined,
   SafetyCertificateOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
   Button,
-  Checkbox,
   Descriptions,
   Flex,
   Form,
@@ -37,7 +37,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import type { ActionErrorCopy } from '../../utils/connectionErrors';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
@@ -53,6 +53,7 @@ import { CatalogDetailSection } from './CatalogDetailSection';
 import { CatalogDrawer } from './CatalogDrawer';
 import { CatalogEntryAvatar } from './CatalogEntryAvatar';
 import {
+  accessSummary,
   capabilityLabel,
   catalogAuthenticationDetail,
   connectStatus,
@@ -78,10 +79,17 @@ const FALLBACK_DISCLOSURE =
   'This server has published no access statement. Anything it exposes becomes available to the agent in the session you connect it to.';
 
 export interface CatalogDetailDrawerProps {
+  /** Same auth presentation, different terminal action; never inferred from routing. */
+  mode?: 'catalog' | 'handoff';
+  /** Where a `handoff`-mode drawer returns to, as read in its copy. */
+  returnTarget?: string;
+  onRetryConnection?: () => void;
   /** Authenticated identity that owns consent, selections, and pasted credentials. */
   identityKey: string | null;
   entry: MCPCatalogEntry | null;
   open: boolean;
+  /** In-place loading/error content before an entry resolves; the drawer stays mounted. */
+  emptyContent?: ReactNode;
   onClose: () => void;
   /** Restore focus to the catalog trigger after the drawer has actually closed. */
   onAfterOpenChange?: (open: boolean) => void;
@@ -132,16 +140,12 @@ export interface CatalogDetailDrawerProps {
   /** Continue surprise OAuth from a fresh direct user gesture. */
   onContinueOAuth?: (popup: MarketplaceOAuthPopup) => void;
   /**
-   * `acknowledgedDisclosure` is the exact text this drawer put on screen, so
-   * what the connect request claims was shown cannot drift from what was.
-   *
    * `bearerToken` is present only for an entry that asks for one, and is the only
    * thing this drawer sends that the user typed. Everything else about the
    * server — where it is, how it is reached, what kind of credential it takes —
    * is the catalog's, resolved on the daemon from `catalog_key`.
    */
   onConnect: (input: {
-    acknowledgedDisclosure: string;
     bearerToken?: string;
     /** Values for the entry's declared `credentials.fields`, keyed by field key. */
     credentialFields?: Record<string, string>;
@@ -152,9 +156,13 @@ export interface CatalogDetailDrawerProps {
 
 const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   identityKey: _identityKey,
+  mode = 'catalog',
+  returnTarget = 'the conversation',
+  onRetryConnection,
   entry,
   open,
   onClose,
+  emptyContent,
   onAfterOpenChange,
   teammates,
   teammatesLoading,
@@ -181,6 +189,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   onConnect,
 }) => {
   const { token } = theme.useToken();
+  const handoff = mode === 'handoff';
   const titleId = useId();
   const successActionRef = useRef<HTMLButtonElement | null>(null);
   const [teammateId, setTeammateId] = useState<BranchID | undefined>();
@@ -250,13 +259,17 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
         return {
           readiness: 'ready' as const,
           label: 'Ready to use',
-          detail: 'Your existing connection can be used in a new session.',
+          detail: handoff
+            ? `Your existing connection is ready for ${returnTarget}.`
+            : 'Your existing connection can be used in a new session.',
         };
       case 'reusable_oauth':
         return {
           readiness: 'ready' as const,
           label: 'Existing sign-in available',
-          detail: 'Reuse your existing connection in a new session without signing in again.',
+          detail: handoff
+            ? 'Reuse your existing connection without signing in again.'
+            : 'Reuse your existing connection in a new session without signing in again.',
         };
       default:
         // Sharing refreshes must clear readiness, not the current entry's
@@ -300,18 +313,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   const blockedReason = runtimeStatus?.readiness === 'blocked' ? runtimeStatus.detail : undefined;
   const disclosure = entry?.permission_disclosure ?? FALLBACK_DISCLOSURE;
 
-  // Consent records the server *and* the words it was given for, rather than a
-  // boolean some effect resets. A boolean leaves one render in which a newly
-  // opened server's disclosure sits above an already-enabled button; keying on
-  // the server alone still lets a re-opened entry arrive pre-consented after
-  // curation rewrote what it discloses. The endpoint's contract is the text, so
-  // this is too.
-  const [consent, setConsent] = useState<{ entryId: string; disclosure: string } | null>(null);
-  const acknowledged =
-    entryId !== undefined && consent?.entryId === entryId && consent.disclosure === disclosure;
-
-  // Keyed by entry for the same reason consent is, and more sharply: a bare
-  // string would survive switching entries in an open drawer, leaving one
+  // Keyed by entry: a bare string would survive switching entries in an open drawer, leaving one
   // vendor's key sitting in the field for a connect to another vendor's
   // endpoint. Pairing it with the entry it was typed for means the field is
   // empty for any entry it was not.
@@ -423,10 +425,10 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   );
   const appForm = configuredApp && !reusesSharedApp ? configuredApp : undefined;
   const canConnect = Boolean(
-    !(sharing === 'shared' && needsApiKey) &&
+    entryId !== undefined &&
+      !(sharing === 'shared' && needsApiKey) &&
       !blockedReason &&
       !policyRefusal &&
-      acknowledged &&
       !connecting &&
       (!needsApiKey || (bearerToken && credentialFieldsComplete)) &&
       (!appForm ||
@@ -437,13 +439,11 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   );
   const connectDisabledReason = connecting
     ? 'Connection in progress.'
-    : !acknowledged
-      ? 'Review the access disclosure and acknowledge it to continue.'
-      : needsApiKey && !bearerToken
-        ? `Enter your ${title} ${tokenNoun} to continue.`
-        : needsApiKey && !credentialFieldsComplete
-          ? `Enter every ${title} credential field to continue.`
-          : undefined;
+    : needsApiKey && !bearerToken
+      ? `Enter your ${title} ${tokenNoun} to continue.`
+      : needsApiKey && !credentialFieldsComplete
+        ? `Enter every ${title} credential field to continue.`
+        : undefined;
 
   return (
     <CatalogDrawer
@@ -530,24 +530,49 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 textAlign: 'center',
               }}
             >
-              <CheckCircleFilled
-                aria-hidden
-                style={{ color: token.colorSuccess, fontSize: token.fontSizeHeading2 }}
-              />
+              {handoff && success.authentication !== 'ready' ? (
+                <ClockCircleOutlined
+                  aria-hidden
+                  style={{ color: token.colorWarning, fontSize: token.fontSizeHeading2 }}
+                />
+              ) : (
+                <CheckCircleFilled
+                  aria-hidden
+                  style={{ color: token.colorSuccess, fontSize: token.fontSizeHeading2 }}
+                />
+              )}
               <div>
                 <Title level={4} style={{ margin: 0 }}>
-                  Added to My Servers
+                  {handoff
+                    ? success.authentication === 'ready'
+                      ? 'Connected and ready'
+                      : success.authentication === 'pending'
+                        ? 'Sign-in pending'
+                        : success.authentication === 'failed'
+                          ? 'Sign-in not completed'
+                          : success.authentication === 'unknown'
+                            ? 'Sign-in needs verification'
+                            : 'Continue sign-in'
+                    : 'Added to My Servers'}
                 </Title>
                 <Paragraph type="secondary" style={{ margin: `${token.marginXXS}px 0 0` }}>
-                  {success.authentication === 'ready'
-                    ? `${title} is ready. Start a session now or keep browsing the MCP Catalog.`
-                    : success.authentication === 'action_required'
-                      ? `${title} was added. Continue sign-in now, or start a session and finish connecting later.`
+                  {handoff
+                    ? success.authentication === 'ready'
+                      ? `${title} is connected. Return to ${returnTarget} to continue.`
                       : success.authentication === 'pending'
-                        ? `${title} was added. Finish sign-in in the provider window while you choose what to do next.`
-                        : success.authentication === 'failed'
-                          ? `${title} was added, but sign-in did not finish. You can retry from My Servers.`
-                          : `${title} was added. Agor could not verify the final sign-in result; check My Servers when ready.`}
+                        ? 'Finish sign-in in the provider window. This drawer will confirm your connection.'
+                        : success.authentication === 'action_required'
+                          ? 'Continue to the provider to complete sign-in.'
+                          : `Sign-in was not confirmed. Retry here or return to ${returnTarget} and connect later.`
+                    : success.authentication === 'ready'
+                      ? `${title} is ready. Start a session now or keep browsing the MCP Catalog.`
+                      : success.authentication === 'action_required'
+                        ? `${title} was added. Continue sign-in now, or start a session and finish connecting later.`
+                        : success.authentication === 'pending'
+                          ? `${title} was added. Finish sign-in in the provider window while you choose what to do next.`
+                          : success.authentication === 'failed'
+                            ? `${title} was added, but sign-in did not finish. You can retry from My Servers.`
+                            : `${title} was added. Agor could not verify the final sign-in result; check My Servers when ready.`}
                 </Paragraph>
               </div>
 
@@ -576,7 +601,18 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 </Text>
               )}
 
-              {showSessionSetup ? (
+              {handoff ? (
+                <Flex gap={token.marginXS} wrap justify="center">
+                  {['failed', 'unknown'].includes(success.authentication) && (
+                    <Button onClick={onRetryConnection} disabled={connecting}>
+                      Retry sign-in
+                    </Button>
+                  )}
+                  <Button ref={successActionRef} type="primary" onClick={onKeepBrowsing}>
+                    Return to {returnTarget}
+                  </Button>
+                </Flex>
+              ) : showSessionSetup ? (
                 <Flex vertical gap={token.marginSM} style={{ width: '100%', textAlign: 'start' }}>
                   <Form layout="vertical" component="div">
                     <Form.Item label="Teammate" style={{ marginBottom: token.marginSM }}>
@@ -674,7 +710,6 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           <Flex vertical gap={token.marginXS}>
             <CatalogDetailSection
               key={`${entryId}:access`}
-              defaultOpen
               label={
                 <Space size={token.marginXS}>
                   <SafetyCertificateOutlined aria-hidden />
@@ -682,23 +717,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 </Space>
               }
             >
-              <Flex vertical gap={token.marginSM}>
-                <Text>{disclosure}</Text>
-                {!blockedReason && !success && (
-                  <Checkbox
-                    checked={acknowledged}
-                    onChange={(event) =>
-                      setConsent(
-                        event.target.checked && entryId !== undefined
-                          ? { entryId, disclosure }
-                          : null
-                      )
-                    }
-                  >
-                    I understand what this server can access
-                  </Checkbox>
-                )}
-              </Flex>
+              <Text>{disclosure}</Text>
             </CatalogDetailSection>
             <CatalogDetailSection
               key={`${entryId}:technical`}
@@ -941,6 +960,13 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
               {connectError && <ActionErrorNotice error={connectError} />}
               {policyRefusal && <Alert type="info" showIcon title={policyRefusal} />}
 
+              <Flex gap={token.marginXS} align="baseline" data-testid="catalog-access-summary">
+                <SafetyCertificateOutlined
+                  aria-hidden
+                  style={{ color: token.colorTextSecondary }}
+                />
+                <Text type="secondary">{accessSummary(disclosure)}</Text>
+              </Flex>
               <Button
                 type="primary"
                 block
@@ -970,7 +996,6 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   }
                   setPopupBlocked(false);
                   onConnect({
-                    acknowledgedDisclosure: disclosure,
                     // Only for an entry that asks. Sending a key to an endpoint
                     // that never wanted one is refused by the daemon, and the
                     // field it would have come from is not rendered anyway.
@@ -1008,7 +1033,9 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             </Flex>
           )}
         </>
-      ) : null}
+      ) : (
+        emptyContent
+      )}
     </CatalogDrawer>
   );
 };

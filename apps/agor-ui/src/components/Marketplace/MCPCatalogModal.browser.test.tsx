@@ -136,10 +136,6 @@ describe('MCP Catalog real Chromium flows', () => {
       );
     });
     // This flow tests the handoff, not pointer hit-testing during drawer entry.
-    const consent = within(drawer).getByRole('checkbox', { name: /I understand/ });
-    act(() => consent.focus());
-    await userEvent.keyboard(' ');
-    expect(consent).toBeChecked();
     const connect = within(drawer).getByRole('button', { name: /Connect/ });
     await waitFor(() => expect(connect).toBeEnabled());
     await userEvent.click(connect);

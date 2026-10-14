@@ -71,7 +71,6 @@ const CURATED = {
  */
 const CONNECT_REQUEST = {
   catalog_key: DEEPWIKI,
-  acknowledged_disclosure: 'Reads public GitHub repository content only.',
 };
 
 /**

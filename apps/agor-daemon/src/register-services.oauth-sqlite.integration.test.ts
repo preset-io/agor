@@ -5034,7 +5034,6 @@ describe('SQLite saved-row OAuth authority', () => {
           {
             catalog_key: entry.name,
             sharing: 'shared',
-            acknowledged_disclosure: entry.permission_disclosure,
           },
           paramsFor(harness)
         );
@@ -5147,7 +5146,6 @@ describe('SQLite saved-row OAuth authority', () => {
     const result = await createRegisteredMCPCatalogConnectService(harness.app, harness.db).create(
       {
         catalog_key: entry.name,
-        acknowledged_disclosure: entry.permission_disclosure,
       },
       { ...paramsFor(harness), provider: 'rest' }
     );

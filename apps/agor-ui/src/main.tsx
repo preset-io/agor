@@ -4,6 +4,7 @@ import App from './App.tsx';
 import './index.css';
 import { installClipboardPolyfill } from './utils/clipboard-polyfill';
 import { preventIosInputZoom } from './utils/deviceDetection';
+import { captureMcpConnectIntent } from './utils/mcpConnectIntent';
 
 declare global {
   interface Window {
@@ -17,6 +18,9 @@ installClipboardPolyfill();
 
 // Lets phone inputs use body-size text without iOS zooming in on focus.
 preventIosInputZoom();
+
+// Before any router can canonicalize the query away.
+captureMcpConnectIntent();
 
 // Cleanup WebSocket connections on Vite HMR
 if (import.meta.hot) {

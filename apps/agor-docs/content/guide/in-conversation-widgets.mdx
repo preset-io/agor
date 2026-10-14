@@ -14,7 +14,7 @@ Widgets are a primitive, and three types ship on it:
 | Type            | The agent calls                      | You get                                                                   |
 | --------------- | ------------------------------------ | ------------------------------------------------------------------------- |
 | `env_vars`      | `agor_widgets_request_env_vars`      | A form for an environment variable, API key, or token the agent needs     |
-| `oauth`         | `agor_widgets_request_oauth`         | A **Connect** button that runs the real browser sign-in for an MCP server |
+| `oauth`         | `agor_widgets_request_oauth`         | A **Connect** button that signs in to, or adds the key for, an MCP server |
 | `gateway_token` | `agor_widgets_request_gateway_token` | An admin-only form for a gateway channel's platform credentials           |
 
 All three retain their status in the transcript and resume the agent after successful completion.
@@ -105,6 +105,12 @@ A card in the transcript naming the server, why the agent wants it, and — when
 Clicking it runs the ordinary browser OAuth flow: a pop-up opens, you sign in with the provider, the provider redirects back to Agor, and Agor exchanges and stores the grant. **No token passes through the page, and none reaches the agent** — the card only ever learns a name, a mode, and whether the attach succeeded.
 
 A workspace-wide (shared) connection says so on the card, and only an admin can mint or complete one: everyone in the Agor workspace would use the account you sign in with.
+
+### Servers that need an API key or your own OAuth app
+
+Some catalog entries, such as GitHub, take a personal access token or API key instead of a sign-in; others, such as Asana, sign in through an OAuth app your organization registers. For those, **Connect** opens the same MCP Catalog drawer you would reach from the Catalog, with the key or OAuth app fields for that entry (an OAuth app then continues to the provider sign-in). If an admin already set up a shared installation with its OAuth app, the card signs you in directly instead. The key goes straight from your browser to Agor, is checked against the server, and is stored for you alone; the agent never sees it. Your organization's MCP member policy applies exactly as it does in the Catalog. Once the server is added, it is attached to the session and the agent resumes.
+
+From a Slack, Discord, or GitHub thread, the link the agent relays opens that drawer directly. There is no Slack card for these servers because a secret cannot be entered in Slack.
 
 ### What happens after you sign in
 

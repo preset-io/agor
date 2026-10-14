@@ -127,17 +127,14 @@ describe('CatalogTab add then start-session flow', () => {
 
     const drawer = await openDrawer();
     await drawer.findByText('No account expected');
-    const checkbox = drawer.container.querySelector<HTMLInputElement>('input[type="checkbox"]');
     const add = (await drawer.findByText('Connect')).closest('button');
-    if (!checkbox || !add) throw new Error('add controls not found');
-    fireEvent.click(checkbox);
+    if (!add) throw new Error('add controls not found');
     await waitFor(() => expect(add).toBeEnabled());
     fireEvent.click(add);
 
     await waitFor(() => expect(api.connect).toHaveBeenCalledOnce());
     expect(api.connect).toHaveBeenCalledWith({
       catalog_key: ENTRY.name,
-      acknowledged_disclosure: ENTRY.permission_disclosure,
       sharing: 'private',
     });
     expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
@@ -182,10 +179,8 @@ describe('CatalogTab add then start-session flow', () => {
     );
     const drawer = await openDrawer();
     await drawer.findByText('No account expected');
-    const checkbox = drawer.container.querySelector<HTMLInputElement>('input[type="checkbox"]');
     const addButton = (await drawer.findByText('Connect')).closest('button');
-    if (!checkbox || !addButton) throw new Error('add controls not found');
-    fireEvent.click(checkbox);
+    if (!addButton) throw new Error('add controls not found');
     fireEvent.click(addButton);
     await drawer.findByText('Added to My Servers');
     const beginButton = drawer.getByText('Start new session').closest('button');
@@ -227,7 +222,6 @@ it.each(['close', 'identity', 'generation'] as const)(
     const view = render(tree());
     const drawer = await openDrawer();
     await drawer.findByText('No account expected');
-    fireEvent.click(drawer.container.querySelector('input[type=checkbox]')!);
     const connect = drawer.getByText('Connect').closest('button')!;
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
@@ -270,7 +264,6 @@ it('keeps setup and reports a refused session start without navigating or seedin
   );
   const drawer = await openDrawer();
   await drawer.findByText('No account expected');
-  fireEvent.click(drawer.container.querySelector('input[type=checkbox]')!);
   const connect = drawer.getByText('Connect').closest('button')!;
   await waitFor(() => expect(connect).toBeEnabled());
   fireEvent.click(connect);
@@ -307,7 +300,6 @@ it('can connect again after closing a drawer with a pending installation', async
   );
   const first = await openDrawer();
   await first.findByText('No account expected');
-  fireEvent.click(first.container.querySelector('input[type=checkbox]')!);
   const connect = first.getByText('Connect').closest('button')!;
   await waitFor(() => expect(connect).toBeEnabled());
   fireEvent.click(connect);
@@ -315,8 +307,6 @@ it('can connect again after closing a drawer with a pending installation', async
   fireEvent.click(first.container.querySelector('button.ant-drawer-close')!);
   const reopened = await openDrawer();
   await reopened.findByText('No account expected');
-  const consent = reopened.container.querySelector('input[type=checkbox]')! as HTMLInputElement;
-  if (!consent.checked) fireEvent.click(consent);
   const retry = reopened.getByText('Connect').closest('button')!;
   await waitFor(() => expect(retry).toBeEnabled());
   await act(async () => {
@@ -328,7 +318,165 @@ it('can connect again after closing a drawer with a pending installation', async
   expect(api.connect).toHaveBeenCalledTimes(2);
 });
 
-describe('fresh Connect OAuth authority in catalog', () => {
+describe('explicit onboarding context', () => {
+  it('re-reports an already-ready install from a fresh handoff, as a reopened drawer is', async () => {
+    // The catalog host mounts a new handoff each time the Connect card asks;
+    // a card whose finish failed must get its ready install reported again.
+    const api = buildClient();
+    const onConnected = vi.fn();
+    const mount = () =>
+      render(
+        <MemoryRouter>
+          <CatalogTab
+            client={api.client}
+            connected
+            connecting={false}
+            authGeneration={1}
+            currentUser={USER}
+            context={{
+              mode: 'handoff',
+              entryName: ENTRY.name,
+              returnTo: 'the conversation',
+              onConnected,
+              onClose: vi.fn(),
+            }}
+          />
+        </MemoryRouter>
+      );
+    for (const attempt of [1, 2]) {
+      const view = mount();
+      const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
+      await dialog.findByText('No account expected');
+      fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+      await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(attempt));
+      view.unmount();
+    }
+    expect(onConnected).toHaveBeenNthCalledWith(2, 'server-1');
+  });
+
+  it('installs without teammate reads, sessions, navigation or prompt staging and returns locally', async () => {
+    const api = buildClient();
+    const onConnected = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <MemoryRouter>
+        <CatalogTab
+          client={api.client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={USER}
+          context={{
+            mode: 'handoff',
+            entryName: ENTRY.name,
+            returnTo: 'onboarding',
+            onConnected,
+            onClose,
+          }}
+        />
+      </MemoryRouter>
+    );
+    const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
+    await dialog.findByText('No account expected');
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+    await dialog.findByText('Connected and ready');
+    expect(api.connect).toHaveBeenCalledWith({
+      catalog_key: ENTRY.name,
+      sharing: 'private',
+    });
+    expect(onConnected).toHaveBeenCalledExactlyOnceWith('server-1');
+    expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
+    expect(api.getPrimaryTeammate).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(consumePromptDraftSeed(USER.user_id, SESSION_ID)).toBe('');
+    expect(dialog.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(dialog.queryByRole('button', { name: /Start.*session/ })).not.toBeInTheDocument();
+    expect(dialog.queryByText(/new session|try.*server|starter prompt/i)).not.toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button', { name: 'Return to onboarding' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('redacts failed installation details and retries locally without session side effects', async () => {
+    const api = buildClient();
+    api.connect.mockRejectedValueOnce(new Error('secret-test-value echoed by a failed provider'));
+    const onConnected = vi.fn();
+    render(
+      <MemoryRouter>
+        <CatalogTab
+          client={api.client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={USER}
+          context={{
+            mode: 'handoff',
+            entryName: ENTRY.name,
+            returnTo: 'onboarding',
+            onConnected,
+            onClose: vi.fn(),
+          }}
+        />
+      </MemoryRouter>
+    );
+    const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
+    await dialog.findByText('No account expected');
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+    await dialog.findByText("Couldn't connect this server.");
+    expect(dialog.queryByRole('button', { name: 'Details' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/secret-test-value/)).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(dialog.getByRole('button', { name: 'Connect' })).not.toHaveClass('ant-btn-loading')
+    );
+    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
+    await dialog.findByText('Connected and ready');
+    expect(api.connect).toHaveBeenCalledTimes(2);
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
+    expect(onConnected).toHaveBeenCalledExactlyOnceWith('server-1');
+  });
+});
+
+it.each(['missing', 'error'] as const)(
+  'keeps the onboarding drawer mounted across %s Catalog retry',
+  async (initial) => {
+    const api = buildClient();
+    if (initial === 'missing')
+      api.catalogRead.mockResolvedValueOnce({ total: 0, limit: 1, skip: 0, data: [] });
+    else api.catalogRead.mockRejectedValueOnce(new Error('fixture catalog unavailable'));
+    render(
+      <MemoryRouter>
+        <CatalogTab
+          client={api.client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={USER}
+          context={{
+            mode: 'handoff',
+            entryName: ENTRY.name,
+            returnTo: 'onboarding',
+            onConnected: vi.fn(),
+            onClose: vi.fn(),
+          }}
+        />
+      </MemoryRouter>
+    );
+    const dialog = await screen.findByRole('dialog', { name: 'Catalog' });
+    const root = dialog.closest('.ant-drawer');
+    const retry = await within(dialog).findByRole('button', { name: 'Retry' });
+    fireEvent.click(retry);
+    await screen.findByText(ENTRY.benefit);
+    expect(document.querySelector('.ant-drawer')).toBe(root);
+    expect(document.querySelectorAll('.ant-drawer')).toHaveLength(1);
+    expect(api.catalogRead).toHaveBeenCalledTimes(2);
+    expect(api.connect).not.toHaveBeenCalled();
+    expect(api.startSession).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  }
+);
+
+describe.each(['catalog', 'handoff'] as const)('fresh Connect OAuth authority in %s', (mode) => {
   it.each([
     {
       name: 'stale positive badge, no live grant',
@@ -376,6 +524,7 @@ describe('fresh Connect OAuth authority in catalog', () => {
     };
     api.connect.mockResolvedValue({ ...response, mcp_server: { ...response.mcp_server, auth } });
     agorStore.setState({ userAuthenticatedMcpServerIds: new Set(cached ? ['server-1'] : []) });
+    const onConnected = vi.fn();
     render(
       <MemoryRouter>
         <CatalogTab
@@ -384,23 +533,32 @@ describe('fresh Connect OAuth authority in catalog', () => {
           connecting={false}
           authGeneration={1}
           currentUser={USER}
+          context={
+            mode === 'handoff'
+              ? {
+                  mode,
+                  entryName: ENTRY.name,
+                  returnTo: 'onboarding',
+                  onConnected,
+                  onClose: vi.fn(),
+                }
+              : undefined
+          }
         />
       </MemoryRouter>
     );
-    await openDrawer();
+    if (mode === 'catalog') await openDrawer();
     const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
     await dialog.findByText('No account expected');
-    fireEvent.click(
-      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
-    );
     fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
     if (ready) {
-      await dialog.findByText('Added to My Servers');
+      await dialog.findByText(mode === 'handoff' ? 'Connected and ready' : 'Added to My Servers');
       expect(dialog.queryByRole('button', { name: /Continue sign-in/ })).not.toBeInTheDocument();
     } else {
       await dialog.findByRole('button', { name: /Continue sign-in/ });
-      expect(dialog.queryByText('Connection status: Connected and ready.')).not.toBeInTheDocument();
+      expect(dialog.queryByText('Connected and ready')).not.toBeInTheDocument();
     }
+    expect(onConnected).toHaveBeenCalledTimes(mode === 'handoff' && ready ? 1 : 0);
     expect(api.client.service).not.toHaveBeenCalledWith('mcp-servers/oauth-start');
     expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
     expect(api.startSession).not.toHaveBeenCalled();
