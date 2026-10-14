@@ -56,7 +56,7 @@ test('lean transcript releases old turn payloads beyond the recent-turn budget',
     const chain = turn.getByRole('button', { name: '1 tool call' });
     await chain.click();
     await turn.getByText('Read').first().waitFor();
-    const reasoning = turn.getByRole('button', { name: /Extended Thinking/ });
+    const reasoning = turn.getByRole('button', { name: /^Thought for/ });
     await reasoning.click();
     await reasoningShown(page, first, 0);
     for (let n = 1; n < 30; n++) {
@@ -82,7 +82,7 @@ test('lean transcript releases old turn payloads beyond the recent-turn budget',
     await turn.getByRole('button', { name: '1 tool call' }).click();
     await turn.getByRole('button', { name: 'Loading tool activity…' }).waitFor();
     await turn.getByText('Read').first().waitFor();
-    await turn.getByRole('button', { name: /Extended Thinking/ }).click();
+    await turn.getByRole('button', { name: /^Thought for/ }).click();
     await reasoningShown(page, first, 0);
     assert.deepEqual(await liveTurns(page, cdp), both([0, ...range(21, 29)]));
 
@@ -455,7 +455,7 @@ test('reloaded inline detail stays open and live while protected turns exceed th
     );
 
     // Collapsing releases them to the budget, which has no room.
-    await reasoningTurn.getByRole('button', { name: /Extended Thinking/ }).click();
+    await reasoningTurn.getByRole('button', { name: /^Thought for/ }).click();
     await readTurn.locator('button[aria-expanded]').filter({ hasText: 'Read' }).click();
     await emptyTurn.locator('button[aria-expanded]').filter({ hasText: 'Read' }).click();
     await disengage(page);
