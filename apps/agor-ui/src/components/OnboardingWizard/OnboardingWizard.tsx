@@ -534,8 +534,9 @@ export function OnboardingWizard({
   // which the teammate is later seeded onto (see App.handleOnboardingComplete).
   const [teammateName, setTeammateName] = useState('');
   const [teammateEmoji, setTeammateEmoji] = useState('🤖');
-  // Chosen gallery template id; null until the user picks one (= no template:
-  // framework default branch, no remit). Sets the avatar and source branch, never the name.
+  // Chosen gallery card id; null until the user picks one. "Start from scratch" is its own
+  // card id (BLANK_TEMPLATE_ID), which completes on the no-template path like Skip.
+  // Sets the avatar and source branch, never the name.
   const [selectedTemplateId, setSelectedTemplateId] = useState<TeammateGalleryCardId | null>(null);
   const [invalidSavedTemplateId, setInvalidSavedTemplateId] = useState<string | null>(null);
   // Tools picked on the tools step; the teammate's first session helps connect them.
@@ -778,8 +779,9 @@ export function OnboardingWizard({
         return validateLlmKeyPattern(selectedAgent, sanitizeSecretValue(apiKey)) === null;
       }
       case 'workspace':
-        // A teammate name is required — it names the new board we always create.
-        return teammateName.trim().length > 0;
+        // A name (it names the new board) and a starting point are required;
+        // "Start from scratch" is a choice. Skip is the no-teammate path.
+        return teammateName.trim().length > 0 && selectedTemplateId !== null;
       case 'tools':
         // Connecting tools is optional; Continue is always available.
         return true;
@@ -796,6 +798,7 @@ export function OnboardingWizard({
     effectiveAuthMethod,
     allowClaudeOAuthSignIn,
     teammateName,
+    selectedTemplateId,
   ]);
 
   const disabledReason = useMemo((): string | null => {
@@ -826,7 +829,8 @@ export function OnboardingWizard({
         return err ?? null;
       }
       case 'workspace':
-        return teammateName.trim().length === 0 ? 'Name your AI teammate to continue' : null;
+        if (teammateName.trim().length === 0) return 'Name your AI teammate to continue';
+        return selectedTemplateId === null ? 'Pick a starting point to continue' : null;
       default:
         return null;
     }
@@ -840,6 +844,7 @@ export function OnboardingWizard({
     effectiveAuthMethod,
     allowClaudeOAuthSignIn,
     teammateName,
+    selectedTemplateId,
     llmSaving,
     completing,
   ]);

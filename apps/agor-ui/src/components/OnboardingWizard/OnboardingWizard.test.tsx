@@ -136,6 +136,10 @@ function renderWizard(
 // the exact text) + `closest('button')` is more robust than role-based
 // queries here — see the file-level note above for why role queries are
 // avoided entirely in this file.
+function pickCard(title: string) {
+  fireEvent.click(screen.getByText(title).closest('[role="button"]') as HTMLElement);
+}
+
 function clickButton(text: string | RegExp) {
   const el = screen.getByText(text);
   const button = el.closest('button');
@@ -218,9 +222,10 @@ describe('OnboardingWizard', () => {
     expect(document.querySelector('.ant-modal-centered')).toBeInTheDocument();
   });
 
-  it('starts with no template picked and completes without one on the default branch', async () => {
+  it('requires a starting point: a name alone keeps Continue disabled, Start from scratch counts', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete });
+    const continueButton = () => screen.getByText(/^continue/i).closest('button');
 
     expect(
       document.querySelector('[aria-label="Teammate template"] [aria-pressed="true"]')
@@ -228,16 +233,20 @@ describe('OnboardingWizard', () => {
     expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Ada' } });
+    expect(continueButton()).toBeDisabled();
+    pickCard('Start from scratch');
+    expect(continueButton()).toBeEnabled();
     clickButton(/^continue/i);
     await findAndClickButton(/skip for now/i); // llm
     clickButton(/^continue/i); // tools
     clickButton(/meet ada/i);
 
+    // Scratch completes on the no-template path: framework default branch, no persona.
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith(
         expect.objectContaining({
-          templateId: null,
-          teammateEmoji: '🤖',
+          templateId: 'blank',
+          teammateEmoji: '✨',
           sourceBranch: undefined,
           sourceRemoteUrl: undefined,
         }),
@@ -245,6 +254,17 @@ describe('OnboardingWizard', () => {
       )
     );
     expect(onComplete.mock.calls[0][0]).not.toHaveProperty('goals');
+  });
+
+  it('resumes old saved progress without a template as nothing chosen', () => {
+    renderWizard({
+      user: makeUser({ preferences: { onboarding: { teammateDisplayName: 'Ada' } } }),
+    });
+    expect(screen.getByLabelText('Teammate name')).toHaveValue('Ada');
+    expect(
+      document.querySelector('[aria-label="Teammate template"] [aria-pressed="true"]')
+    ).toBeNull();
+    expect(screen.getByText(/^continue/i).closest('button')).toBeDisabled();
   });
 
   it('LLM step recommends only Claude and Codex (GPT), and lets the user switch selection', async () => {
@@ -679,6 +699,7 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText('Hi New, meet your teammate')).toBeInTheDocument();
     // The teammate name is empty by default — the user names their teammate.
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    pickCard('Researcher');
 
     clickButton(/^continue →/i);
 
@@ -713,6 +734,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'workspace', client: client as never });
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    pickCard('Start from scratch');
     clickButton(/^continue →/i); // workspace → llm (no board yet)
     await findAndClickButton(/skip for now/i); // llm → tools
     await findAndClickButton(/skip for now/i); // tools → done
@@ -1010,6 +1032,7 @@ describe('OnboardingWizard', () => {
     expect(screen.getByText(/get their own board/i)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    pickCard('Start from scratch');
     clickButton(/^continue →/i); // workspace → llm: still NO board created
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     expect(boardsService.create).not.toHaveBeenCalled();
@@ -1022,7 +1045,7 @@ describe('OnboardingWizard', () => {
       expect(boardsService.create).toHaveBeenCalledWith({
         board_id: TEST_BOARD_ID,
         name: 'Rusty',
-        icon: '🤖',
+        icon: '✨',
       });
     });
   });
@@ -1062,6 +1085,7 @@ describe('OnboardingWizard', () => {
     // workspace — name the teammate (the board is created later, at completion)
     expect(await screen.findByText('Hi New, meet your teammate')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    pickCard('Start from scratch');
     clickButton(/^continue →/i);
 
     // llm
@@ -1079,7 +1103,7 @@ describe('OnboardingWizard', () => {
 
     // The wizard creates the board now (at completion) and emits the teammate
     // naming details + selected agent so the app shell can seed the first AI
-    // teammate on it. No template picked → framework default branch (sourceBranch undefined).
+    // teammate on it. Start from scratch → framework default branch (sourceBranch undefined).
     // Board creation precedes onComplete, so await it.
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith(
@@ -1089,10 +1113,10 @@ describe('OnboardingWizard', () => {
           boardId: TEST_BOARD_ID,
           path: 'teammate',
           teammateName: 'Rusty',
-          teammateEmoji: '🤖',
+          teammateEmoji: '✨',
           sourceBranch: undefined,
           sourceRemoteUrl: undefined,
-          templateId: null,
+          templateId: 'blank',
           agent: 'claude-code',
           requestedTools: [],
         },
@@ -1245,8 +1269,15 @@ describe('OnboardingWizard', () => {
     );
     renderWizard({
       onComplete,
-      user: makeUser({ preferences: { onboarding: { teammateDisplayName: 'Ada' } } }),
+      // A saved Start from scratch pick comes back as that pick, so Continue is available.
+      user: makeUser({
+        preferences: { onboarding: { teammateDisplayName: 'Ada', teammateTemplateId: 'blank' } },
+      }),
     });
+    expect(screen.getByText('Start from scratch').closest('[role="button"]')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
     clickButton(/^continue/i); // workspace
     await findAndClickButton(/skip for now/i); // llm
     clickButton(/^continue/i); // tools
