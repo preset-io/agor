@@ -655,3 +655,65 @@ describe('BoardEditModal', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+it('refreshes the zone snapshot at save without resetting the settings draft', async () => {
+  const { client, get, boardPatch } = makeClient();
+  const onUpdate = vi.fn().mockResolvedValue(undefined);
+  render(
+    <BoardEditModal
+      board={listedBoard}
+      client={client}
+      open
+      onClose={vi.fn()}
+      onUpdate={onUpdate}
+    />
+  );
+  fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Draft name' } });
+  fireEvent.click(screen.getByLabelText('Apply to existing zones'));
+  const concurrent = {
+    ...freshBoard,
+    objects: {
+      'new-zone': { type: 'zone', x: 0, y: 0, width: 800, height: 600, layout: { columnGap: 80 } },
+    },
+  } as Board;
+  get.mockResolvedValue(concurrent);
+  boardPatch.mockImplementation(async (_id, data) => {
+    expect(data.expected.zones).toHaveProperty('new-zone');
+    return { changed: true, changed_zone_ids: [] };
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() =>
+    expect(onUpdate).toHaveBeenCalledWith(listedBoard.board_id, { name: 'Draft name' })
+  );
+  expect(boardPatch.mock.invocationCallOrder[0]).toBeLessThan(
+    onUpdate.mock.invocationCallOrder[0]!
+  );
+});
+
+it('does not write general settings or permissions when the layout defaults write fails, and can retry', async () => {
+  const { client, boardPatch, permissionsPatch } = makeClient();
+  const onUpdate = vi.fn().mockResolvedValue(undefined);
+  const onClose = vi.fn();
+  render(
+    <BoardEditModal
+      board={listedBoard}
+      client={client}
+      open
+      onClose={onClose}
+      onUpdate={onUpdate}
+    />
+  );
+  fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Draft name' } });
+  fireEvent.click(screen.getByLabelText('Apply to existing zones'));
+  fireEvent.click(screen.getByText('Change board access'));
+  boardPatch.mockRejectedValueOnce(new Error('Concurrent layout change'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(showError).toHaveBeenCalled());
+  expect(onUpdate).not.toHaveBeenCalled();
+  expect(permissionsPatch).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  expect(onUpdate).toHaveBeenCalledWith(listedBoard.board_id, { name: 'Draft name' });
+  expect(permissionsPatch).toHaveBeenCalledTimes(1);
+});

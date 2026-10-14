@@ -70,8 +70,6 @@ export function BoardEditModal({
   const [initialZoneDefaults, setInitialZoneDefaults] = useState<ZoneLayoutPolicy>(() =>
     normalizeZoneLayoutPolicy(undefined)
   );
-  const [zoneDefaultsExpected, setZoneDefaultsExpected] =
-    useState<BoardZoneLayoutDefaultsExpected | null>(null);
   const [applyZoneDefaultsToExisting, setApplyZoneDefaultsToExisting] = useState(false);
   const permissionUsers = useMemo(() => {
     const knownUsers = new Map(userById);
@@ -145,24 +143,6 @@ export function BoardEditModal({
         const normalizedZoneDefaults = normalizeZoneLayoutPolicy(fresh.zone_layout_defaults);
         setZoneDefaults(normalizedZoneDefaults);
         setInitialZoneDefaults(normalizedZoneDefaults);
-        setZoneDefaultsExpected({
-          defaults: normalizedZoneDefaults,
-          zones: Object.fromEntries(
-            Object.entries(fresh.objects ?? {}).flatMap(([objectId, object]) =>
-              object.type === 'zone'
-                ? [
-                    [
-                      objectId,
-                      {
-                        binding: zoneLayoutBinding(object),
-                        layout: normalizeZoneLayoutPolicy(object.layout),
-                      },
-                    ] as const,
-                  ]
-                : []
-            )
-          ),
-        });
         setApplyZoneDefaultsToExisting(false);
         form.setFieldsValue({
           name: fresh.name,
@@ -235,22 +215,48 @@ export function BoardEditModal({
         ([field, value]) =>
           JSON.stringify(value) !== JSON.stringify(loadedBoard?.[field as keyof Board])
       );
-      if (generalSettingsChanged) {
-        const updated = await onUpdate?.(board.board_id, formValues);
-        if (updated === false) return;
-      }
       if (
         client &&
-        zoneDefaultsExpected &&
         (applyZoneDefaultsToExisting ||
           JSON.stringify(zoneDefaults) !== JSON.stringify(initialZoneDefaults))
       ) {
+        // Refresh only the optimistic baseline, not the user's draft. A zone
+        // created or edited while this editor is open must not poison retries.
+        const fresh = await client.service('boards').get(board.board_id);
+        const expected: BoardZoneLayoutDefaultsExpected = {
+          defaults: normalizeZoneLayoutPolicy(fresh.zone_layout_defaults),
+          zones: Object.fromEntries(
+            Object.entries(fresh.objects ?? {}).flatMap(([objectId, object]) =>
+              object.type === 'zone'
+                ? [
+                    [
+                      objectId,
+                      {
+                        binding: zoneLayoutBinding(object),
+                        layout: normalizeZoneLayoutPolicy(object.layout),
+                      },
+                    ] as const,
+                  ]
+                : []
+            )
+          ),
+        };
         await client.service('boards').patch(board.board_id, {
           _action: 'setZoneLayoutDefaults',
           defaults: normalizeZoneLayoutPolicy(zoneDefaults),
           applyToExisting: applyZoneDefaultsToExisting,
-          expected: zoneDefaultsExpected,
+          expected,
         } as unknown as Partial<Board>);
+        // If a later settings/permission write fails, retry from the saved
+        // defaults rather than repeatedly applying the same zone mutation.
+        setInitialZoneDefaults(zoneDefaults);
+        setApplyZoneDefaultsToExisting(false);
+      }
+      // Layout is the conflict-prone write: do it before general settings so
+      // a rejected layout cannot leave unrelated settings half-saved.
+      if (generalSettingsChanged) {
+        const updated = await onUpdate?.(board.board_id, formValues);
+        if (updated === false) return;
       }
       await syncPermissions();
       close();
