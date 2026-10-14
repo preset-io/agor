@@ -685,6 +685,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     >
       {showContextInInfo && (
         <ComposerMenu
+          above={cardRef}
           sheet={isMobile}
           title="Session details"
           open={openMenu === 'details-context'}
@@ -715,6 +716,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       )}
       {(infoItems.length > 0 || signInWarning) && (
         <ComposerMenu
+          above={cardRef}
           sheet={isMobile}
           title="Session details"
           open={openMenu === 'details'}
@@ -853,6 +855,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   const plusButton = (
     <ComposerMenu
+      above={cardRef}
       sheet={isMobile}
       title="Add files and actions"
       open={openMenu === 'plus'}
@@ -1051,6 +1054,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   const modelChip = (
     <ComposerMenu
+      above={cardRef}
       sheet={isMobile}
       title="Model"
       open={openMenu === 'model'}
@@ -1077,6 +1081,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   const permissionChip = showPermissionChip && (
     <ComposerMenu
+      above={cardRef}
       sheet={isMobile}
       title="Permissions"
       open={openMenu === 'permissions'}
