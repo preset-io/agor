@@ -194,48 +194,65 @@ export function ComposerMenuRow({
 }: ComposerMenuRowProps) {
   const { token } = theme.useToken();
   const rowHeight = useRowHeight();
+  const body = (
+    <Flex align="center" gap={token.marginXS} style={{ flex: 1, minWidth: 0 }}>
+      <Flex vertical style={{ flex: 1, minWidth: 0 }}>
+        <Typography.Text ellipsis style={{ color: 'inherit' }}>
+          {label}
+        </Typography.Text>
+        {hint && (
+          <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
+            {hint}
+          </Typography.Text>
+        )}
+      </Flex>
+      {value !== undefined && (
+        <Typography.Text type="secondary" style={{ flexShrink: 0 }}>
+          {value}
+        </Typography.Text>
+      )}
+      {checked && <CheckOutlined style={{ color: token.colorPrimary, flexShrink: 0 }} />}
+      {drill && <RightOutlined style={{ color: token.colorTextTertiary, flexShrink: 0 }} />}
+    </Flex>
+  );
   return (
     <Flex align="center" style={{ minHeight: rowHeight, paddingInline: token.paddingXXS }}>
-      <Button
-        type="text"
-        block
-        role={checked === undefined ? undefined : 'radio'}
-        aria-checked={checked}
-        aria-label={ariaLabel}
-        disabled={disabled}
-        onClick={onClick}
-        icon={icon}
-        data-testid={testId}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          height: 'auto',
-          minHeight: rowHeight,
-          justifyContent: 'flex-start',
-          textAlign: 'start',
-          paddingInline: token.paddingXS,
-        }}
-      >
-        <Flex align="center" gap={token.marginXS} style={{ flex: 1, minWidth: 0 }}>
-          <Flex vertical style={{ flex: 1, minWidth: 0 }}>
-            <Typography.Text ellipsis style={{ color: 'inherit' }}>
-              {label}
-            </Typography.Text>
-            {hint && (
-              <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
-                {hint}
-              </Typography.Text>
-            )}
-          </Flex>
-          {value !== undefined && (
-            <Typography.Text type="secondary" style={{ flexShrink: 0 }}>
-              {value}
-            </Typography.Text>
+      {onClick ? (
+        <Button
+          type="text"
+          block
+          role={checked === undefined ? undefined : 'radio'}
+          aria-checked={checked}
+          aria-label={ariaLabel}
+          disabled={disabled}
+          onClick={onClick}
+          icon={icon}
+          data-testid={testId}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: 'auto',
+            minHeight: rowHeight,
+            justifyContent: 'flex-start',
+            textAlign: 'start',
+            paddingInline: token.paddingXS,
+          }}
+        >
+          {body}
+        </Button>
+      ) : (
+        <Flex
+          align="center"
+          gap={token.marginXS}
+          data-testid={testId}
+          style={{ flex: 1, minWidth: 0, minHeight: rowHeight, paddingInline: token.paddingXS }}
+        >
+          {icon && (
+            <span style={{ color: token.colorTextSecondary, display: 'inline-flex' }}>{icon}</span>
           )}
-          {checked && <CheckOutlined style={{ color: token.colorPrimary, flexShrink: 0 }} />}
-          {drill && <RightOutlined style={{ color: token.colorTextTertiary, flexShrink: 0 }} />}
+          {body}
         </Flex>
-      </Button>
+      )}
       {trailing}
     </Flex>
   );

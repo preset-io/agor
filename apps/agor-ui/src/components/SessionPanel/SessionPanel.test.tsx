@@ -680,7 +680,7 @@ describe.each([390, 1280])('shared Stop path at %ipx', (width) => {
     const stop = screen.getByLabelText('Stop');
     fireEvent.click(stop);
     fireEvent.click(stop);
-    expect(stop).toBeDisabled();
+    expect(stop).toHaveAttribute('aria-disabled', 'true');
     expect(create).toHaveBeenCalledExactlyOnceWith({ expected_task_id: taskId });
     expect(service).toHaveBeenCalledWith(`sessions/${session.session_id}/stop`);
     rejectStop(Object.assign(new Error('Not allowed to stop this session'), { code: 403 }));
