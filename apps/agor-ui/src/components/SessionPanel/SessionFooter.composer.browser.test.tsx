@@ -265,7 +265,7 @@ it.each([
     const attach = within(plusMenu).getByText('Attach files', { exact: true }).closest('button')!;
     expect(attach.getBoundingClientRect().height).toBeGreaterThanOrEqual(rowHeight);
     const pin = within(plusMenu).getByRole('button', {
-      name: isMobile ? 'Pin Attach files' : 'Unpin Attach files',
+      name: isMobile ? 'Pin Attach files to the composer' : 'Unpin Attach files from the composer',
     });
     expect(pin.getBoundingClientRect().height).toBe(rowHeight);
     expect(pin.getBoundingClientRect().width).toBe(rowHeight);

@@ -312,14 +312,15 @@ describe('"+" menu and pins', () => {
     const menu = await screen.findByRole('dialog', { name: 'Add files and actions' });
     expect(within(menu).getByText('Add to message')).toBeInTheDocument();
     expect(within(menu).getByText('Session')).toBeInTheDocument();
-    const pin = within(menu).getByRole('button', { name: 'Pin BTW fork' });
+    const pin = within(menu).getByRole('button', { name: 'Pin BTW fork to the composer' });
+    fireEvent.mouseEnter(pin);
+    expect(await screen.findByText('Pin to the composer')).toBeInTheDocument();
     expect(pin).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(pin);
     expect(screen.getByTestId('btw-fork-bar-btn')).toBeInTheDocument();
-    expect(within(menu).getByRole('button', { name: 'Unpin BTW fork' })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    );
+    expect(
+      within(menu).getByRole('button', { name: 'Unpin BTW fork from the composer' })
+    ).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('runs an action from its row and closes the menu', async () => {
@@ -372,7 +373,7 @@ describe('phone pins', () => {
       within(sheet).getByText('The composer fits 2 pins on a phone. Unpin one to add another.')
     ).toBeInTheDocument();
     // jsdom cannot compute AntD's disabled-button border styles, so skip role queries here.
-    expect(within(sheet).getByLabelText('Pin BTW fork')).toBeDisabled();
+    expect(within(sheet).getByLabelText('Pin BTW fork to the composer')).toBeDisabled();
   });
 
   it('hide the tab bar while the text has focus, not when a row button does', () => {
