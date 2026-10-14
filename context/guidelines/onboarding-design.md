@@ -21,8 +21,9 @@ Legacy `preferences.onboarding.goals` and `persona` stay untouched: no migration
 - Name and emoji come first among the controls.
 - "Pick a starting point": one even grid of template cards (3 columns, 2 at ≤480px), each antd icon
   (the template's `icon`) + title + one description line (two-line clamp, full text in a tooltip). No hero card, no category
-  chips. **Personal assistant** is tagged Recommended and preselected. Cards are select-only
-  (clicking the selected card changes nothing). "Start from scratch" (the blank starter) is
+  chips. Nothing is preselected or tagged Recommended; continuing without a pick means no template
+  (framework default branch, no remit, curated tool order), like Skip with a name kept. Cards are
+  select-only (clicking the selected card changes nothing). "Start from scratch" (the blank starter) is
   first. Use the shared `TeammateGallery`
   `compact` variant; Settings uses the same template list in its full gallery.
 - Template data lives in `teammateTemplates.ts`. Prefer **prompt-only** templates (no

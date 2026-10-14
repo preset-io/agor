@@ -69,7 +69,6 @@ interface GalleryCardProps {
   compact?: boolean;
   /** Narrow compact cards put the icon above the title so titles keep their width. */
   stacked?: boolean;
-  recommended?: boolean;
   onSelect: () => void;
 }
 
@@ -78,7 +77,6 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
   selected,
   compact,
   stacked,
-  recommended,
   onSelect,
 }) => {
   const { token } = theme.useToken();
@@ -126,11 +124,6 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
               <Text strong style={{ fontSize: token.fontSize }}>
                 {template.title}
               </Text>
-              {recommended && (
-                <Tag color="processing" style={{ margin: 0, fontSize: token.fontSizeSM }}>
-                  Recommended
-                </Tag>
-              )}
             </Flex>
           </Flex>
           <Paragraph
@@ -280,8 +273,6 @@ export interface TeammateGalleryCardsProps extends TeammateGalleryProps {
   filter?: GalleryFilter;
   /** Onboarding variant: one even grid of icon + title + one-line description cards. */
   compact?: boolean;
-  /** Card tagged Recommended (compact only). */
-  recommendedId?: TeammateGalleryCardId;
 }
 
 /** Card grid, independent of host-specific chrome. */
@@ -290,7 +281,6 @@ export const TeammateGalleryCards: React.FC<TeammateGalleryCardsProps> = ({
   onChange,
   filter = 'all',
   compact,
-  recommendedId,
 }) => {
   const { token } = theme.useToken();
   const narrow = useMediaQuery('(max-width: 480px)');
@@ -326,7 +316,6 @@ export const TeammateGalleryCards: React.FC<TeammateGalleryCardsProps> = ({
             selected={value === template.id}
             compact={compact}
             stacked={compact && narrow}
-            recommended={compact && template.id === recommendedId}
             onSelect={() => onChange(template.id)}
           />
         )

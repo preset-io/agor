@@ -133,14 +133,7 @@ describe('TeammateGallery', () => {
   });
 
   it('compact variant is one even grid: icon, title, one description line, blank first', () => {
-    render(
-      <TeammateGalleryCards
-        value="personal-assistant"
-        onChange={vi.fn()}
-        compact
-        recommendedId="personal-assistant"
-      />
-    );
+    render(<TeammateGalleryCards value="personal-assistant" onChange={vi.fn()} compact />);
 
     expect(screen.getByRole('group', { name: 'Teammate template' })).toHaveStyle({
       gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
@@ -152,9 +145,8 @@ describe('TeammateGallery', () => {
 
     const assistant = cardFor('Personal assistant');
     expect(assistant).toHaveAttribute('aria-pressed', 'true');
-    expect(assistant).toHaveTextContent('Recommended');
     expect(assistant).toHaveTextContent("Keeps up with Slack and your docs so you don't have to.");
-    expect(screen.getAllByText('Recommended')).toHaveLength(1);
+    expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
     expect(screen.queryByText('Or start from a template')).not.toBeInTheDocument();
 
     // No category pill, but the description line is on the card; blank is an ordinary card.

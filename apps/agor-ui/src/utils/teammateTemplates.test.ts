@@ -5,7 +5,6 @@ import { AVATAR_PALETTE } from './avatarPalette';
 import {
   BLANK_TEMPLATE,
   BLANK_TEMPLATE_ID,
-  DEFAULT_TEMPLATE_ID,
   galleryCardsForFilter,
   getCategoryColor,
   getTeammateTemplate,
@@ -35,7 +34,6 @@ describe('TEAMMATE_TEMPLATES', () => {
       'sales-outbound',
       'legal-analyst',
     ]);
-    expect(DEFAULT_TEMPLATE_ID).toBe('personal-assistant');
     for (const template of TEAMMATE_GALLERY_CARDS) {
       expect(template.title).toMatch(/^[A-Z][a-z ]+$/); // sentence case
       expect(template.description.length).toBeLessThanOrEqual(60);

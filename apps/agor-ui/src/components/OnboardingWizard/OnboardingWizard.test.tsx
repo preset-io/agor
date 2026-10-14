@@ -218,15 +218,14 @@ describe('OnboardingWizard', () => {
     expect(document.querySelector('.ant-modal-centered')).toBeInTheDocument();
   });
 
-  it('preselects Personal assistant and completes it on the framework default branch', async () => {
+  it('starts with no template picked and completes without one on the default branch', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete });
 
-    const assistant = screen.getByText('Personal assistant').closest('[role="button"]');
-    expect(assistant).toHaveAttribute('aria-pressed', 'true');
-    // Re-clicking the default keeps it selected instead of leaving nothing picked.
-    fireEvent.click(assistant as HTMLElement);
-    expect(assistant).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      document.querySelector('[aria-label="Teammate template"] [aria-pressed="true"]')
+    ).toBeNull();
+    expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Ada' } });
     clickButton(/^continue/i);
@@ -237,7 +236,8 @@ describe('OnboardingWizard', () => {
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith(
         expect.objectContaining({
-          templateId: 'personal-assistant',
+          templateId: null,
+          teammateEmoji: '🤖',
           sourceBranch: undefined,
           sourceRemoteUrl: undefined,
         }),
@@ -1079,8 +1079,8 @@ describe('OnboardingWizard', () => {
 
     // The wizard creates the board now (at completion) and emits the teammate
     // naming details + selected agent so the app shell can seed the first AI
-    // teammate on it. The default Personal assistant is prompt-only → sourceBranch undefined. Board
-    // creation precedes onComplete, so await it.
+    // teammate on it. No template picked → framework default branch (sourceBranch undefined).
+    // Board creation precedes onComplete, so await it.
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith(
         {
@@ -1092,7 +1092,7 @@ describe('OnboardingWizard', () => {
           teammateEmoji: '🤖',
           sourceBranch: undefined,
           sourceRemoteUrl: undefined,
-          templateId: 'personal-assistant',
+          templateId: null,
           agent: 'claude-code',
           requestedTools: [],
         },

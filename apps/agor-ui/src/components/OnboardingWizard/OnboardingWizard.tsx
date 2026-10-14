@@ -41,7 +41,6 @@ import { type ActionErrorCopy, describeActionError } from '../../utils/connectio
 import type { RequestedCatalogTool } from '../../utils/teammateBootstrapPrompt';
 import {
   BLANK_TEMPLATE_ID,
-  DEFAULT_TEMPLATE_ID,
   getTeammateTemplate,
   resolveTemplateSourceBranch,
   resolveTemplateSourceRemoteUrl,
@@ -535,11 +534,9 @@ export function OnboardingWizard({
   // which the teammate is later seeded onto (see App.handleOnboardingComplete).
   const [teammateName, setTeammateName] = useState('');
   const [teammateEmoji, setTeammateEmoji] = useState('🤖');
-  // Chosen gallery template id; Personal assistant is the default. Sets the
-  // default avatar and the teammate's framework source branch — never the name.
-  const [selectedTemplateId, setSelectedTemplateId] = useState<TeammateGalleryCardId | null>(
-    DEFAULT_TEMPLATE_ID
-  );
+  // Chosen gallery template id; null until the user picks one (= no template:
+  // framework default branch, no remit). Sets the avatar and source branch, never the name.
+  const [selectedTemplateId, setSelectedTemplateId] = useState<TeammateGalleryCardId | null>(null);
   const [invalidSavedTemplateId, setInvalidSavedTemplateId] = useState<string | null>(null);
   // Tools picked on the tools step; the teammate's first session helps connect them.
   const [requestedTools, setRequestedTools] = useState<RequestedCatalogTool[]>([]);
@@ -573,7 +570,7 @@ export function OnboardingWizard({
     setLlmAuthVerified({});
     setTeammateName('');
     setTeammateEmoji('🤖');
-    setSelectedTemplateId(DEFAULT_TEMPLATE_ID);
+    setSelectedTemplateId(null);
     setInvalidSavedTemplateId(null);
     setBoardError(null);
     setCreatedBoardId(null);
@@ -626,7 +623,7 @@ export function OnboardingWizard({
     setTeammateEmoji(savedOnboarding?.teammateEmoji ?? savedBoard?.icon ?? '🤖');
     const savedTemplateId = savedOnboarding?.teammateTemplateId;
     const savedTemplate = getTeammateTemplate(savedTemplateId);
-    setSelectedTemplateId(savedTemplate?.id ?? DEFAULT_TEMPLATE_ID);
+    setSelectedTemplateId(savedTemplate?.id ?? null);
     setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
     if (savedBoardId) {
       setCreatedBoardId(savedBoardId);

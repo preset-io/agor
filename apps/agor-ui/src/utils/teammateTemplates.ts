@@ -250,9 +250,6 @@ export const BLANK_TEMPLATE = {
 
 export type TeammateGalleryCardId = TeammateTemplateId | typeof BLANK_TEMPLATE_ID;
 
-/** Onboarding's recommended, preselected starting point. */
-export const DEFAULT_TEMPLATE_ID = 'personal-assistant' satisfies TeammateTemplateId;
-
 /** Every card shown in the gallery: the blank starter, then all templates. */
 export const TEAMMATE_GALLERY_CARDS = [BLANK_TEMPLATE, ...TEAMMATE_TEMPLATES] as const;
 export type TeammateGalleryCard = (typeof TEAMMATE_GALLERY_CARDS)[number];
