@@ -36,6 +36,11 @@ const bottomInset = theme.getDesignToken().sizeUnit * 2;
 
 beforeEach(async () => {
   localStorage.clear();
+  // Usage shows only once fetched; pin Session IDs so the info line has content.
+  localStorage.setItem(
+    'agor-footer-prefs',
+    JSON.stringify({ pinnedChips: ['timer', 'tools', 'tokens', 'context', 'session-ids'] })
+  );
   document.body.style.margin = '0';
   // The browser suite's 1000px desktop fixture is below the mobile-shell
   // breakpoint. Also exercise the actual desktop composer, including embeds.
