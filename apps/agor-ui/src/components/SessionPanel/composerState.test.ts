@@ -62,16 +62,16 @@ describe('isPermissionNonDefault', () => {
 });
 
 describe('splitPinnedActions', () => {
-  it('keeps pin order and drops actions the tool lacks', () => {
+  it('follows the "+" menu order and drops actions the tool lacks', () => {
     expect(splitPinnedActions(['fork', 'spawn', 'upload'], ['upload', 'fork'])).toEqual({
-      row: ['fork', 'upload'],
+      row: ['upload', 'fork'],
       folded: [],
     });
   });
 
   it('folds pins past the limit back into the menu', () => {
     expect(
-      splitPinnedActions(['upload', 'fork', 'btw-fork'], ['upload', 'fork', 'btw-fork'], 2)
+      splitPinnedActions(['btw-fork', 'fork', 'upload'], ['upload', 'fork', 'btw-fork'], 2)
     ).toEqual({ row: ['upload', 'fork'], folded: ['btw-fork'] });
   });
 });
