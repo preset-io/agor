@@ -1,5 +1,5 @@
 import { SessionStatus, type Task, TaskStatus } from '@agor-live/client';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
@@ -69,146 +69,26 @@ const props: SessionFooterProps = {
   promptInputSlot: <textarea aria-label="Fixture composer" style={{ width: '100%' }} />,
 };
 
-it.each([390, 1280])('keeps Stop stable through shutdown and recovery at %dpx', async (width) => {
-  await page.viewport(width, 900);
-  const onStop = vi.fn();
-  const footer = (state: Partial<SessionFooterProps> = {}) => (
-    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
-      <App>
-        <main style={{ paddingInline: 24 }}>
-          <SessionFooter {...props} {...state} onStop={onStop} />
-        </main>
-      </App>
-    </ConfigProvider>
-  );
-  const view = render(footer());
-  const stop = screen.getByRole('button', { name: 'Stop' });
-  const queue = screen.getByRole('button', { name: 'Queue' });
-  const stopBounds = stop.getBoundingClientRect().toJSON();
-  const queueBounds = queue.getBoundingClientRect().toJSON();
-  expect(stop).toBeEnabled();
-  await userEvent.click(stop);
-  expect(onStop).toHaveBeenCalledOnce();
+const center = (rect: DOMRect) => rect.top + rect.height / 2;
+// Desktop menus use 36px rows; phone bottom sheets use 44px touch rows.
+const menuRowHeight = (isMobile: boolean) =>
+  isMobile ? MOBILE_TOUCH_TARGET : theme.getDesignToken().controlHeightLG - 4;
 
-  const states: Partial<SessionFooterProps>[] = [
-    { stopRequestInFlight: true },
-    ...(['user_stop', 'heartbeat_lost'] as const).map((cause) => ({
-      isStopping: true,
-      session: { ...props.session, status: SessionStatus.STOPPING },
-      recoveryTask: {
-        ...props.footerTimerTask,
-        status: TaskStatus.STOPPING,
-        termination_request: { cause, requested_at: '2026-01-01T00:00:00Z' },
-      } as Task,
-    })),
-  ];
-  for (const state of states) {
-    view.rerender(footer(state));
-    expect(screen.getByRole('button', { name: 'Stop' })).toBe(stop);
-    expect(stop.textContent).toBe(width < 1024 ? '' : 'Stop');
-    expect(stop).toBeDisabled();
-    expect(stop).toHaveAttribute('aria-busy', 'true');
-    expect(stop.querySelector('[data-icon="loading"]')).toBeVisible();
-    expect(stop.getBoundingClientRect().toJSON()).toEqual(stopBounds);
-    expect(queue.getBoundingClientRect().toJSON()).toEqual(queueBounds);
-    stop.click();
-    expect(onStop).toHaveBeenCalledOnce();
-  }
-});
+/** Opens a composer menu: a popover dialog on desktop, a bottom sheet on phones. */
+async function openMenu(trigger: HTMLElement, title: string) {
+  await userEvent.click(trigger);
+  const dialog = await screen.findByRole('dialog', { name: title });
+  await waitFor(() => expect(dialog).toBeVisible());
+  return dialog.querySelector<HTMLElement>('.ant-drawer-body') ?? dialog;
+}
 
-it.each([
-  [360, 740, false],
-  [390, 844, true],
-  [430, 932, false],
-  [1280, 900, false],
-  [1280, 900, true],
-])('keeps chips and actions on single rows at %dx%d (dark=%s)', async (width, height, dark) => {
-  await page.viewport(width, height);
-  render(
-    <ConfigProvider
-      theme={{
-        algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        token: { motion: false },
-      }}
-    >
-      <App>
-        <main style={{ paddingInline: 24 }}>
-          <SessionFooter {...props} />
-        </main>
-      </App>
-    </ConfigProvider>
-  );
+async function closeMenu(title: string) {
+  await userEvent.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: title })).toBeNull());
+}
 
-  const bar = screen.getByTestId('info-bar');
-  const chips = [...bar.children].map((chip) => chip.getBoundingClientRect());
-  const lineBottom = Math.min(...chips.map((chip) => chip.bottom));
-  for (const chip of chips) expect(chip.top).toBeLessThan(lineBottom);
-  const isMobile = width < 1024;
-  // Phones scroll the chip row; desktop wraps so focus rings are never clipped.
-  expect(getComputedStyle(bar).overflowX).toBe(isMobile ? 'auto' : 'visible');
-  expect(getComputedStyle(bar).flexWrap).toBe(isMobile ? 'nowrap' : 'wrap');
-  const modelChip = screen.getByTestId('model-chip');
-  const modelLabel = within(modelChip).getByText(LONG_MODEL);
-  if (isMobile) {
-    // Phones hold a 96px floor and clip the name inside the chip.
-    expect(modelChip.getBoundingClientRect().width).toBeGreaterThanOrEqual(96);
-    expect(modelChip.getBoundingClientRect().width).toBeLessThanOrEqual(bar.clientWidth);
-    expect(modelLabel.scrollWidth).toBeGreaterThan(modelLabel.clientWidth);
-  } else {
-    expect(modelLabel.scrollWidth).toBeLessThanOrEqual(modelLabel.clientWidth);
-    expect(modelChip.getBoundingClientRect().right).toBeLessThanOrEqual(
-      bar.getBoundingClientRect().right
-    );
-  }
-  expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
-
-  const actions = ['Attach files', 'More options', 'Stop', 'Queue'].map((name) =>
-    screen.getByRole('button', { name }).getBoundingClientRect()
-  );
-  for (const action of actions) {
-    expect(action.height).toBe(actions[0].height);
-    expect(action.right).toBeLessThanOrEqual(window.innerWidth);
-    if (isMobile) expect(action.height).toBeGreaterThanOrEqual(MOBILE_TOUCH_TARGET);
-  }
-  // Phones show icon-only squares; desktop Stop/Queue keep text labels.
-  for (const action of actions.slice(2)) {
-    if (isMobile) expect(action.width).toBe(action.height);
-    else expect(action.width).toBeGreaterThan(action.height);
-  }
-  const [stopBounds, queueBounds] = actions.slice(2);
-  expect(stopBounds.top).toBe(queueBounds.top);
-  expect(queueBounds.left - stopBounds.right).toBe(theme.getDesignToken().sizeUnit);
-  if (!isMobile) {
-    const stop = screen.getByRole('button', { name: 'Stop' });
-    const style = getComputedStyle(stop);
-    const label = document.createRange();
-    label.selectNodeContents(within(stop).getByText('Stop', { exact: true }));
-    // Measure the visible text, not its wrapper: the old overlapping grid
-    // reserved a hidden "Recovering…" label and looked like extra padding.
-    expect(stopBounds.right - label.getBoundingClientRect().right).toBeCloseTo(
-      Number.parseFloat(style.paddingRight) + Number.parseFloat(style.borderRightWidth),
-      0
-    );
-  }
-
-  await userEvent.click(screen.getByRole('button', { name: 'More options' }));
-  const menu = await screen.findByRole('group', { name: 'More options' });
-  const label = within(menu).getAllByText('Model', { exact: true })[0].getBoundingClientRect();
-  const select = menu.querySelector('.ant-select')!.getBoundingClientRect();
-  expect(select.left).toBeGreaterThanOrEqual(label.right);
-  expect(select.top).toBeLessThan(label.bottom);
-  expect(label.top).toBeLessThan(select.bottom);
-  const permissions = within(menu).getByText('Permissions', { exact: true });
-  const permissionsRow = permissions.closest('fieldset > div')!.getBoundingClientRect();
-  const permissionsSelect = permissions
-    .closest('fieldset > div')!
-    .querySelector('.ant-select')!
-    .getBoundingClientRect();
-  const center = (rect: DOMRect) => rect.top + rect.height / 2;
-  expect(permissionsRow.height).toBe(isMobile ? MOBILE_TOUCH_TARGET : 32);
-  expect(
-    Math.abs(center(permissions.getBoundingClientRect()) - center(permissionsSelect))
-  ).toBeLessThanOrEqual(1);
+/** Menu copy stays at 12/14px sentence case, and the menu stays on screen. */
+function expectMenuType(menu: HTMLElement) {
   for (const text of menu.querySelectorAll<HTMLElement>('span, div, button')) {
     if (
       ![...text.childNodes].some(
@@ -221,5 +101,192 @@ it.each([
     expect([12, 14]).toContain(Number.parseFloat(style.fontSize));
     expect(style.textTransform).not.toBe('uppercase');
   }
-  await page.screenshot({ path: `./.vitest/composer-${width}-${dark ? 'dark' : 'light'}.png` });
-});
+  const bounds = menu.getBoundingClientRect();
+  expect(bounds.left).toBeGreaterThanOrEqual(0);
+  expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+}
+
+it.each([
+  [390, true],
+  [390, false],
+  [1280, true],
+  [1280, false],
+])(
+  'keeps Stop stable through shutdown and recovery at %dpx (draft=%s)',
+  async (width, hasInput) => {
+    await page.viewport(width, 900);
+    const onStop = vi.fn();
+    const footer = (state: Partial<SessionFooterProps> = {}) => (
+      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
+        <App>
+          <main style={{ paddingInline: 24 }}>
+            <SessionFooter {...props} hasInput={hasInput} {...state} onStop={onStop} />
+          </main>
+        </App>
+      </ConfigProvider>
+    );
+    const view = render(footer());
+    const circle = screen.getByTestId('composer-circle');
+    // With a draft the circle queues it and Stop moves to the working line;
+    // with an empty box the circle itself is Stop.
+    expect(circle).toHaveAccessibleName(hasInput ? 'Queue message' : 'Stop');
+    const stop = hasInput ? screen.getByRole('button', { name: 'Stop the agent' }) : circle;
+    if (!hasInput) expect(screen.queryByRole('button', { name: 'Stop the agent' })).toBeNull();
+    const circleBounds = circle.getBoundingClientRect().toJSON();
+    const stopRight = stop.getBoundingClientRect().right;
+    if (width < 1024) {
+      for (const control of [stop, circle]) {
+        expect(control.getBoundingClientRect().height).toBeGreaterThanOrEqual(MOBILE_TOUCH_TARGET);
+      }
+    }
+    expect(stop).toBeEnabled();
+    expect(stop).not.toHaveAttribute('aria-disabled');
+    await userEvent.click(stop);
+    expect(onStop).toHaveBeenCalledOnce();
+
+    const states: Partial<SessionFooterProps>[] = [
+      { stopRequestInFlight: true },
+      ...(['user_stop', 'heartbeat_lost'] as const).map((cause) => ({
+        isStopping: true,
+        session: { ...props.session, status: SessionStatus.STOPPING },
+        recoveryTask: {
+          ...props.footerTimerTask,
+          status: TaskStatus.STOPPING,
+          termination_request: { cause, requested_at: '2026-01-01T00:00:00Z' },
+        } as Task,
+      })),
+    ];
+    let busyBounds: ReturnType<DOMRect['toJSON']> | undefined;
+    for (const state of states) {
+      view.rerender(footer(state));
+      expect(screen.getByTestId('composer-circle')).toBe(circle);
+      if (hasInput) {
+        expect(screen.getByRole('button', { name: 'Stop the agent' })).toBe(stop);
+        expect(stop).toBeDisabled();
+      } else {
+        // The circle never takes the disabled attribute, so it keeps focus and its tooltip.
+        expect(stop).toHaveAttribute('aria-disabled', 'true');
+      }
+      expect(screen.getByTestId('composer-working-line')).toHaveTextContent('Stopping');
+      expect(stop).toHaveAttribute('aria-busy', 'true');
+      expect(stop.querySelector('[data-icon="loading"]')).toBeVisible();
+      const bounds = stop.getBoundingClientRect().toJSON();
+      busyBounds ??= bounds;
+      expect(bounds).toEqual(busyBounds);
+      expect(bounds.right).toBe(stopRight);
+      expect(circle.getBoundingClientRect().toJSON()).toEqual(circleBounds);
+      stop.click();
+      expect(onStop).toHaveBeenCalledOnce();
+    }
+  }
+);
+
+it.each([
+  [360, 740, false],
+  [390, 844, true],
+  [430, 932, false],
+  [1280, 900, false],
+  [1280, 900, true],
+])(
+  'keeps the composer row and info line on single rows at %dx%d (dark=%s)',
+  async (width, height, dark) => {
+    await page.viewport(width, height);
+    render(
+      <ConfigProvider
+        theme={{
+          algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
+          token: { motion: false },
+        }}
+      >
+        <App>
+          <main style={{ paddingInline: 24 }}>
+            <SessionFooter {...props} />
+          </main>
+        </App>
+      </ConfigProvider>
+    );
+
+    const isMobile = width < 1024;
+    const size = isMobile ? MOBILE_TOUCH_TARGET : theme.getDesignToken().controlHeight;
+    const card = screen.getByTestId('composer-card').getBoundingClientRect();
+    const plus = screen.getByRole('button', { name: 'Add files and actions' });
+    const modelChip = screen.getByTestId('model-chip');
+    const circle = screen.getByTestId('composer-circle');
+    // Desktop pins Attach files here; phone pins are kept separately and start empty.
+    if (isMobile) expect(screen.queryByTestId('upload-bar-btn')).toBeNull();
+    const row = [
+      plus,
+      ...(isMobile ? [] : [screen.getByTestId('upload-bar-btn')]),
+      modelChip,
+      circle,
+    ];
+    const rects = row.map((control) => control.getBoundingClientRect());
+    rects.forEach((rect, index) => {
+      expect(rect.height).toBe(size);
+      expect(Math.abs(center(rect) - center(rects[0]))).toBeLessThanOrEqual(1);
+      expect(rect.left).toBeGreaterThanOrEqual(card.left);
+      expect(rect.right).toBeLessThanOrEqual(card.right);
+      if (index > 0) expect(rect.left).toBeGreaterThanOrEqual(rects[index - 1].right);
+    });
+    // The circle is a circle, and the row ends with it.
+    expect(rects.at(-1)!.width).toBe(size);
+    expect(card.right).toBeLessThanOrEqual(window.innerWidth);
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+
+    const modelLabel = within(modelChip).getByText(LONG_MODEL);
+    if (isMobile) {
+      // Phones clip the long name inside the chip rather than pushing the circle off.
+      expect(modelLabel.scrollWidth).toBeGreaterThan(modelLabel.clientWidth);
+    } else {
+      expect(modelLabel.scrollWidth).toBeLessThanOrEqual(modelLabel.clientWidth);
+    }
+
+    // The info line sits under the card on one line, with phone-sized targets.
+    const infoLine = screen.getByTestId('composer-info-line');
+    expect(infoLine).toHaveTextContent('4%');
+    expect(infoLine).toHaveTextContent('Usage');
+    const info = infoLine.getBoundingClientRect();
+    expect(info.top).toBeGreaterThanOrEqual(card.bottom);
+    expect(info.right).toBeLessThanOrEqual(window.innerWidth);
+    const infoButtons = within(infoLine)
+      .getAllByRole('button')
+      .map((button) => button.getBoundingClientRect());
+    expect(infoButtons.length).toBeGreaterThan(0);
+    for (const button of infoButtons) {
+      expect(button.top).toBe(infoButtons[0].top);
+      expect(button.height).toBe(
+        isMobile ? MOBILE_TOUCH_TARGET : theme.getDesignToken().controlHeightSM
+      );
+    }
+
+    const rowHeight = menuRowHeight(isMobile);
+    const plusMenu = await openMenu(plus, 'Add files and actions');
+    const attach = within(plusMenu).getByText('Attach files', { exact: true }).closest('button')!;
+    expect(attach.getBoundingClientRect().height).toBeGreaterThanOrEqual(rowHeight);
+    const pin = within(plusMenu).getByRole('button', {
+      name: isMobile ? 'Pin Attach files' : 'Unpin Attach files',
+    });
+    expect(pin.getBoundingClientRect().height).toBe(rowHeight);
+    expect(pin.getBoundingClientRect().width).toBe(rowHeight);
+    expectMenuType(plusMenu);
+    await closeMenu('Add files and actions');
+
+    const modelMenu = await openMenu(modelChip, 'Model');
+    expect(within(modelMenu).getByRole('radiogroup', { name: 'Model' })).toBeVisible();
+    const permissionsRow = within(modelMenu)
+      .getByText('Permissions', { exact: true })
+      .closest('button')!;
+    expect(permissionsRow.getBoundingClientRect().height).toBeGreaterThanOrEqual(rowHeight);
+    expectMenuType(modelMenu);
+    await userEvent.click(permissionsRow);
+    const back = await within(modelMenu).findByRole('button', { name: 'Back to model' });
+    expect(back.getBoundingClientRect().height).toBe(rowHeight);
+    const permissions = within(modelMenu).getByRole('radiogroup', { name: 'Permissions' });
+    for (const radio of within(permissions).getAllByRole('radio')) {
+      expect(radio.getBoundingClientRect().height).toBeGreaterThanOrEqual(rowHeight);
+    }
+    expect(within(permissions).getByRole('radio', { checked: true })).toBeVisible();
+    expectMenuType(modelMenu);
+    await page.screenshot({ path: `./.vitest/composer-${width}-${dark ? 'dark' : 'light'}.png` });
+  }
+);
