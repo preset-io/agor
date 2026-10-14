@@ -519,15 +519,12 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   // Check if message is currently streaming
   const isStreaming = 'isStreaming' in message && message.isStreaming === true;
 
-  // Determine loading vs typing state:
-  // - loading: task is running but no streaming chunks yet (waiting for first token)
-  // - typing: streaming has started (we have content)
+  // Loading: the task is running but no streaming chunks have arrived yet.
   const hasContent =
     typeof message.content === 'string'
       ? message.content.trim().length > 0
       : Array.isArray(message.content) && message.content.length > 0;
   const isLoading = isTaskRunning && !hasContent && isAgent;
-  const shouldUseTyping = isStreaming && hasContent;
 
   // Get current user's emoji
   const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
@@ -880,7 +877,6 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 placement={isUser ? 'end' : 'start'}
                 avatar={renderAvatarSlot(avatar)}
                 loading={isLoading}
-                typing={shouldUseTyping ? { effect: 'typing', step: 5, interval: 20 } : false}
                 content={
                   <CopyableContent
                     textContent={textBeforeTools.join('\n\n')}
@@ -1030,7 +1026,6 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 placement="start"
                 avatar={renderAvatarSlot(avatar, !hasTextBefore)}
                 loading={isLoading}
-                typing={shouldUseTyping ? { effect: 'typing', step: 5, interval: 20 } : false}
                 content={
                   <CopyableContent
                     textContent={textAfterTools.join('\n\n')}

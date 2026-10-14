@@ -87,8 +87,15 @@ function update(patch: Partial<ReactiveSessionState>) {
     for (const listener of listeners) listener();
   });
 }
+/** Live text fades in word by word, so match across the word spans. */
 function tail(index: number) {
-  return screen.queryByText(`Message ${index} line 19`);
+  const text = `Message ${index} line 19`;
+  const holds = (element: Element | null) => !!element?.textContent?.includes(text);
+  return (
+    screen.queryAllByText(
+      (_, element) => holds(element) && !Array.from(element!.children).some(holds)
+    )[0] ?? null
+  );
 }
 beforeEach(() => {
   scrollToBottom.mockClear();
