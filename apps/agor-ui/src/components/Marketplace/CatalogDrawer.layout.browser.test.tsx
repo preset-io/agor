@@ -23,7 +23,7 @@ const entry = {
 } as MCPCatalogEntry;
 const props: CatalogDetailDrawerProps = {
   identityKey: 'test-user',
-  entry: null,
+  entry,
   open: true,
   onClose: vi.fn(),
   teammates: [],
@@ -46,32 +46,19 @@ const props: CatalogDetailDrawerProps = {
   policyPendingHint: '',
   onConnect: vi.fn(),
 };
-it('keeps one drawer through loading and uses historical shared disclosure spacing', async () => {
+it('uses historical shared disclosure spacing', async () => {
   const width = window.innerWidth;
   const afterOpen = vi.fn();
-  const view = render(
+  render(
     <ConfigProvider>
-      <CatalogDetailDrawer
-        {...props}
-        onAfterOpenChange={afterOpen}
-        emptyContent={<span role="status">Loading catalog…</span>}
-      />
-    </ConfigProvider>
-  );
-  await screen.findByText('Loading catalog…');
-  await waitFor(() => expect(afterOpen).toHaveBeenCalledWith(true));
-  const root = document.querySelector('.ant-drawer');
-  const wrapper = document.querySelector('.ant-drawer-content-wrapper');
-  view.rerender(
-    <ConfigProvider>
-      <CatalogDetailDrawer {...props} entry={entry} onAfterOpenChange={afterOpen} />
+      <CatalogDetailDrawer {...props} onAfterOpenChange={afterOpen} />
     </ConfigProvider>
   );
   await screen.findByText('Explore public repositories');
+  await waitFor(() => expect(afterOpen).toHaveBeenCalledWith(true));
   expect(document.querySelectorAll('.ant-drawer')).toHaveLength(1);
-  expect(document.querySelector('.ant-drawer')).toBe(root);
-  expect(document.querySelector('.ant-drawer-content-wrapper')).toBe(wrapper);
   expect(afterOpen.mock.calls).toEqual([[true]]);
+  const wrapper = document.querySelector('.ant-drawer-content-wrapper');
   expect(wrapper!.getBoundingClientRect().width).toBe(Math.min(520, width));
   const header = document.querySelector('.ant-drawer-header')!;
   const body = document.querySelector('.ant-drawer-body')!;

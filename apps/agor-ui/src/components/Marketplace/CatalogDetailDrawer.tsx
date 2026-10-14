@@ -19,7 +19,6 @@ import type {
 import { getTeammateConfig } from '@agor-live/client';
 import {
   CheckCircleFilled,
-  ClockCircleOutlined,
   SafetyCertificateOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
@@ -38,7 +37,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import type { ActionErrorCopy } from '../../utils/connectionErrors';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
@@ -79,15 +78,10 @@ const FALLBACK_DISCLOSURE =
   'This server has published no access statement. Anything it exposes becomes available to the agent in the session you connect it to.';
 
 export interface CatalogDetailDrawerProps {
-  /** Same auth presentation, different terminal action; never inferred from routing. */
-  mode?: 'catalog' | 'onboarding';
-  onRetryConnection?: () => void;
   /** Authenticated identity that owns consent, selections, and pasted credentials. */
   identityKey: string | null;
   entry: MCPCatalogEntry | null;
   open: boolean;
-  /** In-place loading/error content before an entry resolves; the drawer stays mounted. */
-  emptyContent?: ReactNode;
   onClose: () => void;
   /** Restore focus to the catalog trigger after the drawer has actually closed. */
   onAfterOpenChange?: (open: boolean) => void;
@@ -156,12 +150,9 @@ export interface CatalogDetailDrawerProps {
 
 const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   identityKey: _identityKey,
-  mode = 'catalog',
-  onRetryConnection,
   entry,
   open,
   onClose,
-  emptyContent,
   onAfterOpenChange,
   teammates,
   teammatesLoading,
@@ -188,7 +179,6 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   onConnect,
 }) => {
   const { token } = theme.useToken();
-  const onboarding = mode === 'onboarding';
   const titleId = useId();
   const successActionRef = useRef<HTMLButtonElement | null>(null);
   const [teammateId, setTeammateId] = useState<BranchID | undefined>();
@@ -258,17 +248,13 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
         return {
           readiness: 'ready' as const,
           label: 'Ready to use',
-          detail: onboarding
-            ? 'Your existing connection is ready for onboarding.'
-            : 'Your existing connection can be used in a new session.',
+          detail: 'Your existing connection can be used in a new session.',
         };
       case 'reusable_oauth':
         return {
           readiness: 'ready' as const,
           label: 'Existing sign-in available',
-          detail: onboarding
-            ? 'Reuse your existing connection without signing in again.'
-            : 'Reuse your existing connection in a new session without signing in again.',
+          detail: 'Reuse your existing connection in a new session without signing in again.',
         };
       default:
         // Sharing refreshes must clear readiness, not the current entry's
@@ -521,49 +507,24 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 textAlign: 'center',
               }}
             >
-              {onboarding && success.authentication !== 'ready' ? (
-                <ClockCircleOutlined
-                  aria-hidden
-                  style={{ color: token.colorWarning, fontSize: token.fontSizeHeading2 }}
-                />
-              ) : (
-                <CheckCircleFilled
-                  aria-hidden
-                  style={{ color: token.colorSuccess, fontSize: token.fontSizeHeading2 }}
-                />
-              )}
+              <CheckCircleFilled
+                aria-hidden
+                style={{ color: token.colorSuccess, fontSize: token.fontSizeHeading2 }}
+              />
               <div>
                 <Title level={4} style={{ margin: 0 }}>
-                  {onboarding
-                    ? success.authentication === 'ready'
-                      ? 'Connected and ready'
-                      : success.authentication === 'pending'
-                        ? 'Sign-in pending'
-                        : success.authentication === 'failed'
-                          ? 'Sign-in not completed'
-                          : success.authentication === 'unknown'
-                            ? 'Sign-in needs verification'
-                            : 'Continue sign-in'
-                    : 'Added to My Servers'}
+                  Added to My Servers
                 </Title>
                 <Paragraph type="secondary" style={{ margin: `${token.marginXXS}px 0 0` }}>
-                  {onboarding
-                    ? success.authentication === 'ready'
-                      ? `${title} is connected. Return to onboarding to continue setup.`
+                  {success.authentication === 'ready'
+                    ? `${title} is ready. Start a session now or keep browsing the MCP Catalog.`
+                    : success.authentication === 'action_required'
+                      ? `${title} was added. Continue sign-in now, or start a session and finish connecting later.`
                       : success.authentication === 'pending'
-                        ? 'Finish sign-in in the provider window. This drawer will confirm your connection.'
-                        : success.authentication === 'action_required'
-                          ? 'Continue to the provider to complete sign-in.'
-                          : 'Sign-in was not confirmed. Retry here or return to onboarding and connect later.'
-                    : success.authentication === 'ready'
-                      ? `${title} is ready. Start a session now or keep browsing the MCP Catalog.`
-                      : success.authentication === 'action_required'
-                        ? `${title} was added. Continue sign-in now, or start a session and finish connecting later.`
-                        : success.authentication === 'pending'
-                          ? `${title} was added. Finish sign-in in the provider window while you choose what to do next.`
-                          : success.authentication === 'failed'
-                            ? `${title} was added, but sign-in did not finish. You can retry from My Servers.`
-                            : `${title} was added. Agor could not verify the final sign-in result; check My Servers when ready.`}
+                        ? `${title} was added. Finish sign-in in the provider window while you choose what to do next.`
+                        : success.authentication === 'failed'
+                          ? `${title} was added, but sign-in did not finish. You can retry from My Servers.`
+                          : `${title} was added. Agor could not verify the final sign-in result; check My Servers when ready.`}
                 </Paragraph>
               </div>
 
@@ -592,18 +553,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 </Text>
               )}
 
-              {onboarding ? (
-                <Flex gap={token.marginXS} wrap justify="center">
-                  {['failed', 'unknown'].includes(success.authentication) && (
-                    <Button onClick={onRetryConnection} disabled={connecting}>
-                      Retry sign-in
-                    </Button>
-                  )}
-                  <Button ref={successActionRef} type="primary" onClick={onKeepBrowsing}>
-                    Return to onboarding
-                  </Button>
-                </Flex>
-              ) : showSessionSetup ? (
+              {showSessionSetup ? (
                 <Flex vertical gap={token.marginSM} style={{ width: '100%', textAlign: 'start' }}>
                   <Form layout="vertical" component="div">
                     <Form.Item label="Teammate" style={{ marginBottom: token.marginSM }}>
@@ -983,9 +933,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             </Flex>
           )}
         </>
-      ) : (
-        emptyContent
-      )}
+      ) : null}
     </CatalogDrawer>
   );
 };

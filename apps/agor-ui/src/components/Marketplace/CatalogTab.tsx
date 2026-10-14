@@ -106,15 +106,6 @@ const CatalogGrid = memo<{
 ));
 
 export interface CatalogTabProps {
-  /** Explicit connection-only owner. Never prepares a workspace or starts a tryout. */
-  context?:
-    | { mode: 'catalog' }
-    | {
-        mode: 'onboarding';
-        entryName: string;
-        onClose: () => void;
-        onConnected: (serverId: string) => void;
-      };
   /** Whether this tab is the active tab; inactive drawers must not portal over another tab. */
   active?: boolean;
   client: AgorClient | null;
@@ -133,7 +124,6 @@ export interface CatalogTabProps {
 
 const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   active = true,
-  context,
   client,
   connected,
   connecting: connectionPending,
@@ -142,7 +132,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   refreshMarketplaceOverview,
   onOpenSession,
 }) => {
-  const onboarding = context?.mode === 'onboarding' ? context : undefined;
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const [filters, setFilters] = useState<CatalogFilterState>(INITIAL_FILTERS);
@@ -208,7 +197,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     surpriseOAuthResultRef.current = null;
   }, [active]);
 
-  const { entries, allEntries, status, matchCount, catalogSize, error, retry } = useCatalogSearch(
+  const { entries, status, matchCount, catalogSize, error, retry } = useCatalogSearch(
     client,
     connected,
     filters,
@@ -216,12 +205,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   );
   const sessionTeammates = useSessionTeammates(
     client,
-    !onboarding &&
-      active &&
-      connected &&
-      !connectionPending &&
-      sessionSetupRequested &&
-      connectSuccess !== null,
+    active && connected && !connectionPending && sessionSetupRequested && connectSuccess !== null,
     currentUser ? `${currentUser.user_id}:${authGeneration}` : undefined
   );
   // `connected` deliberately stays true during disconnect grace, while a token
@@ -446,24 +430,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     setSelected(entry);
   }, []);
 
-  const handoffConsumed = useRef(false);
-  useEffect(() => {
-    if (
-      handoffConsumed.current ||
-      !onboarding?.entryName ||
-      !active ||
-      !connectionReady ||
-      status !== 'ready'
-    )
-      return;
-    const entry = allEntries.find((item) => item.name === onboarding.entryName);
-    if (entry) {
-      handoffConsumed.current = true;
-      openEntry(entry);
-    }
-    // A missing entry may become available after Retry; never guess an endpoint.
-  }, [onboarding, active, connectionReady, status, allEntries, openEntry]);
-
   const restoreDrawerFocus = useCallback((trigger: HTMLElement | null) => {
     if (drawerOpen.current || !trigger?.isConnected || drawerTrigger.current !== trigger) return;
     window.clearTimeout(drawerFocusTimer.current);
@@ -493,8 +459,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       () => restoreDrawerFocus(trigger),
       MARKETPLACE_DRAWER_FOCUS_FALLBACK_MS
     );
-    onboarding?.onClose();
-  }, [restoreDrawerFocus, onboarding]);
+  }, [restoreDrawerFocus]);
 
   const handleDrawerOpenChange = useCallback(
     (open: boolean) => {
@@ -564,12 +529,9 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
               });
               if (!launched && operation.isCurrent()) {
                 authentication = 'failed';
-                showWarning(
-                  onboarding
-                    ? "Sign-in didn't open. Try again here when you're ready."
-                    : "Sign-in didn't open. Try again from My Servers when you're ready.",
-                  { duration: 0 }
-                );
+                showWarning("Sign-in didn't open. Try again from My Servers when you're ready.", {
+                  duration: 0,
+                });
               }
               oauthAttemptId = launched?.attemptId;
               if (oauthAttemptId) authentication = 'pending';
@@ -581,11 +543,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
               oauthPopup.close();
               if (!operation.isCurrent()) return;
               authentication = 'failed';
-              showError(
-                onboarding
-                  ? "Couldn't open sign-in. Go back to onboarding or try again here."
-                  : formatActionError('open sign-in', cause, { idempotent: true })
-              );
+              showError(formatActionError('open sign-in', cause, { idempotent: true }));
             }
           } else if (result.mcp_server.auth?.type === 'oauth') {
             authentication = 'action_required';
@@ -608,16 +566,14 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       } catch (err: unknown) {
         oauthPopup?.close();
         if (!operation.isCurrent()) return;
-        const failure = describeActionError('connect this server', err, { idempotent: false });
-        // Onboarding never shows provider text, which can echo submitted secrets.
-        setConnectError(onboarding ? { ...failure, raw: null } : failure);
+        setConnectError(describeActionError('connect this server', err, { idempotent: false }));
         const requirement = readCredentialRequirement(err);
         if (requirement) setKeyRequirement(requirement);
       } finally {
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, selected, onboarding, sharing, showError, showWarning]
+    [client, operationGuard, selected, sharing, showError, showWarning]
   );
 
   const continueSurpriseOAuth = useCallback(
@@ -673,16 +629,12 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
             ? { ...value, authentication: 'failed' }
             : value
         );
-        showError(
-          onboarding
-            ? "Couldn't open sign-in. Go back to onboarding or try again here."
-            : formatActionError('open sign-in', cause, { idempotent: true })
-        );
+        showError(formatActionError('open sign-in', cause, { idempotent: true }));
       } finally {
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, onboarding, showError]
+    [client, operationGuard, showError]
   );
 
   const handleStartSession = useCallback(
@@ -701,7 +653,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       };
       const current = connectSuccessRef.current;
       if (
-        onboarding ||
         !client ||
         !currentUser ||
         !current ||
@@ -739,88 +690,8 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         }
       }
     },
-    [client, currentUser, navigate, onOpenSession, operationGuard, onboarding]
+    [client, currentUser, navigate, onOpenSession, operationGuard]
   );
-
-  const reportedConnections = useRef(new Set<string>());
-  useEffect(() => {
-    if (
-      !onboarding ||
-      !active ||
-      !connectionReady ||
-      connectSuccess?.authentication !== 'ready' ||
-      reportedConnections.current.has(connectSuccess.serverId)
-    )
-      return;
-    reportedConnections.current.add(connectSuccess.serverId);
-    onboarding.onConnected(connectSuccess.serverId);
-  }, [onboarding, active, connectionReady, connectSuccess]);
-
-  const drawers = (
-    <>
-      <CatalogDetailDrawer
-        mode={onboarding ? 'onboarding' : 'catalog'}
-        onRetryConnection={() => {
-          interactionEpoch.current += 1;
-          setConnectSuccess(null);
-          setConnectError(null);
-          surpriseOAuthResultRef.current = null;
-        }}
-        identityKey={currentUser?.user_id ?? null}
-        entry={selected}
-        open={Boolean(onboarding) || selected !== null}
-        emptyContent={
-          onboarding && (
-            <>
-              {status === 'loading' ? (
-                <Skeleton active aria-label="Loading Catalog" />
-              ) : (
-                <Alert
-                  type="warning"
-                  title={
-                    status === 'error'
-                      ? 'Could not load Catalog'
-                      : 'This tool is not currently in Catalog'
-                  }
-                  action={<Button onClick={retry}>Retry</Button>}
-                />
-              )}
-              <Button onClick={onboarding.onClose}>Return to onboarding</Button>
-            </>
-          )
-        }
-        onClose={closeDrawer}
-        onAfterOpenChange={handleDrawerOpenChange}
-        teammates={sessionTeammates.teammates}
-        teammatesLoading={sessionTeammates.loading}
-        teammatesError={sessionTeammates.error}
-        defaultTeammateId={sessionTeammates.preferredTeammateId}
-        startingSession={startingSession}
-        startSessionError={startSessionError}
-        connecting={connecting}
-        connectError={connectError}
-        credentialRequirement={keyRequirement}
-        connectCapability={connectCapability}
-        policyPending={policyPending}
-        policyPendingHint={policyPendingHint}
-        sharing={sharing}
-        onSharingChange={(value) => {
-          setSharing(value);
-          setConnectError(null);
-        }}
-        readiness={readiness.readiness}
-        readinessLoading={readiness.loading}
-        readinessError={readiness.error}
-        success={connectSuccess}
-        onKeepBrowsing={closeDrawer}
-        onBeginSessionSetup={onboarding ? undefined : () => setSessionSetupRequested(true)}
-        onStartSession={onboarding ? undefined : handleStartSession}
-        onContinueOAuth={continueSurpriseOAuth}
-        onConnect={handleConnect}
-      />
-    </>
-  );
-  if (onboarding) return drawers;
 
   return (
     <Flex vertical gap={token.margin}>
@@ -904,7 +775,39 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         </Flex>
       )}
 
-      {drawers}
+      <CatalogDetailDrawer
+        identityKey={currentUser?.user_id ?? null}
+        entry={selected}
+        open={selected !== null}
+        onClose={closeDrawer}
+        onAfterOpenChange={handleDrawerOpenChange}
+        teammates={sessionTeammates.teammates}
+        teammatesLoading={sessionTeammates.loading}
+        teammatesError={sessionTeammates.error}
+        defaultTeammateId={sessionTeammates.preferredTeammateId}
+        startingSession={startingSession}
+        startSessionError={startSessionError}
+        connecting={connecting}
+        connectError={connectError}
+        credentialRequirement={keyRequirement}
+        connectCapability={connectCapability}
+        policyPending={policyPending}
+        policyPendingHint={policyPendingHint}
+        sharing={sharing}
+        onSharingChange={(value) => {
+          setSharing(value);
+          setConnectError(null);
+        }}
+        readiness={readiness.readiness}
+        readinessLoading={readiness.loading}
+        readinessError={readiness.error}
+        success={connectSuccess}
+        onKeepBrowsing={closeDrawer}
+        onBeginSessionSetup={() => setSessionSetupRequested(true)}
+        onStartSession={handleStartSession}
+        onContinueOAuth={continueSurpriseOAuth}
+        onConnect={handleConnect}
+      />
     </Flex>
   );
 };
@@ -917,7 +820,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
  */
 export const CatalogTab: React.FC<CatalogTabProps> = (props) => (
   <CatalogTabForIdentity
-    key={`${props.context?.mode ?? 'catalog'}:${props.currentUser?.user_id ?? '__no-authenticated-user__'}`}
+    key={props.currentUser?.user_id ?? '__no-authenticated-user__'}
     {...props}
   />
 );
