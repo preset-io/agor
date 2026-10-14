@@ -37,6 +37,7 @@ import { CompactNotice } from '../../CompactNotice';
 import { MCPServerSelect } from '../../MCPServerSelect';
 import { FIELD_WIDTHS } from '../../SettingsModal/panelPrimitives';
 import { Tag } from '../../Tag';
+import { BranchPlacementModal } from '../BranchPlacementModal';
 import type { GeneralFormState } from '../useBranchModalForm';
 
 // Re-exported so external consumers can keep importing the patch-shape type
@@ -82,6 +83,8 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   boardAttachError = null,
 }) => {
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const [placementMounted, setPlacementMounted] = useState(false);
+  const [placementOpen, setPlacementOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const policy = resolveRepoCleanupPolicy(repo.cleanup_policy);
   const branchById = useAgorStore(selectBranchById);
@@ -264,6 +267,41 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
                 options={boardSelectOptions(boards, branchById)}
               />
             </Form.Item>
+
+            <Form.Item
+              extra={
+                state.boardId !== branch.board_id
+                  ? 'Save the board change before moving this branch.'
+                  : undefined
+              }
+            >
+              <Button
+                disabled={
+                  !client ||
+                  !branch.board_id ||
+                  state.boardId !== branch.board_id ||
+                  !!branch.deletion_status ||
+                  !currentUser ||
+                  !hasMinimumRole(currentUser.role, ROLES.MEMBER)
+                }
+                onClick={() => {
+                  setPlacementMounted(true);
+                  setPlacementOpen(true);
+                }}
+              >
+                Move on board…
+              </Button>
+            </Form.Item>
+            {placementMounted && client && (
+              <BranchPlacementModal
+                key={branch.branch_id}
+                client={client}
+                branch={branch}
+                open={placementOpen}
+                onClose={() => setPlacementOpen(false)}
+                afterClose={() => setPlacementMounted(false)}
+              />
+            )}
 
             <Form.Item label="Issue" style={FIELD_WIDTHS.medium}>
               <Input
