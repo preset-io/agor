@@ -97,6 +97,7 @@ export function seed({
 }) {
   agorStore.setState({
     ...EMPTY_MAPS,
+    agenticToolSettingsHydrated: hydrated,
     ...buildSessionMaps(sessions),
     commentById: new Map(comments.map((c) => [c.comment_id, c])),
     branchById: new Map(branches.map((b) => [b.branch_id, b])),

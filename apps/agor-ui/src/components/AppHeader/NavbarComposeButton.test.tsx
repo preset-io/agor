@@ -3,8 +3,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { App as AntApp, Checkbox, Form } from 'antd';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { agorStore } from '../../store/agorStore';
 import { NavbarComposeButton } from './NavbarComposeButton';
 
 const goToSession = vi.hoisted(() => vi.fn());
@@ -17,15 +19,6 @@ vi.mock('../../hooks/useAppNavigation', () => ({
     goToArtifact: vi.fn(),
     goHome: vi.fn(),
   }),
-}));
-
-vi.mock('../../store/agorStore', () => ({
-  useAgorStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      mcpServerById: new Map(),
-      userById: new Map(),
-      agenticToolSettingsByName: new Map(),
-    }),
 }));
 
 vi.mock('../AgenticConfigChipRow', () => ({
@@ -66,27 +59,39 @@ vi.mock('../AgenticConfigChipRow', () => ({
   },
 }));
 
-vi.mock('../AgentSelectionGrid', () => ({
-  AVAILABLE_AGENTS: [
-    { id: 'claude-code', name: 'Claude Code', icon: '🤖' },
-    { id: 'codex', name: 'Codex', icon: '💻' },
-  ],
-  AgentSelectionGrid: ({
-    selectedAgentId,
-    onSelect,
-    variant,
-  }: {
-    selectedAgentId: string | null;
-    onSelect: (id: string) => void;
-    variant?: string;
-  }) => (
-    <div data-testid="agent-grid" data-selected={selectedAgentId ?? ''} data-variant={variant}>
-      <button type="button" data-testid="pick-codex" onClick={() => onSelect('codex')}>
-        codex
-      </button>
-    </div>
-  ),
-}));
+vi.mock('../AgentSelectionGrid', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../AgentSelectionGrid')>();
+  return {
+    AVAILABLE_AGENTS: [
+      { id: 'claude-code', name: 'Claude Code', icon: '🤖' },
+      { id: 'codex', name: 'Codex', icon: '💻' },
+    ],
+    AgentSelectionGrid: ({
+      selectedAgentId,
+      onSelect,
+      variant,
+      fallbackToFirstVisibleAgent,
+    }: {
+      fallbackToFirstVisibleAgent?: boolean;
+      selectedAgentId: string | null;
+      onSelect: (id: string) => void;
+      variant?: string;
+    }) => (
+      <div data-testid="agent-grid" data-selected={selectedAgentId ?? ''} data-variant={variant}>
+        <original.AgentSelectionGrid
+          variant="select"
+          agents={original.AVAILABLE_AGENTS}
+          selectedAgentId={selectedAgentId}
+          onSelect={onSelect}
+          fallbackToFirstVisibleAgent={fallbackToFirstVisibleAgent}
+        />
+        <button type="button" data-testid="pick-codex" onClick={() => onSelect('codex')}>
+          codex
+        </button>
+      </div>
+    ),
+  };
+});
 
 // Passthrough drop zone that exposes a file-drop trigger.
 vi.mock('../SessionPanel/SessionComposerDropZone', () => ({
@@ -195,8 +200,19 @@ function makeClient(primary: Branch | null): AgorClient {
   } as unknown as AgorClient;
 }
 
+const ONLINE = {
+  connected: true,
+  connecting: false,
+  authGeneration: 1,
+  outOfSync: false,
+  capturedSha: null,
+  currentSha: null,
+};
+
 function renderCompose(opts: {
   primary: Branch | null;
+  client?: AgorClient;
+  connection?: Partial<typeof ONLINE>;
   currentBoardId?: string;
   pathname?: string;
   currentUser?: User | null;
@@ -211,20 +227,22 @@ function renderCompose(opts: {
   const onCreateSession = vi.fn(
     opts.onCreateSession ?? (async () => ({ sessionId: 'session-new' }))
   );
-  const client = makeClient(opts.primary);
+  const client = opts.client ?? makeClient(opts.primary);
   const renderElement = (renderOpts: typeof opts) => (
     <MemoryRouter initialEntries={[renderOpts.pathname ?? '/b/x/']}>
-      <AntApp>
-        <NavbarComposeButton
-          client={client}
-          currentUser={renderOpts.currentUser ?? null}
-          authenticationGeneration={renderOpts.authenticationGeneration ?? 0}
-          isAuthenticationGenerationCurrent={renderOpts.isAuthenticationGenerationCurrent}
-          currentBoardId={renderOpts.currentBoardId ?? 'board-current'}
-          onCreateSession={onCreateSession}
-          disabled={renderOpts.disabled}
-        />
-      </AntApp>
+      <ConnectionProvider value={{ ...ONLINE, ...renderOpts.connection }}>
+        <AntApp>
+          <NavbarComposeButton
+            client={client}
+            currentUser={renderOpts.currentUser ?? null}
+            authenticationGeneration={renderOpts.authenticationGeneration ?? 0}
+            isAuthenticationGenerationCurrent={renderOpts.isAuthenticationGenerationCurrent}
+            currentBoardId={renderOpts.currentBoardId ?? 'board-current'}
+            onCreateSession={onCreateSession}
+            disabled={renderOpts.disabled}
+          />
+        </AntApp>
+      </ConnectionProvider>
     </MemoryRouter>
   );
   const result = render(renderElement(opts));
@@ -244,7 +262,67 @@ describe('NavbarComposeButton', () => {
   beforeEach(() => {
     goToSession.mockClear();
     localStorage.clear();
+    agorStore.getState().reset();
+    agorStore.getState().setAgenticToolSettings([]);
   });
+
+  it('holds navbar sends until settings hydrate and preserves the draft', async () => {
+    agorStore.getState().resetMaps();
+    const currentUser = { user_id: 'user-1', primary_agentic_tool: 'claude-code' } as User;
+    const { onCreateSession } = renderCompose({ primary: primaryBranch, currentUser });
+    openPopover();
+    const input = await screen.findByTestId('compose-prompt');
+    fireEvent.change(input, { target: { value: 'Keep navbar draft' } });
+    const send = screen.getByRole('button', { name: 'Send in background' });
+    expect(send).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send & open' })).toBeDisabled();
+    fireEvent.click(send);
+    expect(onCreateSession).not.toHaveBeenCalled();
+    expect(input).toHaveValue('Keep navbar draft');
+    act(() =>
+      agorStore.getState().setAgenticToolSettings([
+        {
+          tool: 'claude-code',
+          enabled: false,
+          deployment_available: true,
+          resolution_policy: 'user_preferred',
+          inline_configuration_allowed: true,
+          connection: {},
+        },
+      ])
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('config-chip-row')).toHaveAttribute('data-tool', 'codex')
+    );
+    expect(send).toBeEnabled();
+    // Workspace/tenant change must revoke the prior settings snapshot while leaving the draft intact.
+    act(() => agorStore.getState().resetMaps());
+    expect(send).toBeDisabled();
+    fireEvent.click(send);
+    expect(onCreateSession).not.toHaveBeenCalled();
+    act(() => agorStore.getState().setAgenticToolSettings([]));
+    fireEvent.click(send);
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: 'codex', initialPrompt: 'Keep navbar draft' }),
+      'board-primary'
+    );
+  });
+
+  it('does not resume a held navbar send with unknown workspace settings', async () => {
+    const { onCreateSession } = renderCompose({ primary: null });
+    openPopover();
+    const input = await screen.findByTestId('compose-prompt');
+    fireEvent.change(input, { target: { value: 'Held draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send in background' }));
+    await screen.findByText('Pick a primary assistant above to send.');
+    act(() => agorStore.getState().resetMaps());
+    fireEvent.click(screen.getByTestId('pick-teammate'));
+    await act(async () => {});
+    expect(onCreateSession).not.toHaveBeenCalled();
+    expect(input).toHaveValue('Held draft');
+  });
+  afterEach(() => vi.restoreAllMocks());
 
   it('shows the resolved primary teammate emoji on the collapsed trigger before opening', async () => {
     const withEmoji = makeBranch({
@@ -378,16 +456,24 @@ describe('NavbarComposeButton', () => {
   });
 
   it('gives both send buttons an explanatory tooltip', async () => {
+    // A mouse pointer: the tooltips only show where hover exists.
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...matchMedia(query),
+      matches: query === '(hover: hover)',
+    }));
     renderCompose({ primary: primaryBranch });
     openPopover();
     // Enable the buttons first; AntD tooltips don't fire on disabled controls.
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'hi' } });
 
     fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send & open' }));
-    expect(await screen.findByText(/takes you there now, on Ada's board/)).toBeInTheDocument();
+    expect(await screen.findByText(/takes you there now on Ada's board\./)).toBeInTheDocument();
 
     fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send in background' }));
-    expect(await screen.findByText(/in the background, on Ada's board/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/in the background on Ada's board\. Check on it anytime\./)
+    ).toBeInTheDocument();
   });
 
   it('lets a dropped file be sent even with an empty prompt', async () => {
@@ -598,5 +684,53 @@ describe('NavbarComposeButton', () => {
 
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(onCreateSession.mock.calls[0][0]).toMatchObject({ mcpServerIds: ['edited-mcp'] });
+  });
+
+  it.each([
+    { connected: true, text: "Couldn't load your primary assistant.", action: true },
+    {
+      connected: false,
+      text: "Couldn't load your primary assistant. The connection to Agor dropped. Try again once it's back.",
+      action: false,
+    },
+  ])(
+    'reports a failed primary lookup (connected: $connected) instead of the picker',
+    async ({ connected, text, action }) => {
+      const getPrimaryTeammate = vi.fn().mockRejectedValue(new Error('Request timed out'));
+      const client = { service: () => ({ getPrimaryTeammate }) } as unknown as AgorClient;
+      renderCompose({ primary: null, client, connection: { connected } });
+      openPopover();
+
+      expect(await screen.findByText(text)).toBeInTheDocument();
+      expect(screen.queryByTestId('primary-picker')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try again' }) !== null).toBe(action);
+    }
+  );
+
+  it('loads the primary again on Try again', async () => {
+    const getPrimaryTeammate = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Request timed out'))
+      .mockResolvedValue(primaryBranch);
+    const client = { service: () => ({ getPrimaryTeammate }) } as unknown as AgorClient;
+    renderCompose({ primary: null, client });
+    // Opening re-resolves too; fail every read until Try again.
+    getPrimaryTeammate.mockRejectedValueOnce(new Error('Request timed out'));
+    openPopover();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText(/Ada, your primary assistant/)).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load your primary assistant.")).not.toBeInTheDocument();
+  });
+
+  it('explains why the trigger is disabled while offline', async () => {
+    renderCompose({ primary: primaryBranch, disabled: true, connection: { connected: false } });
+    fireEvent.mouseEnter(
+      screen.getByRole('button', { name: 'Compose — ask your primary assistant' }).parentElement!
+    );
+    expect(
+      await screen.findByText("Lost connection to Agor. Try again once it's back.")
+    ).toBeInTheDocument();
   });
 });

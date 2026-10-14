@@ -1,8 +1,10 @@
+import { eq } from 'drizzle-orm';
 import { afterEach, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
-import type { UserID } from '../../types';
+import type { TenantID, UploadMetadata, UploadOwner, UploadRef, UserID } from '../../types';
 import { lockBranchForAdmission } from '../branch-admission';
-import { runDatabaseTransaction } from '../database-wrapper';
+import { runDatabaseTransaction, select, update } from '../database-wrapper';
+import { branches } from '../schema';
 import { ownedDbTest } from '../test-helpers';
 import {
   BranchMaintenanceDiscoveryRepository,
@@ -14,6 +16,8 @@ import { seedEnvironmentCommandBranch } from './environment-commands.test-suppor
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
+import { UploadRepository } from './uploads';
+import { UserPrimaryTeammateRepository } from './user-primary-teammate';
 
 const test = ownedDbTest;
 afterEach(() => vi.useRealTimers());
@@ -84,10 +88,98 @@ test('known unfinished tasks prevent claiming maintenance without changing branc
   await expect(
     new BranchMaintenanceRepository(db).claim(branch.branch_id, 'delete')
   ).rejects.toThrow('unfinished tasks');
+  await expect(
+    new BranchMaintenanceRepository(db).claim(branch.branch_id, 'metadata_archive')
+  ).rejects.toThrow('unfinished tasks');
   expect(
     (await new BranchRepository(db).findById(branch.branch_id))?.deletion_status
   ).toBeUndefined();
 });
+
+for (const status of ['failed', 'cleaned', 'deleted', 'ready', 'creating'] as const) {
+  for (const path of ['/tmp/environment-test', '/tmp/environment-test/child', '/tmp']) {
+    test(`overlap guard protects ${status} sibling at ${path} for every filesystem claim`, async ({
+      db,
+    }) => {
+      const { branch, user } = await seedEnvironmentCommandBranch(db);
+      const branches = new BranchRepository(db);
+      await branches.create({
+        repo_id: branch.repo_id,
+        name: 'sibling',
+        ref: 'sibling',
+        branch_unique_id: 9600001,
+        path,
+        created_by: user.user_id,
+        filesystem_status: status,
+        archived: true,
+      });
+      const maintenance = new BranchMaintenanceRepository(db);
+      for (const kind of ['delete', 'cleanup', 'workspace_write'] as const) {
+        await expect(maintenance.claim(branch.branch_id, kind)).rejects.toThrow(
+          /overlaps another branch; use Archive → Leave untouched.*installation operator/
+        );
+      }
+      expect((await branches.findById(branch.branch_id))?.deletion_status).toBeUndefined();
+      const { claim } = await maintenance.claim(branch.branch_id, 'metadata_archive');
+      await expect(maintenance.beginExecution(claim)).rejects.toThrow('cannot launch');
+      await expect(maintenance.beginExecution({ ...claim, kind: 'cleanup' })).rejects.toThrow(
+        'ownership changed'
+      );
+      await maintenance.release(claim);
+    });
+  }
+}
+
+for (const literal of ['percent%', 'under_score', 'escape!', 'back\\slash']) {
+  for (const relation of [
+    'equal',
+    'child',
+    'parent',
+    'unrelated-child',
+    'unrelated-parent',
+  ] as const) {
+    test(`overlap treats ${literal} literally for ${relation} paths`, async ({ db }) => {
+      const { branch, user } = await seedEnvironmentCommandBranch(db);
+      const repo = new BranchRepository(db);
+      const path = `/tmp/${literal}`;
+      const lookalike = path
+        .replace('%', 'wildcard')
+        .replace('_', 'X')
+        .replace('!', '')
+        .replace('\\', '');
+      await repo.update(branch.branch_id, {
+        path:
+          relation === 'parent'
+            ? `${path}/child`
+            : relation === 'unrelated-parent'
+              ? `${lookalike}/child`
+              : path,
+      });
+      await repo.create({
+        repo_id: branch.repo_id,
+        name: 'literal-sibling',
+        ref: 'literal-sibling',
+        branch_unique_id: 9600002,
+        path:
+          relation === 'child'
+            ? `${path}/child`
+            : relation === 'unrelated-child'
+              ? `${lookalike}/child`
+              : path,
+        created_by: user.user_id,
+      });
+      const maintenance = new BranchMaintenanceRepository(db);
+      for (const kind of ['cleanup', 'workspace_write', 'delete'] as const) {
+        if (relation.startsWith('unrelated')) {
+          const { claim } = await maintenance.claim(branch.branch_id, kind);
+          if (kind !== 'delete') await maintenance.release(claim);
+        } else {
+          await expect(maintenance.claim(branch.branch_id, kind)).rejects.toThrow('overlaps');
+        }
+      }
+    });
+  }
+}
 
 test('environment admission and maintenance exclude each other under the branch lock', async ({
   db,
@@ -219,6 +311,9 @@ test('materialization and taskless writes exclude permanent deletion through the
   const maintenance = new BranchMaintenanceRepository(db);
   await branches.update(branch.branch_id, { filesystem_status: 'creating' });
   await expect(maintenance.claim(branch.branch_id, 'delete')).rejects.toThrow('materialization');
+  await expect(maintenance.claim(branch.branch_id, 'metadata_archive')).rejects.toThrow(
+    'materialization'
+  );
   await branches.update(branch.branch_id, { filesystem_status: 'ready' });
   const { claim } = await maintenance.claim(branch.branch_id, 'workspace_write');
   await expect(maintenance.claim(branch.branch_id, 'delete')).rejects.toThrow();
@@ -242,8 +337,212 @@ test('maintenance discovery returns only deleting routing identities and honors 
   const { claim } = await maintenance.claim(branch.branch_id, 'delete');
   const refs = await discovery.findDeletingRefs({ tenantId: 'default' });
   expect(refs).toEqual([{ tenant_id: 'default', branch_id: branch.branch_id }]);
-  expect(await discovery.findDeletingRefs({ tenantId: 'default', after: refs[0] })).toEqual([]);
+  expect(
+    await discovery.findDeletingRefs({ tenantId: 'default' as TenantID, after: refs[0] })
+  ).toEqual([]);
   await maintenance.fail(claim, 'Fixture settled before dispatch');
   expect(await discovery.findDeletingRefs({ tenantId: 'default' })).toEqual([]);
   await expect(discovery.findDeletingRefs({})).rejects.toThrow('PostgreSQL');
 });
+
+for (const retire of [false, true]) {
+  test(`startup releases an interrupted ${retire ? 'teammate retirement' : 'metadata archive'} claim`, async ({
+    db,
+  }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const repo = new BranchRepository(db);
+    const maintenance = new BranchMaintenanceRepository(db);
+    if (retire)
+      await repo.update(branch.branch_id, {
+        custom_context: { teammate: { kind: 'teammate', displayName: 'Fixture' } },
+      });
+    const { claim } = retire
+      ? await maintenance.claimForTeammateRetirement(branch.branch_id, user.user_id, async () => {})
+      : await maintenance.claim(branch.branch_id, 'metadata_archive', user.user_id);
+    expect((await repo.findById(branch.branch_id))?.archived).toBe(retire);
+    expect(await maintenance.reconcileInterruptedMetadataArchives()).toEqual({
+      scanned: 1,
+      released: 1,
+    });
+    expect(await maintenance.reconcileInterruptedMetadataArchives()).toEqual({
+      scanned: 0,
+      released: 0,
+    });
+    expect(await repo.findById(branch.branch_id)).toMatchObject({
+      archived: retire,
+      path: branch.path,
+      filesystem_status: 'ready',
+    });
+    const row = await select(db)
+      .from(branches)
+      .where(eq(branches.branch_id, branch.branch_id))
+      .one();
+    expect(row?.data.maintenance).toBeUndefined();
+    await expect(maintenance.beginExecution(claim)).rejects.toThrow();
+    expect((await maintenance.claim(branch.branch_id, 'cleanup')).acquired).toBe(true);
+  });
+}
+
+for (const kind of ['delete', 'cleanup', 'workspace_write', 'metadata_archive'] as const) {
+  test(`startup retains ${kind} ownership when not safely reclaimable`, async ({ db }) => {
+    const { branch } = await seedEnvironmentCommandBranch(db);
+    const maintenance = new BranchMaintenanceRepository(db);
+    const { claim } = await maintenance.claim(branch.branch_id, kind);
+    if (kind === 'metadata_archive') {
+      // Defensive corruption guard: even this executor-ineligible kind must
+      // never release an unexpected invocation identity.
+      const row = (await select(db)
+        .from(branches)
+        .where(eq(branches.branch_id, branch.branch_id))
+        .one())!;
+      await update(db, branches)
+        .set({
+          data: {
+            ...row.data,
+            maintenance: { ...claim, execution_id: generateId() },
+          },
+        })
+        .where(eq(branches.branch_id, branch.branch_id))
+        .run();
+    }
+    expect((await maintenance.reconcileInterruptedMetadataArchives()).released).toBe(0);
+    const row = await select(db)
+      .from(branches)
+      .where(eq(branches.branch_id, branch.branch_id))
+      .one();
+    expect(row?.data.maintenance?.operation_id).toBe(claim.operation_id);
+  });
+}
+
+test('startup never releases a metadata claim behind a deletion fence', async ({ db }) => {
+  const { branch } = await seedEnvironmentCommandBranch(db);
+  const maintenance = new BranchMaintenanceRepository(db);
+  const { claim } = await maintenance.claim(branch.branch_id, 'metadata_archive');
+  await update(db, branches)
+    .set({ deletion_status: 'deletion_failed' })
+    .where(eq(branches.branch_id, branch.branch_id))
+    .run();
+  expect(await maintenance.reconcileInterruptedMetadataArchives()).toEqual({
+    scanned: 1,
+    released: 0,
+  });
+  const row = await select(db).from(branches).where(eq(branches.branch_id, branch.branch_id)).one();
+  expect(row?.data.maintenance?.operation_id).toBe(claim.operation_id);
+});
+
+for (const [guard, message] of [
+  ['primary', 'Primary teammate'],
+  ['queued', 'unfinished tasks'],
+  ['running', 'unfinished tasks'],
+  ['awaiting_permission', 'unfinished tasks'],
+  ['upload', 'upload staging'],
+  ['starting', 'environment is active'],
+  ['running-environment', 'environment is active'],
+  ['stopping', 'environment is active'],
+  ['command', 'environment is active'],
+  ['creating', 'materialization'],
+  ['deleting', 'deletion cannot be cancelled'],
+  ['deletion_failed', 'deletion cannot be cancelled'],
+  ['maintenance', 'maintenance is already in progress'],
+] as const) {
+  test(`metadata-only overlap escape retains the ${guard} guard without mutation`, async ({
+    db,
+  }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const repo = new BranchRepository(db);
+    const maintenance = new BranchMaintenanceRepository(db);
+    switch (guard) {
+      case 'primary':
+        await new UserPrimaryTeammateRepository(db).setPrimaryTeammate(
+          user.user_id,
+          branch.branch_id,
+          {
+            source: 'explicit',
+          }
+        );
+        break;
+      case 'queued':
+      case 'running':
+      case 'awaiting_permission':
+      case 'upload': {
+        const session = await new SessionRepository(db).create({
+          branch_id: branch.branch_id,
+          agentic_tool: 'codex',
+          created_by: user.user_id,
+        });
+        if (guard !== 'upload') {
+          await new TaskRepository(db).create({
+            session_id: session.session_id,
+            created_by: user.user_id,
+            status: guard,
+          });
+        } else {
+          const owner: UploadOwner = {
+            tenantId: 'default' as TenantID,
+            branchId: branch.branch_id,
+            sessionId: session.session_id,
+            createdBy: user.user_id,
+          };
+          const metadata: UploadMetadata = {
+            ref: `upl_${generateId()}` as UploadRef,
+            name: 'pending.txt',
+            mimeType: 'text/plain',
+            size: 4,
+            createdAt: new Date().toISOString(),
+            expiresAt: null,
+            provenance: 'browser',
+          };
+          await new UploadRepository(db).reserve(owner, metadata);
+        }
+        break;
+      }
+      case 'starting':
+      case 'running-environment':
+      case 'stopping':
+        await repo.update(branch.branch_id, {
+          environment_instance: { status: guard === 'running-environment' ? 'running' : guard },
+        });
+        break;
+      case 'command':
+        await new EnvironmentCommandRepository(db).admit({
+          branch,
+          userId: user.user_id,
+          action: 'stop',
+          attemptId: generateId(),
+        });
+        break;
+      case 'creating':
+        await repo.update(branch.branch_id, { filesystem_status: 'creating' });
+        break;
+      case 'deleting':
+      case 'deletion_failed':
+        await update(db, branches)
+          .set({ deletion_status: guard })
+          .where(eq(branches.branch_id, branch.branch_id))
+          .run();
+        break;
+      case 'maintenance':
+        await maintenance.claim(branch.branch_id, 'workspace_write');
+        break;
+    }
+    await repo.create({
+      repo_id: branch.repo_id,
+      name: 'guard-sibling',
+      ref: 'guard-sibling',
+      branch_unique_id: 9600008,
+      path: branch.path,
+      created_by: user.user_id,
+      filesystem_status: 'failed',
+    });
+    const before = await select(db)
+      .from(branches)
+      .where(eq(branches.branch_id, branch.branch_id))
+      .one();
+    await expect(maintenance.claim(branch.branch_id, 'metadata_archive')).rejects.toThrow(message);
+    const after = await select(db)
+      .from(branches)
+      .where(eq(branches.branch_id, branch.branch_id))
+      .one();
+    expect(after).toEqual(before);
+  });
+}

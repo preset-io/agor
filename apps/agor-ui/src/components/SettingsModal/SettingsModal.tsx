@@ -102,7 +102,8 @@ export interface SettingsModalProps {
   onUpdateUser?: (
     userId: string,
     updates: UpdateUserInput,
-    shouldApply?: () => boolean
+    shouldApply?: () => boolean,
+    options?: { errorShownInline?: boolean }
   ) => void | Promise<void>;
   onDeleteUser?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
   onCreateMCPServer?: (
@@ -414,7 +415,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             userById={userById}
             onArchiveOrDelete={onArchiveOrDeleteBranch}
             onRowClick={handleBranchRowClick}
-            onCreateTeammate={onCreateTeammate ?? onCreateTeammate}
+            onCreateTeammate={onCreateTeammate}
             onClose={onClose}
           />
         );

@@ -63,8 +63,8 @@
   /* More transparent than a typical lightbox so the page reads through and
    * it's obvious you haven't navigated away. */
   background: rgba(4, 10, 9, 0.62);
-  backdrop-filter: blur(5px);
   -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
   animation: lightboxFadeIn 200ms ease both;
 }
 

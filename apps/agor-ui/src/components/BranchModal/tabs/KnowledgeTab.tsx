@@ -6,7 +6,7 @@ import type {
   TeammateKnowledgeGrant,
   TeammateKnowledgeGrantAccess,
 } from '@agor-live/client';
-import { getTeammateConfig } from '@agor-live/client';
+import { getTeammateConfig, knowledgePath } from '@agor-live/client';
 import {
   Alert,
   Button,
@@ -21,7 +21,14 @@ import {
   Typography,
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  formatActionError,
+} from '@/utils/connectionErrors';
 import { useThemedMessage } from '@/utils/message';
+import { uiRouteHref } from '@/utils/uiRoutes';
+import { ActionErrorNotice } from '../../CompactNotice';
 
 interface KnowledgeTabProps {
   branch: Branch;
@@ -88,6 +95,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
   const [repairing, setRepairing] = useState(false);
   const [savingPolicy, setSavingPolicy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [repairError, setRepairError] = useState<ActionErrorCopy | null>(null);
 
   useEffect(() => {
     setKb(initialKb ?? emptyKbConfig());
@@ -141,7 +149,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
   const handleRepair = async () => {
     if (!client) return;
     setRepairing(true);
-    setError(null);
+    setRepairError(null);
     try {
       const result = await client
         .service('branches')
@@ -149,11 +157,18 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
       setNamespace(result.namespace);
       const nextKb = getTeammateConfig(result.branch)?.kb ?? kb;
       setKb(nextKb);
-      showSuccess('Teammate Knowledge namespace is ready');
+      setError(null);
+      showSuccess("This teammate's knowledge is ready.");
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-      showError(message);
+      setRepairError(
+        describeActionError(
+          kb.primary_namespace_id
+            ? "repair this teammate's knowledge"
+            : "set up this teammate's knowledge",
+          err,
+          { idempotent: true }
+        )
+      );
     } finally {
       setRepairing(false);
     }
@@ -168,9 +183,9 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
         .patch(branch.branch_id, buildTeammateKnowledgePatch(branch, nextKb))) as Branch;
       const savedKb = getTeammateConfig(updated)?.kb ?? nextKb;
       setKb(savedKb);
-      showSuccess('Teammate Knowledge policy saved');
+      showSuccess('Knowledge settings saved.');
     } catch (err) {
-      showError(err instanceof Error ? err.message : String(err));
+      showError(formatActionError('save the knowledge settings', err, { idempotent: true }));
     } finally {
       setSavingPolicy(false);
     }
@@ -248,7 +263,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
           extra={
             <Space>
               {namespace?.slug && (
-                <Button href={`/kb/${encodeURIComponent(namespace.slug)}/`} target="_blank">
+                <Button href={uiRouteHref(knowledgePath(namespace.slug))} target="_blank">
                   Open in Knowledge
                 </Button>
               )}
@@ -299,6 +314,17 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
                   Save home
                 </Button>
               </Space.Compact>
+            )}
+
+            {repairError && (
+              <ActionErrorNotice
+                error={repairError}
+                action={{
+                  label: 'Try again',
+                  onClick: () => void handleRepair(),
+                  loading: repairing,
+                }}
+              />
             )}
 
             {loading ? (

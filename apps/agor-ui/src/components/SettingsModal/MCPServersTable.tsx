@@ -37,11 +37,18 @@ import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
 import { useAgorStore } from '@/store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '@/store/selectors';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  errorMessage,
+  isInFlightConnectionLossError,
+  LOST_CONNECTION_TOOLTIP,
+} from '@/utils/connectionErrors';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { mcpServerNeedsAuth } from '@/utils/mcpAuth';
-import { useThemedMessage } from '@/utils/message';
 import { userSelectLabel } from '@/utils/selectSearch';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
+import { ActionErrorNotice } from '../CompactNotice';
 import { HighlightMatch } from '../HighlightMatch';
 import { MCPServerEditModal, MCPServerFormFields } from '../MCPServer';
 import {
@@ -84,6 +91,32 @@ interface MCPServersTableProps {
 /** How an unowned server reads: it is the workspace's, not nobody's. */
 const SHARED_OWNER_LABEL = 'Shared';
 const SHARED_OWNER_HINT = 'No owner — everyone in this workspace can use this server.';
+const SHARED_NO_LONGER_ALLOWED =
+  'You can no longer add shared servers, so choose Private or ask an administrator.';
+
+/** In-form copy for a failed save: the field or local reason when known, else the formatter's. */
+function describeSaveError(action: string, error: unknown, idempotent: boolean) {
+  const reason =
+    firstFormErrorMessage(error) ??
+    (errorMessage(error) === SHARED_NO_LONGER_ALLOWED ? SHARED_NO_LONGER_ALLOWED : null);
+  return reason
+    ? { message: `Couldn't ${action}. ${reason}`, raw: null }
+    : describeActionError(action, error, { idempotent });
+}
+
+/** The server's config version when a conflict is only this editor's own lost-reply patch landing. */
+function versionAfterOwnLostPatch(error: unknown, sentVersion: number): number | null {
+  const { name, code, data } = (error ?? {}) as {
+    name?: unknown;
+    code?: unknown;
+    data?: { expected_config_version?: unknown; current_config_version?: unknown };
+  };
+  if (name !== 'Conflict' && code !== 409) return null;
+  return data?.expected_config_version === sentVersion &&
+    data?.current_config_version === sentVersion + 1
+    ? sentVersion + 1
+    : null;
+}
 
 const getServerHealth = (
   server: MCPServer,
@@ -132,7 +165,6 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   onCreate,
   onDelete,
 }) => {
-  const { showError } = useThemedMessage();
   // Same set the session panel and the picker read, so an install is
   // "unfinished" in exactly one sense across all three.
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
@@ -168,7 +200,16 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     ]
   );
   const canAdd = !policyPending && canAddMcpServer(capability);
-  const addRestriction = policyPending ? policyPendingHint : explainAddRestriction(capability);
+  const addRestriction = !connectionReady
+    ? LOST_CONNECTION_TOOLTIP
+    : policyPending
+      ? policyPendingHint
+      : explainAddRestriction(capability);
+  const manageRestriction = !connectionReady
+    ? LOST_CONNECTION_TOOLTIP
+    : policyPending
+      ? policyPendingHint
+      : explainManageRestriction(capability);
   const operationGuard = useAuthorityOperationGuard(
     durableAuthorityKey
       ? [durableAuthorityKey, client, memberPolicy.policy, memberPolicy.canConfigure]
@@ -193,6 +234,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     [isAdmin, memberPolicy.policy]
   );
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createError, setCreateError] = useState<ActionErrorCopy | null>(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [viewModalOpen, setViewModalOpen] = useState(false);
   const [editingServer, setEditingServer] = useState<MCPServer | null>(null);
@@ -207,6 +249,10 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
   const [createdServerOwnership, setCreatedServerOwnership] = useState<'private' | 'shared'>();
   const createdConfigVersion = useRef(1);
+  // The config version a patch was sent with when its reply was lost.
+  const lostPatchVersion = useRef<number | null>(null);
+  // The form revision whose create lost its reply: Create stays off until the form changes.
+  const [unconfirmedCreateRevision, setUnconfirmedCreateRevision] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
 
   const [formRevision, bumpFormRevision] = useFormRevision();
@@ -231,7 +277,8 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         authType,
       })
     : [];
-  const createBlocked = !canAdd || testing || missingRequiredFields.length > 0;
+  const createUnconfirmed = !createdServerId && unconfirmedCreateRevision === formRevision;
+  const createBlocked = !canAdd || testing || missingRequiredFields.length > 0 || createUnconfirmed;
 
   // Sync modal records when mcpServerById updates (real-time WebSocket
   // updates). An absent row is authoritative too: retaining the previous
@@ -262,9 +309,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const buildCreateData = (values: Record<string, unknown>): CreateMCPServerInput => {
     if (!currentUser?.user_id) throw new Error('Authentication required');
     if (values.ownership === 'shared' && !canAddSharedMcpServer(capability)) {
-      throw new Error(
-        'You can no longer create shared MCP servers. Choose Private or ask an admin.'
-      );
+      throw new Error(SHARED_NO_LONGER_ALLOWED);
     }
     const data: CreateMCPServerInput = {
       owner_user_id: values.ownership === 'shared' ? null : currentUser.user_id,
@@ -299,18 +344,14 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const prepareOAuthStartForCreate = async (
     operation = createOperationGuard.begin()
   ): Promise<string | null> => {
-    if (!client || !operation.isCurrent()) return null;
-    if (!addIsCurrentlyAllowed()) {
-      showError(capabilityRef.current.addRestriction);
-      return null;
-    }
+    // A lost add permission shows as the form's policy notice and disabled actions.
+    if (!client || !operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
+    const creating = !createdServerId;
+    if (creating && createUnconfirmed) return null;
+    setCreateError(null);
     try {
       await createForm.validateFields();
-      if (!operation.isCurrent()) return null;
-      if (!addIsCurrentlyAllowed()) {
-        showError(capabilityRef.current.addRestriction);
-        return null;
-      }
+      if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
       const data = buildCreateData(createForm.getFieldsValue(true));
 
       if (!createdServerId) {
@@ -326,26 +367,41 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
 
       const { name: _name, owner_user_id: _owner, ...updates } = data;
       if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
-      const updated = await client.service('mcp-servers').patch(createdServerId, {
-        ...updates,
-        auth: buildAuthFromValues(createForm.getFieldsValue(true), { forPatch: true }),
-        expected_config_version: createdConfigVersion.current,
-        env: parseEnvJSON(createForm.getFieldValue('env')) ?? {},
-        ...(data.transport === 'stdio'
-          ? {}
-          : { headers: parseHeadersJSON(createForm.getFieldValue('headers')) ?? {} }),
-      } as UpdateMCPServerInput);
+      const patchCreated = (expectedVersion: number) =>
+        client.service('mcp-servers').patch(createdServerId, {
+          ...updates,
+          auth: buildAuthFromValues(createForm.getFieldsValue(true), { forPatch: true }),
+          expected_config_version: expectedVersion,
+          env: parseEnvJSON(createForm.getFieldValue('env')) ?? {},
+          ...(data.transport === 'stdio'
+            ? {}
+            : { headers: parseHeadersJSON(createForm.getFieldValue('headers')) ?? {} }),
+        } as UpdateMCPServerInput);
+      const sentVersion = createdConfigVersion.current;
+      let updated: MCPServer;
+      try {
+        updated = await patchCreated(sentVersion);
+        lostPatchVersion.current = null;
+      } catch (error) {
+        const ownReplay = lostPatchVersion.current === sentVersion;
+        lostPatchVersion.current = isInFlightConnectionLossError(error) ? sentVersion : null;
+        const currentVersion = ownReplay ? versionAfterOwnLostPatch(error, sentVersion) : null;
+        if (currentVersion === null) throw error;
+        // The lost patch landed; save this form once more on top of it.
+        if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
+        createdConfigVersion.current = currentVersion;
+        updated = await patchCreated(currentVersion);
+      }
       if (!operation.isCurrent()) return null;
       createdConfigVersion.current = updated.config_version ?? createdConfigVersion.current + 1;
       return createdServerId;
     } catch (error) {
       if (!operation.isCurrent()) return null;
-      // Say which field. Swallowing a validation rejection here left the OAuth
-      // button doing nothing at all, with nothing on screen to explain it.
-      showError(
-        firstFormErrorMessage(error) ??
-          (error instanceof Error ? error.message : 'Failed to save MCP server')
-      );
+      // A create retried after a lost reply could add the server twice; the patch is version-fenced.
+      if (creating && isInFlightConnectionLossError(error)) {
+        setUnconfirmedCreateRevision(formRevision);
+      }
+      setCreateError(describeSaveError('save the MCP server', error, !creating));
       return null;
     }
   };
@@ -353,10 +409,13 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const resetCreateModal = () => {
     createForm.resetFields();
     setCreateModalOpen(false);
+    setCreateError(null);
     setChosenTransport(null);
     setAuthType('none');
     setCreatedServerId(null);
     setCreatedServerOwnership(undefined);
+    setUnconfirmedCreateRevision(null);
+    lostPatchVersion.current = null;
     bumpFormRevision();
   };
 
@@ -366,27 +425,29 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       return;
     }
 
-    if (!addIsCurrentlyAllowed()) {
-      showError(capabilityRef.current.addRestriction);
-      return;
-    }
+    if (!addIsCurrentlyAllowed() || createUnconfirmed) return;
 
     const operation = createOperationGuard.begin();
+    setCreateError(null);
     try {
       await createForm.validateFields();
-      if (!operation.isCurrent()) return;
-      if (!addIsCurrentlyAllowed()) {
-        showError(capabilityRef.current.addRestriction);
-        return;
-      }
+      if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return;
       const data = buildCreateData(createForm.getFieldsValue(true));
       if (!operation.isCurrent()) return;
-      await onCreate?.(data, operation.isCurrent);
+      try {
+        await onCreate?.(data, operation.isCurrent);
+      } catch (error) {
+        if (operation.isCurrent()) {
+          if (isInFlightConnectionLossError(error)) setUnconfirmedCreateRevision(formRevision);
+          setCreateError(describeActionError('add the MCP server', error, { idempotent: false }));
+        }
+        return;
+      }
       if (!operation.isCurrent()) return;
       resetCreateModal();
     } catch (error) {
       if (!operation.isCurrent()) return;
-      showError(firstFormErrorMessage(error) || 'Please fill in required fields');
+      setCreateError(describeSaveError('add the MCP server', error, false));
     }
   };
 
@@ -397,13 +458,13 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         const id = await prepareOAuthStartForCreate(operation);
         return id ? { mcp_server_id: id } : null;
       }
+      setCreateError(null);
       try {
         await createForm.validateFields(['url', 'headers']);
       } catch (error) {
+        // Headers sit in a collapsed panel, so name the field above the form too.
         if (operation.isCurrent())
-          showError(
-            firstFormErrorMessage(error) ?? 'Please fix connection settings before testing'
-          );
+          setCreateError(describeSaveError('test the connection', error, true));
         return null;
       }
       if (!values.url || values.transport === 'stdio') return null;
@@ -542,9 +603,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         render: (_: unknown, server: MCPServer) => {
           const editable = canEditMcpServer(server, capability);
           const deletable = canDeleteMcpServer(server, capability);
-          const restriction = policyPending
-            ? policyPendingHint
-            : explainManageRestriction(capability);
+          const restriction = manageRestriction;
           return (
             <SettingsActionGroup>
               <Button
@@ -619,8 +678,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       handleDelete,
       handleEdit,
       handleView,
-      policyPending,
-      policyPendingHint,
+      manageRestriction,
       renderOwner,
       searchTerm,
       userAuthenticatedMcpServerIds,
@@ -680,9 +738,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
                 New MCP Server
               </Button>
             ) : (
-              <Tooltip
-                title={policyPending ? policyPendingHint : explainAddRestriction(capability)}
-              >
+              <Tooltip title={addRestriction}>
                 <span>
                   <Button type="primary" icon={<PlusOutlined />} disabled>
                     New MCP Server
@@ -724,9 +780,11 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
                   ? addRestriction
                   : testing
                     ? 'Wait for the connection test to finish.'
-                    : missingRequiredFields.length > 0
-                      ? describeMissingForSave(missingRequiredFields)
-                      : undefined
+                    : createUnconfirmed
+                      ? 'Refresh to see if the server was added before you create it again.'
+                      : missingRequiredFields.length > 0
+                        ? describeMissingForSave(missingRequiredFields)
+                        : undefined
               }
             >
               <span>
@@ -747,6 +805,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
             style={{ marginBottom: 16 }}
           />
         )}
+        {createError && <ActionErrorNotice error={createError} />}
         <Form
           form={createForm}
           layout="vertical"
@@ -791,9 +850,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         mutationAllowed={
           !!editingServer && !policyPending && canEditMcpServer(editingServer, capability)
         }
-        mutationBlockedReason={
-          policyPending ? policyPendingHint : explainManageRestriction(capability)
-        }
+        mutationBlockedReason={manageRestriction}
         onClose={handleEditClose}
       />
 

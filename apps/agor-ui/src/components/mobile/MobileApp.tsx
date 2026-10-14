@@ -12,12 +12,17 @@ import type {
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, hasMinimumRole, ROLES } from '@agor-live/client';
-import { Alert, Button, Drawer, Layout, Typography } from 'antd';
+import { Button, Drawer, Layout, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
-import { useConnectionState } from '../../contexts/ConnectionContext';
+import {
+  CONNECTION_LOST_MESSAGE,
+  formatOutOfSyncMessage,
+  RECONNECTING_MESSAGE,
+  useConnectionState,
+} from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
@@ -31,34 +36,31 @@ import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { agorStore, useAgorStore } from '../../store/agorStore';
 import {
-  makeUnreadCommentCountSelector,
-  selectArtifactById,
   selectBoardById,
   selectBoardObjectsByBoardId,
   selectBranchById,
-  selectCardById,
-  selectCommentById,
   selectRepoById,
   selectSessionById,
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
 import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
-import { isOwnActiveSession } from '../../utils/sessionSearch';
-import { getSessionStatusTone } from '../../utils/sessionStatus';
+import { OPEN_CREATE_FLOW_EVENT, onShellPicker } from '../../utils/shellEvents';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
+import { CompactNotice } from '../CompactNotice';
 import { CreateModals } from '../CreateModals';
 import { type HomeLocationState, HomePage } from '../HomePage';
+import { useHomeNeeds } from '../HomePage/useHomeNeeds';
+import { PrimaryLookupFailedNotice } from '../PrimaryAssistantCompose/PrimaryLookupFailedNotice';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { TeammatesDirectory } from '../TeammatesDirectory';
 import { mobilePageStyle } from './constants';
-import { MobileBoardPage } from './MobileBoardPage';
-import { MobileCommentsPage } from './MobileCommentsPage';
+import { type MobileBoardLocationState, MobileBoardPage } from './MobileBoardPage';
 import { MobileHeader } from './MobileHeader';
 import { MobileMarketplacePage } from './MobileMarketplacePage';
 import { MobileMoreSheet } from './MobileMoreSheet';
@@ -70,6 +72,12 @@ import { sessionBoardId } from './sessionBoardId';
 import { useMobileBack } from './useMobileBack';
 
 const NO_BOARDS: never[] = [];
+
+const connectionBannerStyle: React.CSSProperties = {
+  flexShrink: 0,
+  borderRadius: 0,
+  borderInline: 0,
+};
 
 interface MobileAppProps {
   client: AgorClient | null;
@@ -113,6 +121,8 @@ interface MobileAppProps {
   onToggleReaction?: (commentId: string, emoji: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onLogout?: () => void;
+  /** Reconnects the existing client without discarding unsaved work. */
+  onRetryConnection?: () => void;
   /** Settings link to an external app (e.g. a hosting console), opened in a new tab */
   externalAppLink?: string;
   externalAppLabel?: string;
@@ -129,7 +139,14 @@ interface MobileAppProps {
     options: BranchArchiveOrDeleteOptions
   ) => void | Promise<void>;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
+  onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
 }
+
+/** Board comments are a tab of the board screen; keeps old `/m/comments/:boardId` links working. */
+const BoardCommentsRedirect: React.FC = () => {
+  const { boardId } = useParams<{ boardId: string }>();
+  return <Navigate to={`/m/board/${boardId}?tab=comments`} replace />;
+};
 
 export const MobileApp: React.FC<MobileAppProps> = ({
   client,
@@ -157,6 +174,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onToggleReaction,
   onDeleteComment,
   onLogout,
+  onRetryConnection,
   externalAppLink,
   externalAppLabel,
   onOpenWorkspaceSettings,
@@ -166,12 +184,13 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onUpdateRepo,
   onArchiveOrDeleteBranch,
   onExecuteScheduleNow,
+  onUpdateBoard,
 }) => {
   const navigate = useNavigate();
   const navigation = useAppNavigation();
   const location = useLocation();
   const goBackHome = useMobileBack('/m');
-  const { connected, connecting } = useConnectionState();
+  const { connected, connecting, outOfSync, capturedSha, currentSha } = useConnectionState();
   const reducedMotion = usePrefersReducedMotion();
   // Self-subscribe to the entity maps this surface drills into. The subscription
   // used to live in the outer App shell; relocating it here makes MobileApp the
@@ -180,13 +199,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const boardById = useAgorStore(selectBoardById);
   const boardObjectsByBoardId = useAgorStore(selectBoardObjectsByBoardId);
-  const cardById = useAgorStore(selectCardById);
-  const artifactById = useAgorStore(selectArtifactById);
-  const commentById = useAgorStore(selectCommentById);
   const repoById = useAgorStore(selectRepoById);
   const branchById = useAgorStore(selectBranchById);
   const userById = useAgorStore(selectUserById);
-  const agenticToolSettings = useAgorStore((s) => s.agenticToolSettingsByName);
+  const settingsHydrated = useAgorStore((s) => s.agenticToolSettingsHydrated);
 
   const [moreOpen, setMoreOpen] = useState(false);
   const [askPickerOpen, setAskPickerOpen] = useState(false);
@@ -205,6 +221,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     branch: resolvedPrimaryBranch,
     ownedByCaller: primaryBranchIsOwned,
     setBranch: setPrimaryBranch,
+    resolving: resolvingPrimaryBranch,
+    failed: primaryLookupFailed,
     refresh: refreshPrimaryBranch,
   } = usePrimaryTeammate(client, user?.user_id, authGeneration);
   // A branch resolved for a previous caller is never shown or used as an Ask target.
@@ -225,9 +243,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     markCreating(false)
   );
 
-  // Track the board in view so the Board / Comments tabs have a target even from
-  // the Sessions tab. Falls back to the user's main board, then any board.
-  const boardToken = location.pathname.match(/^\/m\/(?:board|comments)\/([^/]+)/)?.[1];
+  // Track the board in view so the Board tab has a target from any screen.
+  // Falls back to the last visited board, the user's main board, then any board.
+  const { recentBoardIds } = useRecentBoards(NO_BOARDS, '', user?.user_id);
+  const boardToken = location.pathname.match(/^\/m\/board\/([^/]+)/)?.[1];
   const sessionToken = location.pathname.match(/^\/m\/session\/([^/]+)/)?.[1];
   const routedSessionId = sessionToken
     ? sessionById.has(sessionToken)
@@ -250,10 +269,12 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const effectiveBoardId = useMemo(() => {
     if (routeBoardId && boardById.has(routeBoardId)) return routeBoardId;
     if (currentBoardId && boardById.has(currentBoardId)) return currentBoardId;
+    const lastBoardId = recentBoardIds.find((id) => boardById.has(id));
+    if (lastBoardId) return lastBoardId;
     const mainBoardId = user?.preferences?.mainBoardId;
     if (mainBoardId && boardById.has(mainBoardId)) return mainBoardId;
     return boardById.keys().next().value as string | undefined;
-  }, [routeBoardId, currentBoardId, boardById, user?.preferences?.mainBoardId]);
+  }, [routeBoardId, currentBoardId, recentBoardIds, boardById, user?.preferences?.mainBoardId]);
 
   // Load the effective board's partition when it is not complete yet.
   const { boardReady } = useBoardPartition(client, effectiveBoardId, {
@@ -284,12 +305,13 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     onCreateLocalRepo,
   });
 
+  // Settings' "Create AI teammate" (rendered by the app root) opens the shared flow here.
+  const openCreate = createFlows.openCreate;
+  useEffect(() => onShellPicker(OPEN_CREATE_FLOW_EVENT, openCreate), [openCreate]);
+
   // NB: match `/m/session/` (detail) with the trailing slash so it never
-  // swallows `/m/sessions` (the Sessions tab). Comments open from the top-bar
-  // bell as a full-screen sub-view (like session detail), not a bottom tab.
-  const isSessionRoute = location.pathname.startsWith('/m/session/');
-  const isCommentsRoute = location.pathname.startsWith('/m/comments');
-  const isSubView = isSessionRoute || isCommentsRoute;
+  // swallows `/m/sessions` (the sessions list under Home).
+  const isSubView = location.pathname.startsWith('/m/session/');
   // Sessions folded into Home: /m and the sessions list both read as Home.
   const activeTab: MobileTab | null = location.pathname.startsWith('/m/board')
     ? 'board'
@@ -299,19 +321,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         ? null
         : 'home';
 
-  const sessionsBadge = useMemo(() => {
-    let count = 0;
-    for (const session of sessionById.values()) {
-      if (!isOwnActiveSession(session, user?.user_id)) continue;
-      if (getSessionStatusTone(session.status) === 'processing') count++;
-    }
-    return count;
-  }, [sessionById, user?.user_id]);
-
-  const boardCommentsBadge = useAgorStore(
-    useMemo(() => makeUnreadCommentCountSelector(effectiveBoardId), [effectiveBoardId])
-  );
   const commentsBadge = useCommentsForYou(client, user).length;
+
+  // Home's "need you" result, computed once here: the tab bar and Home both read it.
+  const homeNeeds = useHomeNeeds(user?.user_id);
+  const homeBadge = homeNeeds.needsCount + commentsBadge;
 
   // Start a FRESH session and land in its full-screen composer; an identity change mid-flight drops the result.
   const createAndOpenSession = useCallback(
@@ -348,24 +362,30 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
   // Every Ask tap creates a new session on the primary branch (never continues one).
   const startPrimarySession = useCallback(
-    (branch: Branch) =>
-      createAndOpenSession(
+    (branch: Branch) => {
+      // Read the current workspace snapshot again after an asynchronous primary lookup or pick.
+      const settings = agorStore.getState();
+      if (!settings.agenticToolSettingsHydrated) return;
+      return createAndOpenSession(
         branch,
-        resolveAvailableUserAgenticTool(user, agenticToolSettings, AVAILABLE_AGENTS)
-      ),
-    [createAndOpenSession, user, agenticToolSettings]
+        resolveAvailableUserAgenticTool(user, settings.agenticToolSettingsByName, AVAILABLE_AGENTS)
+      );
+    },
+    [createAndOpenSession, user]
   );
 
   const askPrimaryAssistant = useCallback(async () => {
-    if (!client || creatingSessionRef.current) return;
+    if (!client || creatingSessionRef.current || !agorStore.getState().agenticToolSettingsHydrated)
+      return;
     const branch = primaryBranch ?? (await refreshPrimaryBranch());
     if (branch === undefined) return;
-    // No primary (or a transient resolve failure): open the mobile-native
-    // picker — never fall through to the desktop Settings modal.
+    // No primary, or a failed lookup: the mobile-native sheet shows the
+    // picker or the failure — never the desktop Settings modal.
     if (!branch) {
       setAskPickerOpen(true);
       return;
     }
+    setAskPickerOpen(false);
     await startPrimarySession(branch);
   }, [client, primaryBranch, refreshPrimaryBranch, startPrimarySession]);
 
@@ -376,8 +396,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           navigate('/m');
           break;
         case 'board':
-          if (effectiveBoardId) navigate(`/m/board/${effectiveBoardId}`);
-          else setMoreOpen(true);
+          navigate(effectiveBoardId ? `/m/board/${effectiveBoardId}` : '/m/board');
           break;
         case 'ask':
           void askPrimaryAssistant();
@@ -393,7 +412,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     [effectiveBoardId, navigate, askPrimaryAssistant]
   );
 
-  const { recentBoardIds } = useRecentBoards(NO_BOARDS, '', user?.user_id);
   const openHomeBoard = useCallback(
     (boardId: string) => navigate(`/m/board/${boardId}`),
     [navigate]
@@ -411,13 +429,18 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       openHomeBoard(agorStore.getState().branchById.get(branchId)?.board_id ?? boardId),
     [openHomeBoard]
   );
-  const openBoardList = useCallback(() => setMoreOpen(true), []);
+  const openBoardList = useCallback(
+    () =>
+      navigate(effectiveBoardId ? `/m/board/${effectiveBoardId}` : '/m/board', {
+        state: { openBoardSwitcher: true } satisfies MobileBoardLocationState,
+      }),
+    [effectiveBoardId, navigate]
+  );
   const openSessionList = useCallback(() => navigate('/m/sessions'), [navigate]);
   const openTeammates = useCallback(() => navigation.goToTeammates(), [navigation]);
   const createSession = useStableCallback(onCreateSession);
 
-  // The bell opens comments for you across boards (Home › Needs you); on a board
-  // page it opens that board's comments. Already on Home, it replaces the entry so Back still leaves.
+  // Comments for you across boards (Home › Needs you). Already on Home, it replaces the entry so Back still leaves.
   const onHome = location.pathname.replace(/\/$/, '') === '/m';
   const openComments = useCallback(
     () =>
@@ -427,55 +450,68 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       }),
     [navigate, onHome]
   );
-  const openBoardComments = useCallback(() => {
-    if (effectiveBoardId) navigate(`/m/comments/${effectiveBoardId}`);
-  }, [effectiveBoardId, navigate]);
 
   const canCreateSessions = hasMinimumRole(user?.role, ROLES.MEMBER);
 
-  const withHeader = (title: string, page: React.ReactNode, onBack?: () => void) => (
+  const withHeader = (title: string, page: React.ReactNode, onBack: () => void) => (
     <div style={mobilePageStyle}>
-      <MobileHeader
-        title={title}
-        onBack={onBack}
-        onSearch={() => navigate('/m/search')}
-        commentsBadge={commentsBadge}
-        onOpenComments={openComments}
-      />
+      <MobileHeader title={title} onBack={onBack} />
       <div style={{ flex: 1, minHeight: 0 }}>{page}</div>
     </div>
   );
 
   return (
-    // The shell root is pinned to exactly the viewport and clips horizontally,
-    // so no descendant on any tab can widen the document and clip the content
-    // AND the in-flow bottom nav at the same right edge. Content is laid out
-    // fluid (width:100%), so this never cuts anything legitimate.
+    // Exactly the visible viewport (#root is 100dvh too, see index.html), so the
+    // document never scrolls and iOS cannot lift the shell (and its tab bar) when
+    // the toolbar hides; only page content scrolls. Clipping horizontally keeps
+    // any wide descendant from widening it. Top and side insets apply here; the
+    // tab bar alone owns the bottom inset.
     <Layout
       style={{
         height: '100dvh',
-        width: '100%',
-        maxWidth: '100%',
-        margin: 0,
-        overflowX: 'hidden',
         boxSizing: 'border-box',
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingLeft: 'env(safe-area-inset-left)',
+        paddingRight: 'env(safe-area-inset-right)',
+        overflowX: 'hidden',
+        overscrollBehavior: 'none',
       }}
     >
-      {!connected && (
-        <Alert
-          banner
-          type={connecting ? 'info' : 'warning'}
-          showIcon
-          message={
-            connecting
-              ? 'Reconnecting...'
-              : "You're offline. Changes may not be saved until you reconnect."
-          }
-          style={{ flexShrink: 0 }}
+      {outOfSync ? (
+        <CompactNotice
+          type="warning"
+          role="status"
+          message={formatOutOfSyncMessage(capturedSha, currentSha)}
+          actions={[{ label: 'Reload page', onClick: () => window.location.reload() }]}
+          style={connectionBannerStyle}
         />
+      ) : (
+        !connected &&
+        (connecting ? (
+          <CompactNotice
+            type="warning"
+            role="status"
+            message={RECONNECTING_MESSAGE}
+            // Browser sockets retry forever, so without this a dead daemon leaves no action.
+            actions={
+              onRetryConnection ? [{ label: 'Reconnect', onClick: onRetryConnection }] : undefined
+            }
+            style={connectionBannerStyle}
+          />
+        ) : (
+          <CompactNotice
+            type="error"
+            role="alert"
+            message={`${CONNECTION_LOST_MESSAGE} You can't make changes until it's back.`}
+            actions={
+              onRetryConnection ? [{ label: 'Reconnect', onClick: onRetryConnection }] : undefined
+            }
+            style={connectionBannerStyle}
+          />
+        ))
       )}
       {/* Proactive connect-AI / integrations banner, shared with desktop. Hidden
-          on full-screen sub-views (session detail, comments). */}
+          on the session sub-view. */}
       {topBanner && !isSubView && <div style={{ flexShrink: 0 }}>{topBanner}</div>}
       <div
         style={{
@@ -492,23 +528,25 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         <Routes>
           <Route
             index
-            element={withHeader(
-              'Home',
-              <HomePage
-                client={client}
-                currentUser={user}
-                recentBoardIds={recentBoardIds}
-                onBoardClick={openHomeBoard}
-                onBranchClick={openHomeBranch}
-                onSessionClick={openHomeSession}
-                onCreateSession={canCreateSessions ? createSession : undefined}
-                onOpenCreateDialog={canCreateSessions ? createFlows.openCreate : undefined}
-                onOpenSettings={onOpenWorkspaceSettings}
-                onAllBoards={openBoardList}
-                onSeeAllSessions={openSessionList}
-                onSeeAllTeammates={openTeammates}
-              />
-            )}
+            element={
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <HomePage
+                  client={client}
+                  currentUser={user}
+                  recentBoardIds={recentBoardIds}
+                  onBoardClick={openHomeBoard}
+                  onBranchClick={openHomeBranch}
+                  onSessionClick={openHomeSession}
+                  onCreateSession={canCreateSessions ? createSession : undefined}
+                  onOpenCreateDialog={canCreateSessions ? createFlows.openCreate : undefined}
+                  onOpenSettings={onOpenWorkspaceSettings}
+                  onAllBoards={openBoardList}
+                  onSeeAllSessions={openSessionList}
+                  onSeeAllTeammates={openTeammates}
+                  homeNeeds={homeNeeds}
+                />
+              </div>
+            }
           />
           <Route
             path="teammates"
@@ -538,8 +576,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onForkSession={onForkSession}
                 onSpawnSession={onSpawnSession}
                 onCreateSessionOnBranch={(branchId) => setNewSessionBranchId(branchId)}
-                commentsBadge={commentsBadge}
-                onOpenComments={openComments}
+                onAskPrimary={canCreateSessions ? () => void askPrimaryAssistant() : undefined}
+                onBack={goBackHome}
               />
             }
           />
@@ -550,8 +588,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 client={client}
                 currentUser={user}
                 authGeneration={authGeneration}
-                commentsBadge={commentsBadge}
-                onOpenComments={openComments}
               />
             }
           />
@@ -581,19 +617,20 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               <MobileBoardPage
                 boardById={boardById}
                 branchById={branchById}
-                repoById={repoById}
-                sessionsByBranch={sessionsByBranch}
-                boardObjectsByBoardId={boardObjectsByBoardId}
-                cardById={cardById}
-                artifactById={artifactById}
                 onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
                 onNewSession={(branchId) => setNewSessionBranchId(branchId)}
-                onGiveFirstTask={() => void askPrimaryAssistant()}
-                firstTaskAssistantName={primaryTeammateName}
-                commentsBadge={boardCommentsBadge}
-                onOpenComments={openBoardComments}
-                userId={user?.user_id}
+                client={client}
+                currentUser={user}
+                onForkSession={onForkSession}
+                onSpawnSession={onSpawnSession}
+                onUpdateBoard={onUpdateBoard}
+                onSendComment={onSendComment}
+                onReplyComment={onReplyComment}
+                onResolveComment={onResolveComment}
+                onToggleReaction={onToggleReaction}
+                onDeleteComment={onDeleteComment}
                 boardReady={boardReady}
+                settingsHydrated={settingsHydrated}
               />
             }
           />
@@ -619,71 +656,68 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               />
             }
           />
-          <Route
-            path="comments/:boardId"
-            element={
-              <MobileCommentsPage
-                client={client}
-                boardById={boardById}
-                commentById={commentById}
-                branchById={branchById}
-                userById={userById}
-                currentUser={user}
-                onBack={goBackHome}
-                onSendComment={onSendComment}
-                onReplyComment={onReplyComment}
-                onResolveComment={onResolveComment}
-                onToggleReaction={onToggleReaction}
-                onDeleteComment={onDeleteComment}
-              />
-            }
-          />
+          <Route path="comments/:boardId" element={<BoardCommentsRedirect />} />
         </Routes>
       </div>
 
-      {!isSubView && (
-        <MobileTabBar
-          activeTab={activeTab}
-          onSelect={handleTabSelect}
-          sessionsBadge={sessionsBadge}
-          askPending={creatingSession}
-        />
-      )}
+      {/* Docked as the last flex child of the fixed shell on EVERY /m screen,
+          including session detail, so content (and the session composer) lays
+          out above it with no overlap. On sub-views no tab is highlighted. */}
+      <MobileTabBar
+        activeTab={activeTab}
+        onSelect={handleTabSelect}
+        homeBadge={homeBadge}
+        moreBadge={commentsBadge}
+        askPending={creatingSession || !settingsHydrated}
+      />
 
       <Drawer
         open={askPickerOpen}
         onClose={() => setAskPickerOpen(false)}
         placement="bottom"
         height="auto"
-        title="Choose your primary assistant"
+        title={primaryLookupFailed ? 'Ask your primary assistant' : 'Choose your primary assistant'}
         {...reducedMotionSurface(reducedMotion)}
         styles={{ body: { paddingBottom: 'env(safe-area-inset-bottom)' } }}
       >
-        <Typography.Paragraph type="secondary">
-          Pick the teammate to message from the Ask button. You can change it later in Settings.
-        </Typography.Paragraph>
-        <PrimaryTeammatePicker
-          key={`${user?.user_id ?? 'anonymous'}:${authGeneration}`}
-          client={client}
-          currentUserId={user?.user_id}
-          authenticationGeneration={authGeneration}
-          compact
-          onPicked={(branch) => {
-            setPrimaryBranch(branch);
-            setAskPickerOpen(false);
-            void startPrimarySession(branch);
-          }}
-        />
-        <Button
-          type="link"
-          style={{ paddingInline: 0 }}
-          onClick={() => {
-            setAskPickerOpen(false);
-            onOpenWorkspaceSettings('teammates');
-          }}
-        >
-          Create a new teammate
-        </Button>
+        {primaryLookupFailed ? (
+          <PrimaryLookupFailedNotice
+            connected={connected}
+            retrying={resolvingPrimaryBranch}
+            onRetry={() => void askPrimaryAssistant()}
+          />
+        ) : (
+          <>
+            <Typography.Paragraph type="secondary">
+              Pick the teammate to message from the Ask button. You can change it later in Settings.
+            </Typography.Paragraph>
+            <PrimaryTeammatePicker
+              key={`${user?.user_id ?? 'anonymous'}:${authGeneration}`}
+              client={client}
+              currentUserId={user?.user_id}
+              authenticationGeneration={authGeneration}
+              compact
+              onPicked={(branch) => {
+                setPrimaryBranch(branch);
+                setAskPickerOpen(false);
+                void startPrimarySession(branch);
+              }}
+            />
+            {canCreateSessions && (
+              <Button
+                type="link"
+                style={{ paddingInline: 0 }}
+                onClick={() => {
+                  // The shared create-teammate flow, as from Create new and desktop's "+".
+                  setAskPickerOpen(false);
+                  createFlows.openCreate('teammate');
+                }}
+              >
+                Create a new teammate
+              </Button>
+            )}
+          </>
+        )}
       </Drawer>
 
       <Drawer
@@ -713,12 +747,9 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       <MobileMoreSheet
         open={moreOpen}
         onClose={() => setMoreOpen(false)}
-        client={client}
-        canUseMemberWorkspaceServices={hasMinimumRole(user?.role, ROLES.MEMBER)}
-        boardById={boardById}
-        branchById={branchById}
-        sessionsByBranch={sessionsByBranch}
-        commentById={commentById}
+        user={user}
+        commentsBadge={commentsBadge}
+        onOpenComments={openComments}
         onOpenWorkspaceSettings={onOpenWorkspaceSettings}
         onOpenUserSettings={onOpenUserSettings}
         onLogout={onLogout}

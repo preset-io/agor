@@ -8,6 +8,7 @@ import { getDisplayedBoardId } from '../../store/boardPartitions';
 import { discardRealtimeNow, setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { selectSessionsByBranch } from '../../store/selectors';
 import { userScopeCoverage } from '../../test/userScopeCoverage';
+import { makeTeammateBranch } from '../BranchModal/testUtils';
 import { MobileSessionsPage } from './MobileSessionsPage';
 
 const ownSession = {
@@ -28,7 +29,11 @@ const assistantSession = {
 
 const primaryBranch = { branch_id: 'pb', name: 'Fable', repo_id: 'r1' } as Branch;
 
-function renderPage(initialPath = '/m/sessions', withAssistant = true) {
+function renderPage(
+  initialPath = '/m/sessions',
+  withAssistant = true,
+  assistantBranch: Branch = primaryBranch
+) {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <Routes>
@@ -42,7 +47,7 @@ function renderPage(initialPath = '/m/sessions', withAssistant = true) {
               sessionsByBranch={new Map([['pb', [assistantSession]]])}
               currentUser={{ user_id: 'u1' } as User}
               client={null}
-              primaryBranch={withAssistant ? primaryBranch : null}
+              primaryBranch={withAssistant ? assistantBranch : null}
               primaryTeammateName={withAssistant ? 'Fable' : undefined}
               onForkSession={vi.fn(async () => {})}
               onSpawnSession={vi.fn(async () => {})}
@@ -72,6 +77,18 @@ describe('MobileSessionsPage scope', () => {
 
   it('honors the scope=assistant deep link from the Home hero', () => {
     renderPage('/m/sessions?scope=assistant');
+    expect(screen.getByText('Assistant task')).toBeInTheDocument();
+  });
+
+  it("shows the primary teammate's setup failure above its sessions", () => {
+    const failed = makeTeammateBranch({
+      branch_id: 'pb' as Branch['branch_id'],
+      board_id: undefined,
+      filesystem_status: 'failed',
+      error_message: 'git clone exited with code 128',
+    });
+    renderPage('/m/sessions?scope=assistant', true, failed);
+    expect(screen.getByText("Agor couldn't set up your teammate's workspace.")).toBeInTheDocument();
     expect(screen.getByText('Assistant task')).toBeInTheDocument();
   });
 
@@ -160,5 +177,33 @@ describe('MobileSessionsPage Yours empty state', () => {
     expect(screen.queryByText(/No sessions yet/)).not.toBeInTheDocument();
     act(() => agorStore.setState({ coverage: userScopeCoverage({ sessions: true }) }));
     expect(screen.getByText(/No sessions yet/)).toBeInTheDocument();
+  });
+
+  it('offers to ask the primary assistant when the caller can start sessions', () => {
+    agorStore.setState({ coverage: userScopeCoverage({ sessions: true }) });
+    const onAskPrimary = vi.fn();
+    render(
+      <MemoryRouter initialEntries={['/m/sessions']}>
+        <MobileSessionsPage
+          sessionById={new Map()}
+          branchById={new Map()}
+          userById={new Map()}
+          sessionsByBranch={new Map()}
+          currentUser={{ user_id: 'u1' } as User}
+          client={null}
+          primaryBranch={primaryBranch}
+          primaryTeammateName="Fable"
+          onForkSession={vi.fn(async () => {})}
+          onSpawnSession={vi.fn(async () => {})}
+          onCreateSessionOnBranch={vi.fn()}
+          onAskPrimary={onAskPrimary}
+        />
+      </MemoryRouter>
+    );
+    expect(
+      screen.getByText('No sessions yet. Ask your primary assistant to get started.')
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Ask Fable' }));
+    expect(onAskPrimary).toHaveBeenCalledTimes(1);
   });
 });

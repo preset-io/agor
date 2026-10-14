@@ -7,6 +7,7 @@ import type {
   BoardID,
   Branch,
   BranchArchiveOrDeleteOptions,
+  BranchID,
   CreateLocalRepoRequest,
   CreateMCPServerInput,
   CreateRepoRequest,
@@ -32,12 +33,13 @@ import {
   ROLES,
   sessionPath,
 } from '@agor-live/client';
-import { Alert, ConfigProvider, theme } from 'antd';
+import { ConfigProvider, theme } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from './components/AgentSelectionGrid/availableAgents';
 import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
+import { ActionErrorNotice } from './components/CompactNotice';
 import { DaemonConfigurationAlert, DaemonConnectionAlert } from './components/DaemonErrorAlerts';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
 import { uploadFilesToSession } from './components/FileUpload/upload';
@@ -103,7 +105,15 @@ import {
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import type { CreateRepoOptions } from './types';
-import { formatActionError } from './utils/connectionErrors';
+import {
+  CLIENT_NOT_CONNECTED_ERROR,
+  describeActionError,
+  formatActionError,
+  isInFlightConnectionLossError,
+  notConnectedMessage,
+  sessionStartedMessageNotSent,
+  withRawDetail,
+} from './utils/connectionErrors';
 import { createRepository } from './utils/createRepository';
 import {
   enrichAuthenticatedUser,
@@ -127,6 +137,7 @@ import {
   type LatestSessionUpdateRequests,
   runSessionUpdateWithLatestNotification,
 } from './utils/sessionUpdateNotifications';
+import { OPEN_CREATE_FLOW_EVENT, requestShellPicker } from './utils/shellEvents';
 import { getRouterBasename, isMobileShellPath } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
@@ -136,7 +147,8 @@ type EnvironmentAction = 'start' | 'stop' | 'nuke';
 interface PendingEnvironmentToast {
   action: EnvironmentAction;
   key: string;
-  requestedAt: number;
+  /** `last_command.attempt_id` before the request; a result only counts once it changes. */
+  previousAttemptId: string | undefined;
 }
 
 // Stable reference — an inline object here re-processes the modal on every App
@@ -147,10 +159,10 @@ const ONBOARDING_DARK_THEME = { algorithm: theme.darkAlgorithm };
 // identity while the wizard is closed (no framework repo resolved yet).
 const EMPTY_REPOS: Repo[] = [];
 
-const ENV_ACTION_COPY: Record<EnvironmentAction, { present: string; gerund: string }> = {
-  start: { present: 'start', gerund: 'Starting' },
-  stop: { present: 'stop', gerund: 'Stopping' },
-  nuke: { present: 'nuke', gerund: 'Nuking' },
+const ENV_ACTION_COPY: Record<EnvironmentAction, { present: string; done: string }> = {
+  start: { present: 'start', done: 'started' },
+  stop: { present: 'stop', done: 'stopped' },
+  nuke: { present: 'nuke', done: 'nuked' },
 };
 
 const loadedRouteModuleKeys = new Set<RouteModuleKey>();
@@ -260,7 +272,8 @@ function preloadRouteModule(moduleKey: RouteModuleKey): Promise<unknown> {
 }
 
 function AppContent() {
-  const { showSuccess, showError, showWarning, showLoading, destroy } = useThemedMessage();
+  const { showSuccess, showError, showWarning, showInfo, showLoading, destroy } =
+    useThemedMessage();
   const navigate = useNavigate();
   const location = useLocation();
   const { currentSurface, workspaceSurfaceShouldRun } = useWorkspaceSurfaceLifecycle(
@@ -379,14 +392,13 @@ function AppContent() {
     reauthenticate: loginForAuthorityCycle,
     logout: logoutForAuthorityCycle,
     onCompleted: (signedIn) => {
-      showSuccess(
-        signedIn
-          ? 'Password changed successfully!'
-          : 'Password changed successfully. Please sign in again.'
-      );
+      showSuccess(signedIn ? 'Password changed.' : 'Password changed. Sign in again to continue.');
     },
   });
   const pendingEnvironmentToastsRef = useRef<Map<string, PendingEnvironmentToast>>(new Map());
+  const previousEnvironmentAttemptId = (branchId: string) =>
+    agorStore.getState().branchById.get(branchId as BranchID)?.environment_instance?.last_command
+      ?.attempt_id;
   const latestSessionUpdateRequestsRef = useRef<LatestSessionUpdateRequests>(new Map());
 
   useEffect(() => {
@@ -400,27 +412,32 @@ function AppContent() {
       const lastCommand = branch.environment_instance?.last_command;
       if (!lastCommand || lastCommand.action !== pending.action) return;
 
-      const completedAt = Date.parse(lastCommand.timestamp);
-      if (Number.isFinite(completedAt) && completedAt + 1000 < pending.requestedAt) return;
+      if (!lastCommand.attempt_id || lastCommand.attempt_id === pending.previousAttemptId) return;
 
       const copy = ENV_ACTION_COPY[pending.action];
       if (lastCommand.status === 'succeeded') {
-        showSuccess(`Environment ${copy.present} command executed successfully`, {
-          key: pending.key,
-        });
-        pendingEnvironmentToastsRef.current.delete(branch.branch_id);
+        showSuccess(`Environment ${copy.done}.`, { key: pending.key });
       } else if (lastCommand.status === 'failed') {
-        const detail = lastCommand.message ? `: ${lastCommand.message}` : '';
-        showError(`Environment ${copy.present} command failed${detail}`, { key: pending.key });
-        pendingEnvironmentToastsRef.current.delete(branch.branch_id);
+        showError(
+          lastCommand.message
+            ? `Couldn't ${copy.present} the environment. (${lastCommand.message})`
+            : `Couldn't ${copy.present} the environment.`,
+          { key: pending.key }
+        );
+      } else {
+        showWarning(
+          `Agor couldn't confirm the last ${copy.present}. Check the logs before you try again.`,
+          { key: pending.key, duration: 0 }
+        );
       }
+      pendingEnvironmentToastsRef.current.delete(branch.branch_id);
     };
 
     branchesService.on('patched', handleBranchPatched);
     return () => {
       branchesService.removeListener('patched', handleBranchPatched);
     };
-  }, [client, showError, showSuccess]);
+  }, [client, showError, showSuccess, showWarning]);
 
   // Track FE/BE drift: capture the daemon's build SHA on first load (via
   // /health) and flip outOfSync when the daemon later reports a different
@@ -455,6 +472,7 @@ function AppContent() {
     loadingStage,
     loading,
     error: dataError,
+    refetch: refetchData,
   } = useAgorData(client, {
     enabled: workspaceSurfaceShouldRun && !(user?.must_change_password && passwordWriteAvailable),
     directSessionId: directSessionIdFromPath,
@@ -879,7 +897,7 @@ function AppContent() {
     // this authority generation.
     if (!deferOnboardingWizard(owner)) return;
     if (!client) {
-      showError('Onboarding is closed, but “finish later” could not be saved while offline.');
+      showError('Onboarding is closed, but “finish later” couldn’t be saved while offline.');
       return;
     }
 
@@ -918,10 +936,8 @@ function AppContent() {
       } catch (error) {
         if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
         showError(
-          `Onboarding is closed, but “finish later” could not be saved: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          { key: 'onboarding-defer', duration: 8 }
+          withRawDetail('Onboarding is closed, but “finish later” couldn’t be saved.', error),
+          { key: 'onboarding-defer' }
         );
       }
     })();
@@ -1004,7 +1020,7 @@ function AppContent() {
   // Show reconnecting state if we have tokens but lost connection.
   // ONLY show fullscreen on initial connection, not during reconnections.
   if (hasTokens && (!connected || !authenticated) && workspaceSurfaceShouldRun && !hasLoadedOnce) {
-    return <InitialLoadingScreen message="Reconnecting to daemon…" />;
+    return <InitialLoadingScreen message="Reconnecting to Agor…" />;
   }
 
   // Show loading while checking authentication
@@ -1047,7 +1063,14 @@ function AppContent() {
           padding: '2rem',
         }}
       >
-        <Alert type="error" title="Failed to load data" description={dataError} showIcon />
+        <ActionErrorNotice
+          error={
+            isInFlightConnectionLossError(dataError)
+              ? { message: notConnectedMessage('load your workspace'), raw: dataError }
+              : describeActionError('load your workspace', dataError, { idempotent: true })
+          }
+          action={{ label: 'Try again', onClick: () => void refetchData() }}
+        />
       </div>
     );
   }
@@ -1063,11 +1086,15 @@ function AppContent() {
   ): Promise<SessionCreationResult | null> => {
     const branch_id = config.branch_id;
     if (!branch_id) {
-      showError('Failed to create session: Branch ID is required to create a session');
+      showError("Couldn't start the session. No branch was selected.");
       return null;
     }
-    if (!client || !currentUser) {
-      showError('Failed to create session: Authentication required');
+    if (!client) {
+      showError(notConnectedMessage('start the session'));
+      return null;
+    }
+    if (!currentUser) {
+      showError("Couldn't start the session. Sign in again to continue.");
       return null;
     }
 
@@ -1083,7 +1110,7 @@ function AppContent() {
         sessionCreated(session);
         const warning = getSessionCreationWarning(session);
         if (warning) showWarning(warning, { duration: 10 });
-        else showSuccess('Session created!');
+        else showSuccess('Session started.');
       },
       initialPrompt: config.initialPrompt ?? '',
       preparePrompt: attachmentFiles?.length
@@ -1112,7 +1139,7 @@ function AppContent() {
     if (outcome.status === 'cancelled') return null;
     if (outcome.status === 'create-failed') {
       if (!shouldContinue()) return null;
-      showError(formatActionError('create the session', outcome.error, { idempotent: false }));
+      showError(formatActionError('start the session', outcome.error, { idempotent: false }));
       return null;
     }
 
@@ -1131,11 +1158,7 @@ function AppContent() {
 
     if (!shouldContinue()) return null;
     savePromptDraft(operationUserId, outcome.session.session_id, outcome.prompt);
-    showError(
-      `Session created, but it did not start: ${
-        outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
-      }. Open the session to review its setup and retry the prompt.`
-    );
+    showError(sessionStartedMessageNotSent(outcome.error));
     return { sessionId: outcome.session.session_id };
   };
 
@@ -1147,7 +1170,7 @@ function AppContent() {
   const handleForkSession = async (sessionId: string, prompt: string) => {
     try {
       await forkSession(sessionId as SessionID, prompt);
-      showSuccess('Session forked successfully!');
+      showSuccess('Session forked.');
     } catch (err) {
       showError(formatActionError('fork the session', err, { idempotent: false }));
       throw err;
@@ -1158,7 +1181,7 @@ function AppContent() {
   const handleBtwForkSession = async (sessionId: string, prompt: string) => {
     try {
       await btwForkSession(sessionId as SessionID, prompt);
-      showSuccess('Side question sent via btw fork');
+      showSuccess('Side question started.');
     } catch (err) {
       showError(formatActionError('start the side question', err, { idempotent: false }));
       throw err;
@@ -1171,9 +1194,9 @@ function AppContent() {
     const spawnConfig = typeof config === 'string' ? { prompt: config } : config;
     try {
       await spawnSession(sessionId as SessionID, spawnConfig);
-      showSuccess('Subsession session spawned successfully!');
+      showSuccess('Subsession started.');
     } catch (err) {
-      showError(formatActionError('spawn the subsession', err, { idempotent: false }));
+      showError(formatActionError('start the subsession', err, { idempotent: false }));
       throw err;
     }
   };
@@ -1213,13 +1236,21 @@ function AppContent() {
 
   // Handle delete session
   const handleDeleteSession = async (sessionId: string) => {
-    const success = await deleteSession(sessionId as SessionID);
-    if (success) {
-      showSuccess('Session deleted successfully!');
-    } else {
-      showError('Failed to delete session');
+    try {
+      await deleteSession(sessionId as SessionID);
+      showSuccess('Session deleted.');
+    } catch (error) {
+      showError(formatActionError('delete the session', error, { idempotent: true }));
     }
   };
+
+  // Settings show their own save error inline, so they opt out of the toast.
+  const handleUpdateUserFromSettings = (
+    userId: string,
+    updates: UpdateUserInput,
+    shouldApply?: () => boolean,
+    options?: { errorShownInline?: boolean }
+  ) => handleUpdateUser(userId, updates, { ...options, shouldApply });
 
   // Handle create user
   const handleCreateUser = async (data: CreateUserInput, shouldApply?: () => boolean) => {
@@ -1227,10 +1258,10 @@ function AppContent() {
     try {
       await client.service('users').create(data);
       if (shouldApply && !shouldApply()) return;
-      showSuccess('User created successfully!');
+      showSuccess('User created.');
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
-      showError(`Failed to create user: ${error instanceof Error ? error.message : String(error)}`);
+      showError(formatActionError('create the user', error, { idempotent: false }));
       throw error;
     }
   };
@@ -1238,7 +1269,7 @@ function AppContent() {
   const handleUpdateUser = async (
     userId: string,
     updates: UpdateUserInput,
-    options: { silent?: boolean; shouldApply?: () => boolean } = {}
+    options: { silent?: boolean; errorShownInline?: boolean; shouldApply?: () => boolean } = {}
   ) => {
     if (!client || (options.shouldApply && !options.shouldApply())) return;
     const authorityOperation = appAuthorityGuard.begin();
@@ -1274,18 +1305,12 @@ function AppContent() {
         setCredentialVersion((v) => v + 1);
       }
       if (!options.silent) {
-        showSuccess(
-          signedIn
-            ? 'User updated successfully!'
-            : 'Password changed successfully. Please sign in again.'
-        );
+        showSuccess(signedIn ? 'User updated.' : 'Password changed. Sign in again to continue.');
       }
     } catch (error) {
       if (options.shouldApply && !options.shouldApply()) return;
-      if (!options.silent) {
-        showError(
-          `Failed to update user: ${error instanceof Error ? error.message : String(error)}`
-        );
+      if (!options.silent && !options.errorShownInline) {
+        showError(formatActionError('update the user', error, { idempotent: true }));
       }
       throw error;
     }
@@ -1314,7 +1339,10 @@ function AppContent() {
       const resumable =
         latestUser.onboarding_completed !== true && isOnboardingDeferred(latestUser.preferences);
       if (mode === 'resume' && !resumable) {
-        throw new Error('Saved onboarding progress is no longer available. Reopen Settings.');
+        showError(
+          "Couldn't reopen onboarding. Saved onboarding progress is no longer available, so reopen Settings."
+        );
+        return;
       }
       const preferences =
         mode === 'resume'
@@ -1330,9 +1358,7 @@ function AppContent() {
       );
     } catch (error) {
       if (!shouldApply()) return;
-      showError(
-        `Failed to reopen onboarding: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('reopen onboarding', error, { idempotent: true }));
       return;
     }
 
@@ -1348,10 +1374,10 @@ function AppContent() {
     try {
       await client.service('users').remove(userId);
       if (shouldApply && !shouldApply()) return;
-      showSuccess('User deleted successfully!');
+      showSuccess('User deleted.');
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
-      showError(`Failed to delete user: ${error instanceof Error ? error.message : String(error)}`);
+      showError(formatActionError('delete the user', error, { idempotent: true }));
     }
   };
 
@@ -1365,7 +1391,7 @@ function AppContent() {
 
     const created = await createBoard(board);
     if (created) {
-      showSuccess('Board created successfully!');
+      showSuccess('Board created.');
     }
     return created;
   };
@@ -1373,29 +1399,26 @@ function AppContent() {
   const handleUpdateBoard = async (boardId: string, updates: Partial<Board>) => {
     const updated = await updateBoard(boardId as UUID, updates);
     if (updated) {
-      showSuccess('Board updated successfully!');
+      showSuccess('Board updated.');
     }
     return Boolean(updated);
   };
 
   const handleDeleteBoard = async (boardId: string) => {
-    const success = await deleteBoard(boardId as UUID);
-    if (success) {
-      showSuccess('Board deleted successfully!');
+    if (await deleteBoard(boardId as UUID)) {
+      showSuccess('Board deleted.');
     }
   };
 
   const handleArchiveBoard = async (boardId: string) => {
-    const archived = await archiveBoard(boardId as UUID);
-    if (archived) {
-      showSuccess('Board archived successfully!');
+    if (await archiveBoard(boardId as UUID)) {
+      showSuccess('Board archived.');
     }
   };
 
   const handleUnarchiveBoard = async (boardId: string) => {
-    const unarchived = await unarchiveBoard(boardId as UUID);
-    if (unarchived) {
-      showSuccess('Board unarchived successfully!');
+    if (await unarchiveBoard(boardId as UUID)) {
+      showSuccess('Board unarchived.');
     }
   };
 
@@ -1405,7 +1428,7 @@ function AppContent() {
   ) => {
     if (shouldApply && !shouldApply()) return;
     if (!client) {
-      showError('Not connected to daemon — cannot add local repository');
+      showError(notConnectedMessage('add the repository'));
       return;
     }
     try {
@@ -1418,13 +1441,12 @@ function AppContent() {
 
       if (shouldApply && !shouldApply()) return;
 
-      showSuccess('Local repository added successfully!', { key: 'add-local-repo' });
+      showSuccess('Repository added.', { key: 'add-local-repo' });
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
-      showError(
-        `Failed to add local repository: ${error instanceof Error ? error.message : String(error)}`,
-        { key: 'add-local-repo' }
-      );
+      showError(formatActionError('add the repository', error, { idempotent: false }), {
+        key: 'add-local-repo',
+      });
       throw error;
     }
   };
@@ -1438,12 +1460,10 @@ function AppContent() {
     try {
       await client.service('repos').patch(repoId, updates);
       if (shouldApply && !shouldApply()) return;
-      showSuccess('Repository updated successfully!');
+      showSuccess('Repository updated.');
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
-      showError(
-        `Failed to update repository: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('update the repository', error, { idempotent: true }));
     }
   };
 
@@ -1459,25 +1479,24 @@ function AppContent() {
       });
       if (shouldApply && !shouldApply()) return;
       if (cleanup) {
-        showSuccess('Repository and files deleted successfully!');
+        showSuccess('Repository and its files deleted.');
       } else {
-        showSuccess('Repository removed from Agor (files preserved)');
+        showSuccess('Repository removed from Agor. Its files were kept.');
       }
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
       const errorMessage = error instanceof Error ? error.message : String(error);
-
-      // Check for partial deletion (some files deleted, some failed)
       if (errorMessage.includes('Partial deletion occurred:')) {
-        showError(`⚠️ PARTIAL DELETION: Some files were permanently deleted. ${errorMessage}`);
-      }
-      // Check for complete failure (no files deleted)
-      else if (errorMessage.includes('No files were deleted')) {
-        showError(`Deletion failed, but no files were removed. ${errorMessage}`);
-      }
-      // Generic failure
-      else {
-        showError(`Failed to delete repository: ${errorMessage}`);
+        showError(
+          withRawDetail(
+            "Couldn't delete the repository. Some of its files were already removed and need manual cleanup.",
+            error
+          )
+        );
+      } else if (errorMessage.includes('No files were deleted')) {
+        showError(withRawDetail("Couldn't delete the repository. No files were removed.", error));
+      } else {
+        showError(formatActionError('delete the repository', error, { idempotent: true }));
       }
     }
   };
@@ -1486,24 +1505,15 @@ function AppContent() {
     branchId: string,
     options: BranchArchiveOrDeleteOptions
   ) => {
-    if (!client) {
-      throw new Error('Not connected to daemon');
-    }
+    let result: Branch;
     try {
+      if (!client) throw new Error(CLIENT_NOT_CONNECTED_ERROR);
       showLoading(`${options.metadataAction === 'archive' ? 'Archiving' : 'Deleting'} branch...`, {
         key: 'archive-delete',
       });
-      const result = (await client
+      result = (await client
         .service(`branches/${branchId}/archive-or-delete`)
         .create(options)) as Branch;
-      if (result.deletion_status === 'deletion_failed')
-        throw new Error(result.deletion_error || 'Deletion requires reconciliation');
-      showSuccess(
-        options.metadataAction === 'archive'
-          ? 'Branch archived successfully!'
-          : 'Deletion requested. The branch remains visible until cleanup finishes.',
-        { key: 'archive-delete' }
-      );
     } catch (error) {
       showError(
         formatActionError(
@@ -1517,6 +1527,18 @@ function AppContent() {
       );
       throw error;
     }
+    if (result.deletion_status === 'deletion_failed') {
+      showError("Couldn't finish deleting the branch. Check the branch card for details.", {
+        key: 'archive-delete',
+      });
+      throw new Error(result.deletion_error || 'Deletion requires reconciliation');
+    }
+    showSuccess(
+      options.metadataAction === 'archive'
+        ? 'Branch archived.'
+        : 'Deleting the branch. It stays on the board until cleanup finishes.',
+      { key: 'archive-delete' }
+    );
   };
 
   const handleUpdateBranch = async (
@@ -1529,7 +1551,7 @@ function AppContent() {
       // Cast to Partial<Branch> to satisfy Feathers type checking
       // The backend MCP handler properly handles null values for clearing fields
       await client.service('branches').patch(branchId, updates as Partial<Branch>);
-      if (!options.silent) showSuccess('Branch updated successfully!');
+      if (!options.silent) showSuccess('Branch updated.');
     } catch (error) {
       showError(formatActionError('update the branch', error, { idempotent: true }));
     }
@@ -1590,69 +1612,75 @@ function AppContent() {
 
   // Handle environment control
   const handleStartEnvironment = async (branchId: string) => {
-    if (!client) return;
+    if (!client) {
+      showError(notConnectedMessage('start the environment'));
+      return;
+    }
     const key = `start-env-${branchId}`;
     try {
       pendingEnvironmentToastsRef.current.set(branchId, {
         action: 'start',
         key,
-        requestedAt: Date.now(),
+        previousAttemptId: previousEnvironmentAttemptId(branchId),
       });
-      showLoading('Starting environment...', { key });
+      showLoading('Starting the environment…', { key });
       if (!(await startEnvironmentWithConfirmation(branchId))) {
         pendingEnvironmentToastsRef.current.delete(branchId);
         destroy(key);
         return;
       }
-      showSuccess('Environment start requested', { key });
+      showInfo('Starting the environment…', { key });
     } catch (error) {
       pendingEnvironmentToastsRef.current.delete(branchId);
-      showError(
-        `Failed to start environment: ${error instanceof Error ? error.message : String(error)}`,
-        { key }
-      );
+      showError(formatActionError('start the environment', error, { idempotent: false }), {
+        key,
+      });
     }
   };
 
   const handleStopEnvironment = async (branchId: string) => {
-    if (!client) return;
+    if (!client) {
+      showError(notConnectedMessage('stop the environment'));
+      return;
+    }
     const key = `stop-env-${branchId}`;
     try {
       pendingEnvironmentToastsRef.current.set(branchId, {
         action: 'stop',
         key,
-        requestedAt: Date.now(),
+        previousAttemptId: previousEnvironmentAttemptId(branchId),
       });
-      showLoading('Stopping environment...', { key });
+      showLoading('Stopping the environment…', { key });
       await client.service(`branches/${branchId}/stop`).create({});
-      showSuccess('Environment stop requested', { key });
+      showInfo('Stopping the environment…', { key });
     } catch (error) {
       pendingEnvironmentToastsRef.current.delete(branchId);
-      showError(
-        `Failed to stop environment: ${error instanceof Error ? error.message : String(error)}`,
-        { key }
-      );
+      showError(formatActionError('stop the environment', error, { idempotent: true }), {
+        key,
+      });
     }
   };
 
   const handleNukeEnvironment = async (branchId: string) => {
-    if (!client) return;
+    if (!client) {
+      showError(notConnectedMessage('nuke the environment'));
+      return;
+    }
     const key = `nuke-env-${branchId}`;
     try {
       pendingEnvironmentToastsRef.current.set(branchId, {
         action: 'nuke',
         key,
-        requestedAt: Date.now(),
+        previousAttemptId: previousEnvironmentAttemptId(branchId),
       });
-      showLoading('Nuking environment...', { key });
+      showLoading('Nuking the environment…', { key });
       await client.service(`branches/${branchId}/nuke`).create({});
-      showSuccess('Environment nuke requested', { key });
+      showInfo('Nuking the environment…', { key });
     } catch (error) {
       pendingEnvironmentToastsRef.current.delete(branchId);
-      showError(
-        `Failed to nuke environment: ${error instanceof Error ? error.message : String(error)}`,
-        { key }
-      );
+      showError(formatActionError('nuke the environment', error, { idempotent: true }), {
+        key,
+      });
     }
   };
 
@@ -1676,16 +1704,17 @@ function AppContent() {
 
   // Handle MCP server CRUD
   const handleCreateMCPServer = async (data: CreateMCPServerInput, shouldApply?: () => boolean) => {
-    if (!client || (shouldApply && !shouldApply())) return;
+    if (shouldApply && !shouldApply()) return;
+    // The form stays open and shows the not-connected copy.
+    if (!client) throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     try {
       await client.service('mcp-servers').create(data);
       if (shouldApply && !shouldApply()) return;
-      showSuccess('MCP server added successfully!');
+      showSuccess('MCP server added.');
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
-      showError(
-        `Failed to add MCP server: ${error instanceof Error ? error.message : String(error)}`
-      );
+      // The form keeps its input and shows why (MCPServersTable).
+      throw error;
     }
   };
 
@@ -1694,12 +1723,10 @@ function AppContent() {
     try {
       await client.service('mcp-servers').remove(serverId);
       if (shouldApply && !shouldApply()) return;
-      showSuccess('MCP server deleted successfully!');
+      showSuccess('MCP server deleted.');
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
-      showError(
-        `Failed to delete MCP server: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('delete the MCP server', error, { idempotent: true }));
     }
   };
 
@@ -1708,11 +1735,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('gateway-channels').create(data);
-      showSuccess('Gateway channel created!');
+      showSuccess('Channel created.');
     } catch (error) {
-      showError(
-        `Failed to create gateway channel: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('create the channel', error, { idempotent: false }));
     }
   };
 
@@ -1721,16 +1746,17 @@ function AppContent() {
     updates: GatewayChannelPatchData,
     shouldApply?: () => boolean
   ) => {
-    if (!client || (shouldApply && !shouldApply())) return;
+    if (shouldApply && !shouldApply()) return;
+    // The form stays open and shows the not-connected copy.
+    if (!client) throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     try {
       await client.service('gateway-channels').patch(channelId, updates);
       if (shouldApply && !shouldApply()) return;
-      showSuccess('Gateway channel updated!');
+      showSuccess('Channel saved.');
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
-      showError(
-        `Failed to update gateway channel: ${error instanceof Error ? error.message : String(error)}`
-      );
+      // The form keeps its edits and shows why (GatewayChannelsTable).
+      throw error;
     }
   };
 
@@ -1739,12 +1765,10 @@ function AppContent() {
     try {
       await client.service('gateway-channels').remove(channelId);
       if (shouldApply && !shouldApply()) return;
-      showSuccess('Gateway channel deleted!');
+      showSuccess('Channel deleted.');
     } catch (error) {
       if (shouldApply && !shouldApply()) return;
-      showError(
-        `Failed to delete gateway channel: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('delete the channel', error, { idempotent: true }));
     }
   };
 
@@ -1753,11 +1777,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('artifacts').patch(artifactId, updates);
-      showSuccess('Artifact updated!');
+      showSuccess('Artifact updated.');
     } catch (error) {
-      showError(
-        `Failed to update artifact: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('update the artifact', error, { idempotent: true }));
     }
   };
 
@@ -1765,11 +1787,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('artifacts').remove(artifactId);
-      showSuccess('Artifact deleted!');
+      showSuccess('Artifact deleted.');
     } catch (error) {
-      showError(
-        `Failed to delete artifact: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('delete the artifact', error, { idempotent: true }));
     }
   };
 
@@ -1783,7 +1803,9 @@ function AppContent() {
       });
     } catch (error) {
       showError(
-        `Failed to update session env var selections: ${error instanceof Error ? error.message : String(error)}`
+        formatActionError("update the session's environment variables", error, {
+          idempotent: true,
+        })
       );
     }
   };
@@ -1806,9 +1828,7 @@ function AppContent() {
       // Note: Don't show success message here - it's part of the session settings save
       // The main "Session updated" message will appear from handleUpdateSession
     } catch (error) {
-      showError(
-        `Failed to update MCP servers: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('update MCP servers', error, { idempotent: true }));
     }
   };
 
@@ -1821,22 +1841,20 @@ function AppContent() {
         content,
       });
     } catch (error) {
-      showError(
-        `Failed to send comment: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('post the comment', error, { idempotent: false }));
     }
   };
 
   const handleResolveComment = async (commentId: string) => {
     if (!client) return;
+    const resolved = !agorStore.getState().commentById.get(commentId)?.resolved;
     try {
-      const comment = agorStore.getState().commentById.get(commentId);
-      await client.service('board-comments').patch(commentId, {
-        resolved: !comment?.resolved,
-      });
+      await client.service('board-comments').patch(commentId, { resolved });
     } catch (error) {
       showError(
-        `Failed to resolve comment: ${error instanceof Error ? error.message : String(error)}`
+        formatActionError(resolved ? 'resolve the comment' : 'reopen the comment', error, {
+          idempotent: true,
+        })
       );
     }
   };
@@ -1845,11 +1863,9 @@ function AppContent() {
     if (!client) return;
     try {
       await client.service('board-comments').remove(commentId);
-      showSuccess('Comment deleted');
+      showSuccess('Comment deleted.');
     } catch (error) {
-      showError(
-        `Failed to delete comment: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('delete the comment', error, { idempotent: true }));
     }
   };
 
@@ -1861,7 +1877,7 @@ function AppContent() {
         content,
       });
     } catch (error) {
-      showError(`Failed to send reply: ${error instanceof Error ? error.message : String(error)}`);
+      showError(formatActionError('post the reply', error, { idempotent: false }));
     }
   };
 
@@ -1875,9 +1891,7 @@ function AppContent() {
         emoji,
       });
     } catch (error) {
-      showError(
-        `Failed to toggle reaction: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('update your reaction', error, { idempotent: false }));
     }
   };
 
@@ -1999,9 +2013,7 @@ function AppContent() {
       onNukeEnvironment={handleNukeEnvironment}
       onExecuteScheduleNow={handleExecuteScheduleNow}
       onCreateUser={handleCreateUser}
-      onUpdateUser={(userId, updates, shouldApply) =>
-        handleUpdateUser(userId, updates, { shouldApply })
-      }
+      onUpdateUser={handleUpdateUserFromSettings}
       onRefreshCurrentUser={refreshCurrentUserForAuthorityCycle}
       onDeleteUser={handleDeleteUser}
       onCreateMCPServer={handleCreateMCPServer}
@@ -2064,9 +2076,7 @@ function AppContent() {
             }}
             user={currentUser}
             client={client}
-            onUpdateUser={(userId, updates, shouldApply) =>
-              handleUpdateUser(userId, updates, { shouldApply })
-            }
+            onUpdateUser={handleUpdateUserFromSettings}
             onRefreshCurrentUser={refreshCurrentUserForAuthorityCycle}
             onReopenOnboarding={canRunOnboarding ? handleReopenOnboarding : undefined}
             initialTab={userSettingsInitialTab}
@@ -2097,9 +2107,7 @@ function AppContent() {
             onStartEnvironment={handleStartEnvironment}
             onStopEnvironment={handleStopEnvironment}
             onCreateUser={handleCreateUser}
-            onUpdateUser={(userId, updates, shouldApply) =>
-              handleUpdateUser(userId, updates, { shouldApply })
-            }
+            onUpdateUser={handleUpdateUserFromSettings}
             onDeleteUser={handleDeleteUser}
             onCreateMCPServer={handleCreateMCPServer}
             onDeleteMCPServer={handleDeleteMCPServer}
@@ -2108,6 +2116,15 @@ function AppContent() {
             onDeleteGatewayChannel={handleDeleteGatewayChannel}
             onUpdateArtifact={handleUpdateArtifact}
             onDeleteArtifact={handleDeleteArtifact}
+            // As on desktop: member-only; close Settings, then the shared create-teammate flow (owned by MobileApp).
+            onCreateTeammate={
+              hasMinimumRole(currentUser?.role, ROLES.MEMBER)
+                ? () => {
+                    handleSettingsClose();
+                    requestShellPicker(OPEN_CREATE_FLOW_EVENT, 'teammate');
+                  }
+                : undefined
+            }
             branchStorageConfig={featuresConfig?.branchStorage}
           />
         )}
@@ -2236,6 +2253,7 @@ function AppContent() {
                   onToggleReaction={handleToggleReaction}
                   onDeleteComment={handleDeleteComment}
                   onLogout={logout}
+                  onRetryConnection={retryConnection}
                   externalAppLink={headerInstanceConfig?.externalAppLink}
                   externalAppLabel={headerInstanceConfig?.externalAppLabel}
                   onOpenWorkspaceSettings={setSettingsTabToOpen}
@@ -2248,6 +2266,7 @@ function AppContent() {
                   onUpdateRepo={handleUpdateRepo}
                   onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
                   onExecuteScheduleNow={handleExecuteScheduleNow}
+                  onUpdateBoard={handleUpdateBoard}
                 />
               }
             />

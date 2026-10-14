@@ -78,7 +78,7 @@ it('actual SessionFooter legacy Manual warning fits its permissions row', async 
   await userEvent.click(screen.getByRole('button', { name: 'More options' }));
   const warning = await screen.findByText(/ask a workspace admin to update the preset/);
   await waitFor(() => expect(warning).toBeVisible());
-  const row = screen.getByText('Permissions', { exact: true }).parentElement!;
+  const row = screen.getByText('Permissions', { exact: true }).closest('fieldset > div')!;
   const select = screen.getByText('Manual (unavailable)').closest('.ant-select')!;
   expect(warning.getBoundingClientRect().top).toBeGreaterThanOrEqual(
     row.getBoundingClientRect().top - 1

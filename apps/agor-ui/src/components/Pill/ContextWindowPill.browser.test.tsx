@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, Modal } from 'antd';
 import { afterEach, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { ContextWindowPill } from './Pill';
@@ -7,6 +7,72 @@ import { ContextWindowPill } from './Pill';
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+});
+
+it.each([
+  ['trigger', 'trigger'],
+  ['trigger', 'content'],
+  ['content', 'trigger'],
+  ['content', 'content'],
+])(
+  'cancels a pending %s hover-open when Escape is pressed in %s',
+  async (hoverTarget, focusTarget) => {
+    render(
+      <ConfigProvider theme={{ token: { motion: false } }}>
+        <ContextWindowPill
+          used={22}
+          limit={100}
+          taskMetadata={{ raw_sdk_response: { usage: { input_tokens: 22 } } }}
+        />
+      </ConfigProvider>
+    );
+    const trigger = screen.getByRole('button', { name: /Context window 22% used/ });
+    fireEvent.click(trigger);
+    const rawDetails = await screen.findByRole('button', { name: /Raw SDK Response/ });
+    await waitFor(() => expect(rawDetails).toBeVisible());
+    const focused = focusTarget === 'trigger' ? trigger : rawDetails;
+    focused.focus();
+
+    // Hold AntD's delayed hover callback pending across keyboard dismissal.
+    // Advancing the clock makes the race deterministic, without a longer timeout.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    fireEvent.mouseEnter(hoverTarget === 'trigger' ? trigger : rawDetails);
+    fireEvent.keyDown(focused, { key: 'Escape' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    act(() => vi.advanceTimersByTime(1000));
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveFocus();
+
+    // A fresh pointer entry must still work; do not fix dismissal by disabling hover.
+    fireEvent.mouseLeave(trigger);
+    fireEvent.mouseEnter(trigger);
+    act(() => vi.advanceTimersByTime(1000));
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  }
+);
+
+it('keeps its enclosing modal open when Escape dismisses the breakdown', async () => {
+  const onCancel = vi.fn();
+  render(
+    <Modal open title="Usage" footer={null} onCancel={onCancel}>
+      <ContextWindowPill
+        used={22}
+        limit={100}
+        taskMetadata={{ raw_sdk_response: { usage: { input_tokens: 22 } } }}
+      />
+    </Modal>
+  );
+  const trigger = screen.getByRole('button', { name: /Context window 22% used/ });
+  fireEvent.click(trigger);
+  const rawDetails = await screen.findByRole('button', { name: /Raw SDK Response/ });
+  await waitFor(() => expect(rawDetails).toBeVisible());
+  rawDetails.focus();
+  await act(async () => userEvent.keyboard('{Escape}'));
+  await waitFor(() => expect(rawDetails).not.toBeVisible(), { timeout: 2000 });
+  expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  expect(trigger).toHaveFocus();
+  expect(onCancel).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog', { name: 'Usage' })).toBeVisible();
 });
 
 // Exercise a real exit animation longer than the former 400 ms sleep as well as default motion.
@@ -70,10 +136,6 @@ it('does not reopen from a stationary hover after keyboard dismissal', async () 
   await waitFor(() => expect(rawDetails).not.toBeVisible(), { timeout: 2000 });
   expect(trigger).toHaveAttribute('aria-expanded', 'false');
   expect(trigger).toHaveFocus();
-
-  await act(async () => userEvent.unhover(trigger));
-  await act(async () => userEvent.hover(trigger));
-  await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'true'));
 });
 
 it('does not return focus on outside dismissal', async () => {
@@ -97,32 +159,3 @@ it('does not return focus on outside dismissal', async () => {
   await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'false'));
   expect(document.activeElement).toBe(outside);
 });
-
-it.each(['trigger', 'popup'])(
-  'keeps Escape dismissal closed when a delayed %s hover is still pending',
-  (hoverTarget) => {
-    vi.useFakeTimers();
-    render(
-      <ContextWindowPill
-        used={22}
-        limit={100}
-        taskMetadata={{ raw_sdk_response: { usage: { input_tokens: 22 } } }}
-      />
-    );
-    const trigger = screen.getByRole('button', { name: /Context window 22% used/ });
-    fireEvent.click(trigger);
-    const rawDetails = screen.getByRole('button', { name: /Raw SDK Response/ });
-    // Queue AntD's 300 ms hover-open callback, then dismiss before it fires.
-    fireEvent.mouseEnter(hoverTarget === 'trigger' ? trigger : rawDetails);
-    rawDetails.focus();
-    fireEvent.keyDown(rawDetails, { key: 'Escape' });
-    expect(trigger).toHaveAttribute('aria-expanded', 'false');
-    act(() => vi.advanceTimersByTime(1000));
-    expect(trigger).toHaveAttribute('aria-expanded', 'false');
-    expect(trigger).toHaveFocus();
-
-    // An intentional click (also emitted by Enter/Space) can still reopen it.
-    fireEvent.click(trigger);
-    expect(trigger).toHaveAttribute('aria-expanded', 'true');
-  }
-);

@@ -7,6 +7,7 @@ import type {
   MCPServer,
   PermissionMode,
   Session,
+  Task,
 } from '@agor-live/client';
 import { SessionStatus } from '@agor-live/client';
 import {
@@ -169,7 +170,7 @@ describe('SessionFooter', () => {
           <SessionFooter {...baseProps} />
         </ConfigProvider>
       );
-      const footer = screen.getByTestId('prompt-input').parentElement!.parentElement!;
+      const footer = screen.getByTestId('prompt-input').closest('[style*="padding-bottom"]')!;
       expect(footer).toHaveStyle({ paddingBottom: '12px', flexShrink: '0' });
     } finally {
       vi.restoreAllMocks();
@@ -190,7 +191,7 @@ describe('SessionFooter', () => {
       { wrapper: Wrapper }
     );
     expect(screen.getByRole('button', { name: /stop/i })).toBeDisabled();
-    expect(container.querySelector('.ant-spin')).toBeInTheDocument();
+    expect(container.querySelector('[data-icon="loading"]')).toBeInTheDocument();
     expect(container.querySelector('[data-icon="stop"]')).not.toBeInTheDocument();
   });
 
@@ -677,16 +678,26 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
       />,
       { wrapper: Wrapper }
     );
-    fireEvent.click(screen.getByText('Stop').closest('button')!);
+    fireEvent.click(screen.getByLabelText('Stop'));
     expect(onStop).toHaveBeenCalledOnce();
     expect(onSendPrompt).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText('Queue').closest('button')!);
+    fireEvent.click(screen.getByLabelText('Queue'));
     expect(onSendPrompt).toHaveBeenCalledOnce();
     view.rerender(
       <SessionFooter {...baseProps} isRunning composerAttachmentUploading onStop={onStop} />
     );
-    expect(screen.getByText('Send').closest('button')!).toBeDisabled();
-    expect(screen.getByText('Stop').closest('button')!).toBeEnabled();
+    expect(screen.getByLabelText('Send')).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toBeEnabled();
+  });
+
+  it('labels Send and Stop on desktop and keeps them icon-only on phones', () => {
+    const view = render(<SessionFooter {...baseProps} isRunning />, { wrapper: Wrapper });
+    for (const name of ['Stop', 'Send']) {
+      expect(screen.getByLabelText(name).tagName).toBe('BUTTON');
+      expect(screen.getByLabelText(name).textContent).toBe(width < 1024 ? '' : name);
+    }
+    view.rerender(<SessionFooter {...baseProps} isRunning hasInput />);
+    expect(screen.getByLabelText('Queue').textContent).toBe(width < 1024 ? '' : 'Queue');
   });
 
   it('retains pending feedback and waits for an explicit cleanup failure before offering retry', () => {
@@ -695,21 +706,41 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
       <SessionFooter {...baseProps} isRunning stopRequestInFlight onStop={onStop} />,
       { wrapper: Wrapper }
     );
-    fireEvent.click(screen.getByText('Stop').closest('button')!);
+    fireEvent.click(screen.getByLabelText('Stop'));
     expect(onStop).not.toHaveBeenCalled();
-    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
-    expect(screen.getByText('Stop').closest('button')!).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByLabelText('Stop')).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toHaveAttribute('aria-busy', 'true');
     view.rerender(<SessionFooter {...baseProps} stopRequestInFlight onStop={onStop} />);
-    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} isRunning isStopping onStop={onStop} />);
-    const recovering = screen.getByRole('button', { name: 'Recovering' });
+    const recovering = screen.getByRole('button', { name: 'Stop' });
     expect(recovering).toBeDisabled();
+    expect(recovering).toHaveAttribute('aria-busy', 'true');
+    expect(recovering.textContent).toBe(width < 1024 ? '' : 'Stop');
     fireEvent.click(recovering);
     expect(onStop).not.toHaveBeenCalled();
+    view.rerender(
+      <SessionFooter
+        {...baseProps}
+        isRunning
+        isStopping
+        recoveryTask={
+          {
+            task_id: 'stopping-task',
+            termination_request: { cause: 'user_stop', requested_at: '2026-01-01T00:00:00Z' },
+          } as Task
+        }
+        onStop={onStop}
+      />
+    );
+    const stopping = screen.getByRole('button', { name: 'Stop' });
+    expect(stopping).toBeDisabled();
+    expect(stopping).toHaveAttribute('aria-busy', 'true');
+    expect(stopping.textContent).toBe(width < 1024 ? '' : 'Stop');
     view.rerender(<SessionFooter {...baseProps} isRunning connectionDisabled onStop={onStop} />);
-    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} />);
-    expect(screen.queryByText('Stop')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Stop')).not.toBeInTheDocument();
   });
 
   if (width < 1024) {
@@ -721,14 +752,27 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
       render(<SessionFooter {...baseProps} isRunning hasInput />, { wrapper: Wrapper });
       expect(screen.queryByLabelText('Fork session')).not.toBeInTheDocument();
       for (const name of ['Stop', 'Queue', 'More options', 'Attach files']) {
-        const button = ['Stop', 'Queue'].includes(name)
-          ? screen.getByText(name).closest('button')!
-          : screen.getByLabelText(name);
+        const button = screen.getByLabelText(name);
         expect(button.style.minHeight).toBe('44px');
+        expect(button.style.minWidth).toBe('44px');
       }
       fireEvent.click(screen.getByLabelText('More options'));
       const sheet = (await screen.findByText('Session controls')).closest('[role=dialog]')!;
       expect(within(sheet as HTMLElement).getByLabelText('Fork session')).toBeInTheDocument();
+      // A tap must not leave any action row's hover hint over the sheet.
+      for (const label of [
+        'Attach files',
+        'Advanced upload',
+        'Fork session',
+        'BTW fork',
+        'Spawn subsession',
+      ]) {
+        fireEvent.mouseEnter(within(sheet as HTMLElement).getByText(label, { exact: true }));
+      }
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      });
+      expect(document.querySelector('.ant-tooltip')).toBeNull();
       expect(within(sheet as HTMLElement).getByLabelText('Spawn subsession')).toHaveAttribute(
         'aria-disabled',
         'true'

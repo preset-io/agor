@@ -59,7 +59,11 @@ describe('useEnsureFrameworkRepo', () => {
     await waitFor(() => expect(result.current.isCloning).toBe(true));
     expect(result.current.frameworkRepo).toBeUndefined();
     rerender({ row: { ...repo, clone_status: 'failed' } });
-    await waitFor(() => expect(result.current.error).toContain('could not be prepared'));
+    await waitFor(() =>
+      expect(result.current.error).toBe(
+        "The repository couldn't be prepared, but your existing work wasn't removed. Try again, or ask an administrator if it keeps happening."
+      )
+    );
     expect(result.current.frameworkRepo).toBeUndefined();
     expect(result.current.isCloning).toBe(false);
     expect(onCreateRepo).not.toHaveBeenCalled();

@@ -134,7 +134,7 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
         ...RAW_DIFF_LIMITS,
       });
       if (!patch) {
-        showWarning('Diff is too complex to copy safely');
+        showWarning('This diff is too complex to copy.');
         return;
       }
       diffText = patch;
@@ -143,7 +143,7 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
         ...RAW_DIFF_LIMITS,
       });
       if (!patch) {
-        showWarning('Diff is too complex to copy safely');
+        showWarning('This diff is too complex to copy.');
         return;
       }
       diffText = patch;

@@ -47,7 +47,7 @@ export const EventStreamPill = ({
         if (ok) {
           showSuccess(`${copyLabel} copied: ${id}`);
         } else {
-          showError('Failed to copy to clipboard');
+          showError("Couldn't copy. Select the text and copy it manually.");
         }
       };
 

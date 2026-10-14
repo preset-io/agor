@@ -40,6 +40,7 @@ import { useBoardMutationGuard } from '../../hooks/useBoardMutationGuard';
 import { useAgorStore } from '../../store/agorStore';
 import type { BoardWriteTicket } from '../../store/boardMutationGuard';
 import { selectBranchById } from '../../store/selectors';
+import { formatActionError } from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
 import { isSafeExternalUrl } from '../../utils/safeExternalUrl';
 import { ArchiveActionButton } from '../ArchiveButton';
@@ -210,10 +211,9 @@ const CardModalComponent = ({
       onCardUpdated?.(updated as CardWithType);
       setEditingNote(false);
       setEditingDesc(false);
-      showSuccess('Card saved');
+      showSuccess('Card saved.');
     } catch (err) {
-      console.error('Failed to save card:', err);
-      showError('Failed to save card');
+      showError(formatActionError('save the card', err, { idempotent: true }));
     } finally {
       setSaving(false);
     }
@@ -242,7 +242,7 @@ const CardModalComponent = ({
         // confirmation was open.
         if (!isOpenTicketCurrent(ticket)) {
           guard.warnDropped(
-            'The card was not archived: the board reloaded or the connection dropped.'
+            "Couldn't archive the card, because the board reloaded or the connection dropped."
           );
           return;
         }
@@ -253,10 +253,9 @@ const CardModalComponent = ({
           });
           onCardUpdated?.(updated as CardWithType);
           onClose();
-          showSuccess('Card archived');
+          showSuccess('Card archived.');
         } catch (err) {
-          console.error('Failed to archive card:', err);
-          showError('Failed to archive card');
+          showError(formatActionError('archive the card', err, { idempotent: true }));
         }
       },
     });
@@ -284,7 +283,7 @@ const CardModalComponent = ({
       onOk: async () => {
         if (!isOpenTicketCurrent(ticket)) {
           guard.warnDropped(
-            'The card was not deleted: the board reloaded or the connection dropped.'
+            "Couldn't delete the card, because the board reloaded or the connection dropped."
           );
           return;
         }
@@ -292,10 +291,9 @@ const CardModalComponent = ({
           await client.service('cards').remove(card.card_id);
           onCardDeleted?.(card.card_id);
           onClose();
-          showSuccess('Card deleted');
+          showSuccess('Card deleted.');
         } catch (err) {
-          console.error('Failed to delete card:', err);
-          showError('Failed to delete card');
+          showError(formatActionError('delete the card', err, { idempotent: true }));
         }
       },
     });

@@ -37,8 +37,8 @@
   z-index: 200;
   display: flex;
   background: rgba(4, 10, 9, 0.82);
-  backdrop-filter: blur(5px);
   -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
   animation: mzFade 180ms ease both;
 }
 

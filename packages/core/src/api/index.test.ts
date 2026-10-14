@@ -10,7 +10,7 @@ import { TaskStatus } from '@agor/core/types';
 import type { Socket } from 'socket.io-client';
 import io from 'socket.io-client';
 import { beforeEach, describe, expect, it, type MockedFunction, vi } from 'vitest';
-import { BROWSER_FEATHERS_ACK_TIMEOUT_MS } from '../config/constants';
+import { BROWSER_FEATHERS_ACK_TIMEOUT_MS, PAGINATION_CHURN_MESSAGE } from '../config/constants';
 import type { AgorService, UpdatePayload } from './index';
 import { createClient, isDaemonRunning, normalizeFindResult } from './index';
 
@@ -647,9 +647,7 @@ describe('createClient', () => {
         })
         .mockResolvedValueOnce({ total: 2, limit: 2, skip: 2, data: [] });
 
-      await expect(sessionsService.findAll()).rejects.toThrow(
-        'Paginated findAll() changed while pages were being read'
-      );
+      await expect(sessionsService.findAll()).rejects.toThrow(PAGINATION_CHURN_MESSAGE);
     });
 
     it.each([

@@ -5,7 +5,7 @@ export default defineConfig({
     index: 'src/index.ts',
     pure: 'src/pure.ts',
   },
-  format: ['cjs', 'esm'],
+  format: ['esm'],
   dts: false,
   clean: process.env.TSUP_CLEAN !== 'false',
   splitting: false,

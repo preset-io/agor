@@ -20,10 +20,10 @@ import {
 import { useState } from 'react';
 import type { NewSessionConfig } from '../domain/sessionCreation';
 import { captureSessionPatchCommit } from '../store/realtimeBatch';
-import { CLIENT_NOT_CONNECTED_ERROR, formatActionError } from '../utils/connectionErrors';
+import { CLIENT_NOT_CONNECTED_ERROR } from '../utils/connectionErrors';
 
 export const ARCHIVE_REFRESH_WARNING =
-  'Session and same-branch children archived; refresh required to update the session list.';
+  'Session and its subsessions archived. Refresh to update the list.';
 
 type ArchiveSessionResult = {
   session: Session;
@@ -33,9 +33,9 @@ type ArchiveSessionResult = {
 interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session>;
   updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session>;
-  deleteSession: (sessionId: SessionID) => Promise<boolean>;
-  archiveSession: (sessionId: SessionID) => Promise<ArchiveSessionResult | null>;
-  unarchiveSession: (sessionId: SessionID) => Promise<Session | null>;
+  deleteSession: (sessionId: SessionID) => Promise<void>;
+  archiveSession: (sessionId: SessionID) => Promise<ArchiveSessionResult>;
+  unarchiveSession: (sessionId: SessionID) => Promise<Session>;
   // Throw on failure (do NOT return null) so callers can preserve the user's
   // typed prompt in the compose box. See SessionPanel.handleFork / handleBtwSend
   // and ForkSpawnModal.handleOk for the preserved-on-failure invariants.
@@ -43,7 +43,6 @@ interface UseSessionActionsResult {
   btwForkSession: (sessionId: SessionID, prompt: string) => Promise<Session>;
   spawnSession: (sessionId: SessionID, config: Partial<SpawnConfig>) => Promise<Session>;
   creating: boolean;
-  error: string | null;
 }
 
 /**
@@ -54,17 +53,14 @@ interface UseSessionActionsResult {
  */
 export function useSessionActions(client: AgorClient | null): UseSessionActionsResult {
   const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const createSession = async (config: NewSessionConfig): Promise<Session> => {
     if (!client) {
-      setError('Client not connected');
       throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
       setCreating(true);
-      setError(null);
 
       // Branch ID is now passed directly (resolved in NewSessionModal or from branch creation)
       if (!config.branch_id) {
@@ -114,11 +110,6 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       });
 
       return newSession;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to create session';
-      setError(message);
-      console.error('Failed to create session:', err);
-      throw err;
     } finally {
       setCreating(false);
     }
@@ -126,13 +117,11 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
   const forkSession = async (sessionId: SessionID, prompt: string): Promise<Session> => {
     if (!client) {
-      setError('Client not connected');
       throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
       setCreating(true);
-      setError(null);
 
       // Call custom fork endpoint via FeathersJS client
       const forkedSession = (await client.service(`sessions/${sessionId}/fork`).create({
@@ -148,8 +137,6 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       return forkedSession;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fork session';
-      setError(message);
-      console.error('Failed to fork session:', err);
       // Re-throw so callers (and modals) can distinguish failure from success
       // and keep the user's typed prompt from being silently discarded.
       throw err instanceof Error ? err : new Error(message);
@@ -160,13 +147,11 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
 
   const btwForkSession = async (sessionId: SessionID, prompt: string): Promise<Session> => {
     if (!client) {
-      setError('Client not connected');
       throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
       setCreating(true);
-      setError(null);
 
       // Fork the session
       const forkedSession = (await client.service(`sessions/${sessionId}/fork`).create({
@@ -186,8 +171,6 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       return forkedSession;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create btw fork';
-      setError(message);
-      console.error('Failed to create btw fork:', err);
       throw err instanceof Error ? err : new Error(message);
     } finally {
       setCreating(false);
@@ -199,13 +182,11 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     config: Partial<SpawnConfig>
   ): Promise<Session> => {
     if (!client) {
-      setError('Client not connected');
       throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
       setCreating(true);
-      setError(null);
 
       // Call custom spawn endpoint via FeathersJS client with full SpawnConfig
       const spawnedSession = (await client
@@ -220,8 +201,6 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       return spawnedSession;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to spawn session';
-      setError(message);
-      console.error('Failed to spawn session:', err);
       throw err instanceof Error ? err : new Error(message);
     } finally {
       setCreating(false);
@@ -233,97 +212,59 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     updates: Partial<Session>
   ): Promise<Session> => {
     if (!client) {
-      setError(CLIENT_NOT_CONNECTED_ERROR);
       throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
-    try {
-      setError(null);
-      const updatedSession = await client.service('sessions').patch(sessionId, updates);
-      return updatedSession;
-    } catch (err) {
-      setError(formatActionError('update session', err, { idempotent: true }));
-      // Let the request-local notification boundary report the actual failure;
-      // shared hook state cannot identify which overlapping request failed.
-      throw err;
-    }
+    return client.service('sessions').patch(sessionId, updates);
   };
 
-  const deleteSession = async (sessionId: SessionID): Promise<boolean> => {
+  const deleteSession = async (sessionId: SessionID): Promise<void> => {
     if (!client) {
-      setError('Client not connected');
-      return false;
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
-    try {
-      setError(null);
-      await client.service('sessions').remove(sessionId);
-      return true;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to delete session';
-      setError(message);
-      console.error('Failed to delete session:', err);
-      return false;
-    }
+    await client.service('sessions').remove(sessionId);
   };
 
-  const archiveSession = async (sessionId: SessionID): Promise<ArchiveSessionResult | null> => {
+  const archiveSession = async (sessionId: SessionID): Promise<ArchiveSessionResult> => {
     if (!client) {
-      setError('Client not connected');
-      return null;
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
+    const commit = captureSessionPatchCommit();
+    const result = (await client.service(`sessions/${sessionId}/archive`).create({})) as {
+      session: Session;
+      affectedSessions?: Session[];
+    };
+    // Do not depend on every descendant's realtime event arriving before the
+    // drawer updates. Only reconcile server-confirmed rows, never infer a
+    // cascade from the visible genealogy (which can include remote sessions).
+    // Their payloads may already be stale: the store refetches these IDs.
+    // affectedSessions contains changed rows only: an already-archived root
+    // is returned separately and will not produce another realtime patch.
+    const confirmed = new Map(
+      [result.session, ...(result.affectedSessions ?? [])].map((session) => [
+        session.session_id,
+        session,
+      ])
+    );
     try {
-      setError(null);
-      const commit = captureSessionPatchCommit();
-      const result = (await client.service(`sessions/${sessionId}/archive`).create({})) as {
-        session: Session;
-        affectedSessions?: Session[];
-      };
-      // Do not depend on every descendant's realtime event arriving before the
-      // drawer updates. Only reconcile server-confirmed rows, never infer a
-      // cascade from the visible genealogy (which can include remote sessions).
-      // Their payloads may already be stale: the store refetches these IDs.
-      // affectedSessions contains changed rows only: an already-archived root
-      // is returned separately and will not produce another realtime patch.
-      const confirmed = new Map(
-        [result.session, ...(result.affectedSessions ?? [])].map((session) => [
-          session.session_id,
-          session,
-        ])
-      );
-      try {
-        await commit([...confirmed.values()], (id) => client.service('sessions').get(id));
-      } catch {
-        return { session: result.session, reconciliation: 'refresh-required' };
-      }
-      return { session: result.session, reconciliation: 'confirmed' };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to archive session';
-      setError(message);
-      console.error('Failed to archive session:', err);
-      return null;
+      await commit([...confirmed.values()], (id) => client.service('sessions').get(id));
+    } catch {
+      return { session: result.session, reconciliation: 'refresh-required' };
     }
+    return { session: result.session, reconciliation: 'confirmed' };
   };
 
-  const unarchiveSession = async (sessionId: SessionID): Promise<Session | null> => {
+  const unarchiveSession = async (sessionId: SessionID): Promise<Session> => {
     if (!client) {
-      setError('Client not connected');
-      return null;
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
-    try {
-      setError(null);
-      const result = (await client.service(`sessions/${sessionId}/unarchive`).create({})) as {
-        session: Session;
-      };
-      return result.session;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to unarchive session';
-      setError(message);
-      console.error('Failed to unarchive session:', err);
-      return null;
-    }
+    const result = (await client.service(`sessions/${sessionId}/unarchive`).create({})) as {
+      session: Session;
+    };
+    return result.session;
   };
 
   return {
@@ -336,6 +277,5 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     btwForkSession,
     spawnSession,
     creating,
-    error,
   };
 }

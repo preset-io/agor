@@ -23,36 +23,25 @@ import type {
 // shape.
 import { buildZoneTriggerContext, isAgenticToolName } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Collapse,
-  Form,
-  Input,
-  Modal,
-  Radio,
-  Select,
-  Space,
-  Spin,
-  Typography,
-} from 'antd';
+import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Spin, Typography } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  fullSessionDetailsErrorMessage,
-  useFullSessionDetails,
-} from '../../../hooks/useFullSessionDetails';
+import { useFullSessionDetails } from '../../../hooks/useFullSessionDetails';
 import type { AgenticToolOption } from '../../../types';
+import { type ActionErrorCopy, errorMessage } from '../../../utils/connectionErrors';
 import { resolveSessionMcpServerIds } from '../../../utils/resolveQuickStartMcpServerIds';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 // Async server-side renderer — keeps Handlebars out of the browser bundle so
 // the page doesn't need CSP `script-src 'unsafe-eval'`.
-import { renderTemplate } from '../../../utils/templates';
+import { isUnrenderedTemplate, renderTemplate } from '../../../utils/templates';
 import { AgenticToolConfigForm, buildModelConfigFromFormValues } from '../../AgenticToolConfigForm';
 import {
   AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
 } from '../../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
+import { ActionErrorNotice, CompactNotice } from '../../CompactNotice';
+
+type RenderFailure = { kind: 'request'; error: unknown } | { kind: 'template' };
 
 interface ZoneTriggerModalProps {
   /** Stable for one drop action; changes only when a new trigger action opens. */
@@ -70,6 +59,8 @@ interface ZoneTriggerModalProps {
   availableAgents: AgenticToolOption[];
   mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null; // Optional - current user for default settings
+  /** The last run failed before any session started; the modal stays open to run again. */
+  runError?: ActionErrorCopy | null;
   onExecute: (params: {
     sessionId: string | 'new';
     action: 'prompt' | 'fork' | 'spawn';
@@ -97,6 +88,7 @@ const ZoneTriggerModalAction = ({
   availableAgents,
   mcpServerById,
   currentUser,
+  runError,
   onExecute,
 }: ZoneTriggerModalProps) => {
   const [form] = Form.useForm();
@@ -166,9 +158,17 @@ const ZoneTriggerModalAction = ({
   const templateEditRevisionRef = useRef(0);
   const templateRenderRequestRef = useRef<{
     target: string;
+    attempt: number;
     editRevision: number;
-    promise: Promise<string>;
+    promise: Promise<{ rendered: string; failure?: RenderFailure }>;
   } | null>(null);
+  // Rendering failed for this target: the prompt holds the template as written.
+  const [renderFailure, setRenderFailure] = useState<{
+    target: string;
+    failure: RenderFailure;
+  } | null>(null);
+  // Bumped by Try again: renders the current target again.
+  const [renderAttempt, setRenderAttempt] = useState(0);
 
   // Explicit state for session config (survives form mount/unmount cycles)
   const [sessionConfig, setSessionConfig] = useState<{
@@ -305,13 +305,23 @@ const ZoneTriggerModalAction = ({
             : undefined,
         }),
         'raw'
+      ).then(
+        (rendered): { rendered: string; failure?: RenderFailure } =>
+          isUnrenderedTemplate(initial.trigger.template, rendered)
+            ? { rendered, failure: { kind: 'template' } }
+            : { rendered },
+        (error: unknown) => ({
+          rendered: initial.trigger.template,
+          failure: { kind: 'request', error } as const,
+        })
       );
 
     let request = templateRenderRequestRef.current;
-    if (!request || request.target !== templateTarget) {
+    if (!request || request.target !== templateTarget || request.attempt !== renderAttempt) {
       templateEditRevisionRef.current += 1;
       request = {
         target: templateTarget,
+        attempt: renderAttempt,
         editRevision: templateEditRevisionRef.current,
         promise: renderForSession(fullSelectedSession),
       };
@@ -321,8 +331,9 @@ const ZoneTriggerModalAction = ({
 
     let active = true;
     const activeRequest = request;
-    void activeRequest.promise.then((rendered) => {
+    void activeRequest.promise.then(({ rendered, failure }) => {
       if (!active || templateRenderRequestRef.current !== activeRequest) return;
+      setRenderFailure(failure ? { target: templateTarget, failure } : null);
       setTemplateState((current) => ({
         target: templateTarget,
         value:
@@ -333,7 +344,7 @@ const ZoneTriggerModalAction = ({
     return () => {
       active = false;
     };
-  }, [initial, mode, selectedSessionId, fullSelectedSession, templateTarget]);
+  }, [initial, mode, selectedSessionId, fullSelectedSession, templateTarget, renderAttempt]);
 
   const handleExecute = async () => {
     if (sessionDetailsPending) return;
@@ -396,6 +407,7 @@ const ZoneTriggerModalAction = ({
       width={700}
     >
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+        {runError && <ActionErrorNotice error={runError} />}
         {/* Primary Choice: Create New or Reuse */}
         <div>
           <Radio.Group
@@ -481,8 +493,7 @@ const ZoneTriggerModalAction = ({
             <div>
               {requiresSupportedToolSelection && (
                 <Alert
-                  title="This zone uses a removed agentic tool"
-                  description="Choose a supported tool before creating a new session. Existing sessions remain available for reuse."
+                  title="This zone's agent is no longer available. Choose another agent to start a new session."
                   type="warning"
                   showIcon
                   style={{ marginBottom: 12 }}
@@ -557,19 +568,49 @@ const ZoneTriggerModalAction = ({
             Prompt (editable)
           </Typography.Text>
           {sessionDetails.status === 'error' && sessionDetailsFailed && (
-            <Alert
+            <CompactNotice
               type="error"
-              showIcon
+              role="alert"
               style={{ marginBottom: 8 }}
-              title={fullSessionDetailsErrorMessage(sessionDetails.error)}
-              description="The template is not rendered from partial session data. Retry to render it and enable execution."
-              action={
-                <Button size="small" onClick={sessionDetails.retry}>
-                  Retry
-                </Button>
-              }
+              message="Couldn't load this session's details."
+              detailsLead="The template needs the full session. You can run the zone's trigger once it loads."
+              details={[
+                {
+                  label: 'Error',
+                  value: errorMessage(sessionDetails.error),
+                  code: true,
+                },
+              ]}
+              actions={[{ label: 'Try again', onClick: sessionDetails.retry }]}
             />
           )}
+          {renderFailure?.target === templateTarget &&
+            !isRendering &&
+            (renderFailure.failure.kind === 'request' ? (
+              <CompactNotice
+                type="warning"
+                role="alert"
+                style={{ marginBottom: 8 }}
+                message="Couldn't fill in the template, so the prompt shows it as written."
+                details={[
+                  {
+                    label: 'Error',
+                    value: errorMessage(renderFailure.failure.error),
+                    code: true,
+                  },
+                ]}
+                actions={[
+                  { label: 'Try again', onClick: () => setRenderAttempt((attempt) => attempt + 1) },
+                ]}
+              />
+            ) : (
+              <CompactNotice
+                type="warning"
+                role="alert"
+                style={{ marginBottom: 8 }}
+                message="The template has a mistake, so the prompt shows it as written. Edit the prompt before you run it, or fix the template in the zone's settings."
+              />
+            ))}
           <Spin spinning={isRendering} delay={200} description="Rendering template…">
             <Input.TextArea
               value={editableTemplate}

@@ -9,6 +9,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { SessionID } from '../types/id';
 import { renderTemplate } from './handlebars-helpers';
 
@@ -16,7 +17,14 @@ import { renderTemplate } from './handlebars-helpers';
  * Load Agor system prompt template from disk
  */
 export async function loadAgorSystemPromptTemplate(): Promise<string> {
-  const templatePath = path.join(__dirname, 'agor-system-prompt.md');
+  // `import.meta.url`, not `__dirname`: under code splitting the tsup
+  // `__dirname` shim lives in a shared chunk at the package root. This module
+  // stays in the `templates/session-context.js` entry;
+  // scripts/packaged-entry-import-smoke.mjs loads the template from `dist`.
+  const templatePath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    'agor-system-prompt.md'
+  );
   return await fs.readFile(templatePath, 'utf-8');
 }
 

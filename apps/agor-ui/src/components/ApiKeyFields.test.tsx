@@ -70,7 +70,7 @@ describe('ApiKeyFields authority fencing', () => {
     const input = screen.getByPlaceholderText('AIza...');
     fireEvent.change(input, { target: { value: 'secret-example' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not save');
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't save this field.");
     expect(screen.queryByText(/upstream rejected/)).toBeNull();
     expect(input).toHaveValue('secret-example');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -94,7 +94,44 @@ describe('ApiKeyFields authority fencing', () => {
       </AntApp>
     );
     fireEvent.click(screen.getByRole('button', { name: /Clear$/ }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not clear');
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't clear this field.");
     expect(screen.getByText('Set')).toBeVisible();
+  });
+
+  it('explains a lost reply and a guessed permission reason without the raw error', async () => {
+    const forbidden = Object.assign(new Error('Forbidden for key secret-example'), {
+      name: 'Forbidden',
+      code: 403,
+    });
+    const onSave = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('socket has been disconnected'))
+      .mockRejectedValueOnce(forbidden);
+    render(
+      <AntApp>
+        <ApiKeyFields
+          tool="gemini"
+          fieldStatus={{}}
+          onSave={onSave}
+          onClear={vi.fn()}
+          identityKey="user-a"
+          operationScope={['user-a', 1]}
+        />
+      </AntApp>
+    );
+    fireEvent.change(screen.getByPlaceholderText('AIza...'), {
+      target: { value: 'secret-example' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "The connection to Agor dropped before this was confirmed. If it didn't go through, try to save this field again once the connection is back."
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        "Couldn't save this field. You don't have permission to do this."
+      )
+    );
+    expect(screen.queryByText(/secret-example/)).toBeNull();
   });
 });

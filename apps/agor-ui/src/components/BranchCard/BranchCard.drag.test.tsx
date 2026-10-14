@@ -62,6 +62,28 @@ describe('BranchCard drag handle', () => {
     expect(title.closest(`.${REACT_FLOW_NO_DRAG_CLASS}`)).toBeNull();
   });
 
+  it('hides the drag handle on the view-only canvas', () => {
+    const { rerender } = render(
+      <ConnectionProvider value={connected}>
+        <BranchCard branch={branch} repo={repo} sessions={[]} userById={new Map()} client={null} />
+      </ConnectionProvider>
+    );
+    expect(screen.getByTitle('Drag to reposition')).toBeInTheDocument();
+    rerender(
+      <ConnectionProvider value={connected}>
+        <BranchCard
+          branch={branch}
+          repo={repo}
+          sessions={[]}
+          userById={new Map()}
+          client={null}
+          showDragHandle={false}
+        />
+      </ConnectionProvider>
+    );
+    expect(screen.queryByTitle('Drag to reposition')).not.toBeInTheDocument();
+  });
+
   it('opens terminals with structured branch id routing instead of raw cd input', () => {
     const onOpenTerminal = vi.fn();
     render(
