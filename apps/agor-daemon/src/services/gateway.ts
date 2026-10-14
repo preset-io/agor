@@ -5717,10 +5717,10 @@ export class GatewayService {
       await this.requireInboundSessionCreateAccess(channel, user.user_id);
       try {
         // Channel MCP inheritance is applied below, not branch defaults.
-        session = await sessionsService.create(
-          { ...sessionInput, mcpServerIds: [] },
-          { _agenticConfigResolved: true }
-        );
+        session = await sessionsService.create(sessionInput, {
+          _agenticConfigResolved: true,
+          _skipMcpDefaults: true,
+        });
       } catch (error) {
         const stableSessionId = outboundAdmission?.sessionId ?? data.idempotency_session_id;
         if (!stableSessionId || !isDatabaseUniqueConstraintError(error)) {

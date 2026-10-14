@@ -203,7 +203,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       // not only with raw SQLite fixtures or an executor-side empty mock.
       await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
         const links = new SessionMCPServerRepository(scoped);
-        await links.setServers(session.session_id, []);
+        await links.setServers(session.session_id, [], { markSelectionExplicit: true });
         const stored = await new SessionRepository(scoped).findById(session.session_id);
         expect(stored?.mcp_selection_explicit).toBe(true);
         const global = vi.fn(async () => [owner.server]);
@@ -219,7 +219,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
       await expect(
         runWithTenantDatabaseScope(db, tenantB, (scoped) =>
-          new SessionMCPServerRepository(scoped).setServers(session.session_id, [])
+          new SessionMCPServerRepository(scoped).setServers(session.session_id, [], {
+            markSelectionExplicit: true,
+          })
         )
       ).rejects.toThrow();
       await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {

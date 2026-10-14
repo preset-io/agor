@@ -404,7 +404,9 @@ describe('authoritative MCP gateway real transport', () => {
         auth: { type: 'none' },
       },
     });
-    await new SessionMCPServerRepository(h.rawDb).setServers(h.session.session_id, []);
+    await new SessionMCPServerRepository(h.rawDb).setServers(h.session.session_id, [], {
+      markSelectionExplicit: true,
+    });
     const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network forbidden'));
     try {
       await expect(h.request('POST', initialize)).rejects.toMatchObject({

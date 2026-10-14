@@ -205,9 +205,12 @@ is not a routine reconnect and does not revoke tokens at the provider.
 
 A complete session MCP selection is authoritative, including an empty selection:
 `mcpServerIds: []` means no external MCP servers. Omitting the selection retains
-legacy global-server inheritance. The distinction is saved when creating or
-initializing a session or replacing its MCP selection; it is not inferred from
-an empty attachment table on older sessions. The built-in Agor MCP remains available.
+legacy global-server inheritance. The distinction is saved only when a caller
+supplies the selection while creating or initializing a session (or spawning a
+subsession). Forks, and subsessions spawned without a selection, inherit it from
+their parent. Inherited branch, user or gateway-channel defaults keep global
+servers, and later link edits never change it. It is not inferred from an empty
+attachment table on older sessions. The built-in Agor MCP remains available.
 `attached_mcp_servers` reports explicit links, not implicit global servers, so an
 empty list alone does not establish that a historical task ran without external MCP.
 

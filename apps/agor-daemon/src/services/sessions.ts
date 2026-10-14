@@ -241,6 +241,8 @@ export type SessionParams = QueryParams<{
      * Root-level service params are server-controlled; transport query/data cannot set this marker.
      */
     _agenticConfigResolved?: boolean;
+    /** Internal fork/spawn/gateway create: skip branch/user MCP defaults without recording an explicit selection. */
+    _skipMcpDefaults?: boolean;
     /**
      * Trusted session-admission override. Genealogical children inherit their
      * parent's SDK lineage; independent creates resolve branch intent + config.
@@ -683,13 +685,17 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       // Omission preserves provenance: only defaults read here may be skipped.
       // Never accept a client-supplied "inherited" list or fall through to user
       // defaults after a configured branch list turns out to be entirely stale.
+      // Internal children copy their parent's links later; skipping defaults
+      // is not a caller selection and must keep implicit global servers.
+      const selectedMcpServerIds =
+        explicitMcpServerIds ?? (params?._skipMcpDefaults === true ? [] : undefined);
       const user =
-        explicitMcpServerIds === undefined && createdSession.created_by
+        selectedMcpServerIds === undefined && createdSession.created_by
           ? await new UsersRepository(scoped).findById(createdSession.created_by)
           : undefined;
       const serverIds = normalizeCreateMcpServerIds(
         resolveSessionMcpServerIds({
-          explicit: explicitMcpServerIds,
+          explicit: selectedMcpServerIds,
           branch,
           user,
         })
@@ -931,13 +937,22 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   }
 
   /**
-   * Attach explicit MCP server IDs to a session.
+   * Attach MCP server IDs to a session.
+   * Only a caller-supplied selection records explicit intent; inherited or
+   * default lists (gateway channel/user defaults) keep implicit global servers.
    * Emits WebSocket events so the UI updates in real-time.
    */
-  async setMCPServers(sessionId: SessionID, serverIds: string[], label: string): Promise<void> {
-    await runWithTenantDatabaseScope(this.db, getCurrentTenantId(), (scoped) =>
-      new SessionRepository(scoped).update(sessionId, { mcp_selection_explicit: true })
-    );
+  async setMCPServers(
+    sessionId: SessionID,
+    serverIds: string[],
+    label: string,
+    options: { selectionExplicit?: boolean } = {}
+  ): Promise<void> {
+    if (options.selectionExplicit) {
+      await runWithTenantDatabaseScope(this.db, getCurrentTenantId(), (scoped) =>
+        new SessionRepository(scoped).update(sessionId, { mcp_selection_explicit: true })
+      );
+    }
     for (const serverId of serverIds) {
       try {
         await this.sessionMCPRepo.addServer(sessionId, serverId as MCPServerID);
@@ -1143,9 +1158,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
     const forkedSession = await this.create(
       {
-        mcpServerIds: [], // Fork copies its parent below, not fresh-session defaults.
         agentic_tool: parentTool,
-        ...(parent.mcp_selection_explicit && { mcpServerIds: [] }),
         agentic_tool_preset_id: inherited.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
         title: data.prompt.substring(0, 100), // First 100 chars as title
@@ -1166,7 +1179,13 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         model_config: inherited.model_config,
         // Don't copy sdk_session_id - fork will get its own via forkSession:true
       },
-      { ...params, _agenticConfigResolved: true, _sdkHomeScope: parent.sdk_home_scope }
+      {
+        ...params,
+        _agenticConfigResolved: true,
+        // MCP links come from the parent or an explicit spawn selection below.
+        _skipMcpDefaults: true,
+        _sdkHomeScope: parent.sdk_home_scope,
+      }
     );
 
     // Cast forkedSession to Session to handle return type
@@ -1328,11 +1347,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
     const spawnedSession = await this.create(
       {
-        mcpServerIds: [], // Spawn applies its separate explicit/parent policy below.
         agentic_tool: targetTool,
-        ...((data.mcpServerIds !== undefined || parent.mcp_selection_explicit) && {
-          mcpServerIds: [],
-        }),
         agentic_tool_preset_id: resolved.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
         title: data.title || data.prompt.substring(0, 100), // Use provided title or first 100 chars
@@ -1354,7 +1369,13 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         callback_config: callbackConfig,
         // Don't copy sdk_session_id - spawn will get its own via forkSession:true
       },
-      { ...params, _agenticConfigResolved: true, _sdkHomeScope: parent.sdk_home_scope }
+      {
+        ...params,
+        _agenticConfigResolved: true,
+        // MCP links come from the parent or an explicit spawn selection below.
+        _skipMcpDefaults: true,
+        _sdkHomeScope: parent.sdk_home_scope,
+      }
     );
 
     // Cast spawnedSession to Session to handle return type (create returns Session | Session[])
@@ -1363,7 +1384,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // MCP servers: explicit mcpServerIds > copy from parent
     // An explicit empty array means "no MCPs" — does NOT fall through to parent.
     if (data.mcpServerIds !== undefined) {
-      await this.setMCPServers(session.session_id as SessionID, data.mcpServerIds, 'spawn');
+      await this.setMCPServers(session.session_id as SessionID, data.mcpServerIds, 'spawn', {
+        selectionExplicit: true,
+      });
     } else {
       await this.copyMCPServers(
         parent.session_id as SessionID,

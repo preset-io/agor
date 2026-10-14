@@ -126,7 +126,11 @@ describe('runSessionInitializationStages (SQLite)', () => {
       runSessionInitializationStages({
         db,
         mcpServerIds: [],
-        setMcpServers: (ids) => mcpService.setServers(seeded.session.session_id, ids),
+        // Mirrors the initialize route: its selection completes creation.
+        setMcpServers: (ids) =>
+          mcpService.setServers(seeded.session.session_id, ids, undefined, {
+            markSelectionExplicit: true,
+          }),
         setEnvVarNames: vi.fn(),
         publishMcpServersChanged: vi.fn(),
         publishEnvVarNamesChanged: vi.fn(),

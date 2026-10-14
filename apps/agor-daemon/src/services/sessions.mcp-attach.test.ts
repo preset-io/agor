@@ -16,7 +16,7 @@ import type { Application } from '@agor/core/feathers';
 import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import { getMcpServersForSession, resolveEffectiveSessionMcpServers } from '@agor/core/mcp';
 import { resolveSessionMcpServerIds } from '@agor/core/sessions';
-import type { CreateSessionInput } from '@agor/core/types';
+import type { CreateSessionInput, MCPServer, Session } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { afterEach, describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -434,4 +434,137 @@ describe('SessionsService create-time MCP attachment', () => {
     await expect(new SessionRepository(db).findAll()).resolves.toHaveLength(0);
     expect(events).toEqual([]);
   });
+});
+
+describe('SessionsService child MCP selection intent', () => {
+  function childService(db: Database, ownerId: string) {
+    const scopedDb = createTenantScopedDatabaseProxy(db, { requireScope: true });
+    const service = new SessionsService(scopedDb, appStub());
+    vi.spyOn(
+      service as unknown as { resolveChildIdentity: () => Promise<unknown> },
+      'resolveChildIdentity'
+    ).mockResolvedValue({ created_by: ownerId, unix_username: null });
+    const scoped = <T>(work: () => Promise<T>) =>
+      runWithTenantDatabaseScope(scopedDb, 'static', work);
+    return {
+      create: (input: CreateSessionInput, params?: SessionParams) =>
+        scoped(() => service.create(input, params) as Promise<Session>),
+      fork: (id: string) => scoped(() => service.fork(id, { prompt: 'fork' })),
+      spawn: (id: string, mcpServerIds?: string[]) =>
+        scoped(
+          () =>
+            service.spawn(id, {
+              prompt: 'spawn',
+              enableCallback: false,
+              mcpServerIds,
+            }) as Promise<Session>
+        ),
+    };
+  }
+
+  async function effective(db: Database, session: Session, global: MCPServer, userId: string) {
+    const stored = await new SessionRepository(db).findById(session.session_id);
+    return resolveEffectiveSessionMcpServers(
+      stored!,
+      await new SessionMCPServerRepository(db).listServers(session.session_id, true),
+      async () => [global],
+      userId
+    );
+  }
+
+  async function childFixture(db: Database) {
+    const base = await fixture(db);
+    const attached = await base.servers.create({
+      name: `attached-${generateId()}`,
+      transport: 'stdio',
+      command: 'node',
+      args: ['attached.js'],
+      scope: 'session',
+      source: 'user',
+      enabled: true,
+    });
+    // Defaults must not leak into children that inherit from their parent.
+    await new UsersRepository(db).update(base.user.user_id, {
+      default_mcp_server_ids: [attached.mcp_server_id],
+    });
+    return { ...base, attached };
+  }
+
+  const parentInput = (branchId: string, userId: string): CreateSessionInput => ({
+    branch_id: branchId,
+    created_by: userId,
+    agentic_tool: 'claude-code',
+    status: SessionStatus.IDLE,
+  });
+
+  dbTest(
+    'fork and spawn of a parent without explicit intent keep implicit global servers',
+    async ({ db }) => {
+      const { user, branch, sharedServer, attached } = await childFixture(db);
+      const service = childService(db, user.user_id);
+      const parent = await service.create(parentInput(branch.branch_id, user.user_id), {
+        _agenticConfigResolved: true,
+      } as never);
+      expect(parent.mcp_selection_explicit).toBeUndefined();
+
+      const children = [
+        await service.fork(parent.session_id),
+        await service.spawn(parent.session_id),
+      ];
+      for (const child of children) {
+        const stored = await new SessionRepository(db).findById(child.session_id);
+        expect(stored?.mcp_selection_explicit).toBeUndefined();
+        expect(
+          (await effective(db, child, sharedServer, user.user_id)).map((s) => s.mcp_server_id)
+        ).toEqual([sharedServer.mcp_server_id, attached.mcp_server_id]);
+      }
+    }
+  );
+
+  dbTest('explicit parent intent propagates to fork and inheriting spawn', async ({ db }) => {
+    const { user, branch, sharedServer } = await childFixture(db);
+    const service = childService(db, user.user_id);
+    const parent = await service.create(
+      { ...parentInput(branch.branch_id, user.user_id), mcpServerIds: [] },
+      { _agenticConfigResolved: true } as never
+    );
+    expect(parent.mcp_selection_explicit).toBe(true);
+
+    const children = [
+      await service.fork(parent.session_id),
+      await service.spawn(parent.session_id),
+    ];
+    for (const child of children) {
+      const stored = await new SessionRepository(db).findById(child.session_id);
+      expect(stored?.mcp_selection_explicit).toBe(true);
+      expect(await effective(db, child, sharedServer, user.user_id)).toEqual([]);
+    }
+  });
+
+  dbTest('a caller-supplied spawn selection is explicit intent', async ({ db }) => {
+    const { user, branch, sharedServer } = await childFixture(db);
+    const service = childService(db, user.user_id);
+    const parent = await service.create(parentInput(branch.branch_id, user.user_id), {
+      _agenticConfigResolved: true,
+    } as never);
+    const child = await service.spawn(parent.session_id, []);
+    const stored = await new SessionRepository(db).findById(child.session_id);
+    expect(stored?.mcp_selection_explicit).toBe(true);
+    expect(await effective(db, child, sharedServer, user.user_id)).toEqual([]);
+  });
+
+  dbTest(
+    'internal skip-defaults create (gateway) records no selection and keeps globals',
+    async ({ db }) => {
+      const { user, branch, sharedServer } = await childFixture(db);
+      const service = childService(db, user.user_id);
+      const created = await service.create(parentInput(branch.branch_id, user.user_id), {
+        _agenticConfigResolved: true,
+        _skipMcpDefaults: true,
+      } as never);
+      expect(created.mcp_selection_explicit).toBeUndefined();
+      expect(await new SessionMCPServerRepository(db).listServers(created.session_id)).toEqual([]);
+      expect(await effective(db, created, sharedServer, user.user_id)).toEqual([sharedServer]);
+    }
+  );
 });

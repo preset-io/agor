@@ -6729,7 +6729,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           envVarNames: configuredEnvVarNames,
           setMcpServers: async (serverIds) => {
             try {
-              await sessionMCPServersService.setServers(session.session_id, serverIds, params);
+              // Initialization completes creation: its selection is explicit intent.
+              await sessionMCPServersService.setServers(session.session_id, serverIds, params, {
+                markSelectionExplicit: true,
+              });
             } catch (error) {
               if (isMCPServerNotUsableError(error)) {
                 throw new Forbidden('An MCP server is private to another user');

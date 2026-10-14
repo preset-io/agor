@@ -100,9 +100,10 @@ export class SessionMCPServersService {
   async setServers(
     sessionId: SessionID,
     serverIds: MCPServerID[],
-    _params?: SessionMCPParams
+    _params?: SessionMCPParams,
+    options?: { markSelectionExplicit?: boolean }
   ): Promise<void> {
-    return this.sessionMCPRepo.setServers(sessionId, serverIds);
+    return this.sessionMCPRepo.setServers(sessionId, serverIds, options);
   }
 
   /**
