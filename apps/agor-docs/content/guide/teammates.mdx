@@ -24,7 +24,7 @@ The teammate framework is heavily inspired by [OpenClaw](https://github.com/rick
 
 An AI teammate is a special branch backed by the **framework repository**, a template repo containing memory files, identity configuration, skills, and task templates. When you create a teammate, Agor:
 
-1. Creates a home from your selected persona (or Blank, using your chosen repository’s default branch)
+1. Creates a home from your selected persona. Start from scratch and prompt-only personas (such as Personal assistant, Researcher and Engineering assistant) use your chosen repository’s default branch; prompt-only personas add their remit to the first session.
 2. Tags the branch with teammate metadata (name, framework version)
 3. Creates a dedicated board for the teammate's work
 4. Launches your first session, beginning the guided experience in `ONBOARDING.md`
@@ -37,7 +37,7 @@ Home files survive only while installation storage survives; Knowledge is the
 primary memory and document store. Existing teammates and private/custom sources
 retain their storage behavior. The Create dialog offers the same persona gallery as onboarding.
 
-For a private/custom template, Blank (with no explicit source ref) uses the
+For a private/custom template, Start from scratch (with no explicit source ref) uses the
 registered repository’s default branch on its registered remote URL. Agor resolves
 the live commit and fetches it without resetting the registered checkout’s local
 branch or work. An unavailable remote or missing branch fails rather than using
@@ -138,7 +138,7 @@ As your teammate works with you, it naturally improves:
 
 ### From the onboarding wizard
 
-The [first-run wizard](/guide/getting-started#follow-the-onboarding-wizard) (**Goals → AI → Workspace → Tools**) ends by seeding your first teammate: it clones the [teammate framework repository](https://github.com/preset-io/agor-teammate) and creates the teammate's branch on the board you named. If you connected an AI model, it also launches the first session (which follows `ONBOARDING.md`), briefed with the goals you selected and the tools the wizard recommended. If you skipped AI setup, the board is still ready and you can connect a model later.
+The [first-run wizard](/guide/getting-started#follow-the-onboarding-wizard) (**Teammate → AI → Tools**) ends by seeding your first teammate: it clones the [teammate framework repository](https://github.com/preset-io/agor-teammate) and creates the teammate's branch on the board you named. If you connected an AI model, it also launches the first session (which follows `ONBOARDING.md`) and asks it to help you connect the tools you picked. If you skipped AI setup, the board is still ready and you can connect a model later.
 
 ### From Settings
 

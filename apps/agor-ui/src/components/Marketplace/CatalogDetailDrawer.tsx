@@ -155,7 +155,7 @@ export interface CatalogDetailDrawerProps {
 const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   identityKey: _identityKey,
   mode = 'catalog',
-  returnTarget = 'onboarding',
+  returnTarget = 'the conversation',
   onRetryConnection,
   entry,
   open,

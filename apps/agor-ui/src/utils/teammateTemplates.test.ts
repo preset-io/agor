@@ -1,3 +1,5 @@
+import { loadCatalog } from '@agor/core/mcp-catalog';
+import { isCatalogEntryVisible } from '@agor/core/mcp-catalog/query';
 import { describe, expect, it } from 'vitest';
 import { AVATAR_PALETTE } from './avatarPalette';
 import {
@@ -8,28 +10,56 @@ import {
   getTeammateTemplate,
   getTemplateBySourceBranch,
   getTemplateForFrameworkSource,
-  recommendedTemplateIds,
   resolveTemplateSourceBranch,
   resolveTemplateSourceRemoteUrl,
+  sortToolsForTemplate,
   TEAMMATE_GALLERY_CARDS,
   TEAMMATE_TEMPLATES,
   TEMPLATE_CATEGORIES,
 } from './teammateTemplates';
 
 describe('TEAMMATE_TEMPLATES', () => {
-  it('defines the eight templates with unique ids, locked copy, and contract source branches', () => {
-    expect(TEAMMATE_TEMPLATES).toHaveLength(8);
-    const ids = TEAMMATE_TEMPLATES.map((t) => t.id);
-    expect(new Set(ids).size).toBe(8);
-    for (const template of TEAMMATE_TEMPLATES) {
-      expect(template.title.length).toBeGreaterThan(0);
-      expect(template.description.length).toBeGreaterThan(0);
+  it('lists the blank starter, then prompt-only and branch templates, in display order', () => {
+    expect(TEAMMATE_GALLERY_CARDS.map((t) => t.id)).toEqual([
+      BLANK_TEMPLATE_ID,
+      'personal-assistant',
+      'researcher',
+      'engineering-assistant',
+      'builder',
+      'product-manager',
+      'chief-of-staff',
+      'competitive-analyst',
+      'financial-analyst',
+      'deal-desk',
+      'sales-outbound',
+      'legal-analyst',
+    ]);
+    for (const template of TEAMMATE_GALLERY_CARDS) {
+      expect(template.title).toMatch(/^[A-Z][a-z ]+$/); // sentence case
+      expect(template.description.length).toBeLessThanOrEqual(60);
       expect(template.emoji.length).toBeGreaterThan(0);
-      // The parallel agor-teammate workstream keys off these exact names.
-      expect(template.sourceBranch).toMatch(/^template\//);
-      expect(template.sourceRemoteUrl).toBe('https://github.com/preset-io/agor-teammate.git');
       expect(typeof template.icon).toBe('object');
     }
+  });
+
+  it('gives prompt-only templates a remit and no branch, and branch templates no remit', () => {
+    for (const template of TEAMMATE_TEMPLATES) {
+      if ('remit' in template) {
+        expect(template).not.toHaveProperty('sourceBranch');
+        expect(template.remit).toMatch(/^Desired outcome: .+ A first win is .+\.$/);
+        expect(resolveTemplateSourceBranch(template.id)).toBeUndefined();
+        expect(resolveTemplateSourceRemoteUrl(template.id)).toBeUndefined();
+      } else {
+        // The agor-teammate repo keys off these exact names.
+        expect(template.sourceBranch).toMatch(/^template\//);
+        expect(template.sourceRemoteUrl).toBe('https://github.com/preset-io/agor-teammate.git');
+      }
+    }
+    expect(TEAMMATE_TEMPLATES.filter((t) => 'remit' in t).map((t) => t.id)).toEqual([
+      'personal-assistant',
+      'researcher',
+      'engineering-assistant',
+    ]);
   });
 
   it('qualifies real template refs with their source remote but leaves blank on the destination', () => {
@@ -41,32 +71,32 @@ describe('TEAMMATE_TEMPLATES', () => {
   });
 
   it('pins the exact source-branch contract names', () => {
-    expect(TEAMMATE_TEMPLATES.map((t) => t.sourceBranch)).toEqual([
-      'template/competitive-analyst',
+    expect(
+      TEAMMATE_TEMPLATES.flatMap((t) => ('sourceBranch' in t ? [t.sourceBranch] : []))
+    ).toEqual([
+      'template/builder',
       'template/product-manager',
       'template/chief-of-staff',
+      'template/competitive-analyst',
       'template/financial-analyst',
       'template/deal-desk-revops-analyst',
       'template/sales-outbound-analyst',
       'template/legal-analyst',
-      'template/builder',
     ]);
   });
 
-  it('gives each template a distinct emoji (Chief of Staff must not reuse 🧭)', () => {
+  it('gives each template a distinct emoji (Chief of staff must not reuse 🧭)', () => {
     const emojis = TEAMMATE_TEMPLATES.map((t) => t.emoji);
     expect(new Set(emojis).size).toBe(emojis.length);
     expect(TEAMMATE_TEMPLATES.find((t) => t.id === 'chief-of-staff')?.emoji).toBe('🗂️');
     expect(TEAMMATE_TEMPLATES.find((t) => t.id === 'product-manager')?.emoji).toBe('🧭');
   });
 
-  it('appends the blank starter to the gallery cards, never to the templates', () => {
-    expect(TEAMMATE_GALLERY_CARDS).toHaveLength(9);
-    expect(TEAMMATE_GALLERY_CARDS.at(-1)).toBe(BLANK_TEMPLATE);
-    expect(BLANK_TEMPLATE.emoji).toBe('');
-    expect(BLANK_TEMPLATE.description).toBe(
-      'No starter playbook. Tell your teammate what to do and which rules to follow, right in the chat.'
-    );
+  it('puts the blank starter first in the gallery cards, never in the templates', () => {
+    expect(TEAMMATE_GALLERY_CARDS).toHaveLength(12);
+    expect(TEAMMATE_GALLERY_CARDS[0]).toBe(BLANK_TEMPLATE);
+    expect(BLANK_TEMPLATE.title).toBe('Start from scratch');
+    expect(BLANK_TEMPLATE.description).toBe('A blank teammate you shape as you chat.');
     expect(TEAMMATE_TEMPLATES).not.toContain(BLANK_TEMPLATE);
   });
 });
@@ -82,6 +112,9 @@ describe('categories', () => {
     expect(byCategory('chief-of-staff')).toBe('operate');
     expect(byCategory('financial-analyst')).toBe('operate');
     expect(byCategory('legal-analyst')).toBe('operate');
+    expect(byCategory('personal-assistant')).toBe('operate');
+    expect(byCategory('researcher')).toBe('grow');
+    expect(byCategory('engineering-assistant')).toBe('build');
     // Every real template has a category; the blank starter has none.
     expect(TEAMMATE_TEMPLATES.every((t) => t.category)).toBe(true);
     expect(BLANK_TEMPLATE.category).toBeUndefined();
@@ -107,35 +140,20 @@ describe('categories', () => {
 });
 
 describe('galleryCardsForFilter', () => {
-  it('All view leads with blank, then recommended cards (in rec order)', () => {
-    const ids = galleryCardsForFilter(['dig-into-anything'], 'all').map((t) => t.id);
-    // dig-into-anything → blank, then competitive-analyst, financial-analyst.
-    expect(ids.slice(0, 3)).toEqual([
-      BLANK_TEMPLATE_ID,
-      'competitive-analyst',
-      'financial-analyst',
-    ]);
-    // All nine cards present, no dupes.
-    expect(ids).toHaveLength(9);
-    expect(new Set(ids).size).toBe(9);
-  });
-
-  it('All view keeps default order (blank first) when there are no recommendations', () => {
-    const ids = galleryCardsForFilter([], 'all').map((t) => t.id);
+  it('All view lists the blank starter first, then every template in display order', () => {
+    const ids = galleryCardsForFilter('all').map((t) => t.id);
     expect(ids).toEqual([BLANK_TEMPLATE_ID, ...TEAMMATE_TEMPLATES.map((t) => t.id)]);
   });
 
   it('a category filter returns only that category in default order, no blank', () => {
-    const ids = galleryCardsForFilter(['dig-into-anything'], 'grow').map((t) => t.id);
-    // Recommendations do NOT reorder within a category filter.
-    expect(ids).toEqual(['competitive-analyst', 'deal-desk', 'sales-outbound']);
-    expect(ids).not.toContain(BLANK_TEMPLATE_ID);
+    const ids = galleryCardsForFilter('grow').map((t) => t.id);
+    expect(ids).toEqual(['researcher', 'competitive-analyst', 'deal-desk', 'sales-outbound']);
   });
 });
 
 describe('getTeammateTemplate', () => {
   it('resolves known ids (including blank) and returns undefined otherwise', () => {
-    expect(getTeammateTemplate('legal-analyst')?.title).toBe('Legal Analyst');
+    expect(getTeammateTemplate('legal-analyst')?.title).toBe('Legal analyst');
     expect(getTeammateTemplate(BLANK_TEMPLATE_ID)).toBe(BLANK_TEMPLATE);
     expect(getTeammateTemplate('nope')).toBeUndefined();
     expect(getTeammateTemplate(null)).toBeUndefined();
@@ -155,8 +173,9 @@ describe('getTemplateBySourceBranch', () => {
   it('recovers the template from its contract source branch', () => {
     expect(getTemplateBySourceBranch('template/legal-analyst')?.id).toBe('legal-analyst');
     expect(getTemplateBySourceBranch('template/deal-desk-revops-analyst')?.id).toBe('deal-desk');
-    // Round-trips with resolveTemplateSourceBranch for every real template.
+    // Round-trips with resolveTemplateSourceBranch for every branch template.
     for (const template of TEAMMATE_TEMPLATES) {
+      if (!('sourceBranch' in template)) continue;
       expect(getTemplateBySourceBranch(template.sourceBranch)?.id).toBe(template.id);
     }
   });
@@ -202,55 +221,61 @@ describe('getTemplateForFrameworkSource', () => {
   });
 });
 
-describe('recommendedTemplateIds', () => {
-  it('returns [] when no goal is picked', () => {
-    expect(recommendedTemplateIds([])).toEqual([]);
+describe('sortToolsForTemplate', () => {
+  // Curated order, as the tools wall receives it.
+  const catalog = [
+    { name: 'io.github.github/github-mcp-server', category: 'dev-tools' },
+    { name: 'app.linear/linear', category: 'dev-tools' },
+    { name: 'com.supabase/mcp', category: 'data-storage' },
+    { name: 'com.notion/mcp', category: 'productivity' },
+    { name: 'com.datadoghq/mcp', category: 'observability' },
+    { name: 'com.stripe/mcp', category: 'productivity' },
+    { name: 'ai.exa/exa', category: 'search' },
+    { name: 'com.paypal.mcp/mcp', category: 'productivity' },
+    { name: 'com.airtable/mcp', category: 'data-storage' },
+  ] as const;
+  const names = (entries: readonly { name: string }[]) => entries.map((entry) => entry.name);
+
+  it('keeps the curated order with no template or the blank starter', () => {
+    expect(names(sortToolsForTemplate(catalog))).toEqual(names(catalog));
+    expect(names(sortToolsForTemplate(catalog, BLANK_TEMPLATE))).toEqual(names(catalog));
   });
 
-  it('returns [] for an unknown goal that maps to no template', () => {
-    // Every real goal now maps to a template; only unknown ids resolve to nothing.
-    expect(recommendedTemplateIds(['not-a-goal'])).toEqual([]);
-  });
-
-  it('recommends Chief of Staff for the personal-teammate goal', () => {
-    expect(recommendedTemplateIds(['personal-teammate'])).toEqual(['chief-of-staff']);
-  });
-
-  it('recommends Builder for the hand-off-build goal', () => {
-    expect(recommendedTemplateIds(['hand-off-build'])).toEqual(['builder']);
-  });
-
-  it('returns a single goal’s recommended templates (capped at two)', () => {
-    expect(recommendedTemplateIds(['status-updates'])).toEqual(['product-manager']);
-    expect(recommendedTemplateIds(['dig-into-anything'])).toEqual([
-      'competitive-analyst',
-      'financial-analyst',
+  it("lists the template's tools, then its categories, then the rest in curated order", () => {
+    const financial = getTeammateTemplate('financial-analyst');
+    expect(names(sortToolsForTemplate(catalog, financial))).toEqual([
+      // preferredTools, in their own order (Preset is not in this fixture)
+      'com.stripe/mcp',
+      'com.paypal.mcp/mcp',
+      // data-storage, then productivity, each in curated order
+      'com.supabase/mcp',
+      'com.airtable/mcp',
+      'com.notion/mcp',
+      // everything else, unchanged
+      'io.github.github/github-mcp-server',
+      'app.linear/linear',
+      'com.datadoghq/mcp',
+      'ai.exa/exa',
     ]);
   });
 
-  it('returns both when two goals map to different templates', () => {
-    expect(recommendedTemplateIds(['dig-into-anything', 'status-updates'])).toEqual([
-      'competitive-analyst',
-      'product-manager',
-    ]);
+  it('sorts without dropping, adding or mutating entries', () => {
+    const input = [...catalog];
+    for (const template of TEAMMATE_GALLERY_CARDS) {
+      const sorted = sortToolsForTemplate(input, template);
+      expect([...names(sorted)].sort()).toEqual([...names(catalog)].sort());
+    }
+    expect(names(input)).toEqual(names(catalog));
   });
 
-  it('dedups when two goals map to the same template', () => {
-    expect(recommendedTemplateIds(['status-updates', 'ship-without-busywork'])).toEqual([
-      'product-manager',
-    ]);
-  });
-
-  it('takes each goal’s top rec when two mapping goals are supplied', () => {
-    // hand-off-build → builder; dig-into-anything's top rec is competitive-analyst.
-    expect(recommendedTemplateIds(['hand-off-build', 'dig-into-anything'])).toEqual([
-      'builder',
-      'competitive-analyst',
-    ]);
-  });
-
-  it('ignores unknown goal ids', () => {
-    expect(recommendedTemplateIds(['not-a-goal'])).toEqual([]);
-    expect(recommendedTemplateIds(['not-a-goal', 'status-updates'])).toEqual(['product-manager']);
+  it('names only tools the shipped catalog shows', async () => {
+    const visible = new Set(
+      (await loadCatalog()).filter(isCatalogEntryVisible).map((entry) => entry.name)
+    );
+    for (const template of TEAMMATE_TEMPLATES) {
+      for (const tool of 'preferredTools' in template ? template.preferredTools : []) {
+        expect(visible, `${template.id} → ${tool}`).toContain(tool);
+      }
+    }
   });
 });

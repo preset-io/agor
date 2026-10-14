@@ -54,7 +54,7 @@ export function useTeammateForm(frameworkRepo: Repo | undefined) {
   );
 
   const handleTemplateChange = useCallback(
-    (templateId: TeammateGalleryCardId | null) => {
+    (templateId: TeammateGalleryCardId) => {
       const template = getTeammateTemplate(templateId);
       form.setFieldsValue({
         templateId,

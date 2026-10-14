@@ -1,30 +1,34 @@
+import type { MCPCatalogCategory, MCPCatalogEntry } from '@agor/core/types';
 import { TEAMMATE_FRAMEWORK_DEFAULT_BRANCH, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor-live/client';
 import {
   AimOutlined,
   BuildOutlined,
+  CodeOutlined,
   FundOutlined,
   PlusOutlined,
   ProjectOutlined,
   RadarChartOutlined,
   ReconciliationOutlined,
   SafetyOutlined,
+  SearchOutlined,
   SolutionOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
 import { AVATAR_PALETTE } from './avatarPalette';
-import type { OnboardingGoalId } from './onboardingGoals';
 
 /**
  * Canonical teammate starter templates.
  *
- * A template pre-points a new teammate at a ready-made source branch in the
- * `preset-io/agor-teammate` repo. Card copy is locked product copy — do not
- * rewrite. This module is the single source of truth for the templates, the
- * goal→template recommendation mapping, and the pure helpers that drive the
+ * A template either pre-points a new teammate at a ready-made source branch in
+ * the `preset-io/agor-teammate` repo, or is prompt-only: no branch (the
+ * framework default, like the blank starter) plus a `remit` line for the first
+ * session prompt. Card copy is product copy owned by design. This module is the
+ * single source of truth for the templates and the pure helpers that drive the
  * TeammateGallery. Keep it dependency-light and side-effect-free.
  *
- * The `sourceBranch` values are a contract with a parallel workstream creating
- * matching branches in `preset-io/agor-teammate`. Use the exact names below.
+ * The `sourceBranch` values are a contract with `preset-io/agor-teammate`. Use
+ * the exact names below; add prompt-only templates rather than new branches.
  */
 
 /** Category buckets a template can belong to. The blank starter has none. */
@@ -50,10 +54,16 @@ export interface TeammateTemplate {
   category?: TeammateCategoryId;
   /** Default avatar emoji applied on selection; empty for the blank starter. */
   emoji: string;
-  /** Branch in the framework repo the teammate is cut from. */
-  sourceBranch: string;
+  /** Branch in the framework repo the teammate is cut from; omitted = framework default. */
+  sourceBranch?: string;
   /** Remote that owns sourceBranch when it differs from the teammate's destination repo. */
   sourceRemoteUrl?: string;
+  /** Prompt-only templates: what the teammate is for, fed into the first-session prompt. */
+  remit?: string;
+  /** Catalog entry names onboarding's tools wall lists first, in this order. */
+  preferredTools?: readonly string[];
+  /** Catalog categories listed next, in this order. The rest keep the curated order. */
+  preferredToolCategories?: readonly MCPCatalogCategory[];
 }
 
 const BUILT_IN_TEMPLATE_SOURCE = { sourceRemoteUrl: TEAMMATE_FRAMEWORK_REPO_URL } as const;
@@ -85,90 +95,138 @@ export const BLANK_TEMPLATE_ID = 'blank';
 
 export const TEAMMATE_TEMPLATES = [
   {
-    id: 'competitive-analyst',
-    title: 'Competitive Analyst',
-    description:
-      "Tracks every rival's pricing, launches, and moves, then tells you what it means for the next deal.",
-    icon: RadarChartOutlined,
-    category: 'grow',
-    emoji: '🔭',
-    sourceBranch: 'template/competitive-analyst',
-    ...BUILT_IN_TEMPLATE_SOURCE,
+    id: 'personal-assistant',
+    title: 'Personal assistant',
+    description: "Keeps up with Slack and your docs so you don't have to.",
+    icon: UserOutlined,
+    category: 'operate',
+    emoji: '🧑‍💼',
+    remit:
+      'Desired outcome: a useful recurring brief from Slack and connected docs. A first win is a digest of the channels and docs they care about.',
+    preferredTools: [
+      'com.notion/mcp',
+      'app.fellow/mcp',
+      'com.atlassian/atlassian-mcp-server',
+      'com.asana/mcp',
+      'com.zapier/mcp',
+    ],
+    preferredToolCategories: ['productivity', 'messaging', 'search'],
   },
   {
-    id: 'product-manager',
-    title: 'Product Manager',
-    description:
-      'Turns scattered feedback into a clean, prioritized backlog and keeps everyone in the loop.',
-    icon: ProjectOutlined,
+    id: 'researcher',
+    title: 'Researcher',
+    description: 'Ask a question, get real research back.',
+    icon: SearchOutlined,
+    category: 'grow',
+    emoji: '🔎',
+    remit:
+      'Desired outcome: active research on demand. A first win is one evidence-backed finding about the competitor, market, or dataset they care about.',
+    preferredToolCategories: ['search', 'data-storage', 'productivity'],
+  },
+  {
+    id: 'engineering-assistant',
+    title: 'Engineering assistant',
+    description: 'Handles PRs, bug triage and release notes.',
+    icon: CodeOutlined,
     category: 'build',
-    emoji: '🧭',
-    sourceBranch: 'template/product-manager',
-    ...BUILT_IN_TEMPLATE_SOURCE,
-  },
-  {
-    id: 'chief-of-staff',
-    title: 'Chief of Staff',
-    description:
-      'Keeps your world in order: triages the noise, preps your meetings, and closes the loop on everything you hand off.',
-    icon: SolutionOutlined,
-    category: 'operate',
-    emoji: '🗂️',
-    sourceBranch: 'template/chief-of-staff',
-    ...BUILT_IN_TEMPLATE_SOURCE,
-  },
-  {
-    id: 'financial-analyst',
-    title: 'Financial Analyst',
-    description:
-      "Reads the numbers, catches what doesn't add up, and hands you the finding, not a spreadsheet.",
-    icon: FundOutlined,
-    category: 'operate',
-    emoji: '🧮',
-    sourceBranch: 'template/financial-analyst',
-    ...BUILT_IN_TEMPLATE_SOURCE,
-  },
-  {
-    id: 'deal-desk',
-    title: 'Deal Desk Analyst',
-    description: 'Keeps every deal clean, every renewal on time, and every number ready to report.',
-    icon: ReconciliationOutlined,
-    category: 'grow',
-    emoji: '📐',
-    sourceBranch: 'template/deal-desk-revops-analyst',
-    ...BUILT_IN_TEMPLATE_SOURCE,
-  },
-  {
-    id: 'sales-outbound',
-    title: 'Outbound Analyst',
-    description:
-      'Builds your target list, researches each prospect, and drafts the outreach. You hit send.',
-    icon: AimOutlined,
-    category: 'grow',
-    emoji: '🎯',
-    sourceBranch: 'template/sales-outbound-analyst',
-    ...BUILT_IN_TEMPLATE_SOURCE,
-  },
-  {
-    id: 'legal-analyst',
-    title: 'Legal Analyst',
-    description:
-      'Reads the redline, flags the risk, and tells you what to push back on before it costs you.',
-    icon: SafetyOutlined,
-    category: 'operate',
-    emoji: '⚖️',
-    sourceBranch: 'template/legal-analyst',
-    ...BUILT_IN_TEMPLATE_SOURCE,
+    emoji: '🧰',
+    remit:
+      'Desired outcome: less busywork around PRs, bug triage and release notes. A first win is scanning the relevant repo for an actionable issue or pull request.',
+    preferredToolCategories: ['dev-tools', 'observability'],
   },
   {
     id: 'builder',
     title: 'Builder',
-    description: 'Turns your idea into a working app or dashboard, spun up on a live test env.',
+    description: 'Turns your idea into a working app or dashboard.',
     icon: BuildOutlined,
     category: 'build',
     emoji: '🛠️',
     sourceBranch: 'template/builder',
     ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['io.github.github/github-mcp-server', 'com.supabase/mcp', 'com.netlify/mcp'],
+    preferredToolCategories: ['dev-tools', 'data-storage'],
+  },
+  {
+    id: 'product-manager',
+    title: 'Product manager',
+    description: 'Turns feedback into a clear, prioritized backlog.',
+    icon: ProjectOutlined,
+    category: 'build',
+    emoji: '🧭',
+    sourceBranch: 'template/product-manager',
+    ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['app.linear/linear', 'com.atlassian/atlassian-mcp-server', 'com.notion/mcp'],
+    preferredToolCategories: ['productivity', 'observability'],
+  },
+  {
+    id: 'chief-of-staff',
+    title: 'Chief of staff',
+    description: 'Triages the noise, preps meetings, closes the loop.',
+    icon: SolutionOutlined,
+    category: 'operate',
+    emoji: '🗂️',
+    sourceBranch: 'template/chief-of-staff',
+    ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['com.notion/mcp', 'app.fellow/mcp', 'com.asana/mcp'],
+    preferredToolCategories: ['productivity', 'messaging'],
+  },
+  {
+    id: 'competitive-analyst',
+    title: 'Competitive analyst',
+    description: "Tracks rivals' pricing, launches and moves for you.",
+    icon: RadarChartOutlined,
+    category: 'grow',
+    emoji: '🔭',
+    sourceBranch: 'template/competitive-analyst',
+    ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredToolCategories: ['search', 'productivity'],
+  },
+  {
+    id: 'financial-analyst',
+    title: 'Financial analyst',
+    description: "Reads the numbers and flags what doesn't add up.",
+    icon: FundOutlined,
+    category: 'operate',
+    emoji: '🧮',
+    sourceBranch: 'template/financial-analyst',
+    ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['com.stripe/mcp', 'com.paypal.mcp/mcp', 'io.preset/mcp-gateway'],
+    preferredToolCategories: ['data-storage', 'productivity'],
+  },
+  {
+    id: 'deal-desk',
+    title: 'Deal desk analyst',
+    description: 'Keeps deals clean and renewals on time.',
+    icon: ReconciliationOutlined,
+    category: 'grow',
+    emoji: '📐',
+    sourceBranch: 'template/deal-desk-revops-analyst',
+    ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['com.attio/mcp', 'com.stripe/mcp'],
+    preferredToolCategories: ['productivity', 'messaging'],
+  },
+  {
+    id: 'sales-outbound',
+    title: 'Outbound analyst',
+    description: 'Builds target lists and drafts the outreach.',
+    icon: AimOutlined,
+    category: 'grow',
+    emoji: '🎯',
+    sourceBranch: 'template/sales-outbound-analyst',
+    ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['com.attio/mcp', 'com.apify/apify-mcp-server'],
+    preferredToolCategories: ['messaging', 'search', 'productivity'],
+  },
+  {
+    id: 'legal-analyst',
+    title: 'Legal analyst',
+    description: 'Reads the redline and flags the risk.',
+    icon: SafetyOutlined,
+    category: 'operate',
+    emoji: '⚖️',
+    sourceBranch: 'template/legal-analyst',
+    ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredToolCategories: ['productivity', 'search'],
   },
 ] as const satisfies readonly TeammateTemplate[];
 
@@ -176,25 +234,24 @@ export const TEAMMATE_TEMPLATES = [
 export type TeammateTemplateId = (typeof TEAMMATE_TEMPLATES)[number]['id'];
 
 /**
- * The blank starter card. Kept separate from TEAMMATE_TEMPLATES so callers can
- * render "Start blank" first and never accidentally recommend it. Its
- * `sourceBranch` is the framework repo default; the wiring resolves it to the
- * repo's own default branch (the public template's for a github.com private fork).
+ * The blank starter card, shown first. Kept separate from TEAMMATE_TEMPLATES so
+ * it is never categorized. Its `sourceBranch` is the framework repo default; the
+ * wiring resolves it to the repo's own default branch (the public template's for
+ * a github.com private fork).
  */
 export const BLANK_TEMPLATE = {
   id: BLANK_TEMPLATE_ID,
-  title: 'Start blank',
-  description:
-    'No starter playbook. Tell your teammate what to do and which rules to follow, right in the chat.',
+  title: 'Start from scratch',
+  description: 'A blank teammate you shape as you chat.',
   icon: PlusOutlined,
-  emoji: '',
+  emoji: '✨',
   sourceBranch: TEAMMATE_FRAMEWORK_DEFAULT_BRANCH,
 } as const satisfies TeammateTemplate;
 
 export type TeammateGalleryCardId = TeammateTemplateId | typeof BLANK_TEMPLATE_ID;
 
-/** Every card shown in the gallery: all templates plus the blank starter. */
-export const TEAMMATE_GALLERY_CARDS = [...TEAMMATE_TEMPLATES, BLANK_TEMPLATE] as const;
+/** Every card shown in the gallery: the blank starter, then all templates. */
+export const TEAMMATE_GALLERY_CARDS = [BLANK_TEMPLATE, ...TEAMMATE_TEMPLATES] as const;
 export type TeammateGalleryCard = (typeof TEAMMATE_GALLERY_CARDS)[number];
 
 export function getTeammateTemplate(id?: string | null): TeammateGalleryCard | undefined {
@@ -204,9 +261,10 @@ export function getTeammateTemplate(id?: string | null): TeammateGalleryCard | u
 /**
  * Source branch a teammate should be cut from for the given template.
  *
- * Real templates force their contract branch; the blank starter (or no
- * selection) returns undefined so branch creation falls back to the framework
- * repo's own default branch (the public template's for a github.com private fork).
+ * Branch templates force their contract branch; prompt-only templates, the
+ * blank starter, and no selection return undefined so branch creation falls back
+ * to the framework repo's own default branch (the public template's for a
+ * github.com private fork).
  */
 export function resolveTemplateSourceBranch(id?: string | null): string | undefined {
   if (!id || id === BLANK_TEMPLATE_ID) return undefined;
@@ -214,7 +272,7 @@ export function resolveTemplateSourceBranch(id?: string | null): string | undefi
   if (!template) {
     throw new Error(`Unknown teammate template id: ${id}`);
   }
-  return template.sourceBranch;
+  return 'sourceBranch' in template ? template.sourceBranch : undefined;
 }
 
 /** Remote that owns the selected template ref; blank/no selection defers to createTeammateBranch. */
@@ -240,7 +298,9 @@ export function getTemplateBySourceBranch(
 ): TeammateTemplate | undefined {
   const branch = sourceBranch?.trim();
   if (!branch || branch === BLANK_TEMPLATE.sourceBranch) return undefined;
-  return TEAMMATE_TEMPLATES.find((template) => template.sourceBranch === branch);
+  return TEAMMATE_TEMPLATES.find(
+    (template) => 'sourceBranch' in template && template.sourceBranch === branch
+  );
 }
 
 /**
@@ -262,80 +322,36 @@ export function getTemplateForFrameworkSource({
 }
 
 /**
- * Authoritative goal → recommended template mapping, in priority order. Goal
- * ids come from ONBOARDING_GOALS (onboardingGoals.ts). A goal that maps to no
- * template lists []. This is the single source of truth for recommendations.
+ * Onboarding's tools wall order for a template: its `preferredTools`, then its
+ * `preferredToolCategories`, then everything else. The sort is stable, so ties
+ * keep the incoming (curated) order. It only reorders: nothing is dropped, and
+ * no template (or the blank starter) leaves the order unchanged.
  */
-export const GOAL_TEMPLATE_RECS = {
-  'personal-teammate': ['chief-of-staff'],
-  'status-updates': ['product-manager'],
-  'ship-without-busywork': ['product-manager'],
-  'team-teammate': ['product-manager'],
-  'hand-off-build': ['builder'],
-  'dig-into-anything': ['competitive-analyst', 'financial-analyst'],
-} as const satisfies Record<OnboardingGoalId, readonly TeammateTemplateId[]>;
-
-function isOnboardingGoalId(id: string): id is OnboardingGoalId {
-  return Object.hasOwn(GOAL_TEMPLATE_RECS, id);
-}
-
-/**
- * Templates to badge "Recommended" for the selected goals (max 2).
- *
- * Mirrors the primary-then-secondary/dedup approach of mergeGoalIntegrationRecs:
- * - 0 goals (or none mapping to a template) → [].
- * - 1 goal → that goal's recommended templates, capped at 2.
- * - 2 goals → the primary goal's top rec then the secondary goal's top rec,
- *   deduped and capped at 2.
- * Unknown goal ids and templates that don't exist are dropped.
- */
-export function recommendedTemplateIds(goals: readonly string[]): TeammateTemplateId[] {
-  const recLists = goals.filter(isOnboardingGoalId).map((id) => GOAL_TEMPLATE_RECS[id]);
-
-  let candidateIds: readonly TeammateTemplateId[];
-  if (recLists.length === 0) {
-    candidateIds = [];
-  } else if (recLists.length === 1) {
-    candidateIds = recLists[0];
-  } else {
-    candidateIds = [recLists[0][0], recLists[1][0]];
-  }
-
-  const seen = new Set<string>();
-  const result: TeammateTemplateId[] = [];
-  for (const id of candidateIds) {
-    if (result.length >= 2 || !id || seen.has(id) || !getTeammateTemplate(id)) continue;
-    seen.add(id);
-    result.push(id);
-  }
-  return result;
+export function sortToolsForTemplate<T extends Pick<MCPCatalogEntry, 'name' | 'category'>>(
+  entries: readonly T[],
+  template?: TeammateTemplate
+): T[] {
+  const tools = template?.preferredTools ?? [];
+  const categories = template?.preferredToolCategories ?? [];
+  const rank = (entry: T) => {
+    const tool = tools.indexOf(entry.name);
+    if (tool >= 0) return tool;
+    const category = categories.indexOf(entry.category);
+    return tools.length + (category >= 0 ? category : categories.length);
+  };
+  return [...entries].sort((a, b) => rank(a) - rank(b));
 }
 
 /** The gallery's active filter: everything, or a single category. */
 export type GalleryFilter = 'all' | TeammateCategoryId;
 
 /**
- * Cards to render for the given goals + active filter, already ordered:
- * - `all`      → recommended templates first (in recommendation order) with the
- *                rest in default order, and the blank starter always last.
- * - `<category>` → that category's templates in default order (no blank starter).
- *
- * Ordering lives here (not in the component) so it's a single, unit-tested rule.
+ * Cards to render for the active filter: `all` is every template in display
+ * order after the blank starter; a category shows only its templates.
  */
-export function galleryCardsForFilter(
-  goals: readonly string[],
-  filter: GalleryFilter
-): readonly TeammateGalleryCard[] {
+export function galleryCardsForFilter(filter: GalleryFilter): readonly TeammateGalleryCard[] {
   if (filter !== 'all') {
-    // A specific category: default order, blank starter excluded.
     return TEAMMATE_TEMPLATES.filter((template) => template.category === filter);
   }
-
-  // All: blank first (so templates never read as required), then recommended, then the rest.
-  const recommendedCards = recommendedTemplateIds(goals)
-    .map((id) => getTeammateTemplate(id))
-    .filter((template): template is TeammateGalleryCard => Boolean(template));
-  const recommendedIds = new Set(recommendedCards.map((template) => template.id));
-  const rest = TEAMMATE_TEMPLATES.filter((template) => !recommendedIds.has(template.id));
-  return [BLANK_TEMPLATE, ...recommendedCards, ...rest];
+  return TEAMMATE_GALLERY_CARDS;
 }

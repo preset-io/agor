@@ -125,7 +125,7 @@ export type BoardTeammatePanelTab =
 
 interface BoardTeammatePanelProps {
   board: Board | null;
-  /** Content of a leading "Board" tab (the mobile board view). */
+  /** Content of a "Board" tab after Teammate (the mobile board view). */
   boardTab?: React.ReactNode;
   showBranchesTab?: boolean;
   /** Touch-size tabs (44px, 14px labels) for the mobile board screen. */
@@ -660,12 +660,12 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as BoardTeammatePanelTab)}
         items={[
-          ...(boardTab ? [{ key: 'board', label: 'Board', children: boardTab }] : []),
           {
             key: 'teammate',
             label: 'Teammate',
             children: <div style={{ height: '100%', overflow: 'auto' }}>{teammateContent}</div>,
           },
+          ...(boardTab ? [{ key: 'board', label: 'Board', children: boardTab }] : []),
           {
             key: 'all-sessions',
             label: 'Sessions',

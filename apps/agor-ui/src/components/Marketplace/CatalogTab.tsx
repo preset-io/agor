@@ -145,7 +145,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   onOpenSession,
 }) => {
   const handoff = context?.mode === 'handoff' ? context : undefined;
-  const returnTarget = handoff?.returnTo ?? 'onboarding';
+  const returnTarget = handoff?.returnTo ?? 'the conversation';
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const [filters, setFilters] = useState<CatalogFilterState>(INITIAL_FILTERS);

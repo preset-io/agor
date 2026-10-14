@@ -11,6 +11,7 @@ import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
@@ -166,6 +167,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   onCreate,
 }) => {
   const { token } = theme.useToken();
+  const touchInput = useIsTouchInput();
   const navigate = useNavigate();
   const knowledgeHref = useHref('/knowledge');
   const catalog = useMCPCatalogModal();
@@ -281,7 +283,8 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
                 </div>
               }
               title={instanceLabel}
-              trigger="hover"
+              // A tap emulates hover; on touch the description opens on tap instead.
+              trigger={touchInput ? 'click' : 'hover'}
               placement="bottomLeft"
             >
               <Tag color="cyan" style={{ ...INSTANCE_LABEL_STYLE, cursor: 'help' }}>
