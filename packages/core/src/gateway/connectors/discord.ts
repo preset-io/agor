@@ -1908,6 +1908,12 @@ export class DiscordConnector implements GatewayConnector {
     this.gateway.on(WebSocketShardEvents.Dispatch, (payload) => {
       const processDispatch = this.dispatchChain.then(async () => {
         if (this.stopped) return;
+        // A new session restarts sequences and may follow missed changes, so drop cached records too.
+        if (payload.t === GatewayDispatchEvents.Ready) {
+          this.lastSequence = -1;
+          this.guildInfo = null;
+          this.channelInfoCache.clear();
+        }
         const sequence = typeof payload.s === 'number' ? payload.s : undefined;
         if (sequence !== undefined && sequence <= this.lastSequence) return;
         await this.dispatchMessage(payload, callback);

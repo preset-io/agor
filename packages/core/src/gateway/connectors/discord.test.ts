@@ -2651,6 +2651,30 @@ describe('Discord all public channels', () => {
     await connector.stopListening();
   });
 
+  it('restarts sequences and forgets cached channels when Discord starts a new session', async () => {
+    const channels = channelRecords();
+    const harness = allTransport(channels);
+    const connector = new DiscordConnector(allConfig, harness.transport as never);
+    const received: Array<{ metadata: Record<string, unknown> }> = [];
+    await connector.startListening(async (message) => {
+      received.push(message as never);
+    });
+    const settle = () => (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
+    harness.dispatch()?.({ ...mention(openId, '202020202020202020'), s: 40 }, 0);
+    await settle();
+    // Made private while disconnected: no CHANNEL_UPDATE reaches the new session.
+    channels[openId] = { ...channels[openId], permission_overwrites: hiddenFromEveryone };
+    harness.dispatch()?.({ t: 'READY', s: 1, d: {} }, 0);
+    harness.dispatch()?.({ ...mention(openId, '202020202020202021'), s: 2 }, 0);
+    harness.dispatch()?.({ ...mention(listedId, '202020202020202022'), s: 3 }, 0);
+    await settle();
+    expect(received.map((message) => message.metadata.discord_channel_id)).toEqual([
+      openId,
+      listedId,
+    ]);
+    await connector.stopListening();
+  });
+
   it('replies in an unlisted public channel, but keeps proactive sends on listed channels', async () => {
     const { transport, rest } = allTransport();
     const connector = new DiscordConnector(allConfig, transport as never);
