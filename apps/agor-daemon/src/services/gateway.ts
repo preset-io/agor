@@ -739,11 +739,16 @@ function gatewayMessageText(message: Pick<Message, 'content' | 'content_preview'
   return message.content_preview || '';
 }
 
-function quoteForPrompt(text: string, maxChars = 2000): string {
-  const truncated = text.length <= maxChars ? text : `${text.slice(0, maxChars - 1)}…`;
+/**
+ * Quote text as a Markdown blockquote, keeping its line breaks. Pass `maxChars`
+ * only for secondary context; a human's own message must reach the agent whole.
+ */
+function quoteForPrompt(text: string, maxChars?: number): string {
+  const truncated =
+    maxChars === undefined || text.length <= maxChars ? text : `${text.slice(0, maxChars - 1)}…`;
   return truncated
     .split(/\r?\n/)
-    .map((line) => `> ${line}`)
+    .map((line) => (line ? `> ${line}` : '>'))
     .join('\n');
 }
 
@@ -821,6 +826,9 @@ function prependSlackGatewayReplyNote(prompt: string): string {
   return `${SLACK_GATEWAY_REPLY_NOTE}\n\n${prompt}`;
 }
 
+/** Cap on each previous thread message in the Slack catch-up prompt. */
+const SLACK_CONTEXT_MESSAGE_MAX_CHARS = 1200;
+
 function formatSlackCatchUpPrompt(args: {
   channel: GatewayChannel;
   threadId: string;
@@ -865,9 +873,14 @@ function formatSlackCatchUpPrompt(args: {
     if (contextMessages.length === 0) {
       lines.push('- No previous thread messages were included.');
     }
+    let shortenedContext = false;
     for (const message of contextMessages) {
       const time = formatUtcLabel(message.iso_time) ?? message.iso_time;
-      lines.push(`- **${message.actor_label}** · ${time}: ${oneLineForPrompt(message.text, 1200)}`);
+      const text = oneLineForPrompt(message.text, SLACK_CONTEXT_MESSAGE_MAX_CHARS);
+      if (oneLineForPrompt(message.text, Infinity).length > SLACK_CONTEXT_MESSAGE_MAX_CHARS) {
+        shortenedContext = true;
+      }
+      lines.push(`- **${message.actor_label}** · ${time}: ${text}`);
     }
     if (args.hasMore) {
       lines.push(
@@ -875,10 +888,20 @@ function formatSlackCatchUpPrompt(args: {
         '_Slack thread context was truncated. Use the Slack thread history tool if older omitted messages are needed._'
       );
     }
+    if (shortenedContext) {
+      lines.push(
+        '',
+        '_Some previous thread messages were shortened (ending in "…"). Use the Slack thread history tool if their full text is needed._'
+      );
+    }
+    // The current summon is what the human is asking for right now, so it is
+    // passed through whole with its line breaks; Slack already bounds its size.
     lines.push(
       '',
       '### Current summon',
-      `- **${senderName ?? 'Slack user'}**${currentTime ? ` · ${currentTime}` : ''}: ${oneLineForPrompt(args.currentText, 1600)}`,
+      `- **${senderName ?? 'Slack user'}**${currentTime ? ` · ${currentTime}` : ''}:`,
+      '',
+      quoteForPrompt(args.currentText.trim() || '(no text)'),
       '',
       '**Instruction:** Answer the current summon using the context above. Do not repeat the transcript unless asked.'
     );
