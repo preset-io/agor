@@ -118,6 +118,19 @@ export const DEFAULT_SORT: MCPCatalogSort = 'popularity';
 export const entryTitle = catalogDisplayName;
 
 /**
+ * The always-visible line beside Connect that makes pressing it informed
+ * consent. Curated disclosures lead with what the server can reach ("Reads and
+ * writes issues … you authorise."), so the first sentence is the summary; the
+ * full statement stays under "What this can access". Derived rather than
+ * curated so the two can never disagree.
+ */
+export function accessSummary(disclosure: string): string {
+  const text = disclosure.trim();
+  const end = text.search(/[.!?](?=\s+[A-Z])/);
+  return end === -1 ? text : text.slice(0, end + 1);
+}
+
+/**
  * Technical authentication copy follows the live endpoint verdict whenever
  * Connect has one. Catalog metadata is explicitly labelled as an unchecked
  * fallback so stale curation cannot contradict the primary status panel.

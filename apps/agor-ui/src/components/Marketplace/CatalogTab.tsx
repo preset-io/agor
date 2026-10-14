@@ -517,12 +517,10 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
 
   const handleConnect = useCallback(
     async ({
-      acknowledgedDisclosure,
       bearerToken,
       oauthClient,
       oauthPopup,
     }: {
-      acknowledgedDisclosure: string;
       bearerToken?: string;
       oauthClient?: { client_id: string; client_secret?: string };
       oauthPopup?: MarketplaceOAuthPopup;
@@ -543,7 +541,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         const result = await client.service('mcp-catalog/connect').create({
           catalog_key: selected.name,
           sharing,
-          acknowledged_disclosure: acknowledgedDisclosure,
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
           ...(oauthClient ? { oauth_client: oauthClient } : {}),
         });

@@ -198,7 +198,6 @@ it('rejects hidden names before connect, readiness, or catalog session side effe
     }).create(
       {
         catalog_key: 'com.delta/mcp',
-        acknowledged_disclosure: 'Reads the database.',
       },
       params
     )

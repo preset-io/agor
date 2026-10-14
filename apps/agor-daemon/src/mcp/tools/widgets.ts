@@ -382,16 +382,15 @@ async function loadExistingOAuthServer(
 /**
  * The disclosure for a server installed from the catalog, re-read from the entry.
  *
- * §5.4 lets an agent satisfy `acknowledged_disclosure` at install time only
- * because the text then reaches the human above the Connect button. The row
- * does not store it, so a later request by `mcpServerId` — which supersedes the
- * widget that carried it — has to fetch it again, or the replacement button
- * appears with no disclosure at all and nobody ever reads it.
+ * Pressing Connect is the consent, so the access statement has to be on the
+ * card above that button. The row does not store it, so a later request by
+ * `mcpServerId` — which supersedes the widget that carried it — has to fetch it
+ * again, or the replacement button appears with no disclosure at all.
  *
  * An entry that has left the catalog, or cannot be read, yields a refusal
  * rather than a button with no disclosure or a generic one: the contract is
- * that the text the install acknowledged is the text the user reads, and there
- * is no longer any text to show. The user can still connect the server
+ * that the user reads what the entry discloses before connecting, and there is
+ * no longer any text to show. The user can still connect the server
  * themselves from My Servers. The same length refusal as the catalog path
  * applies, for the same reason: Agor does not shorten what someone agrees to.
  */
@@ -443,11 +442,9 @@ function disclosureTooLongMessage(entry: MCPCatalogEntry): string {
  * is not harmless in direct egress mode (see the widget's module docs). The
  * attach happens when the grant lands, not here.
  *
- * `acknowledged_disclosure` is satisfied with the entry's own text because
- * this caller is the daemon, not a browser that skipped the drawer; the
- * disclosure is carried onto the widget and shown before the user clicks
- * Connect, which is the point at which anything is actually granted. See the
- * design doc's security section.
+ * The disclosure is carried onto the widget and shown above Connect, which is
+ * the point at which anything is actually granted — the same implied consent
+ * the catalog drawer uses.
  */
 async function installCatalogOAuthServer(
   ctx: McpContext,
@@ -481,10 +478,8 @@ async function installCatalogOAuthServer(
   //
   //  - the entry NAME is an identity and cannot be shortened without
   //    corrupting it;
-  //  - the DISCLOSURE is the consent. §5.4's whole argument for letting an
-  //    agent satisfy `acknowledged_disclosure` is that this text then reaches
-  //    the human above the Connect button, so quietly discarding its tail
-  //    would hollow out the one protection that argument rests on. An entry
+  //  - the DISCLOSURE is what the user consents to by pressing Connect, so
+  //    quietly discarding its tail would hollow out that consent. An entry
   //    nobody can connect is a curation bug someone fixes; a disclosure with
   //    its last sentence missing is one nobody ever notices.
   if (entry.name.length > CATALOG_ENTRY_NAME_MAX) {
@@ -504,13 +499,9 @@ async function installCatalogOAuthServer(
   // one delegates instead. An agent calling this tool IS an authenticated
   // external caller acting for a user, so it should meet exactly the
   // authorization the browser meets.
-  const result = (await ctx.app.service('mcp-catalog/connect').create(
-    {
-      catalog_key: entry.name,
-      acknowledged_disclosure: entry.permission_disclosure,
-    },
-    ctx.baseServiceParams
-  )) as MCPCatalogConnectResult;
+  const result = (await ctx.app
+    .service('mcp-catalog/connect')
+    .create({ catalog_key: entry.name }, ctx.baseServiceParams)) as MCPCatalogConnectResult;
   const server = result.mcp_server;
 
   const authType = server.auth?.type ?? 'none';

@@ -127,17 +127,14 @@ describe('CatalogTab add then start-session flow', () => {
 
     const drawer = await openDrawer();
     await drawer.findByText('No account expected');
-    const checkbox = drawer.container.querySelector<HTMLInputElement>('input[type="checkbox"]');
     const add = (await drawer.findByText('Connect')).closest('button');
-    if (!checkbox || !add) throw new Error('add controls not found');
-    fireEvent.click(checkbox);
+    if (!add) throw new Error('add controls not found');
     await waitFor(() => expect(add).toBeEnabled());
     fireEvent.click(add);
 
     await waitFor(() => expect(api.connect).toHaveBeenCalledOnce());
     expect(api.connect).toHaveBeenCalledWith({
       catalog_key: ENTRY.name,
-      acknowledged_disclosure: ENTRY.permission_disclosure,
       sharing: 'private',
     });
     expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
@@ -182,10 +179,8 @@ describe('CatalogTab add then start-session flow', () => {
     );
     const drawer = await openDrawer();
     await drawer.findByText('No account expected');
-    const checkbox = drawer.container.querySelector<HTMLInputElement>('input[type="checkbox"]');
     const addButton = (await drawer.findByText('Connect')).closest('button');
-    if (!checkbox || !addButton) throw new Error('add controls not found');
-    fireEvent.click(checkbox);
+    if (!addButton) throw new Error('add controls not found');
     fireEvent.click(addButton);
     await drawer.findByText('Added to My Servers');
     const beginButton = drawer.getByText('Start new session').closest('button');
@@ -227,7 +222,6 @@ it.each(['close', 'identity', 'generation'] as const)(
     const view = render(tree());
     const drawer = await openDrawer();
     await drawer.findByText('No account expected');
-    fireEvent.click(drawer.container.querySelector('input[type=checkbox]')!);
     const connect = drawer.getByText('Connect').closest('button')!;
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
@@ -270,7 +264,6 @@ it('keeps setup and reports a refused session start without navigating or seedin
   );
   const drawer = await openDrawer();
   await drawer.findByText('No account expected');
-  fireEvent.click(drawer.container.querySelector('input[type=checkbox]')!);
   const connect = drawer.getByText('Connect').closest('button')!;
   await waitFor(() => expect(connect).toBeEnabled());
   fireEvent.click(connect);
@@ -307,7 +300,6 @@ it('can connect again after closing a drawer with a pending installation', async
   );
   const first = await openDrawer();
   await first.findByText('No account expected');
-  fireEvent.click(first.container.querySelector('input[type=checkbox]')!);
   const connect = first.getByText('Connect').closest('button')!;
   await waitFor(() => expect(connect).toBeEnabled());
   fireEvent.click(connect);
@@ -315,8 +307,6 @@ it('can connect again after closing a drawer with a pending installation', async
   fireEvent.click(first.container.querySelector('button.ant-drawer-close')!);
   const reopened = await openDrawer();
   await reopened.findByText('No account expected');
-  const consent = reopened.container.querySelector('input[type=checkbox]')! as HTMLInputElement;
-  if (!consent.checked) fireEvent.click(consent);
   const retry = reopened.getByText('Connect').closest('button')!;
   await waitFor(() => expect(retry).toBeEnabled());
   await act(async () => {
@@ -347,14 +337,10 @@ describe('explicit onboarding context', () => {
     );
     const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
     await dialog.findByText('No account expected');
-    fireEvent.click(
-      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
-    );
     fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
     await dialog.findByText('Connected and ready');
     expect(api.connect).toHaveBeenCalledWith({
       catalog_key: ENTRY.name,
-      acknowledged_disclosure: ENTRY.permission_disclosure,
       sharing: 'private',
     });
     expect(onConnected).toHaveBeenCalledExactlyOnceWith('server-1');
@@ -388,9 +374,6 @@ describe('explicit onboarding context', () => {
     );
     const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
     await dialog.findByText('No account expected');
-    fireEvent.click(
-      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
-    );
     fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
     await dialog.findByText("Couldn't connect this server.");
     expect(dialog.queryByRole('button', { name: 'Details' })).not.toBeInTheDocument();
@@ -513,9 +496,6 @@ describe.each(['catalog', 'onboarding'] as const)('fresh Connect OAuth authority
     if (mode === 'catalog') await openDrawer();
     const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
     await dialog.findByText('No account expected');
-    fireEvent.click(
-      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
-    );
     fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
     if (ready) {
       await dialog.findByText(

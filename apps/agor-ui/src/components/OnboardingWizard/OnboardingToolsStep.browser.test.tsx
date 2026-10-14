@@ -332,9 +332,6 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
         await drawer.findByPlaceholderText('Paste your GitHub bearer access token'),
         'test-only-private-pat'
       );
-      await userEvent.click(
-        drawer.getByRole('checkbox', { name: 'I understand what this server can access' })
-      );
       await userEvent.click(drawer.getByRole('button', { name: 'Connect' }));
       await waitFor(() => expect(api.connect).toHaveBeenCalledOnce());
       if (change === 'cancel') await userEvent.click(drawer.getByRole('button', { name: 'Close' }));
@@ -395,9 +392,6 @@ describe('onboarding Slack and authority boundaries in Chromium', () => {
       status.mockResolvedValue({ status: 'pending', mcp_server_id: 'server-1' } as never);
       render(<Harness api={api} onConnected={onConnected} />);
       const drawer = await openTool('Linear');
-      await userEvent.click(
-        drawer.getByRole('checkbox', { name: 'I understand what this server can access' })
-      );
       await userEvent.click(drawer.getByRole('button', { name: 'Connect' }));
       if (retry) {
         await drawer.findByText('Sign-in not completed');

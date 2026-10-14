@@ -89,10 +89,8 @@ const GRANT_REFRESH_SETTLE_MS = 400;
  * Upper bound on the disclosure carried onto a widget row.
  *
  * Generous rather than tight, and the difference matters: this field is the
- * CONSENT. §5.4 justifies an agent satisfying `acknowledged_disclosure` on a
- * human's behalf precisely because the text then travels onto the widget and
- * is rendered above the Connect button, so the person reads it before the only
- * moment anything is granted. A bound that silently shortened it would take
+ * CONSENT: the text travels onto the widget and is rendered above the Connect
+ * button, so the person reads it before the only moment anything is granted. A bound that silently shortened it would take
  * that justification away one sentence at a time — quietly, since the tail of
  * a paragraph is exactly where "and can delete" tends to live.
  *

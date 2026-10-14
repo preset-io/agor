@@ -397,10 +397,7 @@ describe('agor_widgets_request_oauth — catalog install', () => {
     await tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.notion/mcp' });
 
     const connect = calls.find((c) => c.service === 'mcp-catalog/connect');
-    expect(connect?.args[0]).toEqual({
-      catalog_key: 'com.notion/mcp',
-      acknowledged_disclosure: NOTION_ENTRY.permission_disclosure,
-    });
+    expect(connect?.args[0]).toEqual({ catalog_key: 'com.notion/mcp' });
     // Inert: installed, never attached, until the grant lands.
     expect(calls.find((c) => c.service === '/sessions/:id/mcp-servers')).toBeUndefined();
 
@@ -560,9 +557,8 @@ describe('agor_widgets_request_oauth — an existing catalog install requested b
 
 describe('agor_widgets_request_oauth — catalog-owned fields cannot orphan an install', () => {
   it('carries a long permission disclosure through whole', async () => {
-    // The disclosure is the consent: §5.4 lets an agent satisfy
-    // `acknowledged_disclosure` on a human's behalf precisely because this text
-    // then reaches the human above the Connect button. It used to be silently
+    // The disclosure is the consent: pressing Connect below it is what grants
+    // anything, so this text has to reach the human whole. It used to be silently
     // clipped to 1000 characters, which is the one thing that must not happen
     // to it — the tail of a permissions paragraph is where "and can delete"
     // lives. The longest reviewed entry today is 808 characters.
@@ -578,9 +574,7 @@ describe('agor_widgets_request_oauth — catalog-owned fields cannot orphan an i
 
     expect(payload(result).status).toBe('requested');
     expect(appendStub.mock.calls[0][0].metadata.widget.params.permissionDisclosure).toBe(long);
-    const connect = calls.find((c) => c.service === 'mcp-catalog/connect');
-    const connectArgs = connect?.args[0] as { acknowledged_disclosure: string } | undefined;
-    expect(connectArgs?.acknowledged_disclosure).toBe(long);
+    expect(calls.find((c) => c.service === 'mcp-catalog/connect')).toBeDefined();
   });
 
   it('refuses an unshowable disclosure BEFORE installing, rather than shortening it', async () => {

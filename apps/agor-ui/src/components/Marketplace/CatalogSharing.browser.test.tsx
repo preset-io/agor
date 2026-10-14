@@ -156,7 +156,6 @@ it('keeps provider copy stable across held sharing reads, rapid toggles, and key
       await waitFor(() => expect(api.pending).toHaveLength(index + 2));
       expect(api.pending[index + 1].sharing).toBe(sharing);
       expect(drawer.getByText('Connect with Linear')).toBeVisible();
-      expect(drawer.getByRole('button', { name: 'Connect' })).toBeDisabled();
       await api.finish(index + 1);
       await waitFor(() => expect(drawer.getByText('Connect with Linear')).toBeVisible());
     }
@@ -195,7 +194,6 @@ it('uses the new entry identity while a previous entry readiness response arrive
   await waitFor(() => expect(drawer.getByText('Connect with Notion')).toBeVisible());
   expect(drawer.queryByText('Connect with Linear')).toBeNull();
   expect(drawer.queryByText('Ready to use')).toBeNull();
-  expect(drawer.getByRole('button', { name: 'Connect' })).toBeDisabled();
   expect(api.connect).not.toHaveBeenCalled();
 });
 
@@ -209,9 +207,6 @@ it.each(['use_existing_only', 'allow_private_only'] as const)(
     expect(drawer.queryByRole('radio', { name: 'Use existing shared' })).toBeNull();
     await api.finish(0, 'oauth_required', true);
     await userEvent.click(page.getByRole('radio', { name: 'Use existing shared', exact: true }));
-    await userEvent.click(
-      page.getByRole('checkbox', { name: 'I understand what this server can access' })
-    );
     await waitFor(() => expect(api.pending).toHaveLength(2));
     expect(drawer.getByRole('button', { name: 'Connect' })).toBeDisabled();
     expect(drawer.queryByRole('radio', { name: 'Shared' })).toBeNull();
@@ -227,9 +222,6 @@ it('keeps a visible shared reuse selection on policy downgrade, disabled until a
   await waitFor(() => expect(api.pending).toHaveLength(1));
   await api.finish(0);
   await userEvent.click(page.getByRole('radio', { name: 'Shared', exact: true }));
-  await userEvent.click(
-    page.getByRole('checkbox', { name: 'I understand what this server can access' })
-  );
   await waitFor(() => expect(api.pending).toHaveLength(2));
   // Policy changes while the selected ownership's previous read is held.
   await api.setPolicy('use_existing_only');

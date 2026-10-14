@@ -59,7 +59,7 @@ function makeProps(
   };
 }
 afterEach(cleanup);
-it('shows Asana app setup without a bearer field, keeps IDs and secrets in the secure form, requires consent, and clears them on close', async () => {
+it('shows Asana app setup without a bearer field, keeps IDs and secrets in the secure form, and clears them on close', async () => {
   const connect = vi.fn<CatalogDetailDrawerProps['onConnect']>((input) =>
     input.oauthPopup?.close()
   );
@@ -89,8 +89,6 @@ it('shows Asana app setup without a bearer field, keeps IDs and secrets in the s
   await expect
     .element(page.getByLabelText('OAuth app Client ID', { exact: true }))
     .toHaveValue('customer-app');
-  await expect.element(button).toBeDisabled();
-  await page.getByRole('checkbox').click();
   await button.click();
   expect(connect).toHaveBeenCalledOnce();
   expect(connect.mock.calls[0][0].oauthClient).toEqual({
@@ -142,7 +140,6 @@ it('reuses an existing shared app install without asking for or sending app cred
   await expect
     .element(page.getByLabelText('OAuth app Client ID', { exact: true }))
     .not.toBeInTheDocument();
-  await page.getByRole('checkbox').click();
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   expect(connect).toHaveBeenCalledOnce();
   expect(connect.mock.calls[0][0]).not.toHaveProperty('oauthClient');
@@ -178,7 +175,6 @@ it('keeps genuine bearer setup private, submits only the key, and clears it on c
   await expect.element(page.getByRole('radio', { name: 'Shared', exact: true })).toBeDisabled();
   await expect.element(page.getByRole('radio', { name: 'Private', exact: true })).toBeChecked();
   const button = page.getByRole('button', { name: 'Connect', exact: true });
-  await page.getByRole('checkbox').click();
   await expect.element(button).toBeDisabled();
   await key.fill('synthetic-bearer-key');
   await button.click();

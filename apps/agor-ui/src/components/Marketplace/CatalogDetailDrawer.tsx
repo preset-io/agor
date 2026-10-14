@@ -2,9 +2,9 @@ import { ToolBetaBadge } from '../ToolIcon/ToolBetaBadge';
 /**
  * Detail view for one catalog entry, and the only place a connect starts.
  *
- * The access disclosure is the first expanded details section and the connect
- * control stays disabled until it is acknowledged. The disclosure controls
- * remain keyboard-operable without weakening the server-side text match.
+ * Consent is implied: a one-line access summary sits directly above Connect,
+ * so pressing it is informed, and the full statement stays one click away
+ * under "What this can access" (collapsed by default).
  */
 
 import type {
@@ -26,7 +26,6 @@ import {
 import {
   Alert,
   Button,
-  Checkbox,
   Descriptions,
   Flex,
   Form,
@@ -54,6 +53,7 @@ import { CatalogDetailSection } from './CatalogDetailSection';
 import { CatalogDrawer } from './CatalogDrawer';
 import { CatalogEntryAvatar } from './CatalogEntryAvatar';
 import {
+  accessSummary,
   capabilityLabel,
   catalogAuthenticationDetail,
   connectStatus,
@@ -138,16 +138,12 @@ export interface CatalogDetailDrawerProps {
   /** Continue surprise OAuth from a fresh direct user gesture. */
   onContinueOAuth?: (popup: MarketplaceOAuthPopup) => void;
   /**
-   * `acknowledgedDisclosure` is the exact text this drawer put on screen, so
-   * what the connect request claims was shown cannot drift from what was.
-   *
    * `bearerToken` is present only for an entry that asks for one, and is the only
    * thing this drawer sends that the user typed. Everything else about the
    * server — where it is, how it is reached, what kind of credential it takes —
    * is the catalog's, resolved on the daemon from `catalog_key`.
    */
   onConnect: (input: {
-    acknowledgedDisclosure: string;
     bearerToken?: string;
     oauthClient?: { client_id: string; client_secret?: string };
     oauthPopup?: MarketplaceOAuthPopup;
@@ -312,18 +308,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   const blockedReason = runtimeStatus?.readiness === 'blocked' ? runtimeStatus.detail : undefined;
   const disclosure = entry?.permission_disclosure ?? FALLBACK_DISCLOSURE;
 
-  // Consent records the server *and* the words it was given for, rather than a
-  // boolean some effect resets. A boolean leaves one render in which a newly
-  // opened server's disclosure sits above an already-enabled button; keying on
-  // the server alone still lets a re-opened entry arrive pre-consented after
-  // curation rewrote what it discloses. The endpoint's contract is the text, so
-  // this is too.
-  const [consent, setConsent] = useState<{ entryId: string; disclosure: string } | null>(null);
-  const acknowledged =
-    entryId !== undefined && consent?.entryId === entryId && consent.disclosure === disclosure;
-
-  // Keyed by entry for the same reason consent is, and more sharply: a bare
-  // string would survive switching entries in an open drawer, leaving one
+  // Keyed by entry: a bare string would survive switching entries in an open drawer, leaving one
   // vendor's key sitting in the field for a connect to another vendor's
   // endpoint. Pairing it with the entry it was typed for means the field is
   // empty for any entry it was not.
@@ -416,10 +401,10 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   );
   const appForm = configuredApp && !reusesSharedApp ? configuredApp : undefined;
   const canConnect = Boolean(
-    !(sharing === 'shared' && needsApiKey) &&
+    entryId !== undefined &&
+      !(sharing === 'shared' && needsApiKey) &&
       !blockedReason &&
       !policyRefusal &&
-      acknowledged &&
       !connecting &&
       (!needsApiKey || bearerToken) &&
       (!appForm ||
@@ -430,11 +415,9 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   );
   const connectDisabledReason = connecting
     ? 'Connection in progress.'
-    : !acknowledged
-      ? 'Review the access disclosure and acknowledge it to continue.'
-      : needsApiKey && !bearerToken
-        ? `Enter your ${title} bearer access token to continue.`
-        : undefined;
+    : needsApiKey && !bearerToken
+      ? `Enter your ${title} bearer access token to continue.`
+      : undefined;
 
   return (
     <CatalogDrawer
@@ -701,7 +684,6 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           <Flex vertical gap={token.marginXS}>
             <CatalogDetailSection
               key={`${entryId}:access`}
-              defaultOpen
               label={
                 <Space size={token.marginXS}>
                   <SafetyCertificateOutlined aria-hidden />
@@ -709,23 +691,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 </Space>
               }
             >
-              <Flex vertical gap={token.marginSM}>
-                <Text>{disclosure}</Text>
-                {!blockedReason && !success && (
-                  <Checkbox
-                    checked={acknowledged}
-                    onChange={(event) =>
-                      setConsent(
-                        event.target.checked && entryId !== undefined
-                          ? { entryId, disclosure }
-                          : null
-                      )
-                    }
-                  >
-                    I understand what this server can access
-                  </Checkbox>
-                )}
-              </Flex>
+              <Text>{disclosure}</Text>
             </CatalogDetailSection>
             <CatalogDetailSection
               key={`${entryId}:technical`}
@@ -917,6 +883,13 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
               {connectError && <ActionErrorNotice error={connectError} />}
               {policyRefusal && <Alert type="info" showIcon title={policyRefusal} />}
 
+              <Flex gap={token.marginXS} align="baseline" data-testid="catalog-access-summary">
+                <SafetyCertificateOutlined
+                  aria-hidden
+                  style={{ color: token.colorTextSecondary }}
+                />
+                <Text type="secondary">{accessSummary(disclosure)}</Text>
+              </Flex>
               <Button
                 type="primary"
                 block
@@ -946,7 +919,6 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   }
                   setPopupBlocked(false);
                   onConnect({
-                    acknowledgedDisclosure: disclosure,
                     // Only for an entry that asks. Sending a key to an endpoint
                     // that never wanted one is refused by the daemon, and the
                     // field it would have come from is not rendered anyway.

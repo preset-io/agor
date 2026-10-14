@@ -84,14 +84,18 @@ async function openGitHub() {
 }
 
 /** Measure the real portalled drawer, not the modal behind it. */
-function drawerSpacing(dialog: HTMLElement) {
+async function drawerSpacing(dialog: HTMLElement) {
   const root = dialog.closest('.ant-drawer')!;
   const header = root.querySelector<HTMLElement>('.ant-drawer-header')!;
   const body = root.querySelector<HTMLElement>('.ant-drawer-body')!;
   const content = body.firstElementChild as HTMLElement;
   const disclosure = within(dialog).getByRole('button', { name: 'What this can access' });
   const sections = disclosure.parentElement!;
-  const sectionBody = sections.querySelector<HTMLElement>('.ant-collapse-body')!;
+  // Collapsed by default; open it to measure the body both surfaces share.
+  await userEvent.click(disclosure);
+  const sectionBody = await waitFor(
+    () => sections.querySelector<HTMLElement>('.ant-collapse-body') ?? Promise.reject()
+  );
   const connect = within(dialog).getByRole('button', {
     name: 'Connect',
   });
@@ -148,7 +152,7 @@ describe('onboarding-owned Catalog in Chromium', () => {
       await waitFor(() =>
         expect(catalogDialog.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 0)
       );
-      const expected = drawerSpacing(catalogDialog);
+      const expected = await drawerSpacing(catalogDialog);
       expect(expected.width).toBe(Math.min(520, window.innerWidth));
       standard.unmount();
 
@@ -162,7 +166,7 @@ describe('onboarding-owned Catalog in Chromium', () => {
       await waitFor(() =>
         expect(onboardingDialog.getBoundingClientRect().right).toBeCloseTo(window.innerWidth, 0)
       );
-      const actual = drawerSpacing(onboardingDialog);
+      const actual = await drawerSpacing(onboardingDialog);
       // Browser transforms can introduce tiny fractional CSS-pixel rounding.
       // Spacing tokens stay exact; geometry must agree to 0.01 CSS pixels.
       const { width, headerHeight, actionWidth, ...spacing } = actual;
@@ -259,9 +263,6 @@ describe('onboarding-owned Catalog in Chromium', () => {
     render(<Harness api={api} complete={complete} update={update} />);
     const { input, drawer } = await openGitHub();
     await userEvent.fill(input, 'test-only-credential');
-    await userEvent.click(
-      drawer.getByRole('checkbox', { name: 'I understand what this server can access' })
-    );
     await userEvent.click(drawer.getByRole('button', { name: 'Connect' }));
     await drawer.findByText("Couldn't connect this server.");
     await userEvent.fill(input, 'test-only-retry');
@@ -270,7 +271,6 @@ describe('onboarding-owned Catalog in Chromium', () => {
     expect(api.connect).toHaveBeenLastCalledWith(
       expect.objectContaining({
         bearer_token: 'test-only-retry',
-        acknowledged_disclosure: githubHandoffEntry.permission_disclosure,
       })
     );
     expect(complete).not.toHaveBeenCalled();
