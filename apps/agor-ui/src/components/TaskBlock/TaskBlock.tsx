@@ -950,20 +950,23 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
     const metadataPills = (
       <MetadataList gap={token.sizeUnit}>
-        <TimerPill
-          style={plainPillStyle}
-          status={task.status}
-          startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
-          endedAt={
-            task.completed_at ||
-            (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
-              ? task.message_range?.end_timestamp
-              : undefined)
-          }
-          durationMs={task.duration_ms}
-          lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
-          latestExecutorPulse={task.latest_executor_pulse}
-        />
+        {/* The working line is a running turn's live timer. */}
+        {task.status !== TaskStatus.RUNNING && (
+          <TimerPill
+            style={plainPillStyle}
+            status={task.status}
+            startedAt={task.started_at || task.message_range?.start_timestamp || task.created_at}
+            endedAt={
+              task.completed_at ||
+              (task.message_range?.end_timestamp !== task.message_range?.start_timestamp
+                ? task.message_range?.end_timestamp
+                : undefined)
+            }
+            durationMs={task.duration_ms}
+            lastExecutorHeartbeatAt={task.last_executor_heartbeat_at}
+            latestExecutorPulse={task.latest_executor_pulse}
+          />
+        )}
         {scheduledFromBranch && scheduledRunAt && (
           <ScheduledRunPill style={plainPillStyle} scheduledRunAt={scheduledRunAt} />
         )}
