@@ -681,7 +681,7 @@ it('keeps history text choices, keyboard disclosure and scroll anchors with mult
       <ConversationView client={null} sessionId={sessionId} />
     </div>
   );
-  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(18);
+  expect(screen.getAllByRole('button', { name: 'Show more' })).toHaveLength(18);
   expect(screen.getByText('Tail 19-0')).toBeInTheDocument();
   expect(screen.getByText('Tail 19-1')).toBeInTheDocument();
   expect(screen.queryByText('Tail 10-0')).not.toBeInTheDocument();
@@ -697,7 +697,7 @@ it('keeps history text choices, keyboard disclosure and scroll anchors with mult
     viewport.scrollTop -= 100;
     fireEvent.scroll(viewport);
   });
-  const expand = screen.getAllByRole('button', { name: 'show more' })[0];
+  const expand = screen.getAllByRole('button', { name: 'Show more' })[0];
   expand.focus();
   await page.screenshot({ path: `./.vitest/history-collapsed-${window.innerWidth}.png` });
   await userEvent.keyboard('{Enter}');
@@ -805,7 +805,7 @@ it('follows a long live response without clamping the current prompt or losing p
     );
     expect(screen.getByText(`Live answer ${length - 1}`)).toBeInTheDocument();
     expect(screen.getByText('Live prompt 19')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'show more' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
     await waitFor(
       () =>
         expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThan(24),
@@ -822,7 +822,7 @@ it('follows a long live response without clamping the current prompt or losing p
     })
   );
   expect(screen.getByText('Live answer 34')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'show more' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
   await page.screenshot({ path: `./.vitest/history-live-expanded-${window.innerWidth}.png` });
 });
 
@@ -863,14 +863,14 @@ it('bounds long code, tables and single-line prose previews while preserving ful
   expect(screen.queryByText('row-199')).not.toBeInTheDocument();
   expect(screen.queryByText('Wrapped prose '.repeat(200).trim())).not.toBeInTheDocument();
   expect(screen.getByText('Short message')).toBeInTheDocument();
-  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(3);
+  expect(screen.getAllByRole('button', { name: 'Show more' })).toHaveLength(3);
   expect(screen.queryByRole('button', { name: 'Download file' })).not.toBeInTheDocument();
-  await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+  await userEvent.click(screen.getAllByRole('button', { name: 'Show more' })[0]);
   expect(screen.getByText('After code fence')).toBeInTheDocument();
   expect(screen.getByText('code-line-199')).toBeInTheDocument();
-  await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+  await userEvent.click(screen.getAllByRole('button', { name: 'Show more' })[0]);
   expect(screen.getByText('row-199')).toBeInTheDocument();
-  await userEvent.click(screen.getByRole('button', { name: 'show more' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Show more' }));
   expect(screen.getByText('Wrapped prose '.repeat(200).trim())).toBeInTheDocument();
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
 });
@@ -897,11 +897,11 @@ it('collapses tall low-character history and medium prose with shorter previews'
   expect(articles[0].textContent).not.toContain('Word10');
   expect(articles[0].getBoundingClientRect().height).toBeLessThan(300);
   expect(articles[1].textContent!.length).toBeLessThanOrEqual(700);
-  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(2);
+  expect(screen.getAllByRole('button', { name: 'Show more' })).toHaveLength(2);
   await page.screenshot({ path: `./.vitest/history-dual-budget-${window.innerWidth}.png` });
-  await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+  await userEvent.click(screen.getAllByRole('button', { name: 'Show more' })[0]);
   expect(articles[0].textContent).toContain('Word49');
-  await userEvent.click(screen.getByRole('button', { name: 'show more' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Show more' }));
   expect(screen.getByText(prose)).toBeInTheDocument();
 });
 
