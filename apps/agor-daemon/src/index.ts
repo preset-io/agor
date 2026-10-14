@@ -26,6 +26,7 @@ import {
 } from '@agor/core/telemetry';
 import { patchConsole } from '@agor/core/utils/logger';
 import { extractDbFilePath } from '@agor/core/utils/path';
+import { configurePrivateOutboundDestinations } from '@agor/core/utils/safe-outbound-fetch';
 import { deriveLoopbackReachableOrigin, UI_MOUNT_PATH } from '@agor/core/utils/url';
 
 patchConsole();
@@ -203,6 +204,9 @@ async function startDaemonWithOwnedMetrics(
   // Programmatic startup must cross the same untrusted config boundary as
   // YAML before environment projection reads nested scalar values.
   assertValidRawConfig(config);
+  // Install the validated outbound allowlist before any service can issue an
+  // outbound request through safeOutboundFetch.
+  configurePrivateOutboundDestinations(config.security?.private_outbound_destinations);
 
   // Deployment environment overrides are resolved in memory. Container and
   // Kubernetes entrypoints must never materialize them back into config.yaml.
