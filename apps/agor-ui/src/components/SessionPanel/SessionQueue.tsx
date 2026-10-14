@@ -166,7 +166,7 @@ export function SessionQueue({
           type="text"
           aria-expanded={open}
           onClick={() => setExpanded((value) => !value)}
-          icon={open ? <DownOutlined /> : <RightOutlined />}
+          icon={open ? <DownOutlined aria-hidden /> : <RightOutlined aria-hidden />}
           iconPlacement="end"
           style={{ height: isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight }}
         >

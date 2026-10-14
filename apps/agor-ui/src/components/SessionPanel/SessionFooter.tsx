@@ -61,6 +61,7 @@ import { ModelSelector } from '../ModelSelector';
 import {
   CODEX_APPROVAL_POLICIES,
   CODEX_SANDBOX_MODES,
+  getPermissionModeLabel,
   getPermissionModeMeta,
   getPermissionModes,
 } from '../PermissionModeSelector';
@@ -452,7 +453,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const permissionChipName =
     session.agentic_tool === 'codex'
       ? `${codexSandboxMode}, ${codexApprovalPolicy}`
-      : (permissionMeta?.label ?? permissionMode);
+      : getPermissionModeLabel(session.agentic_tool, permissionMode);
   const permissionChipLabel =
     session.agentic_tool === 'codex'
       ? codexApprovalPolicy
@@ -542,6 +543,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   };
   const detailsMain = (
     <>
+      {!isMobile && <ComposerMenuSection>Session details</ComposerMenuSection>}
       <ComposerMenuRow
         label="Timer"
         icon={<ClockCircleOutlined />}
@@ -648,7 +650,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   };
   const infoTextStyle: React.CSSProperties = {
     height: isMobile ? MOBILE_TOUCH_TARGET : token.controlHeightSM,
-    paddingInline: token.paddingXXS,
+    paddingInline: token.sizeXXS / 2,
     fontSize: token.fontSizeSM,
     color: token.colorTextTertiary,
     minWidth: 0,
@@ -670,7 +672,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           onOpenChange={openDetails('details-context')}
           content={detailsContent}
         >
-          <Tooltip title="Context window">
+          <Tooltip title="Context window" open={openMenu === 'details-context' ? false : undefined}>
             <Button
               type="text"
               size="small"
@@ -852,7 +854,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         )
       }
     >
-      <Tooltip title="Add files and actions">
+      <Tooltip title="Add files and actions" open={openMenu === 'plus' ? false : undefined}>
         <Button
           type="text"
           aria-label="Add files and actions"
@@ -907,7 +909,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       <ComposerMenuBack label="Model" onBack={() => setModelPage('model')} />
       {presetNote}
       {session.agentic_tool === 'gemini' && isGeminiManualMode(permissionMode) && (
-        <ComposerMenuNote>{GEMINI_MANUAL_MESSAGE}</ComposerMenuNote>
+        <ComposerMenuNote>
+          {GEMINI_MANUAL_MESSAGE} If your settings are managed, ask a workspace admin to update the
+          preset.
+        </ComposerMenuNote>
       )}
       {session.agentic_tool === 'codex' ? (
         <>
@@ -959,7 +964,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         compact
         showAdvisor={false}
         renderRows={({ options, currentModel, select }) => (
-          <div role="radiogroup" aria-label="Model">
+          <div
+            role="radiogroup"
+            aria-label="Model"
+            style={{ maxHeight: 'min(320px, 40dvh)', overflowY: 'auto' }}
+          >
             <ComposerMenuSection>Model</ComposerMenuSection>
             {options.map((option) => (
               <ComposerMenuRow
@@ -986,6 +995,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               disabled={managedByPreset}
               value={effortLevel ?? toolCaps?.defaultReasoningEffort}
               onChange={(value) => onEffortChange(value as EffortLevel)}
+              styles={{ label: { paddingInline: token.paddingXXS, fontSize: token.fontSizeSM } }}
               options={EFFORT_OPTIONS.filter((option) => effortLevels.includes(option.value)).map(
                 (option) => ({
                   value: option.value,
@@ -1028,7 +1038,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       onOpenChange={openModelMenu('model')}
       content={modelMenuContent}
     >
-      <Tooltip title="Model and effort">
+      <Tooltip title="Model and effort" open={openMenu === 'model' ? false : undefined}>
         <Button
           type="text"
           aria-label={modelChipAriaLabel}
@@ -1054,7 +1064,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       onOpenChange={openModelMenu('permissions')}
       content={modelMenuContent}
     >
-      <Tooltip title="Permissions">
+      <Tooltip title="Permissions" open={openMenu === 'permissions' ? false : undefined}>
         <Button
           type="text"
           aria-label={`Permissions: ${permissionChipName}. Change`}
