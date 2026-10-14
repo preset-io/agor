@@ -73,6 +73,7 @@ it.each([
   [360, 740, false],
   [390, 844, true],
   [430, 932, false],
+  [1280, 900, false],
   [1280, 900, true],
 ])('keeps chips and actions on single rows at %dx%d (dark=%s)', async (width, height, dark) => {
   await page.viewport(width, height);
@@ -126,6 +127,21 @@ it.each([
   for (const action of actions.slice(2)) {
     if (isMobile) expect(action.width).toBe(action.height);
     else expect(action.width).toBeGreaterThan(action.height);
+  }
+  const [stopBounds, queueBounds] = actions.slice(2);
+  expect(stopBounds.top).toBe(queueBounds.top);
+  expect(queueBounds.left - stopBounds.right).toBe(theme.getDesignToken().sizeUnit);
+  if (!isMobile) {
+    const stop = screen.getByRole('button', { name: 'Stop' });
+    const style = getComputedStyle(stop);
+    const label = document.createRange();
+    label.selectNodeContents(within(stop).getByText('Stop', { exact: true }));
+    // Measure the visible text, not its wrapper: the old overlapping grid
+    // reserved a hidden "Recovering…" label and looked like extra padding.
+    expect(stopBounds.right - label.getBoundingClientRect().right).toBeCloseTo(
+      Number.parseFloat(style.paddingRight) + Number.parseFloat(style.borderRightWidth),
+      0
+    );
   }
 
   await userEvent.click(screen.getByRole('button', { name: 'More options' }));
