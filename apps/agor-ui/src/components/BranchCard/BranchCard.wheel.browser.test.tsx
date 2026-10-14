@@ -246,7 +246,9 @@ it('remeasures loaded sessions, nested wheel targets, and tree expansion at the 
     await waitFor(() =>
       expect(holder().firstElementChild!.clientHeight > holder().clientHeight).toBe(overflow)
     );
-    const row = screen.getByRole('button', { name: /^Open session Conversation 0(;|$)/ });
+    // After shrinking a scrolled list, the virtual list keeps its old offset and
+    // renders from a later row until the browser's async scroll clamp resyncs it.
+    const row = await screen.findByRole('button', { name: /^Open session Conversation 0(;|$)/ });
     const before = flow.getViewport();
     await act(async () => userEvent.wheel(row.querySelector('span')!, { delta: { x: 12, y: 80 } }));
     if (overflow) {
