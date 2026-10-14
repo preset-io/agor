@@ -17,6 +17,7 @@ import {
   getDefaultPermissionMode,
   mapToCodexPermissionConfig,
   SessionStatus,
+  shortId,
 } from '@agor-live/client';
 import {
   ApiOutlined,
@@ -527,7 +528,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       ? `MCP ${mcpSummary.attachedCount}`
       : null,
     pinnedChips.includes('tokens') ? 'Usage' : null,
-    pinnedChips.includes('session-ids') ? session.session_id.slice(0, 8) : null,
+    pinnedChips.includes('session-ids') ? shortId(session.session_id) : null,
   ].filter((item): item is string => Boolean(item));
 
   const infoPin = (id: string, name: string) => {
@@ -609,7 +610,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       <ComposerMenuRow
         label="Session IDs"
         icon={<IdcardOutlined />}
-        value={session.session_id.slice(0, 8)}
+        value={shortId(session.session_id)}
         trailing={infoPin('session-ids', 'session IDs')}
       />
       <ComposerMenuRow
