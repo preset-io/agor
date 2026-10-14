@@ -806,7 +806,9 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
             shape="circle"
             icon={<ClockCircleOutlined />}
             aria-label={`Message ${message.index} timestamp: ${timestamp}`}
-            onClick={() => setTimestampOpen(true)}
+            // On touch the click trigger toggles via onOpenChange; forcing open here
+            // would undo its close on a second tap.
+            onClick={touchInput ? undefined : () => setTimestampOpen(true)}
             onBlur={() => setTimestampOpen(false)}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
