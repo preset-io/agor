@@ -109,7 +109,6 @@ import { appendComposerText } from './composerText';
 import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionAttachmentTray } from './SessionAttachmentTray';
-import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
 import { buildSpawnPromptContext } from './spawn-prompt-context';
@@ -850,11 +849,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const promptInputSlot = React.useMemo(() => {
     if (!session) return null;
     return (
-      <SessionComposerDropZone
-        disabled={composerAttachmentUploading}
-        onDragActiveChange={setComposerDropActive}
-        onFilesDrop={addComposerAttachments}
-      >
+      <>
         {composerAttachmentValidationError && (
           <Alert
             type="error"
@@ -917,7 +912,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             event.target.value = '';
           }}
         />
-      </SessionComposerDropZone>
+      </>
     );
   }, [
     session,
@@ -1535,6 +1530,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onPermissionModeChange={stableFooterHandlers.onPermissionModeChange}
       onCodexPermissionChange={stableFooterHandlers.onCodexPermissionChange}
       promptInputSlot={promptInputSlot}
+      onFilesDrop={addComposerAttachments}
+      onDropActiveChange={setComposerDropActive}
     />
   ) : null;
 
