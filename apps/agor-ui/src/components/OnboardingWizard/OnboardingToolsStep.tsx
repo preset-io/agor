@@ -60,7 +60,8 @@ function ToolTile({
         aria-label={title}
         aria-description={entry.benefit}
         aria-pressed={picked}
-        // A pick is the theme's primary outline; the tile text keeps its own colours.
+        // A pick: the primary border plus an inset ring of the same colour (lineWidthBold
+        // in total, no size change) on colorPrimaryBg. Tile text keeps its own colours.
         color={picked ? 'primary' : 'default'}
         variant="outlined"
         onClick={onToggle}
@@ -71,6 +72,10 @@ function ToolTile({
           justifyContent: 'flex-start',
           textAlign: 'left',
           whiteSpace: 'normal',
+          ...(picked && {
+            boxShadow: `inset 0 0 0 ${token.lineWidthBold - token.lineWidth}px ${token.colorPrimary}`,
+            background: token.colorPrimaryBg,
+          }),
         }}
       >
         <Flex align="center" gap={token.marginXS} style={{ minWidth: 0 }}>

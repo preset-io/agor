@@ -87,26 +87,42 @@ describe('onboarding tools wall in Chromium', () => {
     expect(screen.queryByText(githubHandoffEntry.benefit)).not.toBeInTheDocument();
   });
 
-  it('toggles a pick with a primary-colour outline and opens no drawer', async () => {
+  it('marks a pick with a 2px primary ring and fill, without resizing, and opens no drawer', async () => {
     render(<Harness api={makeCatalogClient(entries)} />);
     const github = await screen.findByRole('button', { name: 'GitHub' });
-    const border = () => getComputedStyle(github).borderTopColor;
-    const unpicked = border();
+    const size = () => {
+      const { width, height } = github.getBoundingClientRect();
+      return { width, height };
+    };
+    const unpickedSize = size();
+    const { colorPrimary, colorPrimaryBg } = theme.getDesignToken({
+      algorithm: theme.darkAlgorithm,
+    });
+    // Normalise token hex to the rgb() form getComputedStyle returns.
+    const rgb = (color: string) => {
+      const probe = document.createElement('span');
+      probe.style.color = color;
+      document.body.append(probe);
+      const value = getComputedStyle(probe).color;
+      probe.remove();
+      return value;
+    };
 
     await userEvent.click(github);
     expect(github).toHaveAttribute('aria-pressed', 'true');
     await userEvent.hover(screen.getByPlaceholderText('Search tools'));
-    const { colorPrimary } = theme.getDesignToken({ algorithm: theme.darkAlgorithm });
-    const probe = document.createElement('span');
-    probe.style.color = colorPrimary;
-    document.body.append(probe);
-    expect(border()).toBe(getComputedStyle(probe).color);
-    probe.remove();
+    const picked = getComputedStyle(github);
+    expect(picked.borderTopColor).toBe(rgb(colorPrimary));
+    expect(picked.boxShadow).toContain(rgb(colorPrimary));
+    expect(picked.boxShadow).toContain('inset');
+    expect(picked.backgroundColor).toBe(rgb(colorPrimaryBg));
+    expect(size()).toEqual(unpickedSize);
     expect(document.querySelector('.ant-drawer')).toBeNull();
 
     await userEvent.click(github);
     expect(github).toHaveAttribute('aria-pressed', 'false');
     await userEvent.hover(screen.getByPlaceholderText('Search tools'));
-    expect(border()).toBe(unpicked);
+    expect(getComputedStyle(github).boxShadow).not.toContain('inset');
+    expect(size()).toEqual(unpickedSize);
   });
 });
