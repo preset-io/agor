@@ -437,7 +437,7 @@ it('forgets the reading state of trimmed turns and keeps it for turns still load
   const toggle = (n: number) =>
     within(viewport.querySelector<HTMLElement>(`[data-task-block="${taskId(n)}"]`)!).getByRole(
       'button',
-      { name: /^show (more|less)$/ }
+      { name: /^Show (more|less)$/ }
     );
   // History arrives collapsed and the reader expands turn 5; turn 9 arrived
   // as the latest turn and stays expanded.

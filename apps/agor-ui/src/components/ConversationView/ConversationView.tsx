@@ -459,7 +459,9 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           if (state.resizeDifference === guard) state.resizeDifference = 0;
         }, 1);
       });
-      if (shift) state.scrollTop = viewport.scrollTop + shift;
+      // Record the position even without a shift: a clamp from the removal is
+      // programmatic too, and a stale record reads it as the reader scrolling up.
+      state.scrollTop = viewport.scrollTop + shift;
       // Removal can outweigh a turn appended in the same frame; a negative resize
       // does not re-pin, so follow the lock explicitly.
       if (state.isAtBottom) void scrollToBottom({ animation: 'instant' });
