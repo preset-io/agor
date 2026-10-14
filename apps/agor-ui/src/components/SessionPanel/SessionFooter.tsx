@@ -1,3 +1,4 @@
+import { GEMINI_MANUAL_MESSAGE, isGeminiManualMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   AgenticToolCapabilities,
   AgenticToolName,
@@ -10,47 +11,49 @@ import type {
   Session,
   Task,
 } from '@agor-live/client';
-import { getDefaultModelForTool, SessionStatus } from '@agor-live/client';
+import {
+  getDefaultModelForTool,
+  getDefaultPermissionMode,
+  mapToCodexPermissionConfig,
+  SessionStatus,
+} from '@agor-live/client';
 import {
   ArrowUpOutlined,
   BranchesOutlined,
-  ClockCircleOutlined,
   ForkOutlined,
-  IdcardOutlined,
   LockOutlined,
-  NumberOutlined,
   PaperClipOutlined,
-  PercentageOutlined,
   PlusOutlined,
-  PushpinFilled,
-  PushpinOutlined,
   QuestionCircleOutlined,
-  RobotOutlined,
   SettingOutlined,
-  ToolOutlined,
   UnorderedListOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { Button, Divider, Drawer, Flex, Popover, Tooltip, Typography, theme } from 'antd';
+import { Button, Divider, Flex, Segmented, Tag, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useElementWidth } from '../../hooks/useElementWidth';
 import { COMPACT_PIN_LIMIT, useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { LOST_CONNECTION_TOOLTIP } from '../../utils/connectionErrors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { CompactNotice } from '../CompactNotice';
-import { EFFORT_OPTIONS, EffortSelector } from '../EffortSelector';
+import { EFFORT_OPTIONS } from '../EffortSelector';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import type { ModelConfig } from '../ModelSelector';
 import { ModelSelector } from '../ModelSelector';
-import { getPermissionModeMeta, PermissionModeSelector } from '../PermissionModeSelector';
+import {
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  getPermissionModeMeta,
+  getPermissionModes,
+} from '../PermissionModeSelector';
 import { ContextWindowPill, TimerPill, useElapsedDuration } from '../Pill';
-import { getModelChipLabel, getModelDisplayName } from '../Pill/modelDisplay';
-import { SessionIdsList } from '../SessionIds';
+import { getModelChipLabel } from '../Pill/modelDisplay';
 import {
   ComposerMenu,
+  ComposerMenuBack,
   ComposerMenuNote,
   ComposerMenuRow,
   ComposerMenuSection,
@@ -118,6 +121,8 @@ export interface SessionFooterProps {
   promptInputSlot: React.ReactNode;
 }
 
+type ComposerMenuId = 'plus' | 'model' | 'permissions' | 'details';
+
 const PINNABLE_ACTIONS = ['upload', 'advanced-upload', 'fork', 'btw-fork', 'spawn'];
 
 // Memoized: the panel re-renders once per animation frame while its session
@@ -177,17 +182,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   // desktop gets 32px controls and popovers anchored to their trigger.
   const isMobile = useIsMobileViewport();
   const reducedMotion = usePrefersReducedMotion();
-  const actionSize = isMobile ? 'middle' : 'small';
-  const touchActionStyle: React.CSSProperties | undefined = isMobile
-    ? { minHeight: MOBILE_TOUCH_TARGET, minWidth: MOBILE_TOUCH_TARGET }
-    : undefined;
-  const [moreOpen, setMoreOpen] = React.useState(false);
-  const moreContentRef = React.useRef<HTMLFieldSetElement>(null);
-  const getMorePopupContainer = React.useCallback(
-    (triggerNode: HTMLElement) =>
-      moreContentRef.current ?? triggerNode.parentElement ?? triggerNode,
-    []
-  );
   const cardRef = React.useRef<HTMLDivElement>(null);
   const cardWidth = useElementWidth(cardRef);
   const narrow = !isMobile && cardWidth > 0 && cardWidth < NARROW_COMPOSER_WIDTH;
@@ -215,13 +209,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     }
   };
   const pinnedChips = prefs.pinnedChips;
-  const toggleChip = (id: string) => {
-    setPref({
-      pinnedChips: pinnedChips.includes(id)
-        ? pinnedChips.filter((c) => c !== id)
-        : [...pinnedChips, id],
-    });
-  };
 
   // Model name + token counts for individual chips. A brand-new session hasn't
   // persisted its model into model_config yet — it's resolved from tool/user
@@ -230,13 +217,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   // unreachable) until the user first changed the model via Session Settings.
   const effectiveModel =
     session.model_config?.model ?? getDefaultModelForTool(session.agentic_tool);
-  const modelName = effectiveModel
-    ? getModelDisplayName(
-        session.model_config?.provider
-          ? `${session.model_config.provider}/${effectiveModel}`
-          : effectiveModel
-      )
-    : null;
   const elapsed = useElapsedDuration({
     status: footerTimerTask?.status ?? 'pending',
     startedAt: footerTimerTask?.message_range?.start_timestamp || footerTimerTask?.created_at,
@@ -280,295 +260,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const btwForkDisabled = connectionDisabled || !hasInput || composerAttachmentsPresent;
   const spawnDisabled = connectionDisabled || isRunning || composerAttachmentsPresent;
   const sendDisabled = connectionDisabled || composerAttachmentUploading || !hasInput;
-
-  // Overflow menu scale: one row height, one label size, one control height.
-  const rowHeight = isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight;
-  const controlHeight = isMobile ? token.controlHeight : token.controlHeightSM;
-  const labelFontSize = isMobile ? token.fontSize : token.fontSizeSM;
-
-  const sectionHeaderStyle: React.CSSProperties = {
-    padding: `${token.paddingXS}px ${token.paddingSM}px ${token.paddingXXS}px`,
-    fontSize: token.fontSizeSM,
-    fontWeight: token.fontWeightStrong,
-    color: token.colorTextTertiary,
-    userSelect: 'none',
-  };
-
-  const overflowRowStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: token.marginXS,
-    padding: `0 ${token.paddingXXS}px 0 ${token.paddingSM}px`,
-    height: rowHeight,
-  };
-  // Label stays on the first control line even when a control grows taller.
-  const settingRowStyle: React.CSSProperties = {
-    ...overflowRowStyle,
-    height: 'auto',
-    minHeight: rowHeight,
-    boxSizing: 'border-box',
-    paddingBlock: (rowHeight - controlHeight) / 2,
-    alignItems: 'flex-start',
-    cursor: 'default',
-  };
-  const labelGroupStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: token.marginXS,
-    flex: 1,
-    minWidth: 0,
-    height: controlHeight,
-  };
-  const settingNameStyle: React.CSSProperties = { ...labelGroupStyle, minWidth: 'max-content' };
-  const settingControlStyle: React.CSSProperties = {
-    display: 'flex',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    minHeight: controlHeight,
-    flex: 2,
-    minWidth: 0,
-    pointerEvents: managedByPreset ? 'none' : undefined,
-    opacity: managedByPreset ? 0.65 : undefined,
-  };
-  const iconStyle: React.CSSProperties = {
-    fontSize: token.fontSize,
-    color: token.colorTextSecondary,
-    flexShrink: 0,
-  };
-  const labelStyle: React.CSSProperties = {
-    fontSize: labelFontSize,
-    flex: 1,
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  };
-  const pinToggle = (pinned: boolean, label: string, tooltip: string, onToggle: () => void) => (
-    <Tooltip title={tooltip} placement="right">
-      <Button
-        type="text"
-        size={actionSize}
-        aria-label={label}
-        style={{
-          ...touchActionStyle,
-          flexShrink: 0,
-          color: pinned ? token.colorPrimary : token.colorTextTertiary,
-        }}
-        icon={
-          pinned ? (
-            <PushpinFilled style={{ fontSize: token.fontSizeSM }} />
-          ) : (
-            <PushpinOutlined style={{ fontSize: token.fontSizeSM }} />
-          )
-        }
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle();
-        }}
-      />
-    </Tooltip>
-  );
-  const chipPin = (id: string, name: string) =>
-    pinToggle(
-      pinnedChips.includes(id),
-      `${pinnedChips.includes(id) ? 'Hide' : 'Show'} ${name}`,
-      pinnedChips.includes(id) ? 'Hide from info bar' : 'Show in info bar',
-      () => toggleChip(id)
-    );
-
-  // One effort control, shown in the controls panel and again in the phone chip bar.
-  const renderEffortSelector = (size: 'small' | 'middle') =>
-    toolCaps?.reasoningEffortLevels ? (
-      <EffortSelector
-        value={effortLevel}
-        onChange={onEffortChange}
-        levels={toolCaps.reasoningEffortLevels}
-        fallbackValue={toolCaps.defaultReasoningEffort}
-        allowInherited={!toolCaps.defaultReasoningEffort}
-        size={size}
-        compact
-        plain
-      />
-    ) : null;
-  const moreContent = (
-    <fieldset
-      ref={moreContentRef}
-      aria-label="More options"
-      onMouseDown={(event) => event.stopPropagation()}
-      style={{
-        width: isMobile ? '100%' : 260,
-        minWidth: 0,
-        padding: '6px 0',
-        margin: 0,
-        border: 0,
-      }}
-    >
-      <div style={sectionHeaderStyle}>Settings</div>
-
-      <div style={settingRowStyle}>
-        <span style={settingNameStyle}>
-          <RobotOutlined style={iconStyle} />
-          <Typography.Text style={{ ...labelStyle, color: token.colorTextSecondary }}>
-            Model
-          </Typography.Text>
-        </span>
-        <div
-          style={settingControlStyle}
-          title={
-            managedByPreset ? 'Managed by preset; switch presets in Session Settings' : undefined
-          }
-        >
-          <div style={{ width: '100%', minWidth: 0 }}>
-            <ModelSelector
-              key={session.session_id}
-              value={modelConfig}
-              onCommit={onModelConfigCommit}
-              agentic_tool={session.agentic_tool}
-              client={client}
-              branchId={session.branch_id}
-              catalogEnabled={session.created_by === currentUserId}
-              compact={!isMobile}
-              getPopupContainer={getMorePopupContainer}
-            />
-          </div>
-        </div>
-      </div>
-
-      {supportsLiveEffort && (
-        <div style={settingRowStyle}>
-          <span style={settingNameStyle}>
-            <PercentageOutlined style={iconStyle} />
-            <Typography.Text style={{ ...labelStyle, color: token.colorTextSecondary }}>
-              Effort
-            </Typography.Text>
-          </span>
-          <div style={settingControlStyle}>{renderEffortSelector(actionSize)}</div>
-        </div>
-      )}
-
-      <div style={settingRowStyle}>
-        <span style={settingNameStyle}>
-          <LockOutlined style={iconStyle} />
-          <Typography.Text style={{ ...labelStyle, color: token.colorTextSecondary }}>
-            Permissions
-          </Typography.Text>
-        </span>
-        <div style={settingControlStyle}>
-          <PermissionModeSelector
-            value={permissionMode}
-            onChange={onPermissionModeChange}
-            agentic_tool={session.agentic_tool}
-            codexSandboxMode={codexSandboxMode}
-            codexApprovalPolicy={codexApprovalPolicy}
-            onCodexChange={onCodexPermissionChange}
-            compact
-            iconOnly={false}
-            plain
-            size={actionSize}
-          />
-        </div>
-      </div>
-
-      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
-
-      <div style={sectionHeaderStyle}>Info bar</div>
-
-      {footerTimerTask && (
-        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <ClockCircleOutlined style={iconStyle} />
-          <Typography.Text style={labelStyle}>Timer</Typography.Text>
-          {chipPin('timer', 'timer')}
-        </div>
-      )}
-
-      <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-        <ToolOutlined style={iconStyle} />
-        <Typography.Text style={labelStyle}>Tools</Typography.Text>
-        {chipPin('tools', 'tools')}
-      </div>
-
-      {modelName && (
-        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <RobotOutlined style={iconStyle} />
-          <Typography.Text style={labelStyle}>Model</Typography.Text>
-          {chipPin('model', 'model')}
-        </div>
-      )}
-
-      <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-        <NumberOutlined style={iconStyle} />
-        <Typography.Text style={labelStyle}>Usage</Typography.Text>
-        {chipPin('tokens', 'usage')}
-      </div>
-
-      {latestContextWindow && latestContextWindow.limit > 0 && (
-        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <PercentageOutlined style={iconStyle} />
-          <Typography.Text style={labelStyle}>Context %</Typography.Text>
-          {chipPin('context', 'context')}
-        </div>
-      )}
-
-      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
-
-      <Popover
-        trigger="click"
-        placement="topLeft"
-        title={
-          <span>
-            <IdcardOutlined style={{ marginRight: 8 }} />
-            Session IDs
-          </span>
-        }
-        content={
-          <div style={{ width: 400, maxWidth: '90vw' }}>
-            <SessionIdsList session={session} />
-          </div>
-        }
-      >
-        {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
-        <div
-          role="button"
-          tabIndex={0}
-          style={{ ...overflowRowStyle, cursor: 'pointer' }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              e.currentTarget.click();
-            }
-          }}
-        >
-          <IdcardOutlined style={iconStyle} />
-          <Typography.Text style={labelStyle}>Session IDs</Typography.Text>
-          {chipPin('session-ids', 'session IDs')}
-        </div>
-      </Popover>
-
-      {onOpenSessionSettings && (
-        <>
-          <Divider style={{ margin: `${token.marginXXS}px 0` }} />
-          <Button
-            block
-            type="text"
-            icon={<SettingOutlined style={{ fontSize: token.fontSize }} />}
-            aria-label="Session settings"
-            style={{
-              height: rowHeight,
-              justifyContent: 'flex-start',
-              paddingInline: token.paddingSM,
-              fontSize: labelFontSize,
-            }}
-            onClick={() => {
-              setMoreOpen(false);
-              onOpenSessionSettings(session.session_id);
-            }}
-          >
-            Session settings
-          </Button>
-        </>
-      )}
-    </fieldset>
-  );
 
   const stopTooltip = connectionDisabled
     ? LOST_CONNECTION_TOOLTIP
@@ -750,7 +441,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     fontSize: token.fontSize,
   };
 
-  const [openMenu, setOpenMenu] = React.useState<'plus' | null>(null);
+  const [openMenu, setOpenMenu] = React.useState<ComposerMenuId | null>(null);
+  const [modelPage, setModelPage] = React.useState<'model' | 'permissions'>('model');
   const runAction = (action: () => void) => () => {
     setOpenMenu(null);
     action();
@@ -879,20 +571,207 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     </ComposerMenu>
   );
 
+  const effortLevels = toolCaps?.reasoningEffortLevels ?? [];
+  const permissionModes = getPermissionModes(session.agentic_tool);
+  const defaultPermissionMode = getDefaultPermissionMode(session.agentic_tool);
+  const presetNote = managedByPreset ? (
+    <ComposerMenuNote>Managed by preset. Switch presets in session settings.</ComposerMenuNote>
+  ) : null;
+  const defaultTag = (
+    <Tag bordered={false} style={{ marginInlineEnd: 0 }}>
+      default
+    </Tag>
+  );
+  const permissionRadioRows = (
+    title: string,
+    rows: { value: string; label: string; description?: string; isDefault?: boolean }[],
+    current: string,
+    onSelect: (value: string) => void
+  ) => (
+    <div role="radiogroup" aria-label={title}>
+      <ComposerMenuSection>{title}</ComposerMenuSection>
+      {rows.map((row) => (
+        <ComposerMenuRow
+          key={row.value}
+          label={row.label}
+          hint={row.description}
+          checked={row.value === current}
+          value={row.isDefault ? defaultTag : undefined}
+          disabled={managedByPreset}
+          onClick={() => onSelect(row.value)}
+        />
+      ))}
+    </div>
+  );
+  const codexDefaults = mapToCodexPermissionConfig(defaultPermissionMode);
+  const permissionsPage = (
+    <>
+      <ComposerMenuBack label="Model" onBack={() => setModelPage('model')} />
+      {presetNote}
+      {session.agentic_tool === 'gemini' && isGeminiManualMode(permissionMode) && (
+        <ComposerMenuNote>{GEMINI_MANUAL_MESSAGE}</ComposerMenuNote>
+      )}
+      {session.agentic_tool === 'codex' ? (
+        <>
+          {permissionRadioRows(
+            'Sandbox',
+            CODEX_SANDBOX_MODES.map((mode) => ({
+              ...mode,
+              isDefault: mode.value === codexDefaults.sandboxMode,
+            })),
+            codexSandboxMode,
+            (value) => onCodexPermissionChange(value as CodexSandboxMode, codexApprovalPolicy)
+          )}
+          {permissionRadioRows(
+            'Approval',
+            CODEX_APPROVAL_POLICIES.map((policy) => ({
+              ...policy,
+              isDefault: policy.value === codexDefaults.approvalPolicy,
+            })),
+            codexApprovalPolicy,
+            (value) => onCodexPermissionChange(codexSandboxMode, value as CodexApprovalPolicy)
+          )}
+        </>
+      ) : (
+        permissionRadioRows(
+          'Permissions',
+          permissionModes.map((mode) => ({
+            value: mode.mode,
+            label: mode.label,
+            description: mode.description,
+            isDefault: mode.mode === defaultPermissionMode,
+          })),
+          permissionMode,
+          (value) => onPermissionModeChange(value as PermissionMode)
+        )
+      )}
+    </>
+  );
+  const modelPageContent = (
+    <>
+      {presetNote}
+      <ModelSelector
+        key={session.session_id}
+        value={modelConfig}
+        onCommit={onModelConfigCommit}
+        agentic_tool={session.agentic_tool}
+        client={client}
+        branchId={session.branch_id}
+        catalogEnabled={session.created_by === currentUserId}
+        compact
+        showAdvisor={false}
+        renderRows={({ options, currentModel, select }) => (
+          <div role="radiogroup" aria-label="Model">
+            <ComposerMenuSection>Model</ComposerMenuSection>
+            {options.map((option) => (
+              <ComposerMenuRow
+                key={option.value}
+                label={option.label}
+                hint={option.description}
+                checked={option.value === currentModel}
+                value={option.isDefault ? defaultTag : undefined}
+                disabled={managedByPreset}
+                onClick={() => select(option.value)}
+              />
+            ))}
+          </div>
+        )}
+      />
+      {effortLevels.length > 0 && (
+        <>
+          <ComposerMenuSection>Effort</ComposerMenuSection>
+          <div style={{ paddingInline: token.paddingXS, paddingBottom: token.paddingXXS }}>
+            <Segmented
+              block
+              aria-label="Effort"
+              size={isMobile ? 'large' : 'middle'}
+              disabled={managedByPreset}
+              value={effortLevel ?? toolCaps?.defaultReasoningEffort}
+              onChange={(value) => onEffortChange(value as EffortLevel)}
+              options={EFFORT_OPTIONS.filter((option) => effortLevels.includes(option.value)).map(
+                (option) => ({
+                  value: option.value,
+                  label: option.label,
+                  title: option.description,
+                })
+              )}
+            />
+          </div>
+        </>
+      )}
+      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
+      <ComposerMenuRow
+        label="Permissions"
+        icon={<LockOutlined />}
+        value={permissionChipName}
+        drill
+        onClick={() => setModelPage('permissions')}
+      />
+      {onOpenSessionSettings && (
+        <ComposerMenuRow
+          label="Session settings"
+          icon={<SettingOutlined />}
+          onClick={runAction(() => onOpenSessionSettings(session.session_id))}
+        />
+      )}
+    </>
+  );
+  const modelMenuContent = modelPage === 'permissions' ? permissionsPage : modelPageContent;
+  const openModelMenu = (menu: 'model' | 'permissions') => (open: boolean) => {
+    setModelPage(menu === 'permissions' ? 'permissions' : 'model');
+    setOpenMenu(open ? menu : null);
+  };
+
   const modelChip = (
-    <Tooltip title="Model and effort">
-      <Button
-        type="text"
-        aria-label={modelChipAriaLabel}
-        onClick={isMobile ? () => setMoreOpen(true) : undefined}
-        style={chipStyle}
-        data-testid="model-chip"
-      >
-        <Typography.Text ellipsis style={{ minWidth: 0, fontSize: token.fontSize }}>
-          {modelChipLabel}
-        </Typography.Text>
-      </Button>
-    </Tooltip>
+    <ComposerMenu
+      sheet={isMobile}
+      title="Model"
+      open={openMenu === 'model'}
+      onOpenChange={openModelMenu('model')}
+      content={modelMenuContent}
+    >
+      <Tooltip title="Model and effort">
+        <Button
+          type="text"
+          aria-label={modelChipAriaLabel}
+          aria-haspopup="dialog"
+          aria-expanded={openMenu === 'model'}
+          onClick={isMobile ? () => openModelMenu('model')(true) : undefined}
+          style={chipStyle}
+          data-testid="model-chip"
+        >
+          <Typography.Text ellipsis style={{ minWidth: 0, fontSize: token.fontSize }}>
+            {modelChipLabel}
+          </Typography.Text>
+        </Button>
+      </Tooltip>
+    </ComposerMenu>
+  );
+
+  const permissionChip = showPermissionChip && (
+    <ComposerMenu
+      sheet={isMobile}
+      title="Permissions"
+      open={openMenu === 'permissions'}
+      onOpenChange={openModelMenu('permissions')}
+      content={modelMenuContent}
+    >
+      <Tooltip title="Permissions">
+        <Button
+          type="text"
+          aria-label={`Permissions: ${permissionChipName}. Change`}
+          aria-haspopup="dialog"
+          aria-expanded={openMenu === 'permissions'}
+          onClick={isMobile ? () => openModelMenu('permissions')(true) : undefined}
+          style={{ ...chipStyle, color: token.colorWarningText }}
+          data-testid="permission-chip"
+        >
+          <Typography.Text ellipsis style={{ minWidth: 0, color: 'inherit' }}>
+            {permissionChipLabel}
+          </Typography.Text>
+        </Button>
+      </Tooltip>
+    </ComposerMenu>
   );
 
   const workingLine = showStop && (
@@ -1020,35 +899,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         <Flex align="center" gap={token.sizeXXS} style={{ minWidth: 0 }}>
           {plusButton}
           {pinnedRow}
-          {isMobile ? (
-            modelChip
-          ) : (
-            <Popover
-              open={moreOpen}
-              onOpenChange={setMoreOpen}
-              trigger="click"
-              placement="topLeft"
-              content={moreContent}
-              title={null}
-            >
-              {modelChip}
-            </Popover>
-          )}
-          {showPermissionChip && (
-            <Tooltip title="Permissions">
-              <Button
-                type="text"
-                aria-label={`Permissions: ${permissionChipName}. Change`}
-                onClick={() => setMoreOpen(true)}
-                style={{ ...chipStyle, color: token.colorWarningText }}
-                data-testid="permission-chip"
-              >
-                <Typography.Text ellipsis style={{ minWidth: 0, color: 'inherit' }}>
-                  {permissionChipLabel}
-                </Typography.Text>
-              </Button>
-            </Tooltip>
-          )}
+          {modelChip}
+          {permissionChip}
           <span style={{ flex: 1 }} />
           <Tooltip title={circleTooltip}>
             <Button
@@ -1158,23 +1010,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               />
             )}
         </Flex>
-      )}
-
-      {isMobile && (
-        <Drawer
-          open={moreOpen}
-          onClose={() => setMoreOpen(false)}
-          placement="bottom"
-          height="85%"
-          title="Session controls"
-          {...reducedMotionSurface(reducedMotion)}
-          styles={{
-            content: glassSurfaceStyle(token, 0.85),
-            body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)', overflowY: 'auto' },
-          }}
-        >
-          {moreContent}
-        </Drawer>
       )}
     </div>
   );
