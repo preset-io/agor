@@ -8,7 +8,7 @@ import type {
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
-import { Button, Empty, Input, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import { Button, Empty, Input, Spin, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
@@ -211,29 +211,27 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
   return (
     <div>
       <ResponsiveSettingsHeader
+        title="Teammates"
         description="Teammates are persistent AI companions backed by a framework repo. They maintain memory, orchestrate work across branches, and run on scheduled heartbeats."
-        actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
-            <Input
-              allowClear
-              placeholder="Search teammates..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              style={{
-                width: compact ? '100%' : token.sizeUnit * 40,
-                flex: compact ? '1 1 100%' : undefined,
-              }}
-            />
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={onCreateTeammate}
-              disabled={!onCreateTeammate}
-            >
-              Create AI teammate
-            </Button>
-          </Space>
-        )}
+        search={
+          <Input
+            allowClear
+            placeholder="Search teammates..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        }
+        count={`${teammates.length} ${teammates.length === 1 ? 'teammate' : 'teammates'}`}
+        primaryActions={
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={onCreateTeammate}
+            disabled={!onCreateTeammate}
+          >
+            Create AI teammate
+          </Button>
+        }
       />
 
       {teammates.length === 0 && !searchTerm && !teammatesLoaded && (

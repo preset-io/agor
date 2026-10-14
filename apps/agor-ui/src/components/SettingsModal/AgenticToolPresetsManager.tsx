@@ -6,13 +6,13 @@ import {
   type AuthorityOperation,
   useAuthorityOperationGuard,
 } from '../../hooks/useAuthorityOperationGuard';
+import { useThemedMessage } from '../../utils/message';
 import {
   AgenticToolConfigForm,
   buildConfigFromFormValues,
   getFormValuesFromConfig,
 } from '../AgenticToolConfigForm';
-
-import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
+import { DrillInFrame, useDrillFormDraft } from './SettingsDrill';
 
 interface Props {
   client: AgorClient;
@@ -20,6 +20,14 @@ interface Props {
   onError(message: string): void;
   identityKey: string | null;
   operationScope: readonly unknown[] | null;
+  /**
+   * The open editor's token, null when closed. AgenticToolsSection owns it so
+   * only one tool has an open editor; each open gets a new token.
+   */
+  editorToken: number | null;
+  onEditorOpen(): void;
+  /** Closes the editor opened as `token`; ignored if another open replaced it. */
+  onEditorClose(token: number | null): void;
 }
 
 export const AgenticToolPresetsManager: React.FC<Props> = ({
@@ -28,20 +36,26 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
   onError,
   identityKey,
   operationScope,
+  editorToken,
+  onEditorOpen,
+  onEditorClose,
 }) => {
   const [form] = Form.useForm();
   const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
   const [editing, setEditing] = useState<AgenticToolPreset | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
+  const modalOpen = editorToken !== null;
   const [saving, setSaving] = useState(false);
   const operationGuard = useAuthorityOperationGuard(operationScope);
+  const { showSuccess } = useThemedMessage();
+  // The inline editor reports its draft to the Settings leave guard.
+  const isDraftDirty = useDrillFormDraft(form, modalOpen ? (editing ?? 'new') : null);
 
+  // The owner closes the editor on an identity change; this clears the rest.
   // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey intentionally erases the replacement caller's modal/form state
   useLayoutEffect(() => {
     form.resetFields();
     setPresets([]);
     setEditing(null);
-    setModalOpen(false);
     setSaving(false);
   }, [form, identityKey]);
 
@@ -82,10 +96,12 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
       is_default: preset?.is_default ?? false,
       ...getFormValuesFromConfig(tool, preset?.configuration),
     });
-    setModalOpen(true);
+    onEditorOpen();
   };
 
   const save = async () => {
+    // The open this save belongs to: a late reply must not close a later one.
+    const openToken = editorToken;
     const operation = operationGuard.begin();
     if (!operation.isCurrent()) return;
     try {
@@ -101,7 +117,8 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
       if (editing) await client.service('agentic-tool-presets').patch(editing.preset_id, data);
       else await client.service('agentic-tool-presets').create({ ...data, tool });
       if (!operation.isCurrent()) return;
-      setModalOpen(false);
+      showSuccess(editing ? 'Preset updated' : 'Preset created');
+      onEditorClose(openToken);
       await load(operation);
     } catch (error) {
       if (!operation.isCurrent()) return;
@@ -110,6 +127,38 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
       if (operation.isCurrent()) setSaving(false);
     }
   };
+
+  // Preset create/edit renders in place of the list. This manager is nested
+  // inside a tool's config panel, so a modal here would stack on the Settings
+  // modal ("no modal on modal"); the inline form avoids that.
+  if (modalOpen) {
+    return (
+      <DrillInFrame
+        title={editing ? `Edit ${editing.name}` : `New ${tool} preset`}
+        dirty={isDraftDirty}
+        saving={saving}
+        onSave={save}
+        onBack={() => onEditorClose(editorToken)}
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="Description">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item
+            name="is_default"
+            label="Default for new configurations"
+            valuePropName="checked"
+          >
+            <Switch />
+          </Form.Item>
+          <AgenticToolConfigForm agenticTool={tool} client={client} />
+        </Form>
+      </DrillInFrame>
+    );
+  }
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -150,6 +199,7 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
                     try {
                       await client.service('agentic-tool-presets').remove(preset.preset_id);
                       if (!operation.isCurrent()) return;
+                      showSuccess('Preset deleted');
                       await load(operation);
                     } catch (error) {
                       if (!operation.isCurrent()) return;
@@ -174,32 +224,6 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
           )}
         />
       )}
-      <AdaptiveSettingsModal
-        title={editing ? `Edit ${editing.name}` : `New ${tool} preset`}
-        open={modalOpen}
-        onCancel={() => setModalOpen(false)}
-        onOk={() => void save()}
-        confirmLoading={saving}
-        destroyOnHidden
-        width={680}
-      >
-        <Form form={form} layout="vertical">
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="description" label="Description">
-            <Input.TextArea rows={2} />
-          </Form.Item>
-          <Form.Item
-            name="is_default"
-            label="Default for new configurations"
-            valuePropName="checked"
-          >
-            <Switch />
-          </Form.Item>
-          <AgenticToolConfigForm agenticTool={tool} client={client} />
-        </Form>
-      </AdaptiveSettingsModal>
     </Space>
   );
 };

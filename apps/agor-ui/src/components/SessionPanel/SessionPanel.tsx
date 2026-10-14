@@ -57,6 +57,7 @@ import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useSessionGenealogyTargets } from '../../hooks/useSessionGenealogyTargets';
@@ -68,6 +69,13 @@ import {
   selectUserAuthenticatedMcpServerIds,
   selectUserById,
 } from '../../store/selectors';
+import { isComposerSendKey } from '../../utils/composerKeys';
+import {
+  formatActionError,
+  notConnectedMessage,
+  unconfirmedMessage,
+  withRawDetail,
+} from '../../utils/connectionErrors';
 import { getContextWindowGradient, selectLatestContextWindow } from '../../utils/contextWindow';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
@@ -91,8 +99,9 @@ import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import {
+  BlockingAttachmentError,
   buildPromptWithAttachments,
-  getComposerAttachmentFailureMessage,
+  formatComposerUploadError,
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
 } from './composerAttachments';
@@ -120,9 +129,6 @@ export type { PermissionMode };
 // The parent reads/clears the value imperatively via a ref.
 // ---------------------------------------------------------------------------
 
-// iOS Safari zooms into inputs below 16px.
-const MOBILE_COMPOSER_FONT_SIZE = 16;
-
 export interface PromptInputHandle {
   getValue: () => string;
   /** Empty the composer, or leave only `remainder` (text typed after a send began). */
@@ -141,7 +147,7 @@ interface PromptInputProps {
   onHasInputChange: (hasInput: boolean) => void;
   /** Kept in sync so memoized children can read the latest value */
   inputValueRef: React.MutableRefObject<string>;
-  /** Called on Enter (without Shift) when there is sendable composer content */
+  /** Called on a send keypress (`isComposerSendKey`) when there is sendable composer content */
   onSubmit: () => void;
   hasExternalInput?: boolean;
   // Forwarded to AutocompleteTextarea
@@ -184,6 +190,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     ref
   ) => {
     const isMobile = useIsMobileViewport();
+    const touchInput = useIsTouchInput();
     const { token } = theme.useToken();
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
@@ -300,14 +307,13 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
 
     const handleKeyPress = React.useCallback(
       (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          if (valueRef.current.trim() || hasExternalInput) {
-            onSubmit();
-          }
+        if (!isComposerSendKey(e, touchInput)) return;
+        e.preventDefault();
+        if (valueRef.current.trim() || hasExternalInput) {
+          onSubmit();
         }
       },
-      [hasExternalInput, onSubmit]
+      [hasExternalInput, onSubmit, touchInput]
     );
 
     return (
@@ -330,17 +336,16 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         enableKnowledgeMentions
         kbLinkTarget="absolute-route"
         highlightWhenEmpty
-        // Preserve the mobile composer's iOS no-autozoom threshold. The shared
-        // textarea also applies these metrics to its mention highlight overlay.
-        // Block padding makes one line a full touch-target tall.
+        // Body-size text like desktop; iOS focus zoom is off via the viewport
+        // (preventIosInputZoom). The shared textarea also applies these metrics
+        // to its mention highlight overlay. Block padding makes one line a full
+        // touch-target tall.
         textareaStyle={
           isMobile
             ? {
-                fontSize: MOBILE_COMPOSER_FONT_SIZE,
+                fontSize: token.fontSize,
                 paddingBlock:
-                  (MOBILE_TOUCH_TARGET -
-                    2 * token.lineWidth -
-                    MOBILE_COMPOSER_FONT_SIZE * token.lineHeight) /
+                  (MOBILE_TOUCH_TARGET - 2 * token.lineWidth - token.fontSize * token.lineHeight) /
                   2,
               }
             : undefined
@@ -387,7 +392,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const mobileHeaderButtonStyle: React.CSSProperties | undefined = isMobileShell
     ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
     : undefined;
-  const { showSuccess, showInfo, showError } = useThemedMessage();
+  const { showInfo, showError, showWarning } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const recenterMap = useRecenterMap();
 
@@ -968,7 +973,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleArchive = () => {
     if (!client || connectionDisabled) {
-      showError('Cannot archive while disconnected from the daemon.');
+      showError(notConnectedMessage('archive the session'));
       return;
     }
 
@@ -1058,6 +1063,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
 
     composerSendInFlightRef.current = sendStartComposerIdentity;
+    let uploadingFiles: File[] | null = null;
     try {
       const sendStartSessionId = session.session_id;
       const value = promptRef.current?.getValue() ?? '';
@@ -1067,21 +1073,23 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
       const blockingAttachment = attachmentsAtSendStart.find(isBlockingComposerAttachment);
       if (blockingAttachment) {
-        showError(
-          `${getComposerAttachmentFailureMessage(blockingAttachment)}. Remove failed files before sending.`
-        );
+        showError(new BlockingAttachmentError(blockingAttachment).message);
         return;
       }
 
       if (!onSendPrompt) {
-        showError('Cannot send prompt from this view.');
+        showError("You can't send messages from this view.");
         return;
       }
 
+      uploadingFiles = attachmentsAtSendStart
+        .filter((attachment) => attachment.status !== 'uploaded')
+        .map((attachment) => attachment.file);
       const uploadedFiles = await uploadComposerAttachments(
         attachmentsAtSendStart,
         sendStartSessionId
       );
+      uploadingFiles = null;
       const currentComposerIdentity = composerSessionIdentityRef.current;
       if (
         currentComposerIdentity.ownerId !== sendStartComposerIdentity.ownerId ||
@@ -1143,8 +1151,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       if (composerOwnsAdmissionCompletion) scrollToBottom?.();
     } catch (error) {
       if (composerSessionIdentityRef.current !== sendStartComposerIdentity) return;
-      console.error('Composer send failed — keeping prompt and files in composer:', error);
-      showError(error instanceof Error ? error.message : 'Failed to send prompt');
+      // The message and files stay in the composer.
+      showError(
+        error instanceof BlockingAttachmentError
+          ? error.message
+          : uploadingFiles
+            ? formatComposerUploadError(uploadingFiles, error)
+            : formatActionError('send your message', error, { idempotent: false })
+      );
     } finally {
       if (composerSendInFlightRef.current === sendStartComposerIdentity) {
         composerSendInFlightRef.current = null;
@@ -1241,7 +1255,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           task.status === TaskStatus.AWAITING_INPUT
       );
     if (!stopTarget) {
-      showError('Execution state is still syncing. Try again.');
+      showInfo("Couldn't find running work to stop. Refresh to see the latest state.");
       return;
     }
 
@@ -1256,7 +1270,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         showInfo(result.reason ?? 'Stop requested; waiting for executor termination.');
       }
     } catch (error) {
-      console.error('Failed to stop execution:', error);
       const reconciliation = isStopTransportAmbiguous(error)
         ? await reconcileStopTransportFailure(
             () => currentClientRef.current,
@@ -1266,8 +1279,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         : { outcome: 'unresolved' as const };
       if (reconciliation.outcome === 'accepted' || reconciliation.outcome === 'ended') {
         showInfo(reconciliation.reason);
+      } else if (isStopTransportAmbiguous(error)) {
+        showError(withRawDetail(unconfirmedMessage('stop the agent', { idempotent: true }), error));
       } else {
-        showError('Failed to stop execution. You can try again.');
+        showError(formatActionError('stop the agent', error, { idempotent: true }));
       }
     } finally {
       setStopRequestInFlight(false);
@@ -1296,9 +1311,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       setForceFailTarget(null);
       setForceFailConfirmation('');
     } catch (error) {
-      console.error('Failed to force-fail execution:', error);
       setRecoveryError(
-        'Could not reopen this session. You may need the branch owner or an administrator to help.'
+        withRawDetail(
+          "Couldn't reopen this session. Ask a branch owner or administrator to help.",
+          error
+        )
       );
     } finally {
       setStopRequestInFlight(false);
@@ -1308,9 +1325,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const handleFork = async () => {
     if (!session) return;
     if (composerAttachmentsRef.current.length > 0) {
-      showError(
-        'Attachments are only supported for normal Send for now. Remove attachments to fork.'
-      );
+      showWarning('Remove attachments to fork. Attachments only work with Send.');
       return;
     }
     const value = promptRef.current?.getValue() ?? '';
@@ -1324,8 +1339,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // Only clear the compose box + draft on success, so a failed fork
       // leaves the typed prompt intact for the user to retry.
       promptRef.current?.clear();
-    } catch (error) {
-      console.error('Fork failed — keeping prompt in compose box:', error);
+    } catch {
+      // The fork handler shows why; the message stays in the compose box.
     }
   };
 
@@ -1338,9 +1353,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleBtwSend = async () => {
     if (composerAttachmentsRef.current.length > 0) {
-      showError(
-        'Attachments are only supported for normal Send for now. Remove attachments to send BTW.'
-      );
+      showWarning('Remove attachments to ask a side question. Attachments only work with Send.');
       return;
     }
     const value = promptRef.current?.getValue() ?? '';
@@ -1349,16 +1362,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     try {
       await onBtwFork?.(session.session_id, promptToSend);
       promptRef.current?.clear();
-    } catch (error) {
-      console.error('BTW fork failed — keeping prompt in compose box:', error);
+    } catch {
+      // The side-question handler shows why; the message stays in the compose box.
     }
   };
 
   const handleSpawnOpen = () => {
     if (composerAttachmentsRef.current.length > 0) {
-      showError(
-        'Attachments are only supported for normal Send for now. Remove attachments to spawn.'
-      );
+      showWarning('Remove attachments to start a subsession. Attachments only work with Send.');
       return;
     }
     setSpawnModalOpen(true);
@@ -1774,15 +1785,33 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             {totalMatches > 1 && (
               <Space size={2}>
                 <Tooltip title="Previous (Shift+Enter)">
-                  <Button type="text" size="small" icon={<UpOutlined />} onClick={goPrev} />
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label="Previous match"
+                    icon={<UpOutlined />}
+                    onClick={goPrev}
+                  />
                 </Tooltip>
                 <Tooltip title="Next (Enter)">
-                  <Button type="text" size="small" icon={<DownOutlined />} onClick={goNext} />
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label="Next match"
+                    icon={<DownOutlined />}
+                    onClick={goNext}
+                  />
                 </Tooltip>
               </Space>
             )}
             <Tooltip title="Close search (Esc)">
-              <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
+              <Button
+                type="text"
+                size="small"
+                aria-label="Close search"
+                icon={<CloseOutlined />}
+                onClick={closeSearch}
+              />
             </Tooltip>
           </div>
         </div>
@@ -1948,9 +1977,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             setAdvancedUploadInitialFiles([]);
           }}
           initialFiles={advancedUploadInitialFiles}
-          onUploadComplete={(files) => {
-            showSuccess(`Uploaded ${files.length} file(s)`);
-          }}
           onInsertMention={(filepath) => {
             promptRef.current?.insertText(`@${filepath}`);
           }}

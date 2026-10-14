@@ -149,10 +149,9 @@ it.each([false, true])(
     expectCenteredActivity();
 
     // Stopping retains both buttons and removing activity never shifts them.
-    // Desktop Stop may widen to its "Recovering…" label, growing leftward.
     const stopBounds = stop.getBoundingClientRect();
     view.rerender(panel(SessionStatus.STOPPING, embedded));
-    expect(screen.getByRole('button', { name: 'Recovering' })).toBe(stop);
+    expect(screen.getByRole('button', { name: 'Stop' })).toBe(stop);
     expect(stop).toBeDisabled();
     expect(stop).toHaveAttribute('aria-busy', 'true');
     expect(screen.queryByRole('status', { name: 'Agent is working' })).toBeNull();
@@ -160,11 +159,7 @@ it.each([false, true])(
       [send, buttonBounds],
       [stop, stopBounds],
     ] as const) {
-      const current = control.getBoundingClientRect();
-      expect(current.right).toBe(previous.right);
-      if (phone || control === send) expect(current.width).toBe(previous.width);
-      // Stop's own existing icon-to-Spin swap can change inline rounding.
-      expect(Math.abs(current.top - previous.top)).toBeLessThanOrEqual(1);
+      expect(control.getBoundingClientRect().toJSON()).toEqual(previous.toJSON());
     }
 
     view.rerender(panel(SessionStatus.COMPLETED, embedded));

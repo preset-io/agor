@@ -1,7 +1,7 @@
 import { DEFAULT_AGENTIC_TOOL_NAME } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { ThemeProvider } from '../../contexts/ThemeContext';
 import { agorStore } from '../../store/agorStore';
@@ -10,16 +10,22 @@ import { OPEN_CREATE_FLOW_EVENT, requestShellPicker } from '../../utils/shellEve
 import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { MobileApp } from './MobileApp';
 
+let boardSettingsHydrated: boolean | undefined;
 vi.mock('./MobileBoardPage', () => ({
   MobileBoardPage: ({
     onOpenBranch,
+    settingsHydrated,
   }: {
+    settingsHydrated: boolean;
     onOpenBranch: (branchId: string, tab: string) => void;
-  }) => (
-    <button type="button" onClick={() => onOpenBranch('branch-1', 'schedule')}>
-      Open schedule
-    </button>
-  ),
+  }) => {
+    boardSettingsHydrated = settingsHydrated;
+    return (
+      <button type="button" onClick={() => onOpenBranch('branch-1', 'schedule')}>
+        Open schedule
+      </button>
+    );
+  },
 }));
 
 // Capture the props the sheet is actually handed, so a control that renders
@@ -130,6 +136,71 @@ async function askWithPendingCreation(extraProps: Record<string, unknown> = {}) 
 }
 
 describe('MobileApp branch actions', () => {
+  beforeEach(() => {
+    agorStore.getState().reset();
+    agorStore.getState().setAgenticToolSettings([]);
+  });
+
+  it.each(['Ask your primary assistant'])(
+    'holds %s until current workspace tool settings hydrate',
+    async (action) => {
+      agorStore.getState().resetMaps();
+      const onCreateSession = vi.fn(async () => null);
+      renderMobileApp('/m/board/board-1', {
+        client: primaryClient,
+        user: { user_id: 'user-1', primary_agentic_tool: 'claude-code' },
+        onCreateSession,
+      });
+      await act(async () => {});
+      expect(boardSettingsHydrated).toBe(false);
+      const button = screen.getByRole('button', { name: action });
+      expect(button).toHaveClass('ant-btn-loading');
+      fireEvent.click(button);
+      await act(async () => {});
+      expect(onCreateSession).not.toHaveBeenCalled();
+      act(() =>
+        agorStore.getState().setAgenticToolSettings([
+          {
+            tool: 'claude-code',
+            enabled: false,
+            deployment_available: true,
+            resolution_policy: 'user_preferred',
+            inline_configuration_allowed: true,
+            connection: {},
+          },
+        ])
+      );
+      expect(boardSettingsHydrated).toBe(true);
+      expect(button).not.toHaveClass('ant-btn-loading');
+      fireEvent.click(button);
+      await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+      expect(onCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: 'codex' }),
+        'board-1'
+      );
+      act(() => agorStore.getState().resetMaps());
+      expect(boardSettingsHydrated).toBe(false);
+      expect(button).toHaveClass('ant-btn-loading');
+      fireEvent.click(button);
+      await act(async () => {});
+      expect(onCreateSession).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('rechecks hydration when a mobile primary pick resumes Ask', async () => {
+    const onCreateSession = vi.fn(async () => null);
+    const client = { service: () => ({ getPrimaryTeammate: async () => null }) };
+    renderMobileApp('/m', { client, user: { user_id: 'user-1' }, onCreateSession });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    await screen.findByTestId('teammate-picker');
+    act(() => agorStore.getState().resetMaps());
+    const pick = teammatePicker.props.onPicked as (branch: typeof primaryBranch) => void;
+    act(() => pick(primaryBranch));
+    await act(async () => {});
+    expect(onCreateSession).not.toHaveBeenCalled();
+  });
+
   it('wires board branch actions to the requested bottom sheet tab', () => {
     renderMobileApp();
 

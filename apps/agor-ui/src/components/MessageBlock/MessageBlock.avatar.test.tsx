@@ -1,7 +1,8 @@
 import type { Message } from '@agor-live/client';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
+import { TOUCH_INPUT_QUERY } from '../../hooks/useCanHover';
 import { MessageBlock } from './MessageBlock';
 
 const messageOf = (role: 'user' | 'assistant'): Message =>
@@ -49,5 +50,24 @@ describe('MessageBlock avatar sizing', () => {
       height: `${IDENTITY_AVATAR_SIZE}px`,
     });
     expect(container.querySelector('[data-testid="avatar-spacer"]')).toBeNull();
+  });
+
+  it('toggles the grouped-message timestamp closed on a second tap on touch', async () => {
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...matchMedia(query),
+      matches: query === TOUCH_INPUT_QUERY,
+    }));
+    onTestFinished(() => vi.mocked(window.matchMedia).mockRestore());
+    render(<MessageBlock message={{ ...messageOf('assistant'), index: 7 }} showAvatar={false} />);
+    const clock = screen.getByRole('button', { name: /Message 7 timestamp:/ });
+    const tooltip = () => document.querySelector('.ant-tooltip');
+
+    fireEvent.click(clock);
+    await waitFor(() => expect(tooltip()).not.toBeNull());
+    expect(tooltip()!.className).not.toContain('ant-tooltip-hidden');
+
+    fireEvent.click(clock);
+    await waitFor(() => expect(tooltip()!.className).toContain('ant-tooltip-hidden'));
   });
 });

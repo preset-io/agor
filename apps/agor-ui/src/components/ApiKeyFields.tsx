@@ -8,8 +8,10 @@ import {
 import { Alert, Button, Input, Space, Tooltip, Typography, theme } from 'antd';
 import { useLayoutEffect, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { describeActionError } from '@/utils/connectionErrors';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { ClaudeSubscriptionTokenInstructions } from './ClaudeSubscriptionTokenInstructions';
+import { FIELD_WIDTHS } from './SettingsModal/panelPrimitives';
 import { Tag } from './Tag';
 
 const { Text, Link } = Typography;
@@ -224,13 +226,11 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
       setInputValues((previous) =>
         previous[field] === raw ? { ...previous, [field]: '' } : previous
       );
-    } catch {
+    } catch (error) {
       if (!operation.isCurrent()) return;
-      // Never echo provider/server errors here: they can contain credential values.
-      setFieldErrors((previous) => ({
-        ...previous,
-        [field]: 'Could not save this field. Please try again.',
-      }));
+      // Only the formatted message, never the raw error: it can contain credential values.
+      const { message } = describeActionError('save this field', error, { idempotent: true });
+      setFieldErrors((previous) => ({ ...previous, [field]: message }));
     }
   };
 
@@ -240,12 +240,10 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
     setFieldErrors((previous) => ({ ...previous, [field]: undefined }));
     try {
       await onClear(field);
-    } catch {
+    } catch (error) {
       if (!operation.isCurrent()) return;
-      setFieldErrors((previous) => ({
-        ...previous,
-        [field]: 'Could not clear this field. Please try again.',
-      }));
+      const { message } = describeActionError('clear this field', error, { idempotent: true });
+      setFieldErrors((previous) => ({ ...previous, [field]: message }));
     }
   };
 
@@ -253,6 +251,10 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
     const { field, label, description, placeholder, docUrl, helper, type = 'password' } = config;
     const isSet = !!fieldStatus[field];
     const InputComponent = type === 'password' ? Input.Password : Input;
+    // A key/token is a fixed-length string — cap it to `short` so the field
+    // matches what you type into it. Base URLs (`type: 'text'`) run longer, so
+    // they get `medium` instead of full-bleed.
+    const widthStyle = type === 'text' ? FIELD_WIDTHS.medium : FIELD_WIDTHS.short;
     // Non-secret fields (`type: 'text'`, e.g. base URLs) get their saved
     // value echoed back to the owner so they can verify the exact value
     // without clearing and retyping. Secret fields never show plaintext.
@@ -308,7 +310,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
               </Button>
             </Space>
           ) : (
-            <Space.Compact style={{ width: '100%' }}>
+            <Space.Compact style={{ width: '100%', ...widthStyle }}>
               <InputComponent
                 placeholder={placeholder}
                 value={inputValues[field] || ''}

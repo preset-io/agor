@@ -34,6 +34,7 @@ import { Button, Tooltip, theme } from 'antd';
 import React, { useState } from 'react';
 import { BRAND, brandBadgeHref } from '../../branding/brand';
 import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { formatTimestampWithRelative } from '../../utils/time';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
@@ -431,6 +432,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   revealDetails = false,
 }) => {
   const { token } = theme.useToken();
+  const touchInput = useIsTouchInput();
   const [timestampOpen, setTimestampOpen] = useState(false);
 
   // One vertical gap for every top-level block a message renders — speaker
@@ -792,7 +794,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
       return (
         <Tooltip
           title={timestamp}
-          trigger={['hover', 'focus']}
+          // A tap emulates hover; on touch the timestamp opens on tap instead.
+          trigger={touchInput ? 'click' : ['hover', 'focus']}
           open={timestampOpen}
           onOpenChange={setTimestampOpen}
           mouseEnterDelay={0.5}
@@ -803,7 +806,9 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
             shape="circle"
             icon={<ClockCircleOutlined />}
             aria-label={`Message ${message.index} timestamp: ${timestamp}`}
-            onClick={() => setTimestampOpen(true)}
+            // On touch the click trigger toggles via onOpenChange; forcing open here
+            // would undo its close on a second tap.
+            onClick={touchInput ? undefined : () => setTimestampOpen(true)}
             onBlur={() => setTimestampOpen(false)}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {

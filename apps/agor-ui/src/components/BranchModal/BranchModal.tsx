@@ -9,12 +9,18 @@ import type {
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { Badge, Button, Drawer, Grid, Modal, Space, Tabs, theme } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById, selectUserById } from '../../store/selectors';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  isInFlightConnectionLossError,
+} from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
-import { CompactNotice } from '../CompactNotice';
+import { ActionErrorNotice, CompactNotice } from '../CompactNotice';
+import { DrillInFrame, useDiscardConfirm } from '../SettingsModal/SettingsDrill';
 import { EnvironmentTab } from './tabs/EnvironmentTab';
 import { FilesTab } from './tabs/FilesTab';
 import { GeneralTab } from './tabs/GeneralTab';
@@ -23,7 +29,11 @@ import { PermissionsTab } from './tabs/PermissionsTab';
 import { ScheduleTab } from './tabs/ScheduleTab';
 import { SessionsTab } from './tabs/SessionsTab';
 import { TeammateTab } from './tabs/TeammateTab';
-import { type BranchUpdate, useBranchModalForm } from './useBranchModalForm';
+import {
+  type BranchModalSaveResult,
+  type BranchUpdate,
+  useBranchModalForm,
+} from './useBranchModalForm';
 
 export type BranchModalTab =
   | 'general'
@@ -57,6 +67,13 @@ export interface BranchModalProps {
   onSessionClick?: (sessionId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
   defaultTab?: BranchModalTab; // Open modal to a specific tab
+  /**
+   * Render the body as an in-place drill-in (no outer Modal) for the Workspace
+   * Settings shell: the shared drill footer drives Save/Cancel and the
+   * unsaved-changes guard. Default false → the standalone Modal used everywhere
+   * else is unchanged.
+   */
+  embedded?: boolean;
   presentation?: 'modal' | 'bottom-sheet';
 }
 
@@ -76,6 +93,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   onSessionClick,
   onExecuteScheduleNow,
   defaultTab,
+  embedded = false,
   presentation = 'modal',
 }) => {
   // Entity maps are read from the store rather than drilled through props so
@@ -86,8 +104,22 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const { token } = theme.useToken();
   const screens = Grid.useBreakpoint();
   const compact = !screens.md;
-  const { showSuccess, showError } = useThemedMessage();
-  const [activeTab, setActiveTab] = useState<BranchModalTab>('general');
+  const { showSuccess } = useThemedMessage();
+  const [saveError, setSaveError] = useState<ActionErrorCopy | null>(null);
+  // The open Schedules form's dirty getter; joins the branch form in the
+  // drill-in leave guard (Back, nav switch, close) and gates Save's close.
+  const scheduleDraftRef = useRef<(() => boolean) | null>(null);
+  const setScheduleDraft = useCallback((isDirty: (() => boolean) | null) => {
+    scheduleDraftRef.current = isDirty;
+  }, []);
+  const isScheduleDirty = () => scheduleDraftRef.current?.() ?? false;
+  const confirmDiscard = useDiscardConfirm();
+  // Teammate records render a 'teammate' tab FIRST (see tabItems below), so the
+  // default tab must follow the record kind — otherwise a teammate opens on its
+  // second tab. Lazy init avoids a flash of 'general' before the open effect runs.
+  const [activeTab, setActiveTab] = useState<BranchModalTab>(
+    () => defaultTab ?? (branch && isTeammate(branch) ? 'teammate' : 'general')
+  );
 
   const form = useBranchModalForm({
     branch,
@@ -101,13 +133,18 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     return [...knownUsers.values()];
   }, [userById, form.allUsers]);
 
-  // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
+  // Sync active tab when the modal opens — use defaultTab if specified, else the
+  // record's own first tab ('teammate' for teammates, 'general' otherwise).
+  // `branch` is read at open-time only and deliberately kept out of the deps: a
+  // realtime branch re-emit while the modal is open must NOT reset the tab the
+  // user has since clicked into.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: branch read at open-time only (see comment)
   useEffect(() => {
     if (open) {
       setActiveTab(
         defaultTab === 'permissions' && !form.canViewPermissions
           ? 'general'
-          : defaultTab || 'general'
+          : (defaultTab ?? (branch && isTeammate(branch) ? 'teammate' : 'general'))
       );
     }
   }, [open, defaultTab, form.canViewPermissions]);
@@ -120,12 +157,14 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     }
   }, [activeTab, form.canViewPermissions]);
 
-  // Surface permission-package load failures once per error transition.
+  // A save settling after close or a branch switch must not show its banner on the next form.
+  const formSessionRef = useRef(0);
+  const branchId = branch?.branch_id;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: open and branchId start a new form session
   useEffect(() => {
-    if (form.permissionsLoadError) {
-      showError(`Failed to load branch permissions: ${form.permissionsLoadError.message}`);
-    }
-  }, [form.permissionsLoadError, showError]);
+    formSessionRef.current += 1;
+    setSaveError(null);
+  }, [open, branchId]);
 
   const isATeammate = branch ? isTeammate(branch) : false;
   const teammateConfig = useMemo(() => (branch ? getTeammateConfig(branch) : null), [branch]);
@@ -142,6 +181,10 @@ export const BranchModal: React.FC<BranchModalProps> = ({
         actions={onOpenSettings ? [{ label: 'Open repositories', onClick: onOpenSettings }] : []}
       />
     );
+    // Drill-in mode renders in place, never a dialog over the Settings modal.
+    if (embedded) {
+      return <DrillInFrame title={`Branch: ${branch.name}`}>{unavailable}</DrillInFrame>;
+    }
     return presentation === 'bottom-sheet' || compact ? (
       <Drawer
         title={`Branch: ${branch.name}`}
@@ -165,12 +208,25 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     : `Branch: ${branch.name}`;
 
   const handleSave = async () => {
+    setSaveError(null);
+    const session = formSessionRef.current;
     const result = await form.save();
+    const current = session === formSessionRef.current;
     if (result.ok) {
-      showSuccess(isATeammate ? 'Teammate updated' : 'Branch updated');
-      onClose();
-    } else {
-      showError(result.error.message || 'Failed to save changes');
+      showSuccess(isATeammate ? 'Teammate updated.' : 'Branch updated.');
+      if (!current) return;
+      // The branch is saved, but an open schedule draft is not part of it: show
+      // the draft and ask before closing; Keep editing stays on it.
+      if (isScheduleDirty()) {
+        setActiveTab('schedule');
+        confirmDiscard(true, onClose);
+      } else {
+        onClose();
+      }
+    } else if (current) {
+      setSaveError(
+        describeSaveFailure(result, isATeammate ? 'save the teammate' : 'save the branch')
+      );
     }
   };
 
@@ -299,6 +355,7 @@ export const BranchModal: React.FC<BranchModalProps> = ({
             onSessionClick?.(sessionId);
             onClose();
           }}
+          onDraftChange={setScheduleDraft}
         />
       ),
     },
@@ -330,7 +387,14 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const footer = (
     <Space>
       {form.hasChanges && (
-        <Button onClick={form.reset} disabled={form.saving} aria-label="Reset changes">
+        <Button
+          onClick={() => {
+            setSaveError(null);
+            form.reset();
+          }}
+          disabled={form.saving}
+          aria-label="Reset changes"
+        >
           Reset
         </Button>
       )}
@@ -350,14 +414,58 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   );
 
   const contents = (
-    <Tabs
-      tabPosition="top"
-      activeKey={activeTab}
-      onChange={(key) => setActiveTab(key as BranchModalTab)}
-      items={tabItems}
-    />
+    <>
+      {form.permissionsLoadError && (
+        <ActionErrorNotice
+          error={describeActionError("load this branch's permissions", form.permissionsLoadError, {
+            idempotent: true,
+          })}
+          action={{ label: 'Try again', onClick: form.reloadPermissions }}
+          style={{ margin: '12px 16px 0' }}
+        />
+      )}
+      {saveError && <ActionErrorNotice error={saveError} style={{ margin: '12px 16px 0' }} />}
+      <Tabs
+        tabPosition="top"
+        activeKey={activeTab}
+        onChange={(key) => setActiveTab(key as BranchModalTab)}
+        items={tabItems}
+      />
+    </>
   );
 
+  // Drill-in mode: no outer Modal. The shared shell footer renders Save/Cancel
+  // (Save only when there is something saveable) and runs the unsaved-changes
+  // guard from `dirty`; Reset moves to the header's extra slot.
+  if (embedded) {
+    return (
+      <DrillInFrame
+        title={title}
+        dirty={() => form.hasChanges || isScheduleDirty()}
+        saving={form.saving}
+        saveLabel="Save Changes"
+        onSave={canSave ? handleSave : undefined}
+        extra={
+          form.hasChanges ? (
+            <Button
+              onClick={() => {
+                setSaveError(null);
+                form.reset();
+              }}
+              disabled={form.saving}
+              aria-label="Reset changes"
+            >
+              Reset
+            </Button>
+          ) : null
+        }
+      >
+        {contents}
+      </DrillInFrame>
+    );
+  }
+
+  // Mobile / explicit bottom-sheet: a Drawer instead of the centered Modal.
   if (presentation === 'bottom-sheet' || compact) {
     return (
       <Drawer
@@ -397,3 +505,18 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     </Modal>
   );
 };
+
+function describeSaveFailure(
+  result: Extract<BranchModalSaveResult, { ok: false }>,
+  action: string
+): ActionErrorCopy {
+  if (result.notReady) return { message: 'Still loading. Try again in a moment.', raw: null };
+  if (!result.permissionsSaved)
+    return describeActionError(action, result.error, { idempotent: true });
+  return {
+    message: isInFlightConnectionLossError(result.error)
+      ? 'Permissions saved, but the connection to Agor dropped before the other changes were confirmed.'
+      : "Permissions saved, but the other changes weren't.",
+    raw: result.error.message,
+  };
+}

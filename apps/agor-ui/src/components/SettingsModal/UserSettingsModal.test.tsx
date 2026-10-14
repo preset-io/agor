@@ -1,5 +1,5 @@
 import type { AgenticToolName, AgorClient, UpdateUserInput, User } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntApp, ConfigProvider, type FormInstance, Grid } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -349,7 +349,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
           },
           default_mcp_server_ids: [],
         },
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -500,7 +501,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
           },
           default_mcp_server_ids: [],
         },
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
 
@@ -534,7 +536,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       expect(onUpdate).toHaveBeenCalledWith(
         'user-1',
         expect.objectContaining({ password: 'new-secure-password' }),
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
 
@@ -646,8 +649,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledTimes(1);
-      expect(screen.getByRole('alert')).toHaveTextContent('save failed');
+      expect(screen.getByRole('alert')).toHaveTextContent("Couldn't save your settings.");
     }, ASYNC);
+    fireEvent.click(within(screen.getByRole('alert')).getByText('Details'));
+    expect(screen.getByRole('region', { name: 'Technical details' })).toHaveTextContent(
+      'save failed'
+    );
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -675,8 +682,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledTimes(1);
-      expect(screen.getByRole('alert')).toHaveTextContent('save failed');
+      expect(screen.getByRole('alert')).toHaveTextContent("Couldn't save your settings.");
     }, ASYNC);
+    fireEvent.click(within(screen.getByRole('alert')).getByText('Details'));
+    expect(screen.getByRole('region', { name: 'Technical details' })).toHaveTextContent(
+      'save failed'
+    );
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -770,10 +781,13 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByText('Editing Bob')).toBeInTheDocument();
     // Personal API tokens are caller-scoped, so the entry is hidden here.
     expect(screen.queryByRole('menuitem', { name: /api tokens/i })).not.toBeInTheDocument();
-    // Groups & Access is admin-only nav; the force-password control lives there.
+    // Groups & Access is admin-only nav.
+    expect(screen.getByRole('menuitem', { name: /groups & access/i })).toBeInTheDocument();
+    // The force-password control lives in the Access panel's Danger zone (main's
+    // #2538 placement; our Phase-4 relocation to Security was superseded when the
+    // settings-redesign branch merged main's UserSettingsModal).
     fireEvent.click(screen.getByRole('menuitem', { name: /groups & access/i }));
-    await screen.findByRole('heading', { name: 'Groups & access' });
-    expect(screen.getByText(/force password change/i)).toBeInTheDocument();
+    expect(await screen.findByText(/force password change/i)).toBeInTheDocument();
   });
 
   it('hides caller-scoped Codex ChatGPT controls when an admin edits another user', async () => {
@@ -1200,6 +1214,37 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.queryByRole('menuitem', { name: /gemini/i })).not.toBeInTheDocument();
   });
 
+  it('shows a failed delete of the saved personal configuration next to its button', async () => {
+    agorStore
+      .getState()
+      .setAgenticToolSettings([
+        { tool: 'gemini', enabled: true, resolution_policy: 'tenant_required' },
+      ] as never);
+    const user = makeUser({ agentic_tools: { gemini: { GEMINI_API_KEY: true } } });
+    const onUpdate = vi.fn().mockRejectedValue(new Error('boom'));
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+        initialTab="gemini"
+      />
+    );
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Delete saved personal configuration' })
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'OK' }));
+    expect(
+      await screen.findByText("Couldn't delete the saved configuration.", undefined, ASYNC)
+    ).toBeInTheDocument();
+    expect(onUpdate).toHaveBeenCalledOnce();
+  });
+
   it('preserves an in-progress audio edit across navigation (no draft loss)', async () => {
     const user = makeUser();
     const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
@@ -1304,7 +1349,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       expect(onUpdate).toHaveBeenCalledWith(
         user.user_id,
         expect.objectContaining({ primary_agentic_tool: 'gemini' }),
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
     const [, , shouldApply] = onUpdate.mock.calls[0] as unknown as [string, unknown, () => boolean];

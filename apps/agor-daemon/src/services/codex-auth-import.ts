@@ -17,6 +17,7 @@
  *   derived from the authenticated user, never from request data.
  */
 
+import { parseCodexAuthJson } from '@agor/core/codex/auth-file';
 import { isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   getCurrentTenantId,
@@ -27,7 +28,6 @@ import {
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, CodexAuthImportResult, UserID } from '@agor/core/types';
 import type { CodexCredentialBindInvalidator } from '../codex-auth-bind-invalidation.js';
-import { parseCodexAuthJson } from '../utils/codex-auth-file.js';
 import {
   type AppLike,
   type CodexCredentialMutationCoordinator,

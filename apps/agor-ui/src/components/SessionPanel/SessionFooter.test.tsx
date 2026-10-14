@@ -23,8 +23,10 @@ import { App, ConfigProvider, theme } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { TOUCH_INPUT_QUERY } from '../../hooks/useCanHover';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { agorStore } from '../../store/agorStore';
+import { TouchTooltipConfig } from '../TouchTooltipConfig';
 import { SessionFooter, type SessionFooterProps } from './SessionFooter';
 
 vi.mock('../../hooks/useAuth', () => ({
@@ -191,7 +193,7 @@ describe('SessionFooter', () => {
       { wrapper: Wrapper }
     );
     expect(screen.getByRole('button', { name: /stop/i })).toBeDisabled();
-    expect(container.querySelector('.ant-spin')).toBeInTheDocument();
+    expect(container.querySelector('[data-icon="loading"]')).toBeInTheDocument();
     expect(container.querySelector('[data-icon="stop"]')).not.toBeInTheDocument();
   });
 
@@ -713,9 +715,10 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
     view.rerender(<SessionFooter {...baseProps} stopRequestInFlight onStop={onStop} />);
     expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} isRunning isStopping onStop={onStop} />);
-    const recovering = screen.getByRole('button', { name: 'Recovering' });
+    const recovering = screen.getByRole('button', { name: 'Stop' });
     expect(recovering).toBeDisabled();
-    expect(recovering.textContent).toBe(width < 1024 ? '' : 'Recovering…');
+    expect(recovering).toHaveAttribute('aria-busy', 'true');
+    expect(recovering.textContent).toBe(width < 1024 ? '' : 'Stop');
     fireEvent.click(recovering);
     expect(onStop).not.toHaveBeenCalled();
     view.rerender(
@@ -732,9 +735,10 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
         onStop={onStop}
       />
     );
-    const stopping = screen.getByRole('button', { name: 'Stopping' });
+    const stopping = screen.getByRole('button', { name: 'Stop' });
     expect(stopping).toBeDisabled();
-    expect(stopping.textContent).toBe(width < 1024 ? '' : 'Stopping…');
+    expect(stopping).toHaveAttribute('aria-busy', 'true');
+    expect(stopping.textContent).toBe(width < 1024 ? '' : 'Stop');
     view.rerender(<SessionFooter {...baseProps} isRunning connectionDisabled onStop={onStop} />);
     expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} />);
@@ -747,7 +751,18 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
         'agor-footer-prefs',
         JSON.stringify({ pinnedItems: ['upload', 'advanced-upload', 'fork', 'btw-fork', 'spawn'] })
       );
-      render(<SessionFooter {...baseProps} isRunning hasInput />, { wrapper: Wrapper });
+      // A phone: touch input, under the app's touch tooltip default.
+      const matchMedia = window.matchMedia;
+      vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+        ...matchMedia(query),
+        matches: query === TOUCH_INPUT_QUERY,
+      }));
+      render(
+        <TouchTooltipConfig>
+          <SessionFooter {...baseProps} isRunning hasInput />
+        </TouchTooltipConfig>,
+        { wrapper: Wrapper }
+      );
       expect(screen.queryByLabelText('Fork session')).not.toBeInTheDocument();
       for (const name of ['Stop', 'Queue', 'More options', 'Attach files']) {
         const button = screen.getByLabelText(name);

@@ -7,7 +7,8 @@
  */
 
 import type { AgorClient, Branch, TeammateConfig, User } from '@agor-live/client';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { App as AntApp } from 'antd';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
@@ -60,6 +61,86 @@ function renderBranchModal({
     />
   );
 }
+
+describe('BranchModal — failures', () => {
+  it('keeps the modal open with the draft and an in-form error when save fails', async () => {
+    const owner = makeUser({ user_id: 'user-1', role: 'admin' });
+    const onClose = vi.fn();
+    const { client } = makeStubClient({ owners: [owner], users: [owner], failBranchPatch: true });
+    renderWithApp(
+      <BranchModal
+        open
+        onClose={onClose}
+        branch={makeBranch({ created_by: owner.user_id })}
+        repo={makeRepo()}
+        sessions={[]}
+        client={client}
+        currentUser={owner}
+      />
+    );
+    const notes = screen.getByPlaceholderText<HTMLTextAreaElement>(
+      'Freeform notes about this branch...'
+    );
+    await waitFor(() => expect(notes.disabled).toBe(false));
+    fireEvent.change(notes, { target: { value: 'Draft' } });
+    fireEvent.click(screen.getByLabelText('Save changes'));
+
+    expect(await screen.findByText("Couldn't save the branch.")).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Details'));
+    expect(screen.getByText('daemon exploded')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(notes.value).toBe('Draft');
+  }, 30_000);
+
+  it('drops the save failure banner when the modal switches to another branch', async () => {
+    const owner = makeUser({ user_id: 'user-1', role: 'admin' });
+    const { client } = makeStubClient({ owners: [owner], users: [owner], failBranchPatch: true });
+    const modal = (branch: Branch) => (
+      <AntApp>
+        <BranchModal
+          open
+          onClose={vi.fn()}
+          branch={branch}
+          repo={makeRepo()}
+          sessions={[]}
+          client={client}
+          currentUser={owner}
+        />
+      </AntApp>
+    );
+    const first = makeBranch({ created_by: owner.user_id });
+    const view = render(modal(first));
+    const notes = screen.getByPlaceholderText<HTMLTextAreaElement>(
+      'Freeform notes about this branch...'
+    );
+    await waitFor(() => expect(notes.disabled).toBe(false));
+    fireEvent.change(notes, { target: { value: 'Draft' } });
+    fireEvent.click(screen.getByLabelText('Save changes'));
+    expect(await screen.findByText("Couldn't save the branch.")).toBeInTheDocument();
+
+    view.rerender(
+      modal(
+        makeBranch({
+          branch_id: '00000000-0000-7000-8000-0000000000ff' as Branch['branch_id'],
+          created_by: owner.user_id,
+        })
+      )
+    );
+    await waitFor(() => expect(screen.queryByText("Couldn't save the branch.")).toBeNull());
+  }, 30_000);
+
+  it('shows a permission load failure in the modal with Try again', async () => {
+    const admin = makeUser({ user_id: 'admin-1', role: 'superadmin' });
+    const { client, calls } = makeStubClient({ failPermissionsFind: true });
+    renderBranchModal({ currentUser: admin, client });
+
+    expect(await screen.findByText("Couldn't load this branch's permissions.")).toBeInTheDocument();
+    const finds = () => calls.filter((call) => call.service === 'branches/:id/permissions').length;
+    const before = finds();
+    fireEvent.click(screen.getByText('Try again'));
+    await waitFor(() => expect(finds()).toBe(before + 1));
+  }, 30_000);
+});
 
 describe('BranchModal — permissions tab visibility', () => {
   it('mounts the target editor without a development-preview banner', async () => {

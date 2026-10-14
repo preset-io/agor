@@ -8,7 +8,7 @@ export default defineConfig({
     'runtime/binary': 'src/runtime/binary.ts',
     'ui/index': 'src/ui/index.ts',
   },
-  format: ['cjs', 'esm'],
+  format: ['esm'],
   dts: false,
   splitting: false,
   clean: process.env.TSUP_CLEAN !== 'false',

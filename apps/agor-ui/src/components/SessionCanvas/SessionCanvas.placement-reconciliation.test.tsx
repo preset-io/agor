@@ -102,12 +102,14 @@ vi.mock('./canvas/ZoneTriggerModal', () => ({
   ZoneTriggerModal: ({
     open,
     onExecute,
+    runError,
   }: {
     open: boolean;
     onExecute: (params: Record<string, unknown>) => Promise<void>;
+    runError?: { message: string } | null;
   }) => {
     if (open) triggerPickerExecute = onExecute;
-    return open ? <div data-testid="zone-trigger-picker" /> : null;
+    return open ? <div data-testid="zone-trigger-picker">{runError?.message}</div> : null;
   },
 }));
 
@@ -220,12 +222,13 @@ interface CanvasOptions {
   app?: boolean;
   branches?: Branch[];
   connection?: Parameters<typeof ConnectionProvider>[0]['value'];
+  onSessionClick?: (sessionId: string) => void;
 }
 
 function canvasUi(
   client: AgorClient,
   canvasBoard: Board,
-  { app = true, branches = [branch], connection = CONNECTED }: CanvasOptions
+  { app = true, branches = [branch], connection = CONNECTED, onSessionClick }: CanvasOptions
 ) {
   const ui = (
     <ConnectionProvider value={connection}>
@@ -234,6 +237,7 @@ function canvasUi(
         board={canvasBoard}
         client={client}
         branches={branches}
+        onSessionClick={onSessionClick}
       />
     </ConnectionProvider>
   );
@@ -516,6 +520,100 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     expect(prompt).toHaveBeenCalledTimes(1);
   });
 
+  const openTriggerPicker = async (
+    client: AgorClient,
+    options: CanvasOptions = {}
+  ): Promise<void> => {
+    triggerPickerExecute = null;
+    agorStore.setState({
+      boardObjectsByBoardId: new Map([[BOARD_ID, [{ ...implementingPlacement, zone_id: null }]]]),
+    });
+    const triggerBoard = {
+      ...board,
+      objects: {
+        ...board.objects,
+        [IMPLEMENTING_ZONE_ID]: {
+          ...board.objects?.[IMPLEMENTING_ZONE_ID],
+          trigger: { behavior: 'show_picker', prompt_template: 'Review this fixture.' },
+        },
+      },
+    } as Board;
+    renderCanvas(client, triggerBoard, options);
+    await act(async () => {});
+    drag(BRANCH_ID, { x: 1800, y: 200 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(501);
+    });
+    expect(screen.getByTestId('zone-trigger-picker')).toBeTruthy();
+  };
+
+  it('keeps the zone-trigger picker open with the reason when no session started', async () => {
+    vi.useFakeTimers();
+    const create = vi.fn(async () => ({ session_id: 'session-new' }));
+    const prompt = vi.fn(async () => ({}));
+    const client = {
+      service: vi.fn(() => ({ patch: vi.fn(async () => ({})), create })),
+      sessions: { prompt },
+    } as unknown as AgorClient;
+    await openTriggerPicker(client);
+    create.mockRejectedValueOnce(new Error('Agent unavailable'));
+    await act(async () => {
+      await triggerPickerExecute?.({
+        sessionId: 'new',
+        action: 'prompt',
+        renderedTemplate: 'Review this fixture.',
+        agent: 'claude-code',
+      });
+    });
+    expect(screen.getByTestId('zone-trigger-picker')).toHaveTextContent(
+      "Couldn't start the session."
+    );
+    expect(prompt).not.toHaveBeenCalled();
+
+    // Running it again from the open picker works.
+    await act(async () => {
+      await triggerPickerExecute?.({
+        sessionId: 'new',
+        action: 'prompt',
+        renderedTemplate: 'Review this fixture.',
+        agent: 'claude-code',
+      });
+    });
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('zone-trigger-picker')).toBeNull();
+  });
+
+  it('opens the started session when its first message was not sent', async () => {
+    vi.useFakeTimers();
+    const onSessionClick = vi.fn();
+    const create = vi.fn(async () => ({ session_id: 'session-new' }));
+    const prompt = vi.fn(async () => {
+      throw new Error('Session is busy');
+    });
+    const client = {
+      service: vi.fn(() => ({ patch: vi.fn(async () => ({})), create })),
+      sessions: { prompt },
+    } as unknown as AgorClient;
+    await openTriggerPicker(client, { onSessionClick });
+    create.mockClear();
+    await act(async () => {
+      await triggerPickerExecute?.({
+        sessionId: 'new',
+        action: 'prompt',
+        renderedTemplate: 'Review this fixture.',
+        agent: 'claude-code',
+      });
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(onSessionClick).toHaveBeenCalledExactlyOnceWith('session-new');
+    expect(screen.queryByTestId('zone-trigger-picker')).toBeNull();
+    expect(
+      screen.getByText(
+        "The session started, but your first message wasn't sent. Open the session to send it. (Session is busy)"
+      )
+    ).toBeTruthy();
+  });
+
   // A reconnect resync resets every partition and marks the displayed board
   // loaded in one synchronous step: no render ever sees the board unloaded.
   const resyncReload = () =>
@@ -715,7 +813,7 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     // Still open, with the draft and the reason; the note shows what is saved.
     expect(screen.getByText('Edit Markdown Note')).toBeTruthy();
     expect(screen.getByDisplayValue('My careful draft')).toBeTruthy();
-    expect(screen.getByText(/You do not have permission to edit this board/)).toBeTruthy();
+    expect(screen.getByText("Couldn't save the note.")).toBeTruthy();
     expect(
       (currentNode('markdown-1') as FlowNode & { data: { content: string } }).data.content
     ).toBe('Old note');
@@ -750,7 +848,7 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     expect(boardPatches(patch)).toHaveLength(1);
     expect(screen.getByText('Add Markdown Note', { selector: '.ant-modal-title' })).toBeTruthy();
     expect(screen.getByDisplayValue('A fresh note')).toBeTruthy();
-    expect(screen.getByText(/Forbidden/)).toBeTruthy();
+    expect(screen.getByText("Couldn't save the note.")).toBeTruthy();
     // The optimistic note is rolled back.
     expect(flowProps?.nodes.some((candidate) => candidate.type === 'markdown')).toBe(false);
   });
@@ -772,6 +870,196 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
       )
     );
 
+  const addNoteAfterLostReply = async (options: CanvasOptions = {}) => {
+    const patch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('socket has been disconnected'))
+      .mockResolvedValue({});
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    const canvas = renderCanvas(client, board, options);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Add Markdown Note' }));
+    act(() => {
+      (flowProps as unknown as { onPaneClick: (event: unknown) => void }).onPaneClick({
+        clientX: 50,
+        clientY: 60,
+      });
+    });
+    fireEvent.change(await screen.findByPlaceholderText(/# Title/), {
+      target: { value: 'A fresh note' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    });
+    expect(
+      screen.getByText(
+        "The connection to Agor dropped before this was confirmed. If it didn't go through, try to save the note again once the connection is back."
+      )
+    ).toBeTruthy();
+    expect(screen.getByDisplayValue('A fresh note')).toBeTruthy();
+    // Redrawn from the store's board, which doesn't have the note.
+    await waitFor(() =>
+      expect(flowProps?.nodes.some((candidate) => candidate.type === 'markdown')).toBe(false)
+    );
+    return { patch, canvas };
+  };
+
+  it('saves a new note again as an update of the same note after a lost reply', async () => {
+    const { patch } = await addNoteAfterLostReply();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+    const [first, second] = boardPatches(patch);
+    expect(second.objectId).toBe(first.objectId);
+    await waitFor(() => expect(screen.queryByText('Edit Markdown Note')).toBeNull());
+  });
+
+  it('sends nothing more for a note whose reply was lost once the connection comes back', async () => {
+    const { patch, canvas } = await addNoteAfterLostReply();
+    act(() => canvas.rerenderBoard(board, { connection: { ...CONNECTED, authGeneration: 2 } }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+    expect(boardPatches(patch)).toHaveLength(1);
+    expect(
+      screen.getByText(
+        'This board reloaded while the note was open, so it was not created. Copy your draft to keep it, then add the note again.'
+      )
+    ).toBeTruthy();
+    expect(screen.getByDisplayValue('A fresh note')).toBeTruthy();
+  });
+
+  it('a failed zone delete brings the zone back with its pinned branch still inside it', async () => {
+    const patch = vi.fn(async () => {
+      throw new Error('You do not have permission to edit this board.');
+    });
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    renderCanvas(client);
+    await act(async () => {});
+    expect(currentNode(BRANCH_ID).parentId).toBe(IMPLEMENTING_ZONE_ID);
+    const before = currentNode(BRANCH_ID).position;
+    type ZoneData = Parameters<typeof ZoneNode>[0]['data'];
+    const zoneData = (currentNode(IMPLEMENTING_ZONE_ID) as FlowNode & { data: ZoneData }).data;
+    await act(async () => {
+      await zoneData.onDelete?.(IMPLEMENTING_ZONE_ID, false, zoneData.beginBoardWrite?.() ?? null);
+    });
+    expect(boardPatches(patch)).toEqual([expect.objectContaining({ _action: 'deleteZone' })]);
+    expect(currentNode(IMPLEMENTING_ZONE_ID)).toBeTruthy();
+    expect(currentNode(BRANCH_ID).parentId).toBe(IMPLEMENTING_ZONE_ID);
+    expect(currentNode(BRANCH_ID).position).toEqual(before);
+    expect(
+      await screen.findByText(
+        "Couldn't delete the zone. (You do not have permission to edit this board.)"
+      )
+    ).toBeTruthy();
+  });
+
+  type DeletableNote = FlowNode & {
+    data: {
+      onDelete: (id: string, ticket: unknown) => Promise<void>;
+      beginBoardWrite: () => unknown;
+    };
+  };
+
+  it('a note delete that lost its reply comes back, and redraws again after the reconnect', async () => {
+    const patch = vi.fn(async () => {
+      throw new Error('socket has been disconnected');
+    });
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    const canvas = renderCanvas(client, noteBoard);
+    await act(async () => {});
+    const note = currentNode('markdown-1') as DeletableNote;
+    await act(async () => {
+      await note.data.onDelete('markdown-1', note.data.beginBoardWrite());
+    });
+    // The store still has it, so it is drawn again.
+    expect(currentNode('markdown-1')).toBeTruthy();
+    // The reconnect resync finds it was deleted.
+    const { 'markdown-1': _gone, ...remaining } = noteBoard.objects ?? {};
+    act(() =>
+      canvas.rerenderBoard({ ...noteBoard, objects: remaining } as Board, {
+        connection: { ...CONNECTED, authGeneration: 2 },
+      })
+    );
+    expect(flowProps?.nodes.some((candidate) => candidate.id === 'markdown-1')).toBe(false);
+  });
+
+  it('a failed delete during a drag waits for the drag to end before redrawing', async () => {
+    const patch = vi.fn(async () => {
+      throw new Error('You do not have permission to edit this board.');
+    });
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    renderCanvas(client, noteBoard);
+    await act(async () => {});
+    act(() => {
+      flowProps?.onNodeDragStart?.({}, currentNode(BRANCH_ID));
+    });
+    const note = currentNode('markdown-1') as DeletableNote;
+    await act(async () => {
+      await note.data.onDelete('markdown-1', note.data.beginBoardWrite());
+    });
+    // Mid-drag: the canvas isn't rebuilt under the pointer.
+    expect(flowProps?.nodes.some((candidate) => candidate.id === 'markdown-1')).toBe(false);
+    act(() => {
+      flowProps?.onNodeDragStop?.({}, currentNode(BRANCH_ID));
+    });
+    await waitFor(() => expect(currentNode('markdown-1')).toBeTruthy());
+  });
+
+  it('a failed zone resize redraws the zone at its saved size', async () => {
+    vi.useFakeTimers();
+    const patch = vi.fn(async () => {
+      throw new Error('You do not have permission to edit this board.');
+    });
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    renderCanvas(client);
+    await act(async () => {});
+    resize([IMPLEMENTING_ZONE_ID, 2000, 900]);
+    act(() => {
+      // React Flow applies the resize to the node while the save is pending.
+      flowProps?.nodes.forEach((candidate) => {
+        if (candidate.id === IMPLEMENTING_ZONE_ID) Object.assign(candidate, { width: 2000 });
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(501);
+    });
+    expect(boardPatches(patch)).toHaveLength(1);
+    expect(currentNode(IMPLEMENTING_ZONE_ID)).toMatchObject({ width: 1100, height: 720 });
+  });
+
+  it('a lost reply on a drawn zone drops the ghost, and the reconnect shows it if it was saved', async () => {
+    const patch = vi.fn(async () => {
+      throw new Error('socket has been disconnected');
+    });
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    const canvas = renderCanvas(client);
+    await act(async () => {});
+    const zoneCount = () =>
+      flowProps?.nodes.filter((candidate) => candidate.type === 'zone').length;
+    const zonesBefore = zoneCount();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Zone' }));
+    const drawSurface = screen.getByTestId('react-flow');
+    fireEvent.pointerDown(drawSurface, { clientX: 0, clientY: 0, buttons: 1 });
+    fireEvent.pointerMove(drawSurface, { clientX: 300, clientY: 300, buttons: 1 });
+    await act(async () => {
+      fireEvent.pointerUp(drawSurface, { clientX: 300, clientY: 300 });
+    });
+    const sent = boardPatches(patch)[0];
+    expect(sent).toEqual(expect.objectContaining({ _action: 'upsertObject' }));
+    await waitFor(() => expect(zoneCount()).toBe(zonesBefore));
+    act(() =>
+      canvas.rerenderBoard(
+        {
+          ...board,
+          objects: { ...board.objects, [sent.objectId as string]: sent.objectData },
+        } as Board,
+        { connection: { ...CONNECTED, authGeneration: 2 } }
+      )
+    );
+    expect(currentNode(sent.objectId as string)).toBeTruthy();
+  });
+
   it('keeps a markdown draft rejected by a reload to copy or discard, and saves only after reopening', async () => {
     copySpy.mockClear();
     const patch = vi.fn(async () => ({}));
@@ -790,7 +1078,7 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     // The editor stays open with the draft and says why; Save stays refused.
     expect(screen.getByText('Edit Markdown Note')).toBeTruthy();
     expect(screen.getByDisplayValue('My careful draft')).toBeTruthy();
-    expect(screen.getByText(/Board reloaded — changes not saved/)).toBeTruthy();
+    expect(screen.getByText(/The board reloaded, so your changes weren't saved\./)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Re-apply to reloaded board' })).toBeNull();
     const save = screen.getByRole('button', { name: 'Save' });
     expect(save).toBeDisabled();
@@ -1358,7 +1646,9 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
         if (behavior === 'always_new') {
           expect(create).toHaveBeenCalledTimes(1);
           expect(
-            screen.getByText(/2 unavailable default MCP server\(s\) were skipped/)
+            screen.getByText(
+              /Session started without 2 default MCP servers because they aren't available/
+            )
           ).toBeTruthy();
         } else expect(screen.getByTestId('zone-trigger-picker')).toBeTruthy();
       } else {

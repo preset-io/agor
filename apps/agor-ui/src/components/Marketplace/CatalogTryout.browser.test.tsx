@@ -169,12 +169,9 @@ describe('recovered Catalog tryout flow in Chromium', () => {
         false
       );
     });
-    await userEvent.click(drawer.getByRole('checkbox'));
-    await waitFor(() => expect(drawer.getByRole('checkbox')).toBeChecked());
     await userEvent.click(drawer.getByRole('button', { name: 'Connect', exact: true }));
     expect(api.connect).toHaveBeenCalledWith({
       catalog_key: entry.name,
-      acknowledged_disclosure: entry.permission_disclosure,
       sharing: 'private',
     });
     expect(api.start).not.toHaveBeenCalled();

@@ -110,7 +110,7 @@ describe('BranchesTable — server pages with the store empty', { timeout: 10_00
       renderTable(client);
       await screen.findByText('feature-1');
       const pickFilter = (label: string) => {
-        fireEvent.mouseDown(screen.getByRole('combobox'));
+        fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Status' }));
         fireEvent.click(
           document.querySelector(`.ant-select-item-option[title="${label}"]`) as Element
         );
@@ -196,5 +196,30 @@ describe('BranchesTable — server pages with the store empty', { timeout: 10_00
     // Archiving moves the row out of the Active filter: the page is read again.
     emit('patched', branch(2, { archived: true }));
     await waitFor(() => expect(branchesFind).toHaveBeenCalledTimes(reads + 1));
+  });
+
+  it('filters by repository on the server and starts on page 1', async () => {
+    const { client, branchesFind } = makeClient();
+    renderTable(client);
+    await screen.findByText('feature-1');
+    fireEvent.click(screen.getByTitle('2'));
+    await screen.findByText('feature-11');
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Repository' }));
+    fireEvent.click(document.querySelector('.ant-select-item-option[title="repo-1"]') as Element);
+    await waitFor(() =>
+      expect(branchesFind).toHaveBeenLastCalledWith({
+        query: {
+          archived: false,
+          repo_id: 'repo-1',
+          $limit: 10,
+          $skip: 0,
+          $sort: { created_at: -1 },
+        },
+      })
+    );
+    expect(branchesFind).not.toHaveBeenCalledWith({
+      query: expect.objectContaining({ repo_id: 'repo-1', $skip: 10 }),
+    });
   });
 });

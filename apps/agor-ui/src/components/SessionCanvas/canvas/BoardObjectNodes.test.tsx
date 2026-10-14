@@ -208,7 +208,9 @@ describe('ZoneNode settings modal', () => {
     const input = screen.getByDisplayValue('My Zone');
     fireEvent.change(input, { target: { value: 'Draft label' } });
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(await screen.findByText(/Board reloaded — changes not saved/)).toBeTruthy();
+    expect(
+      await screen.findByText(/The board reloaded, so your changes weren't saved\./)
+    ).toBeTruthy();
     expect(screen.getByDisplayValue('Draft label')).toBeTruthy();
     expect(onUpdate).toHaveBeenCalledTimes(1);
     expect(onUpdate.mock.calls[0][2]).toBe(opened);
@@ -224,7 +226,9 @@ describe('ZoneNode settings modal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy draft' }));
     await waitFor(() => expect(copySpy).toHaveBeenCalledExactlyOnceWith('Draft label'));
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
-    expect(screen.queryByText(/Board reloaded — changes not saved/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/The board reloaded, so your changes weren't saved\./)
+    ).not.toBeInTheDocument();
     expect(screen.queryByDisplayValue('Draft label')).not.toBeInTheDocument();
     expect(screen.getByText('My Zone')).toBeTruthy();
     expect(onUpdate).toHaveBeenCalledTimes(1);
@@ -307,7 +311,9 @@ describe('ZoneNode settings modal', () => {
     view.rerender(zone(false));
     fireEvent.blur(screen.getByDisplayValue('Draft label'));
 
-    expect(await screen.findByText(/Board reloaded — changes not saved/)).toBeTruthy();
+    expect(
+      await screen.findByText(/The board reloaded, so your changes weren't saved\./)
+    ).toBeTruthy();
     expect(screen.getByDisplayValue('Draft label')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy draft' })).toBeTruthy();
     // The reload brings edit back: the draft still never saves.
@@ -358,7 +364,9 @@ describe('ZoneNode settings modal', () => {
     view.rerender(zone(false));
     fireEvent.keyDown(screen.getByDisplayValue('Draft label'), { key: 'Enter' });
     expect(screen.getByDisplayValue('Draft label')).toBeTruthy();
-    expect(screen.queryByText(/Board reloaded — changes not saved/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/The board reloaded, so your changes weren't saved\./)
+    ).not.toBeInTheDocument();
     expect(onUpdate).not.toHaveBeenCalled();
 
     view.rerender(zone(true));

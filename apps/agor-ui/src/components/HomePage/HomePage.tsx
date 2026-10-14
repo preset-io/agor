@@ -4,6 +4,7 @@ import { Alert, Button, Flex, Skeleton, Typography, theme } from 'antd';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionDisabled, useConnectionState } from '../../contexts/ConnectionContext';
+import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
 import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
@@ -95,7 +96,7 @@ export interface HomePageProps {
   ) => Promise<SessionCreationResult | null>;
   /** Board and teammate onboarding steps open the shared create modals. */
   onOpenCreateDialog?: (kind: CreateModalKind) => void;
-  onOpenSettings?: (section: 'repos' | 'mcp' | 'users') => void;
+  onOpenSettings?: (section: 'repos' | 'users') => void;
   /** Defaults to the header board switcher. */
   onAllBoards?: () => void;
   /** Defaults to header search filtered to sessions. */
@@ -138,6 +139,8 @@ const HomeOnboarding: React.FC<{
   onOpenSettings: NonNullable<HomePageProps['onOpenSettings']>;
   onDismiss: () => void;
 }> = ({ isAdmin, canStartSessions, onOpenCreateDialog, onOpenSettings, onDismiss }) => {
+  // MCP tools are set up in the MCP Marketplace, not in Settings.
+  const catalog = useMCPCatalogModal();
   const done = useStoreWithEqualityFn(
     agorStore,
     (s) => ({
@@ -174,7 +177,7 @@ const HomeOnboarding: React.FC<{
           },
         ]
       : []),
-    ...(isAdmin ? adminSteps(done, onOpenSettings) : []),
+    ...(isAdmin ? adminSteps(done, onOpenSettings, () => catalog?.openCatalog()) : []),
   ];
   if (steps.every((step) => step.done)) return null;
   return <OnboardingCard steps={steps} onDismiss={onDismiss} />;
@@ -183,14 +186,15 @@ const HomeOnboarding: React.FC<{
 /** Workspace setup only admins can do. */
 const adminSteps = (
   done: { mcp: boolean; invite: boolean },
-  onOpenSettings: NonNullable<HomePageProps['onOpenSettings']>
+  onOpenSettings: NonNullable<HomePageProps['onOpenSettings']>,
+  onOpenCatalog: () => void
 ) => [
   {
     id: 'mcp',
     label: 'Configure MCP tools',
     cta: 'Set up',
     done: done.mcp,
-    onClick: () => onOpenSettings('mcp'),
+    onClick: onOpenCatalog,
   },
   {
     id: 'invite',

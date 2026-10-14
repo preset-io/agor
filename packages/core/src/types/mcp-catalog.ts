@@ -382,6 +382,10 @@ export interface MCPCatalogFilters {
  * *kind* of auth still come from the catalog entry and the live endpoint
  * server-side, so this cannot be used to register an arbitrary server, and a
  * client cannot name the destination its own credential is sent to.
+ *
+ * There is no consent field: pressing Connect next to the entry's access summary
+ * is the consent (see `context/concepts/mcp-catalog.md`). A legacy
+ * `acknowledged_disclosure` from an older client is ignored.
  */
 export type MCPCatalogSharing = 'private' | 'shared';
 
@@ -408,20 +412,6 @@ export interface MCPCatalogConnectData {
   bearer_token?: string;
   /** Browser-only configured app material. Never submit through model-visible tools. */
   oauth_client?: { client_id: string; client_secret?: string };
-  /**
-   * The `permission_disclosure` the user was shown and accepted.
-   *
-   * Adding a server makes it available for later attachment to sessions, so
-   * the disclosure is the last thing between a user and that decision. A
-   * client-side checkbox cannot be
-   * the only place that rule lives: the endpoint would accept a connect from
-   * any caller that never rendered it. Sending back the text — rather than a
-   * bare `true` — means a client cannot satisfy the check without having had
-   * the disclosure in hand, and a stale one no longer matches the entry.
-   *
-   * It does not prove a human read the words. It proves the protocol ran.
-   */
-  acknowledged_disclosure: string;
 }
 
 /** What a successful connect hands back to the caller. */

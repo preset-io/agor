@@ -11,7 +11,7 @@ import {
   TEAMMATE_TEMPLATES,
   TEMPLATE_CATEGORIES,
 } from '../../utils/teammateTemplates';
-import { TeammateGallery } from './TeammateGallery';
+import { TeammateGallery, TeammateGalleryCards } from './TeammateGallery';
 
 function cardFor(title: string): HTMLElement {
   const card = screen.getByText(title).closest('[role="button"]');
@@ -54,20 +54,23 @@ function contrastRatio(foreground: string, background: string): number {
 }
 
 describe('TeammateGallery', () => {
-  it('renders all eight templates plus the blank starter as an optional single-select button group', () => {
+  it('renders every template plus the blank starter as an optional single-select button group', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
 
     expect(screen.getByRole('group', { name: 'Teammate template' })).toBeInTheDocument();
     for (const title of [
-      'Competitive Analyst',
-      'Product Manager',
-      'Chief of Staff',
-      'Financial Analyst',
-      'Deal Desk Analyst',
-      'Outbound Analyst',
-      'Legal Analyst',
+      'Personal assistant',
+      'Researcher',
+      'Engineering assistant',
+      'Competitive analyst',
+      'Product manager',
+      'Chief of staff',
+      'Financial analyst',
+      'Deal desk analyst',
+      'Outbound analyst',
+      'Legal analyst',
       'Builder',
-      'Start blank',
+      'Start from scratch',
     ]) {
       expect(screen.getByText(title)).toBeInTheDocument();
     }
@@ -81,14 +84,10 @@ describe('TeammateGallery', () => {
     expect(group).toHaveStyle({ gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' });
   });
 
-  it('renders each description in full with no ellipsis truncation', () => {
+  it('renders each description in full in the full gallery', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
-    // The Competitive Analyst copy used to truncate ("...then tells you...") in
-    // the narrow carousel; the full sentence must now be present verbatim.
     expect(
-      screen.getByText(
-        "Tracks every rival's pricing, launches, and moves, then tells you what it means for the next deal."
-      )
+      screen.getByText("Tracks rivals' pricing, launches and moves for you.")
     ).toBeInTheDocument();
   });
 
@@ -96,100 +95,83 @@ describe('TeammateGallery', () => {
     const onChange = vi.fn();
     const { rerender } = render(<TeammateGallery value={null} onChange={onChange} />);
 
-    fireEvent.click(cardFor('Legal Analyst'));
+    fireEvent.click(cardFor('Legal analyst'));
     expect(onChange).toHaveBeenLastCalledWith('legal-analyst');
 
-    fireEvent.click(cardFor('Start blank'));
+    fireEvent.click(cardFor('Start from scratch'));
     expect(onChange).toHaveBeenLastCalledWith('blank');
 
     rerender(<TeammateGallery value="legal-analyst" onChange={onChange} />);
-    expect(cardFor('Legal Analyst')).toHaveAttribute('aria-pressed', 'true');
-    expect(cardFor('Product Manager')).toHaveAttribute('aria-pressed', 'false');
+    expect(cardFor('Legal analyst')).toHaveAttribute('aria-pressed', 'true');
+    expect(cardFor('Product manager')).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('selects via keyboard (Enter / Space)', () => {
     const onChange = vi.fn();
     render(<TeammateGallery value={null} onChange={onChange} />);
 
-    fireEvent.keyDown(cardFor('Product Manager'), { key: 'Enter' });
+    fireEvent.keyDown(cardFor('Product manager'), { key: 'Enter' });
     expect(onChange).toHaveBeenLastCalledWith('product-manager');
 
-    fireEvent.keyDown(cardFor('Competitive Analyst'), { key: ' ' });
+    fireEvent.keyDown(cardFor('Competitive analyst'), { key: ' ' });
     expect(onChange).toHaveBeenLastCalledWith('competitive-analyst');
   });
 
-  it('single-click toggles: unselected card selects, the selected card deselects', () => {
+  it('is select-only: the selected card ignores clicks and Enter/Space', () => {
     const onChange = vi.fn();
     render(<TeammateGallery value="legal-analyst" onChange={onChange} />);
 
-    // Click an unselected card → selects it.
-    fireEvent.click(cardFor('Product Manager'));
+    fireEvent.click(cardFor('Product manager'));
     expect(onChange).toHaveBeenLastCalledWith('product-manager');
 
-    // Click the already-selected card → clears the pick (single click, no dblclick).
-    fireEvent.click(cardFor('Legal Analyst'));
-    expect(onChange).toHaveBeenLastCalledWith(null);
-  });
-
-  it('keyboard (Enter/Space) toggles both ways', () => {
-    const onChange = vi.fn();
-    render(<TeammateGallery value="legal-analyst" onChange={onChange} />);
-
-    // Enter on the already-selected card clears it.
-    fireEvent.keyDown(cardFor('Legal Analyst'), { key: 'Enter' });
-    expect(onChange).toHaveBeenLastCalledWith(null);
-
-    // Space on a different (unselected) card selects it.
+    // Re-selecting the current pick changes nothing; there is no deselect.
     onChange.mockClear();
-    fireEvent.keyDown(cardFor('Product Manager'), { key: ' ' });
-    expect(onChange).toHaveBeenLastCalledWith('product-manager');
+    fireEvent.click(cardFor('Legal analyst'));
+    fireEvent.keyDown(cardFor('Legal analyst'), { key: 'Enter' });
+    fireEvent.keyDown(cardFor('Legal analyst'), { key: ' ' });
+    expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('single-click / keyboard also toggles the blank starter off when selected', () => {
-    const onChange = vi.fn();
-    render(<TeammateGallery value="blank" onChange={onChange} />);
+  it('compact variant is one even grid: icon, title, one description line, blank first', () => {
+    render(<TeammateGalleryCards value="personal-assistant" onChange={vi.fn()} compact />);
 
-    fireEvent.click(cardFor('Start blank'));
-    expect(onChange).toHaveBeenLastCalledWith(null);
+    expect(screen.getByRole('group', { name: 'Teammate template' })).toHaveStyle({
+      gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    });
+    const order = cardOrder();
+    expect(order[0]).toBe('Start from scratch');
+    expect(order[1]).toBe('Personal assistant');
+    expect(order).toHaveLength(12);
 
-    onChange.mockClear();
-    fireEvent.keyDown(cardFor('Start blank'), { key: 'Enter' });
-    expect(onChange).toHaveBeenLastCalledWith(null);
-  });
-
-  it('badges up to two goal-recommended templates and never the blank card', () => {
-    render(<TeammateGallery goals={['dig-into-anything']} value={null} onChange={vi.fn()} />);
-
-    // dig-into-anything → competitive + financial analyst. Scope to the grid so
-    // the "Recommended" filter chip isn't counted as a badge.
-    const grid = screen.getByRole('group', { name: 'Teammate template' });
-    expect(within(grid).getAllByText('Recommended')).toHaveLength(2);
-    expect(cardFor('Competitive Analyst')).toHaveTextContent('Recommended');
-    expect(cardFor('Financial Analyst')).toHaveTextContent('Recommended');
-    expect(cardFor('Product Manager')).not.toHaveTextContent('Recommended');
-    expect(cardFor('Start blank')).not.toHaveTextContent('Recommended');
-  });
-
-  it('shows no badge when the selected goals map to no template', () => {
-    // Every real goal now maps to a template; only unknown goal ids resolve to nothing.
-    render(<TeammateGallery goals={['not-a-goal']} value={null} onChange={vi.fn()} />);
+    const assistant = cardFor('Personal assistant');
+    expect(assistant).toHaveAttribute('aria-pressed', 'true');
+    expect(assistant).toHaveTextContent("Keeps up with Slack and your docs so you don't have to.");
     expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
+    expect(screen.queryByText('Or start from a template')).not.toBeInTheDocument();
+
+    // No category pill, but the description line is on the card; blank is an ordinary card.
+    // Each card shows its antd icon, never the avatar emoji.
+    const template = cardFor('Legal analyst');
+    expect(template.querySelector('.anticon-safety')).toBeInTheDocument();
+    expect(template).not.toHaveTextContent('⚖️');
+    expect(cardFor('Personal assistant').querySelector('.anticon-user')).toBeInTheDocument();
+    expect(cardFor('Researcher').querySelector('.anticon-search')).toBeInTheDocument();
+    expect(cardFor('Engineering assistant').querySelector('.anticon-code')).toBeInTheDocument();
+    expect(template).toHaveTextContent('Reads the redline and flags the risk.');
+    expect(within(template).queryByText('Operate')).not.toBeInTheDocument();
+    const blank = cardFor('Start from scratch');
+    expect(blank.querySelector('.anticon-plus')).toBeInTheDocument();
+    expect(blank).not.toHaveTextContent('✨');
+    expect(blank.getAttribute('style') ?? '').not.toContain('grid-column');
   });
 
-  it('shows no badge when no goals are supplied', () => {
+  it('renders exactly the All/Grow/Build/Operate chips and no Recommended badge', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
-    expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
-  });
-
-  it('renders exactly the All/Grow/Build/Operate chips — no Recommended chip', () => {
-    render(<TeammateGallery goals={['dig-into-anything']} value={null} onChange={vi.fn()} />);
     const chips = chipRow();
     for (const label of ['All', 'Grow', 'Build', 'Operate']) {
       expect(within(chips).getByText(label)).toBeInTheDocument();
     }
-    // The redundant Recommended filter chip is gone, even when goals produce recs
-    // (recommended templates still sort first and keep their badge in the grid).
-    expect(within(chips).queryByText('Recommended')).not.toBeInTheDocument();
+    expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
   });
 
   it('models category filtering as one exclusive radio control with arrow-key navigation', () => {
@@ -200,7 +182,12 @@ describe('TeammateGallery', () => {
 
     fireEvent.keyDown(radios[0], { key: 'ArrowRight' });
     expect(within(chipRow()).getByRole('radio', { name: 'Grow' })).toBeChecked();
-    expect(cardOrder()).toEqual(['Competitive Analyst', 'Deal Desk Analyst', 'Outbound Analyst']);
+    expect(cardOrder()).toEqual([
+      'Researcher',
+      'Competitive analyst',
+      'Deal desk analyst',
+      'Outbound analyst',
+    ]);
   });
 
   it('filters the grid to a category and hides the blank starter', () => {
@@ -208,15 +195,14 @@ describe('TeammateGallery', () => {
     fireEvent.click(within(chipRow()).getByText('Grow'));
 
     // Grow templates only; other categories + blank are gone.
-    expect(cardOrder()).toEqual(['Competitive Analyst', 'Deal Desk Analyst', 'Outbound Analyst']);
-    expect(screen.queryByText('Product Manager')).not.toBeInTheDocument();
-    expect(screen.queryByText('Start blank')).not.toBeInTheDocument();
-  });
-
-  it('leads the All view with blank, then sorts recommended cards to the front', () => {
-    render(<TeammateGallery goals={['dig-into-anything']} value={null} onChange={vi.fn()} />);
-    const order = cardOrder();
-    expect(order.slice(0, 3)).toEqual(['Start blank', 'Competitive Analyst', 'Financial Analyst']);
+    expect(cardOrder()).toEqual([
+      'Researcher',
+      'Competitive analyst',
+      'Deal desk analyst',
+      'Outbound analyst',
+    ]);
+    expect(screen.queryByText('Product manager')).not.toBeInTheDocument();
+    expect(screen.queryByText('Start from scratch')).not.toBeInTheDocument();
   });
 
   it('shows a category pill per card in the category color (no icon tile); blank has none', () => {
@@ -226,19 +212,19 @@ describe('TeammateGallery', () => {
 
     // The colored category pill is now the sole carrier of the category hue — the
     // per-card icon tile was removed, so template cards render no icon.
-    const growCard = cardFor('Competitive Analyst');
+    const growCard = cardFor('Competitive analyst');
     expect(growCard.querySelector('.anticon')).toBeNull();
 
     // Grow card carries a "Grow" pill tinted the grow accent; a different category
     // (Operate) renders its own distinct hue.
     const growPill = within(growCard).getByText('Grow');
     expect(growPill.getAttribute('style')).toContain(growRgb);
-    const operatePill = within(cardFor('Legal Analyst')).getByText('Operate');
+    const operatePill = within(cardFor('Legal analyst')).getByText('Operate');
     expect(operatePill.getAttribute('style')).toContain(operateRgb);
     expect(growRgb).not.toBe(operateRgb);
 
     // The blank starter has no category → no category pill.
-    const blank = cardFor('Start blank');
+    const blank = cardFor('Start from scratch');
     for (const label of ['Grow', 'Build', 'Operate']) {
       expect(within(blank).queryByText(label)).not.toBeInTheDocument();
     }
@@ -248,7 +234,7 @@ describe('TeammateGallery', () => {
     render(<TeammateGallery value="competitive-analyst" onChange={vi.fn()} />);
     const growRgb = rgbOf(getCategoryColor('grow') ?? '');
 
-    const selectedStyle = cardFor('Competitive Analyst').getAttribute('style') ?? '';
+    const selectedStyle = cardFor('Competitive analyst').getAttribute('style') ?? '';
     // Category accent, thin border, faint wash — not the old loud 2px blue.
     expect(selectedStyle).toContain(growRgb);
     expect(selectedStyle).toContain('border-width: 1px');
@@ -267,21 +253,22 @@ describe('TeammateGallery', () => {
     }
   );
 
-  it('renders Start blank as a full-width dashed header card, first in the All view', () => {
+  it('renders Start from scratch as a full-width dashed card, first in the All view', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
-    const blankStyle = cardFor('Start blank').getAttribute('style') ?? '';
-    // Spans every column of the auto-fit grid → full-width header.
+    const blankStyle = cardFor('Start from scratch').getAttribute('style') ?? '';
+    // Spans every column of the auto-fit grid → full-width row.
     expect(blankStyle).toContain('grid-column: 1 / -1');
     // Understated "build your own" affordance: dashed border.
     expect(blankStyle).toContain('border-style: dashed');
-    // Leads the grid; the eight templates keep their normal (non-spanning) cells.
-    expect(cardOrder()[0]).toBe('Start blank');
-    expect(cardFor('Competitive Analyst').getAttribute('style') ?? '').not.toContain('grid-column');
+    // Opens the grid; the templates keep their normal (non-spanning) cells.
+    expect(cardOrder()[0]).toBe('Start from scratch');
+    expect(cardOrder()[1]).toBe('Personal assistant');
+    expect(cardFor('Competitive analyst').getAttribute('style') ?? '').not.toContain('grid-column');
   });
 
-  it('keeps Start blank a dashed 1px card when selected (no layout shift)', () => {
+  it('keeps Start from scratch a dashed 1px card when selected (no layout shift)', () => {
     render(<TeammateGallery value="blank" onChange={vi.fn()} />);
-    const blankStyle = cardFor('Start blank').getAttribute('style') ?? '';
+    const blankStyle = cardFor('Start from scratch').getAttribute('style') ?? '';
     expect(blankStyle).toContain('border-style: dashed');
     expect(blankStyle).toContain('border-width: 1px');
     expect(blankStyle).not.toContain('border-width: 2px');
@@ -296,11 +283,11 @@ describe('TeammateGallery', () => {
     const clear = screen.getByText('Clear filters').closest('button');
     expect(clear).toBeInTheDocument();
     // Filtered: blank hidden.
-    expect(screen.queryByText('Start blank')).not.toBeInTheDocument();
+    expect(screen.queryByText('Start from scratch')).not.toBeInTheDocument();
 
     fireEvent.click(clear as HTMLButtonElement);
     // Reset to All: every card back (blank first) and the button is gone.
-    expect(screen.getByText('Start blank')).toBeInTheDocument();
+    expect(screen.getByText('Start from scratch')).toBeInTheDocument();
     expect(screen.queryByText('Clear filters')).toBeNull();
   });
 });

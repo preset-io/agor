@@ -10,31 +10,31 @@
       "source": "./src/shared/index.ts",
       "types": "./dist/shared/index.d.ts",
       "import": "./dist/shared/index.js",
-      "require": "./dist/shared/index.cjs"
+      "default": "./dist/shared/index.js"
     },
     "./daemon": {
       "source": "./src/daemon/index.ts",
       "types": "./dist/daemon/index.d.ts",
       "import": "./dist/daemon/index.js",
-      "require": "./dist/daemon/index.cjs"
+      "default": "./dist/daemon/index.js"
     },
     "./runtime": {
       "source": "./src/runtime/index.ts",
       "types": "./dist/runtime/index.d.ts",
       "import": "./dist/runtime/index.js",
-      "require": "./dist/runtime/index.cjs"
+      "default": "./dist/runtime/index.js"
     },
     "./runtime/binary": {
       "source": "./src/runtime/binary.ts",
       "types": "./dist/runtime/binary.d.ts",
       "import": "./dist/runtime/binary.js",
-      "require": "./dist/runtime/binary.cjs"
+      "default": "./dist/runtime/binary.js"
     },
     "./ui": {
       "source": "./src/ui/index.ts",
       "types": "./dist/ui/index.d.ts",
       "import": "./dist/ui/index.js",
-      "require": "./dist/ui/index.cjs"
+      "default": "./dist/ui/index.js"
     }
   },
   "files": [

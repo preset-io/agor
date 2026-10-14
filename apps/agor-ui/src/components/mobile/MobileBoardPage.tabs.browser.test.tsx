@@ -42,6 +42,7 @@ it.each([360, 390, 430])('keeps the board tabs on one touch-size row at %ipx', a
             element={
               <div style={{ height: 760, display: 'flex', flexDirection: 'column' }}>
                 <MobileBoardPage
+                  settingsHydrated={true}
                   client={null}
                   boardById={agorStore.getState().boardById}
                   branchById={new Map()}
@@ -61,8 +62,8 @@ it.each([360, 390, 430])('keeps the board tabs on one touch-size row at %ipx', a
 
   const tabs = screen.getAllByRole('tab');
   expect(tabs.map((tab) => tab.textContent?.replace(/\d+$/, ''))).toEqual([
-    'Board',
     'Teammate',
+    'Board',
     'Sessions',
     'Comments',
   ]);

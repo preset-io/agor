@@ -9,6 +9,9 @@ export interface InitialLoadDebugFetchTiming {
   key: string;
   label: string;
   durationMs: number;
+  startedAtMs: number;
+  /** UTF-8 JSON array bytes, not compressed wire/Socket.IO framing bytes. */
+  jsonBytes: number | null;
   count: number | null;
   status: 'success' | 'error';
   error?: string;
@@ -118,6 +121,8 @@ export function createInitialLoadDebugTimer(items: readonly InitialLoadDebugItem
             key,
             label: labels.get(key) ?? key,
             durationMs: roundMs(getNow() - itemStart),
+            startedAtMs: roundMs(itemStart - start),
+            jsonBytes: new TextEncoder().encode(JSON.stringify(result)).byteLength,
             count: result.length,
             status: 'success',
           });
@@ -128,6 +133,8 @@ export function createInitialLoadDebugTimer(items: readonly InitialLoadDebugItem
             key,
             label: labels.get(key) ?? key,
             durationMs: roundMs(getNow() - itemStart),
+            startedAtMs: roundMs(itemStart - start),
+            jsonBytes: null,
             count: null,
             status: 'error',
             error: errorMessage(error),

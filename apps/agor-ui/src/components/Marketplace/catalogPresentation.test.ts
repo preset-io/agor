@@ -1,6 +1,7 @@
 import type { MCPCatalogEntry } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
+  accessSummary,
   CONNECTABLE_AUTH_TYPES,
   capabilityLabel,
   catalogAuthenticationDetail,
@@ -218,5 +219,35 @@ describe('isConnectable', () => {
 describe('sort default', () => {
   it("is hand-assigned rank, not the spec's install count — nothing counts installs", () => {
     expect(DEFAULT_SORT).toBe('popularity');
+  });
+});
+
+describe('accessSummary', () => {
+  it('is the first sentence of the disclosure', () => {
+    expect(
+      accessSummary(
+        'Reads public models, datasets, and Spaces. Authorising an account also exposes your private repositories.'
+      )
+    ).toBe('Reads public models, datasets, and Spaces.');
+  });
+
+  it('does not end a sentence at an abbreviation', () => {
+    expect(
+      accessSummary(
+        'Reads repositories owned by Example Inc. and its U.S. subsidiaries you authorise. Also writes.'
+      )
+    ).toBe('Reads repositories owned by Example Inc. and its U.S. subsidiaries you authorise.');
+  });
+
+  it('extends a first sentence too short to stand alone', () => {
+    expect(
+      accessSummary('Read-only. Searches indices and reads analytics for every app. Cannot write.')
+    ).toBe('Read-only. Searches indices and reads analytics for every app.');
+  });
+
+  it('keeps a single sentence whole, including dotted names inside it', () => {
+    expect(accessSummary('  Reads boards in the monday.com accounts you authorise.  ')).toBe(
+      'Reads boards in the monday.com accounts you authorise.'
+    );
   });
 });

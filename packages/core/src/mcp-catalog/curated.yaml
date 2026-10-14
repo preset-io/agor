@@ -142,6 +142,10 @@ entries:
     auth_type: oauth
 
   - name: io.github.clerk/mcp-server
+    # Oct 14: mcp.clerk.com/mcp now returns 401 with OAuth scopes for managing
+    # applications, users and domains, so the public-docs entry below is no
+    # longer accurate. Hidden until re-curated (auth_type and disclosure).
+    hidden: true
     category: dev-tools
     capabilities: [docs, code-search]
     benefit: Pull Clerk's own SDK snippets for the framework you are in, so auth code compiles against the current API rather than a remembered one.

@@ -9,8 +9,9 @@ import { test } from 'node:test';
 
 const require = createRequire(import.meta.url);
 
-for (const format of ['js', 'cjs']) {
-  test(`OAuth refresh shares the daemon DB authority (${format})`, async (t) => {
+// Core ships ESM only; Node >=22.12 supports both import and require(esm).
+for (const loader of ['import', 'require']) {
+  test(`OAuth refresh shares the daemon DB authority (${loader})`, async (t) => {
     const home = mkdtempSync(join(tmpdir(), 'agor-oauth-build-test-'));
     const overrides = {
       HOME: home,
@@ -28,10 +29,10 @@ for (const format of ['js', 'cjs']) {
       rmSync(home, { recursive: true, force: true });
     });
     const load = (path) =>
-      format === 'cjs' ? require(path) : import(new URL(path, import.meta.url));
-    const dbModule = await load(`../packages/core/dist/db/index.${format}`);
-    const oauth = await load(`../packages/core/dist/tools/mcp/oauth-refresh.${format}`);
-    const entitlement = await load(`../packages/core/dist/tools/mcp/grant-entitlement.${format}`);
+      loader === 'require' ? require(path) : import(new URL(path, import.meta.url));
+    const dbModule = await load(`../packages/core/dist/db/index.js`);
+    const oauth = await load(`../packages/core/dist/tools/mcp/oauth-refresh.js`);
+    const entitlement = await load(`../packages/core/dist/tools/mcp/grant-entitlement.js`);
     t.mock.method(globalThis, 'fetch', () => {
       throw new Error('Network is forbidden in this test');
     });

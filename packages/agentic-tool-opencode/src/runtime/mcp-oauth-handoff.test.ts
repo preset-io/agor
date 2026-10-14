@@ -66,7 +66,10 @@ function fixture(
         buildInvocationConfig(
           id: SessionID,
           token: string
-        ): Promise<{ mcp: Record<string, { headers?: Record<string, string> }> }>;
+        ): Promise<{
+          mcp: Record<string, { headers?: Record<string, string> }>;
+          mcpSignInNotice?: string;
+        }>;
       }
     ).buildInvocationConfig(sessionId, 'fictional-agor-token');
   return { build, dependencies, create, listEffectiveServers };
@@ -96,7 +99,7 @@ describe('executor repository to OpenCode OAuth handoff', () => {
     { authorization: 'Bearer ' },
     { authorization: 'Basic fictional' },
   ])(
-    'fails closed on missing, expired/unrefreshable or unusable authority result %j',
+    'withholds missing, expired/unrefreshable or unusable authority result %j',
     async (response) => {
       const configured = server();
       configured.auth = {
@@ -106,9 +109,14 @@ describe('executor repository to OpenCode OAuth handoff', () => {
         oauth_token_url: 'https://auth.example.test/token',
       };
       const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network forbidden'));
-      await expect(fixture([configured], response).build()).rejects.toThrow(
-        'usable Authorization header'
-      );
+      const config = await fixture([configured], response).build();
+      // Main now withholds unusable OAuth servers instead of failing the turn.
+      // The runtime-authority boundary still must not mint credentials locally
+      // or fall back to the server's custom Authorization.
+      expect(Object.keys(config.mcp)).toHaveLength(1);
+      expect(config.mcpSignInNotice).toContain('fictional-server');
+      expect(config.mcpSignInNotice).toContain('agor_widgets_request_oauth');
+      expect(JSON.stringify(config)).not.toContain('must-not-win');
       expect(fetch).not.toHaveBeenCalled();
     }
   );
@@ -116,7 +124,11 @@ describe('executor repository to OpenCode OAuth handoff', () => {
   it('does not hide an unavailable credential authority or leak its error', async () => {
     const f = fixture([server()], {});
     f.create.mockRejectedValue(new Error('fictional-private-error'));
-    await expect(f.build()).rejects.toThrow('Attached MCP server fictional authentication failed');
+    const config = await f.build();
+    expect(Object.keys(config.mcp)).toHaveLength(1);
+    expect(config.mcpSignInNotice).toContain("couldn't load the sign-in");
+    expect(config.mcpSignInNotice).toContain('retry shortly');
+    expect(JSON.stringify(config)).not.toContain('fictional-private-error');
   });
 
   it('does not borrow a different caller’s private attachment or request its bearer', async () => {

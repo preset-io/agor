@@ -32,9 +32,16 @@ import { Button, Card, Input, Space, Typography, theme } from 'antd';
 import { useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks';
 import { useAgorStore } from '@/store/agorStore';
+import {
+  type ActionErrorCopy,
+  CLIENT_NOT_CONNECTED_ERROR,
+  describeActionError,
+} from '@/utils/connectionErrors';
 import { useThemedMessage } from '@/utils/message';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
+import { ActionErrorNotice, CompactNotice } from '../CompactNotice';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
+import { useWidgetReplay, WIDGET_ALREADY_ANSWERED_MESSAGE } from './widgetReplay';
 
 const { Text } = Typography;
 
@@ -236,7 +243,8 @@ interface PendingFormProps {
 
 const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) => {
   const { token } = theme.useToken();
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess, showInfo } = useThemedMessage();
+  const classifyFailure = useWidgetReplay<'submitted' | 'dismissed'>();
   const fields = useMemo(() => params.fields, [params.fields]);
 
   const [values, setValues] = useState<Record<string, string>>(() => {
@@ -247,6 +255,8 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
   const [submitting, setSubmitting] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ActionErrorCopy | null>(null);
+  const [answeredElsewhere, setAnsweredElsewhere] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [localResolution, setLocalResolution] = useState<'submitted' | 'dismissed' | null>(null);
   const resolvingRef = useRef(false);
@@ -286,9 +296,27 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
 
   const post = async (path: 'submit' | 'dismiss', body: unknown) => {
     if (!client) {
-      throw new Error('No client available — refresh and try again');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
     return client.service(`widgets/${encodeURIComponent(widgetId)}/${path}`).create(body ?? {});
+  };
+
+  /** Handles a failure the server reports as already answered; returns false for a real failure. */
+  const resolveFailure = (
+    action: 'submit' | 'dismiss',
+    resolution: 'submitted' | 'dismissed',
+    err: unknown
+  ): boolean => {
+    const outcome = classifyFailure(action, resolution, err);
+    if (outcome.kind === 'failed') return false;
+    resolvingRef.current = true;
+    if (outcome.kind === 'answered') {
+      setAnsweredElsewhere(true);
+      return true;
+    }
+    setLocalResolution(outcome.resolution);
+    if (outcome.resolution === 'submitted') showInfo('Tokens submitted');
+    return true;
   };
 
   const handleSubmit = async () => {
@@ -302,6 +330,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
     resolvingRef.current = true;
     setSubmitting(true);
     setValidationMessage(null);
+    setActionError(null);
     setFieldErrors({});
     const tokens: Record<string, string> = {};
     for (const field of fields) {
@@ -315,9 +344,9 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
       showSuccess('Tokens submitted');
     } catch (err) {
       resolvingRef.current = false;
-      const message = `Save failed: ${err instanceof Error ? err.message : String(err)}`;
-      setValidationMessage(`${message}. Check the tokens and try again.`);
-      showError(message);
+      if (!resolveFailure('submit', 'submitted', err)) {
+        setActionError(describeActionError('save the tokens', err, { idempotent: true }));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -328,15 +357,16 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
     resolvingRef.current = true;
     setDismissing(true);
     setValidationMessage(null);
+    setActionError(null);
     setFieldErrors({});
     try {
       await post('dismiss', {});
       setLocalResolution('dismissed');
     } catch (err) {
       resolvingRef.current = false;
-      const message = `Dismiss failed: ${err instanceof Error ? err.message : String(err)}`;
-      setValidationMessage(`${message}. Try again.`);
-      showError(message);
+      if (!resolveFailure('dismiss', 'dismissed', err)) {
+        setActionError(describeActionError('dismiss this request', err, { idempotent: true }));
+      }
     } finally {
       setDismissing(false);
     }
@@ -421,13 +451,23 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
             {validationMessage}
           </Text>
         ) : null}
+        {answeredElsewhere ? (
+          <CompactNotice type="neutral" role="status" message={WIDGET_ALREADY_ANSWERED_MESSAGE} />
+        ) : actionError ? (
+          <ActionErrorNotice error={actionError} />
+        ) : null}
 
         <Space style={{ width: '100%', justifyContent: 'flex-end' }} size="small">
           {/* Dismiss is the admin-only decline action, so only surface it to a
               known admin — never during the role-loading window (isAdmin is
               false until the role hydrates). The daemon enforces the same. */}
           {isAdmin ? (
-            <Button size="small" onClick={handleDismiss} loading={dismissing} disabled={submitting}>
+            <Button
+              size="small"
+              onClick={handleDismiss}
+              loading={dismissing}
+              disabled={submitting || answeredElsewhere}
+            >
               Dismiss
             </Button>
           ) : null}
@@ -436,7 +476,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
             type="primary"
             onClick={handleSubmit}
             loading={submitting}
-            disabled={!allFilled || dismissing}
+            disabled={!allFilled || dismissing || answeredElsewhere}
           >
             Save
           </Button>

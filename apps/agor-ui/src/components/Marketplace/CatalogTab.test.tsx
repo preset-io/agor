@@ -614,20 +614,20 @@ describe('connect', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
-  it('shows the access disclosure expanded and blocks connect until it is acknowledged', async () => {
+  it('keeps the full access disclosure collapsed and shows its summary beside Connect', async () => {
     const drawer = await openDrawer();
 
     expect(drawer.getByText('What this can access')).toBeVisible();
-    expect(drawer.getByText(DEEPWIKI.permission_disclosure)).toBeVisible();
+    expect(drawer.getByTestId('catalog-access-summary')).toHaveTextContent(
+      DEEPWIKI.permission_disclosure
+    );
+    expect(drawer.queryByRole('checkbox')).not.toBeInTheDocument();
 
     const connect = await findNoAuthConnect(drawer);
-    expect(connect).toBeDisabled();
-
-    fireEvent.click(drawer.getByRole('checkbox'));
     await waitFor(() => expect(connect).toBeEnabled());
   });
 
-  it('erases the active entry, refusal, consent, and key across admin A -> admin B', async () => {
+  it('erases the active entry, refusal, and key across admin A -> admin B', async () => {
     const client = makeClient();
     const view = (currentUser: User, authGeneration: number) => (
       <MemoryRouter>
@@ -643,7 +643,6 @@ describe('connect', () => {
     const rendered = render(view(DEFAULT_ADMIN, 1));
     fireEvent.click(await findCard('DeepWiki'));
     let drawer = await findDrawer();
-    fireEvent.click(drawer.getByRole('checkbox'));
     const connect = await findNoAuthConnect(drawer);
     await waitFor(() => expect(connect).toBeEnabled());
     connectImpl = async () => {
@@ -654,17 +653,16 @@ describe('connect', () => {
     fireEvent.click(connect);
     const keyInput = await drawer.findByPlaceholderText(/bearer access token/i);
     fireEvent.change(keyInput, { target: { value: 'admin-a-private-key' } });
-    expect(drawer.getByText(/Endpoint now requires/)).toBeVisible();
+    expect(drawer.getByText("Couldn't connect this server.")).toBeVisible();
 
     rendered.rerender(view(REPLACEMENT_ADMIN, 2));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     fireEvent.click(await findCard('DeepWiki'));
     drawer = await findDrawer();
-    expect(drawer.getByRole('checkbox')).not.toBeChecked();
     expect(drawer.queryByPlaceholderText(/bearer access token/i)).not.toBeInTheDocument();
-    expect(drawer.queryByText(/Endpoint now requires/)).not.toBeInTheDocument();
-    expect(await findNoAuthConnect(drawer)).toBeDisabled();
+    expect(drawer.queryByText("Couldn't connect this server.")).not.toBeInTheDocument();
+    expect(await findNoAuthConnect(drawer)).toBeEnabled();
     expect(connectCalls).toHaveLength(1);
   });
 
@@ -695,7 +693,6 @@ describe('connect', () => {
     const rendered = render(view(DEFAULT_ADMIN, 1));
     fireEvent.click(await findCard('DeepWiki'));
     const drawer = await findDrawer();
-    fireEvent.click(drawer.getByRole('checkbox'));
     const connect = await findNoAuthConnect(drawer);
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
@@ -728,7 +725,6 @@ describe('connect', () => {
     renderTab();
     fireEvent.click(await findCard('Linear'));
     const drawer = await findDrawer();
-    fireEvent.click(drawer.getByRole('checkbox'));
     const connect = drawer.getByRole('button', { name: 'Connect' });
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
@@ -745,9 +741,7 @@ describe('connect', () => {
     };
     expect(popup.location?.replace).toHaveBeenCalledWith('https://accounts.example.test/authorize');
     expect(
-      screen.queryByText(
-        'Sign-in could not start automatically. Continue from MCP settings in the new session.'
-      )
+      screen.queryByText("Sign-in didn't open. Try again from My Servers when you're ready.")
     ).not.toBeInTheDocument();
     expect(drawer.queryByText('Connection status: Connected and ready.')).not.toBeInTheDocument();
   });
@@ -762,12 +756,7 @@ describe('connect', () => {
     const drawer = await openDrawer();
     await drawer.findByText('No account expected');
     const connect = drawer.getByText('Connect').closest('button');
-    const checkbox = drawer
-      .getByText('I understand what this server can access')
-      .closest('label')
-      ?.querySelector('input');
-    if (!connect || !checkbox) throw new Error('Connect consent controls not found');
-    fireEvent.click(checkbox);
+    if (!connect) throw new Error('Connect control not found');
     await waitFor(() => expect(connect).not.toBeDisabled());
     vi.mocked(window.open).mockClear();
 
@@ -875,12 +864,13 @@ describe('connect', () => {
     };
     const drawer = await openDrawer();
     const connect = await findNoAuthConnect(drawer);
-    fireEvent.click(drawer.getByRole('checkbox'));
     await waitFor(() => expect(connect).toBeEnabled());
 
     fireEvent.click(connect);
 
-    expect(await drawer.findByText(/temporarily unavailable/)).toBeVisible();
+    expect(await drawer.findByText("Couldn't connect this server.")).toBeVisible();
+    fireEvent.click(drawer.getByRole('button', { name: 'Details' }));
+    expect(drawer.getByText('DeepWiki is temporarily unavailable')).toBeVisible();
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
@@ -916,7 +906,6 @@ describe('connect capability reaches the drawer', () => {
     renderTab({ currentUser });
     fireEvent.click(await findCard('DeepWiki'));
     const drawer = await findDrawer();
-    fireEvent.click(drawer.getByRole('checkbox'));
     return drawer;
   }
 
@@ -938,7 +927,7 @@ describe('connect capability reaches the drawer', () => {
     const connect = await findNoAuthConnect(drawer);
 
     expect(connect).toBeDisabled();
-    expect(drawer.getByText(/Use existing servers only/)).toBeInTheDocument();
+    expect(drawer.getByText(/doesn't let you add servers/)).toBeInTheDocument();
     expect(connectCalls).toHaveLength(0);
   });
 

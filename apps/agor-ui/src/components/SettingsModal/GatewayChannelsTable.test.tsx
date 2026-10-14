@@ -3,8 +3,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { App as AntdApp } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
+import { StandaloneSettingsDrillProvider } from './SettingsDrill';
 
 // The real branch/user pickers are antd v6 `Select`s; opening their dropdowns in
 // jsdom is pathologically slow. Replace them with trivial native inputs so the
@@ -95,10 +97,12 @@ vi.mock('../AgenticToolConfigurationPicker', async () => {
   };
 });
 
-function renderWithProviders(ui: React.ReactElement) {
+function renderWithProviders(ui: React.ReactElement, section?: 'gateway') {
   return render(
     <MemoryRouter>
-      <AntdApp>{ui}</AntdApp>
+      <AntdApp>
+        <StandaloneSettingsDrillProvider section={section}>{ui}</StandaloneSettingsDrillProvider>
+      </AntdApp>
     </MemoryRouter>
   );
 }
@@ -410,6 +414,24 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(channelCreate.mock.calls[0][0].agor_user_id).toBeFalsy();
   });
 
+  it('blocks a second create after a lost reply until the form changes', async () => {
+    const { client, channelCreate } = makeClient();
+    channelCreate.mockRejectedValue(new Error('socket has been disconnected'));
+    renderTable(client);
+    clickButton(/Add Channel/);
+    await advanceToTokensStep();
+    fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
+    fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
+    clickButton(/Create channel/);
+    await screen.findByText(
+      /Refresh to see if it went through before you try to create the channel again/
+    );
+    expect(getButton(/Create channel/)).toBeDisabled();
+    fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test2' } });
+    expect(getButton(/Create channel/)).toBeEnabled();
+    expect(channelCreate).toHaveBeenCalledTimes(1);
+  });
+
   it('erases create secrets and cancels validation continuation on admin A -> admin B', async () => {
     const { client, channelCreate } = makeClient();
     const branch = makeBranch();
@@ -422,14 +444,16 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     const table = (currentUser: User) => (
       <MemoryRouter>
         <AntdApp>
-          <GatewayChannelsTable
-            client={client}
-            gatewayChannelById={new Map()}
-            branchById={new Map([[branch.branch_id, branch]])}
-            userById={users}
-            mcpServerById={new Map()}
-            currentUser={currentUser}
-          />
+          <StandaloneSettingsDrillProvider>
+            <GatewayChannelsTable
+              client={client}
+              gatewayChannelById={new Map()}
+              branchById={new Map([[branch.branch_id, branch]])}
+              userById={users}
+              mcpServerById={new Map()}
+              currentUser={currentUser}
+            />
+          </StandaloneSettingsDrillProvider>
         </AntdApp>
       </MemoryRouter>
     );
@@ -494,6 +518,7 @@ function renderEditTable(
   opts: {
     currentUser?: User;
     onUpdate?: (channelId: string, updates: Partial<GatewayChannel>) => void;
+    section?: 'gateway';
   } = {}
 ) {
   const branch = makeBranch();
@@ -513,7 +538,8 @@ function renderEditTable(
       mcpServerById={new Map<string, MCPServer>()}
       currentUser={currentUser}
       onUpdate={opts.onUpdate}
-    />
+    />,
+    opts.section
   );
   fireEvent.click(screen.getByTitle('Edit'));
 }
@@ -579,15 +605,17 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     const table = (currentUser: User) => (
       <MemoryRouter>
         <AntdApp>
-          <GatewayChannelsTable
-            client={null}
-            gatewayChannelById={new Map([[channel.id, channel]])}
-            branchById={new Map([[branch.branch_id, branch]])}
-            userById={new Map([[currentUser.user_id, currentUser]])}
-            mcpServerById={new Map()}
-            currentUser={currentUser}
-            onUpdate={onUpdate}
-          />
+          <StandaloneSettingsDrillProvider>
+            <GatewayChannelsTable
+              client={null}
+              gatewayChannelById={new Map([[channel.id, channel]])}
+              branchById={new Map([[branch.branch_id, branch]])}
+              userById={new Map([[currentUser.user_id, currentUser]])}
+              mcpServerById={new Map()}
+              currentUser={currentUser}
+              onUpdate={onUpdate}
+            />
+          </StandaloneSettingsDrillProvider>
         </AntdApp>
       </MemoryRouter>
     );
@@ -703,6 +731,30 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     clickButton(/^Save$/);
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
     expect(onUpdate.mock.calls[0][1].config).toMatchObject(tokens);
+  });
+
+  it('keeps the edit form open with its edits when the save is rejected', async () => {
+    const { client } = makeClient();
+    // authorization.ts via register-hooks.ts
+    const onUpdate = vi.fn().mockRejectedValue(
+      Object.assign(new Error('You need admin access to update gateway channels'), {
+        name: 'Forbidden',
+        code: 403,
+      })
+    );
+    renderEditTable(client, makeSlackChannel(), { onUpdate });
+    expandPanel('Credentials');
+    fireEvent.change(screen.getByPlaceholderText('xapp-...'), {
+      target: { value: 'xapp-kept' },
+    });
+
+    clickButton(/^Save$/);
+
+    expect(
+      await screen.findByText("Couldn't save the channel. You don't have permission to do this.")
+    ).toBeVisible();
+    expect(screen.getByText('Edit Gateway Channel')).toBeVisible();
+    expect(screen.getByPlaceholderText('xapp-...')).toHaveValue('xapp-kept');
   });
 
   it('derives the Message Sources scope/event list (no stale message.* events)', async () => {
@@ -849,6 +901,42 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(queryButton(/Copy manifest/)).toBeDefined();
   });
 
+  it('warns that delivering reactions adds reactions:read and subscribes to reaction events', async () => {
+    const { client } = makeClient(undefined, { appId: 'A0123ABC', teamId: 'T1' });
+    renderEditTable(client, makeSlackChannel());
+    expandPanel('Message Sources');
+
+    expect(screen.queryAllByText('reaction_added')).toHaveLength(0);
+    fireEvent.click(document.querySelector('#inbound_reactions') as HTMLElement);
+
+    expect(await screen.findByText(/This change adds the/)).toBeInTheDocument();
+    expect(screen.queryAllByText('reactions:read').length).toBeGreaterThan(0);
+    expect(screen.queryAllByText('reaction_added').length).toBeGreaterThan(0);
+    expect(screen.queryAllByText('reaction_removed').length).toBeGreaterThan(0);
+  });
+
+  it('persists inbound_reactions on save and rehydrates it on edit', async () => {
+    const onUpdate = vi.fn();
+    renderEditTable(
+      null,
+      {
+        ...makeSlackChannel(),
+        agentic_config: { agent: 'claude-code' },
+        config: { ...makeSlackChannel().config, inbound_reactions: true },
+      },
+      { onUpdate }
+    );
+    expandPanel('Message Sources');
+    expect(document.querySelector('#inbound_reactions')).toHaveAttribute('aria-checked', 'true');
+
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      config: expect.objectContaining({ inbound_reactions: true }),
+    });
+  });
+
   it('does not warn on unrelated edits or on toggles that only remove scopes', async () => {
     renderEditTable(null, makeSlackChannel());
     expandPanel('Message Sources');
@@ -898,7 +986,11 @@ describe('GatewayChannelsTable Slack edit mode', () => {
 
     renderEditTable(null, channel, { onUpdate });
 
-    expect(screen.getByText('This channel uses a removed agentic tool')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This channel's agent is no longer available. Choose another agent before you save."
+      )
+    ).toBeInTheDocument();
     expect(queryButton(/^Save$/)).toBeDisabled();
     expect(onUpdate).not.toHaveBeenCalled();
 
@@ -1028,18 +1120,20 @@ describe('GatewayChannelsTable socket authority generations', () => {
     const view = (generation: number) => (
       <MemoryRouter>
         <AntdApp>
-          <ConnectionProvider
-            value={{
-              connected: true,
-              connecting: false,
-              authGeneration: generation,
-              outOfSync: false,
-              capturedSha: null,
-              currentSha: null,
-            }}
-          >
-            {table}
-          </ConnectionProvider>
+          <StandaloneSettingsDrillProvider>
+            <ConnectionProvider
+              value={{
+                connected: true,
+                connecting: false,
+                authGeneration: generation,
+                outOfSync: false,
+                capturedSha: null,
+                currentSha: null,
+              }}
+            >
+              {table}
+            </ConnectionProvider>
+          </StandaloneSettingsDrillProvider>
         </AntdApp>
       </MemoryRouter>
     );
@@ -1064,6 +1158,52 @@ describe('GatewayChannelsTable socket authority generations', () => {
 });
 
 describe('GatewayChannelsTable GitHub create wizard', () => {
+  async function openGithubCreateApp() {
+    renderTable(makeClient().client);
+    clickButton(/Add Channel/);
+    selectChannelType('GitHub');
+    await waitForAvailableStep('Credentials');
+    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+      target: { value: 'My GH' },
+    });
+    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
+    clickButton(/^Continue$/);
+    await waitForStep('Create app');
+  }
+
+  it('asks the user to sign in again when the install has no access token', async () => {
+    localStorage.removeItem(ACCESS_TOKEN_KEY);
+    await openGithubCreateApp();
+    clickButton(/Create GitHub App on GitHub/);
+    expect(
+      await screen.findByText("Couldn't start the GitHub App install. Sign in again first.")
+    ).toBeInTheDocument();
+  });
+
+  it('explains a refused install state request', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: 'Admin role required to initiate GitHub App install' }),
+        {
+          status: 403,
+        }
+      )
+    );
+    try {
+      await openGithubCreateApp();
+      clickButton(/Create GitHub App on GitHub/);
+      expect(
+        await screen.findByText(
+          "Couldn't start the GitHub App install. You don't have permission to do this. (Admin role required to initiate GitHub App install)"
+        )
+      ).toBeInTheDocument();
+    } finally {
+      fetchMock.mockRestore();
+      localStorage.removeItem(ACCESS_TOKEN_KEY);
+    }
+  });
+
   it('walks Channel → Create app → Credentials → Configure and builds a github payload', async () => {
     const { client, channelCreate } = makeClient();
     renderTable(client);
@@ -1218,5 +1358,56 @@ describe('gateway inventory boundaries', () => {
     expect(document.querySelector('[role="switch"]')).toBeNull();
     expect(onDelete).not.toHaveBeenCalled();
     expect(onUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('GatewayChannelsTable unsaved-changes guard', () => {
+  const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
+
+  it('asks before leaving a dirty edit, from the breadcrumb and the footer Cancel', async () => {
+    renderEditTable(null, makeSlackChannel(), { section: 'gateway' });
+    fireEvent.change(screen.getByDisplayValue('Team Slack'), { target: { value: 'Renamed' } });
+
+    fireEvent.click(screen.getByText('Gateway Channels'));
+    await waitFor(() => expect(confirms()).toBe(1));
+    clickButton(/^Keep editing$/);
+    expect(screen.getByDisplayValue('Renamed')).toBeInTheDocument();
+    await waitFor(() => expect(confirms()).toBe(0));
+
+    clickButton(/^Cancel$/);
+    await waitFor(() => expect(confirms()).toBe(1));
+    clickButton(/^Discard$/);
+    await waitFor(() => expect(queryButton(/Add Channel/)).toBeDefined());
+  });
+
+  it('asks before the create wizard Cancel discards a typed name', async () => {
+    renderTable(null);
+    clickButton(/Add Channel/);
+    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+      target: { value: 'Draft channel' },
+    });
+    clickButton(/^Cancel$/);
+    await waitFor(() => expect(confirms()).toBe(1));
+    clickButton(/^Keep editing$/);
+    expect(screen.getByDisplayValue('Draft channel')).toBeInTheDocument();
+  });
+
+  it('leaves an untouched create wizard without asking, despite its seeded defaults', async () => {
+    const user = makeUser({ default_mcp_server_ids: ['mcp-1'] } as Partial<User>);
+    const branch = makeBranch();
+    renderWithProviders(
+      <GatewayChannelsTable
+        client={null}
+        gatewayChannelById={new Map<string, GatewayChannel>()}
+        branchById={new Map([[branch.branch_id, branch]])}
+        userById={new Map([[user.user_id, user]])}
+        mcpServerById={new Map<string, MCPServer>()}
+        currentUser={user}
+      />
+    );
+    clickButton(/Add Channel/);
+    clickButton(/^Cancel$/);
+    await waitFor(() => expect(queryButton(/Add Channel/)).toBeDefined());
+    expect(confirms()).toBe(0);
   });
 });

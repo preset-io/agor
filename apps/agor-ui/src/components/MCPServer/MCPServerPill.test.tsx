@@ -1,7 +1,9 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MCPServerPill } from './MCPServerPill';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { TOUCH_INPUT_QUERY } from '@/hooks/useCanHover';
+import { TouchTooltipConfig } from '../TouchTooltipConfig';
+import { formatRefreshError, MCPServerPill } from './MCPServerPill';
 
 const refreshAndRefetchMCPOAuthGrant = vi.hoisted(() => vi.fn());
 const showError = vi.fn();
@@ -420,5 +422,127 @@ describe('MCPServerPill OAuth recovery', () => {
     releaseRefresh();
     await refreshPending;
     expect(showSuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('MCPServerPill refresh failures', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const server = {
+    mcp_server_id: '01900000-0000-7000-8000-000000000010',
+    name: 'oauth-server',
+    display_name: 'OAuth Server',
+    transport: 'http',
+    scope: 'global',
+    enabled: true,
+    auth: { type: 'oauth' },
+  } as MCPServer;
+  const clickRefresh = () => {
+    render(
+      <MCPServerPill
+        server={server}
+        needsAuth={false}
+        client={{ service: vi.fn(() => ({ create: vi.fn() })) } as unknown as AgorClient}
+        authorityKey="user-a:member:1"
+        actionAllowed
+        actionBlockedReason="OAuth unavailable"
+        configureAllowed
+        configureBlockedReason="Only an administrator can change saved credentials."
+      />
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Refresh OAuth credentials for OAuth Server' })
+    );
+  };
+
+  it('asks for a new sign-in when the refresh token is no longer valid', async () => {
+    refreshAndRefetchMCPOAuthGrant.mockResolvedValue({ success: false, error: 'needs_reauth' });
+    clickRefresh();
+    await waitFor(() =>
+      expect(showWarning).toHaveBeenCalledWith(
+        'Your sign-in to this server expired. Sign in again.'
+      )
+    );
+  });
+
+  it('explains a refused refresh with the curated reason', async () => {
+    refreshAndRefetchMCPOAuthGrant.mockResolvedValue({
+      success: false,
+      error: 'token_refresh_failed',
+    });
+    clickRefresh();
+    await waitFor(() =>
+      expect(showError).toHaveBeenCalledWith(
+        "Couldn't refresh the sign-in. The provider refused it, so try again or sign in again if it keeps happening."
+      )
+    );
+  });
+
+  it('keeps the raw error when the refresh request throws', async () => {
+    refreshAndRefetchMCPOAuthGrant.mockRejectedValue(new Error('fictional-transport-error'));
+    clickRefresh();
+    await waitFor(() =>
+      expect(showError).toHaveBeenCalledWith(
+        "Couldn't refresh the sign-in. (fictional-transport-error)"
+      )
+    );
+  });
+});
+
+describe('formatRefreshError', () => {
+  it.each([
+    [
+      'refresh_in_progress',
+      "Couldn't refresh the sign-in. A refresh is already running, so try again in a moment.",
+    ],
+    ['unknown_error', "Couldn't refresh the sign-in."],
+    ['mcp_server_id is required', "Couldn't refresh the sign-in. (mcp_server_id is required)"],
+  ])('shows %s without internal codes', (code, copy) => {
+    expect(formatRefreshError(code)).toBe(copy);
+  });
+});
+
+describe('MCPServerPill on touch', () => {
+  // With no primary action (a ready non-OAuth server), the status is the only feedback.
+  it('toggles the status on tap when there is no primary action', async () => {
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...matchMedia(query),
+      matches: query === TOUCH_INPUT_QUERY,
+    }));
+    onTestFinished(() => vi.mocked(window.matchMedia).mockRestore());
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000005',
+      name: 'plain-server',
+      display_name: 'Plain Server',
+      transport: 'http',
+      scope: 'global',
+      enabled: true,
+      auth: { type: 'none' },
+    } as MCPServer;
+    render(
+      <TouchTooltipConfig>
+        <MCPServerPill
+          server={server}
+          needsAuth={false}
+          client={null}
+          authorityKey={null}
+          actionAllowed
+          actionBlockedReason="OAuth unavailable"
+          configureAllowed={false}
+          configureBlockedReason="Only an administrator can change saved credentials."
+        />
+      </TouchTooltipConfig>
+    );
+    const pill = screen.getByRole('button', { name: 'Plain Server MCP server. Ready.' });
+    const tooltip = () => document.querySelector('.ant-tooltip');
+
+    fireEvent.click(pill);
+    await waitFor(() => expect(tooltip()).not.toBeNull());
+    expect(tooltip()!.className).not.toContain('ant-tooltip-hidden');
+    expect(tooltip()).toHaveTextContent('HTTP MCP server');
+
+    fireEvent.click(pill);
+    await waitFor(() => expect(tooltip()!.className).toContain('ant-tooltip-hidden'));
   });
 });

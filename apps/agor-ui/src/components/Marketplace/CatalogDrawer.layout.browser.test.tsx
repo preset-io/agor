@@ -23,7 +23,7 @@ const entry = {
 } as MCPCatalogEntry;
 const props: CatalogDetailDrawerProps = {
   identityKey: 'test-user',
-  entry: null,
+  entry,
   open: true,
   onClose: vi.fn(),
   teammates: [],
@@ -46,32 +46,19 @@ const props: CatalogDetailDrawerProps = {
   policyPendingHint: '',
   onConnect: vi.fn(),
 };
-it('keeps one drawer through loading and uses historical shared disclosure spacing', async () => {
+it('uses historical shared disclosure spacing', async () => {
   const width = window.innerWidth;
   const afterOpen = vi.fn();
-  const view = render(
+  render(
     <ConfigProvider>
-      <CatalogDetailDrawer
-        {...props}
-        onAfterOpenChange={afterOpen}
-        emptyContent={<span role="status">Loading catalog…</span>}
-      />
-    </ConfigProvider>
-  );
-  await screen.findByText('Loading catalog…');
-  await waitFor(() => expect(afterOpen).toHaveBeenCalledWith(true));
-  const root = document.querySelector('.ant-drawer');
-  const wrapper = document.querySelector('.ant-drawer-content-wrapper');
-  view.rerender(
-    <ConfigProvider>
-      <CatalogDetailDrawer {...props} entry={entry} onAfterOpenChange={afterOpen} />
+      <CatalogDetailDrawer {...props} onAfterOpenChange={afterOpen} />
     </ConfigProvider>
   );
   await screen.findByText('Explore public repositories');
+  await waitFor(() => expect(afterOpen).toHaveBeenCalledWith(true));
   expect(document.querySelectorAll('.ant-drawer')).toHaveLength(1);
-  expect(document.querySelector('.ant-drawer')).toBe(root);
-  expect(document.querySelector('.ant-drawer-content-wrapper')).toBe(wrapper);
   expect(afterOpen.mock.calls).toEqual([[true]]);
+  const wrapper = document.querySelector('.ant-drawer-content-wrapper');
   expect(wrapper!.getBoundingClientRect().width).toBe(Math.min(520, width));
   const header = document.querySelector('.ant-drawer-header')!;
   const body = document.querySelector('.ant-drawer-body')!;
@@ -79,28 +66,23 @@ it('keeps one drawer through loading and uses historical shared disclosure spaci
   expect(getComputedStyle(body).padding).toBe('24px');
   const disclosure = screen.getByRole('button', { name: 'What this can access' });
   expect(getComputedStyle(disclosure).padding).toBe('12px');
-  const content = document.querySelector('.ant-collapse-body')!;
-  expect(getComputedStyle(content).padding).toBe('16px');
   expect(disclosure.getBoundingClientRect().height).toBeGreaterThanOrEqual(32);
   const icon = disclosure.querySelector('.ant-collapse-expand-icon')!;
   expect(icon.getBoundingClientRect().left - disclosure.getBoundingClientRect().left).toBe(12);
-  expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+  expect(disclosure.getAttribute('aria-expanded')).toBe('false');
   disclosure.focus();
   await userEvent.keyboard('{Enter}');
-  await waitFor(() => expect(disclosure.getAttribute('aria-expanded')).toBe('false'));
+  await waitFor(() => expect(disclosure.getAttribute('aria-expanded')).toBe('true'));
+  const content = document.querySelector('.ant-collapse-body')!;
+  expect(getComputedStyle(content).padding).toBe('16px');
   expect(document.activeElement).toBe(disclosure);
   await userEvent.keyboard('{Enter}');
-  await waitFor(() => expect(disclosure.getAttribute('aria-expanded')).toBe('true'));
-  await userEvent.keyboard(' ');
   await waitFor(() => expect(disclosure.getAttribute('aria-expanded')).toBe('false'));
   await userEvent.keyboard(' ');
   await waitFor(() => expect(disclosure.getAttribute('aria-expanded')).toBe('true'));
-  expect(document.activeElement).toBe(disclosure);
-  const consent = screen.getByRole('checkbox');
-  consent.focus();
   await userEvent.keyboard(' ');
-  expect(consent).toBeChecked();
-  expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+  await waitFor(() => expect(disclosure.getAttribute('aria-expanded')).toBe('false'));
+  expect(document.activeElement).toBe(disclosure);
   await page.screenshot({ path: `./__screenshots__/parent-drawer-${window.innerWidth}.png` });
   expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);
   expect(document.querySelector('.ant-drawer-footer')).toBeNull();

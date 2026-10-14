@@ -25,9 +25,16 @@ import {
 } from '@ant-design/icons';
 import { Button, Card, Checkbox, Input, Select, Space, Typography, theme } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ActionErrorCopy,
+  CLIENT_NOT_CONNECTED_ERROR,
+  describeActionError,
+} from '@/utils/connectionErrors';
 import { useThemedMessage } from '@/utils/message';
+import { ActionErrorNotice, CompactNotice } from '../CompactNotice';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
 import { Tag } from '../Tag';
+import { useWidgetReplay, WIDGET_ALREADY_ANSWERED_MESSAGE } from './widgetReplay';
 
 const { Text } = Typography;
 
@@ -88,6 +95,16 @@ function buildSubmittedSummaryText(input: {
   ].filter(Boolean);
   return parts.join('; ');
 }
+
+type LocalResolution =
+  | {
+      kind: 'submitted';
+      names: string[];
+      scope: EnvVarScope;
+      usedExisting?: string[];
+      submitted?: string[];
+    }
+  | { kind: 'dismissed'; names: string[] };
 
 interface VarRowProps {
   name: string;
@@ -197,7 +214,8 @@ interface PendingFormProps {
 
 const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, client }) => {
   const { token } = theme.useToken();
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess, showInfo } = useThemedMessage();
+  const classifyFailure = useWidgetReplay<LocalResolution>();
   const orderedNames = useMemo(() => orderedEnvVarNames(params.names), [params.names]);
   const [existingByName, setExistingByName] = useState<Record<string, EnvVarExistingStatus>>({});
 
@@ -214,23 +232,15 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
   const [submitting, setSubmitting] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ActionErrorCopy | null>(null);
+  const [answeredElsewhere, setAnsweredElsewhere] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [useExisting, setUseExisting] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
     for (const name of orderedNames) initial[name] = false;
     return initial;
   });
-  const [localResolution, setLocalResolution] = useState<
-    | {
-        kind: 'submitted';
-        names: string[];
-        scope: EnvVarScope;
-        usedExisting?: string[];
-        submitted?: string[];
-      }
-    | { kind: 'dismissed'; names: string[] }
-    | null
-  >(null);
+  const [localResolution, setLocalResolution] = useState<LocalResolution | null>(null);
   const resolvingRef = useRef(false);
 
   useEffect(() => {
@@ -275,7 +285,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
   // on token expiry rather than a raw 401 surfacing as a save failure.
   const post = async (path: 'submit' | 'dismiss', body: unknown) => {
     if (!client) {
-      throw new Error('No client available — refresh and try again');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
     return client.service(`widgets/${encodeURIComponent(widgetId)}/${path}`).create(body ?? {});
   };
@@ -291,6 +301,27 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
     return out;
   };
 
+  /** Handles a failure the server reports as already answered; returns false for a real failure. */
+  const resolveFailure = (
+    action: 'submit' | 'dismiss',
+    resolution: LocalResolution,
+    err: unknown
+  ): boolean => {
+    const outcome = classifyFailure(action, resolution, err);
+    if (outcome.kind === 'failed') return false;
+    if (outcome.kind === 'answered') {
+      resolvingRef.current = true;
+      setAnsweredElsewhere(true);
+      return true;
+    }
+    resolvingRef.current = true;
+    setLocalResolution(outcome.resolution);
+    if (outcome.resolution.kind === 'submitted') {
+      showInfo(buildSubmittedSummaryText(outcome.resolution));
+    }
+    return true;
+  };
+
   const handleSubmit = async () => {
     if (resolvingRef.current || localResolution) return;
     if (!allFilled) {
@@ -303,6 +334,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
     resolvingRef.current = true;
     setSubmitting(true);
     setValidationMessage(null);
+    setActionError(null);
     setFieldErrors({});
     const useExistingNames = orderedNames.filter((name) => useExisting[name]);
     const valueNames = orderedNames.filter((name) => !useExisting[name]);
@@ -311,28 +343,23 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
       use_existing: useExistingNames,
       scope,
     };
+    const resolution: LocalResolution = {
+      kind: 'submitted',
+      names: orderedNames,
+      scope,
+      submitted: valueNames,
+      usedExisting: useExistingNames,
+    };
     try {
       await post('submit', submitBody);
-      setLocalResolution({
-        kind: 'submitted',
-        names: orderedNames,
-        scope,
-        submitted: valueNames,
-        usedExisting: useExistingNames,
-      });
-      showSuccess(
-        buildSubmittedSummaryText({
-          submitted: valueNames,
-          usedExisting: useExistingNames,
-          scope,
-        })
-      );
+      setLocalResolution(resolution);
+      showSuccess(buildSubmittedSummaryText(resolution));
     } catch (err) {
       resolvingRef.current = false;
-      const message = `Save failed: ${err instanceof Error ? err.message : String(err)}`;
-      setFieldErrors(extractFieldErrors(err));
-      setValidationMessage(`${message}. Check the requested names and try again.`);
-      showError(message);
+      if (!resolveFailure('submit', resolution, err)) {
+        setFieldErrors(extractFieldErrors(err));
+        setActionError(describeActionError('save the variables', err, { idempotent: true }));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -343,15 +370,17 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
     resolvingRef.current = true;
     setDismissing(true);
     setValidationMessage(null);
+    setActionError(null);
     setFieldErrors({});
+    const resolution: LocalResolution = { kind: 'dismissed', names: orderedNames };
     try {
       await post('dismiss', {});
-      setLocalResolution({ kind: 'dismissed', names: orderedNames });
+      setLocalResolution(resolution);
     } catch (err) {
       resolvingRef.current = false;
-      const message = `Dismiss failed: ${err instanceof Error ? err.message : String(err)}`;
-      setValidationMessage(`${message}. Try again.`);
-      showError(message);
+      if (!resolveFailure('dismiss', resolution, err)) {
+        setActionError(describeActionError('dismiss this request', err, { idempotent: true }));
+      }
     } finally {
       setDismissing(false);
     }
@@ -430,7 +459,11 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
           />
         ))}
 
-        {validationMessage ? (
+        {answeredElsewhere ? (
+          <CompactNotice type="neutral" role="status" message={WIDGET_ALREADY_ANSWERED_MESSAGE} />
+        ) : actionError ? (
+          <ActionErrorNotice error={actionError} />
+        ) : validationMessage ? (
           <Text type="danger" style={{ fontSize: token.fontSizeSM }}>
             {validationMessage}
           </Text>
@@ -458,7 +491,12 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
             />
           </Space>
           <Space size="small">
-            <Button size="small" onClick={handleDismiss} loading={dismissing} disabled={submitting}>
+            <Button
+              size="small"
+              onClick={handleDismiss}
+              loading={dismissing}
+              disabled={submitting || answeredElsewhere}
+            >
               Dismiss
             </Button>
             <Button
@@ -466,7 +504,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
               type="primary"
               onClick={handleSubmit}
               loading={submitting}
-              disabled={!allFilled || dismissing}
+              disabled={!allFilled || dismissing || answeredElsewhere}
             >
               Save
             </Button>

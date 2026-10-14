@@ -32,6 +32,14 @@ export interface UploadFilesToSessionResult {
   warning?: string;
 }
 
+/** fetch rejected without a response (network loss), so the upload may still have landed. */
+export class UploadConnectionError extends Error {
+  constructor(cause: TypeError) {
+    super(cause.message, { cause });
+    this.name = 'UploadConnectionError';
+  }
+}
+
 const MAX_UPLOAD_ERROR_LENGTH = 240;
 // Refresh a stored access token this close to expiry before spending an
 // upload on it; the daemon rejects expired bearers before reading the body.
@@ -132,6 +140,8 @@ export async function uploadFilesToSession({
       body: formData,
       signal,
       // Bearer-only endpoint; do not send cookies/credentials.
+    }).catch((error: unknown) => {
+      throw error instanceof TypeError ? new UploadConnectionError(error) : error;
     });
   };
 

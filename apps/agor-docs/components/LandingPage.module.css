@@ -1977,8 +1977,8 @@
     border: 1px solid rgba(94, 233, 208, 0.22);
     border-radius: 14px;
     background: rgba(8, 18, 16, 0.92);
-    backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
     text-align: center;
     opacity: 0;
     transform: translateY(14px);

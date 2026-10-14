@@ -226,7 +226,7 @@ describe('resolveMCPOAuthCompatibilityPolicy', () => {
 
 it('resolves actual hidden saved installs through the full runtime catalog, without mutation', async () => {
   const definitions = (await loadCatalog()).filter((entry) => entry.hidden);
-  expect(definitions).toHaveLength(7);
+  expect(definitions).toHaveLength(8);
   for (const definition of definitions) {
     const server = catalogServer({
       catalog_entry_name: definition.name,
@@ -236,7 +236,13 @@ it('resolves actual hidden saved installs through the full runtime catalog, with
     expect(await resolveMCPOAuthCompatibilityPolicy(server)).toEqual(
       await resolveMCPOAuthCompatibilityPolicy(server, [{ ...definition, hidden: false }])
     );
-    expect(await resolveMCPOAuthCompatibilityPolicy(server)).toMatchObject({ mode: 'marketplace' });
+    // Marketplace mode is the OAuth recipe; a hidden non-OAuth entry (Clerk,
+    // hidden pending re-curation) resolves strict, hidden or not.
+    if (definition.auth_type === 'oauth') {
+      expect(await resolveMCPOAuthCompatibilityPolicy(server)).toMatchObject({
+        mode: 'marketplace',
+      });
+    }
     expect(server).toEqual(before);
   }
 });

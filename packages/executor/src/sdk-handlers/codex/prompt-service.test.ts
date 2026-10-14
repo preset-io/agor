@@ -47,6 +47,12 @@ const configMocks = vi.hoisted(() => ({
   getDaemonUrl: vi.fn(),
 }));
 
+import { resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
+import {
+  realMcpScoping,
+  shippedAsanaInstall,
+  userEnvBearerInstall,
+} from '../../../test/helpers/real-mcp-scoping.js';
 import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
 import { isExecutorCleanupUnverified } from '../../termination-state.js';
 import { CodexTool } from './codex-tool.js';
@@ -834,6 +840,50 @@ describe('CodexPromptService - prompt flow client initialization', () => {
         force: true,
       });
     }
+  });
+
+  it('appends the MCP sign-in notice to the per-turn provider prompt', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-flow.md');
+    serviceWithPrivates.buildMcpServersConfig = vi.fn().mockResolvedValue({
+      total: 0,
+      servers: {},
+      signInNotice: '## MCP servers that need sign-in\n- mcpServerId: asana-id, label: "Asana"',
+    });
+    mockSessionsRepo.findById.mockResolvedValue({
+      session_id: 'session-flow',
+      branch_id: 'branch-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: 'existing-thread',
+      model_config: { model: 'gpt-5.4' },
+    });
+    mockSessionsRepo.update.mockResolvedValue(undefined);
+    mockBranchesRepo.findById.mockResolvedValue({ branch_id: 'branch-1', path: process.cwd() });
+    mockStreamEvents = [
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      },
+    ];
+
+    for await (const _ of service.promptSessionStreaming('session-flow' as any, 'review')) {
+    }
+
+    const input = mockRunStreamedInputs.at(-1);
+    expect(input).toContain('review');
+    expect(input).toContain('Current Agor session ID: session-flow');
+    expect(input).toContain('- mcpServerId: asana-id, label: "Asana"');
   });
 });
 
@@ -3318,6 +3368,149 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       expect(servers[name].required).toBeUndefined();
       expect(servers[name].startup_timeout_ms).toBeUndefined();
     }
+  });
+
+  describe('OAuth servers without a grant', () => {
+    const remote = (name: string, auth: Record<string, unknown>) => ({
+      server: {
+        mcp_server_id: `${name}-id`,
+        name,
+        display_name: name === 'asana' ? 'Asana' : undefined,
+        transport: 'http',
+        url: `https://mcp.${name}.test/mcp`,
+        auth,
+      },
+    });
+    const build = () =>
+      (makeService() as any).buildMcpServersConfig(
+        '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+        undefined,
+        { sessionOwnerId }
+      );
+
+    it.each([
+      ['per-user', { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'customer-app' }],
+      [
+        'shared after a mode switch',
+        {
+          type: 'oauth',
+          oauth_mode: 'shared',
+          oauth_dcr_mode: 'disabled',
+          oauth_client_id: 'customer-app',
+        },
+      ],
+    ])('withholds a %s configured-client server and asks for sign-in', async (_label, auth) => {
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([remote('asana', auth)]);
+      const { servers, total, signInNotice } = await build();
+      expect(servers.asana).toBeUndefined();
+      expect(total).toBe(0);
+      expect(signInNotice).toContain('- mcpServerId: asana-id, label: "Asana"');
+      expect(signInNotice).toContain('agor_widgets_request_oauth');
+      expect(signInNotice).toContain('tools are not loaded');
+    });
+
+    it('keeps passing a DCR server through, with the Connect note', async () => {
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([remote('dcr', { type: 'oauth' })]);
+      const { servers, total, signInNotice } = await build();
+      expect(servers.dcr).toMatchObject({ url: 'https://mcp.dcr.test/mcp' });
+      expect(servers.dcr.bearer_token_env_var).toBeUndefined();
+      expect(total).toBe(1);
+      expect(signInNotice).toContain('- mcpServerId: dcr-id, label: "dcr"');
+      // Codex skips an optional server that fails to start and carries on;
+      // the agent is still told plainly that it is unavailable.
+      expect(signInNotice).toContain('unavailable until the user connects them');
+      expect(signInNotice).not.toContain('tools are not loaded');
+    });
+
+    it("uses only the acting user's grant: user A gets the server, user B the notice", async () => {
+      const real = await realMcpScoping([await shippedAsanaInstall('per_user')], {
+        grantsByUser: { 'user-a': { 'asana-id': 'Bearer a-token' } },
+      });
+      const buildFor = (forUserId: string) => {
+        mcpScopingMocks.getMcpServersForSession.mockImplementationOnce(
+          real.getMcpServersForSession
+        );
+        vi.mocked(resolveScopedMCPAuthHeaders).mockImplementationOnce(
+          real.resolveScopedMCPAuthHeaders
+        );
+        mcpAuthMocks.resolveMCPAuthHeaders.mockImplementationOnce(real.resolveMCPAuthHeaders);
+        return (makeService() as any).buildMcpServersConfig(
+          '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+          undefined,
+          { forUserId }
+        );
+      };
+
+      const userA = await buildFor('user-a');
+      expect(userA.servers.asana.bearer_token_env_var).toBeDefined();
+      expect(userA.signInNotice).toBeUndefined();
+
+      const userB = await buildFor('user-b');
+      expect(userB.servers.asana).toBeUndefined();
+      expect(userB.signInNotice).toContain('- mcpServerId: asana-id, label: "Asana"');
+      expect(JSON.stringify(userB)).not.toContain('a-token');
+    });
+
+    it('withholds a user-env bearer server, naming the variable, through real scoping', async () => {
+      vi.stubEnv('AGOR_USER_ENV_KEYS', '');
+      const real = await realMcpScoping([userEnvBearerInstall()]);
+      mcpScopingMocks.getMcpServersForSession.mockImplementationOnce(real.getMcpServersForSession);
+      vi.mocked(resolveScopedMCPAuthHeaders).mockImplementationOnce(
+        real.resolveScopedMCPAuthHeaders
+      );
+      mcpAuthMocks.resolveMCPAuthHeaders.mockImplementationOnce(real.resolveMCPAuthHeaders);
+      try {
+        const { servers, signInNotice } = await build();
+        expect(servers.linear).toBeUndefined();
+        expect(signInNotice).toContain('missing environment variables: LINEAR_API_KEY');
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it.each(['per_user', 'shared'] as const)(
+      'withholds the shipped Asana install (%s) through real scoping with the Connect notice',
+      async (mode) => {
+        const real = await realMcpScoping([await shippedAsanaInstall(mode)]);
+        mcpScopingMocks.getMcpServersForSession.mockImplementationOnce(
+          real.getMcpServersForSession
+        );
+        vi.mocked(resolveScopedMCPAuthHeaders).mockImplementationOnce(
+          real.resolveScopedMCPAuthHeaders
+        );
+        mcpAuthMocks.resolveMCPAuthHeaders.mockImplementationOnce(real.resolveMCPAuthHeaders);
+        const { servers, signInNotice } = await build();
+        expect(servers.asana).toBeUndefined();
+        expect(signInNotice).toContain('- mcpServerId: asana-id, label: "Asana"');
+        expect(signInNotice).toContain('agor_widgets_request_oauth');
+        expect(signInNotice).not.toContain('machine (client-credentials)');
+      }
+    );
+
+    it('withholds a configured client whose credential lookup fails, asking to retry', async () => {
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+        remote('asana', { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'app' }),
+        remote('dcr', { type: 'oauth' }),
+      ]);
+      mcpAuthMocks.resolveMCPAuthHeaders.mockRejectedValue(new Error('authority timed out'));
+      const { servers, signInNotice } = await build();
+      expect(servers.asana).toBeUndefined();
+      expect(signInNotice).toContain("couldn't load the sign-in");
+      expect(signInNotice).toContain('mcpServerId: asana-id');
+      // DCR keeps today's catch behavior: dispatched, no notice.
+      expect(servers.dcr).toMatchObject({ url: 'https://mcp.dcr.test/mcp' });
+      expect(signInNotice).not.toContain('dcr-id');
+    });
+
+    it('adds no notice when the grant is present', async () => {
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+        remote('asana', { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'app' }),
+      ]);
+      mcpAuthMocks.resolveMCPAuthHeaders.mockResolvedValue({ Authorization: 'Bearer token' });
+      const { servers, signInNotice } = await build();
+      expect(servers.asana.bearer_token_env_var).toBeDefined();
+      expect(signInNotice).toBeUndefined();
+    });
   });
 });
 

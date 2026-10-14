@@ -72,9 +72,9 @@ overrides:
   zod: ^4.6.5
 
 patchedDependencies:
-  '@vitest/browser@5.0.1': e6af742b176f167230def94e4e7b081241b5d84d7c446d01581606050559d6e1
   '@rc-component/util@1.13.0': b9106e9587099133a5b54cf6e8075a8bab098413d2d1b986302739eb06106a27
   '@streamdown/code@1.1.1': 6c4a3e4bb1c8f4eb48df153df1da1f2f448f68f4c1508c0cfd1df001c15ca023
+  '@vitest/browser@5.0.1': e6af742b176f167230def94e4e7b081241b5d84d7c446d01581606050559d6e1
   streamdown@2.5.0: 19300059403a0f3973e236d4d8049c92a6d5a3422d55cdf1653207fda4ddb8a4
 
 importers:
@@ -253,6 +253,9 @@ importers:
       socket.io:
         specifier: ^4.8.3
         version: 4.8.3(supports-color@8.1.1)
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.288
@@ -338,9 +341,6 @@ importers:
       vitest:
         specifier: ^5.0.1
         version: 5.0.1(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(@vitest/browser-playwright@5.0.1)(@vitest/coverage-v8@5.0.1)(@vitest/ui@5.0.1)(jsdom@27.1.0(supports-color@8.1.1))(vite@8.3.0(@types/node@24.13.3)(esbuild@0.25.12)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
-      zod:
-        specifier: ^4.6.5
-        version: 4.6.5
 
   apps/agor-docs:
     dependencies:

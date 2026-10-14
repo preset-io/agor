@@ -13,6 +13,13 @@
 import type { MessageID, UserID } from './id';
 import type { MCPSlackConnectDelivery } from './mcp';
 
+/**
+ * Session-URL query parameter naming a pending `oauth` widget whose catalog
+ * drawer should open on arrival. Gateway users cannot see the inline card, so
+ * the link the agent relays opens the drawer that card would have opened.
+ */
+export const MCP_CONNECT_WIDGET_QUERY_PARAM = 'mcp_connect';
+
 /** Lifecycle status of a widget request. */
 export type WidgetStatus = 'pending' | 'resolving' | 'submitted' | 'dismissed' | 'already_present';
 

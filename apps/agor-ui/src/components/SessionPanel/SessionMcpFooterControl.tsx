@@ -6,8 +6,10 @@ import React from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
 import { useMCPCatalogModal } from '@/contexts/MCPCatalogModalContext';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { useIsMobileViewport } from '@/hooks/useIsMobileViewport';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useAgorStore } from '../../store/agorStore';
+import { formatActionError } from '../../utils/connectionErrors';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { updateSessionMcpServers } from '../../utils/sessionMcpServers';
@@ -160,6 +162,16 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
     return () => document.removeEventListener('pointerdown', dismissOutside);
   }, [open]);
 
+  // The phone info bar scrolls horizontally, which clips an absolutely
+  // positioned popup to nothing. On phones, anchor it to the viewport just
+  // above the trigger instead.
+  const isMobile = useIsMobileViewport();
+  const [phoneBottom, setPhoneBottom] = React.useState<number | null>(null);
+  React.useLayoutEffect(() => {
+    const top = open && isMobile ? triggerRef.current?.getBoundingClientRect().top : undefined;
+    setPhoneBottom(top === undefined ? null : window.innerHeight - top);
+  }, [open, isMobile]);
+
   const dismissAndRestoreFocus = React.useCallback(() => {
     setOpen(false);
     triggerRef.current?.focus();
@@ -255,12 +267,10 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
     try {
       await updateSessionMcpServers(client, sessionId, sessionMcpServerIds, nextIds);
       if (!operation.isCurrent()) return;
-      showSuccess('Session MCP servers updated');
+      showSuccess('Session MCP servers updated.');
     } catch (err) {
       if (!operation.isCurrent()) return;
-      showError(
-        `Failed to update MCP servers: ${err instanceof Error ? err.message : String(err)}`
-      );
+      showError(formatActionError('update MCP servers', err, { idempotent: true }));
     } finally {
       if (operation.isCurrent()) setSaving(false);
     }
@@ -303,13 +313,13 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
                 actionAllowed={oauthActionAllowed}
                 actionBlockedReason={
                   !connectionReady
-                    ? 'Reconnect to the Agor daemon before changing OAuth credentials.'
+                    ? 'Reconnect to Agor before changing OAuth credentials.'
                     : 'Your account can no longer change OAuth credentials.'
                 }
                 configureAllowed={editMutationAllowed}
                 configureBlockedReason={
                   !connectionReady
-                    ? 'Reconnect to the Agor daemon before changing saved credentials.'
+                    ? 'Reconnect to Agor before changing saved credentials.'
                     : 'Only an administrator can change saved credentials.'
                 }
                 onEdit={editMutationAllowed ? handleEditServer : undefined}
@@ -428,9 +438,16 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
           aria-labelledby={headingId}
           onKeyDown={handleEscape}
           style={{
-            position: 'absolute',
-            bottom: `calc(100% + ${token.sizeXS}px)`,
-            left: 0,
+            ...(isMobile && phoneBottom !== null
+              ? {
+                  position: 'fixed',
+                  bottom: phoneBottom + token.sizeXS,
+                  left: token.paddingXS,
+                  right: token.paddingXS,
+                  // The info bar is nowrap; let the panel's copy wrap.
+                  whiteSpace: 'normal',
+                }
+              : { position: 'absolute', bottom: `calc(100% + ${token.sizeXS}px)`, left: 0 }),
             zIndex: token.zIndexPopupBase,
             padding: token.paddingSM,
             background: token.colorBgElevated,
@@ -455,7 +472,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
           mutationAllowed={editMutationAllowed}
           mutationBlockedReason={
             !connected || connecting
-              ? 'Reconnect to the Agor daemon before changing this MCP server.'
+              ? 'Reconnect to Agor before changing this MCP server.'
               : 'Your account can no longer change this MCP server.'
           }
           onClose={() => setEditModalOpen(false)}

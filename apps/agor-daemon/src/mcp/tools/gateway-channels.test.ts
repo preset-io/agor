@@ -3235,6 +3235,20 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     });
   });
 
+  it('adds reactions:read, reaction events, and inbound_reactions config when inboundReactions is enabled', async () => {
+    const opts = { ...dmOnly, inboundReactions: true };
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_slack_manifest_generate.handler(opts);
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.bot_scopes).toEqual(requiredBotScopes(wizardOptionsFor(opts)));
+    expect(payload.bot_scopes).toEqual(expect.arrayContaining(['reactions:read']));
+    expect(payload.bot_scopes).not.toContain('reactions:write');
+    expect(payload.bot_events).toEqual(['message.im', 'reaction_added', 'reaction_removed']);
+    expect(payload.manifest.settings.event_subscriptions.bot_events).toEqual(payload.bot_events);
+    expect(payload.create_channel_config_hint.config.inbound_reactions).toBe(true);
+  });
+
   it('adds files:write scope and agent_tools config when fileUpload is enabled', async () => {
     const opts = { ...dmOnly, fileUpload: true };
     const tools = await captureTools('admin');
@@ -3341,6 +3355,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     expect(parsed.reactions).toBe(false);
     expect(parsed.fileUpload).toBe(false);
     expect(parsed.fileDownload).toBe(false);
+    expect(parsed.inboundReactions).toBe(false);
 
     const result = await tools.agor_gateway_slack_manifest_generate.handler(parsed);
     const payload = JSON.parse(result.content[0].text);
@@ -3348,6 +3363,9 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     expect(payload.manifest).toEqual(buildSlackManifest(wizardOptionsFor(dmAligned)));
     expect(payload.create_channel_config_hint.config.align_slack_users).toBe(true);
     expect(payload.bot_scopes).toEqual(expect.arrayContaining(['users:read.email']));
+    expect(payload.create_channel_config_hint.config.inbound_reactions).toBe(false);
+    expect(payload.bot_scopes).not.toContain('reactions:read');
+    expect(payload.bot_events).not.toContain('reaction_added');
     expect(payload.create_channel_config_hint.config).not.toHaveProperty('allowed_channel_ids');
   });
 

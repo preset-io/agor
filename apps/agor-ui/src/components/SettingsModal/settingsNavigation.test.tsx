@@ -18,8 +18,7 @@ describe('buildSettingsNav', () => {
         !['agentic-tools', 'gateway', 'groups', 'users'].includes(section),
     });
     expect(sections(nav)).not.toContain('workspace-preferences');
-    expect(sections(nav)).toContain('mcp');
-    expect(nav.map((group) => group.key)).toEqual(['workspace', 'integrations', 'system']);
+    expect(nav.map((group) => group.key)).toEqual(['resources', 'cards', 'system']);
   });
 
   it('attaches counts only where provided', () => {
@@ -35,22 +34,27 @@ describe('buildSettingsNav', () => {
 
   it('keeps the desktop and mobile headings, labels and Beta marker the shells render', () => {
     const nav = buildSettingsNav({ isAdmin: true, canSeeSection: () => true });
-    expect(nav.map((group) => [group.key, group.title, group.mobileTitle])).toEqual([
-      ['workspace', 'Workspace', undefined],
-      ['integrations', 'Integrations', undefined],
-      ['admin', 'Admin', 'Members & groups'],
-      ['system', 'System', 'About'],
+    expect(nav.map((group) => [group.key, group.title, group.mobileTitle, group.badge])).toEqual([
+      ['people', 'People', undefined, undefined],
+      ['resources', 'Resources', undefined, undefined],
+      ['cards', 'Cards', undefined, 'Beta'],
+      ['integrations', 'Integrations', undefined, 'Admin'],
+      ['system', 'System', 'About', undefined],
     ]);
     const rows = nav.flatMap((group) => group.rows);
-    expect(rows.filter((row) => row.beta).map((row) => row.section)).toEqual(['cards']);
     expect(
       rows.filter((row) => row.mobileLabel).map((row) => [row.section, row.label, row.mobileLabel])
     ).toEqual([
       ['agentic-tools', 'Agentic Tools', 'Agentic tools'],
-      ['mcp', 'MCP Servers', 'MCP servers'],
       ['gateway', 'Gateway Channels', 'Gateway channels'],
       ['about', 'About', 'About Agor'],
     ]);
+  });
+
+  it('has no MCP Servers section: MCP lives in the Marketplace', () => {
+    const nav = buildSettingsNav({ isAdmin: true, canSeeSection: () => true });
+    expect(sections(nav)).not.toContain('mcp' as never);
+    expect(nav.flatMap((group) => group.rows).map((row) => row.label)).not.toContain('MCP Servers');
   });
 });
 

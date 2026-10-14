@@ -495,9 +495,9 @@ connection still pre-opens the provider window while browser user activation is 
 stays at **Sign-in pending** until Agor confirms the durable grant; navigating the popup is not treated
 as success. If sign-in does not finish, **My Servers** remains the recovery path.
 
-**What this can access** is expanded by default and must be acknowledged before Connect is enabled.
-Agor records the exact disclosure text shown; collapsing it is not consent. Technical details are
-collapsed separately because they are not part of that consent record.
+A one-line summary of what the server can access sits directly above **Connect**; pressing Connect
+is your consent. The full statement is under **What this can access**, and technical details are in
+their own section; both are collapsed by default.
 
 If you previously set an `mcp_catalog:` block in `~/.agor/config.yaml`, leave it
 or delete it — either works. The daemon still accepts the section so an upgrade

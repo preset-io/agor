@@ -5,10 +5,12 @@ import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { memo, useMemo, useRef, useState } from 'react';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useSessionAccess } from '../../hooks/useSessionAccess';
 import { useSharedTeammates } from '../../hooks/useSharedTeammates';
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { makeLatestOwnSessionSelector, makeTeammatesSelector } from '../../store/selectors';
+import { isComposerSendKey } from '../../utils/composerKeys';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { teammateEmoji, teammateLabel, teammateOption } from '../../utils/teammateLabels';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
@@ -196,7 +198,11 @@ export const HomeAskBox = memo(function HomeAskBox({
 }: HomeAskBoxProps) {
   const { token } = theme.useToken();
   const compact = useHomeCompact();
+  const touchInput = useIsTouchInput();
   const { authGeneration } = useConnectionState();
+  // Missing settings mean “enabled” to the fallback resolver. Wait for the
+  // current workspace snapshot before choosing a tool, without blocking drafts.
+  const settingsHydrated = useAgorStore((s) => s.agenticToolSettingsHydrated);
   const inputRef = useRef<TextAreaRef>(null);
   const [prompt, setPrompt] = useState('');
   const [target, setTarget] = useState<Branch | null>(null);
@@ -210,7 +216,8 @@ export const HomeAskBox = memo(function HomeAskBox({
     onCreateSession,
     onOpenSession,
     // Also gates a held send resumed by a pick after the box was emptied.
-    canSend: () => !disabled && prompt.trim().length > 0,
+    canSend: () =>
+      !disabled && agorStore.getState().agenticToolSettingsHydrated && prompt.trim().length > 0,
     buildConfig: (branch) => {
       sentRef.current = { prompt, target };
       return buildNewSessionConfig({
@@ -245,6 +252,7 @@ export const HomeAskBox = memo(function HomeAskBox({
   );
   const busy =
     disabled ||
+    !settingsHydrated ||
     compose.submitting !== null ||
     compose.resolving ||
     (!target && compose.resolveFailed);
@@ -289,7 +297,7 @@ export const HomeAskBox = memo(function HomeAskBox({
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+            if (!isComposerSendKey(e, touchInput)) return;
             e.preventDefault();
             send(e.metaKey || e.ctrlKey ? 'open' : 'background');
           }}
@@ -299,6 +307,11 @@ export const HomeAskBox = memo(function HomeAskBox({
           // Default input inline padding keeps typed text and the placeholder off the focus ring.
           style={{ fontSize: token.fontSizeLG }}
         />
+        {!settingsHydrated && (
+          <Typography.Text role="status" type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            Loading agentic tool availability
+          </Typography.Text>
+        )}
         <Flex align="center" gap={token.marginXS} data-home-ask-toolbar>
           <AskTargetSelect
             client={client}

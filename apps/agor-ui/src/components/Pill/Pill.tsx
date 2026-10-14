@@ -24,6 +24,7 @@ import {
 import { Badge, Button, Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useRef, useState } from 'react';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
@@ -347,7 +348,7 @@ const ContextWindowPopoverContent: React.FC<{
     <div
       onKeyDown={(event) => {
         if (event.key !== 'Escape') return;
-        event.stopPropagation();
+        // Let AntD handle dismissal so it also cancels pending hover timers.
         onEscape();
       }}
       style={{ width: 400, maxWidth: '90vw' }}
@@ -437,8 +438,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   // Restore focus only for keyboard dismissal, never for hover or outside clicks.
-  const closeWithKeyboard = () => {
-    setOpen(false);
+  const restoreTriggerFocus = () => {
     triggerRef.current?.focus();
   };
   // Prefer the executor-supplied snapshot — its totalTokens/maxTokens are
@@ -476,7 +476,7 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
           limit={effectiveLimit}
           percentage={percentage}
           taskMetadata={taskMetadata}
-          onEscape={closeWithKeyboard}
+          onEscape={restoreTriggerFocus}
         />
       }
       title={null}
@@ -491,12 +491,6 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
         type="text"
         aria-label={`Context window ${hasLimit ? `${percentage}% used` : 'usage unknown'}; show token breakdown`}
         aria-expanded={open}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.stopPropagation();
-            closeWithKeyboard();
-          }
-        }}
         style={{
           padding: 0,
           height: 'auto',
@@ -636,6 +630,7 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
   style,
 }) => {
   const { token } = theme.useToken();
+  const touchInput = useIsTouchInput();
   // Prefer SDK session ID (more useful for CLI/logs) over Agor internal ID
   const displayId = sdkSessionId || sessionId;
   const idShort = shortId(displayId);
@@ -675,7 +670,8 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
           />
         </div>
       }
-      trigger="hover"
+      // A tap emulates hover; on touch the IDs open and close on tap instead.
+      trigger={touchInput ? 'click' : 'hover'}
       placement="top"
       mouseEnterDelay={0.3}
     >

@@ -5,6 +5,7 @@ import { Profiler } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { TOUCH_INPUT_QUERY } from '../../hooks/useCanHover';
 import { buildSessionMaps, EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { userScopeCoverage } from '../../test/userScopeCoverage';
@@ -22,12 +23,13 @@ function RouteStateProbe() {
   );
 }
 
-/** Wide viewport: every media query matches, so Home renders at desktop density. */
+/** Wide, hover-capable viewport, so Home renders at desktop density. */
 export const asDesktop = () =>
   vi.spyOn(window, 'matchMedia').mockImplementation(
     (query) =>
       ({
-        matches: true,
+        // Wide and hover-capable: every query but the touch one.
+        matches: query !== TOUCH_INPUT_QUERY,
         media: query,
         addEventListener: () => {},
         removeEventListener: () => {},
@@ -97,6 +99,7 @@ export function seed({
 }) {
   agorStore.setState({
     ...EMPTY_MAPS,
+    agenticToolSettingsHydrated: hydrated,
     ...buildSessionMaps(sessions),
     commentById: new Map(comments.map((c) => [c.comment_id, c])),
     branchById: new Map(branches.map((b) => [b.branch_id, b])),

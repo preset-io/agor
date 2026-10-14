@@ -25,7 +25,7 @@ describe('getShellSurfacePath', () => {
     ).toBe('/');
     expect(
       getShellSurfacePath({
-        pathname: '/settings/mcp/',
+        pathname: '/settings/gateway/',
         state: { settingsBackgroundPath: '/b/alpha/' },
       })
     ).toBe('/b/alpha/');
@@ -60,7 +60,7 @@ describe('getShellSurfacePath', () => {
     expect(
       getShellSurfacePath({
         pathname: '/settings/users/',
-        state: { settingsBackgroundPath: '/settings/mcp/' },
+        state: { settingsBackgroundPath: '/settings/gateway/' },
       })
     ).toBe('/settings/users/');
   });
