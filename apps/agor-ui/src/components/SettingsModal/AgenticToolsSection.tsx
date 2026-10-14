@@ -7,7 +7,7 @@ import type {
   TenantAgenticToolSettings,
 } from '@agor-live/client';
 import { Alert, Select, Space, Spin, Switch, Tabs, Typography, theme } from 'antd';
-import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
 import { agorStore } from '../../store/agorStore';
 import {
@@ -90,13 +90,17 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({
   // One preset editor at a time across tools: leaving its tab goes through the
   // Settings discard guard and closes it, so the shell tracks the only draft.
   const { confirmLeaveIfDirty } = useSettingsDrill();
-  const [presetEditorTool, setPresetEditorTool] = useState<TenantAgenticToolName | null>(null);
+  const [presetEditor, setPresetEditor] = useState<{
+    tool: TenantAgenticToolName;
+    token: number;
+  } | null>(null);
+  const presetOpenCount = useRef(0);
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [toolTabs, setToolTabs] = useState<Partial<Record<TenantAgenticToolName, string>>>({});
   const leavePresetEditor = (go: () => void) =>
-    presetEditorTool
+    presetEditor
       ? confirmLeaveIfDirty(() => {
-          setPresetEditorTool(null);
+          setPresetEditor(null);
           go();
         })
       : go();
@@ -106,7 +110,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({
     setSettings({});
     setError(null);
     setSaving({});
-    setPresetEditorTool(null);
+    setPresetEditor(null);
   }, [identityKey]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
@@ -357,9 +361,15 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({
                                 onError={setError}
                                 identityKey={identityKey}
                                 operationScope={operationScope}
-                                editorOpen={presetEditorTool === tool}
-                                onEditorOpenChange={(open) =>
-                                  setPresetEditorTool(open ? tool : null)
+                                editorToken={
+                                  presetEditor?.tool === tool ? presetEditor.token : null
+                                }
+                                onEditorOpen={() => {
+                                  presetOpenCount.current += 1;
+                                  setPresetEditor({ tool, token: presetOpenCount.current });
+                                }}
+                                onEditorClose={(token) =>
+                                  setPresetEditor((open) => (open?.token === token ? null : open))
                                 }
                               />
                             )}

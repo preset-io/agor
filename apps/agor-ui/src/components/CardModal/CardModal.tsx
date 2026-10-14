@@ -219,13 +219,19 @@ const CardModalComponent = ({
   const handleSave = useCallback(async () => {
     if (!card || !client || !hasChanges || !canEdit || !isOpenTicketCurrent(ticket)) return;
     setSaving(true);
+    // Send only what this draft changed, so a concurrent edit to the other
+    // field survives; the acknowledged card becomes the new baseline.
+    const changes: { note?: string; description?: string } = {};
+    if (noteValue !== baseline.note) changes.note = noteValue;
+    if (descValue !== baseline.description) changes.description = descValue;
     try {
-      const updated = await client.service('cards').patch(card.card_id, {
-        note: noteValue,
-        description: descValue,
-      });
-      onCardUpdated?.(updated as CardWithType);
-      setBaseline({ note: noteValue, description: descValue });
+      const updated = (await client.service('cards').patch(card.card_id, changes)) as CardWithType;
+      onCardUpdated?.(updated);
+      const acked = { note: updated.note || '', description: updated.description || '' };
+      setBaseline(acked);
+      // Fields still as sent take the acknowledged value; anything typed meanwhile stays.
+      setNoteValue((current) => (current === noteValue ? acked.note : current));
+      setDescValue((current) => (current === descValue ? acked.description : current));
       setEditingNote(false);
       setEditingDesc(false);
       showSuccess('Card saved.');
@@ -239,6 +245,7 @@ const CardModalComponent = ({
     client,
     noteValue,
     descValue,
+    baseline,
     hasChanges,
     canEdit,
     isOpenTicketCurrent,

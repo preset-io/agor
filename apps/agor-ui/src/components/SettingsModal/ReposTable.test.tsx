@@ -129,7 +129,7 @@ describe('ReposTable cleanup configuration authority', { timeout: 30_000 }, () =
     fireEvent.change(screen.getByLabelText('Default Branch'), { target: { value: 'develop' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
     await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
-    expect(onUpdate.mock.calls[0][1]).toEqual({ slug: repo.slug, default_branch: 'develop' });
+    expect(onUpdate.mock.calls[0][1]).toEqual({ default_branch: 'develop' });
   });
 
   it('saves a deliberately changed administrator policy even when collapsed', async () => {
@@ -157,6 +157,37 @@ describe('ReposTable cleanup configuration authority', { timeout: 30_000 }, () =
     expect(onUpdate.mock.calls[0][1].cleanup_policy).toEqual({
       ...repo.cleanup_policy,
       command: './changed.sh',
+    });
+  });
+
+  it('merges a changed policy key over a concurrent policy edit instead of reverting it', async () => {
+    const repo = makeRepo({
+      cleanup_policy: { enabled: true, command: './cleanup.sh', allow_branch_protection: false },
+    });
+    const onUpdate = vi.fn();
+    const view = (row: Repo) => (
+      <ReposTable
+        repoById={new Map([[row.repo_id, row]])}
+        identityKey="admin:admin"
+        operationScope={['admin:admin', 1]}
+        canConfigureCleanup
+        onUpdate={onUpdate}
+      />
+    );
+    const rendered = renderWithSettingsShell(view(repo));
+    fireEvent.click(screen.getByRole('button', { name: /edit/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Branch cleanup/ }));
+    fireEvent.change(screen.getByLabelText('Cleanup command'), {
+      target: { value: './changed.sh' },
+    });
+    // Another administrator turns on branch protection meanwhile.
+    rendered.rerender(
+      view({ ...repo, cleanup_policy: { ...repo.cleanup_policy!, allow_branch_protection: true } })
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+    expect(onUpdate.mock.calls[0][1]).toEqual({
+      cleanup_policy: { enabled: true, command: './changed.sh', allow_branch_protection: true },
     });
   });
 });
@@ -202,14 +233,15 @@ describe('repository setup status', () => {
 });
 
 describe('ReposTable live updates', () => {
-  it('keeps a typed draft when the open repo is patched, seeding only once per open', async () => {
+  it('keeps a typed draft over a remote slug change and saves only the default branch', async () => {
     const repo = makeRepo({ slug: 'org/repository', default_branch: 'main' });
+    const onUpdate = vi.fn();
     const view = (row: Repo) => (
       <ReposTable
         repoById={new Map([[row.repo_id, row]])}
         identityKey="admin:admin"
         operationScope={['admin:admin', 1]}
-        onUpdate={vi.fn()}
+        onUpdate={onUpdate}
       />
     );
     const rendered = renderWithSettingsShell(view(repo));
@@ -220,6 +252,11 @@ describe('ReposTable live updates', () => {
     // Neither the draft nor an untouched field follows the record while it is open.
     await waitFor(() => expect(screen.getByLabelText('Default Branch')).toHaveValue('develop'));
     expect(screen.getByLabelText('Repository Slug')).toHaveValue('org/repository');
+
+    // The save leaves the remote slug change alone.
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+    expect(onUpdate.mock.calls[0][1]).toEqual({ default_branch: 'develop' });
   });
 
   it('leaves a seeded but unchanged edit without asking to discard', async () => {

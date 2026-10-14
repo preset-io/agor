@@ -112,18 +112,13 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   const handleUpdate = () => {
     if (!editingArtifact) return;
     form.validateFields().then((values) => {
-      // Build a patch of only fields that actually changed. If nothing
-      // changed, skip the network round-trip entirely — avoids firing a
-      // spurious `patched` broadcast for a no-op submit.
+      // Patch only what this draft changed since it was seeded, so a
+      // concurrent edit to another field survives; a no-op submit sends nothing.
+      const changed = isDraftDirty.changedValues();
       const updates: Partial<Artifact> = {};
-      const nextName = values.name;
-      const nextDescription = values.description || undefined;
-      const currentDescription = editingArtifact.description || undefined;
-      if (nextName !== editingArtifact.name) updates.name = nextName;
-      if (nextDescription !== currentDescription) updates.description = nextDescription;
-      if (values.board_id && values.board_id !== editingArtifact.board_id) {
-        updates.board_id = values.board_id;
-      }
+      if ('name' in changed) updates.name = values.name;
+      if ('description' in changed) updates.description = values.description || undefined;
+      if ('board_id' in changed && values.board_id) updates.board_id = values.board_id;
       if (Object.keys(updates).length > 0) {
         onUpdate?.(editingArtifact.artifact_id, updates);
       }

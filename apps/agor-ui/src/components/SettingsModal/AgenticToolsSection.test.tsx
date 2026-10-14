@@ -3,7 +3,7 @@ import type {
   TenantAgenticToolName,
   TenantAgenticToolSettings,
 } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AgenticToolsSection } from './AgenticToolsSection';
 import { renderWithSettingsShell } from './settingsDrillTestUtils';
@@ -140,5 +140,67 @@ describe('AgenticToolsSection preset editor', () => {
     fireEvent.click(await screen.findByText('Discard'));
     await waitFor(() => expect(tab('Codex')).toHaveAttribute('aria-selected', 'true'));
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+  });
+});
+
+describe('AgenticToolsSection preset save fence', () => {
+  it("does not let a late save reply close another tool's editor", async () => {
+    const settings: TenantAgenticToolSettings[] = tools.map((tool) => ({
+      tool,
+      deployment_available: true,
+      enabled: true,
+      resolution_policy: 'user_preferred',
+      inline_configuration_allowed: true,
+      connection: {},
+    }));
+    let finishClaudeSave!: (preset: unknown) => void;
+    const create = vi.fn(
+      () =>
+        new Promise((done) => {
+          finishClaudeSave = done;
+        })
+    );
+    const client = {
+      service: vi.fn((path: string) => ({
+        find: vi.fn().mockResolvedValue(path === 'agentic-tool-presets' ? [] : settings),
+        create,
+        patch: vi.fn(),
+        remove: vi.fn(),
+      })),
+    } as unknown as AgorClient;
+    renderWithSettingsShell(
+      <AgenticToolsSection
+        client={client}
+        identityKey="admin:admin"
+        operationScope={['admin:admin', client, 1]}
+      />,
+      'agentic-tools'
+    );
+    const tab = (label: string) => screen.getByText(label).closest('[role="tab"]') as HTMLElement;
+    const activePane = (label: string) =>
+      document.getElementById(tab(label).getAttribute('aria-controls') ?? '') as HTMLElement;
+
+    fireEvent.click(await screen.findByText('Presets'));
+    fireEvent.click(await screen.findByText('New preset'));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Claude preset' } });
+    await act(async () => {
+      // The shell footer's Save comes after the (hidden) Authentication pane's.
+      fireEvent.click(screen.getAllByText('Save').at(-1) as HTMLElement);
+    });
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+
+    // While Claude's save is in flight, move to Codex and open its editor.
+    fireEvent.click(tab('Codex'));
+    fireEvent.click(await screen.findByText('Discard'));
+    await waitFor(() => expect(tab('Codex')).toHaveAttribute('aria-selected', 'true'));
+    const codex = within(activePane('Codex'));
+    fireEvent.click(await codex.findByText('Presets'));
+    fireEvent.click(await codex.findByText('New preset'));
+    fireEvent.change(codex.getByLabelText('Name'), { target: { value: 'Codex draft' } });
+
+    await act(async () => {
+      finishClaudeSave({ preset_id: 'preset-1', tool: 'claude-code', name: 'Claude preset' });
+    });
+    expect(codex.getByLabelText('Name')).toHaveValue('Codex draft');
   });
 });

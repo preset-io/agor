@@ -132,8 +132,13 @@ describe('CardModal permission gating', () => {
     );
   });
 
-  it('keeps an unsaved note when the open card is updated live, and saving resets the baseline', async () => {
+  it('keeps an unsaved note over a live update, saves only the note, and takes the acknowledged card', async () => {
     const { client, patch, effectiveAccessFind } = makeClient(['board.view', 'board.edit']);
+    const remote = { ...card, title: 'Renamed card', description: 'Remote description' };
+    patch.mockImplementation(async (_id: string, data: unknown) => ({
+      ...remote,
+      ...(data as object),
+    }));
     const view = (row: CardWithType) =>
       withApp(<CardModal open card={row} board={board} client={client} onClose={vi.fn()} />);
     const rendered = render(view(card));
@@ -143,8 +148,8 @@ describe('CardModal permission gating', () => {
     fireEvent.change(screen.getByPlaceholderText("Agent's live commentary..."), {
       target: { value: 'My unsaved note' },
     });
-    // Someone else renames the card: a new card object with the old note.
-    rendered.rerender(view({ ...card, title: 'Renamed card' }));
+    // Someone else renames the card and edits its description.
+    rendered.rerender(view(remote));
     expect(await screen.findByText('Renamed card')).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Agent's live commentary...")).toHaveValue(
       'My unsaved note'
@@ -153,14 +158,11 @@ describe('CardModal permission gating', () => {
     const save = () => screen.getByText('Save').closest('button') as HTMLButtonElement;
     expect(save()).toBeEnabled();
     fireEvent.click(save());
-    await waitFor(() =>
-      expect(patch).toHaveBeenCalledWith(
-        'card-1',
-        expect.objectContaining({ note: 'My unsaved note' })
-      )
-    );
-    // The saved note is the new baseline, even before the live card catches up.
+    // The untouched description is not sent, so the remote edit survives.
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('card-1', { note: 'My unsaved note' }));
+    // The acknowledged card is the new baseline, remote description included.
     await waitFor(() => expect(save()).toBeDisabled());
+    expect(screen.getByText('Remote description')).toBeInTheDocument();
   });
 
   it('is read-only while its board is still loading, even with board.edit', async () => {

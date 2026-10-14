@@ -69,14 +69,17 @@ describe('BranchModal schedules', () => {
     expect(screen.getByRole('button', { name: 'Make schedule dirty' })).toBeInTheDocument();
   });
 
+  // Text queries: role queries over the whole branch editor are slow in jsdom.
+  const tab = (label: string) => screen.getByText(label).closest('[role="tab"]') as HTMLElement;
+
   async function saveBranchChange() {
-    fireEvent.click(screen.getByRole('tab', { name: 'General' }));
+    fireEvent.click(tab('General'));
     const notes = await screen.findByPlaceholderText<HTMLTextAreaElement>(
       'Freeform notes about this branch...'
     );
     await waitFor(() => expect(notes.disabled).toBe(false));
     fireEvent.change(notes, { target: { value: 'Saved note' } });
-    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+    fireEvent.click(screen.getByText('Save Changes'));
   }
 
   it('saves the branch but asks before Save closes over a schedule draft', async () => {
@@ -91,10 +94,10 @@ describe('BranchModal schedules', () => {
 
     await waitFor(() => expect(confirms()).toBe(1));
     // The draft is shown behind the question; Keep editing stays on it.
-    expect(screen.getByRole('tab', { name: 'Schedules' })).toHaveAttribute('aria-selected', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(tab('Schedules')).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByText('Keep editing'));
     await waitFor(() => expect(confirms()).toBe(0));
-    expect(screen.getByRole('button', { name: 'Make schedule dirty' })).toBeInTheDocument();
+    expect(screen.getByText('Make schedule dirty')).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   }, 30_000);
 
@@ -104,7 +107,7 @@ describe('BranchModal schedules', () => {
     await openNewSchedule();
     await saveBranchChange();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    fireEvent.click(await screen.findByText('Discard'));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
   }, 30_000);
 });

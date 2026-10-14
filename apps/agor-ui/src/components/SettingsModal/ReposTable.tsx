@@ -100,12 +100,6 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     drill?.mode === 'edit' && drill.recordId ? (repoById.get(drill.recordId) ?? null) : null;
   const isCreating = drill?.mode === 'create';
   const isEditing = !!editingRepo;
-  // The repo as first seen by this open, i.e. what the form was seeded from.
-  // Saves diff against it, so a concurrent edit to an untouched field survives.
-  const openedRepoRef = useRef<{ drill: unknown; repo: Repo } | null>(null);
-  if (editingRepo && openedRepoRef.current?.drill !== drill) {
-    openedRepoRef.current = { drill, repo: editingRepo };
-  }
 
   const openEdit = useCallback(
     (repo: Repo) => openDrill({ mode: 'edit', recordId: repo.repo_id }),
@@ -176,24 +170,28 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       const values = await repoForm.validateFields();
       if (!operation.isCurrent()) return;
       if (isEditing && editingRepo) {
-        const updates: Partial<Repo> = {
-          slug: values.slug,
-        };
-        // Metadata-only saves must neither require executable-config authority
-        // nor overwrite an administrator's concurrent policy edit.
-        if (
-          canConfigureCleanup &&
-          values.cleanup_policy &&
-          Object.entries(
-            resolveRepoCleanupPolicy((openedRepoRef.current?.repo ?? editingRepo).cleanup_policy)
-          ).some(([key, value]) => values.cleanup_policy[key] !== value)
-        ) {
-          updates.cleanup_policy = values.cleanup_policy;
-        }
-        if (values.default_branch) {
+        // Patch only what this draft changed since it was seeded, so a
+        // concurrent edit to an untouched field survives. Metadata-only saves
+        // must not require executable-config authority; changed policy keys go
+        // over the live policy, keeping an administrator's concurrent edits.
+        const changed = isDraftDirty.changedValues();
+        const updates: Partial<Repo> = {};
+        if ('slug' in changed) updates.slug = values.slug;
+        if ('default_branch' in changed && values.default_branch) {
           updates.default_branch = values.default_branch;
         }
-        await onUpdate?.(editingRepo.repo_id, updates, operation.isCurrent);
+        const policyChanges = changed.cleanup_policy as
+          | Partial<ReturnType<typeof resolveRepoCleanupPolicy>>
+          | undefined;
+        if (canConfigureCleanup && policyChanges && Object.keys(policyChanges).length > 0) {
+          updates.cleanup_policy = {
+            ...resolveRepoCleanupPolicy(editingRepo.cleanup_policy),
+            ...policyChanges,
+          };
+        }
+        if (Object.keys(updates).length > 0) {
+          await onUpdate?.(editingRepo.repo_id, updates, operation.isCurrent);
+        }
       } else if (repoMode === 'local') {
         await onCreateLocal?.(
           { path: values.path, slug: values.slug || undefined },
@@ -223,6 +221,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     editingRepo,
     repoMode,
     canConfigureCleanup,
+    isDraftDirty,
     onUpdate,
     onCreateLocal,
     onCreate,

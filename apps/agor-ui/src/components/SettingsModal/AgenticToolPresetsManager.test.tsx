@@ -1,8 +1,29 @@
 import type { AgenticToolPreset, AgorClient } from '@agor-live/client';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import type { ComponentProps } from 'react';
+import { useRef, useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { AgenticToolPresetsManager } from './AgenticToolPresetsManager';
 import { renderWithSettingsShell } from './settingsDrillTestUtils';
+
+type ManagerProps = ComponentProps<typeof AgenticToolPresetsManager>;
+
+/** Owns the open-editor token the way AgenticToolsSection does. */
+function Manager(props: Omit<ManagerProps, 'editorToken' | 'onEditorOpen' | 'onEditorClose'>) {
+  const [token, setToken] = useState<number | null>(null);
+  const opens = useRef(0);
+  return (
+    <AgenticToolPresetsManager
+      {...props}
+      editorToken={token}
+      onEditorOpen={() => {
+        opens.current += 1;
+        setToken(opens.current);
+      }}
+      onEditorClose={(closing) => setToken((current) => (current === closing ? null : current))}
+    />
+  );
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -23,7 +44,7 @@ describe('AgenticToolPresetsManager authority lifetime', () => {
     } as unknown as AgorClient;
     const onError = vi.fn();
     const view = (generation: number) => (
-      <AgenticToolPresetsManager
+      <Manager
         client={client}
         tool="claude-code"
         onError={onError}
@@ -76,7 +97,7 @@ describe('AgenticToolPresetsManager unsaved-changes guard', () => {
       service: vi.fn(() => ({ find, create: vi.fn(), patch: vi.fn(), remove: vi.fn() })),
     } as unknown as AgorClient;
     renderWithSettingsShell(
-      <AgenticToolPresetsManager
+      <Manager
         client={client}
         tool="claude-code"
         onError={vi.fn()}

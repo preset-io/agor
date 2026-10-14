@@ -20,9 +20,14 @@ interface Props {
   onError(message: string): void;
   identityKey: string | null;
   operationScope: readonly unknown[] | null;
-  /** Controlled by AgenticToolsSection so only one tool has an open editor. */
-  editorOpen?: boolean;
-  onEditorOpenChange?(open: boolean): void;
+  /**
+   * The open editor's token, null when closed. AgenticToolsSection owns it so
+   * only one tool has an open editor; each open gets a new token.
+   */
+  editorToken: number | null;
+  onEditorOpen(): void;
+  /** Closes the editor opened as `token`; ignored if another open replaced it. */
+  onEditorClose(token: number | null): void;
 }
 
 export const AgenticToolPresetsManager: React.FC<Props> = ({
@@ -31,33 +36,26 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
   onError,
   identityKey,
   operationScope,
-  editorOpen,
-  onEditorOpenChange,
+  editorToken,
+  onEditorOpen,
+  onEditorClose,
 }) => {
   const [form] = Form.useForm();
   const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
   const [editing, setEditing] = useState<AgenticToolPreset | null>(null);
-  const [localOpen, setLocalOpen] = useState(false);
-  const modalOpen = editorOpen ?? localOpen;
-  const setModalOpen = useCallback(
-    (next: boolean) => {
-      setLocalOpen(next);
-      onEditorOpenChange?.(next);
-    },
-    [onEditorOpenChange]
-  );
+  const modalOpen = editorToken !== null;
   const [saving, setSaving] = useState(false);
   const operationGuard = useAuthorityOperationGuard(operationScope);
   const { showSuccess } = useThemedMessage();
   // The inline editor reports its draft to the Settings leave guard.
   const isDraftDirty = useDrillFormDraft(form, modalOpen ? (editing ?? 'new') : null);
 
+  // The owner closes the editor on an identity change; this clears the rest.
   // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey intentionally erases the replacement caller's modal/form state
   useLayoutEffect(() => {
     form.resetFields();
     setPresets([]);
     setEditing(null);
-    setModalOpen(false);
     setSaving(false);
   }, [form, identityKey]);
 
@@ -98,10 +96,12 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
       is_default: preset?.is_default ?? false,
       ...getFormValuesFromConfig(tool, preset?.configuration),
     });
-    setModalOpen(true);
+    onEditorOpen();
   };
 
   const save = async () => {
+    // The open this save belongs to: a late reply must not close a later one.
+    const openToken = editorToken;
     const operation = operationGuard.begin();
     if (!operation.isCurrent()) return;
     try {
@@ -118,7 +118,7 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
       else await client.service('agentic-tool-presets').create({ ...data, tool });
       if (!operation.isCurrent()) return;
       showSuccess(editing ? 'Preset updated' : 'Preset created');
-      setModalOpen(false);
+      onEditorClose(openToken);
       await load(operation);
     } catch (error) {
       if (!operation.isCurrent()) return;
@@ -138,7 +138,7 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({
         dirty={isDraftDirty}
         saving={saving}
         onSave={save}
-        onBack={() => setModalOpen(false)}
+        onBack={() => onEditorClose(editorToken)}
       >
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>

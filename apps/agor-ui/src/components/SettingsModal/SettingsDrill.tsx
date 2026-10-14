@@ -321,6 +321,29 @@ const snapshot = (value: unknown) =>
       : v
   );
 
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+/** The fields of `current` that differ from `seed`; nested objects keep only their changed keys. */
+function diffFromSeed(
+  current: Record<string, unknown>,
+  seed: Record<string, unknown>
+): Record<string, unknown> {
+  const changed: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(current)) {
+    const base = seed[key];
+    if (snapshot(value) === snapshot(base)) continue;
+    changed[key] = isPlainObject(value) && isPlainObject(base) ? diffFromSeed(value, base) : value;
+  }
+  return changed;
+}
+
+/** The `dirty` getter for DrillInFrame, plus the fields changed since the seed. */
+export type DrillFormDraft = (() => boolean) & {
+  /** Only what the user changed since the form was seeded: save these, not the whole form. */
+  changedValues: () => Record<string, unknown>;
+};
+
 /**
  * Draft tracking for a drill-in form; returns the `dirty` getter for DrillInFrame.
  *
@@ -332,12 +355,14 @@ const snapshot = (value: unknown) =>
  * With `live` (the open record's form values) the form is seeded from it once
  * per open. Later updates to the record are ignored, so a draft is never
  * overwritten; a record that loads after the editor opened still seeds it.
+ * Saves patch only `changedValues()`, so they never revert a concurrent edit
+ * to a field the user left alone.
  */
 export function useDrillFormDraft(
   form: FormInstance,
   openKey: unknown,
   live?: Record<string, unknown> | null
-): () => boolean {
+): DrillFormDraft {
   const baseline = useRef<Record<string, unknown> | null>(null);
   const seeded = useRef<{ key: unknown; fromLive: boolean } | null>(null);
   const isDirty = useCallback(
@@ -361,7 +386,13 @@ export function useDrillFormDraft(
     baseline.current = JSON.parse(snapshot(form.getFieldsValue(true)));
     seeded.current = { key: openKey, fromLive: Boolean(live) };
   }, [openKey, live, form, isDirty]);
-  return isDirty;
+  return useMemo(
+    () =>
+      Object.assign(() => isDirty(), {
+        changedValues: () => diffFromSeed(form.getFieldsValue(true), baseline.current ?? {}),
+      }),
+    [isDirty, form]
+  );
 }
 
 /**

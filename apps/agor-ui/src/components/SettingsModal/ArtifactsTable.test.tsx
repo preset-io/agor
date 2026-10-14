@@ -85,7 +85,8 @@ describe('ArtifactsTable', () => {
 });
 
 describe('ArtifactsTable live updates', () => {
-  it('keeps a typed draft when the open artifact is patched, seeding only once per open', async () => {
+  it('keeps a typed draft over a remote rename and saves only the description', async () => {
+    const onUpdate = vi.fn();
     const view = (row: Artifact) => (
       <MemoryRouter>
         <ArtifactsTable
@@ -93,6 +94,7 @@ describe('ArtifactsTable live updates', () => {
           boardById={new Map([['board-1', { board_id: 'board-1', name: 'Engineering' } as Board]])}
           branchById={new Map()}
           userById={new Map()}
+          onUpdate={onUpdate}
         />
       </MemoryRouter>
     );
@@ -106,5 +108,10 @@ describe('ArtifactsTable live updates', () => {
     // Neither the draft nor an untouched field follows the record while it is open.
     await waitFor(() => expect(screen.getByLabelText('Description')).toHaveValue('My draft'));
     expect(screen.getByLabelText('Name')).toHaveValue(artifact.name);
+
+    // The save leaves the remote rename alone.
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+    expect(onUpdate).toHaveBeenCalledWith(artifact.artifact_id, { description: 'My draft' });
   });
 });
