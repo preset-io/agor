@@ -33,26 +33,27 @@ vi.mock('../../hooks/useAuth', () => ({
 
 // The real picker fetches live model lists; the stub renders the rows the composer asks for.
 vi.mock('../ModelSelector', () => ({
-  ModelSelector: ({ renderRows, onCommit }: ModelSelectorProps) =>
+  // Like the real picker, an unset value falls back to the tool default (Sonnet here).
+  ModelSelector: ({ renderRows, onCommit, value }: ModelSelectorProps) =>
     renderRows ? (
       renderRows({
         options: [
           {
-            value: 'opus',
-            label: 'Opus',
-            description: 'Most capable',
+            value: 'claude-sonnet-5-5',
+            label: 'Sonnet 5.5',
+            description: 'Fast',
             isDefault: true,
             accountDependent: false,
           },
           {
-            value: 'sonnet',
-            label: 'Sonnet',
-            description: 'Fast',
+            value: 'claude-opus-5-5',
+            label: 'Opus 5.5',
+            description: 'Most capable',
             isDefault: false,
             accountDependent: false,
           },
         ],
-        currentModel: 'opus',
+        currentModel: value?.model ?? 'claude-sonnet-5-5',
         select: (model) => onCommit?.({ mode: 'alias', model }),
       })
     ) : (
@@ -260,6 +261,21 @@ describe('model chip', () => {
     expect(chip).toHaveAccessibleName('Model Opus 5.5, High effort. Change');
   });
 
+  it('checks the model the chip names, even without a stored model config', async () => {
+    renderFooter({ modelConfig: undefined });
+    expect(screen.getByTestId('model-chip')).toHaveTextContent('Opus 5.5');
+    fireEvent.click(screen.getByTestId('model-chip'));
+    const menu = await screen.findByRole('dialog', { name: 'Model' });
+    expect(within(menu).getByRole('radio', { name: /Opus 5.5/ })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    expect(within(menu).getByRole('radio', { name: /Sonnet 5.5/ })).toHaveAttribute(
+      'aria-checked',
+      'false'
+    );
+  });
+
   it('opens model rows, an effort control and a Permissions drill-in row', async () => {
     const onModelConfigCommit = vi.fn();
     const onEffortChange = vi.fn();
@@ -272,7 +288,7 @@ describe('model chip', () => {
     );
     expect(within(menu).queryByRole('combobox')).not.toBeInTheDocument();
     fireEvent.click(within(menu).getByRole('radio', { name: /Sonnet/ }));
-    expect(onModelConfigCommit).toHaveBeenCalledWith({ mode: 'alias', model: 'sonnet' });
+    expect(onModelConfigCommit).toHaveBeenCalledWith({ mode: 'alias', model: 'claude-sonnet-5-5' });
     fireEvent.click(within(menu).getByText('Low'));
     expect(onEffortChange).toHaveBeenCalledWith('low');
     fireEvent.click(within(menu).getByRole('button', { name: /Permissions/ }));
