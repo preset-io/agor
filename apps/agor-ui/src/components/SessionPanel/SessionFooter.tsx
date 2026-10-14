@@ -50,6 +50,13 @@ import { ContextWindowPill, TimerPill, useElapsedDuration } from '../Pill';
 import { getModelChipLabel, getModelDisplayName } from '../Pill/modelDisplay';
 import { SessionIdsList } from '../SessionIds';
 import {
+  ComposerMenu,
+  ComposerMenuNote,
+  ComposerMenuRow,
+  ComposerMenuSection,
+  ComposerPinToggle,
+} from './ComposerMenu';
+import {
   getComposerCircleState,
   isPermissionNonDefault,
   NARROW_COMPOSER_WIDTH,
@@ -195,7 +202,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         ? toolCaps?.supportsChildSpawn !== false
         : true
   );
-  const { row: rowPins } = splitPinnedActions(
+  const { row: rowPins, folded: foldedPins } = splitPinnedActions(
     pinnedItems,
     availableActions,
     isMobile || narrow ? COMPACT_PIN_LIMIT : undefined
@@ -361,13 +368,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       />
     </Tooltip>
   );
-  const itemPin = (id: string, name: string) =>
-    pinToggle(
-      pinnedItems.includes(id),
-      `${pinnedItems.includes(id) ? 'Unpin' : 'Pin'} ${name}`,
-      pinnedItems.includes(id) ? 'Unpin from bar' : 'Pin to bar',
-      () => togglePin(id)
-    );
   const chipPin = (id: string, name: string) =>
     pinToggle(
       pinnedChips.includes(id),
@@ -468,259 +468,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           />
         </div>
       </div>
-
-      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
-
-      <div style={sectionHeaderStyle}>Actions</div>
-
-      {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
-      <div
-        role="button"
-        tabIndex={uploadDisabled ? -1 : 0}
-        style={{
-          ...overflowRowStyle,
-          opacity: uploadDisabled ? 0.4 : 1,
-          cursor: uploadDisabled ? 'not-allowed' : 'pointer',
-        }}
-        onClick={
-          uploadDisabled
-            ? undefined
-            : () => {
-                setMoreOpen(false);
-                onAttachFiles();
-              }
-        }
-        onKeyDown={
-          uploadDisabled
-            ? undefined
-            : (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  setMoreOpen(false);
-                  onAttachFiles();
-                }
-              }
-        }
-      >
-        <Tooltip
-          title={
-            composerAttachmentUploading
-              ? composerUploadTooltip
-              : connectionDisabled
-                ? LOST_CONNECTION_TOOLTIP
-                : 'Attach files to prompt'
-          }
-          placement="left"
-        >
-          <span style={labelGroupStyle}>
-            <PaperClipOutlined style={iconStyle} />
-            <Typography.Text style={labelStyle}>Attach files</Typography.Text>
-          </span>
-        </Tooltip>
-        {itemPin('upload', 'Upload')}
-      </div>
-
-      {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
-      <div
-        role="button"
-        tabIndex={advancedUploadDisabled ? -1 : 0}
-        style={{
-          ...overflowRowStyle,
-          opacity: advancedUploadDisabled ? 0.4 : 1,
-          cursor: advancedUploadDisabled ? 'not-allowed' : 'pointer',
-        }}
-        onClick={
-          advancedUploadDisabled
-            ? undefined
-            : () => {
-                setMoreOpen(false);
-                onUploadOpen();
-              }
-        }
-        onKeyDown={
-          advancedUploadDisabled
-            ? undefined
-            : (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  setMoreOpen(false);
-                  onUploadOpen();
-                }
-              }
-        }
-      >
-        <Tooltip
-          title={
-            composerAttachmentUploading
-              ? composerUploadTooltip
-              : connectionDisabled
-                ? LOST_CONNECTION_TOOLTIP
-                : 'Upload files with options'
-          }
-          placement="left"
-        >
-          <span style={labelGroupStyle}>
-            <UploadOutlined style={iconStyle} />
-            <Typography.Text style={labelStyle}>Advanced upload</Typography.Text>
-          </span>
-        </Tooltip>
-        {itemPin('advanced-upload', 'Advanced upload')}
-      </div>
-
-      {toolCaps?.supportsSessionFork !== false && (
-        // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
-        <div
-          role="button"
-          aria-disabled={forkDisabled}
-          aria-label="Fork session"
-          tabIndex={forkDisabled ? -1 : 0}
-          style={{
-            ...overflowRowStyle,
-            opacity: forkDisabled ? 0.4 : 1,
-            cursor: forkDisabled ? 'not-allowed' : 'pointer',
-          }}
-          onClick={
-            forkDisabled
-              ? undefined
-              : () => {
-                  setMoreOpen(false);
-                  onFork();
-                }
-          }
-          onKeyDown={
-            forkDisabled
-              ? undefined
-              : (e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setMoreOpen(false);
-                    onFork();
-                  }
-                }
-          }
-        >
-          <Tooltip
-            title={
-              connectionDisabled
-                ? LOST_CONNECTION_TOOLTIP
-                : composerAttachmentsPresent
-                  ? composerAttachmentActionTooltip
-                  : 'Fork this session'
-            }
-            placement="left"
-          >
-            <span style={labelGroupStyle}>
-              <ForkOutlined style={iconStyle} />
-              <Typography.Text style={labelStyle}>Fork session</Typography.Text>
-            </span>
-          </Tooltip>
-          {itemPin('fork', 'Fork')}
-        </div>
-      )}
-
-      {toolCaps?.supportsSessionFork !== false && (
-        // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
-        <div
-          role="button"
-          aria-disabled={btwForkDisabled}
-          aria-label="Ask side question via BTW fork"
-          tabIndex={btwForkDisabled ? -1 : 0}
-          style={{
-            ...overflowRowStyle,
-            opacity: btwForkDisabled ? 0.4 : 1,
-            cursor: btwForkDisabled ? 'not-allowed' : 'pointer',
-          }}
-          onClick={
-            btwForkDisabled
-              ? undefined
-              : () => {
-                  setMoreOpen(false);
-                  onBtwSend();
-                }
-          }
-          onKeyDown={
-            btwForkDisabled
-              ? undefined
-              : (e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setMoreOpen(false);
-                    onBtwSend();
-                  }
-                }
-          }
-        >
-          <Tooltip
-            title={
-              composerAttachmentsPresent
-                ? composerAttachmentActionTooltip
-                : connectionDisabled || !hasInput
-                  ? 'Needs input and a live connection'
-                  : 'Ask a side question via an ephemeral fork'
-            }
-            placement="left"
-          >
-            <span style={labelGroupStyle}>
-              <QuestionCircleOutlined style={iconStyle} />
-              <Typography.Text style={labelStyle}>BTW fork</Typography.Text>
-            </span>
-          </Tooltip>
-          {itemPin('btw-fork', 'BTW fork')}
-        </div>
-      )}
-
-      {toolCaps?.supportsChildSpawn !== false && (
-        // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
-        <div
-          role="button"
-          aria-disabled={spawnDisabled}
-          aria-label="Spawn subsession"
-          tabIndex={spawnDisabled ? -1 : 0}
-          style={{
-            ...overflowRowStyle,
-            opacity: spawnDisabled ? 0.4 : 1,
-            cursor: spawnDisabled ? 'not-allowed' : 'pointer',
-          }}
-          onClick={
-            spawnDisabled
-              ? undefined
-              : () => {
-                  setMoreOpen(false);
-                  onSpawnOpen();
-                }
-          }
-          onKeyDown={
-            spawnDisabled
-              ? undefined
-              : (e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setMoreOpen(false);
-                    onSpawnOpen();
-                  }
-                }
-          }
-        >
-          <Tooltip
-            title={
-              connectionDisabled
-                ? 'Disconnected'
-                : composerAttachmentsPresent
-                  ? composerAttachmentActionTooltip
-                  : isRunning
-                    ? 'Session is running'
-                    : 'Spawn a child subsession'
-            }
-            placement="left"
-          >
-            <span style={labelGroupStyle}>
-              <BranchesOutlined style={iconStyle} />
-              <Typography.Text style={labelStyle}>Spawn subsession</Typography.Text>
-            </span>
-          </Tooltip>
-          {itemPin('spawn', 'Spawn')}
-        </div>
-      )}
 
       <Divider style={{ margin: `${token.marginXXS}px 0` }} />
 
@@ -1003,17 +750,148 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     fontSize: token.fontSize,
   };
 
+  const [openMenu, setOpenMenu] = React.useState<'plus' | null>(null);
+  const runAction = (action: () => void) => () => {
+    setOpenMenu(null);
+    action();
+  };
+  const attachmentsHint = composerAttachmentsPresent
+    ? 'Attachments only work with Send for now'
+    : undefined;
+  const actionRows: Record<
+    string,
+    { label: string; hint: string; icon: React.ReactNode; onClick: () => void; disabled: boolean }
+  > = {
+    upload: {
+      label: 'Attach files',
+      hint: 'Photos, screenshots and files',
+      icon: <PaperClipOutlined />,
+      onClick: onAttachFiles,
+      disabled: uploadDisabled,
+    },
+    'advanced-upload': {
+      label: 'Advanced upload',
+      hint: 'Choose where files go',
+      icon: <UploadOutlined />,
+      onClick: onUploadOpen,
+      disabled: advancedUploadDisabled,
+    },
+    fork: {
+      label: 'Fork session',
+      hint: attachmentsHint ?? 'Copy this session and branch off',
+      icon: <ForkOutlined />,
+      onClick: onFork,
+      disabled: forkDisabled,
+    },
+    'btw-fork': {
+      label: 'BTW fork',
+      hint: attachmentsHint ?? 'Ask a side question in a throwaway fork',
+      icon: <QuestionCircleOutlined />,
+      onClick: onBtwSend,
+      disabled: btwForkDisabled,
+    },
+    spawn: {
+      label: 'Spawn subsession',
+      hint:
+        attachmentsHint ??
+        (isRunning ? 'Not while the session is running' : 'Start a child session for a subtask'),
+      icon: <BranchesOutlined />,
+      onClick: onSpawnOpen,
+      disabled: spawnDisabled,
+    },
+  };
+  const pinsFull = isMobile && pinnedItems.length >= COMPACT_PIN_LIMIT;
+  const renderActionRow = (id: string) => {
+    const row = actionRows[id];
+    const pinned = pinnedItems.includes(id);
+    return (
+      <ComposerMenuRow
+        key={id}
+        label={row.label}
+        hint={connectionDisabled ? LOST_CONNECTION_TOOLTIP : row.hint}
+        icon={row.icon}
+        disabled={row.disabled}
+        onClick={runAction(row.onClick)}
+        trailing={
+          <ComposerPinToggle
+            pinned={pinned}
+            label={`${pinned ? 'Unpin' : 'Pin'} ${row.label}`}
+            tooltip={pinned ? 'Unpin from bar' : 'Pin to bar'}
+            disabled={!pinned && pinsFull}
+            onToggle={() => togglePin(id)}
+          />
+        }
+      />
+    );
+  };
+  const plusMenuContent = (
+    <>
+      <ComposerMenuSection>Add to message</ComposerMenuSection>
+      {['upload', 'advanced-upload']
+        .filter((id) => availableActions.includes(id))
+        .map(renderActionRow)}
+      <ComposerMenuSection>Session</ComposerMenuSection>
+      {['fork', 'btw-fork', 'spawn']
+        .filter((id) => availableActions.includes(id))
+        .map(renderActionRow)}
+      <ComposerMenuNote>
+        {pinsFull
+          ? 'The composer fits 2 pins on a phone. Unpin one to add another.'
+          : 'Pin an action to keep it in the composer row.'}
+      </ComposerMenuNote>
+      {foldedPins.map((id) => (
+        <ComposerMenuNote key={id}>
+          {`${actionRows[id].label} stays in here until the panel is wider.`}
+        </ComposerMenuNote>
+      ))}
+      {onOpenSessionSettings && (
+        <>
+          <Divider style={{ margin: `${token.marginXXS}px 0` }} />
+          <ComposerMenuRow
+            label="Session settings"
+            icon={<SettingOutlined />}
+            onClick={runAction(() => onOpenSessionSettings(session.session_id))}
+          />
+        </>
+      )}
+    </>
+  );
+
   const plusButton = (
-    <Tooltip title="Add files and actions">
+    <ComposerMenu
+      sheet={isMobile}
+      title="Add files and actions"
+      open={openMenu === 'plus'}
+      onOpenChange={(open) => setOpenMenu(open ? 'plus' : null)}
+      content={plusMenuContent}
+    >
+      <Tooltip title="Add files and actions">
+        <Button
+          type="text"
+          aria-label="Add files and actions"
+          aria-haspopup="dialog"
+          aria-expanded={openMenu === 'plus'}
+          icon={<PlusOutlined />}
+          onClick={isMobile ? () => setOpenMenu('plus') : undefined}
+          style={rowButtonStyle}
+        />
+      </Tooltip>
+    </ComposerMenu>
+  );
+
+  const modelChip = (
+    <Tooltip title="Model and effort">
       <Button
         type="text"
-        aria-label="Add files and actions"
-        aria-haspopup="dialog"
-        aria-expanded={moreOpen}
-        icon={<PlusOutlined />}
+        aria-label={modelChipAriaLabel}
         onClick={isMobile ? () => setMoreOpen(true) : undefined}
-        style={rowButtonStyle}
-      />
+        style={chipStyle}
+        data-testid="model-chip"
+      >
+        <Typography.Text ellipsis style={{ minWidth: 0, fontSize: token.fontSize }}>
+          {modelChipLabel}
+        </Typography.Text>
+      </Button>
     </Tooltip>
   );
 
@@ -1140,8 +1018,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         {workingLine}
         <div style={{ minWidth: 0 }}>{promptInputSlot}</div>
         <Flex align="center" gap={token.sizeXXS} style={{ minWidth: 0 }}>
+          {plusButton}
+          {pinnedRow}
           {isMobile ? (
-            plusButton
+            modelChip
           ) : (
             <Popover
               open={moreOpen}
@@ -1151,23 +1031,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               content={moreContent}
               title={null}
             >
-              {plusButton}
+              {modelChip}
             </Popover>
           )}
-          {pinnedRow}
-          <Tooltip title="Model and effort">
-            <Button
-              type="text"
-              aria-label={modelChipAriaLabel}
-              onClick={() => setMoreOpen(true)}
-              style={chipStyle}
-              data-testid="model-chip"
-            >
-              <Typography.Text ellipsis style={{ minWidth: 0, fontSize: token.fontSize }}>
-                {modelChipLabel}
-              </Typography.Text>
-            </Button>
-          </Tooltip>
           {showPermissionChip && (
             <Tooltip title="Permissions">
               <Button
