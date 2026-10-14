@@ -80,10 +80,7 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
           <SessionPanelContent
             client={null}
             session={session}
-            scrollToBottom={null}
-            scrollToTop={null}
             setScrollToBottom={vi.fn()}
-            setScrollToTop={vi.fn()}
             queuedTasks={[]}
             spawnModalOpen={open}
             setSpawnModalOpen={setOpen}
