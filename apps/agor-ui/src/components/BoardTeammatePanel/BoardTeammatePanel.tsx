@@ -703,6 +703,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                     board={board}
                     repoById={repoById}
                     client={client}
+                    canMoveBranches={canEditBoard}
                   />
                 ) : (
                   <div style={{ padding: 16 }}>
