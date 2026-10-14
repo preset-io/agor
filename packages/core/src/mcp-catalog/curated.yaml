@@ -711,7 +711,7 @@ unpublished:
   - name: com.squareup/mcp
     # DCR admits allowlisted redirect URIs only, and there is no customer-app
     # route. Request the allowlist in the Square developer forum's MCP category
-    # with each Cloud environment's stable callback; unhide once approved.
+    # with each deployment's stable relay callback; unhide once approved.
     title: Square
     hidden: true
     category: productivity
@@ -731,7 +731,7 @@ unpublished:
   - name: com.intercom/mcp
     # DCR admits allowlisted redirect URIs only, and there is no customer-app
     # route. Ask Intercom support to allowlist the product name ("Agor") and
-    # each Cloud environment's exact stable callback; unhide once approved.
+    # each deployment's exact stable relay callback; unhide once approved.
     hidden: true
     category: productivity
     capabilities: [crm, docs]

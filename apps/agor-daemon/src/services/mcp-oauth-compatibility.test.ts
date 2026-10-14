@@ -320,7 +320,7 @@ it.each(['per_user', 'shared'] as const)(
       },
     });
     await expect(catalogInstallRelayIssuer(server, true)).resolves.toBe('https://app.asana.com');
-    // The customer app pins its issuer whether or not the cell runs the relay.
+    // The customer app pins its issuer whether or not the runtime has the relay.
     await expect(catalogInstallRelayIssuer(server, false)).resolves.toBe('https://app.asana.com');
     await expect(resolveMCPOAuthCompatibilityPolicy(server)).resolves.toMatchObject({
       catalogEntryName: asana.name,

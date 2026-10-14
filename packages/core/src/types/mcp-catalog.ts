@@ -295,10 +295,11 @@ export interface MCPCatalogEntryOAuth {
     credentials_hint?: string;
   };
   /**
-   * A DCR provider that admits only allowlisted redirect URIs. On a cell with
+   * A DCR provider that admits only allowlisted redirect URIs. On a runtime with
    * the hosted callback relay, flows use the relay's fixed per-issuer callback
-   * (the same one `configured_client` uses) so one URI per Cloud environment can
-   * be submitted to the provider. Without the relay, the direct callback is used.
+   * (the same one `configured_client` uses), so each deployment submits its one
+   * stable relay callback to the provider. Without the relay, the direct
+   * callback is used.
    */
   stable_callback?: { issuer: string };
   /**

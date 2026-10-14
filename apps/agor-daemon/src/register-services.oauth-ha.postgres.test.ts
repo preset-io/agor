@@ -1460,7 +1460,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         // reusing the relay-callback registration.
         expect(oauthFixture.registrations).toBe(registrationsBefore + 1);
         expect((await deliver(b)).result).toEqual({ outcome: 'connected' });
-        // A cell without the relay uses the direct callback, and does not reuse
+        // A runtime without the relay uses the direct callback, and does not reuse
         // the registration made for the relay callback.
         const preparedBeforeDirect = preparations.length;
         const directStart = (await replicaA.app

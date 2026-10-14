@@ -27,8 +27,8 @@ export function isCatalogEntryVisible(entry: MCPCatalogEntry): boolean {
 }
 
 /**
- * The issuer whose stable relay callback this entry's OAuth flows use when the
- * cell runs the hosted callback relay: a customer-owned app's reviewed issuer,
+ * The issuer whose stable relay callback this entry's OAuth flows use on a
+ * runtime with the hosted callback relay: a customer-owned app's reviewed issuer,
  * or an allowlisted DCR provider's. Undefined means the direct callback.
  */
 export function catalogRelayIssuer(entry: Pick<MCPCatalogEntry, 'oauth'>): string | undefined {

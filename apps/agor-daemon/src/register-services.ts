@@ -2628,7 +2628,7 @@ export async function registerMCPServices(
 
     // Only customer-owned (configured_client) catalog apps and allowlisted DCR
     // providers (stable_callback) use the hosted relay; DCR then registers the
-    // relay callback. Every other flow keeps the cell's direct callback.
+    // relay callback. Every other flow keeps the daemon's direct callback.
     const relayFlow = Boolean(oauthRelay && relayIssuer);
 
     // Local reservations are attempt-aware, so establish identity before
