@@ -293,8 +293,10 @@ export interface TeamsGatewayConfig {
   catch_up?: TeamsCatchUpConfig;
   /** Read inline images and personal-chat files; needs `supportsFiles` in the app manifest. */
   files?: boolean;
+  /** Deliver reactions to the bot's messages in mapped conversations as short prompts (off by default). */
+  inbound_reactions?: boolean;
   agent_tools?: TeamsAgentToolsConfig;
-  /** Allows proactive channel posts (off by default); replies, notices, and typing are always on. */
+  /** Allows proactive channel posts and DMs (off by default); replies, notices, and typing are always on. */
   outbound_enabled?: boolean;
   /** `channel:<19:…@thread.tacv2>` used when a proactive send names no target. */
   default_outbound_target?: string | null;
@@ -375,6 +377,16 @@ export const TEAMS_CHANNEL_ID_PATTERN = /^19:[A-Za-z0-9_-]+@thread\.(?:tacv2|sky
 export function teamsOutboundChannelTarget(target: string): string | null {
   const channelId = target.trim().startsWith('channel:') ? target.trim().slice(8) : '';
   return TEAMS_CHANNEL_ID_PATTERN.test(channelId) ? channelId : null;
+}
+
+const TEAMS_ENTRA_OBJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TEAMS_USER_PRINCIPAL = /^[^\s@<>"/\\]{1,128}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}$/;
+
+/** The person of a `user:<email | Entra object ID>` outbound target, or null. */
+export function teamsOutboundUserTarget(target: string): string | null {
+  const user = target.trim().startsWith('user:') ? target.trim().slice(5).trim() : '';
+  if (TEAMS_ENTRA_OBJECT_ID.test(user)) return user.toLowerCase();
+  return TEAMS_USER_PRINCIPAL.test(user) ? user.toLowerCase() : null;
 }
 
 export interface TeamsCatchUpConfig {
@@ -516,6 +528,9 @@ export function validateTeamsConfig(
   if (typeof raw.outbound_enabled !== 'boolean') errors.push('outbound_enabled must be a boolean');
   if (raw.files !== undefined && typeof raw.files !== 'boolean') {
     errors.push('files must be a boolean');
+  }
+  if (raw.inbound_reactions !== undefined && typeof raw.inbound_reactions !== 'boolean') {
+    errors.push('inbound_reactions must be a boolean');
   }
   validateAgentToolToggles(raw.agent_tools, TEAMS_AGENT_TOOL_DEFAULTS, 'Teams', errors);
   if (raw.default_outbound_target !== undefined && raw.default_outbound_target !== null) {

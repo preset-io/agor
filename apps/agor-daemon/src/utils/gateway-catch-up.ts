@@ -161,8 +161,9 @@ export async function fetchGatewayCatchUp(args: {
   return { prompt, cursor: args.request.throughProviderCursor };
 }
 
-/** A DM includes the admitted message and stored proactive texts, never Discord history. */
-export function formatDiscordDirectMessagePrompt(args: {
+/** A DM includes the admitted message and stored proactive texts, never provider history. */
+export function formatDirectMessagePrompt(args: {
+  provider: string;
   threadId: string;
   currentText: string;
   sentMessages: { providerMessageId: string; timestamp: string; text: string }[];
@@ -177,7 +178,7 @@ export function formatDiscordDirectMessagePrompt(args: {
   for (let omitted = 0; ; omitted += 1) {
     const prompt = renderUntrustedContext({
       format: 'agor.gateway.untrusted-provider-context.v1',
-      provider: 'Discord',
+      provider: args.provider,
       thread_id: args.threadId,
       previous_messages: previousMessages.slice(omitted),
       ...(omitted ? { omitted_note: `${omitted} earlier agent messages omitted` } : {}),

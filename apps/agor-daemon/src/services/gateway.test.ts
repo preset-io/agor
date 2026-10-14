@@ -456,7 +456,7 @@ function makeGatewayHarness(args: {
     }
   ).usersRepo = { findByEmailForAlignment, findById };
   const outboundRepo = {
-    listDiscordDirectMessageSends: vi.fn(async () => []),
+    listDirectMessageSends: vi.fn(async () => []),
     admitReplySession,
     completeReplyAdmission,
   };
@@ -5918,7 +5918,7 @@ describe('GatewayService outbound emit session branch binding', () => {
     vi.mocked(getConnector).mockReturnValue({ sendSlackMessage, sendDirectMessage } as never);
     const outboundRepo = {
       create: vi.fn(async (data: Record<string, unknown>) => ({ id: 'out-1', ...data })),
-      listDiscordDirectMessageSends: vi.fn(async () => []),
+      listDirectMessageSends: vi.fn(async () => []),
       admitReplySession: vi.fn(async () => null),
       completeReplyAdmission: vi.fn(async () => undefined),
     };
@@ -7404,5 +7404,274 @@ describe('GatewayService Teams proactive sends', () => {
     };
     await teamsCreate(service, channel, data);
     expect(outboundRepo.admitReplySession).not.toHaveBeenCalled();
+  });
+});
+
+describe('GatewayService Teams reactions', () => {
+  const channel = makeTeamsChannel({
+    id: 'teams-reaction-channel',
+    config: { inbound_reactions: true, catch_up: { mode: 'best_effort' } },
+  });
+  const THREAD = '19:c@thread.tacv2|1616990000001';
+
+  function reactionHarness(
+    options: { config?: Record<string, unknown>; mapped?: boolean; reactedText?: string } = {}
+  ) {
+    const reactionChannel = {
+      ...channel,
+      config: { ...(channel.config as Record<string, unknown>), ...options.config },
+    } as GatewayChannel;
+    const fetchProviderHistory = vi.fn();
+    const harness = makeGatewayHarness({
+      channel: reactionChannel,
+      existingMapping:
+        options.mapped === false
+          ? null
+          : makeMapping({
+              id: 'map-r' as never,
+              channel_id: reactionChannel.id,
+              thread_id: THREAD,
+              session_id: 'sess-r' as never,
+              teams_last_admitted_activity_id: '1616990000005',
+              metadata: { teams_conversation_type: 'channel' },
+            }),
+      connector: { sendMessage: vi.fn(), fetchProviderHistory },
+    });
+    const notices = vi.fn(async () => undefined);
+    const findByProviderMessageInThread = vi.fn(async () =>
+      options.reactedText === undefined ? null : { message_id: 'msg-1' }
+    );
+    Object.assign(harness.service as unknown as Record<string, unknown>, {
+      sendTeamsSystemMessage: notices,
+      taskRepo: { findById: vi.fn(async () => null) },
+      teamsDeliveryRepo: { findByProviderMessageInThread },
+      messagesRepo: {
+        findById: vi.fn(async () => ({ content: options.reactedText, content_preview: '' })),
+      },
+    });
+    const create = (eventType = 'reaction_added') =>
+      teamsCreate(harness.service, reactionChannel, {
+        channel_key: reactionChannel.channel_key,
+        thread_id: THREAD,
+        text: '',
+        user_name: 'Ada',
+        metadata: {
+          teams_conversation_type: 'channel',
+          teams_has_mention: false,
+          teams_user_name: 'Ada',
+          teams_event_type: eventType,
+          teams_reaction: 'like',
+          teams_reaction_item_id: '1616990000009',
+        },
+        teams_catch_up: {
+          activity_id: 'reaction-abc',
+          timestamp: '2026-10-14T12:00:00.000Z',
+          service_url: 'https://smba.trafficmanager.net/amer/',
+          team_id: '19:team@thread.tacv2',
+          team_group_id: null,
+        },
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000c1' as never,
+      });
+    return { ...harness, create, notices, fetchProviderHistory, findByProviderMessageInThread };
+  }
+
+  it('prompts the mapped session with the reacted message, without catch-up or a cursor move', async () => {
+    const {
+      create,
+      promptCreate,
+      notices,
+      fetchProviderHistory,
+      threadMapRepo,
+      findByProviderMessageInThread,
+    } = reactionHarness({ reactedText: 'Shall I merge the fix?' });
+    await expect(create()).resolves.toMatchObject({ success: true, sessionId: 'sess-r' });
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain('[Teams reaction] Ada reacted "like" to your message');
+    expect(prompt).toContain('Shall I merge the fix?');
+    expect(prompt).toContain('lightweight signal, not a new request');
+    expect(findByProviderMessageInThread).toHaveBeenCalledWith('map-r', '1616990000009');
+    expect(fetchProviderHistory).not.toHaveBeenCalled();
+    expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).not.toHaveBeenCalled();
+    expect(notices).not.toHaveBeenCalled();
+  });
+
+  it('reports a removal, and still prompts when the reacted message is unknown', async () => {
+    const { create, promptCreate } = reactionHarness();
+    await create('reaction_removed');
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain('Ada removed their "like" reaction from your message');
+    expect(prompt).not.toContain('Your message:');
+  });
+
+  it('never starts a session, and does nothing when reactions are off', async () => {
+    for (const options of [{ mapped: false }, { config: { inbound_reactions: false } }]) {
+      const { create, promptCreate, sessionsCreate, notices } = reactionHarness(options);
+      await expect(create()).resolves.toMatchObject({ success: false });
+      expect(promptCreate).not.toHaveBeenCalled();
+      expect(sessionsCreate).not.toHaveBeenCalled();
+      expect(notices).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe('GatewayService Teams proactive DMs', () => {
+  const CHAT = 'a:1WFBmMYtHYGEDUX011dlEKFh3EKvfLguozxnujkAYr';
+  const channel = makeTeamsChannel({
+    id: 'teams-dm-channel',
+    config: { outbound_enabled: true },
+  });
+  const anchor = {
+    ok: true,
+    row: { thread_id: '19:c@thread.tacv2|1', team_id: '19:team@thread.tacv2' },
+    address: { serviceUrl: 'https://smba.trafficmanager.net/amer/' },
+  };
+
+  function dmHarness(
+    options: {
+      config?: Record<string, unknown>;
+      member?: Record<string, unknown> | null;
+      findMember?: ReturnType<typeof vi.fn>;
+    } = {}
+  ) {
+    const dmChannel = {
+      ...channel,
+      config: { ...(channel.config as Record<string, unknown>), ...options.config },
+    } as GatewayChannel;
+    const harness = makeGatewayHarness({ channel: dmChannel });
+    const create = vi.fn(async (data: Record<string, unknown>) => ({ id: 'dm-1', ...data }));
+    Object.assign(harness.outboundRepo, { create });
+    (harness.service as unknown as { teamsAddressRepo: unknown }).teamsAddressRepo = {
+      loadFencedTeamAnchors: vi.fn(async () => [anchor]),
+    };
+    const findMember =
+      options.findMember ??
+      vi.fn(async () =>
+        options.member === undefined
+          ? { id: '29:1ab-member', aadObjectId: 'aad-ada', email: 'ada@contoso.com' }
+          : options.member
+      );
+    const sendPersonalMessage = vi.fn(async () => ({
+      conversationId: CHAT,
+      firstMessageId: '1791924437861',
+      sentChunks: 1,
+    }));
+    vi.spyOn(teamsConnectorCache, 'get').mockReturnValue({
+      formatMessage: (text: string) => text,
+      findMember,
+      sendPersonalMessage,
+      invalidateTokens: vi.fn(),
+    } as never);
+    const emit = (target = 'user:ada@contoso.com') =>
+      runWithTenantContext('tenant-channel', () =>
+        harness.service.emitMessage({
+          gatewayChannelId: dmChannel.id,
+          message: 'Your report is ready',
+          target,
+          emittedByUserId: 'user-1' as UserID,
+          userRole: 'admin',
+        })
+      );
+    return { ...harness, create, findMember, sendPersonalMessage, emit };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('DMs a member of a known team and records the send against that chat', async () => {
+    const { emit, findMember, sendPersonalMessage, create } = dmHarness();
+    await expect(emit()).resolves.toMatchObject({
+      success: true,
+      platform_channel_id: CHAT,
+      platform_message_id: '1791924437861',
+    });
+    expect(findMember).toHaveBeenCalledWith({
+      serviceUrl: 'https://smba.trafficmanager.net/amer/',
+      conversationId: '19:team@thread.tacv2',
+      userId: 'ada@contoso.com',
+    });
+    expect(sendPersonalMessage).toHaveBeenCalledWith(anchor.address, {
+      memberId: '29:1ab-member',
+      chunks: ['Your report is ready'],
+      signal: expect.any(AbortSignal),
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform_channel_id: CHAT,
+        platform_thread_id: `${CHAT}|1791924437861`,
+        metadata: expect.objectContaining({ direct_message: true }),
+      })
+    );
+  });
+
+  it('refuses people outside the known teams or the user allowlist, before sending', async () => {
+    const outsider = dmHarness({ member: null });
+    await expect(outsider.emit()).rejects.toThrow("isn't a member of a team where Agor");
+    expect(outsider.sendPersonalMessage).not.toHaveBeenCalled();
+    const unlisted = dmHarness({ config: { allowed_user_aad_object_ids: ['aad-other'] } });
+    await expect(unlisted.emit()).rejects.toThrow('allowed_user_aad_object_ids');
+    expect(unlisted.sendPersonalMessage).not.toHaveBeenCalled();
+    const unreachable = dmHarness({
+      findMember: vi.fn(async () => {
+        throw new TeamsMemberLookupError('teams_member_lookup_http_503', true);
+      }),
+    });
+    await expect(unreachable.emit()).rejects.toThrow('could not be reached');
+  });
+
+  it('gives the reply the DMs sent since the last message, once', async () => {
+    const { service, promptCreate, outboundRepo, threadMapRepo } = makeGatewayHarness({
+      channel,
+      existingMapping: makeMapping({
+        id: 'map-dm' as never,
+        channel_id: channel.id,
+        thread_id: CHAT,
+        session_id: 'sess-dm' as never,
+        teams_last_admitted_activity_id: '1791924400000',
+        metadata: { teams_conversation_type: 'personal' },
+      }),
+    });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      sendTeamsSystemMessage: vi.fn(async () => undefined),
+      taskRepo: { findById: vi.fn(async () => null) },
+    });
+    outboundRepo.listDirectMessageSends.mockResolvedValueOnce([
+      // Before the cursor: already seen.
+      { platform_message_id: '1791924300000', created_at: 'x', message_text: 'old news' },
+      {
+        platform_message_id: '1791924437861',
+        created_at: 'y',
+        message_text: 'Your report is ready',
+      },
+    ] as never);
+    await teamsCreate(service, channel, {
+      channel_key: channel.channel_key,
+      thread_id: CHAT,
+      text: 'thanks, can you also email it?',
+      user_name: 'Ada',
+      metadata: { teams_conversation_type: 'personal' },
+      teams_catch_up: {
+        activity_id: '1791924500000',
+        timestamp: '2026-10-14T12:00:00.000Z',
+        service_url: 'https://smba.trafficmanager.net/amer/',
+        team_id: null,
+        team_group_id: null,
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000d1' as never,
+    });
+    expect(outboundRepo.listDirectMessageSends).toHaveBeenCalledWith(
+      channel.id,
+      CHAT,
+      expect.any(Date),
+      'teams'
+    );
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain('Your report is ready');
+    expect(prompt).not.toContain('old news');
+    expect(prompt).toContain('thanks, can you also email it?');
+    expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).toHaveBeenCalledWith(
+      'map-dm',
+      '1791924500000'
+    );
   });
 });

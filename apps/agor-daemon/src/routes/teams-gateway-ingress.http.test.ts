@@ -419,6 +419,65 @@ describe('registered Teams HTTP ingress with real SDK JWT verification', {
     });
   });
 
+  function reaction(id: string, overrides: Record<string, unknown> = {}) {
+    return activity({
+      id,
+      type: 'messageReaction',
+      text: undefined,
+      replyToId: '1616990000009',
+      conversation: {
+        id: '19:channel@thread.tacv2;messageid=1616989510408',
+        conversationType: 'channel',
+      },
+      reactionsAdded: [{ type: 'like' }],
+      ...overrides,
+    });
+  }
+
+  ownedDbTest('ignores reactions unless the channel opted in', async ({ db }) => {
+    await withRoute(db, async ({ sign, post }) => {
+      expect((await post(sign(), reaction('reaction-1'))).status).toBe(200);
+      await expectNoPersistence(db);
+    });
+  });
+
+  ownedDbTest(
+    'queues an opted-in reaction once per reactor and message within the limit',
+    async ({ db }) => {
+      await withRoute(
+        db,
+        async ({ sign, post }) => {
+          expect((await post(sign(), reaction('reaction-1'))).status).toBe(200);
+          // Teams retries reuse the activity; a fresh duplicate is throttled per reactor and message.
+          expect((await post(sign(), reaction('reaction-2'))).status).toBe(200);
+          const events = await select(db).from(gatewayInboundEvents).all();
+          expect(events).toHaveLength(1);
+          expect(events[0].thread_id).toBe('19:channel@thread.tacv2|1616989510408');
+          const payload = new GatewayInboundEventRepository(db).decryptQueuedPayload(
+            events[0] as never
+          );
+          expect(payload).toMatchObject({
+            activityType: 'messageReaction',
+            text: '',
+            metadata: {
+              teams_event_type: 'reaction_added',
+              teams_reaction: 'like',
+              teams_reaction_item_id: '1616990000009',
+            },
+          });
+          // A channel reaction that does not name its thread root is dropped, not guessed.
+          const rootless = reaction('reaction-3', {
+            conversation: { id: '19:channel@thread.tacv2', conversationType: 'channel' },
+            reactionsAdded: [{ type: 'heart' }],
+          });
+          expect((await post(sign(), rootless)).status).toBe(200);
+          expect(await select(db).from(gatewayInboundEvents).all()).toHaveLength(1);
+        },
+        { inbound_reactions: true }
+      );
+    }
+  );
+
   ownedDbTest('revokes the stored address when the bot is uninstalled', async ({ db }) => {
     await withRoute(db, async ({ sign, post }) => {
       expect((await post(sign())).status).toBe(200);

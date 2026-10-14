@@ -241,6 +241,27 @@ row. The send is synchronous and not durable, as on Slack and Discord.
   alias. Only channel conversations reach the seed gate. The reply that opens a
   seeded session skips catch-up and moves the cursor to itself; later mentions
   read catch-up as usual. Answers go through the outbox.
+- A `user:<email | Entra object ID>` target is resolved with the Bot Connector
+  member API on the teams of fenced anchors (inside `allowed_team_ids`); the
+  recipient must also pass `allowed_user_aad_object_ids`, since their reply
+  would be refused otherwise. `POST v3/conversations` opens (or reuses) the
+  1:1 chat; it posts nothing, so its failures are reported as not sent. The
+  send is recorded with the chat ID as its thread and is never a seed: the
+  reply lands in the person's one personal-chat session, whose next prompt
+  includes the DMs sent since its last admitted message (message IDs are epoch
+  milliseconds, so they order sends and replies) as untrusted context, as on
+  Discord.
+
+## Reactions
+
+With `inbound_reactions`, a `messageReaction` activity is queued like a
+message. Teams reports reactions only on the bot's own messages. A reaction
+reaches only a conversation that already has a session; it never creates one,
+consumes a seed, reads catch-up, moves the cursor, or posts a notice when it is
+refused. A channel reaction must name its thread through the conversation's
+root message, or it is ignored. The prompt quotes the reacted message from the
+conversation's deliveries or proactive sends. Limits are per daemon process:
+one prompt per reaction per minute, three per conversation per minute.
 
 ## Migration
 

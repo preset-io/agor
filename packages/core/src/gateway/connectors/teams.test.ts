@@ -5,6 +5,7 @@ import {
   extractQuotedReplyText,
   fetchTeamsMemberIdentity,
   normalizeTeamsActivity,
+  normalizeTeamsReaction,
   probeTeamsCredentials,
   TeamsConnector,
   TeamsMemberLookupError,
@@ -110,6 +111,7 @@ describe('fetchTeamsMemberIdentity', () => {
       })
     );
     await expect(fetchTeamsMemberIdentity(request, { fetchImpl, getToken })).resolves.toEqual({
+      id: '29:user-1',
       email: 'ada@example.com',
       userPrincipalName: 'ada@contoso.onmicrosoft.com',
       aadObjectId: 'aad-1',
@@ -711,5 +713,79 @@ describe('normalizeTeamsActivity', () => {
       { name: 'notes.docx', reason: 'unsupported_type' },
       { name: 'spec.docx', reason: 'channel_file' },
     ]);
+  });
+});
+
+describe('normalizeTeamsReaction', () => {
+  const config = { app_id: 'app-123' };
+
+  function reaction(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 'reaction-activity-1',
+      type: 'messageReaction',
+      channelId: 'msteams',
+      serviceUrl: 'https://smba.trafficmanager.net/teams/',
+      timestamp: '2026-10-14T12:00:00.000Z',
+      conversation: {
+        id: '19:channel@thread.tacv2;messageid=1700000000001',
+        conversationType: 'channel',
+      },
+      from: { id: '29:user-1', name: 'Ada', aadObjectId: 'aad-1' },
+      recipient: { id: '28:app-123', name: 'Agor' },
+      channelData: { tenant: { id: 'tenant-1' }, team: { id: '19:team@thread.tacv2' } },
+      replyToId: '1700000000009',
+      reactionsAdded: [{ type: 'like' }],
+      ...overrides,
+    };
+  }
+
+  it('maps a reaction to its thread with the reacted message and no text', () => {
+    const normalized = normalizeTeamsReaction(reaction(), config);
+    expect(normalized).toMatchObject({
+      activityType: 'messageReaction',
+      threadId: '19:channel@thread.tacv2|1700000000001',
+      text: '',
+      hasMention: false,
+      metadata: {
+        teams_event_type: 'reaction_added',
+        teams_reaction: 'like',
+        teams_reaction_item_id: '1700000000009',
+        teams_has_mention: false,
+      },
+    });
+    expect(normalized?.files).toBeUndefined();
+  });
+
+  it('reports a removal, and keys each reactor, reaction and direction separately', () => {
+    const removed = normalizeTeamsReaction(
+      reaction({ reactionsAdded: undefined, reactionsRemoved: [{ type: 'heart' }] }),
+      config
+    );
+    expect(removed?.metadata).toMatchObject({
+      teams_event_type: 'reaction_removed',
+      teams_reaction: 'heart',
+    });
+    const added = normalizeTeamsReaction(reaction(), config);
+    expect(added?.providerEventId).not.toBe(removed?.providerEventId);
+    expect(normalizeTeamsReaction(reaction(), config)?.providerEventId).toBe(
+      added?.providerEventId
+    );
+  });
+
+  it('derives a stable activity ID when Teams sends none', () => {
+    const first = normalizeTeamsReaction(reaction({ id: undefined }), config);
+    expect(first?.activityId).toMatch(/^reaction-[0-9a-f]{32}$/);
+    expect(normalizeTeamsReaction(reaction({ id: undefined }), config)?.activityId).toBe(
+      first?.activityId
+    );
+  });
+
+  it('rejects malformed reactions', () => {
+    expect(normalizeTeamsReaction(reaction({ type: 'message' }), config)).toBeNull();
+    expect(normalizeTeamsReaction(reaction({ replyToId: 'not-a-message' }), config)).toBeNull();
+    expect(
+      normalizeTeamsReaction(reaction({ reactionsAdded: [{ type: '<script>' }] }), config)
+    ).toBeNull();
+    expect(normalizeTeamsReaction(reaction({ reactionsAdded: [] }), config)).toBeNull();
   });
 });

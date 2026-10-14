@@ -19,6 +19,7 @@ import {
   isAllowedTeamsServiceUrl,
   type NormalizedTeamsActivity,
   normalizeTeamsActivity,
+  normalizeTeamsReaction,
   safeTeamsMetadata,
   teamsAddressRevocationFromActivity,
 } from '@agor/core/gateway';
@@ -28,6 +29,7 @@ import { authorizeJWT, buildJwksUri } from '@microsoft/agents-hosting';
 import type { Request, Response } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
+import { TeamsReactionLimiter } from '../utils/teams-reaction-limits.js';
 
 const MAX_ACTIVITY_BYTES = 1_024 * 1_024;
 
@@ -234,6 +236,7 @@ export function registerTeamsGatewayIngressRoute(input: {
   const wakeWorker =
     input.wakeWorker ??
     (() => (input.app.get('teamsGatewayWorker') as { wake?: () => void } | undefined)?.wake?.());
+  const reactionLimiter = new TeamsReactionLimiter();
   const limiter = rateLimit({
     windowMs: 60_000,
     limit: 120,
@@ -365,8 +368,28 @@ export function registerTeamsGatewayIngressRoute(input: {
         return;
       }
       const teamsAppId = config!.app_id as string;
+      // A reaction to the bot's message is queued only when the channel opted in.
+      let reaction: NormalizedTeamsActivity | null = null;
+      if (rawActivity.type === 'messageReaction' && config!.inbound_reactions === true) {
+        try {
+          reaction = normalizeTeamsReaction(rawActivity, config!);
+        } catch {
+          reaction = null;
+        }
+        const conversationId = (rawActivity.conversation as Record<string, unknown> | undefined)
+          ?.id;
+        // A channel reaction names its thread only through the conversation's root message.
+        if (
+          reaction &&
+          reaction.conversationType.toLowerCase() === 'channel' &&
+          !(typeof conversationId === 'string' && conversationId.includes(';messageid='))
+        ) {
+          console.log('[gateway.teams.ingress] event=reaction_ignored reason=thread_unknown');
+          reaction = null;
+        }
+      }
       // Lifecycle and other non-message activities are never queued.
-      if (rawActivity.type !== 'message') {
+      if (rawActivity.type !== 'message' && !reaction) {
         const revocation = teamsAddressRevocationFromActivity(rawActivity, teamsAppId);
         if (revocation) {
           try {
@@ -393,7 +416,7 @@ export function registerTeamsGatewayIngressRoute(input: {
 
       let normalized: NormalizedTeamsActivity;
       try {
-        normalized = normalizeTeamsActivity(rawActivity, config!);
+        normalized = reaction ?? normalizeTeamsActivity(rawActivity, config!);
       } catch (error) {
         res.status(400).json({
           error: 'Teams activity is malformed',
@@ -418,8 +441,11 @@ export function registerTeamsGatewayIngressRoute(input: {
       }
       // Unmentioned group/channel traffic (RSC receive-all) and empty summons are never stored.
       if (
-        (normalized.conversationType.toLowerCase() !== 'personal' && !normalized.hasMention) ||
-        (!normalized.text.trim() && !normalized.files?.length && !normalized.skippedFiles?.length)
+        !reaction &&
+        ((normalized.conversationType.toLowerCase() !== 'personal' && !normalized.hasMention) ||
+          (!normalized.text.trim() &&
+            !normalized.files?.length &&
+            !normalized.skippedFiles?.length))
       ) {
         res.status(200).json({ ok: true });
         return;
@@ -431,6 +457,25 @@ export function registerTeamsGatewayIngressRoute(input: {
       );
       if (allowlistError) {
         res.status(403).json({ error: 'Teams activity is not allowlisted', code: allowlistError });
+        return;
+      }
+
+      const reactionAdmission = reaction
+        ? reactionLimiter.admit(
+            JSON.stringify([
+              channel!.id,
+              reaction.conversationId,
+              reaction.metadata.teams_reaction_item_id,
+              reaction.userAadObjectId ?? reaction.userId,
+              reaction.metadata.teams_reaction,
+              reaction.metadata.teams_event_type,
+            ]),
+            JSON.stringify([channel!.id, reaction.threadId])
+          )
+        : null;
+      if (reaction && !reactionAdmission) {
+        console.log('[gateway.teams.ingress] event=reaction_ignored reason=rate_limited');
+        res.status(200).json({ ok: true });
         return;
       }
 
@@ -459,6 +504,7 @@ export function registerTeamsGatewayIngressRoute(input: {
           });
         });
       } catch (error) {
+        reactionAdmission?.release();
         if (res.headersSent) return;
         if (error instanceof TeamsInboundAuthorityChangedError) {
           // A retry can never be admitted under the new authority; 5xx would only invite back-off.

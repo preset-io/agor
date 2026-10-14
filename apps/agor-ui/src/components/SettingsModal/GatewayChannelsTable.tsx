@@ -2680,10 +2680,22 @@ const ChannelFormFields: React.FC<{
             same resource-specific consent as catch-up. This content is untrusted and is kept only
             in the reading session's transcript.
           </Typography.Text>
+          <Form.Item name="teams_inbound_reactions" valuePropName="checked" initialValue={false}>
+            <Checkbox>
+              Deliver reactions to sessions (<code>inbound_reactions</code>)
+            </Checkbox>
+          </Form.Item>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            When someone reacts to the bot's message in a conversation that already has a session,
+            the reaction reaches that session as a short prompt. It never starts a session and is
+            rate limited per conversation. Teams reports reactions only on the bot's own messages.
+          </Typography.Text>
 
           <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-            Proactive sends post a new thread in a standard channel the bot can reach. Replies that
-            @mention the bot start a session; answers to people who mention the bot are always on.
+            Proactive sends post a new thread in a standard channel the bot can reach, or DM a
+            member of a team the bot is in (<code>user:&lt;work email&gt;</code>). Channel replies
+            that @mention the bot start a session, and a DM reply goes to that person's chat
+            session; answers to people who mention the bot are always on.
           </Typography.Text>
           <Form.Item
             label="Enable proactive outbound"
@@ -4455,6 +4467,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.default_outbound_target = teamsTarget || null;
       config.agent_tools = { channel_history: values.teams_channel_history === true };
       config.files = values.teams_files === true;
+      config.inbound_reactions = values.teams_inbound_reactions === true;
       // The timeout is daemon-defaulted and bounded; the wizard keeps any stored value.
       const storedCatchUp =
         config.catch_up && typeof config.catch_up === 'object' && !Array.isArray(config.catch_up)
@@ -4872,6 +4885,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         config?.agent_tools
       ).channel_history;
       formValues.teams_files = config?.files === true;
+      formValues.teams_inbound_reactions = config?.inbound_reactions === true;
     } else if (channel.channel_type === 'shortcut') {
       formValues.shortcut_agent_member_id = config?.agent_member_id;
       formValues.shortcut_mention_name = config?.mention_name;

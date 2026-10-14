@@ -48,9 +48,11 @@ import {
   botFrameworkScope,
   type PreparedTeamsSend,
   prepareTeamsSend,
+  sendTeamsDirectMessage,
   startTeamsChannelThread,
   type TeamsAccessTokenProvider,
   type TeamsChannelThreadResult,
+  type TeamsDirectMessageResult,
   TeamsSendError,
 } from './teams-send';
 
@@ -181,6 +183,8 @@ export async function probeTeamsCredentials(
 
 /** Email-bearing fields the Bot Connector returns for a conversation member. */
 export interface TeamsMemberIdentity {
+  /** Bot Framework member ID (`29:…`), used to open a 1:1 chat. */
+  id: string | null;
   email: string | null;
   userPrincipalName: string | null;
   aadObjectId: string | null;
@@ -269,6 +273,7 @@ export async function fetchTeamsMemberIdentity(
     return null;
   }
   return {
+    id: stringValue(body.id),
     email: stringValue(body.email),
     userPrincipalName: stringValue(body.userPrincipalName),
     aadObjectId: stringValue(body.aadObjectId),
@@ -549,6 +554,81 @@ export function normalizeTeamsActivity(
   };
 }
 
+export const TEAMS_REACTION_EVENT_TYPES = ['reaction_added', 'reaction_removed'] as const;
+export type TeamsReactionEventType = (typeof TEAMS_REACTION_EVENT_TYPES)[number];
+
+export function isTeamsReactionEventType(value: unknown): value is TeamsReactionEventType {
+  return value === 'reaction_added' || value === 'reaction_removed';
+}
+
+const TEAMS_REACTION_NAME = /^[A-Za-z0-9_+-]{1,64}$/;
+
+/** A shape-checked Teams reaction type (`like`, `heart`, or a newer emoji code), or null. */
+export function normalizeTeamsReactionName(value: unknown): string | null {
+  return typeof value === 'string' && TEAMS_REACTION_NAME.test(value) ? value : null;
+}
+
+/**
+ * Normalize a `messageReaction` activity. Teams sends these only for reactions
+ * to the bot's own messages. Returns null for anything that is not one
+ * well-formed reaction to a numeric message ID.
+ */
+export function normalizeTeamsReaction(
+  raw: Record<string, unknown>,
+  config: TeamsGatewayConfig
+): NormalizedTeamsActivity | null {
+  if (raw.type !== 'messageReaction') return null;
+  const reactedMessageId = stringValue(raw.replyToId);
+  if (!reactedMessageId || !/^\d{1,20}$/.test(reactedMessageId)) return null;
+  const first = (value: unknown) => (Array.isArray(value) ? asRecord(value[0]).type : undefined);
+  const added = normalizeTeamsReactionName(first(raw.reactionsAdded));
+  const removed = added ? null : normalizeTeamsReactionName(first(raw.reactionsRemoved));
+  const reaction = added ?? removed;
+  if (!reaction) return null;
+  const eventType: TeamsReactionEventType = added ? 'reaction_added' : 'reaction_removed';
+  // Reaction activities may carry no ID; a digest of what identifies the event stands in.
+  const activityId =
+    stringValue(raw.id) ??
+    `reaction-${createHash('sha256')
+      .update(
+        JSON.stringify([
+          asRecord(raw.conversation).id,
+          reactedMessageId,
+          asRecord(raw.from).id,
+          reaction,
+          eventType,
+          raw.timestamp,
+        ])
+      )
+      .digest('hex')
+      .slice(0, 32)}`;
+  // The reaction has no text or files; identity and thread come from the shared normalizer.
+  const base = normalizeTeamsActivity(
+    { ...raw, id: activityId, text: '', attachments: [], entities: [] },
+    config
+  );
+  const reactor = base.userAadObjectId ?? base.userId;
+  return {
+    ...base,
+    // One event per reactor, message, reaction and direction; Teams retries reuse the activity ID.
+    providerEventId: `teams:reaction:${JSON.stringify([
+      base.conversationId,
+      reactedMessageId,
+      reactor,
+      reaction,
+      eventType,
+      base.activityId,
+    ])}`,
+    metadata: {
+      ...base.metadata,
+      teams_has_mention: false,
+      teams_event_type: eventType,
+      teams_reaction: reaction,
+      teams_reaction_item_id: reactedMessageId,
+    },
+  };
+}
+
 export interface TeamsConnectorDependencies {
   tokenProvider?: TeamsAccessTokenProvider;
 }
@@ -610,6 +690,30 @@ export class TeamsConnector implements GatewayConnector {
       appId: this.config.app_id as string,
       tenantId: this.config.microsoft_tenant_id ?? '',
     });
+  }
+
+  /** Open (or reuse) the 1:1 chat with a resolved member and post the chunks; targeting checks belong to the caller. */
+  sendPersonalMessage(
+    anchor: Record<string, unknown>,
+    input: { memberId: string; chunks: string[]; signal?: AbortSignal }
+  ): Promise<TeamsDirectMessageResult> {
+    return sendTeamsDirectMessage(anchor, this.tokens, {
+      ...input,
+      appId: this.config.app_id as string,
+      tenantId: this.config.microsoft_tenant_id ?? '',
+    });
+  }
+
+  /** A member of a conversation or team by Teams ID, Entra object ID, or UPN; null when not a member. */
+  findMember(request: {
+    serviceUrl: string;
+    conversationId: string;
+    userId: string;
+  }): Promise<TeamsMemberIdentity | null> {
+    return fetchTeamsMemberIdentity(
+      { config: this.config, ...request },
+      { getToken: () => this.tokens.getAccessToken(botFrameworkScope(request.serviceUrl)) }
+    );
   }
 
   /** A team's channels through a fenced anchor's service URL. */

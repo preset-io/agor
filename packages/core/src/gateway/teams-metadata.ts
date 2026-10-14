@@ -6,6 +6,9 @@ const TEAMS_SAFE_METADATA_KEYS = [
   'teams_team_name',
   'teams_user_name',
   'teams_has_mention',
+  'teams_event_type',
+  'teams_reaction',
+  'teams_reaction_item_id',
 ] as const;
 
 /** Keep only allowlisted string/boolean Teams metadata. */

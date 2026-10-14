@@ -400,15 +400,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway reply admission (P
         );
       }
       await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-        const rows = await new GatewayOutboundMessageRepository(
-          scoped
-        ).listDiscordDirectMessageSends(channel.id, dmChannelId, null);
+        const rows = await new GatewayOutboundMessageRepository(scoped).listDirectMessageSends(
+          channel.id,
+          dmChannelId,
+          null
+        );
         expect(rows.map((row) => row.message_text)).toEqual(texts);
         expect(await new ThreadSessionMapRepository(scoped).findByChannel(channel.id)).toEqual([]);
       });
       await runWithTenantDatabaseScope(db, otherTenantId, async (scoped) => {
         expect(
-          await new GatewayOutboundMessageRepository(scoped).listDiscordDirectMessageSends(
+          await new GatewayOutboundMessageRepository(scoped).listDirectMessageSends(
             channel.id,
             dmChannelId,
             null

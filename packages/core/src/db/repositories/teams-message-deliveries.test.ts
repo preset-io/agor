@@ -65,6 +65,31 @@ describe('TeamsMessageDeliveryRepository', () => {
     });
   });
 
+  ownedDbTest(
+    'finds the delivery that posted any chunk, only in its own thread',
+    async ({ db }) => {
+      const { deliveries, ref, mapping } = await claimedDelivery(db);
+      for (const chunkIndex of [0, 1]) {
+        await deliveries.markEffectStarted({ ...ref, chunkIndex });
+        await deliveries.checkpointChunk({
+          ...ref,
+          receipt: { chunk_index: chunkIndex, provider_message_id: `179192443786${chunkIndex}` },
+        });
+      }
+      for (const id of ['1791924437860', '1791924437861']) {
+        expect((await deliveries.findByProviderMessageInThread(mapping.id, id))?.delivery_id).toBe(
+          ref.deliveryId
+        );
+      }
+      expect(
+        await deliveries.findByProviderMessageInThread(mapping.id, '1791924437869')
+      ).toBeNull();
+      expect(
+        await deliveries.findByProviderMessageInThread(generateId() as never, '1791924437860')
+      ).toBeNull();
+    }
+  );
+
   ownedDbTest('resumes after a crash at the first chunk without a receipt', async ({ db }) => {
     const { deliveries, ref, now } = await claimedDelivery(db);
     await deliveries.recordChunkPlan({ ...ref, digest: '40000:plan' });

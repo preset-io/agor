@@ -105,14 +105,19 @@ export {
   requiredBotScopes,
   SLACK_AGENT_TOOL_SCOPES,
 } from './connectors/slack-manifest';
-export type { NormalizedTeamsActivity } from './connectors/teams';
+export type { NormalizedTeamsActivity, TeamsMemberIdentity } from './connectors/teams';
 export {
   createTeamsAuthConfiguration,
   extractQuotedReplyText,
   fetchTeamsMemberIdentity,
+  isTeamsReactionEventType,
   normalizeTeamsActivity,
+  normalizeTeamsReaction,
+  normalizeTeamsReactionName,
+  TEAMS_REACTION_EVENT_TYPES,
   TeamsConnector,
   TeamsMemberLookupError,
+  type TeamsReactionEventType,
 } from './connectors/teams';
 export { teamsAddressRevocationFromActivity } from './connectors/teams-address-events';
 export type {
@@ -136,6 +141,7 @@ export {
 export type {
   PreparedTeamsSend,
   TeamsChannelThreadResult,
+  TeamsDirectMessageResult,
   TeamsSendOutcome,
 } from './connectors/teams-send';
 export {

@@ -8,7 +8,11 @@ import {
 } from '@agor/core/db';
 import { Forbidden } from '@agor/core/feathers';
 import type { NormalizedTeamsActivity } from '@agor/core/gateway';
-import { gatewayFailureCode, safeTeamsMetadata } from '@agor/core/gateway';
+import {
+  gatewayFailureCode,
+  isTeamsReactionEventType,
+  safeTeamsMetadata,
+} from '@agor/core/gateway';
 import {
   type GatewayInboundEvent,
   type GatewayInboundEventID,
@@ -199,10 +203,14 @@ export class TeamsGatewayWorker {
     )
       throw new TeamsInboundError('teams_payload_identity_mismatch', false);
     // Rows queued before ingress filtering (non-message, empty, unmentioned) drain without a Task.
+    const reaction =
+      activity.activityType === 'messageReaction' &&
+      isTeamsReactionEventType(activity.metadata?.teams_event_type);
     const admissible =
-      activity.activityType === 'message' &&
-      (!!activity.text.trim() || !!activity.files?.length || !!activity.skippedFiles?.length) &&
-      (activity.conversationType.toLowerCase() === 'personal' || activity.hasMention);
+      reaction ||
+      (activity.activityType === 'message' &&
+        (!!activity.text.trim() || !!activity.files?.length || !!activity.skippedFiles?.length) &&
+        (activity.conversationType.toLowerCase() === 'personal' || activity.hasMention));
     let result: { sessionId?: string; taskId?: TaskID } = {};
     if (admissible) {
       if (!this.gatewayService) {

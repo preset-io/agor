@@ -306,3 +306,80 @@ export async function startTeamsChannelThread(
   }
   return { rootMessageId, sentChunks };
 }
+
+/** A proactive 1:1 message: the chat it landed in, its first message, and how many chunks landed. */
+export interface TeamsDirectMessageResult {
+  conversationId: string;
+  firstMessageId: string;
+  sentChunks: number;
+  /** A later chunk failed after the first one was posted. */
+  error?: TeamsSendError;
+}
+
+// Opening the 1:1 chat posts nothing; Teams returns the same chat for the same person.
+export async function sendTeamsDirectMessage(
+  anchor: Record<string, unknown>,
+  tokens: TeamsAccessTokenProvider,
+  input: {
+    memberId: string;
+    tenantId: string;
+    appId: string;
+    chunks: string[];
+    signal?: AbortSignal;
+  }
+): Promise<TeamsDirectMessageResult> {
+  const reference = anchor as unknown as ConversationReference;
+  if (!/^29:[A-Za-z0-9_-]{1,512}$/.test(input.memberId) || input.chunks.length === 0) {
+    throw new TeamsSendError({ phase: 'prepare', reason: 'address_invalid' });
+  }
+  const client = await connectorClient(reference.serviceUrl, tokens);
+  let conversationId: unknown;
+  try {
+    const response = await client.httpClient.request<{ id?: unknown }>({
+      method: 'post',
+      url: 'v3/conversations',
+      data: {
+        isGroup: false,
+        bot: { id: `28:${input.appId}` },
+        members: [{ id: input.memberId }],
+        tenantId: input.tenantId,
+        channelData: { tenant: { id: input.tenantId } },
+      },
+      signal: input.signal,
+    });
+    conversationId = response.data?.id;
+  } catch (error) {
+    // Nothing has been posted yet, so any failure here is safe to report as not sent.
+    const failure = sendFailure(error);
+    throw new TeamsSendError({
+      phase: 'prepare',
+      reason: 'conversation_create_failed',
+      ...(failure.status !== undefined ? { status: failure.status } : {}),
+      ...(failure.providerCode ? { providerCode: failure.providerCode } : {}),
+      ...(failure.retryAfterMs !== undefined ? { retryAfterMs: failure.retryAfterMs } : {}),
+    });
+  }
+  if (typeof conversationId !== 'string' || !/^a:[A-Za-z0-9_-]{1,1024}$/.test(conversationId)) {
+    throw new TeamsSendError({ phase: 'prepare', reason: 'address_invalid' });
+  }
+  const chat = await prepareTeamsSend(
+    {
+      channelId: 'msteams',
+      serviceUrl: reference.serviceUrl,
+      conversation: { id: conversationId, conversationType: 'personal', tenantId: input.tenantId },
+      ...(reference.agent ? { agent: reference.agent } : {}),
+    },
+    tokens
+  );
+  const firstMessageId = await chat.send(input.chunks[0] as string, input.signal);
+  let sentChunks = 1;
+  try {
+    for (const chunk of input.chunks.slice(1)) {
+      await chat.send(chunk, input.signal);
+      sentChunks += 1;
+    }
+  } catch (error) {
+    return { conversationId, firstMessageId, sentChunks, error: sendFailure(error) };
+  }
+  return { conversationId, firstMessageId, sentChunks };
+}

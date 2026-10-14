@@ -10,6 +10,8 @@ export type TeamsSendConnector = Pick<
   | 'invalidateTokens'
   | 'downloadToken'
   | 'startChannelThread'
+  | 'sendPersonalMessage'
+  | 'findMember'
   | 'listTeamChannels'
   | 'fetchChannelMessageFiles'
 >;

@@ -3,6 +3,7 @@ import { isAllowedTeamsServiceUrl } from '../teams-service-url';
 import {
   classifyTeamsSendFailure,
   prepareTeamsSend,
+  sendTeamsDirectMessage,
   startTeamsChannelThread,
   TeamsSendError,
 } from './teams-send';
@@ -292,5 +293,83 @@ describe('startTeamsChannelThread', () => {
       { ...input, chunks: ['x'] }
     ).catch((caught: unknown) => caught);
     expect(classifyTeamsSendFailure(unaddressable)).toMatchObject({ kind: 'ambiguous' });
+  });
+});
+
+describe('sendTeamsDirectMessage', () => {
+  const CHAT = 'a:1WFBmMYtHYGEDUX011dlEKFh3EKvfLguozxnujkAYr';
+  const input = { memberId: '29:1ab-member', tenantId: 'tenant-1', appId: 'teams-app' };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('opens the 1:1 chat, then posts each chunk into it', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(201, { id: CHAT }))
+      .mockResolvedValueOnce(jsonResponse(201, { id: '1791924437861' }))
+      .mockResolvedValueOnce(jsonResponse(201, { id: '1791924437862' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await sendTeamsDirectMessage(
+      address,
+      { getAccessToken: async () => 'bot-token' },
+      { ...input, chunks: ['first', 'second'] }
+    );
+    expect(result).toEqual({
+      conversationId: CHAT,
+      firstMessageId: '1791924437861',
+      sentChunks: 2,
+    });
+    const [createUrl, createInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(createUrl).toBe('https://smba.trafficmanager.net/amer/v3/conversations');
+    expect(JSON.parse(String(createInit.body))).toEqual({
+      isGroup: false,
+      bot: { id: '28:teams-app' },
+      members: [{ id: '29:1ab-member' }],
+      tenantId: 'tenant-1',
+      channelData: { tenant: { id: 'tenant-1' } },
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      `https://smba.trafficmanager.net/amer/v3/conversations/${CHAT}/activities`
+    );
+    expect(
+      JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body))
+    ).toMatchObject({
+      type: 'message',
+      text: 'first',
+      conversation: { id: CHAT },
+    });
+  });
+
+  it('reports a refused chat as not sent, with the provider status', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValueOnce(jsonResponse(403, { error: { code: 'Forbidden' } }))
+    );
+    const failure = await sendTeamsDirectMessage(
+      address,
+      { getAccessToken: async () => 'bot-token' },
+      { ...input, chunks: ['hello'] }
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(TeamsSendError);
+    expect(failure).toMatchObject({
+      phase: 'prepare',
+      reason: 'conversation_create_failed',
+      status: 403,
+    });
+  });
+
+  it('refuses a member ID that is not a Teams user ID before any request', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      sendTeamsDirectMessage(
+        address,
+        { getAccessToken: async () => 'bot-token' },
+        { ...input, memberId: 'aad-object-id', chunks: ['hello'] }
+      )
+    ).rejects.toMatchObject({ reason: 'address_invalid' });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

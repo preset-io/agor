@@ -14,7 +14,7 @@ import type {
   TenantID,
   ThreadSessionMapID,
 } from '@agor/core/types';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database, SystemDatabase } from '../client';
 import {
@@ -63,6 +63,7 @@ export type TeamsMessageDeliveryClaim = DeliveryClaim<TeamsMessageDelivery>;
 type TeamsClaimRef = Omit<DeliveryClaimRef, 'deliveryId'> & { deliveryId: TeamsMessageDeliveryID };
 
 const MAX_TEAMS_RETRY_DELAY_MS = 10 * 60_000;
+const RECENT_THREAD_DELIVERIES = 200;
 
 export class TeamsMessageDeliveryClaimLostError extends Error {
   constructor(deliveryId: string) {
@@ -184,6 +185,29 @@ export class TeamsMessageDeliveryRepository {
       .where(eq(teamsMessageDeliveries.message_id, messageId))
       .one();
     return row ? rowToDelivery(row) : null;
+  }
+
+  /** The recent delivery in one conversation that posted this Teams message, if any. */
+  async findByProviderMessageInThread(
+    threadSessionMapId: ThreadSessionMapID,
+    providerMessageId: string
+  ): Promise<TeamsMessageDelivery | null> {
+    const rows = await select(this.db)
+      .from(teamsMessageDeliveries)
+      .where(eq(teamsMessageDeliveries.thread_session_map_id, threadSessionMapId))
+      .orderBy(desc(teamsMessageDeliveries.created_at))
+      .limit(RECENT_THREAD_DELIVERIES)
+      .all();
+    const delivery = rows
+      .map(rowToDelivery)
+      .find(
+        (candidate: TeamsMessageDelivery) =>
+          candidate.provider_message_id === providerMessageId ||
+          candidate.chunk_receipts.some(
+            (receipt) => receipt.provider_message_id === providerMessageId
+          )
+      );
+    return delivery ?? null;
   }
 
   async findDueRefs(

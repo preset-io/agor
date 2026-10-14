@@ -2,7 +2,7 @@ import type { GatewayConnector, GatewayProviderHistoryResult } from '@agor/core/
 import { describe, expect, it } from 'vitest';
 import {
   fetchGatewayCatchUp,
-  formatDiscordDirectMessagePrompt,
+  formatDirectMessagePrompt,
   formatGatewayCatchUpPrompt,
 } from './gateway-catch-up';
 
@@ -233,6 +233,7 @@ describe('provider-neutral gateway catch-up', () => {
 
 describe('Discord DM stored context', () => {
   const args = {
+    provider: 'Discord',
     threadId: 'discord:dm:999999999999999999:444444444444444444',
     currentText: 'current',
     sentMessages: Array.from({ length: 5 }, (_, i) => ({
@@ -243,7 +244,7 @@ describe('Discord DM stored context', () => {
     maxPromptBytes: 1400,
   };
   it('drops oldest first with the exact count and encoded byte budget', () => {
-    const prompt = formatDiscordDirectMessagePrompt(args);
+    const prompt = formatDirectMessagePrompt(args);
     const data = JSON.parse(prompt.split('\n')[2]);
     expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(args.maxPromptBytes);
     expect(data.previous_messages.length).toBeGreaterThan(0);
@@ -259,7 +260,7 @@ describe('Discord DM stored context', () => {
   });
   it('always retains the live DM even when it alone exceeds the budget', () => {
     const data = JSON.parse(
-      formatDiscordDirectMessagePrompt({ ...args, maxPromptBytes: 1 }).split('\n')[2]
+      formatDirectMessagePrompt({ ...args, maxPromptBytes: 1 }).split('\n')[2]
     );
     expect(data.previous_messages).toEqual([]);
     expect(data.omitted_note).toBe('5 earlier agent messages omitted');

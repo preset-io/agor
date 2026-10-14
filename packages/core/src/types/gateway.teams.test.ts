@@ -3,6 +3,7 @@ import {
   resolveTeamsAgentTools,
   teamsAttachmentDeadlineMs,
   teamsOutboundChannelTarget,
+  teamsOutboundUserTarget,
   validateTeamsConfig,
   withTeamsConfigDefaults,
 } from './gateway';
@@ -78,6 +79,21 @@ describe('Teams parity config', () => {
     ).toEqual(['default_outbound_target must target an allowed channel']);
     expect(teamsOutboundChannelTarget(`channel:${channelId}`)).toBe(channelId);
     expect(teamsOutboundChannelTarget('channel:C123')).toBeNull();
+    expect(errors({ inbound_reactions: 'yes' })).toEqual(['inbound_reactions must be a boolean']);
+    expect(errors({ inbound_reactions: true })).toEqual([]);
+  });
+
+  it('reads a DM target as a work email or Entra object ID', () => {
+    expect(teamsOutboundUserTarget('user:Ada.Lovelace@Contoso.com')).toBe(
+      'ada.lovelace@contoso.com'
+    );
+    expect(teamsOutboundUserTarget(' user: 6F1A2B3C-0000-4000-8000-0123456789AB ')).toBe(
+      '6f1a2b3c-0000-4000-8000-0123456789ab'
+    );
+    expect(teamsOutboundUserTarget('user:someone')).toBeNull();
+    expect(teamsOutboundUserTarget('user:a/b@contoso.com')).toBeNull();
+    expect(teamsOutboundUserTarget('ada@contoso.com')).toBeNull();
+    expect(teamsOutboundUserTarget(`channel:${channelId}`)).toBeNull();
   });
 });
 

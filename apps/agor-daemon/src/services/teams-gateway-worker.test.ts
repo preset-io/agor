@@ -297,6 +297,41 @@ describe('TeamsGatewayWorker inbound admission', () => {
     }
   });
 
+  it('admits a queued reaction with its reaction metadata, and drains a malformed one', async () => {
+    const reactionMetadata = {
+      teams_conversation_type: 'channel',
+      teams_has_mention: false,
+      teams_event_type: 'reaction_added',
+      teams_reaction: 'like',
+      teams_reaction_item_id: '1616990000009',
+    };
+    const setup = makeWorker({
+      activity: activity({
+        activityType: 'messageReaction',
+        text: '',
+        hasMention: false,
+        metadata: reactionMetadata,
+      }),
+    });
+    await setup.worker.checkOnce();
+    expect(setup.create).toHaveBeenCalledOnce();
+    expect(setup.create.mock.calls[0][0]).toMatchObject({
+      text: '',
+      metadata: reactionMetadata,
+    });
+    const malformed = makeWorker({
+      activity: activity({
+        activityType: 'messageReaction',
+        text: '',
+        hasMention: false,
+        metadata: { ...reactionMetadata, teams_event_type: 'reaction_changed' },
+      }),
+    });
+    await malformed.worker.checkOnce();
+    expect(malformed.create).not.toHaveBeenCalled();
+    expect(malformed.complete).toHaveBeenCalledOnce();
+  });
+
   it('admits an attachment-only mention and passes the file names on', async () => {
     const skippedFiles = [{ name: 'report.pdf', reason: 'unsupported_type' }];
     const files = [

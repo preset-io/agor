@@ -4153,7 +4153,10 @@ describe('Teams outbound targets (MCP)', () => {
       expect.objectContaining({
         gateway_channel_id: 'chan-teams',
         channel_type: 'teams',
-        accepted_target_formats: ['channel:<19:…@thread.tacv2>'],
+        accepted_target_formats: [
+          'channel:<19:…@thread.tacv2>',
+          'user:<work email or Entra object ID>',
+        ],
         known_channels: [{ teams_channel_id: OTHER, name: 'Releases' }],
       }),
     ]);
