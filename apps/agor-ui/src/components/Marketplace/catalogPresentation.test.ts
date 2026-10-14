@@ -231,6 +231,20 @@ describe('accessSummary', () => {
     ).toBe('Reads public models, datasets, and Spaces.');
   });
 
+  it('does not end a sentence at an abbreviation', () => {
+    expect(
+      accessSummary(
+        'Reads repositories owned by Example Inc. and its U.S. subsidiaries you authorise. Also writes.'
+      )
+    ).toBe('Reads repositories owned by Example Inc. and its U.S. subsidiaries you authorise.');
+  });
+
+  it('extends a first sentence too short to stand alone', () => {
+    expect(
+      accessSummary('Read-only. Searches indices and reads analytics for every app. Cannot write.')
+    ).toBe('Read-only. Searches indices and reads analytics for every app.');
+  });
+
   it('keeps a single sentence whole, including dotted names inside it', () => {
     expect(accessSummary('  Reads boards in the monday.com accounts you authorise.  ')).toBe(
       'Reads boards in the monday.com accounts you authorise.'
