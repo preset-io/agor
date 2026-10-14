@@ -801,7 +801,7 @@ describe('mcp-catalog/connect', () => {
     expect(created.mcpServers).toHaveLength(1);
   });
 
-  it('ignores a legacy acknowledged_disclosure, stale or not', async () => {
+  it('still connects an old client that sends acknowledged_disclosure, stale or not', async () => {
     const { app, created, deps } = buildApp(CURATED);
 
     await createMCPCatalogConnectService(app, deps).create(
