@@ -20,6 +20,7 @@ import {
 } from '../../utils/sessionSearch';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
+import { FadeText } from '../FadeText';
 import { HighlightMatch } from '../HighlightMatch';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import {
@@ -159,19 +160,16 @@ const BoardSessionRow = memo(function BoardSessionRow({
         <Flex align="center" gap={token.marginXS} style={{ minHeight: token.controlHeight }}>
           <SessionRowLogo tool={session.agentic_tool} />
           <SessionRelationshipIcon session={session} size={10} />
-          {/* Plain spans keep hundreds of rows cheap; styles come from the shared tokens. */}
-          <span
-            title={titleText}
-            style={{
-              color: token.colorText,
-              ...getSessionRowTitleStyle(token, {
-                read: isSessionRowRead(session, false),
-                hug: true,
-              }),
-            }}
+          <FadeText
+            fullText={titleText}
+            tooltipProps={{ placement: 'topLeft' }}
+            style={getSessionRowTitleStyle(token, {
+              read: isSessionRowRead(session, false),
+              hug: true,
+            })}
           >
             <HighlightMatch text={titleText} query={query} />
-          </span>
+          </FadeText>
           {/* The branch is quiet metadata beside the title, like a gateway channel. */}
           <span
             title={branchLabel ?? 'No branch'}
