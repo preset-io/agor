@@ -22,6 +22,7 @@ import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { OPEN_BOARD_SWITCHER_EVENT, onShellPicker } from '../../utils/shellEvents';
 import { BoardEditModal } from '../BoardEditModal';
 import { BoardTile, getBoardEmoji } from '../BoardTile';
+import { FadeText } from '../FadeText';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -343,9 +344,9 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
               ) : (
                 <HomeOutlined style={{ fontSize: 18 }} />
               )}
-              <Text strong ellipsis style={{ flex: 1, minWidth: 0 }} data-current-board-name>
+              <FadeText strong style={{ flex: 1 }} data-current-board-name>
                 {currentBoard?.name || 'Home'}
-              </Text>
+              </FadeText>
             </Flex>
             <DownOutlined
               style={{ fontSize: 12, color: token.colorTextSecondary, flexShrink: 0 }}
