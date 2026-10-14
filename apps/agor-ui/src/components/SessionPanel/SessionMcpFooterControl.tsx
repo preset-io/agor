@@ -25,6 +25,8 @@ export interface SessionMcpFooterControlProps {
   sessionMcpServerIds: string[];
   mcpServerById: Map<string, MCPServer>;
   userAuthenticatedMcpServerIds: Set<string>;
+  /** Render the panel in place (inside Session details) instead of a badge and popup. */
+  inline?: boolean;
 }
 
 const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps> = ({
@@ -34,6 +36,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
   sessionMcpServerIds,
   mcpServerById,
   userAuthenticatedMcpServerIds,
+  inline = false,
 }) => {
   const { token } = theme.useToken();
   const catalog = useMCPCatalogModal();
@@ -74,7 +77,8 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
   // partial, and an edit diff would detach what it never saw.
   const linksLoaded = useAgorStore((s) => s.sessionMcpLoaded.has(sessionId));
   const [saving, setSaving] = React.useState(false);
-  const [open, setOpen] = React.useState(false);
+  const [disclosureOpen, setOpen] = React.useState(false);
+  const open = inline || disclosureOpen;
   // Bind the response to every authority/inventory input at render time, not
   // just effect cleanup. A stale response cannot enable an option for one render.
   const availabilityRequest = React.useMemo(
@@ -148,7 +152,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
   const headingId = `${popupId}-heading`;
 
   React.useEffect(() => {
-    if (!open) return;
+    if (!open || inline) return;
     const dismissOutside = (event: PointerEvent) => {
       if (
         rootRef.current &&
@@ -160,7 +164,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
     };
     document.addEventListener('pointerdown', dismissOutside);
     return () => document.removeEventListener('pointerdown', dismissOutside);
-  }, [open]);
+  }, [open, inline]);
 
   // The phone info bar scrolls horizontally, which clips an absolutely
   // positioned popup to nothing. On phones, anchor it to the viewport just
@@ -277,7 +281,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
   };
 
   const content = (
-    <div style={{ width: 340, maxWidth: 'min(340px, 80vw)' }}>
+    <div style={inline ? { width: '100%' } : { width: 340, maxWidth: 'min(340px, 80vw)' }}>
       <Space orientation="vertical" size={10} style={{ width: '100%' }}>
         <div>
           <Flex align="center" justify="space-between">
@@ -357,6 +361,39 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
       </Space>
     </div>
   );
+
+  const editModal = (
+    <>
+      {editingServer && (
+        <MCPServerEditModal
+          server={editingServer}
+          open={editModalOpen}
+          client={client}
+          identityKey={currentUserId ?? null}
+          authGeneration={authGeneration}
+          authorityKey={durableAuthorityKey}
+          mutationAllowed={editMutationAllowed}
+          mutationBlockedReason={
+            !connected || connecting
+              ? 'Reconnect to Agor before changing this MCP server.'
+              : 'Your account can no longer change this MCP server.'
+          }
+          onClose={() => setEditModalOpen(false)}
+          afterClose={finishEditModalClose}
+          focusTriggerAfterClose={false}
+        />
+      )}
+    </>
+  );
+
+  if (inline) {
+    return (
+      <div ref={rootRef}>
+        {content}
+        {editModal}
+      </div>
+    );
+  }
 
   return (
     <div ref={rootRef} style={{ position: 'relative', display: 'inline-flex' }}>
@@ -461,25 +498,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
           {content}
         </div>
       )}
-      {editingServer && (
-        <MCPServerEditModal
-          server={editingServer}
-          open={editModalOpen}
-          client={client}
-          identityKey={currentUserId ?? null}
-          authGeneration={authGeneration}
-          authorityKey={durableAuthorityKey}
-          mutationAllowed={editMutationAllowed}
-          mutationBlockedReason={
-            !connected || connecting
-              ? 'Reconnect to Agor before changing this MCP server.'
-              : 'Your account can no longer change this MCP server.'
-          }
-          onClose={() => setEditModalOpen(false)}
-          afterClose={finishEditModalClose}
-          focusTriggerAfterClose={false}
-        />
-      )}
+      {editModal}
     </div>
   );
 };

@@ -1,3 +1,4 @@
+import type { ContextUsageSnapshot } from '@agor/core/types';
 import { GEMINI_MANUAL_MESSAGE, isGeminiManualMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   AgenticToolCapabilities,
@@ -18,29 +19,42 @@ import {
   SessionStatus,
 } from '@agor-live/client';
 import {
+  ApiOutlined,
   ArrowUpOutlined,
   BranchesOutlined,
+  ClockCircleOutlined,
+  CopyOutlined,
   ForkOutlined,
+  IdcardOutlined,
+  InfoCircleOutlined,
   LockOutlined,
+  NumberOutlined,
   PaperClipOutlined,
+  PieChartOutlined,
   PlusOutlined,
   QuestionCircleOutlined,
   SettingOutlined,
   UnorderedListOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { Button, Divider, Flex, Segmented, Tag, Tooltip, Typography, theme } from 'antd';
+import type { ButtonProps } from 'antd';
+import { Button, Divider, Flex, Progress, Segmented, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useElementWidth } from '../../hooks/useElementWidth';
 import { COMPACT_PIN_LIMIT, useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { useSessionUsage } from '../../hooks/useSessionUsage';
+import { copyToClipboard } from '../../utils/clipboard';
 import { LOST_CONNECTION_TOOLTIP } from '../../utils/connectionErrors';
+import { getContextWindowColor, resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { useThemedMessage } from '../../utils/message';
 import { CompactNotice } from '../CompactNotice';
 import { EFFORT_OPTIONS } from '../EffortSelector';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
+import { summarizeSessionMcpServers } from '../MCPServer/mcp-session-summary';
 import type { ModelConfig } from '../ModelSelector';
 import { ModelSelector } from '../ModelSelector';
 import {
@@ -49,8 +63,8 @@ import {
   getPermissionModeMeta,
   getPermissionModes,
 } from '../PermissionModeSelector';
-import { ContextWindowPill, TimerPill, useElapsedDuration } from '../Pill';
 import { getModelChipLabel } from '../Pill/modelDisplay';
+import { useElapsedDuration } from '../Pill/TimerPill';
 import {
   ComposerMenu,
   ComposerMenuBack,
@@ -67,7 +81,6 @@ import {
 } from './composerState';
 import { RecoveryActions } from './RecoveryActions';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
-import { SessionUsagePopover } from './SessionUsagePopover';
 
 export interface SessionFooterProps {
   // Session data for chips
@@ -119,7 +132,10 @@ export interface SessionFooterProps {
   promptInputSlot: React.ReactNode;
 }
 
-type ComposerMenuId = 'plus' | 'model' | 'permissions' | 'details';
+type ComposerMenuId = 'plus' | 'model' | 'permissions' | 'details' | 'details-context';
+
+const formatTokenCount = (count: number) =>
+  count >= 1000 ? `${(count / 1000).toFixed(count >= 100_000 ? 0 : 1)}k` : String(count);
 
 const PINNABLE_ACTIONS = ['upload', 'advanced-upload', 'fork', 'btw-fork', 'spawn'];
 
@@ -174,6 +190,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
   const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
   const { token } = theme.useToken();
+  const { showSuccess } = useThemedMessage();
   // One card at every width: phones get 44px targets and bottom sheets,
   // desktop gets 32px controls and popovers anchored to their trigger.
   const isMobile = useIsMobileViewport();
@@ -205,6 +222,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     }
   };
   const pinnedChips = prefs.pinnedChips;
+  const toggleChip = (id: string) => {
+    setPref({
+      pinnedChips: pinnedChips.includes(id)
+        ? pinnedChips.filter((c) => c !== id)
+        : [...pinnedChips, id],
+    });
+  };
 
   // Model name + token counts for individual chips. A brand-new session hasn't
   // persisted its model into model_config yet — it's resolved from tool/user
@@ -242,11 +266,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   // user previously unpinned Tools. Reveal the MCP badge for as long as any
   // attached server needs authentication; once recovered, the saved pin
   // preference takes effect again.
-  const showMcpControl = pinnedChips.includes('tools') || unauthedMcpServers.length > 0;
   const mcpNoticeMessage =
     unauthedMcpServers.length === 1
-      ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Open the MCP badge to connect it.`
-      : `${unauthedMcpServers.length} MCP servers aren’t connected. Open the MCP badge to connect them.`;
+      ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Open Session details to connect it.`
+      : `${unauthedMcpServers.length} MCP servers aren’t connected. Open Session details to connect them.`;
 
   const composerAttachmentActionTooltip = 'Attachments are only supported for normal Send for now';
   const composerUploadTooltip = 'Uploading files...';
@@ -293,17 +316,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         <div>New line Shift+Enter</div>
       </>
     );
-  const circleVisual: React.CSSProperties =
-    circleState === 'stop' && !circleDisabled
-      ? { background: token.colorText, color: token.colorBgContainer, borderColor: 'transparent' }
-      : circleDisabled
-        ? {
-            background: token.colorFillSecondary,
-            color: token.colorTextTertiary,
-            borderColor: 'transparent',
-            cursor: 'not-allowed',
-          }
-        : {};
+  // Stop is the inverse solid fill; an empty Send is a quiet filled circle.
+  const circleVariant: Pick<ButtonProps, 'color' | 'variant'> = circleDisabled
+    ? { color: 'default', variant: 'filled' }
+    : circleState === 'stop'
+      ? { color: 'default', variant: 'solid' }
+      : { color: 'primary', variant: 'solid' };
 
   const controlSize = isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight;
   const rowButtonStyle: React.CSSProperties = {
@@ -438,11 +456,264 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   };
 
   const [openMenu, setOpenMenu] = React.useState<ComposerMenuId | null>(null);
+  const [plusPage, setPlusPage] = React.useState<'main' | 'details'>('main');
   const [modelPage, setModelPage] = React.useState<'model' | 'permissions'>('model');
   const runAction = (action: () => void) => () => {
     setOpenMenu(null);
     action();
   };
+  const [detailsPage, setDetailsPage] = React.useState<'main' | 'mcp'>('main');
+  const detailsOpen = openMenu === 'details' || openMenu === 'details-context';
+  const { usage, loading: usageLoading } = useSessionUsage(
+    client,
+    session.session_id,
+    detailsOpen || (openMenu === 'plus' && plusPage === 'details'),
+    currentUserId
+  );
+  const mcpSummary = summarizeSessionMcpServers(
+    sessionMcpServerIds,
+    mcpServerById,
+    userAuthenticatedMcpServerIds
+  );
+  const contextSnapshot = (
+    latestContextWindow?.taskMetadata as
+      | { normalized_sdk_response?: { contextUsageSnapshot?: ContextUsageSnapshot } }
+      | undefined
+  )?.normalized_sdk_response?.contextUsageSnapshot;
+  const contextLimit = contextSnapshot?.maxTokens ?? latestContextWindow?.limit ?? 0;
+  const contextPercent =
+    latestContextWindow && contextLimit > 0
+      ? Math.round(
+          resolveContextWindowPercentage(
+            contextSnapshot?.totalTokens ?? latestContextWindow.used,
+            contextLimit,
+            contextSnapshot
+          )
+        )
+      : null;
+  const contextColor =
+    contextPercent === null
+      ? token.colorTextTertiary
+      : getContextWindowColor(contextPercent, {
+          normal: token.colorPrimary,
+          warning: token.colorWarning,
+          critical: token.colorError,
+        });
+  const signInWarning =
+    unauthedMcpServers.length === 1
+      ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} needs sign-in`
+      : unauthedMcpServers.length > 1
+        ? `${unauthedMcpServers.length} MCP servers need sign-in`
+        : null;
+  const usageValue = usage ? `${formatTokenCount(usage.total)} tokens` : usageLoading ? '…' : '';
+  const infoItems = [
+    pinnedChips.includes('timer') && elapsed.hasTiming ? elapsed.label : null,
+    pinnedChips.includes('tools') && mcpSummary.attachedCount > 0
+      ? `MCP ${mcpSummary.attachedCount}`
+      : null,
+    pinnedChips.includes('tokens') ? 'Usage' : null,
+    pinnedChips.includes('session-ids') ? session.session_id.slice(0, 8) : null,
+  ].filter((item): item is string => Boolean(item));
+
+  const infoPin = (id: string, name: string) => {
+    const pinned = pinnedChips.includes(id);
+    return (
+      <ComposerPinToggle
+        pinned={pinned}
+        label={`${pinned ? 'Hide' : 'Show'} ${name}`}
+        tooltip={pinned ? 'Hide from info bar' : 'Show in info bar'}
+        onToggle={() => toggleChip(id)}
+      />
+    );
+  };
+  const copyId = (id: string, what: string) => async () => {
+    await copyToClipboard(id);
+    showSuccess(`${what} copied`);
+  };
+  const detailsMain = (
+    <>
+      <ComposerMenuRow
+        label="Timer"
+        icon={<ClockCircleOutlined />}
+        value={elapsed.hasTiming ? elapsed.label : 'Not started'}
+        trailing={infoPin('timer', 'timer')}
+      />
+      <ComposerMenuRow
+        label="MCP tools"
+        icon={<ApiOutlined />}
+        value={String(mcpSummary.attachedCount)}
+        drill
+        onClick={() => setDetailsPage('mcp')}
+        trailing={infoPin('tools', 'MCP tools')}
+      />
+      {unauthedMcpServers.map((server) => (
+        <Flex
+          key={server.mcp_server_id}
+          align="center"
+          gap={token.marginXS}
+          style={{ paddingInline: token.paddingSM, paddingBottom: token.paddingXXS }}
+        >
+          <Typography.Text
+            style={{ flex: 1, fontSize: token.fontSizeSM, color: token.colorWarningText }}
+          >
+            {`${server.display_name || server.name} needs sign-in. Its tools are off until you connect.`}
+          </Typography.Text>
+          <Button size="small" onClick={() => setDetailsPage('mcp')}>
+            Connect
+          </Button>
+        </Flex>
+      ))}
+      <ComposerMenuRow
+        label="Usage"
+        icon={<NumberOutlined />}
+        value={usageValue}
+        trailing={infoPin('tokens', 'usage')}
+      />
+      <ComposerMenuRow
+        label="Context"
+        icon={<PieChartOutlined />}
+        value={
+          contextPercent === null
+            ? 'Unknown'
+            : `${contextPercent}% of ${formatTokenCount(contextLimit)}`
+        }
+        trailing={infoPin('context', 'context')}
+      />
+      {contextPercent !== null && (
+        <div style={{ paddingInline: token.paddingSM }}>
+          <Progress
+            percent={contextPercent}
+            showInfo={false}
+            size="small"
+            strokeColor={contextColor}
+            aria-label={`Context ${contextPercent}% used`}
+          />
+        </div>
+      )}
+      <ComposerMenuRow
+        label="Session IDs"
+        icon={<IdcardOutlined />}
+        value={session.session_id.slice(0, 8)}
+        trailing={infoPin('session-ids', 'session IDs')}
+      />
+      <ComposerMenuRow
+        label="Copy session ID"
+        icon={<CopyOutlined />}
+        onClick={copyId(session.session_id, 'Session ID')}
+      />
+      {session.sdk_session_id && (
+        <ComposerMenuRow
+          label="Copy agent session ID"
+          icon={<CopyOutlined />}
+          onClick={copyId(session.sdk_session_id, 'Agent session ID')}
+        />
+      )}
+      <ComposerMenuNote>
+        Pin an item to show it in the info bar under the composer. MCP sign-in problems always show.
+      </ComposerMenuNote>
+    </>
+  );
+  const detailsContent =
+    detailsPage === 'mcp' ? (
+      <>
+        <ComposerMenuBack label="Session details" onBack={() => setDetailsPage('main')} />
+        <div style={{ padding: `0 ${token.paddingSM}px ${token.paddingXS}px` }}>
+          <SessionMcpFooterControl
+            inline
+            client={client}
+            currentUserId={currentUserId}
+            sessionId={session.session_id}
+            sessionMcpServerIds={sessionMcpServerIds}
+            mcpServerById={mcpServerById}
+            userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
+          />
+        </div>
+      </>
+    ) : (
+      detailsMain
+    );
+  const openDetails = (menu: 'details' | 'details-context') => (open: boolean) => {
+    setDetailsPage('main');
+    setOpenMenu(open ? menu : null);
+  };
+  const infoTextStyle: React.CSSProperties = {
+    height: isMobile ? MOBILE_TOUCH_TARGET : token.controlHeightSM,
+    paddingInline: token.paddingXXS,
+    fontSize: token.fontSizeSM,
+    color: token.colorTextTertiary,
+    minWidth: 0,
+  };
+  const showContextInInfo = contextPercent !== null && pinnedChips.includes('context');
+  const infoLineVisible =
+    (showContextInInfo || infoItems.length > 0 || signInWarning) &&
+    !(isMobile && cardFocused && !signInWarning);
+  const infoLine = infoLineVisible && (
+    <Flex
+      align="center"
+      style={{ minWidth: 0, paddingInline: token.paddingXS }}
+      data-testid="composer-info-line"
+    >
+      {showContextInInfo && (
+        <ComposerMenu
+          sheet={isMobile}
+          title="Session details"
+          open={openMenu === 'details-context'}
+          onOpenChange={openDetails('details-context')}
+          content={detailsContent}
+        >
+          <Tooltip title="Context window">
+            <Button
+              type="text"
+              size="small"
+              aria-label={`Context ${contextPercent}% used. Session details`}
+              onClick={isMobile ? () => openDetails('details-context')(true) : undefined}
+              style={{ ...infoTextStyle, gap: token.sizeXXS }}
+            >
+              <Progress
+                type="circle"
+                size={token.fontSizeSM}
+                percent={contextPercent ?? 0}
+                showInfo={false}
+                strokeWidth={16}
+                strokeColor={contextColor}
+                aria-hidden
+              />
+              {contextPercent}%
+            </Button>
+          </Tooltip>
+        </ComposerMenu>
+      )}
+      {(infoItems.length > 0 || signInWarning) && (
+        <ComposerMenu
+          sheet={isMobile}
+          title="Session details"
+          open={openMenu === 'details'}
+          onOpenChange={openDetails('details')}
+          content={detailsContent}
+        >
+          <Button
+            type="text"
+            size="small"
+            aria-label={`Session details. ${[...infoItems, signInWarning].filter(Boolean).join(', ')}`}
+            onClick={isMobile ? () => openDetails('details')(true) : undefined}
+            style={infoTextStyle}
+          >
+            <Typography.Text ellipsis style={{ fontSize: token.fontSizeSM, color: 'inherit' }}>
+              {showContextInInfo && infoItems.length > 0 ? '· ' : ''}
+              {infoItems.join(' · ')}
+              {signInWarning && (
+                <span style={{ color: token.colorWarningText }}>
+                  {infoItems.length > 0 ? ' · ' : ''}
+                  {signInWarning}
+                </span>
+              )}
+            </Typography.Text>
+          </Button>
+        </ComposerMenu>
+      )}
+    </Flex>
+  );
+
   const attachmentsHint = composerAttachmentsPresent
     ? 'Attachments only work with Send for now'
     : undefined;
@@ -532,15 +803,22 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           {`${actionRows[id].label} stays in here until the panel is wider.`}
         </ComposerMenuNote>
       ))}
+      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
+      <ComposerMenuRow
+        label="Session details"
+        icon={<InfoCircleOutlined />}
+        drill
+        onClick={() => {
+          setDetailsPage('main');
+          setPlusPage('details');
+        }}
+      />
       {onOpenSessionSettings && (
-        <>
-          <Divider style={{ margin: `${token.marginXXS}px 0` }} />
-          <ComposerMenuRow
-            label="Session settings"
-            icon={<SettingOutlined />}
-            onClick={runAction(() => onOpenSessionSettings(session.session_id))}
-          />
-        </>
+        <ComposerMenuRow
+          label="Session settings"
+          icon={<SettingOutlined />}
+          onClick={runAction(() => onOpenSessionSettings(session.session_id))}
+        />
       )}
     </>
   );
@@ -550,8 +828,22 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       sheet={isMobile}
       title="Add files and actions"
       open={openMenu === 'plus'}
-      onOpenChange={(open) => setOpenMenu(open ? 'plus' : null)}
-      content={plusMenuContent}
+      onOpenChange={(open) => {
+        setPlusPage('main');
+        setOpenMenu(open ? 'plus' : null);
+      }}
+      content={
+        plusPage === 'details' ? (
+          <>
+            {detailsPage === 'main' && (
+              <ComposerMenuBack label="Add files and actions" onBack={() => setPlusPage('main')} />
+            )}
+            {detailsContent}
+          </>
+        ) : (
+          plusMenuContent
+        )
+      }
     >
       <Tooltip title="Add files and actions">
         <Button
@@ -560,7 +852,14 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           aria-haspopup="dialog"
           aria-expanded={openMenu === 'plus'}
           icon={<PlusOutlined />}
-          onClick={isMobile ? () => setOpenMenu('plus') : undefined}
+          onClick={
+            isMobile
+              ? () => {
+                  setPlusPage('main');
+                  setOpenMenu('plus');
+                }
+              : undefined
+          }
           style={rowButtonStyle}
         />
       </Tooltip>
@@ -573,11 +872,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const presetNote = managedByPreset ? (
     <ComposerMenuNote>Managed by preset. Switch presets in session settings.</ComposerMenuNote>
   ) : null;
-  const defaultTag = (
-    <Tag bordered={false} style={{ marginInlineEnd: 0 }}>
-      default
-    </Tag>
-  );
+  const defaultTag = <span style={{ fontSize: token.fontSizeSM }}>default</span>;
   const permissionRadioRows = (
     title: string,
     rows: { value: string; label: string; description?: string; isDefault?: boolean }[],
@@ -880,9 +1175,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           flexDirection: 'column',
           gap: token.sizeXXS,
           borderRadius: token.borderRadius * 2,
-          border: `${token.lineWidth}px ${token.lineType} ${
-            cardFocused ? token.colorPrimary : token.colorBorder
-          }`,
+          borderWidth: token.lineWidth,
+          borderStyle: token.lineType,
+          borderColor: cardFocused ? token.colorPrimary : token.colorBorder,
           boxShadow: cardFocused
             ? `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`
             : undefined,
@@ -900,7 +1195,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           <span style={{ flex: 1 }} />
           <Tooltip title={circleTooltip}>
             <Button
-              type="primary"
+              {...circleVariant}
               shape="circle"
               aria-label={circleLabel}
               aria-disabled={circleDisabled || undefined}
@@ -934,7 +1229,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 flexShrink: 0,
                 boxShadow: 'none',
                 transition: reducedMotion ? 'none' : undefined,
-                ...circleVisual,
+                cursor: circleDisabled ? 'not-allowed' : undefined,
               }}
               data-testid="composer-circle"
             />
@@ -942,71 +1237,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         </Flex>
       </div>
 
-      {/* Info bar (replaced by the info line in a later step) */}
-      {(showMcpControl ||
-        (footerTimerTask && pinnedChips.includes('timer')) ||
-        pinnedChips.includes('tokens') ||
-        (latestContextWindow && latestContextWindow.limit > 0 && pinnedChips.includes('context')) ||
-        pinnedChips.includes('session-ids')) && (
-        <Flex
-          align="center"
-          gap={token.sizeUnit}
-          wrap
-          style={{ marginTop: token.marginXXS, paddingInline: token.paddingXS }}
-          data-testid="info-bar"
-        >
-          {footerTimerTask && pinnedChips.includes('timer') && (
-            <div
-              style={{ display: 'inline-flex', alignItems: 'center', height: 22 }}
-              data-testid="timer-chip"
-            >
-              <TimerPill
-                status={footerTimerTask.status}
-                startedAt={
-                  footerTimerTask.message_range?.start_timestamp || footerTimerTask.created_at
-                }
-                endedAt={
-                  footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at
-                }
-                durationMs={footerTimerTask.duration_ms}
-                lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
-                latestExecutorPulse={footerTimerTask.latest_executor_pulse}
-              />
-            </div>
-          )}
-          {showMcpControl && (
-            <SessionMcpFooterControl
-              client={client}
-              currentUserId={currentUserId}
-              sessionId={session.session_id}
-              sessionMcpServerIds={sessionMcpServerIds}
-              mcpServerById={mcpServerById}
-              userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
-            />
-          )}
-          {pinnedChips.includes('tokens') && (
-            <SessionUsagePopover
-              key={`${session.session_id}:${currentUserId}`}
-              client={client ?? null}
-              sessionId={session.session_id}
-              userId={currentUserId}
-            />
-          )}
-          {latestContextWindow &&
-            latestContextWindow.limit > 0 &&
-            pinnedChips.includes('context') && (
-              <ContextWindowPill
-                used={latestContextWindow.used}
-                limit={latestContextWindow.limit}
-                taskMetadata={
-                  latestContextWindow.taskMetadata as React.ComponentProps<
-                    typeof ContextWindowPill
-                  >['taskMetadata']
-                }
-              />
-            )}
-        </Flex>
-      )}
+      {infoLine}
     </div>
   );
 };
