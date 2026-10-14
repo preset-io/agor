@@ -88,7 +88,20 @@ vi.mock('reactflow', async () => {
     useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
     useNodesState: (initial: FlowNode[]) => {
       const [nodes, setNodes] = React.useState(initial);
-      return [nodes, setNodes, vi.fn()];
+      return [
+        nodes,
+        setNodes,
+        (changes: Array<{ type: string; id: string; selected?: boolean }>) => {
+          setNodes((current) =>
+            current.map((node) => {
+              const change = changes.find(
+                (entry) => entry.id === node.id && entry.type === 'select'
+              );
+              return change ? { ...node, selected: change.selected } : node;
+            })
+          );
+        },
+      ];
     },
     useEdgesState: (initial: unknown[]) => {
       const [edges, setEdges] = React.useState(initial);
@@ -1176,6 +1189,47 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
     await waitFor(() => expect(screen.queryByText('Zone changes not saved')).toBeNull());
     expect(patch).not.toHaveBeenCalled();
+  });
+
+  it('restores selected node geometry and shows a toast when align persistence rejects', async () => {
+    let rejectWrite: ((error: Error) => void) | undefined;
+    const patch = vi.fn(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectWrite = reject;
+        })
+    );
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    renderCanvas(client);
+    await act(async () => {});
+    const ids = [BRANCH_ID, `card-${card.card_id}`];
+    const original = ids.map((id) => ({
+      ...currentNode(id),
+      position: { ...currentNode(id).position },
+    }));
+    act(() =>
+      flowProps?.onNodesChange?.(ids.map((id) => ({ type: 'select', id, selected: true })))
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'More alignment actions' }));
+    fireEvent.click(await screen.findByText('Left / start'));
+    await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(ids.map((id) => currentNode(id).position)).not.toEqual(
+      original.map((node) => node.position)
+    );
+    await act(async () => rejectWrite?.(new Error('Layout denied')));
+    await waitFor(() =>
+      expect(ids.map((id) => currentNode(id).position)).toEqual(
+        original.map((node) => node.position)
+      )
+    );
+    expect(screen.getByText(/Couldn't save the layout/)).toBeTruthy();
+    // An unrelated store repaint must not resurrect the rejected local pins.
+    act(() =>
+      agorStore.setState({ branchById: new Map([[BRANCH_ID, { ...branch, name: 'Repaint' }]]) })
+    );
+    expect(ids.map((id) => currentNode(id).position)).toEqual(
+      original.map((node) => node.position)
+    );
   });
 
   afterEach(() => {

@@ -3766,6 +3766,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // Planned from this board's loaded geometry: no ticket, no write.
         const ticket = boardGuard.capture();
         if (!ticket) return;
+        const previousLocalPositions = { ...localPositionsRef.current };
+        const previousZoneGeometry = { ...localZoneGeometryRef.current };
         setNodes((currentNodes) =>
           currentNodes.map((node) => arrangedNodeById.get(node.id) ?? node)
         );
@@ -3832,12 +3834,49 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             }
           }
         }
-        if (Object.keys(canvasObjectUpdates).length > 0 || Object.keys(entityUpdates).length > 0) {
-          await client.service('boards').patch(ticket.boardId, {
-            _action: 'applyLayout',
-            objects: canvasObjectUpdates,
-            placements: entityUpdates,
-          } as unknown as Partial<Board>);
+        const optimisticPositions = { ...localPositionsRef.current };
+        const optimisticZoneGeometry = { ...localZoneGeometryRef.current };
+        try {
+          if (
+            Object.keys(canvasObjectUpdates).length > 0 ||
+            Object.keys(entityUpdates).length > 0
+          ) {
+            await client.service('boards').patch(ticket.boardId, {
+              _action: 'applyLayout',
+              objects: canvasObjectUpdates,
+              placements: entityUpdates,
+            } as unknown as Partial<Board>);
+          }
+        } catch (error) {
+          showError(formatActionError('save the layout', error, { idempotent: true }));
+          // Never roll a rejected old-board write into the newly loaded board.
+          if (boardGuard.isCurrent(ticket)) {
+            // Release only pins still owned by this optimistic layout. A newer
+            // drag/realtime change must not be undone when this request settles.
+            for (const [id, position] of Object.entries(optimisticPositions)) {
+              if (
+                localPositionsRef.current[id] !== position ||
+                previousLocalPositions[id] === position
+              )
+                continue;
+              if (previousLocalPositions[id])
+                localPositionsRef.current[id] = previousLocalPositions[id];
+              else delete localPositionsRef.current[id];
+            }
+            for (const [id, geometry] of Object.entries(optimisticZoneGeometry)) {
+              if (
+                localZoneGeometryRef.current[id] !== geometry ||
+                previousZoneGeometry[id] === geometry
+              )
+                continue;
+              if (previousZoneGeometry[id])
+                localZoneGeometryRef.current[id] = previousZoneGeometry[id];
+              else delete localZoneGeometryRef.current[id];
+            }
+            selectionLayoutOrderRef.current = undefined;
+            resyncBoardNodes();
+          }
+          return;
         }
         requestPostLayoutViewport(layoutIntent, viewportIntentToken);
       },
@@ -3852,6 +3891,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         getUsableBoardAspect,
         nodes,
         requestPostLayoutViewport,
+        resyncBoardNodes,
         selectedLayoutNodes,
         selectionLayoutSettings,
         setNodes,
