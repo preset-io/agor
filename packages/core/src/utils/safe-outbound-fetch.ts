@@ -48,6 +48,40 @@ for (const [network, prefix] of [
   blocked.addSubnet(network, prefix, 'ipv6');
 }
 
+export interface PrivateOutboundDestination {
+  host: string;
+  cidrs: readonly string[];
+}
+
+/**
+ * Operator-pinned private destinations, keyed by exact lowercase hostname.
+ * Replaced wholesale by {@link configurePrivateOutboundDestinations}; empty by
+ * default so every private/reserved address stays blocked.
+ */
+let privateDestinations: ReadonlyMap<string, BlockList> = new Map();
+
+/**
+ * Install the process-wide allowlist of private HTTPS destinations. Callers
+ * pass already-validated config (`security.private_outbound_destinations`).
+ * A listed host must resolve only to IPv4 addresses inside its own CIDRs; it
+ * never falls back to the public-address rule. Calling again replaces the set.
+ */
+export function configurePrivateOutboundDestinations(
+  entries: readonly PrivateOutboundDestination[] | undefined
+): void {
+  const next = new Map<string, BlockList>();
+  for (const entry of entries ?? []) {
+    const host = entry.host.toLowerCase();
+    const ranges = next.get(host) ?? new BlockList();
+    for (const cidr of entry.cidrs) {
+      const [network, prefix] = cidr.split('/');
+      ranges.addSubnet(network ?? '', Number(prefix), 'ipv4');
+    }
+    next.set(host, ranges);
+  }
+  privateDestinations = next;
+}
+
 export class UnsafeOutboundUrlError extends Error {
   readonly code = 'unsafe_outbound_url';
   constructor(message = 'Outbound OAuth destination is not allowed') {
@@ -190,6 +224,24 @@ async function resolvePinnedAddress(
     : await withAbort(resolveDns(hostname, { all: true, verbatim: true }), signal);
   throwIfAborted(signal);
   if (addresses.length === 0) throw new UnsafeOutboundUrlError('OAuth destination did not resolve');
+  const privateRanges =
+    !literalFamily && url.protocol === 'https:'
+      ? privateDestinations.get(hostname.toLowerCase())
+      : undefined;
+  if (privateRanges) {
+    // A pinned host replaces the public rule rather than extending it: every
+    // answer must be IPv4 inside the operator's ranges, or nothing is sent.
+    for (const candidate of addresses) {
+      if (
+        candidate.family !== 4 ||
+        isIP(candidate.address) !== 4 ||
+        !privateRanges.check(candidate.address, 'ipv4')
+      ) {
+        throw new UnsafeOutboundUrlError();
+      }
+    }
+    return addresses[0] as { address: string; family: 4 | 6 };
+  }
   for (const candidate of addresses) {
     const family = candidate.family as 4 | 6;
     const loopbackDev =
