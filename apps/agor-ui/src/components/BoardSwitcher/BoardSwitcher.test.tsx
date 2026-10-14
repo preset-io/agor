@@ -1,6 +1,6 @@
 import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { OPEN_BOARD_SWITCHER_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { BoardSwitcher } from './BoardSwitcher';
@@ -269,5 +269,28 @@ describe('BoardSwitcher empty states', () => {
       });
     }
     expect(await screen.findByText(text)).toBeInTheDocument();
+  });
+});
+
+describe('BoardSwitcher outside tap', () => {
+  const popupHidden = () =>
+    screen
+      .getByTestId('board-switcher-popup')
+      .closest('.ant-dropdown')
+      ?.className.includes('hidden');
+
+  // iOS Safari fires pointerdown, but no mousedown, for a tap on a non-clickable element.
+  it('closes on a pointerdown outside without a mousedown, and stays open for one inside', async () => {
+    const { container } = renderSwitcher();
+    const outside = document.body.appendChild(document.createElement('div'));
+    onTestFinished(() => outside.remove());
+    fireEvent.click(container.querySelector('button.ant-dropdown-trigger') as HTMLButtonElement);
+    await screen.findByRole('menu');
+
+    fireEvent.pointerDown(screen.getByTestId('board-switcher-popup'));
+    expect(popupHidden()).toBe(false);
+
+    fireEvent.pointerDown(outside);
+    await waitFor(() => expect(popupHidden()).toBe(true));
   });
 });

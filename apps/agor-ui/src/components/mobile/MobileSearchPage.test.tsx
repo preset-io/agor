@@ -28,10 +28,7 @@ describe('MobileSearchPage', () => {
     render(
       <MemoryRouter initialEntries={['/m/search']}>
         <Routes>
-          <Route
-            path="/m/search"
-            element={<MobileSearchPage onOpenWorkspaceSettings={vi.fn()} onOpenBranch={vi.fn()} />}
-          />
+          <Route path="/m/search" element={<MobileSearchPage onOpenBranch={vi.fn()} />} />
           <Route path="/m/session/:id" element={<div>session view</div>} />
         </Routes>
       </MemoryRouter>
@@ -61,7 +58,7 @@ describe('MobileSearchPage', () => {
       });
       render(
         <MemoryRouter initialEntries={['/m/search']}>
-          <MobileSearchPage onOpenWorkspaceSettings={vi.fn()} onOpenBranch={onOpenBranch} />
+          <MobileSearchPage onOpenBranch={onOpenBranch} />
         </MemoryRouter>
       );
       fireEvent.change(screen.getByPlaceholderText(/Search sessions/), {
@@ -89,10 +86,7 @@ describe('MobileSearchPage', () => {
     render(
       <MemoryRouter initialEntries={['/m/search']}>
         <Routes>
-          <Route
-            path="/m/search"
-            element={<MobileSearchPage onOpenWorkspaceSettings={vi.fn()} onOpenBranch={vi.fn()} />}
-          />
+          <Route path="/m/search" element={<MobileSearchPage onOpenBranch={vi.fn()} />} />
           <Route
             path={artifactFullscreenPath(artifact.artifact_id)}
             element={<div>Artifact content</div>}
@@ -111,7 +105,7 @@ describe('MobileSearchPage', () => {
     useGlobalSearchMock.mockReturnValue({ results: EMPTY_RESULTS, hasAnyResults: false });
     render(
       <MemoryRouter initialEntries={['/m/search']}>
-        <MobileSearchPage onOpenWorkspaceSettings={vi.fn()} onOpenBranch={vi.fn()} />
+        <MobileSearchPage onOpenBranch={vi.fn()} />
       </MemoryRouter>
     );
     expect(screen.getByText(/Find sessions, branches, boards/)).toBeInTheDocument();

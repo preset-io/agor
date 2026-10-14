@@ -20,12 +20,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Only the database read is stubbed; `mcpOAuthGrantIsConnected` — the verdict
 // this gate asks of it, shared with the mint gate — stays real.
+vi.mock('@agor/core/mcp-catalog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/mcp-catalog')>()),
+  loadCatalog: vi.fn(),
+}));
 vi.mock('../../services/mcp-oauth-grant-liveness.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../services/mcp-oauth-grant-liveness.js')>()),
   resolveMCPOAuthGrantLiveness: vi.fn(),
 }));
 
 import { Forbidden } from '@agor/core/feathers';
+import { loadCatalog } from '@agor/core/mcp-catalog';
 import { resolveMCPOAuthGrantLiveness } from '../../services/mcp-oauth-grant-liveness.js';
 import { _resetWidgetRegistryForTests, getWidget } from '../registry';
 import {
@@ -44,6 +49,14 @@ const defaultParams = {
   reason: 'Read the roadmap page.',
   catalogEntryName: 'com.notion/mcp',
   permissionDisclosure: 'Agor can read and write pages you share with this integration.',
+};
+
+/** A widget pinned only to a catalog entry, as the API-key lane mints it. */
+const CATALOG_CONNECT_PARAMS = {
+  serverName: 'GitHub',
+  oauthMode: 'per_user' as const,
+  reason: 'Read the repository issues.',
+  catalogEntryName: 'io.github.github/github-mcp-server',
 };
 
 interface MakeCtxOpts {
@@ -164,8 +177,11 @@ describe('oauth widget — paramsSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('requires a pinned server id and a known oauth mode', () => {
+  it('requires a pin (server id or catalog entry) and a known oauth mode', () => {
     expect(oauthParamsSchema.safeParse({ ...defaultParams, mcpServerId: '' }).success).toBe(false);
+    const { mcpServerId: _pinned, catalogEntryName: _entry, ...unpinned } = defaultParams;
+    expect(oauthParamsSchema.safeParse(unpinned).success).toBe(false);
+    expect(oauthParamsSchema.safeParse(CATALOG_CONNECT_PARAMS).success).toBe(true);
     expect(oauthParamsSchema.safeParse({ ...defaultParams, oauthMode: 'team' }).success).toBe(
       false
     );
@@ -415,6 +431,175 @@ describe('oauth widget — resolveFromDaemonVerification', () => {
     const serialized = JSON.stringify(meta);
     expect(Object.keys(meta).sort()).toEqual(['attached', 'mcp_server_id', 'name', 'oauth_mode']);
     expect(serialized).not.toMatch(/token|expires|scope|secret|2030/i);
+  });
+});
+
+/**
+ * The catalog-connect lane: the widget pins only a catalog entry, the drawer's
+ * own Connect made the install, and the browser names it. That name is a
+ * candidate, not a destination — only an install of the pinned entry the
+ * resolver may use is attached.
+ */
+describe('oauth widget — catalog-connect resolution', () => {
+  const GITHUB_ENTRY = {
+    name: 'io.github.github/github-mcp-server',
+    remote_url: 'https://api.githubcopilot.com/mcp/',
+    transport: 'streamable-http',
+    auth_type: 'credentials',
+    credentials: { scheme: 'bearer', label: 'Fine-grained personal access token' },
+    permission_disclosure: 'Uses the token you provide.',
+  };
+  const API_KEY_INSTALL = () => ({
+    ...OAUTH_SERVER_ROW(),
+    mcp_server_id: 'srv-github',
+    display_name: 'GitHub',
+    source: 'catalog',
+    catalog_entry_name: 'io.github.github/github-mcp-server',
+    transport: 'http',
+    url: 'https://api.githubcopilot.com/mcp',
+    headers: {},
+    auth: { type: 'bearer', token: '***' },
+  });
+  beforeEach(() => {
+    vi.mocked(loadCatalog).mockResolvedValue([GITHUB_ENTRY] as never);
+  });
+  const resolveWith = (ctx: ReturnType<typeof makeCtx>['ctx'], mcpServerId?: string) => {
+    if (oauthWidget.resolution !== 'daemon_verified') throw new Error('wrong resolution kind');
+    return oauthWidget.resolveFromDaemonVerification(
+      ctx,
+      { mcp_server_id: mcpServerId },
+      CATALOG_CONNECT_PARAMS
+    );
+  };
+
+  it('attaches the API-key install the drawer made, without asking for a grant', async () => {
+    const { ctx, attachSpy } = makeCtx({ server: API_KEY_INSTALL() });
+    const meta = await resolveWith(ctx, 'srv-github');
+
+    expect(meta).toEqual({
+      mcp_server_id: 'srv-github',
+      name: 'GitHub',
+      oauth_mode: 'per_user',
+      attached: true,
+    });
+    expect(attachSpy).toHaveBeenCalledWith({ mcpServerId: 'srv-github' }, expect.anything());
+    expect(livenessStub).not.toHaveBeenCalled();
+  });
+
+  it('refuses an install edited to point elsewhere with no auth (no grant, no attach)', async () => {
+    // Provenance survives ordinary edits; the current config is what counts.
+    const { ctx, attachSpy } = makeCtx({
+      server: { ...API_KEY_INSTALL(), url: 'https://attacker.example/mcp', auth: { type: 'none' } },
+    });
+    await expect(resolveWith(ctx, 'srv-github')).rejects.toThrow(/not a current catalog install/);
+    expect(attachSpy).not.toHaveBeenCalled();
+    expect(livenessStub).not.toHaveBeenCalled();
+  });
+
+  it('refuses an OAuth entry install with OAuth removed but the catalog URL kept', async () => {
+    const ASANA_ENTRY = {
+      name: 'com.asana/mcp',
+      remote_url: 'https://mcp.asana.com/sse',
+      transport: 'sse',
+      auth_type: 'oauth',
+      oauth: { configured_client: { setup_url: 'https://app.asana.com', secret_required: true } },
+      permission_disclosure: 'Reads and writes tasks.',
+    };
+    vi.mocked(loadCatalog).mockResolvedValue([ASANA_ENTRY] as never);
+    const { ctx, attachSpy } = makeCtx({
+      server: {
+        ...API_KEY_INSTALL(),
+        mcp_server_id: 'srv-asana',
+        catalog_entry_name: 'com.asana/mcp',
+        transport: 'sse',
+        url: 'https://mcp.asana.com/sse',
+        auth: { type: 'none' },
+      },
+    });
+    if (oauthWidget.resolution !== 'daemon_verified') throw new Error('wrong resolution kind');
+    await expect(
+      oauthWidget.resolveFromDaemonVerification(
+        ctx,
+        { mcp_server_id: 'srv-asana' },
+        { ...CATALOG_CONNECT_PARAMS, catalogEntryName: 'com.asana/mcp' }
+      )
+    ).rejects.toThrow(/not a current catalog install/);
+    expect(attachSpy).not.toHaveBeenCalled();
+    expect(livenessStub).not.toHaveBeenCalled();
+  });
+
+  it('refuses a keyed entry install with the key removed', async () => {
+    const { ctx, attachSpy } = makeCtx({
+      server: { ...API_KEY_INSTALL(), auth: { type: 'none' } },
+    });
+    await expect(resolveWith(ctx, 'srv-github')).rejects.toThrow(/not a current catalog install/);
+    expect(attachSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses an install edited to carry custom headers', async () => {
+    const { ctx, attachSpy } = makeCtx({
+      server: { ...API_KEY_INSTALL(), headers: { 'X-Forward': 'somewhere' } },
+    });
+    await expect(resolveWith(ctx, 'srv-github')).rejects.toThrow(/not a current catalog install/);
+    expect(attachSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses an install whose entry left the catalog', async () => {
+    vi.mocked(loadCatalog).mockResolvedValue([]);
+    const { ctx, attachSpy } = makeCtx({ server: API_KEY_INSTALL() });
+    await expect(resolveWith(ctx, 'srv-github')).rejects.toThrow(/not a current catalog install/);
+    expect(attachSpy).not.toHaveBeenCalled();
+  });
+
+  it('still requires a grant for an OAuth entry install', async () => {
+    vi.mocked(loadCatalog).mockResolvedValue([{ ...GITHUB_ENTRY, auth_type: 'oauth' }] as never);
+    const { ctx, attachSpy } = makeCtx({
+      server: { ...API_KEY_INSTALL(), auth: { type: 'oauth', oauth_mode: 'per_user' } },
+    });
+    livenessStub.mockResolvedValue({ live: false, reason: 'missing', refreshable: false });
+
+    await expect(resolveWith(ctx, 'srv-github')).rejects.toBeInstanceOf(Forbidden);
+    expect(attachSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses without a server id rather than guessing one', async () => {
+    const { ctx, attachSpy } = makeCtx({ server: API_KEY_INSTALL() });
+    await expect(resolveWith(ctx)).rejects.toThrow(/from the card first/);
+    expect(attachSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses an install of a different entry, even one the caller owns', async () => {
+    const { ctx, attachSpy } = makeCtx({
+      server: { ...API_KEY_INSTALL(), catalog_entry_name: 'com.notion/mcp' },
+    });
+    await expect(resolveWith(ctx, 'srv-github')).rejects.toThrow(/not a current catalog install/);
+    expect(attachSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a hand-configured server that merely shares the entry name', async () => {
+    const { ctx, attachSpy } = makeCtx({ server: { ...API_KEY_INSTALL(), source: 'user' } });
+    await expect(resolveWith(ctx, 'srv-github')).rejects.toThrow(/not a current catalog install/);
+    expect(attachSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses another user's private install of the same entry", async () => {
+    const { ctx, attachSpy } = makeCtx({
+      server: { ...API_KEY_INSTALL(), owner_user_id: 'someone-else' },
+    });
+    await expect(resolveWith(ctx, 'srv-github')).rejects.toThrow(/not available to you/);
+    expect(attachSpy).not.toHaveBeenCalled();
+  });
+
+  it('ignores a browser-named server when the widget pins one', async () => {
+    // The pinned lane's anti-confused-deputy property is unchanged.
+    const { ctx } = makeCtx();
+    if (oauthWidget.resolution !== 'daemon_verified') throw new Error('wrong resolution kind');
+    const meta = await oauthWidget.resolveFromDaemonVerification(
+      ctx,
+      { mcp_server_id: 'srv-github' },
+      defaultParams
+    );
+    expect(meta.mcp_server_id).toBe('srv-notion');
   });
 });
 

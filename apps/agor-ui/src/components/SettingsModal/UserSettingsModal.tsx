@@ -107,6 +107,7 @@ import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
 import { PrimaryTeammatePicker } from './PrimaryTeammatePicker';
 import { FieldRow, PanelHeader, SectionDivider, SettingsSection } from './panelPrimitives';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 import { UploadsTab } from './UploadsTab';
 import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
@@ -280,6 +281,13 @@ export interface UserSettingsModalProps {
     shouldApply?: () => boolean
   ) => void | Promise<void>;
   initialTab?: string;
+  /**
+   * Render the body as an in-place drill-in (no outer Modal) for the Workspace
+   * Settings shell. The editor keeps its own panel-aware footer (ownsFooter) and
+   * publishes `dirty` for the shell's leave guard. Default false → the standalone
+   * Modal/Drawer used by the personal User Settings surface is unchanged.
+   */
+  embedded?: boolean;
 }
 
 const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
@@ -291,6 +299,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   onUpdate,
   onReopenOnboarding,
   initialTab,
+  embedded = false,
 }) => {
   const { token } = theme.useToken();
   const { config: authConfig, featuresConfig, identityContractState } = useAuthConfig();
@@ -735,6 +744,9 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     // Let persistence settle before dismissing the field saving/error state.
     if (!saving) handleClose();
   };
+  // Inside Workspace Settings, Close runs the drill-in's unsaved-changes guard;
+  // outside a drill shell this leaves at once.
+  const { confirmLeaveIfDirty } = useSettingsDrill();
 
   const syncUserGroups = async (
     nextGroupIds: string[],
@@ -2217,7 +2229,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       <Alert
         type="info"
         showIcon
-        title="Authentication is managed by this workspace — your personal configuration is never used while this policy is active."
+        title="Authentication is managed by this workspace; your personal configuration is never used while this policy is active."
         style={{ marginBottom: 16 }}
       />
     ) : effectiveSource === 'Unavailable' ? (
@@ -2509,7 +2521,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         </Button>,
       ]
     : [
-        <Button key="close" onClick={requestClose} disabled={saving}>
+        <Button key="close" onClick={() => confirmLeaveIfDirty(requestClose)} disabled={saving}>
           Close
         </Button>,
         <Button
@@ -2546,6 +2558,152 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     </div>
   );
 
+  const desktopBody = (
+    <ConfigProvider theme={scopedTheme}>
+      <Layout
+        style={{
+          height: '100%',
+          background: token.colorBgContainer,
+          flexDirection: compact ? 'column' : 'row',
+        }}
+      >
+        <Sider
+          width={compact ? '100%' : 220}
+          style={{
+            background: token.colorBgElevated,
+            borderRight: compact ? 0 : `1px solid ${token.colorBorderSecondary}`,
+            borderBottom: compact ? `1px solid ${token.colorBorderSecondary}` : 0,
+            overflow: 'auto',
+            maxHeight: compact ? 240 : undefined,
+            flex: compact ? '0 0 auto' : undefined,
+            padding: compact ? `${token.paddingSM}px` : `20px ${token.marginSM}px`,
+          }}
+        >
+          <div style={{ padding: `0 ${token.marginXXS}px ${token.marginMD}px` }}>{siderTitle}</div>
+          <div style={{ padding: `0 ${token.marginXXS}px ${token.marginSM}px` }}>
+            <Input
+              allowClear
+              placeholder="Search settings"
+              prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+          {searchActive ? (
+            searchResults.length === 0 ? (
+              <div style={{ padding: '8px 16px' }}>
+                <Typography.Text type="secondary">No settings match “{search}”</Typography.Text>
+              </div>
+            ) : (
+              <Menu
+                mode="inline"
+                selectedKeys={[]}
+                onClick={({ key }) => handleSearchResultClick(key)}
+                items={searchMenuItems}
+                style={{ borderInlineEnd: 'none', background: 'transparent' }}
+              />
+            )
+          ) : (
+            <Menu
+              mode="inline"
+              selectedKeys={activeInNav ? [activeKey] : []}
+              onClick={({ key }) => setActiveKey(key)}
+              items={menuItems}
+              style={{ borderInlineEnd: 'none', background: 'transparent' }}
+            />
+          )}
+        </Sider>
+        <Content style={{ padding: '28px 32px', overflow: 'auto' }}>{renderFormPanels()}</Content>
+      </Layout>
+    </ConfigProvider>
+  );
+
+  // The phone layout: a section picker instead of the sider. Inside Settings
+  // the shell already supplies Back and Close.
+  const compactBody = (
+    <ConfigProvider theme={scopedTheme}>
+      <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+        <Flex
+          vertical
+          gap={token.marginSM}
+          style={{
+            padding: `${token.paddingSM}px ${token.paddingMD}px`,
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
+            background: token.colorBgElevated,
+            flex: '0 0 auto',
+          }}
+        >
+          <Flex align="center" justify="space-between" gap={token.marginSM}>
+            <div style={{ minWidth: 0 }}>{siderTitle}</div>
+            {!embedded && (
+              <Button
+                type="text"
+                icon={<CloseOutlined />}
+                aria-label="Close user settings"
+                disabled={saving}
+                onClick={requestClose}
+              />
+            )}
+          </Flex>
+          <Select
+            aria-label="User settings section"
+            showSearch
+            optionFilterProp="label"
+            value={activeInNav ? activeKey : undefined}
+            placeholder="Choose a settings section"
+            options={mobileSectionOptions}
+            onChange={setActiveKey}
+            style={{ width: '100%' }}
+            size="large"
+          />
+        </Flex>
+        <Content
+          style={{
+            padding: `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            minWidth: 0,
+            width: '100%',
+            maxWidth: '100%',
+            boxSizing: 'border-box',
+          }}
+        >
+          <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>{renderFormPanels()}</div>
+        </Content>
+      </Layout>
+    </ConfigProvider>
+  );
+
+  // Drill-in mode for the Workspace Settings shell: no outer Modal. The editor
+  // keeps its own panel-aware footer (ownsFooter) and publishes `dirty` for the
+  // shell leave guard; the breadcrumb backs out via requestClose → onClose.
+  if (embedded) {
+    return (
+      <DrillInFrame
+        title={user?.name || user?.email || 'Edit user'}
+        dirty={dirtyMainPanels.size > 0 || dirtyAgenticConfigTools.size > 0}
+        ownsFooter
+        onBack={requestClose}
+      >
+        <Flex vertical style={{ height: '100%', minHeight: 0 }}>
+          {hiddenForms}
+          <div style={{ flex: 1, minHeight: 0 }}>{compact ? compactBody : desktopBody}</div>
+          <Space
+            style={{
+              width: '100%',
+              justifyContent: 'flex-end',
+              paddingTop: token.paddingSM,
+              marginTop: token.marginSM,
+              borderTop: `1px solid ${token.colorBorderSecondary}`,
+            }}
+          >
+            {footer}
+          </Space>
+        </Flex>
+      </DrillInFrame>
+    );
+  }
+
   if (compact) {
     return (
       <Drawer
@@ -2560,57 +2718,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         styles={{ body: { padding: 0, overflow: 'hidden' } }}
       >
         {hiddenForms}
-        <ConfigProvider theme={scopedTheme}>
-          <Layout style={{ height: '100%', background: token.colorBgContainer }}>
-            <Flex
-              vertical
-              gap={token.marginSM}
-              style={{
-                padding: `${token.paddingSM}px ${token.paddingMD}px`,
-                borderBottom: `1px solid ${token.colorBorderSecondary}`,
-                background: token.colorBgElevated,
-                flex: '0 0 auto',
-              }}
-            >
-              <Flex align="center" justify="space-between" gap={token.marginSM}>
-                <div style={{ minWidth: 0 }}>{siderTitle}</div>
-                <Button
-                  type="text"
-                  icon={<CloseOutlined />}
-                  aria-label="Close user settings"
-                  disabled={saving}
-                  onClick={requestClose}
-                />
-              </Flex>
-              <Select
-                aria-label="User settings section"
-                showSearch
-                optionFilterProp="label"
-                value={activeInNav ? activeKey : undefined}
-                placeholder="Choose a settings section"
-                options={mobileSectionOptions}
-                onChange={setActiveKey}
-                style={{ width: '100%' }}
-                size="large"
-              />
-            </Flex>
-            <Content
-              style={{
-                padding: `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`,
-                overflowY: 'auto',
-                overflowX: 'hidden',
-                minWidth: 0,
-                width: '100%',
-                maxWidth: '100%',
-                boxSizing: 'border-box',
-              }}
-            >
-              <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>
-                {renderFormPanels()}
-              </div>
-            </Content>
-          </Layout>
-        </ConfigProvider>
+        {compactBody}
       </Drawer>
     );
   }
@@ -2657,65 +2765,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
           lightweight hidden connectors, calling form methods while switching
           panels can produce noisy "useForm is not connected" console warnings. */}
       {hiddenForms}
-      <ConfigProvider theme={scopedTheme}>
-        <Layout
-          style={{
-            height: '100%',
-            background: token.colorBgContainer,
-            flexDirection: compact ? 'column' : 'row',
-          }}
-        >
-          <Sider
-            width={compact ? '100%' : 220}
-            style={{
-              background: token.colorBgElevated,
-              borderRight: compact ? 0 : `1px solid ${token.colorBorderSecondary}`,
-              borderBottom: compact ? `1px solid ${token.colorBorderSecondary}` : 0,
-              overflow: 'auto',
-              maxHeight: compact ? 240 : undefined,
-              flex: compact ? '0 0 auto' : undefined,
-              padding: compact ? `${token.paddingSM}px` : `20px ${token.marginSM}px`,
-            }}
-          >
-            <div style={{ padding: `0 ${token.marginXXS}px ${token.marginMD}px` }}>
-              {siderTitle}
-            </div>
-            <div style={{ padding: `0 ${token.marginXXS}px ${token.marginSM}px` }}>
-              <Input
-                allowClear
-                placeholder="Search settings"
-                prefix={<SearchOutlined style={{ color: token.colorTextTertiary }} />}
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-            {searchActive ? (
-              searchResults.length === 0 ? (
-                <div style={{ padding: '8px 16px' }}>
-                  <Typography.Text type="secondary">No settings match “{search}”</Typography.Text>
-                </div>
-              ) : (
-                <Menu
-                  mode="inline"
-                  selectedKeys={[]}
-                  onClick={({ key }) => handleSearchResultClick(key)}
-                  items={searchMenuItems}
-                  style={{ borderInlineEnd: 'none', background: 'transparent' }}
-                />
-              )
-            ) : (
-              <Menu
-                mode="inline"
-                selectedKeys={activeInNav ? [activeKey] : []}
-                onClick={({ key }) => setActiveKey(key)}
-                items={menuItems}
-                style={{ borderInlineEnd: 'none', background: 'transparent' }}
-              />
-            )}
-          </Sider>
-          <Content style={{ padding: '28px 32px', overflow: 'auto' }}>{renderFormPanels()}</Content>
-        </Layout>
-      </ConfigProvider>
+      {desktopBody}
     </Modal>
   );
 };

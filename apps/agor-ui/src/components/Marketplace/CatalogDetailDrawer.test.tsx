@@ -37,6 +37,13 @@ const DEEPWIKI = {
   auth_type: 'none',
 } as unknown as MCPCatalogEntry;
 
+const POSTMANLIKE = {
+  ...DEEPWIKI,
+  name: 'com.postmanlike/mcp',
+  permission_disclosure:
+    'Reads and writes collections you authorise. Its hosted server collects product telemetry.',
+} as MCPCatalogEntry;
+
 const LINEAR = {
   ...DEEPWIKI,
   name: 'app.linear/linear',
@@ -211,45 +218,19 @@ describe('CatalogDetailDrawer connected state', () => {
 });
 
 describe('CatalogDetailDrawer consent', () => {
-  it('gates connect on the disclosure being acknowledged', () => {
-    renderDrawer(DEEPWIKI);
+  it('implies consent: the access summary sits above an enabled Connect, full text collapsed', () => {
+    renderDrawer(POSTMANLIKE);
 
-    expect(screen.getByText(DEEPWIKI.permission_disclosure as string)).toBeVisible();
-    expect(connectButton()).toBeDisabled();
-
-    fireEvent.click(screen.getByRole('checkbox'));
-
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.getByTestId('catalog-access-summary')).toHaveTextContent(
+      'Reads and writes collections you authorise.'
+    );
+    expect(screen.getByTestId('catalog-access-summary')).not.toHaveTextContent('telemetry');
+    expect(screen.getByRole('button', { name: /What this can access/ })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
     expect(connectButton()).toBeEnabled();
-  });
-
-  it("does not carry one server's acknowledgement to the next one shown", () => {
-    const { show } = renderDrawer(DEEPWIKI);
-    fireEvent.click(screen.getByRole('checkbox'));
-    expect(connectButton()).toBeEnabled();
-
-    show(LINEAR);
-
-    expect(screen.getByText(LINEAR.permission_disclosure as string)).toBeVisible();
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
-    expect(connectButton()).toBeDisabled();
-  });
-
-  it('withdraws consent when the disclosure it was given for is rewritten', () => {
-    // A reseed can rewrite what an entry discloses. Consent was given for the
-    // old words, and the endpoint's contract is the text — so the same entry
-    // saying something new has to be acknowledged again.
-    const { show } = renderDrawer(DEEPWIKI);
-    fireEvent.click(screen.getByRole('checkbox'));
-    expect(connectButton()).toBeEnabled();
-
-    show({
-      ...DEEPWIKI,
-      permission_disclosure: 'Now also writes to your repositories.',
-    } as MCPCatalogEntry);
-
-    expect(screen.getByText('Now also writes to your repositories.')).toBeVisible();
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
-    expect(connectButton()).toBeDisabled();
   });
 });
 
@@ -296,7 +277,6 @@ describe('CatalogDetailDrawer OAuth activation', () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(popup);
     const onConnect = vi.fn();
     renderOAuth(onConnect);
-    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(connectButton());
     expect(open).toHaveBeenCalledWith(
       'about:blank',
@@ -323,7 +303,6 @@ describe('CatalogDetailDrawer OAuth activation', () => {
     const onConnect = vi.fn();
     renderOAuth(onConnect, { entry: DEEPWIKI, readinessLoading: true });
 
-    fireEvent.click(screen.getByRole('checkbox'));
     expect(connectButton()).toBeEnabled();
     fireEvent.click(connectButton());
 
@@ -340,7 +319,6 @@ describe('CatalogDetailDrawer OAuth activation', () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null);
     const onConnect = vi.fn();
     renderOAuth(onConnect);
-    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(connectButton());
     expect(onConnect).not.toHaveBeenCalled();
     expect(
@@ -370,7 +348,6 @@ describe('CatalogDetailDrawer connect capability', () => {
 
   it('refuses a viewer at the action and explains the role restriction', () => {
     renderDrawer(DEEPWIKI, { capability: VIEWER });
-    fireEvent.click(screen.getByRole('checkbox'));
 
     expect(connectButton()).toBeDisabled();
     expect(screen.getByText(/read-only access/i)).toBeInTheDocument();
@@ -408,7 +385,6 @@ describe('CatalogDetailDrawer connect capability', () => {
 
   it('refuses a member when the workspace policy forbids new servers', () => {
     renderDrawer(DEEPWIKI, { capability: RESTRICTED_MEMBER });
-    fireEvent.click(screen.getByRole('checkbox'));
 
     expect(connectButton()).toBeDisabled();
     expect(screen.getByText(/doesn't let you add servers/)).toBeInTheDocument();
@@ -418,7 +394,6 @@ describe('CatalogDetailDrawer connect capability', () => {
     renderDrawer(DEEPWIKI, {
       capability: { ...RESTRICTED_MEMBER, policy: 'allow_crud', canConfigure: true },
     });
-    fireEvent.click(screen.getByRole('checkbox'));
 
     expect(connectButton()).toBeEnabled();
   });
@@ -432,14 +407,12 @@ describe('CatalogDetailDrawer connect capability', () => {
         canConfigure: true,
       },
     });
-    fireEvent.click(screen.getByRole('checkbox'));
 
     expect(connectButton()).toBeDisabled();
   });
 
   it('fails closed without inventing a workspace policy while the read is pending', () => {
     renderDrawer(DEEPWIKI, { policyPending: true });
-    fireEvent.click(screen.getByRole('checkbox'));
 
     expect(connectButton()).toBeDisabled();
     expect(screen.getByText(POLICY_LOADING_HINT)).toBeInTheDocument();
@@ -568,15 +541,13 @@ describe('CatalogDetailDrawer API key', () => {
     expect(connectButton()).toHaveTextContent('Connect');
   });
 
-  it('erases same-entry consent and the pasted key on same-role identity replacement', () => {
+  it('erases the pasted key on same-role identity replacement', () => {
     const { onConnect, replaceIdentity } = renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'admin-a-private-key' } });
     expect(connectButton()).toBeEnabled();
 
     replaceIdentity('user-admin-b');
 
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
     expect(keyField()).toHaveValue('');
     expect(connectButton()).toBeDisabled();
     fireEvent.click(connectButton());
@@ -585,9 +556,8 @@ describe('CatalogDetailDrawer API key', () => {
 
   it('offers a key field for an entry that needs one, and gates connect on it', () => {
     renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
 
-    // Acknowledged, branch chosen — and still not connectable, because the
+    // Branch chosen — and still not connectable, because the
     // endpoint will refuse an install without a key anyway. Finding that out
     // at the button beats finding it out from the daemon.
     expect(keyField()).toBeVisible();
@@ -602,7 +572,6 @@ describe('CatalogDetailDrawer API key', () => {
 
   it('hands the pasted key to the connect callback', () => {
     const { onConnect } = renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(keyField() as HTMLElement, { target: { value: '  fake-key-1111  ' } });
 
     fireEvent.click(connectButton());
@@ -617,7 +586,6 @@ describe('CatalogDetailDrawer API key', () => {
 
   it('does not enable connect for a field holding only whitespace', () => {
     renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
 
     fireEvent.change(keyField() as HTMLElement, { target: { value: '   ' } });
 
@@ -629,7 +597,6 @@ describe('CatalogDetailDrawer API key', () => {
     // across a change of entry, so a bare string would leave GitHub's key in
     // the box for a connect to Sentry.
     const { show } = renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
 
     show(SENTRY);
@@ -644,7 +611,6 @@ describe('CatalogDetailDrawer API key', () => {
     // Marketplace is open. Without an explicit discard the pasted key sat in
     // React state indefinitely and came back, revealable, on reopening.
     const { setOpen } = renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
 
     setOpen(false);
@@ -659,7 +625,6 @@ describe('CatalogDetailDrawer API key', () => {
     // and a user who mistyped one character should not have to find the key
     // again to fix it.
     renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
 
     expect(keyField()).toHaveValue('fake-github-key');
@@ -668,7 +633,6 @@ describe('CatalogDetailDrawer API key', () => {
 
   it('discards the pasted key while the successful next step remains on screen', () => {
     const { succeed, answerFromEndpoint } = renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
 
     succeed();
@@ -692,7 +656,6 @@ describe('CatalogDetailDrawer API key', () => {
 
   it('keeps the prescribed bearer field when the endpoint confirms credentials', () => {
     const { answerFromEndpoint } = renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
     answerFromEndpoint('required');
 
     expect(keyField()).toBeVisible();
@@ -705,7 +668,6 @@ describe('CatalogDetailDrawer API key', () => {
     // The whole point of one extra round trip: the second attempt carries what
     // the first was refused for lacking.
     const { answerFromEndpoint, onConnect } = renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
     answerFromEndpoint('required');
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });
 
@@ -721,7 +683,6 @@ describe('CatalogDetailDrawer API key', () => {
     // the endpoint up, and the daemon refuses every keyed request. The button
     // was unreachable because it demanded a key that guaranteed refusal.
     const { answerFromEndpoint } = renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
 
     answerFromEndpoint('not_accepted');
@@ -743,7 +704,6 @@ describe('CatalogDetailDrawer API key', () => {
     const open = vi.spyOn(window, 'open');
     const { answerFromEndpoint, onConnect } = renderWithConnect(OAUTH_LINEAR);
     answerFromEndpoint('not_accepted');
-    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(connectButton());
 
     expect(open).not.toHaveBeenCalled();
@@ -758,7 +718,6 @@ describe('CatalogDetailDrawer API key', () => {
     // retention bug one state further along, and submitting it would repeat the
     // refusal the retry exists to escape.
     const { answerFromEndpoint, onConnect } = renderWithConnect(GITHUB);
-    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-github-key' } });
     answerFromEndpoint('not_accepted');
 
@@ -775,7 +734,6 @@ describe('CatalogDetailDrawer API key', () => {
 
   it('offers no key field for an entry that does not need one', () => {
     const { onConnect } = renderWithConnect(DEEPWIKI);
-    fireEvent.click(screen.getByRole('checkbox'));
 
     expect(keyField()).toBeNull();
 
@@ -828,7 +786,6 @@ describe('explicit ownership and no-write reuse', () => {
         },
         readiness: { catalog_key: DEEPWIKI.name, state },
       });
-      fireEvent.click(screen.getByRole('checkbox'));
       expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
     }
   );
@@ -838,7 +795,6 @@ describe('explicit ownership and no-write reuse', () => {
       capability: { ...ALLOWED, role: 'viewer', isAdmin: false, canConfigure: false },
       readiness: { catalog_key: DEEPWIKI.name, state: 'installed_ready' },
     });
-    fireEvent.click(screen.getByRole('checkbox'));
     expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
     expect(screen.queryByRole('radio', { name: 'Shared' })).toBeNull();
   });

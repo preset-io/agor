@@ -26,9 +26,20 @@
  * Slack leaves exactly this state. Before it, the only way forward was a full
  * re-authorization of an account that was already connected.
  *
+ * A widget pinned only to a catalog entry (no `mcpServerId` — an entry that
+ * needs an API key, so nothing could be installed at mint time) runs none of
+ * that. Connect opens the MCP Catalog's own drawer for the entry (the app's
+ * catalog host mounts `CatalogTab` in its handoff mode — see
+ * `openCatalogEntry`), whose Connect is the one catalog connect path: member
+ * policy, the key field, egress and storage are all the drawer's. When the
+ * drawer reports the install ready, this card POSTs its id to `oauth-resolve`,
+ * and the daemon verifies it is an install of that entry before attaching it.
+ * A session link carrying `?mcp_connect=<widget id>` opens the drawer on
+ * arrival, which is how a gateway user reaches it.
+ *
  * No secret ever touches this component. The provider redirects to the
  * daemon's own callback; the popup's only job is to be the window the user
- * signs in to.
+ * signs in to. A key typed in the drawer goes from that form to the daemon.
  *
  * Terminal states (one-line read-only summaries):
  *   - submitted (attached)      ✅ Connected and attached
@@ -51,10 +62,12 @@ import {
   type MarketplaceOAuthPopup,
   openMarketplaceOAuthPopup,
 } from '@/components/Marketplace/marketplaceOAuthPopup';
+import { useMCPCatalogModal } from '@/contexts/MCPCatalogModalContext';
 import { useAgorStore } from '@/store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '@/store/selectors';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { formatActionError, notConnectedMessage } from '@/utils/connectionErrors';
+import { consumeMcpConnectIntent } from '@/utils/mcpConnectIntent';
 import { oauthAttemptFailureMessage, waitForMCPOAuthAttempt } from '@/utils/mcpOAuthAttempt';
 import { useThemedMessage } from '@/utils/message';
 import { CompactNotice } from '../CompactNotice';
@@ -64,7 +77,8 @@ import { useWidgetReplay, WIDGET_ALREADY_ANSWERED_MESSAGE } from './widgetReplay
 const { Text, Paragraph } = Typography;
 
 interface OAuthWidgetParams {
-  mcpServerId: string;
+  /** Absent when the widget is pinned only to `catalogEntryName`. */
+  mcpServerId?: string;
   serverName: string;
   oauthMode: 'per_user' | 'shared';
   reason: string;
@@ -168,7 +182,11 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
   // as the only way forward.
   const authenticatedServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
   const [finishFailed, setFinishFailed] = useState(false);
-  const canFinish = !finishFailed && authenticatedServerIds.has(params.mcpServerId);
+  const canFinish =
+    !finishFailed && !!params.mcpServerId && authenticatedServerIds.has(params.mcpServerId);
+  // Catalog-connect lane: Connect opens the catalog drawer instead of a popup.
+  const catalogEntryName = params.mcpServerId ? undefined : params.catalogEntryName;
+  const catalog = useMCPCatalogModal();
 
   // Latest-click-wins. A second Connect invalidates the first click's popup and
   // poll so a stale attempt cannot resolve the widget behind a newer one.
@@ -195,7 +213,7 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
    * pressing it after the Slack page finished the same request, converges
    * rather than duplicating.
    */
-  const finish = async () => {
+  const finish = async (connectedServerId?: string) => {
     if (busyStates.has(state) || !client) return;
     const owner = ++operationOwner.current;
     setFailure(null);
@@ -203,7 +221,9 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
     try {
       const resolved = (await client
         .service(`widgets/${encodeURIComponent(widgetId)}/oauth-resolve`)
-        .create({})) as { status?: string };
+        .create(connectedServerId ? { mcp_server_id: connectedServerId } : {})) as {
+        status?: string;
+      };
       if (operationOwner.current !== owner) return;
       setState('connected');
       if (resolved.status === 'submitted') showSuccess(`Connected ${params.serverName}`);
@@ -216,10 +236,32 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
       setFinishFailed(true);
       setState('idle');
       setFailure(
-        `Agor could not finish connecting "${params.serverName}". Sign in again to continue.`
+        catalogEntryName
+          ? formatActionError('finish connecting', err, { idempotent: true })
+          : `Agor could not finish connecting "${params.serverName}". Sign in again to continue.`
       );
     }
   };
+
+  const openCatalogDrawer = (entryName: string) => {
+    if (!catalog) {
+      setFailure('Connect this server from the MCP Catalog in Agor.');
+      return;
+    }
+    setFailure(null);
+    catalog.openCatalogEntry({
+      entryName,
+      returnTo: 'the conversation',
+      onConnected: (serverId) => void finish(serverId),
+    });
+  };
+
+  // A relayed session link names this widget: open its drawer on arrival.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once, on arrival
+  useEffect(() => {
+    if (!catalogEntryName || !client || !catalog) return;
+    if (consumeMcpConnectIntent(widgetId)) openCatalogDrawer(catalogEntryName);
+  }, [client, catalog]);
 
   const connect = async () => {
     if (state === 'starting' || state === 'pending' || state === 'connected') return;
@@ -227,6 +269,11 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
       setFailure(notConnectedMessage('connect'));
       return;
     }
+    if (catalogEntryName) {
+      openCatalogDrawer(catalogEntryName);
+      return;
+    }
+    const mcpServerId = params.mcpServerId as string;
     // Reserve the popup synchronously, while the click still has user
     // activation. Opening it after the oauth-start await gets it blocked.
     const popup = openMarketplaceOAuthPopup();
@@ -242,7 +289,7 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
 
     try {
       const result = (await client.service('mcp-servers/oauth-start').create({
-        mcp_server_id: params.mcpServerId,
+        mcp_server_id: mcpServerId,
       })) as OAuthStartSuccess | MCPOAuthStartFailure;
       if (!isCurrent()) return;
       if (!result.success || !result.authorizationUrl || !result.attempt_id) {
@@ -354,7 +401,9 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
         {progressAnnouncement}
       </span>
       <span role="alert" aria-atomic="true" style={VISUALLY_HIDDEN_STYLE}>
-        {failure ? `Sign-in to ${params.serverName} was not completed. ${failure}` : ''}
+        {failure
+          ? `${catalogEntryName ? 'Connecting' : 'Sign-in to'} ${params.serverName} was not completed. ${failure}`
+          : ''}
       </span>
       <Space orientation="vertical" size="small" style={{ width: '100%' }}>
         <Space size="small">
@@ -425,7 +474,7 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
             role="presentation"
             type="error"
             showIcon
-            title="Sign-in was not completed"
+            title={catalogEntryName ? 'Connection was not completed' : 'Sign-in was not completed'}
             description={failure}
           />
         ) : null}
@@ -438,7 +487,7 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
             <Button
               size="small"
               type="primary"
-              onClick={finish}
+              onClick={() => finish()}
               loading={busy}
               disabled={answeredElsewhere}
             >

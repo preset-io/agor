@@ -75,15 +75,11 @@ describe('CatalogDetailDrawer staged flow', () => {
     expect(screen.queryByText('Teammate')).not.toBeInTheDocument();
     expect(screen.queryByText('Agent tool')).not.toBeInTheDocument();
 
-    const checkbox = document.querySelector<HTMLInputElement>('input[type="checkbox"]');
     const addButton = screen.getByText('Connect').closest('button');
-    if (!checkbox || !addButton) throw new Error('add controls not found');
-    fireEvent.click(checkbox);
+    if (!addButton) throw new Error('add controls not found');
     fireEvent.click(addButton);
 
-    expect(onConnect).toHaveBeenCalledWith({
-      acknowledgedDisclosure: ENTRY.permission_disclosure,
-    });
+    expect(onConnect).toHaveBeenCalledWith({});
   });
 
   it('renders a calm next-step state and asks for teammate/tool only on request', async () => {

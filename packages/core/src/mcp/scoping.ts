@@ -24,6 +24,7 @@ import type { MCPServer, MCPServerFilters, MCPServerID, SessionID } from '../typ
 import { isMCPServerUsableBy } from './ownership';
 import {
   buildMCPTemplateContextFromEnv,
+  extractMCPTemplateDependencies,
   hasTemplateMarker,
   resolveMcpServerTemplates,
   TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS,
@@ -73,6 +74,36 @@ export interface MCPServerWithSource {
   source: 'session-assigned' | 'global';
   /** Non-persisted result from the tenant/user-scoped executor credential authority. */
   oauthAuthResolution: MCPOAuthAuthResolution;
+  /**
+   * `auth.oauth_grant_type` as stored, before template resolution defaults it
+   * to `client_credentials`. Absent when the server never set one.
+   */
+  configuredOAuthGrantType?: string;
+  /**
+   * Names (never values) of user environment variables a bearer/JWT secret
+   * template references that are unset for the acting user. Absent otherwise.
+   */
+  missingUserEnvKeys?: string[];
+}
+
+/** Unset user env vars behind an unresolved bearer/JWT secret, by name. */
+function missingAuthUserEnvKeys(
+  original: MCPServer,
+  unresolvedFields: readonly string[],
+  userEnv: Readonly<Record<string, string>>
+): string[] {
+  const auth = original.auth;
+  if (!auth || auth.type === 'none' || auth.type === 'oauth') return [];
+  const fields = TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS.filter((field) =>
+    unresolvedFields.includes(`auth.${field}`)
+  );
+  if (fields.length === 0) return [];
+  // Only the unresolved secret fields, so a set variable elsewhere in the
+  // config cannot be reported and an unrelated unset one cannot either.
+  const { keys } = extractMCPTemplateDependencies({
+    auth: { type: auth.type, ...Object.fromEntries(fields.map((field) => [field, auth[field]])) },
+  } as MCPServer);
+  return [...keys].filter((key) => !userEnv[key]).sort();
 }
 
 export type MCPOAuthAuthResolution =
@@ -305,7 +336,16 @@ export async function getMcpServersForSession(
           servers[i] = {
             ...servers[i],
             server: result.server,
+            ...(original.auth?.oauth_grant_type
+              ? { configuredOAuthGrantType: original.auth.oauth_grant_type }
+              : {}),
           };
+          const missingUserEnvKeys = missingAuthUserEnvKeys(
+            original,
+            result.unresolvedFields,
+            templateContext.user.env
+          );
+          if (missingUserEnvKeys.length > 0) servers[i].missingUserEnvKeys = missingUserEnvKeys;
           if (hasTemplates) templatesResolved++;
 
           // Log warnings for non-critical unresolved fields

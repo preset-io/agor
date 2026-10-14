@@ -31,7 +31,7 @@ interface Props extends Omit<AgenticToolConfigFormProps, 'agenticTool' | 'client
   /**
    * How a reserved default/preset resolves — surfaced as a schedule-run note.
    * `save` (default) shows no banner (the redesign relies on inline resolved
-   * summaries); `schedule-run` explains per-run resolution for ScheduleModal.
+   * summaries); `schedule-run` explains per-run resolution for ScheduleForm.
    */
   defaultResolution?: 'save' | 'schedule-run';
   /** Current user — resolves "My default" and gates the save-as-default checkbox. */

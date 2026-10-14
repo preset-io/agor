@@ -7,10 +7,10 @@ type Props = Pick<
 >;
 
 /**
- * One presentation seam for Catalog detail/auth and pre-selection states.
- * Context owners supply content/callbacks, not drawer spacing overrides.
+ * One presentation seam for Catalog detail/auth states.
+ * Callers supply content/callbacks, not drawer spacing overrides.
  * AntD owns header/body padding and responsive width; actions remain in the
- * body flow (there is no separate padded footer in either context).
+ * body flow (there is no separate padded footer).
  */
 export function CatalogDrawer({ children, ...props }: Props) {
   const { token } = theme.useToken();

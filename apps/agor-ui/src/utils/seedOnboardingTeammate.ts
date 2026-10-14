@@ -1,20 +1,17 @@
 import type { AgenticToolName, AgorClient, Branch, Repo, Session, UserID } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
 import type { NewSessionConfig, SessionCreationResult } from '../domain/sessionCreation';
-import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
-import type { OnboardingSlackGatewayIntent } from './onboardingSlack';
 import { stagePromptDraftSeed } from './promptDrafts';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
   buildTeammateFirstSessionTitle,
+  type RequestedCatalogTool,
 } from './teammateBootstrapPrompt';
 import { createTeammateBranch, type TeammateCreationDeps } from './teammateCreation';
 import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
 
 export interface SeedOnboardingTeammateInput {
-  connectedMcpServerIds?: string[];
-  slackGatewayIntent?: OnboardingSlackGatewayIntent;
   /** Framework repo the teammate branches from — undefined while it's still cloning. */
   frameworkRepo: Repo | undefined;
   /** Board the wizard already created; the teammate is seeded onto it (no second board). */
@@ -37,12 +34,10 @@ export interface SeedOnboardingTeammateInput {
   agent?: AgenticToolName | null;
   /** False for a fallback tool after skipping AI setup: create an idle session and draft. */
   startInitialTurn: boolean;
-  /** Goal-tailored tools/connections with their real Agor setup surface. */
-  suggestedIntegrations?: OnboardingIntegrationRecommendation[];
-  /** Onboarding goal ids (order-preserving, primary first); [] when skipped. */
-  goals?: string[];
   /** Chosen gallery template id (persona); null/undefined = blank starter. */
   templateId?: string | null;
+  /** Tools picked in onboarding, listed in the first-session prompt. */
+  requestedTools?: readonly RequestedCatalogTool[];
   user?: { name?: string | null; email?: string | null } | null;
   /** Identity that initiated onboarding; the daemon independently validates it. */
   expectedUserId: UserID;
@@ -154,7 +149,7 @@ async function findExistingSession(
 
 /**
  * Seeds the user's first AI teammate at the end of onboarding: a branch on the
- * framework repo plus a goal-primed onboarding session, reusing the board the
+ * framework repo plus a first onboarding session, reusing the board the
  * wizard already created.
  *
  * Durable IDs are recovery handles, not proof of success. The caller must require
@@ -286,11 +281,9 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       emoji: input.teammateEmoji,
       userName: input.user?.name,
       userEmail: input.user?.email,
-      goals: input.goals,
       templateId: input.templateId,
+      requestedTools: input.requestedTools,
       localHome: getTeammateConfig(branch)?.localHome,
-      suggestedIntegrations: input.suggestedIntegrations,
-      slackGatewayIntent: input.slackGatewayIntent,
     });
     const initialization = await startTeammateBootstrapSession({
       client: input.client,
@@ -299,9 +292,6 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       sessionConfig: {
         branch_id: branch.branch_id,
         agent: input.agent,
-        ...(input.connectedMcpServerIds?.length
-          ? { mcpServerIds: input.connectedMcpServerIds }
-          : {}),
         title: buildTeammateFirstSessionTitle({
           displayName: teammateName,
           emoji: input.teammateEmoji,

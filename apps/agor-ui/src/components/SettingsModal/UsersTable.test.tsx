@@ -1,10 +1,10 @@
 import type { User } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { App as AntApp, ConfigProvider } from 'antd';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
+import { renderWithSettingsShell } from './settingsDrillTestUtils';
 import { UsersTable } from './UsersTable';
 
 function user(user_id: string, role: User['role']): User {
@@ -23,19 +23,15 @@ function renderTable(
   users: User[],
   onCreate: NonNullable<ComponentProps<typeof UsersTable>['onCreate']> = vi.fn()
 ) {
-  return render(
-    <ConfigProvider theme={{ hashed: false }}>
-      <AntApp>
-        <UsersTable
-          userById={new Map(users.map((item) => [item.user_id, item]))}
-          client={null}
-          currentUser={currentUser}
-          onCreate={onCreate}
-          onUpdate={vi.fn()}
-          onDelete={vi.fn()}
-        />
-      </AntApp>
-    </ConfigProvider>
+  return renderWithSettingsShell(
+    <UsersTable
+      userById={new Map(users.map((item) => [item.user_id, item]))}
+      client={null}
+      currentUser={currentUser}
+      onCreate={onCreate}
+      onUpdate={vi.fn()}
+      onDelete={vi.fn()}
+    />
   );
 }
 
@@ -102,7 +98,9 @@ describe('UsersTable role authority', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('dialog', { name: 'Create User' })).toBeInTheDocument();
+    // Drill-in (no stacked dialog): the create form stays in place on rejection,
+    // marked by the breadcrumb's current crumb.
+    expect(screen.getByText('Create User')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('user@example.com')).toHaveValue('new-user@example.test');
     expect(screen.getByPlaceholderText('••••••••')).toHaveValue('password1234567');
     expect(
@@ -160,29 +158,25 @@ describe('UsersTable role authority', () => {
     });
     const onCreate = vi.fn(() => pending);
     const view = (generation: number) => (
-      <ConfigProvider theme={{ hashed: false }}>
-        <AntApp>
-          <ConnectionProvider
-            value={{
-              connected: true,
-              connecting: false,
-              authGeneration: generation,
-              outOfSync: false,
-              capturedSha: null,
-              currentSha: null,
-            }}
-          >
-            <UsersTable
-              userById={new Map([[admin.user_id, admin]])}
-              client={null}
-              currentUser={admin}
-              onCreate={onCreate}
-            />
-          </ConnectionProvider>
-        </AntApp>
-      </ConfigProvider>
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          authGeneration: generation,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <UsersTable
+          userById={new Map([[admin.user_id, admin]])}
+          client={null}
+          currentUser={admin}
+          onCreate={onCreate}
+        />
+      </ConnectionProvider>
     );
-    const rendered = render(view(30));
+    const rendered = renderWithSettingsShell(view(30));
     fireEvent.click(screen.getByRole('button', { name: /new user/i }));
     fireEvent.change(screen.getByPlaceholderText('user@example.com'), {
       target: { value: 'new-user@example.test' },
@@ -201,6 +195,38 @@ describe('UsersTable role authority', () => {
 
     expect(screen.getByText('Create User')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('••••••••')).toHaveValue('new-user-password');
+  });
+
+  it('guards Back on a dirty user edit, from the breadcrumb and from Close', async () => {
+    const admin = user('admin', 'admin');
+    const member = user('member', 'member');
+    renderWithSettingsShell(
+      <UsersTable
+        userById={new Map([admin, member].map((item) => [item.user_id, item]))}
+        client={null}
+        currentUser={admin}
+        onUpdate={vi.fn()}
+      />,
+      'users'
+    );
+    fireEvent.click(screen.getByLabelText('Edit member@example.test'));
+    fireEvent.change(await screen.findByDisplayValue('member'), {
+      target: { value: 'Renamed member' },
+    });
+    const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
+
+    fireEvent.click(screen.getByText('Users'));
+    await waitFor(() => expect(confirms()).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByDisplayValue('Renamed member')).toBeInTheDocument();
+    await waitFor(() => expect(confirms()).toBe(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(confirms()).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    await waitFor(() =>
+      expect(screen.getByLabelText('Edit member@example.test')).toBeInTheDocument()
+    );
   });
 });
 
@@ -223,16 +249,12 @@ describe('UsersTable groups load', () => {
             : vi.fn().mockResolvedValue([{ group_id: 'g1', user_id: 'admin' }]),
       }),
     } as unknown as ComponentProps<typeof UsersTable>['client'];
-    render(
-      <ConfigProvider theme={{ hashed: false }}>
-        <AntApp>
-          <UsersTable
-            userById={new Map([[admin.user_id, admin]])}
-            client={client}
-            currentUser={admin}
-          />
-        </AntApp>
-      </ConfigProvider>
+    renderWithSettingsShell(
+      <UsersTable
+        userById={new Map([[admin.user_id, admin]])}
+        client={client}
+        currentUser={admin}
+      />
     );
     expect(await screen.findByText("Couldn't load groups.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));

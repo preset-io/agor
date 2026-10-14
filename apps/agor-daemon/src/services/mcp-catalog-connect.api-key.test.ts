@@ -78,7 +78,6 @@ const CURATED = {
 
 const CONNECT_REQUEST = {
   catalog_key: GITHUB,
-  acknowledged_disclosure: DISCLOSURE,
 };
 
 const testDatabaseDirs = new Set<string>();

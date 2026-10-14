@@ -9,6 +9,7 @@ import {
 import { Tooltip } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { useIsTouchInput } from '@/hooks/useCanHover';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { formatActionError } from '@/utils/connectionErrors';
 import { refreshAndRefetchMCPOAuthGrant } from '../../utils/mcpOAuthAttempt';
@@ -110,6 +111,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
   onEdit,
 }) => {
   const { showSuccess, showInfo, showWarning, showError } = useThemedMessage();
+  const touchInput = useIsTouchInput();
   const [refreshing, setRefreshing] = useState(false);
   // Local override so the tooltip reflects a just-refreshed expiry without
   // waiting for a full MCPServer re-fetch from the parent.
@@ -267,7 +269,9 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
       <Tooltip
         // The label is a button for actionable pills, so the same explanation
         // keyboard users receive on focus is available to pointer users on hover.
-        trigger={['hover', 'focus']}
+        // On touch a tap runs the primary action; without one, the tap toggles
+        // this status instead (a tap emulates hover, so hover/focus is off).
+        trigger={touchInput ? (primaryAction ? undefined : 'click') : ['hover', 'focus']}
         title={
           needsConfiguration && !configureAllowed
             ? configureBlockedReason
@@ -360,8 +364,11 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
                 onEdit(server);
               }}
               style={{
-                marginLeft: 8,
-                padding: 0,
+                // Touch pads the 11px icon to a finger-sized hit area; the
+                // negative margin keeps the pill's layout unchanged.
+                ...(touchInput
+                  ? { padding: 8, margin: '-8px -8px -8px 0' }
+                  : { marginLeft: 8, padding: 0 }),
                 background: 'transparent',
                 border: 'none',
                 color: 'inherit',

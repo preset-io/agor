@@ -1,9 +1,29 @@
+import { resolveRepoCleanupPolicy } from '@agor/core/types';
 import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
-import { resolveRepoCleanupPolicy } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Alert, Button, Card, Collapse, Empty, Form, Input, Space, Typography } from 'antd';
-import { useLayoutEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  Collapse,
+  Empty,
+  Form,
+  Input,
+  Modal,
+  Space,
+  Tooltip,
+  Typography,
+} from 'antd';
+import {
+  type Key,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { mapToArray } from '@/utils/mapHelpers';
 import { repositorySetupMessage } from '@/utils/repositorySetupMessage';
@@ -11,11 +31,14 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { RepoFormFields } from '../forms/RepoFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { Tag } from '../Tag';
-import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
+import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 
 interface ReposTableProps {
   repoById: Map<string, Repo>;
+  /** Whether the caller may configure the branch cleanup policy (admin-only). */
   canConfigureCleanup?: boolean;
   identityKey: string | null;
   operationScope: readonly unknown[] | null;
@@ -51,25 +74,39 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     [repoById]
   );
   const [searchTerm, setSearchTerm] = useState('');
-  const [repoModalOpen, setRepoModalOpen] = useState(false);
-  const [editingRepo, setEditingRepo] = useState<Repo | null>(null);
   const [repoMode, setRepoMode] = useState<'remote' | 'local'>('remote');
   const [repoForm] = Form.useForm();
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [repoToDelete, setRepoToDelete] = useState<Repo | null>(null);
+
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
   const operationGuard = useAuthorityOperationGuard(operationScope);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: authorityKey intentionally erases the selected caller-private row
+  // A different caller erases the selected caller-private row and any draft.
+  const authorityKeyRef = useRef(identityKey);
   useLayoutEffect(() => {
+    if (authorityKeyRef.current === identityKey) return;
+    authorityKeyRef.current = identityKey;
     repoForm.resetFields();
-    setRepoModalOpen(false);
-    setEditingRepo(null);
     setRepoMode('remote');
     setDeleteModalOpen(false);
     setRepoToDelete(null);
-  }, [identityKey, repoForm]);
+    closeDrill();
+  }, [identityKey, repoForm, closeDrill]);
 
+  // Editing/creating swaps this section's Content pane for the drill-in editor
+  // below, instead of stacking a second Modal on top of Settings.
+  const editingRepo =
+    drill?.mode === 'edit' && drill.recordId ? (repoById.get(drill.recordId) ?? null) : null;
+  const isCreating = drill?.mode === 'create';
   const isEditing = !!editingRepo;
+
+  const openEdit = useCallback(
+    (repo: Repo) => openDrill({ mode: 'edit', recordId: repo.repo_id }),
+    [openDrill]
+  );
+  const openCreate = useCallback(() => openDrill({ mode: 'create' }), [openDrill]);
+
   const filteredRepos = useMemo(
     () =>
       filterBySettingsSearch(repos, searchTerm, [
@@ -81,6 +118,34 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         (repo) => repo.repo_type,
       ]),
     [repos, searchTerm]
+  );
+
+  useEffect(() => {
+    if (editingRepo) setRepoMode(editingRepo.repo_type ?? 'remote');
+  }, [editingRepo]);
+
+  // Reset the form to create defaults (remote mode, default_branch "main")
+  // whenever the drill-in enters create mode.
+  useEffect(() => {
+    if (isCreating) {
+      setRepoMode('remote');
+      repoForm.resetFields();
+      repoForm.setFieldsValue({ default_branch: 'main' });
+    }
+  }, [isCreating, repoForm]);
+  // Seeds an opened repo once; later record updates never overwrite the draft.
+  const isDraftDirty = useDrillFormDraft(
+    repoForm,
+    drill,
+    useMemo(
+      () =>
+        editingRepo && {
+          slug: editingRepo.slug,
+          default_branch: editingRepo.default_branch || 'main',
+          cleanup_policy: resolveRepoCleanupPolicy(editingRepo.cleanup_policy),
+        },
+      [editingRepo]
+    )
   );
 
   const handleOpenDeleteModal = (repo: Repo) => {
@@ -98,86 +163,70 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     }
   };
 
-  const handleOpenCreateModal = () => {
-    setEditingRepo(null);
-    setRepoMode('remote');
-    repoForm.resetFields();
-    repoForm.setFieldsValue({
-      default_branch: 'main',
-    });
-    setRepoModalOpen(true);
-  };
-
-  const handleOpenEditModal = (repo: Repo) => {
-    setEditingRepo(repo);
-    setRepoMode(repo.repo_type ?? 'remote');
-    repoForm.setFieldsValue({
-      slug: repo.slug,
-      default_branch: repo.default_branch || 'main',
-      cleanup_policy: resolveRepoCleanupPolicy(repo.cleanup_policy),
-    });
-    setRepoModalOpen(true);
-  };
-
-  const handleSaveRepo = async () => {
+  const handleSave = useCallback(async () => {
     const operation = operationGuard.begin();
     if (!operation.isCurrent()) return;
     try {
       const values = await repoForm.validateFields();
       if (!operation.isCurrent()) return;
       if (isEditing && editingRepo) {
-        const updates: Partial<Repo> = {
-          slug: values.slug,
-        };
-        // Metadata-only saves must neither require executable-config authority
-        // nor overwrite an administrator's concurrent policy edit.
-        if (
-          canConfigureCleanup &&
-          values.cleanup_policy &&
-          Object.entries(resolveRepoCleanupPolicy(editingRepo.cleanup_policy)).some(
-            ([key, value]) => values.cleanup_policy[key] !== value
-          )
-        ) {
-          updates.cleanup_policy = values.cleanup_policy;
-        }
-        if (values.default_branch) {
+        // Patch only what this draft changed since it was seeded, so a
+        // concurrent edit to an untouched field survives. Metadata-only saves
+        // must not require executable-config authority; changed policy keys go
+        // over the live policy, keeping an administrator's concurrent edits.
+        const changed = isDraftDirty.changedValues();
+        const updates: Partial<Repo> = {};
+        if ('slug' in changed) updates.slug = values.slug;
+        if ('default_branch' in changed && values.default_branch) {
           updates.default_branch = values.default_branch;
         }
-        await onUpdate?.(editingRepo.repo_id, updates, operation.isCurrent);
-      } else {
-        if (repoMode === 'local') {
-          await onCreateLocal?.(
-            { path: values.path, slug: values.slug || undefined },
-            operation.isCurrent
-          );
-        } else {
-          await onCreate?.(
-            {
-              url: values.url,
-              slug: values.slug,
-              default_branch: values.default_branch,
-            },
-            operation.isCurrent
-          );
+        const policyChanges = changed.cleanup_policy as
+          | Partial<ReturnType<typeof resolveRepoCleanupPolicy>>
+          | undefined;
+        if (canConfigureCleanup && policyChanges && Object.keys(policyChanges).length > 0) {
+          updates.cleanup_policy = {
+            ...resolveRepoCleanupPolicy(editingRepo.cleanup_policy),
+            ...policyChanges,
+          };
         }
+        if (Object.keys(updates).length > 0) {
+          await onUpdate?.(editingRepo.repo_id, updates, operation.isCurrent);
+        }
+      } else if (repoMode === 'local') {
+        await onCreateLocal?.(
+          { path: values.path, slug: values.slug || undefined },
+          operation.isCurrent
+        );
+      } else {
+        await onCreate?.(
+          {
+            url: values.url,
+            slug: values.slug,
+            default_branch: values.default_branch,
+          },
+          operation.isCurrent
+        );
       }
       if (!operation.isCurrent()) return;
-      repoForm.resetFields();
-      setEditingRepo(null);
-      setRepoModalOpen(false);
+      closeDrill();
     } catch {
       // Ant Design displays validation errors. Parent mutation errors already
       // own their user-facing message; either way stale continuations do not
       // close or clear a reconnect-preserved draft.
     }
-  };
-
-  const handleCancelModal = () => {
-    repoForm.resetFields();
-    setEditingRepo(null);
-    setRepoMode('remote');
-    setRepoModalOpen(false);
-  };
+  }, [
+    operationGuard,
+    repoForm,
+    isEditing,
+    editingRepo,
+    repoMode,
+    canConfigureCleanup,
+    isDraftDirty,
+    onUpdate,
+    onCreateLocal,
+    onCreate,
+    closeDrill,
+  ]);
 
   const handleModeChange = (e: RadioChangeEvent) => {
     const value = e.target.value as 'remote' | 'local';
@@ -191,34 +240,177 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     });
   };
 
-  const modalTitle = isEditing
+  const drillTitle = isEditing
     ? 'Edit Repository'
     : repoMode === 'local'
       ? 'Add Local Repository'
       : 'Clone Repository';
-  const modalOkText = isEditing ? 'Save' : repoMode === 'local' ? 'Add' : 'Clone';
+  const drillSaveLabel = isEditing ? 'Save' : repoMode === 'local' ? 'Add' : 'Clone';
+
+  const columns = [
+    {
+      title: 'Name',
+      dataIndex: 'name',
+      key: 'name',
+      width: 220,
+      render: (name: string, repo: Repo) => (
+        <Space>
+          <FolderOutlined />
+          <Typography.Link ellipsis title={name} onClick={() => openEdit(repo)}>
+            <HighlightMatch text={name} query={searchTerm} />
+          </Typography.Link>
+          {(repo.clone_status === 'cloning' || repo.clone_status === 'failed') && (
+            <Tooltip title={repositorySetupMessage(repo)}>
+              <Tag color={repo.clone_status === 'failed' ? 'warning' : 'processing'}>
+                {repo.clone_status === 'failed' ? 'Setup failed' : 'Setting up'}
+              </Tag>
+            </Tooltip>
+          )}
+        </Space>
+      ),
+    },
+    {
+      title: 'Type',
+      dataIndex: 'repo_type',
+      key: 'repo_type',
+      width: 100,
+      filters: [
+        { text: 'Remote', value: 'remote' },
+        { text: 'Local', value: 'local' },
+      ],
+      onFilter: (value: Key | boolean, repo: Repo) => (repo.repo_type ?? 'remote') === value,
+      render: (_: unknown, repo: Repo) => {
+        const isLocal = repo.repo_type === 'local';
+        return <Tag color={isLocal ? 'green' : 'blue'}>{isLocal ? 'Local' : 'Remote'}</Tag>;
+      },
+    },
+    {
+      title: 'Slug',
+      dataIndex: 'slug',
+      key: 'slug',
+      width: 200,
+      render: (slug: string) => (
+        <Typography.Text code style={{ fontSize: 12 }}>
+          <HighlightMatch text={slug} query={searchTerm} />
+        </Typography.Text>
+      ),
+    },
+    {
+      title: 'Location',
+      key: 'location',
+      render: (_: unknown, repo: Repo) => {
+        const location = repo.remote_url || repo.local_path;
+        return location ? (
+          <Typography.Text code ellipsis style={{ fontSize: 11 }} title={location}>
+            <HighlightMatch text={location} query={searchTerm} />
+          </Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        );
+      },
+    },
+    {
+      title: 'Branch',
+      dataIndex: 'default_branch',
+      key: 'default_branch',
+      width: 120,
+      render: (branch?: string) =>
+        branch ? (
+          <Typography.Text code style={{ fontSize: 11 }}>
+            <HighlightMatch text={branch} query={searchTerm} />
+          </Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 88,
+      render: (_: unknown, repo: Repo) => (
+        <SettingsActionGroup>
+          <Tooltip title="Edit repository">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => openEdit(repo)}
+            />
+          </Tooltip>
+          <Tooltip title="Delete repository">
+            <Button
+              type="text"
+              size="small"
+              icon={<DeleteOutlined />}
+              danger
+              onClick={() => handleOpenDeleteModal(repo)}
+            />
+          </Tooltip>
+        </SettingsActionGroup>
+      ),
+    },
+  ];
+
+  if (editingRepo || isCreating) {
+    return (
+      <DrillInFrame
+        title={drillTitle}
+        dirty={isDraftDirty}
+        saveLabel={drillSaveLabel}
+        onSave={handleSave}
+      >
+        {editingRepo && (
+          <RepoSetupStatus
+            repo={editingRepo}
+            onRetry={
+              onCreate
+                ? async (data) => {
+                    const operation = operationGuard.begin();
+                    if (!operation.isCurrent()) return;
+                    try {
+                      await onCreate(data, operation.isCurrent);
+                    } catch {
+                      // The explicit create handler owns the actionable notification.
+                    }
+                  }
+                : undefined
+            }
+          />
+        )}
+        <Form form={repoForm} layout="vertical" style={{ maxWidth: 520 }}>
+          <RepoFormFields
+            form={repoForm}
+            mode={isEditing ? 'edit' : 'create'}
+            repoMode={repoMode}
+            onRepoModeChange={handleModeChange}
+            canConfigureCleanup={canConfigureCleanup}
+          />
+        </Form>
+      </DrillInFrame>
+    );
+  }
 
   return (
     <div>
       <ResponsiveSettingsHeader
+        title="Repositories"
         description="Connect remote or local git repositories for your sessions."
-        actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
-            <Input
-              allowClear
-              placeholder="Search name, slug, URL, path, type, or branch"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              style={{ width: compact ? '100%' : 340, flex: compact ? '1 1 100%' : undefined }}
-            />
-            <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreateModal}>
-              New Repository
-            </Button>
-          </Space>
-        )}
+        search={
+          <Input
+            allowClear
+            placeholder="Search name, slug, URL, path, type, or branch"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        }
+        primaryActions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            New Repository
+          </Button>
+        }
       />
 
-      {repos.length === 0 && (
+      {repos.length === 0 ? (
         <div
           style={{
             display: 'flex',
@@ -235,178 +427,30 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             </Typography.Text>
           </Empty>
         </div>
+      ) : filteredRepos.length === 0 ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: 400,
+          }}
+        >
+          <Empty description={`No repositories match “${searchTerm}”`} />
+        </div>
+      ) : (
+        <ResponsiveTable
+          primaryColumnKey="name"
+          dataSource={filteredRepos}
+          columns={columns}
+          rowKey="repo_id"
+          pagination={{ pageSize: 10, showSizeChanger: true }}
+          size="small"
+        />
       )}
-
-      {repos.length > 0 && (
-        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-          {filteredRepos.map((repo: Repo) => {
-            const isLocal = repo.repo_type === 'local';
-            const tagColor = isLocal ? 'green' : 'blue';
-            const tagLabel = isLocal ? 'Local' : 'Remote';
-
-            return (
-              <Card
-                key={repo.repo_id}
-                size="small"
-                title={
-                  <Space>
-                    <FolderOutlined />
-                    <Typography.Text strong>
-                      <HighlightMatch text={repo.name} query={searchTerm} />
-                    </Typography.Text>
-                    <Tag color={tagColor} style={{ marginLeft: 8 }}>
-                      <HighlightMatch text={tagLabel} query={searchTerm} />
-                    </Tag>
-                  </Space>
-                }
-                extra={
-                  <Space>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<EditOutlined />}
-                      onClick={() => handleOpenEditModal(repo)}
-                    />
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<DeleteOutlined />}
-                      danger
-                      onClick={() => handleOpenDeleteModal(repo)}
-                    />
-                  </Space>
-                }
-              >
-                {(repo.clone_status === 'cloning' || repo.clone_status === 'failed') && (
-                  <Alert
-                    type={repo.clone_status === 'failed' ? 'warning' : 'info'}
-                    showIcon
-                    title={
-                      repo.clone_status === 'failed'
-                        ? 'Repository setup failed'
-                        : 'Repository setup in progress'
-                    }
-                    description={repositorySetupMessage(repo)}
-                    action={
-                      repo.clone_status === 'failed' && repo.remote_url && onCreate ? (
-                        <Button
-                          size="small"
-                          onClick={async () => {
-                            const operation = operationGuard.begin();
-                            if (!operation.isCurrent()) return;
-                            try {
-                              await onCreate(
-                                {
-                                  url: repo.remote_url!,
-                                  slug: repo.slug,
-                                  default_branch: repo.default_branch || 'main',
-                                },
-                                operation.isCurrent
-                              );
-                            } catch {
-                              // The explicit create handler owns the actionable notification.
-                            }
-                          }}
-                        >
-                          Retry setup
-                        </Button>
-                      ) : undefined
-                    }
-                  />
-                )}
-                {repo.clone_status === 'failed' && repo.clone_error && (
-                  <Collapse
-                    size="small"
-                    items={[
-                      {
-                        key: 'setup',
-                        label: 'Setup diagnostics',
-                        children: (
-                          <>
-                            <Typography.Paragraph>
-                              Attempt {repo.clone_generation ?? 'legacy'} ·{' '}
-                              {repo.clone_error.category} · exit {repo.clone_error.exit_code}
-                            </Typography.Paragraph>
-                            <Typography.Paragraph code>
-                              {repo.clone_error.message.slice(0, 2000)}
-                            </Typography.Paragraph>
-                          </>
-                        ),
-                      },
-                    ]}
-                  />
-                )}
-                {/* Repo metadata */}
-                <Space orientation="vertical" size={8} style={{ width: '100%' }}>
-                  <div>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Slug:{' '}
-                    </Typography.Text>
-                    <Typography.Text code style={{ fontSize: 12 }}>
-                      <HighlightMatch text={repo.slug} query={searchTerm} />
-                    </Typography.Text>
-                  </div>
-
-                  <div>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Type:{' '}
-                    </Typography.Text>
-                    <Typography.Text code style={{ fontSize: 11 }}>
-                      <HighlightMatch text={tagLabel.toLowerCase()} query={searchTerm} />
-                    </Typography.Text>
-                  </div>
-
-                  <div>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Remote:{' '}
-                    </Typography.Text>
-                    <Typography.Text code style={{ fontSize: 11 }}>
-                      {repo.remote_url ? (
-                        <HighlightMatch text={repo.remote_url} query={searchTerm} />
-                      ) : (
-                        '—'
-                      )}
-                    </Typography.Text>
-                  </div>
-
-                  {repo.local_path && (
-                    <div>
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        Path:{' '}
-                      </Typography.Text>
-                      <Typography.Text code style={{ fontSize: 11 }}>
-                        <HighlightMatch text={repo.local_path} query={searchTerm} />
-                      </Typography.Text>
-                    </div>
-                  )}
-                </Space>
-              </Card>
-            );
-          })}
-        </Space>
-      )}
-
-      {/* Create/Edit Repository Modal */}
-      <AdaptiveSettingsModal
-        title={modalTitle}
-        open={repoModalOpen}
-        onOk={handleSaveRepo}
-        onCancel={handleCancelModal}
-        okText={modalOkText}
-      >
-        <Form form={repoForm} layout="vertical" style={{ marginTop: 16 }}>
-          <RepoFormFields
-            form={repoForm}
-            canConfigureCleanup={canConfigureCleanup}
-            mode={isEditing ? 'edit' : 'create'}
-            repoMode={repoMode}
-            onRepoModeChange={handleModeChange}
-          />
-        </Form>
-      </AdaptiveSettingsModal>
 
       {/* Delete Repository Modal */}
-      <AdaptiveSettingsModal
+      <Modal
         title="Delete Repository"
         open={deleteModalOpen}
         onCancel={() => {
@@ -477,7 +521,72 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             )}
           </Space>
         )}
-      </AdaptiveSettingsModal>
+      </Modal>
     </div>
+  );
+};
+
+/** Setup progress / failure for a repository, with a retry for a failed remote clone. */
+const RepoSetupStatus: React.FC<{
+  repo: Repo;
+  onRetry?: (data: CreateRepoRequest) => void;
+}> = ({ repo, onRetry }) => {
+  if (repo.clone_status !== 'cloning' && repo.clone_status !== 'failed') return null;
+  const remoteUrl = repo.remote_url;
+  return (
+    <Space
+      orientation="vertical"
+      size={8}
+      style={{ width: '100%', maxWidth: 520, marginBottom: 16 }}
+    >
+      <Alert
+        type={repo.clone_status === 'failed' ? 'warning' : 'info'}
+        showIcon
+        title={
+          repo.clone_status === 'failed'
+            ? 'Repository setup failed'
+            : 'Repository setup in progress'
+        }
+        description={repositorySetupMessage(repo)}
+        action={
+          repo.clone_status === 'failed' && remoteUrl && onRetry ? (
+            <Button
+              size="small"
+              onClick={() =>
+                onRetry({
+                  url: remoteUrl,
+                  slug: repo.slug,
+                  default_branch: repo.default_branch || 'main',
+                })
+              }
+            >
+              Retry setup
+            </Button>
+          ) : undefined
+        }
+      />
+      {repo.clone_status === 'failed' && repo.clone_error && (
+        <Collapse
+          size="small"
+          items={[
+            {
+              key: 'setup',
+              label: 'Setup diagnostics',
+              children: (
+                <>
+                  <Typography.Paragraph>
+                    Attempt {repo.clone_generation ?? 'legacy'} · {repo.clone_error.category} · exit{' '}
+                    {repo.clone_error.exit_code}
+                  </Typography.Paragraph>
+                  <Typography.Paragraph code>
+                    {repo.clone_error.message.slice(0, 2000)}
+                  </Typography.Paragraph>
+                </>
+              ),
+            },
+          ]}
+        />
+      )}
+    </Space>
   );
 };

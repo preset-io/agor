@@ -124,11 +124,12 @@ import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { ActionErrorNotice, CompactNotice } from '../CompactNotice';
 import { JSONEditor, validateJSON } from '../JSONEditor';
-import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { BranchSelect } from './BranchSelect';
+import { FIELD_WIDTHS } from './panelPrimitives';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 import { SettingsIdentity } from './SettingsIdentity';
 import { UserSelect } from './UserSelect';
 
@@ -747,7 +748,7 @@ const ConnectionTestResultView: React.FC<{ result: GatewayConnectionTestResult }
           expandable
           description={
             <>
-              A green result does not guarantee these — confirm them on the platform:
+              A green result does not guarantee these; confirm them on the platform:
               <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
                 {result.notVerifiable.map((n) => (
                   <li key={n}>{n}</li>
@@ -832,8 +833,8 @@ const SlackScopeChangeWarning: React.FC<{
       description={
         <>
           <div style={{ marginBottom: 6 }}>
-            Saving here does not change the Slack app — update its manifest and reinstall the app
-            for the new scope{addedScopes.length > 1 ? 's' : ''} to take effect.
+            Saving here does not change the Slack app; update its manifest and reinstall the app for
+            the new scope{addedScopes.length > 1 ? 's' : ''} to take effect.
           </div>
           <Space size="small" wrap>
             <SlackAppManifestLink appInfo={appInfo} />
@@ -894,7 +895,7 @@ const SlackManifestPanel: React.FC<{
         type="secondary"
         style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
       >
-        The recommended manifest for this channel&apos;s current options — the desired Slack app
+        The recommended manifest for this channel&apos;s current options; the desired Slack app
         configuration, not a readout of your app&apos;s live settings. Paste it into{' '}
         <strong>App Manifest</strong> in your Slack app to align its scopes and events.
       </Typography.Text>
@@ -1414,7 +1415,7 @@ const SlackSetupWizard: React.FC<{
           {`Required Slack Scopes & Events (${scopes.length} scopes, ${events.length} events)`}
         </Typography.Text>
         <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 12px' }}>
-          Derived from the selected surfaces — channel-like surfaces trigger on{' '}
+          Derived from the selected surfaces; channel-like surfaces trigger on{' '}
           <code>app_mention</code>, not <code>message.*</code> channel events. You copy the full
           manifest on the next step.
         </Typography.Paragraph>
@@ -1425,7 +1426,7 @@ const SlackSetupWizard: React.FC<{
       <div style={{ display: step === 1 ? undefined : 'none' }}>
         <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
           Create the Slack app from this manifest. Slack preconfigures every scope and event for you
-          — no manual scope entry needed.
+          with no manual scope entry needed.
         </Typography.Paragraph>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
@@ -1459,7 +1460,7 @@ const SlackSetupWizard: React.FC<{
           </li>
           <li>
             Go to <strong>Basic Information → App-Level Tokens</strong> and generate a token with
-            the <code>connections:write</code> scope — this is your <code>xapp-</code> token.
+            the <code>connections:write</code> scope; this is your <code>xapp-</code> token.
           </li>
         </ol>
       </div>
@@ -1512,7 +1513,7 @@ const SlackSetupWizard: React.FC<{
           <CompactAlert
             type="warning"
             heading="Testing is optional"
-            description="Slack can't be fully verified up front. Save now and confirm by messaging the bot — but an untested channel may not work."
+            description="Slack can't be fully verified up front. Save now and confirm by messaging the bot, but an untested channel may not work."
             style={{ marginBottom: 16 }}
           />
         )}
@@ -1876,7 +1877,7 @@ const DiscordSetupFields: React.FC<{
               <InputNumber
                 min={MIN_DISCORD_CATCH_UP.max_pages}
                 max={MAX_DISCORD_CATCH_UP.max_pages}
-                style={{ width: '100%' }}
+                style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
               />
             </Form.Item>
             <Form.Item
@@ -1887,7 +1888,7 @@ const DiscordSetupFields: React.FC<{
               <InputNumber
                 min={MIN_DISCORD_CATCH_UP.max_messages}
                 max={MAX_DISCORD_CATCH_UP.max_messages}
-                style={{ width: '100%' }}
+                style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
               />
             </Form.Item>
             <Form.Item
@@ -1898,7 +1899,7 @@ const DiscordSetupFields: React.FC<{
               <InputNumber
                 min={MIN_DISCORD_CATCH_UP.max_prompt_bytes}
                 max={MAX_DISCORD_CATCH_UP.max_prompt_bytes}
-                style={{ width: '100%' }}
+                style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
               />
             </Form.Item>
             <Form.Item
@@ -1909,7 +1910,7 @@ const DiscordSetupFields: React.FC<{
               <InputNumber
                 min={MIN_DISCORD_CATCH_UP.request_timeout_ms}
                 max={MAX_DISCORD_CATCH_UP.request_timeout_ms}
-                style={{ width: '100%' }}
+                style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
               />
             </Form.Item>
             <Form.Item
@@ -1920,7 +1921,7 @@ const DiscordSetupFields: React.FC<{
               <InputNumber
                 min={MIN_DISCORD_CATCH_UP.rate_limit_max_retries}
                 max={MAX_DISCORD_CATCH_UP.rate_limit_max_retries}
-                style={{ width: '100%' }}
+                style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
               />
             </Form.Item>
             <Form.Item
@@ -1931,7 +1932,7 @@ const DiscordSetupFields: React.FC<{
               <InputNumber
                 min={MIN_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms}
                 max={MAX_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms}
-                style={{ width: '100%' }}
+                style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
               />
             </Form.Item>
           </Space>
@@ -2457,12 +2458,12 @@ const ChannelFormFields: React.FC<{
               <div style={{ marginBottom: 16 }}>
                 <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
                   Create a GitHub App to connect Agor to your repositories. This uses GitHub&apos;s
-                  URL-parameters registration flow — you&apos;ll be redirected to GitHub with the
+                  URL-parameters registration flow; you&apos;ll be redirected to GitHub with the
                   form pre-filled, then brought back here to complete setup.
                 </Typography.Paragraph>
 
                 <Form.Item label="App Name" name="github_app_name">
-                  <Input placeholder="Agor (optional — defaults to 'Agor')" />
+                  <Input placeholder="Agor (optional, defaults to 'Agor')" />
                 </Form.Item>
 
                 <Form.Item
@@ -2657,7 +2658,7 @@ const ChannelFormFields: React.FC<{
                                   placeholder={
                                     editingChannel?.config &&
                                     (editingChannel.config as Record<string, unknown>).private_key
-                                      ? '(private key is set — paste new key to replace)'
+                                      ? '(private key is set; paste new key to replace)'
                                       : '-----BEGIN RSA PRIVATE KEY-----\n...'
                                   }
                                   style={{ fontFamily: 'monospace', fontSize: 11 }}
@@ -2724,7 +2725,11 @@ const ChannelFormFields: React.FC<{
                           initialValue={30}
                           tooltip="How frequently to poll the GitHub API for new mentions"
                         >
-                          <InputNumber min={10} max={300} style={{ width: '100%' }} />
+                          <InputNumber
+                            min={10}
+                            max={300}
+                            style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
+                          />
                         </Form.Item>
                       </>
                     ),
@@ -2961,7 +2966,11 @@ const ChannelFormFields: React.FC<{
                       initialValue={3978}
                       tooltip="Port for the Bot Framework HTTP endpoint"
                     >
-                      <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
+                      <InputNumber
+                        min={1024}
+                        max={65535}
+                        style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
+                      />
                     </Form.Item>
 
                     <Form.Item
@@ -3066,7 +3075,7 @@ const ChannelFormFields: React.FC<{
                     <Form.Item
                       label="Agent Member ID (optional)"
                       name="shortcut_agent_member_id"
-                      tooltip="Override the mention target. Leave blank to auto-resolve from the API token's own member — comments that @mention that member trigger the agent."
+                      tooltip="Override the mention target. Leave blank to auto-resolve from the API token's own member; comments that @mention that member trigger the agent."
                     >
                       <Input placeholder="(auto-resolved from token)" />
                     </Form.Item>
@@ -3170,7 +3179,11 @@ const ChannelFormFields: React.FC<{
                       initialValue={15}
                       tooltip="How frequently to poll the Shortcut API for new mentions"
                     >
-                      <InputNumber min={5} max={300} style={{ width: '100%' }} />
+                      <InputNumber
+                        min={5}
+                        max={300}
+                        style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
+                      />
                     </Form.Item>
                   </>
                 ),
@@ -3557,7 +3570,7 @@ const ChannelFormFields: React.FC<{
                       description={
                         <div>
                           <Typography.Text type="secondary" style={{ fontSize: 'inherit' }}>
-                            Derived from the selected surfaces — channel-like surfaces trigger on{' '}
+                            Derived from the selected surfaces; channel-like surfaces trigger on{' '}
                             <code>app_mention</code>, not <code>message.*</code> channel events.
                             Copy the full manifest from the App Manifest section.
                           </Typography.Text>
@@ -3783,11 +3796,15 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   );
   const operationGuard = useAuthorityOperationGuard(callerAuthority.operationScope);
   const canManage = !!currentUser && hasMinimumRole(currentUser.role, ROLES.ADMIN);
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [editModalOpen, setEditModalOpen] = useState(false);
+  // Create/edit are drill-ins (no stacked modal on top of Settings), driven by
+  // the shell's drill state.
+  const { drill, openDrill, closeDrill, confirmLeaveIfDirty } = useSettingsDrill();
+  const createModalOpen = drill?.mode === 'create';
+  const editModalOpen = drill?.mode === 'edit';
+  const editingChannel =
+    editModalOpen && drill.recordId ? (gatewayChannelById.get(drill.recordId) ?? null) : null;
   const [saveError, setSaveError] = useState<ActionErrorCopy | null>(null);
   const [agentWarning, setAgentWarning] = useState<string | null>(null);
-  const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
   const [channelType, setChannelType] = useState<ChannelType>('slack');
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>('claude-code');
   const [requiresSupportedToolSelection, setRequiresSupportedToolSelection] = useState(false);
@@ -3795,6 +3812,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   const [createForm] = Form.useForm();
   const [editForm] = Form.useForm();
+  // Both forms are seeded by the open handlers, before the editor mounts.
+  const isCreateDirty = useDrillFormDraft(createForm, createModalOpen ? drill : null);
+  const isEditDirty = useDrillFormDraft(editForm, editModalOpen ? drill : null);
   const handleAgentChange = useCallback(
     (agent: AgenticToolName) => {
       const form = editModalOpen ? editForm : createForm;
@@ -3872,9 +3892,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   useLayoutEffect(() => {
     createForm.resetFields();
     editForm.resetFields();
-    setCreateModalOpen(false);
-    setEditModalOpen(false);
-    setEditingChannel(null);
+    closeDrill();
     setChannelType('slack');
     setSelectedAgent('claude-code');
     setRequiresSupportedToolSelection(false);
@@ -4320,7 +4338,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         await client.service('gateway-channels').patch(discordDraftId, { enabled: true });
         showSuccess('Discord channel verified and turned on.');
         createForm.resetFields();
-        setCreateModalOpen(false);
+        closeDrill();
         setChannelType('slack');
         resetCreateFlow();
         return;
@@ -4346,7 +4364,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (!operation.isCurrent()) return;
       showSuccess('Channel created.');
       createForm.resetFields();
-      setCreateModalOpen(false);
+      closeDrill();
       setChannelType('slack');
       resetCreateFlow();
     } catch (error: unknown) {
@@ -4396,7 +4414,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 
   const closeCreateModal = () => {
     createForm.resetFields();
-    setCreateModalOpen(false);
+    closeDrill();
     setChannelType('slack');
     setSelectedAgent('claude-code');
     setRequiresSupportedToolSelection(false);
@@ -4408,7 +4426,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setSaveError(null);
     setAgentWarning(null);
     resetConnectionTest();
-    setEditingChannel(channel);
     setChannelType(channel.channel_type);
     const persistedAgent = channel.agentic_config?.agent ?? 'claude-code';
     const agent = isAgenticToolName(persistedAgent) ? persistedAgent : null;
@@ -4562,7 +4579,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     }
 
     editForm.setFieldsValue(formValues);
-    setEditModalOpen(true);
+    openDrill({ mode: 'edit', recordId: channel.id });
   };
 
   const handleUpdate = async () => {
@@ -4604,8 +4621,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       await onUpdate?.(editingChannel.id, updates, operation.isCurrent);
       if (!operation.isCurrent()) return;
       editForm.resetFields();
-      setEditModalOpen(false);
-      setEditingChannel(null);
+      closeDrill();
       setChannelType('slack');
       setRequiresSupportedToolSelection(false);
     } catch (error) {
@@ -4728,110 +4744,15 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     ]);
   }, [gatewayChannelById, searchTerm, branchById, userById]);
 
-  return (
-    <div>
-      <ResponsiveSettingsHeader
-        description="Route messages from Slack, Discord, GitHub, Microsoft Teams, and other platforms to Agor sessions."
-        actions={(compact) => (
-          <Space
-            wrap
-            style={{ width: compact ? '100%' : undefined, maxWidth: '100%' }}
-            styles={{ item: { minWidth: 0, maxWidth: '100%' } }}
-          >
-            <Input
-              allowClear
-              placeholder="Search name, type, target branch, or person"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              style={{
-                width: compact ? '100%' : 360,
-                maxWidth: '100%',
-                flex: compact ? '1 1 100%' : undefined,
-              }}
-            />
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              disabled={!canManage}
-              onClick={() => {
-                resetConnectionTest();
-                createForm.setFieldValue('mcpServerIds', currentUser?.default_mcp_server_ids ?? []);
-                setCreateModalOpen(true);
-              }}
-            >
-              Add Channel
-            </Button>
-          </Space>
-        )}
-      />
-
-      {channels.length === 0 ? (
-        <div
-          style={{
-            padding: '60px 20px',
-            textAlign: 'center',
-            color: token.colorTextTertiary,
-          }}
-        >
-          <MessageOutlined style={{ fontSize: 48, marginBottom: 16, display: 'block' }} />
-          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
-            {searchTerm ? 'No matching channels.' : 'No channels configured.'}
-          </Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Add a channel to route messages from Slack, Discord, Teams, or other platforms to Agor
-            sessions.
-          </Typography.Text>
-        </div>
-      ) : (
-        <ResponsiveTable
-          primaryColumnKey="name"
-          dataSource={channels}
-          columns={columns}
-          tableLayout="fixed"
-          key={searchTerm}
-          rowKey="id"
-          pagination={{ defaultPageSize: 10, showSizeChanger: true }}
-          size="small"
-        />
-      )}
-
-      {/* Create Channel Modal */}
-      <AdaptiveSettingsModal
+  // Create/edit drill in place of the list (no modal on modal).
+  if (createModalOpen) {
+    // The wizard keeps its own footer; the frame supplies the breadcrumb and guard.
+    return (
+      <DrillInFrame
         title="Add Gateway Channel"
-        open={createModalOpen}
-        onCancel={closeCreateModal}
-        width={600}
-        footer={
-          // One structurally-identical footer on every step: Back (left),
-          // Cancel + primary (right). Buttons never move between steps.
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <Button
-              type="link"
-              disabled={createStep === 0}
-              onClick={() => setCreateStep((step) => Math.max(0, step - 1))}
-              style={{ paddingLeft: 0 }}
-            >
-              Back
-            </Button>
-            <Space style={{ marginLeft: 'auto' }}>
-              <Button onClick={closeCreateModal}>Cancel</Button>
-              <Button
-                type="primary"
-                loading={creating}
-                disabled={isFinalCreateStep && createUnconfirmed}
-                onClick={handleCreatePrimary}
-              >
-                {isFinalCreateStep
-                  ? channelType === 'discord'
-                    ? discordDraftId
-                      ? 'Verify and enable'
-                      : 'Create secure draft'
-                    : 'Create channel'
-                  : 'Continue'}
-              </Button>
-            </Space>
-          </div>
-        }
+        dirty={isCreateDirty}
+        onBack={closeCreateModal}
+        ownsFooter
       >
         {agentWarning && <CompactNotice type="warning" role="alert" message={agentWarning} />}
         {saveError && <ActionErrorNotice error={saveError} />}
@@ -4870,26 +4791,55 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             authorityGuard={operationGuard}
           />
         </Form>
-      </AdaptiveSettingsModal>
+        {/* One structurally-identical footer on every step: Back (left),
+            Cancel + primary (right). Buttons never move between steps. */}
+        <div style={{ display: 'flex', alignItems: 'center', marginTop: 16 }}>
+          <Button
+            type="link"
+            disabled={createStep === 0}
+            onClick={() => setCreateStep((step) => Math.max(0, step - 1))}
+            style={{ paddingLeft: 0 }}
+          >
+            Back
+          </Button>
+          <Space style={{ marginLeft: 'auto' }}>
+            <Button onClick={() => confirmLeaveIfDirty(closeCreateModal)}>Cancel</Button>
+            <Button
+              type="primary"
+              loading={creating}
+              disabled={isFinalCreateStep && createUnconfirmed}
+              onClick={handleCreatePrimary}
+            >
+              {isFinalCreateStep
+                ? channelType === 'discord'
+                  ? discordDraftId
+                    ? 'Verify and enable'
+                    : 'Create secure draft'
+                  : 'Create channel'
+                : 'Continue'}
+            </Button>
+          </Space>
+        </div>
+      </DrillInFrame>
+    );
+  }
 
-      {/* Edit Channel Modal */}
-      <AdaptiveSettingsModal
+  if (editModalOpen) {
+    return (
+      <DrillInFrame
         title="Edit Gateway Channel"
-        open={editModalOpen}
-        onOk={handleUpdate}
-        onCancel={() => {
+        dirty={isEditDirty}
+        onSave={handleUpdate}
+        saveDisabled={requiresSupportedToolSelection}
+        onBack={() => {
           editForm.resetFields();
-          setEditModalOpen(false);
-          setEditingChannel(null);
+          closeDrill();
           setChannelType('slack');
           setSelectedAgent('claude-code');
           setRequiresSupportedToolSelection(false);
           setSaveError(null);
           resetConnectionTest();
         }}
-        okText="Save"
-        okButtonProps={{ disabled: requiresSupportedToolSelection }}
-        width={600}
       >
         {requiresSupportedToolSelection && (
           <Alert
@@ -4942,7 +4892,69 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             authorityGuard={operationGuard}
           />
         </Form>
-      </AdaptiveSettingsModal>
+      </DrillInFrame>
+    );
+  }
+
+  return (
+    <div>
+      <ResponsiveSettingsHeader
+        title="Gateway Channels"
+        description="Route messages from Slack, Discord, GitHub, Microsoft Teams, and other platforms to Agor sessions."
+        search={
+          <Input
+            allowClear
+            placeholder="Search name, type, target branch, or person"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        }
+        count={`${channels.length} ${channels.length === 1 ? 'channel' : 'channels'}`}
+        primaryActions={
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            disabled={!canManage}
+            onClick={() => {
+              resetConnectionTest();
+              createForm.setFieldValue('mcpServerIds', currentUser?.default_mcp_server_ids ?? []);
+              openDrill({ mode: 'create' });
+            }}
+          >
+            Add Channel
+          </Button>
+        }
+      />
+
+      {channels.length === 0 ? (
+        <div
+          style={{
+            padding: '60px 20px',
+            textAlign: 'center',
+            color: token.colorTextTertiary,
+          }}
+        >
+          <MessageOutlined style={{ fontSize: 48, marginBottom: 16, display: 'block' }} />
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+            {searchTerm ? 'No matching channels.' : 'No channels configured.'}
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Add a channel to route messages from Slack, Discord, Teams, or other platforms to Agor
+            sessions.
+          </Typography.Text>
+        </div>
+      ) : (
+        <ResponsiveTable
+          primaryColumnKey="name"
+          dataSource={channels}
+          columns={columns}
+          tableLayout="fixed"
+          key={searchTerm}
+          rowKey="id"
+          pagination={{ defaultPageSize: 10, showSizeChanger: true }}
+          size="small"
+        />
+      )}
     </div>
   );
 };

@@ -1,7 +1,8 @@
 import type { AgorClient, Board, BoardCapabilityPolicies, User, UserID } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { Form, Input } from 'antd';
+import { App as AntApp, Form, Input } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { StandaloneSettingsDrillProvider } from '../SettingsModal/SettingsDrill';
 import { BoardEditModal } from './BoardEditModal';
 
 const showError = vi.hoisted(() => vi.fn());
@@ -387,6 +388,59 @@ describe('BoardEditModal', () => {
       })
     );
   });
+
+  it.each(['spacing', 'apply'] as const)(
+    'guards and saves embedded zone defaults when changing %s',
+    async (change) => {
+      const { client, boardPatch } = makeClient();
+      const onClose = vi.fn();
+      render(
+        <AntApp>
+          <StandaloneSettingsDrillProvider section="boards">
+            <BoardEditModal
+              board={listedBoard}
+              client={client}
+              open
+              embedded
+              onClose={onClose}
+              onUpdate={vi.fn()}
+            />
+          </StandaloneSettingsDrillProvider>
+        </AntApp>
+      );
+      const editor = await screen.findByTestId('board-zone-defaults-editor');
+      if (change === 'spacing') {
+        fireEvent.change(within(editor).getByLabelText('Horizontal gap'), {
+          target: { value: '8' },
+        });
+      } else {
+        fireEvent.click(within(editor).getByLabelText('Apply to existing zones'));
+      }
+      fireEvent.click(screen.getByText('Cancel'));
+      const confirm = await waitFor(() => {
+        const dialog = document.querySelector('.ant-modal-confirm');
+        expect(dialog).not.toBeNull();
+        return dialog as HTMLElement;
+      });
+      expect(confirm).toHaveTextContent('Discard unsaved changes?');
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() =>
+        expect(document.querySelector('.ant-modal-confirm')).not.toBeInTheDocument()
+      );
+      fireEvent.click(screen.getByText('Save'));
+      await waitFor(() => expect(boardPatch).toHaveBeenCalledOnce());
+      expect(boardPatch).toHaveBeenCalledWith(
+        listedBoard.board_id,
+        expect.objectContaining({
+          _action: 'setZoneLayoutDefaults',
+          applyToExisting: change === 'apply',
+          ...(change === 'spacing' ? { defaults: expect.objectContaining({ columnGap: 8 }) } : {}),
+        })
+      );
+      await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    }
+  );
 
   it('does not send a defaults action for an unchanged save', async () => {
     const { client, boardPatch } = makeClient();

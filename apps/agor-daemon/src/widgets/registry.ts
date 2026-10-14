@@ -124,9 +124,12 @@ export interface WidgetSubmitCtx {
  * polled so the daemon can log and correlate, but no field here is trusted as
  * proof: `resolveFromDaemonVerification` re-reads the persisted grant and decides
  * for itself. A client that invents an attempt id resolves nothing.
+ * `mcp_server_id` names the install a catalog-drawer connect produced, for a
+ * widget pinned only to a catalog entry; the handler verifies it is one.
  */
 export interface WidgetDaemonVerifiedEvidence {
   attempt_id?: string;
+  mcp_server_id?: string;
 }
 
 /** Fields every widget registration carries, whatever resolves it. */

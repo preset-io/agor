@@ -54,7 +54,7 @@ it('shows personas before Advanced and carries explicit selection; custom refs a
     sourceBranch: 'my-custom-ref',
     sourceRemoteUrl: undefined,
   });
-  fireEvent.click(screen.getByText('Start blank'));
+  fireEvent.click(screen.getByText('Start from scratch'));
   expect(fields!.form.getFieldsValue(true)).toMatchObject({
     templateId: 'blank',
     sourceBranch: undefined,

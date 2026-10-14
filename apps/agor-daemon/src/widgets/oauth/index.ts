@@ -38,9 +38,18 @@ import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden } from '@agor/core/feathers';
 import { isMCPServerUsableBy } from '@agor/core/mcp';
-import type { GatewayChannel, MCPServer, MCPServerID, Session, UserID } from '@agor/core/types';
+import { findCatalogEntry, loadCatalog } from '@agor/core/mcp-catalog';
+import type {
+  GatewayChannel,
+  MCPCatalogEntry,
+  MCPServer,
+  MCPServerID,
+  Session,
+  UserID,
+} from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { z } from 'zod';
+import { isCurrentCatalogInstallOfEntry } from '../../services/mcp-catalog-install-policy.js';
 import {
   mcpOAuthGrantIsConnected,
   resolveMCPOAuthGrantLiveness,
@@ -76,11 +85,15 @@ const GRANT_REFRESH_SETTLE_MS = 400;
  * Agent-provided params, validated when the MCP tool fires and then frozen
  * onto the widget row.
  *
- * `mcpServerId` is pinned here at mint time and is the ONLY destination this
- * widget can ever resolve against. That is the whole anti-confused-deputy
- * story for the resolve endpoint: the request carries no server id, no URL,
- * and no catalog key, so a tampered client cannot aim a resolution at a
- * different server it happens to hold a grant for.
+ * The pin is the whole anti-confused-deputy story for the resolve endpoint.
+ * When `mcpServerId` is pinned it is the ONLY destination this widget can ever
+ * resolve against, and the request's server id is ignored. When only
+ * `catalogEntryName` is pinned (an entry the user connects through the catalog
+ * drawer, e.g. with an API key, so no row exists at mint time), the request
+ * names the install the drawer just made and the daemon accepts it only if it
+ * is a caller-usable catalog install of exactly that entry — whose URL,
+ * transport and auth recipe the catalog fixes — so a tampered client cannot aim
+ * the resolution anywhere the entry does not already point.
  *
  * Everything else is presentational. Nothing here is secret — see §5.1 of the
  * widgets design doc.
@@ -89,12 +102,11 @@ const GRANT_REFRESH_SETTLE_MS = 400;
  * Upper bound on the disclosure carried onto a widget row.
  *
  * Generous rather than tight, and the difference matters: this field is the
- * CONSENT. §5.4 justifies an agent satisfying `acknowledged_disclosure` on a
- * human's behalf precisely because the text then travels onto the widget and
- * is rendered above the Connect button, so the person reads it before the only
- * moment anything is granted. A bound that silently shortened it would take
- * that justification away one sentence at a time — quietly, since the tail of
- * a paragraph is exactly where "and can delete" tends to live.
+ * CONSENT: the text travels onto the widget and is rendered above the Connect
+ * button, so the person reads it before the only moment anything is granted.
+ * A bound that silently shortened it would take that away one sentence at a
+ * time — quietly, since the tail of a paragraph is exactly where "and can
+ * delete" tends to live.
  *
  * So the bound exists only to stop an unbounded blob reaching a message row,
  * and a catalog entry that exceeds it is REFUSED before anything is installed
@@ -108,7 +120,10 @@ export const oauthParamsSchema = z
     mcpServerId: z
       .string()
       .min(1)
-      .describe('MCP server row this widget authorizes. Pinned by the daemon at mint time.'),
+      .optional()
+      .describe(
+        'MCP server row this widget authorizes, pinned by the daemon at mint time. Absent when the user connects a catalog entry through the catalog drawer, where `catalogEntryName` is the pin.'
+      ),
     serverName: z
       .string()
       .min(1)
@@ -134,7 +149,10 @@ export const oauthParamsSchema = z
       .optional()
       .describe('The catalog entry’s plain-language statement of what connecting grants.'),
   })
-  .strict();
+  .strict()
+  .refine((params) => params.mcpServerId || params.catalogEntryName, {
+    message: 'An oauth widget must pin an MCP server or a catalog entry',
+  });
 
 export type OAuthWidgetParams = z.infer<typeof oauthParamsSchema>;
 
@@ -325,11 +343,164 @@ async function attachToSession(
   return { attached: true };
 }
 
+/** What either resolve lane hands the shared tail: a server ready to check. */
+interface ResolvedTarget {
+  server: MCPServer;
+  mcpServerId: MCPServerID;
+  oauthMode: OAuthWidgetParams['oauthMode'];
+}
+
+/** Ownership the resolver needs for any server it is about to attach. */
+function assertUsableByResolver(ctx: WidgetSubmitCtx, server: MCPServer): void {
+  // The pure ownership predicate, not the params-shaped `isMcpServerUsableByCaller`:
+  // that one reads `params.provider` to classify the caller and would treat
+  // this provider-less daemon-side call as INTERNAL, i.e. always allowed. The
+  // resolver may be a shared-session collaborator rather than the actor who
+  // minted the widget, so this has to be a real check.
+  const isAdmin = hasMinimumRole(ctx.submitterRole, ROLES.ADMIN);
+  if (!isAdmin && !isMCPServerUsableBy(server, ctx.submitterUserId)) {
+    throw new Forbidden('That MCP server is not available to you');
+  }
+}
+
+function loadServerForResolver(ctx: WidgetSubmitCtx, mcpServerId: string): Promise<MCPServer> {
+  const serversService = ctx.app.service('mcp-servers') as unknown as McpServersGetService;
+  return serversService.get(mcpServerId, {
+    user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
+  });
+}
+
 /**
- * Resolve the widget from a completed browser OAuth flow.
+ * Pinned lane: the server named at mint time, and only it. It must still be an
+ * enabled OAuth server in the mode it was minted for; the browser's server id
+ * is ignored.
+ */
+async function resolvePinnedServer(
+  ctx: WidgetSubmitCtx,
+  params: OAuthWidgetParams & { mcpServerId: string }
+): Promise<ResolvedTarget> {
+  const server = await loadServerForResolver(ctx, params.mcpServerId);
+  assertUsableByResolver(ctx, server);
+  if (!server.enabled || server.auth?.type !== 'oauth') {
+    throw new Forbidden(
+      `"${params.serverName}" is no longer an enabled OAuth MCP server; reconfigure it and ask again.`
+    );
+  }
+  if ((server.auth.oauth_mode ?? 'per_user') !== params.oauthMode) {
+    throw new Forbidden(
+      `"${params.serverName}" changed OAuth mode since this request was made; ask again.`
+    );
+  }
+  return {
+    server,
+    mcpServerId: params.mcpServerId as MCPServerID,
+    oauthMode: params.oauthMode,
+  };
+}
+
+/**
+ * Catalog lane: the install the Catalog drawer reports, accepted only while it
+ * is still a current install of the pinned entry — the entry's endpoint,
+ * transport, no custom headers, and an auth prescription Connect could have
+ * written (`isCurrentCatalogInstallOfEntry`). Provenance fields alone survive
+ * ordinary edits, so a row retargeted elsewhere or switched to no auth is
+ * refused here rather than attached.
+ */
+async function resolveCatalogInstall(
+  ctx: WidgetSubmitCtx,
+  params: OAuthWidgetParams,
+  mcpServerId: string | undefined
+): Promise<ResolvedTarget> {
+  if (!mcpServerId) {
+    throw new Forbidden(`Connect "${params.serverName}" from the card first, then try again.`);
+  }
+  const server = await loadServerForResolver(ctx, mcpServerId);
+  assertUsableByResolver(ctx, server);
+  const entry = params.catalogEntryName
+    ? findCatalogEntry(await loadCatalog(), params.catalogEntryName)
+    : undefined;
+  if (
+    !server.enabled ||
+    !entry?.remote_url ||
+    !isCurrentCatalogInstallOfEntry(server, entry as MCPCatalogEntry & { remote_url: string })
+  ) {
+    throw new Forbidden(
+      `That MCP server is not a current catalog install of "${params.serverName}"`
+    );
+  }
+  const oauthMode = (server.auth?.oauth_mode ?? 'per_user') as OAuthWidgetParams['oauthMode'];
+  if (server.auth?.type === 'oauth') assertOAuthWidgetRoleFloor(ctx.submitterRole, oauthMode);
+  return { server, mcpServerId: mcpServerId as MCPServerID, oauthMode };
+}
+
+/**
+ * The grant check both lanes share for an OAuth server. Credentials belong to
+ * the prompt actor resolving this widget, not to the Session owner
+ * (`mcp-egress/gateway.ts`, `register-routes.ts`), so the grant is looked up
+ * under the resolver.
  *
- * `evidence.attempt_id` is logged for correlation and otherwise unused: the
- * decision below comes entirely from rows this daemon owns.
+ * Fails closed if the database handle is missing: unlike the env_vars widget's
+ * optional session-selection write, this read IS the authorization, so a
+ * missing handle must refuse rather than skip.
+ */
+async function assertResolverGrantConnected(
+  ctx: WidgetSubmitCtx,
+  mcpServerId: MCPServerID,
+  serverName: string,
+  attemptId: string | undefined
+): Promise<void> {
+  const db = (ctx.app as unknown as { get?: (key: string) => unknown }).get?.('database') as
+    | GrantLookupDatabase
+    | undefined;
+  if (!db) {
+    throw new Forbidden('MCP OAuth status is unavailable on this daemon; try Connect again.');
+  }
+  const readLiveness = () =>
+    ctx.runInTenantDatabaseScope(() =>
+      resolveMCPOAuthGrantLiveness(db, mcpServerId, ctx.submitterUserId)
+    );
+  let liveness = await readLiveness();
+
+  // `mcpOAuthGrantIsConnected`, not `live` — the same verdict the mint gate
+  // asks (D4.1). This gate completes an attach-and-resume against a credential
+  // that already exists; it issues nothing, seals nothing, and talks to no
+  // provider. What makes it the security boundary is that the decision comes
+  // from a grant row this daemon owns, read under the RESOLVER's identity (D3)
+  // — not the age of that grant's access token. Requiring `live` here while
+  // the mint gate accepts a refreshable grant would refuse a finish for the
+  // exact user the mint gate would have connected for free: someone who signs
+  // in and comes back after an hour-lived access token has lapsed.
+  //
+  // A refresh this daemon started can still be in flight at exactly the moment
+  // the browser POSTs; one short look turns that race into a success instead
+  // of advice to redo a sign-in that worked.
+  if (!mcpOAuthGrantIsConnected(liveness) && liveness.reason === 'refreshing') {
+    await new Promise((resolve) => setTimeout(resolve, GRANT_REFRESH_SETTLE_MS));
+    liveness = await readLiveness();
+  }
+
+  if (!mcpOAuthGrantIsConnected(liveness)) {
+    console.info(
+      `[widgets] event=oauth_widget_unverified server_id=${mcpServerId} reason=${liveness.reason} attempt_id=${attemptId ?? 'none'}`
+    );
+    // "You have not signed in" and "you have, and Agor is still finishing"
+    // need different instructions; both reopen the widget for a retry.
+    throw new Forbidden(
+      liveness.reason === 'refreshing'
+        ? `Agor is still finishing the connection to "${serverName}". Wait a moment, then press Connect again — you should not need to sign in again.`
+        : `Sign-in to "${serverName}" has not completed. Finish the provider sign-in, then try Connect again.`
+    );
+  }
+}
+
+/**
+ * Resolve the widget from a completed browser connect — an OAuth sign-in, or a
+ * catalog-drawer connect for an entry pinned by name.
+ *
+ * `evidence.attempt_id` is logged for correlation and otherwise unused.
+ * `evidence.mcp_server_id` is read only by the catalog lane, and then only
+ * names a candidate it accepts or refuses: the decision comes entirely from
+ * rows this daemon owns.
  */
 async function resolveOAuthWidgetFromCallback(
   ctx: WidgetSubmitCtx,
@@ -342,100 +513,23 @@ async function resolveOAuthWidgetFromCallback(
   // directly (tests do) and costs nothing.
   assertOAuthWidgetRoleFloor(ctx.submitterRole, params.oauthMode);
 
-  // a. The pinned server must still exist, still be usable by this caller, and
-  // still be an enabled OAuth server. A server that was disabled or converted
-  // to bearer auth between mint and resolve is not something to attach.
-  const serversService = ctx.app.service('mcp-servers') as unknown as McpServersGetService;
-  const server = await serversService.get(params.mcpServerId, {
-    user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
-  });
-  // The pure ownership predicate, not the params-shaped `isMcpServerUsableByCaller`:
-  // that one reads `params.provider` to classify the caller and would treat
-  // this provider-less daemon-side call as INTERNAL, i.e. always allowed. The
-  // resolver may be a shared-session collaborator rather than the actor who
-  // minted the widget, so this has to be a real check.
-  const isAdmin = hasMinimumRole(ctx.submitterRole, ROLES.ADMIN);
-  if (!isAdmin && !isMCPServerUsableBy(server, ctx.submitterUserId)) {
-    throw new Forbidden('That MCP server is not available to you');
-  }
-  if (!server.enabled || server.auth?.type !== 'oauth') {
-    throw new Forbidden(
-      `"${params.serverName}" is no longer an enabled OAuth MCP server; reconfigure it and ask again.`
-    );
-  }
-  if ((server.auth.oauth_mode ?? 'per_user') !== params.oauthMode) {
-    throw new Forbidden(
-      `"${params.serverName}" changed OAuth mode since this request was made; ask again.`
-    );
+  const { server, mcpServerId, oauthMode } = params.mcpServerId
+    ? await resolvePinnedServer(ctx, { ...params, mcpServerId: params.mcpServerId })
+    : await resolveCatalogInstall(ctx, params, evidence.mcp_server_id);
+
+  // Catalog connect writes a bearer or open row only after the live endpoint
+  // accepted it, so such a current install is ready as it stands. OAuth needs
+  // the grant.
+  if (server.auth?.type === 'oauth') {
+    await assertResolverGrantConnected(ctx, mcpServerId, params.serverName, evidence.attempt_id);
   }
 
-  // b. THE check. Credentials belong to the prompt actor resolving this
-  // widget, not to the Session owner (`mcp-egress/gateway.ts`,
-  // `register-routes.ts`), so the grant is looked up under the resolver.
-  //
-  // Fails closed if the database handle is missing: unlike the env_vars
-  // widget's optional session-selection write, this read IS the authorization,
-  // so a missing handle must refuse rather than skip.
-  const db = (ctx.app as unknown as { get?: (key: string) => unknown }).get?.('database') as
-    | GrantLookupDatabase
-    | undefined;
-  if (!db) {
-    throw new Forbidden('MCP OAuth status is unavailable on this daemon; try Connect again.');
-  }
-  const readLiveness = () =>
-    ctx.runInTenantDatabaseScope(() =>
-      resolveMCPOAuthGrantLiveness(db, params.mcpServerId as MCPServerID, ctx.submitterUserId)
-    );
-  let liveness = await readLiveness();
-
-  // `mcpOAuthGrantIsConnected`, not `live` — the same verdict the mint gate
-  // asks (D4.1). This gate completes an attach-and-resume against a credential
-  // that already exists; it issues nothing, seals nothing, and talks to no
-  // provider. What makes it the security boundary is that the decision comes
-  // from a grant row this daemon owns, read under the RESOLVER's identity (D3)
-  // — not the age of that grant's access token. Requiring `live` here while
-  // the mint gate accepts a refreshable grant would refuse a finish for the
-  // exact user the mint gate would have connected for free, and that is not
-  // hypothetical: the B1 lane is built for someone who signs in and comes back
-  // later, by which time an hour-lived access token has lapsed and only its
-  // refresh token is left. The old refusal told them to go and complete a
-  // sign-in they had already completed.
-  //
-  // A refresh this daemon started can still be in flight at exactly the moment
-  // the browser POSTs. Now that a refreshable grant counts, the only rows that
-  // reach here unconnected-and-`refreshing` are the ones with no spendable
-  // refresh token on file (`ambiguous`, or none at all), so the settle wait is
-  // narrower than it was — but it is the same race, and one short look still
-  // turns it into a success instead of advice to redo a sign-in that worked.
-  if (!mcpOAuthGrantIsConnected(liveness) && liveness.reason === 'refreshing') {
-    await new Promise((resolve) => setTimeout(resolve, GRANT_REFRESH_SETTLE_MS));
-    liveness = await readLiveness();
-  }
-
-  if (!mcpOAuthGrantIsConnected(liveness)) {
-    console.info(
-      `[widgets] event=oauth_widget_unverified server_id=${params.mcpServerId} reason=${liveness.reason} attempt_id=${evidence.attempt_id ?? 'none'}`
-    );
-    // The copy has to distinguish "you have not signed in" from "you have, and
-    // Agor is still finishing". Telling the user who just completed a provider
-    // sign-in to go and complete it is false, and it sends them back through a
-    // flow that already worked. Both reopen the widget for a retry; only the
-    // instruction differs.
-    throw new Forbidden(
-      liveness.reason === 'refreshing'
-        ? `Agor is still finishing the connection to "${params.serverName}". Wait a moment, then press Connect again — you should not need to sign in again.`
-        : `Sign-in to "${params.serverName}" has not completed. Finish the provider sign-in, then try Connect again.`
-    );
-  }
-
-  // c. Only now — the grant exists, so the server is useful the moment the
-  // agent sees it.
-  const { attached } = await attachToSession(ctx, params.mcpServerId);
-
+  // Only now is the server useful the moment the agent sees it.
+  const { attached } = await attachToSession(ctx, mcpServerId);
   return {
-    mcp_server_id: params.mcpServerId,
+    mcp_server_id: mcpServerId,
     name: server.display_name || server.name || params.serverName,
-    oauth_mode: params.oauthMode,
+    oauth_mode: oauthMode,
     attached,
   };
 }

@@ -351,7 +351,7 @@ describe('persistUserDefaultFromForm', () => {
   });
 });
 
-// #1963's schedule-run resolution copy is preserved for ScheduleModal (the only
+// #1963's schedule-run resolution copy is preserved for ScheduleForm (the only
 // picker consumer that passes defaultResolution). Save-context surfaces show no
 // banner (WS3 replaced it with inline resolved summaries), so #1963's original
 // "save-time copy" assertion is intentionally dropped as obsolete.

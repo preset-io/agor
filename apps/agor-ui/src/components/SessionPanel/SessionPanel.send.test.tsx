@@ -2,9 +2,10 @@ import type { AgorClient, Session } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App } from 'antd';
 import { StrictMode } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { TOUCH_INPUT_QUERY } from '../../hooks/useCanHover';
 import { agorStore } from '../../store/agorStore';
 import { SOCKET_DISCONNECTED_ERROR } from '../../utils/connectionErrors';
 import { getPromptDraft, savePromptDraft, stagePromptDraftSeed } from '../../utils/promptDrafts';
@@ -419,6 +420,57 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(getPromptDraft('user-a', 'session-1')).toBe('and a follow-up'));
   });
 
+  function asTouch() {
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...matchMedia(query),
+      matches: query === TOUCH_INPUT_QUERY,
+    }));
+    onTestFinished(() => vi.mocked(window.matchMedia).mockRestore());
+  }
+
+  // A touch device with a hardware keyboard (iPad): soft keyboards never send these modifiers.
+  it.each([
+    ['Cmd', { metaKey: true }],
+    ['Ctrl', { ctrlKey: true }],
+  ])('sends on %s+Enter from a hardware keyboard on a touch device', async (_name, modifier) => {
+    asTouch();
+    const { onSendPrompt } = renderSessionPanel();
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'Line one' } });
+    expect(fireEvent.keyDown(textarea, { key: 'Enter', ...modifier })).toBe(false);
+    await waitFor(() =>
+      expect(onSendPrompt).toHaveBeenCalledWith('session-1', 'Line one', 'allow-all')
+    );
+  });
+
+  // iOS Return fires a real Enter keydown, which sent multi-line prompts mid-typing.
+  it('lets Return on a touch keyboard insert a newline; only Send sends', async () => {
+    asTouch();
+    const { onSendPrompt } = renderSessionPanel();
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'Line one\nline two' } });
+
+    // Not prevented, so the browser inserts the newline.
+    expect(fireEvent.keyDown(textarea, { key: 'Enter' })).toBe(true);
+    expect(onSendPrompt).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() =>
+      expect(onSendPrompt).toHaveBeenCalledWith('session-1', 'Line one\nline two', 'allow-all')
+    );
+  });
+
+  it('does not send on the Enter that commits an IME composition', () => {
+    const { onSendPrompt } = renderSessionPanel();
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    fireEvent.change(textarea, { target: { value: 'にほんご' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', isComposing: true });
+    // Safari reports the committing Enter as keyCode 229 after compositionend.
+    fireEvent.keyDown(textarea, { key: 'Enter', keyCode: 229 });
+    expect(onSendPrompt).not.toHaveBeenCalled();
+  });
+
   it('keeps an edited prompt intact when admission completes', async () => {
     const send = deferred<boolean>();
     const onSendPrompt = vi.fn().mockReturnValue(send.promise);
@@ -743,12 +795,13 @@ describe('SessionPanel composer send', () => {
 });
 
 describe('responsive shared prompt input', () => {
-  it('retains the mobile no-autozoom font and matching mention overlay metrics', () => {
+  // iOS focus zoom below 16px is handled by the viewport (preventIosInputZoom).
+  it('uses body-size text on phones with matching mention overlay metrics', () => {
     const viewport = vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(390);
     try {
       renderSessionPanel();
       const textarea = screen.getByPlaceholderText(/Prompt here/);
-      expect(textarea.style.fontSize).toBe('16px');
+      expect(textarea.style.fontSize).toBe('14px');
       fireEvent.change(textarea, { target: { value: 'Ask @alice about the fictional project' } });
       const overlay = textarea.parentElement?.querySelector<HTMLElement>('div[aria-hidden="true"]');
       expect(overlay).not.toBeNull();

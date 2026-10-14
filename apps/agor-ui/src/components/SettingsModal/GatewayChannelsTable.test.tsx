@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
+import { StandaloneSettingsDrillProvider } from './SettingsDrill';
 
 // The real branch/user pickers are antd v6 `Select`s; opening their dropdowns in
 // jsdom is pathologically slow. Replace them with trivial native inputs so the
@@ -96,10 +97,12 @@ vi.mock('../AgenticToolConfigurationPicker', async () => {
   };
 });
 
-function renderWithProviders(ui: React.ReactElement) {
+function renderWithProviders(ui: React.ReactElement, section?: 'gateway') {
   return render(
     <MemoryRouter>
-      <AntdApp>{ui}</AntdApp>
+      <AntdApp>
+        <StandaloneSettingsDrillProvider section={section}>{ui}</StandaloneSettingsDrillProvider>
+      </AntdApp>
     </MemoryRouter>
   );
 }
@@ -441,14 +444,16 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     const table = (currentUser: User) => (
       <MemoryRouter>
         <AntdApp>
-          <GatewayChannelsTable
-            client={client}
-            gatewayChannelById={new Map()}
-            branchById={new Map([[branch.branch_id, branch]])}
-            userById={users}
-            mcpServerById={new Map()}
-            currentUser={currentUser}
-          />
+          <StandaloneSettingsDrillProvider>
+            <GatewayChannelsTable
+              client={client}
+              gatewayChannelById={new Map()}
+              branchById={new Map([[branch.branch_id, branch]])}
+              userById={users}
+              mcpServerById={new Map()}
+              currentUser={currentUser}
+            />
+          </StandaloneSettingsDrillProvider>
         </AntdApp>
       </MemoryRouter>
     );
@@ -513,6 +518,7 @@ function renderEditTable(
   opts: {
     currentUser?: User;
     onUpdate?: (channelId: string, updates: Partial<GatewayChannel>) => void;
+    section?: 'gateway';
   } = {}
 ) {
   const branch = makeBranch();
@@ -532,7 +538,8 @@ function renderEditTable(
       mcpServerById={new Map<string, MCPServer>()}
       currentUser={currentUser}
       onUpdate={opts.onUpdate}
-    />
+    />,
+    opts.section
   );
   fireEvent.click(screen.getByTitle('Edit'));
 }
@@ -598,15 +605,17 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     const table = (currentUser: User) => (
       <MemoryRouter>
         <AntdApp>
-          <GatewayChannelsTable
-            client={null}
-            gatewayChannelById={new Map([[channel.id, channel]])}
-            branchById={new Map([[branch.branch_id, branch]])}
-            userById={new Map([[currentUser.user_id, currentUser]])}
-            mcpServerById={new Map()}
-            currentUser={currentUser}
-            onUpdate={onUpdate}
-          />
+          <StandaloneSettingsDrillProvider>
+            <GatewayChannelsTable
+              client={null}
+              gatewayChannelById={new Map([[channel.id, channel]])}
+              branchById={new Map([[branch.branch_id, branch]])}
+              userById={new Map([[currentUser.user_id, currentUser]])}
+              mcpServerById={new Map()}
+              currentUser={currentUser}
+              onUpdate={onUpdate}
+            />
+          </StandaloneSettingsDrillProvider>
         </AntdApp>
       </MemoryRouter>
     );
@@ -1111,18 +1120,20 @@ describe('GatewayChannelsTable socket authority generations', () => {
     const view = (generation: number) => (
       <MemoryRouter>
         <AntdApp>
-          <ConnectionProvider
-            value={{
-              connected: true,
-              connecting: false,
-              authGeneration: generation,
-              outOfSync: false,
-              capturedSha: null,
-              currentSha: null,
-            }}
-          >
-            {table}
-          </ConnectionProvider>
+          <StandaloneSettingsDrillProvider>
+            <ConnectionProvider
+              value={{
+                connected: true,
+                connecting: false,
+                authGeneration: generation,
+                outOfSync: false,
+                capturedSha: null,
+                currentSha: null,
+              }}
+            >
+              {table}
+            </ConnectionProvider>
+          </StandaloneSettingsDrillProvider>
         </AntdApp>
       </MemoryRouter>
     );
@@ -1347,5 +1358,56 @@ describe('gateway inventory boundaries', () => {
     expect(document.querySelector('[role="switch"]')).toBeNull();
     expect(onDelete).not.toHaveBeenCalled();
     expect(onUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('GatewayChannelsTable unsaved-changes guard', () => {
+  const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
+
+  it('asks before leaving a dirty edit, from the breadcrumb and the footer Cancel', async () => {
+    renderEditTable(null, makeSlackChannel(), { section: 'gateway' });
+    fireEvent.change(screen.getByDisplayValue('Team Slack'), { target: { value: 'Renamed' } });
+
+    fireEvent.click(screen.getByText('Gateway Channels'));
+    await waitFor(() => expect(confirms()).toBe(1));
+    clickButton(/^Keep editing$/);
+    expect(screen.getByDisplayValue('Renamed')).toBeInTheDocument();
+    await waitFor(() => expect(confirms()).toBe(0));
+
+    clickButton(/^Cancel$/);
+    await waitFor(() => expect(confirms()).toBe(1));
+    clickButton(/^Discard$/);
+    await waitFor(() => expect(queryButton(/Add Channel/)).toBeDefined());
+  });
+
+  it('asks before the create wizard Cancel discards a typed name', async () => {
+    renderTable(null);
+    clickButton(/Add Channel/);
+    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+      target: { value: 'Draft channel' },
+    });
+    clickButton(/^Cancel$/);
+    await waitFor(() => expect(confirms()).toBe(1));
+    clickButton(/^Keep editing$/);
+    expect(screen.getByDisplayValue('Draft channel')).toBeInTheDocument();
+  });
+
+  it('leaves an untouched create wizard without asking, despite its seeded defaults', async () => {
+    const user = makeUser({ default_mcp_server_ids: ['mcp-1'] } as Partial<User>);
+    const branch = makeBranch();
+    renderWithProviders(
+      <GatewayChannelsTable
+        client={null}
+        gatewayChannelById={new Map<string, GatewayChannel>()}
+        branchById={new Map([[branch.branch_id, branch]])}
+        userById={new Map([[user.user_id, user]])}
+        mcpServerById={new Map<string, MCPServer>()}
+        currentUser={user}
+      />
+    );
+    clickButton(/Add Channel/);
+    clickButton(/^Cancel$/);
+    await waitFor(() => expect(queryButton(/Add Channel/)).toBeDefined());
+    expect(confirms()).toBe(0);
   });
 });

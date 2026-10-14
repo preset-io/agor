@@ -123,6 +123,36 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
     await waitFor(() => expect(updateSessionMcpServers).toHaveBeenCalledOnce());
   });
 
+  // The phone info bar scrolls horizontally and clipped an absolute panel to nothing.
+  it('anchors the panel to the viewport above the trigger on phones', async () => {
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(390);
+    vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(664);
+    try {
+      render(
+        <SessionMcpFooterControl
+          client={client}
+          currentUserId="user-a"
+          sessionId="session-id"
+          sessionMcpServerIds={[server.mcp_server_id]}
+          mcpServerById={new Map([[server.mcp_server_id, server]])}
+          userAuthenticatedMcpServerIds={new Set()}
+        />,
+        { wrapper: Wrapper }
+      );
+      const trigger = screen.getByRole('button', { name: /^MCP servers\./ });
+      vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({ top: 463 } as DOMRect);
+      fireEvent.click(trigger);
+      const panel = await screen.findByRole('dialog', { name: 'Session MCP servers' });
+      expect(panel.style.position).toBe('fixed');
+      // 664 - 463 = 201px from the viewport bottom, plus the gap.
+      expect(Number.parseFloat(panel.style.bottom)).toBeGreaterThan(201);
+      expect(panel.style.left).not.toBe('');
+      expect(panel.style.right).not.toBe('');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('explains a permanent session-configuration denial rather than suggesting retry', async () => {
     findServers.mockRejectedValue({ code: 403 });
     render(

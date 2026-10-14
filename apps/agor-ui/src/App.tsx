@@ -53,6 +53,7 @@ import { buildPromptWithAttachments } from './components/SessionPanel/composerAt
 import { sendPromptWithReconciliation } from './components/SessionPanel/promptReconciliation';
 import { SettingsModal } from './components/SettingsModal';
 import { StreamdownPortalApp } from './components/StreamdownPortalApp';
+import { TouchTooltipConfig } from './components/TouchTooltipConfig';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
@@ -122,7 +123,6 @@ import {
 import { ensureOnboardingFrameworkRepo } from './utils/ensureOnboardingFrameworkRepo';
 import { completeLocalPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
-import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
 import {
   buildDeferredOnboardingPreferences,
   buildRestartedOnboardingPreferences,
@@ -130,7 +130,7 @@ import {
   isOnboardingDeferred,
   type OnboardingReopenMode,
 } from './utils/onboardingLifecycle';
-import { resolveOnboardingSlackIntent } from './utils/onboardingSlack';
+import { buildCompletedOnboardingPreferences } from './utils/onboardingPreferences';
 import { savePromptDraft } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
@@ -746,12 +746,6 @@ function AppContent() {
       : undefined;
     if (!isCurrentUser()) return;
 
-    const slackGatewayIntent = await resolveOnboardingSlackIntent(
-      client,
-      currentUser,
-      result.slackGatewayIntent
-    );
-    if (!isCurrentUser()) return;
     const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
     // Always end onboarding inside the first-task composer: if the user skipped
     // the LLM step, fall back to their governed default agent so the pre-seeded
@@ -765,8 +759,6 @@ function AppContent() {
         AVAILABLE_AGENTS
       );
     const seeded = await seedOnboardingTeammate({
-      slackGatewayIntent,
-      connectedMcpServerIds: result.connectedMcpServerIds,
       frameworkRepo: readyFrameworkRepo,
       boardId: result.boardId,
       teammateName: result.teammateName,
@@ -775,12 +767,9 @@ function AppContent() {
       sourceRemoteUrl: result.sourceRemoteUrl,
       agent: bootstrapAgent,
       startInitialTurn: result.agent != null,
-      suggestedIntegrations: result.suggestedIntegrations,
-      // Goals drive the first-session prompt; [] (skipped) yields the generic
-      // follow-the-user guidance. Passed straight from the wizard.
-      goals: result.goals,
       // Template persona for the first-session opener.
       templateId: result.templateId,
+      requestedTools: result.requestedTools,
       user: {
         name: currentUser.name,
         email: currentUser.email,
@@ -1587,7 +1576,10 @@ function AppContent() {
       position?: { x: number; y: number };
       storage_mode?: 'worktree' | 'clone';
       clone_depth?: number;
-    }
+    },
+    // Teammate creation composes this with its own success toast, so it opts out
+    // of the generic "Branch created" message to avoid a misleading double toast.
+    options: { silent?: boolean } = {}
   ): Promise<Branch | null> => {
     if (!client) return null;
     try {
@@ -1611,8 +1603,13 @@ function AppContent() {
         clone_depth: data.clone_depth,
       })) as Branch;
 
-      // Dismiss loading message - branch will appear on board via WebSocket broadcast
-      destroy('create-branch');
+      // Branch appears on the board via WebSocket broadcast; confirm the action
+      // (silent for composed flows like teammate creation, which toast their own).
+      if (options.silent) {
+        destroy('create-branch');
+      } else {
+        showSuccess('Branch created successfully!', { key: 'create-branch' });
+      }
       return branch;
     } catch (error) {
       showError(formatActionError('create the branch', error, { idempotent: false }), {
@@ -2328,31 +2325,33 @@ function AppWrapper() {
 
   return (
     <ConfigProvider theme={getCurrentThemeConfig()}>
-      <StreamdownPortalApp>
-        <ErrorBoundary variant="global">
-          {/* CanvasNavigationProvider lives outside the agor `App` body so
+      <TouchTooltipConfig>
+        <StreamdownPortalApp>
+          <ErrorBoundary variant="global">
+            {/* CanvasNavigationProvider lives outside the agor `App` body so
               hooks called in that body (useUrlState, useAppNavigation) can
               read the canvas-nav context. The inner App component used to
               wrap its own JSX in this provider; that's been removed. */}
-          <CanvasNavigationProvider>
-            {isMarketingScreenshotRoute ? (
-              <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
-                <MarketingScreenshotPage />
-              </Suspense>
-            ) : isMarketingVideoRoute ? (
-              <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
-                <MarketingVideoPage />
-              </Suspense>
-            ) : isRbacPolicyPrototypeRoute && RbacPolicyPrototypePage ? (
-              <Suspense fallback={<InitialLoadingScreen message="Loading RBAC prototype…" />}>
-                <RbacPolicyPrototypePage />
-              </Suspense>
-            ) : (
-              <AppContent />
-            )}
-          </CanvasNavigationProvider>
-        </ErrorBoundary>
-      </StreamdownPortalApp>
+            <CanvasNavigationProvider>
+              {isMarketingScreenshotRoute ? (
+                <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
+                  <MarketingScreenshotPage />
+                </Suspense>
+              ) : isMarketingVideoRoute ? (
+                <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
+                  <MarketingVideoPage />
+                </Suspense>
+              ) : isRbacPolicyPrototypeRoute && RbacPolicyPrototypePage ? (
+                <Suspense fallback={<InitialLoadingScreen message="Loading RBAC prototype…" />}>
+                  <RbacPolicyPrototypePage />
+                </Suspense>
+              ) : (
+                <AppContent />
+              )}
+            </CanvasNavigationProvider>
+          </ErrorBoundary>
+        </StreamdownPortalApp>
+      </TouchTooltipConfig>
     </ConfigProvider>
   );
 }

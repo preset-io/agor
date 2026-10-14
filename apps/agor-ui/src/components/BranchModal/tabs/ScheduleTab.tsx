@@ -17,7 +17,7 @@ import {
   UnorderedListOutlined,
 } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
-import { Button, Empty, Popconfirm, Space, Spin, Switch, Table, Tooltip, Typography } from 'antd';
+import { Button, Empty, Input, Popconfirm, Space, Spin, Switch, Tooltip, Typography } from 'antd';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -27,8 +27,9 @@ import {
 } from '../../../utils/connectionErrors';
 import { useThemedMessage } from '../../../utils/message';
 import { ActionErrorNotice } from '../../CompactNotice';
-import { ScheduleModal } from '../../ScheduleModal';
+import { ScheduleForm } from '../../ScheduleForm';
 import { ScheduleRunsPanel } from '../../ScheduleRunsPanel';
+import { ResponsiveTable } from '../../SettingsModal/ResponsiveTable';
 
 const { Text } = Typography;
 
@@ -39,6 +40,9 @@ interface ScheduleTabProps {
   currentUser?: User | null;
   userById?: Map<string, User>;
   onOpenSession?: (sessionId: string) => void;
+  /** Whether an open schedule form holds unsaved changes (for the branch editor's guard). */
+  /** The open schedule form's dirty getter (null when closed), for the branch editor's leave guard. */
+  onDraftChange?: (isDirty: (() => boolean) | null) => void;
 }
 
 const formatTimestamp = (ms: number | null | undefined) =>
@@ -129,12 +133,15 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
   currentUser,
   userById = new Map(),
   onOpenSession,
+  onDraftChange,
 }) => {
   const { showError, showSuccess } = useThemedMessage();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [scheduleSearch, setScheduleSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<ActionErrorCopy | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
+  // New/Edit opens the form in place of the list (no dialog over the editor).
+  const [formOpen, setFormOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [runsPanelSchedule, setRunsPanelSchedule] = useState<Schedule | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
@@ -200,12 +207,12 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 
   const handleNew = () => {
     setEditingSchedule(null);
-    setModalOpen(true);
+    setFormOpen(true);
   };
 
   const handleEdit = (schedule: Schedule) => {
     setEditingSchedule(schedule);
-    setModalOpen(true);
+    setFormOpen(true);
   };
 
   const handleDelete = async (schedule: Schedule) => {
@@ -417,23 +424,65 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
     },
   ];
 
+  const searchTermLower = scheduleSearch.trim().toLowerCase();
+  const visibleSchedules = searchTermLower
+    ? schedules.filter(
+        (s) =>
+          s.name.toLowerCase().includes(searchTermLower) ||
+          (s.description ?? '').toLowerCase().includes(searchTermLower)
+      )
+    : schedules;
+
+  if (formOpen) {
+    return (
+      <div style={{ padding: 16, minWidth: 0 }}>
+        <ScheduleForm
+          onClose={() => setFormOpen(false)}
+          branchId={branch.branch_id}
+          schedule={editingSchedule}
+          mcpServerById={mcpServerById}
+          client={client}
+          executionOwner={executionOwner}
+          currentUser={currentUser}
+          onSaved={() => fetchSchedules()}
+          onDraftChange={onDraftChange}
+        />
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: 16, minWidth: 0 }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          gap: 12,
-          marginBottom: 12,
-          minWidth: 0,
-        }}
-      >
+      <div style={{ marginBottom: 8, minWidth: 0 }}>
         <CompactTooltipText
           title={`Schedules for ${branch.name}`}
           ariaLabel={`Schedules for ${branch.name}`}
         >
           Schedules for {branch.name}
         </CompactTooltipText>
+        <Text type="secondary" style={{ display: 'block', marginTop: 2 }}>
+          Fire a prompt on a cadence — hourly heartbeats, daily summaries, weekly retros. Each run
+          starts a new session on this branch.
+        </Text>
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 12,
+          marginBottom: 12,
+          minWidth: 0,
+        }}
+      >
+        <Input
+          allowClear
+          placeholder="Search schedules by name or description"
+          value={scheduleSearch}
+          onChange={(e) => setScheduleSearch(e.target.value)}
+          style={{ maxWidth: 320 }}
+          disabled={schedules.length === 0}
+        />
         <Button
           type="primary"
           icon={<PlusOutlined />}
@@ -463,10 +512,15 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
             New schedule
           </Button>
         </Empty>
+      ) : visibleSchedules.length === 0 ? (
+        <Empty description={`No schedules match "${scheduleSearch.trim()}"`} />
       ) : (
-        <Table<Schedule>
+        // Cards below md: the columns are wider than a phone, and Settings clips
+        // horizontal overflow rather than scrolling it.
+        <ResponsiveTable<Schedule>
+          primaryColumnKey="name"
           rowKey="schedule_id"
-          dataSource={schedules}
+          dataSource={visibleSchedules}
           columns={columns}
           pagination={false}
           size="small"
@@ -474,19 +528,6 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
           style={{ width: '100%' }}
         />
       )}
-
-      <ScheduleModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        branchId={branch.branch_id}
-        branchName={branch.name}
-        schedule={editingSchedule}
-        mcpServerById={mcpServerById}
-        client={client}
-        executionOwner={executionOwner}
-        currentUser={currentUser}
-        onSaved={() => fetchSchedules()}
-      />
 
       <ScheduleRunsPanel
         open={runsPanelSchedule !== null}

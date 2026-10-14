@@ -1,11 +1,11 @@
 import type { Branch, Repo, Session, UserID } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FRAMEWORK_REPO_SLUG, findFrameworkRepo } from '../hooks/useFrameworkRepo';
-import { ONBOARDING_INTEGRATION_RECOMMENDATIONS } from './onboardingGoals';
 import { stagePromptDraftSeed } from './promptDrafts';
 import { type SeedOnboardingTeammateInput, seedOnboardingTeammate } from './seedOnboardingTeammate';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import { createTeammateBranch } from './teammateCreation';
+import { resolveTemplateSourceBranch, resolveTemplateSourceRemoteUrl } from './teammateTemplates';
 import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
 
 // These are the two collaborators the completion path must actually invoke —
@@ -46,11 +46,6 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
     teammateEmoji: '🤖',
     agent: 'claude-code',
     startInitialTurn: true,
-    suggestedIntegrations: [
-      ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack,
-      ONBOARDING_INTEGRATION_RECOMMENDATIONS.github,
-    ],
-    goals: ['ship-without-busywork'],
     user: { name: 'Ada', email: 'ada@example.com' },
     expectedUserId: USER_ID,
     isCurrentUser: () => true,
@@ -113,7 +108,7 @@ describe('seedOnboardingTeammate', () => {
     expect(stagePromptDraftSeed).not.toHaveBeenCalled();
   });
 
-  it('creates a teammate branch + goal-primed onboarding session when the framework repo is present', async () => {
+  it('creates a teammate branch + first onboarding session when the framework repo is present', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',
       board_id: 'board-1',
@@ -148,7 +143,7 @@ describe('seedOnboardingTeammate', () => {
     expect(sessionArg).toEqual(
       expect.objectContaining({ branchId: 'branch-1', boardId: 'board-1', onCreateSession })
     );
-    // Agent choice + goals are threaded through to the onboarding prompt.
+    // Agent choice is threaded through to the onboarding session.
     expect(sessionArg.sessionConfig).toEqual(
       expect.objectContaining({
         branch_id: 'branch-1',
@@ -158,11 +153,6 @@ describe('seedOnboardingTeammate', () => {
     );
     const initialPrompt = (sessionArg.sessionConfig as { initialPrompt: string }).initialPrompt;
     expect(initialPrompt).toContain('Rusty');
-    // The selected goal's bootstrap line is threaded into the first-session prompt.
-    expect(initialPrompt).toContain('Desired outcome: less shipping busywork');
-    expect(initialPrompt).toContain(
-      '- Suggested tools and connections: Slack gateway messaging, GitHub'
-    );
     expect(initialPrompt).toContain('Read ONBOARDING.md');
     expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');
 
@@ -179,30 +169,19 @@ describe('seedOnboardingTeammate', () => {
     expect(onWarn).not.toHaveBeenCalled();
   });
 
-  it('attaches confirmed Catalog tools without confusing their idle session with the bootstrap', async () => {
+  it('lists picked tools in the first prompt without attaching any server', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',
       board_id: 'board-1',
     } as Branch);
     startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
     const { input } = setup({
-      connectedMcpServerIds: ['server-1'],
-      sessionById: new Map([
-        [
-          'catalog-session',
-          { session_id: 'catalog-session', branch_id: 'branch-1', title: 'GitHub' } as Session,
-        ],
-      ]),
+      requestedTools: [{ name: 'Notion', catalogEntryName: 'com.notion/mcp' }],
     });
     await seedOnboardingTeammate(input);
-    expect(startTeammateBootstrapSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionConfig: expect.objectContaining({
-          mcpServerIds: ['server-1'],
-          title: '🤖 Rusty — first session',
-        }),
-      })
-    );
+    const { sessionConfig } = startTeammateBootstrapSessionMock.mock.calls[0][0];
+    expect(sessionConfig.initialPrompt).toContain('Notion (com.notion/mcp)');
+    expect(sessionConfig).not.toHaveProperty('mcpServerIds');
   });
 
   it('returns the durable session when daemon-side initialization is incomplete', async () => {
@@ -281,33 +260,45 @@ describe('seedOnboardingTeammate', () => {
     expect(onWarn).not.toHaveBeenCalled();
   });
 
-  it('threads the template persona and routed integration guidance into the first-session prompt', async () => {
+  it('threads the template persona into the first-session prompt', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',
       board_id: 'board-1',
     } as Branch);
     startTeammateBootstrapSessionMock.mockResolvedValue({ sessionId: 'session-1' });
 
-    const { input } = setup({
-      goals: [],
-      templateId: 'legal-analyst',
-    });
+    const { input } = setup({ templateId: 'legal-analyst' });
     await seedOnboardingTeammate(input);
 
     const sessionArg = startTeammateBootstrapSessionMock.mock.calls[0][0];
     const initialPrompt = (sessionArg.sessionConfig as { initialPrompt: string }).initialPrompt;
-    // Template persona surfaces in context and drives the personal opener even
-    // though no goal was picked.
-    expect(initialPrompt).toContain('- Created from the Legal Analyst template.');
+    expect(initialPrompt).toContain('- Created from the Legal analyst template.');
     expect(initialPrompt).toMatch(/Open as yourself: one warm line/);
-    // Slack keeps safe, session-scoped agency while GitHub
-    // now points to the reviewed PAT-based Catalog entry.
+  });
+
+  it('creates a prompt-only template on the default branch with its remit in the prompt', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    startTeammateBootstrapSessionMock.mockResolvedValue({ sessionId: 'session-1' });
+
+    // The wizard passes resolveTemplateSourceBranch/RemoteUrl, both undefined here.
+    const { input } = setup({
+      templateId: 'personal-assistant',
+      sourceBranch: resolveTemplateSourceBranch('personal-assistant'),
+      sourceRemoteUrl: resolveTemplateSourceRemoteUrl('personal-assistant'),
+    });
+    await seedOnboardingTeammate(input);
+
+    const branchInput = createTeammateBranchMock.mock.calls[0][0];
+    expect(branchInput.sourceBranch).toBeUndefined();
+    expect(branchInput.sourceRemoteUrl).toBeUndefined();
+    const sessionArg = startTeammateBootstrapSessionMock.mock.calls[0][0];
+    const initialPrompt = (sessionArg.sessionConfig as { initialPrompt: string }).initialPrompt;
+    expect(initialPrompt).toContain('- Created from the Personal assistant template.');
     expect(initialPrompt).toContain(
-      'Slack means gateway messaging here, not an MCP recommendation'
-    );
-    expect(initialPrompt).toContain('Do not offer generic connector registration');
-    expect(initialPrompt).toContain(
-      'GitHub: use the reviewed Catalog entry io.github.github/github-mcp-server'
+      '- Template remit: Desired outcome: a useful recurring brief from Slack and connected docs.'
     );
   });
 

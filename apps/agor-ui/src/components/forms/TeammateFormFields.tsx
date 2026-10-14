@@ -12,7 +12,7 @@ import { TeammateGallery } from '../TeammateGallery';
 
 export interface TeammateFormFieldsProps {
   form: FormInstance;
-  onTemplateChange: (id: TeammateGalleryCardId | null) => void;
+  onTemplateChange: (id: TeammateGalleryCardId) => void;
   repos: Repo[];
   frameworkRepo: Repo | undefined;
   isCloning?: boolean;

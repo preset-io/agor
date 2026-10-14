@@ -53,7 +53,8 @@ export interface TeammateCreationDeps {
       boardId?: string;
       custom_context?: Record<string, unknown>;
       notes?: string | null;
-    }
+    },
+    options?: { silent?: boolean }
   ) => Promise<Branch | null>;
   onUpdateBranch: (
     branchId: string,
@@ -159,16 +160,22 @@ export async function createTeammateBranch(
   // Create the branch with teammate metadata on the initial row. That keeps
   // the board card consistent immediately and avoids a race where a later
   // executor readiness patch can arrive before the UI sees the metadata patch.
-  const branch = await deps.onCreateBranch(input.repoId, {
-    name: branchName,
-    ref: branchName,
-    createBranch: true,
-    ...source,
-    pullLatest: true,
-    boardId,
-    custom_context: { teammate: teammateConfig },
-    ...(input.description?.trim() ? { notes: input.description.trim() } : {}),
-  });
+  const branch = await deps.onCreateBranch(
+    input.repoId,
+    {
+      name: branchName,
+      ref: branchName,
+      createBranch: true,
+      ...source,
+      pullLatest: true,
+      boardId,
+      custom_context: { teammate: teammateConfig },
+      ...(input.description?.trim() ? { notes: input.description.trim() } : {}),
+    },
+    // Suppress the generic "Branch created" toast; teammate creation surfaces its
+    // own completion feedback.
+    { silent: true }
+  );
   if (!shouldContinue()) return null;
 
   if (branch) {

@@ -50,8 +50,8 @@ withTestAuthority();
 
 // Every tab that waits on the partition offers Try again, not only the canvas.
 it.each([
-  ['Board', ''],
-  ['Teammate', '?tab=teammate'],
+  ['Teammate', ''],
+  ['Board', '?tab=board'],
   ['Sessions', '?tab=all-sessions'],
 ])(
   'a cold mobile board whose partition fails offers Try again on the %s tab, and Try again loads it',
