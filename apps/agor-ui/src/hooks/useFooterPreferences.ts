@@ -1,17 +1,27 @@
 import React from 'react';
 
+/** Phones fit this many pinned actions in the composer row. */
+export const COMPACT_PIN_LIMIT = 2;
+
 const DEFAULTS = {
   showToolsChip: true,
   showStatsChip: true,
   showForkInBar: true,
   showUploadInBar: true,
   pinnedItems: ['fork', 'upload'] as string[],
-  pinnedChips: ['timer', 'tools', 'model', 'tokens', 'context'] as string[],
+  /** Phone pins are separate from desktop pins and start empty. */
+  pinnedItemsCompact: [] as string[],
+  pinnedChips: ['timer', 'tools', 'tokens', 'context'] as string[],
 };
 
 export type FooterPreferences = typeof DEFAULTS;
 
 const KEY = 'agor-footer-prefs';
+
+const stringList = (value: unknown, fallback: string[]): string[] =>
+  Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : fallback;
 
 export function useFooterPreferences(): [
   FooterPreferences,
@@ -24,12 +34,12 @@ export function useFooterPreferences(): [
         return {
           ...DEFAULTS,
           ...stored,
-          pinnedItems: Array.isArray(stored.pinnedItems)
-            ? stored.pinnedItems
-            : DEFAULTS.pinnedItems,
-          pinnedChips: Array.isArray(stored.pinnedChips)
-            ? stored.pinnedChips
-            : DEFAULTS.pinnedChips,
+          pinnedItems: stringList(stored.pinnedItems, DEFAULTS.pinnedItems),
+          pinnedItemsCompact: stringList(
+            stored.pinnedItemsCompact,
+            DEFAULTS.pinnedItemsCompact
+          ).slice(0, COMPACT_PIN_LIMIT),
+          pinnedChips: stringList(stored.pinnedChips, DEFAULTS.pinnedChips),
         };
       }
     } catch {

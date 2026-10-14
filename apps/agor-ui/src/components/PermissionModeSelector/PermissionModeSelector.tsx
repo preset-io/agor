@@ -20,6 +20,8 @@ import { Flex, Select, Space, Tooltip, Typography, theme } from 'antd';
 interface ModeOption {
   mode: PermissionMode;
   label: string;
+  /** Composer chip label when the full name is long. */
+  shortLabel?: string;
   description: string;
   icon: React.ReactNode;
   tone: 'danger' | 'success' | 'info' | 'warning';
@@ -90,6 +92,7 @@ const CLAUDE_CODE_MODES: ModeOption[] = [
   {
     mode: 'bypassPermissions',
     label: 'Bypass permissions',
+    shortLabel: 'Bypass',
     description: 'Runs everything without asking · isolated environments only',
     icon: <UnlockOutlined />,
     tone: 'warning',
@@ -140,6 +143,7 @@ const GEMINI_MODES: ModeOption[] = [
   {
     mode: 'yolo',
     label: 'Bypass permissions',
+    shortLabel: 'Bypass',
     description: 'Runs everything without asking · isolated environments only',
     icon: <UnlockOutlined />,
     tone: 'warning',
@@ -165,6 +169,7 @@ const COPILOT_MODES: ModeOption[] = [
   {
     mode: 'bypassPermissions',
     label: 'Bypass permissions',
+    shortLabel: 'Bypass',
     description: 'Runs everything without asking · isolated environments only',
     icon: <UnlockOutlined />,
     tone: 'warning',
@@ -251,6 +256,11 @@ const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): Mod
       return CLAUDE_CODE_MODES;
   }
 };
+
+/** Mode options for a tool, ordered most oversight first. */
+export const getPermissionModes = (
+  tool: PermissionModeSelectorProps['agentic_tool']
+): readonly ModeOption[] => getModesForTool(tool);
 
 /** Human-readable label for a raw permission mode value (for inline summaries). */
 export const getPermissionModeLabel = (

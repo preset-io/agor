@@ -122,6 +122,8 @@ interface AutocompleteTextareaProps {
   highlightWhenEmpty?: boolean;
   /** Style overrides for the underlying Ant Design textarea control. */
   textareaStyle?: React.CSSProperties;
+  /** `borderless` when a surrounding card owns the border and focus ring. */
+  variant?: 'outlined' | 'borderless';
 }
 
 // Minimum characters required after : before showing emoji picker (like Slack)
@@ -382,6 +384,7 @@ export const AutocompleteTextarea = React.forwardRef<
       kbLinkTarget = 'stable-uri',
       highlightWhenEmpty = false,
       textareaStyle,
+      variant = 'outlined',
     },
     ref
   ) => {
@@ -1497,16 +1500,19 @@ export const AutocompleteTextarea = React.forwardRef<
           placeholder={placeholder}
           autoSize={autoSize || { minRows: 2, maxRows: 10 }}
           className="agor-textarea agor-textarea-with-highlights"
+          variant={variant}
           style={{
-            borderColor:
-              shouldHighlightEmpty && !suppressEmptyHighlight
-                ? token.colorPrimary
-                : token.colorBorder,
-            boxShadow: suppressEmptyHighlight
-              ? 'none'
-              : shouldHighlightEmpty
-                ? `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`
-                : undefined,
+            ...(variant === 'outlined' && {
+              borderColor:
+                shouldHighlightEmpty && !suppressEmptyHighlight
+                  ? token.colorPrimary
+                  : token.colorBorder,
+              boxShadow: suppressEmptyHighlight
+                ? 'none'
+                : shouldHighlightEmpty
+                  ? `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`
+                  : undefined,
+            }),
             backgroundColor: hasHighlights ? 'transparent' : undefined,
             transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
             position: 'relative',
