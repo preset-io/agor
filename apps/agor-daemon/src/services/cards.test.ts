@@ -5,7 +5,14 @@
  * reach the repository read while results stay identical to the in-memory path.
  */
 
-import { BoardRepository, CardRepository, type Database, generateId } from '@agor/core/db';
+import {
+  BoardRepository,
+  CardRepository,
+  createTenantScopedDatabaseProxy,
+  type Database,
+  generateId,
+  runWithTenantDatabaseScope,
+} from '@agor/core/db';
 import type { BoardID, Card } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -27,62 +34,104 @@ async function seed(db: Database) {
   await cardRepo.archive(aArchived.card_id);
   await cardRepo.create({ board_id: boardB, title: 'other' });
 
-  const service = new CardsService(db);
+  const service = new CardsService(createTenantScopedDatabaseProxy(db));
   return { service, boardA, boardB, a1, a2, aArchived };
 }
 
 describe('CardsService.find SQL pushdown', () => {
-  dbTest('pushes board_id into the repository read', async ({ db }) => {
-    const { service, boardA } = await seed(db);
-    const repoFindAll = vi.spyOn(
-      (service as unknown as { cardRepo: CardRepository }).cardRepo,
-      'findAll'
-    );
+  dbTest('pushes board_id into the repository read', async ({ db }) =>
+    runWithTenantDatabaseScope(db, 'cards-service-test', async () => {
+      const { service, boardA } = await seed(db);
+      const repoFindAll = vi.spyOn(
+        (service as unknown as { cardRepo: CardRepository }).cardRepo,
+        'findAll'
+      );
 
-    const result = (await service.find({ query: { board_id: boardA } })) as {
-      data: Card[];
-      total: number;
-    };
+      const result = (await service.find({ query: { board_id: boardA } })) as {
+        data: Card[];
+        total: number;
+      };
 
-    // SQL-bounded: the board predicate reaches the repository, not a whole-table read.
-    expect(repoFindAll).toHaveBeenCalledWith({ board_id: boardA });
-    // boardA has 3 cards (2 active + 1 archived).
-    expect(result.total).toBe(3);
-    expect(result.data.every((c) => c.board_id === boardA)).toBe(true);
-  });
+      // SQL-bounded: the board predicate reaches the repository, not a whole-table read.
+      expect(repoFindAll).toHaveBeenCalledWith({ board_id: boardA });
+      // boardA has 3 cards (2 active + 1 archived).
+      expect(result.total).toBe(3);
+      expect(result.data.every((c) => c.board_id === boardA)).toBe(true);
+    })
+  );
 
-  dbTest('pushes board_id + archived and preserves sort/total parity', async ({ db }) => {
-    const { service, boardA } = await seed(db);
-    const repoFindAll = vi.spyOn(
-      (service as unknown as { cardRepo: CardRepository }).cardRepo,
-      'findAll'
-    );
+  dbTest('pushes board_id + archived and preserves sort/total parity', async ({ db }) =>
+    runWithTenantDatabaseScope(db, 'cards-service-test', async () => {
+      const { service, boardA } = await seed(db);
+      const repoFindAll = vi.spyOn(
+        (service as unknown as { cardRepo: CardRepository }).cardRepo,
+        'findAll'
+      );
 
-    const result = (await service.find({
-      query: { board_id: boardA, archived: false, $sort: { title: 1 } },
-    })) as { data: Card[]; total: number };
+      const result = (await service.find({
+        query: { board_id: boardA, archived: false, $sort: { title: 1 } },
+      })) as { data: Card[]; total: number };
 
-    expect(repoFindAll).toHaveBeenCalledWith({ board_id: boardA, archived: false });
-    expect(result.total).toBe(2);
-    expect(result.data.map((c) => c.title)).toEqual(['alpha', 'beta']);
-  });
+      expect(repoFindAll).toHaveBeenCalledWith({ board_id: boardA, archived: false });
+      expect(result.total).toBe(2);
+      expect(result.data.map((c) => c.title)).toEqual(['alpha', 'beta']);
+    })
+  );
 
-  dbTest('leaves an uncoerced string archived to the in-memory filter', async ({ db }) => {
-    const { service, boardA } = await seed(db);
-    const repoFindAll = vi.spyOn(
-      (service as unknown as { cardRepo: CardRepository }).cardRepo,
-      'findAll'
-    );
+  dbTest('leaves an uncoerced string archived to the in-memory filter', async ({ db }) =>
+    runWithTenantDatabaseScope(db, 'cards-service-test', async () => {
+      const { service, boardA } = await seed(db);
+      const repoFindAll = vi.spyOn(
+        (service as unknown as { cardRepo: CardRepository }).cardRepo,
+        'findAll'
+      );
 
-    // Cards are not query-validated; a raw string 'false' must NOT be pushed as a
-    // boolean. The repository read carries only board_id; the string predicate
-    // falls through to the in-memory equality filter exactly as before (no card
-    // row has archived === 'false', so the result is empty).
-    const result = (await service.find({
-      query: { board_id: boardA, archived: 'false' as unknown as boolean },
-    })) as { data: Card[]; total: number };
+      // Cards are not query-validated; a raw string 'false' must NOT be pushed as a
+      // boolean. The repository read carries only board_id; the string predicate
+      // falls through to the in-memory equality filter exactly as before (no card
+      // row has archived === 'false', so the result is empty).
+      const result = (await service.find({
+        query: { board_id: boardA, archived: 'false' as unknown as boolean },
+      })) as { data: Card[]; total: number };
 
-    expect(repoFindAll).toHaveBeenCalledWith({ board_id: boardA });
-    expect(result.total).toBe(0);
-  });
+      expect(repoFindAll).toHaveBeenCalledWith({ board_id: boardA });
+      expect(result.total).toBe(0);
+    })
+  );
+});
+
+describe('CardsService zone placement', () => {
+  dbTest('creates and moves with card-sized anchors or exact coordinates', async ({ db }) =>
+    runWithTenantDatabaseScope(db, 'cards-service-test', async () => {
+      const { service, boardA } = await seed(db);
+      const zoneData = {
+        type: 'zone' as const,
+        x: 1000,
+        y: 2000,
+        width: 1000,
+        height: 800,
+        label: 'Review',
+      };
+      const { card, boardObject } = await service.createWithPlacement({
+        board_id: boardA,
+        title: 'Placed',
+        zoneId: 'review',
+        zoneData,
+        position: 'bottom-right',
+      });
+      expect(boardObject).toMatchObject({ zone_id: 'review', position: { x: 540, y: 590 } });
+      expect(
+        await service.moveToZone(card.card_id, 'review', zoneData, { x: 10, y: 10 })
+      ).toMatchObject({ position: { x: 10, y: 10 } });
+      expect(
+        await service.moveToZone(card.card_id, 'review', zoneData, { x: 9999, y: -10 })
+      ).toMatchObject({ position: { x: 600, y: 0 } });
+      const unpinned = await service.moveToZone(card.card_id, null, undefined, { x: -10, y: 20 });
+      expect(unpinned.position).toEqual({ x: -10, y: 20 });
+      expect(unpinned.zone_id).toBeUndefined();
+      await expect(service.moveToZone(card.card_id, null, undefined, 'center')).rejects.toThrow(
+        /requires a zone/
+      );
+    })
+  );
 });

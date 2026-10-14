@@ -8,6 +8,21 @@ import type { ArtifactID, BoardID, BranchID } from './id';
  */
 export type BoardPosition = { x: number; y: number };
 
+/** Named placements within a zone, accounting for entity size and adaptive padding. */
+export const ZONE_PLACEMENT_ANCHORS = [
+  'top-left',
+  'top-center',
+  'top-right',
+  'center-left',
+  'center',
+  'center-right',
+  'bottom-left',
+  'bottom-center',
+  'bottom-right',
+] as const;
+export type ZonePlacementAnchor = (typeof ZONE_PLACEMENT_ANCHORS)[number];
+export type BoardPlacementSpec = BoardPosition | ZonePlacementAnchor;
+
 /**
  * Board object types for canvas annotations.
  *

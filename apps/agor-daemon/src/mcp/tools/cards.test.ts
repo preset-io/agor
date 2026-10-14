@@ -215,7 +215,7 @@ describe('card MCP realtime events', () => {
 
     expect(boardsGet).toHaveBeenCalledOnce();
     expect(createWithPlacement).toHaveBeenCalledWith(expect.any(Object), params);
-    expect(moveToZone).toHaveBeenCalledWith('card-1', null, undefined);
+    expect(moveToZone).toHaveBeenCalledWith('card-1', null, undefined, undefined);
     expect(archive).toHaveBeenCalledWith('card-1');
     expect(cardsEmit).toHaveBeenCalledWith(
       'created',
@@ -233,4 +233,46 @@ describe('card MCP realtime events', () => {
       expect.objectContaining({ path: 'board-objects', method: 'patch', params: {} })
     );
   });
+});
+
+describe('card placement arguments', () => {
+  it.each(['top-left', { x: 10, y: 10 }])(
+    'forwards position %s for create and move',
+    async (position) => {
+      const zone = { type: 'zone', x: 1000, y: 2000, width: 1000, height: 800 };
+      const createWithPlacement = vi.fn().mockResolvedValue({ card: {}, boardObject: {} });
+      const moveToZone = vi.fn().mockResolvedValue({});
+      const ctx = {
+        app: {
+          get: () => ({}),
+          service(name: string) {
+            if (name === 'boards')
+              return { get: async () => ({ board_id: 'board-1', objects: { review: zone } }) };
+            if (name === 'cards')
+              return {
+                get: async () => ({ card_id: 'card-1', board_id: 'board-1' }),
+                createWithPlacement,
+                moveToZone,
+              };
+            if (name === 'board-objects') return {};
+            throw new Error(`Unexpected service: ${name}`);
+          },
+        },
+        baseServiceParams: {},
+      } as unknown as Parameters<typeof registerCardTools>[1];
+      await captureHandler(
+        'agor_cards_create',
+        ctx
+      )({ boardId: 'board-1', title: 'Placed', zoneId: 'review', position });
+      expect(createWithPlacement).toHaveBeenCalledWith(
+        expect.objectContaining({ zoneId: 'review', position }),
+        {}
+      );
+      await captureHandler(
+        'agor_cards_move',
+        ctx
+      )({ cardId: 'card-1', zoneId: 'review', position });
+      expect(moveToZone).toHaveBeenCalledWith('card-1', 'review', zone, position);
+    }
+  );
 });

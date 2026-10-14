@@ -17,6 +17,7 @@ import type {
   AuthenticatedParams,
   BoardEntityObject,
   BoardID,
+  BoardPlacementSpec,
   Card,
   CardID,
   CardTypeID,
@@ -128,16 +129,19 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   /**
    * Create a card AND its board_objects placement in one operation.
    *
-   * If zoneId is provided, the card is placed in that zone with jitter positioning.
-   * Otherwise, the card gets default position (0, 0).
+   * If zoneId is provided, resolve the requested position (random by default).
+   * Otherwise, use absolute coordinates, defaulting to (0, 0).
    */
   async createWithPlacement(
     data: Partial<Card> & {
       zoneId?: string;
       zoneData?: ZoneBoardObject;
+      position?: BoardPlacementSpec;
     },
     params?: CardParams
   ): Promise<{ card: Card; boardObject: BoardEntityObject }> {
+    if (!data.zoneId && typeof data.position === 'string')
+      throw new Error('An anchor requires a zone');
     // Create the card
     const card = await this.cardRepo.create({
       ...data,
@@ -146,14 +150,14 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
     });
 
     // Calculate position
-    let position = { x: 0, y: 0 };
+    let position = typeof data.position === 'object' ? data.position : { x: 0, y: 0 };
     const zoneId = data.zoneId;
 
     if (zoneId && data.zoneData) {
-      const { computeZoneRelativePosition, CARD_WIDTH, CARD_HEIGHT } = await import(
+      const { resolveZoneRelativePosition, CARD_WIDTH, CARD_HEIGHT } = await import(
         '@agor/core/utils/board-placement'
       );
-      position = computeZoneRelativePosition(data.zoneData, {
+      position = resolveZoneRelativePosition(data.zoneData, data.position, {
         entityWidth: CARD_WIDTH,
         entityHeight: CARD_HEIGHT,
         desiredPadding: 60,
@@ -242,8 +246,10 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   async moveToZone(
     cardId: CardID,
     zoneId: string | null,
-    zoneData?: ZoneBoardObject
+    zoneData?: ZoneBoardObject,
+    positionSpec?: BoardPlacementSpec
   ): Promise<BoardEntityObject> {
+    if (!zoneId && typeof positionSpec === 'string') throw new Error('An anchor requires a zone');
     const boardObj = await this.boardObjectRepo.findByCardId(cardId);
     if (!boardObj) {
       throw new Error(`Card ${cardId} has no board placement`);
@@ -251,16 +257,18 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
 
     // If moving to a zone with zone data, calculate position
     if (zoneId && zoneData) {
-      const { computeZoneRelativePosition, CARD_WIDTH, CARD_HEIGHT } = await import(
+      const { resolveZoneRelativePosition, CARD_WIDTH, CARD_HEIGHT } = await import(
         '@agor/core/utils/board-placement'
       );
-      const position = computeZoneRelativePosition(zoneData, {
+      const position = resolveZoneRelativePosition(zoneData, positionSpec, {
         entityWidth: CARD_WIDTH,
         entityHeight: CARD_HEIGHT,
         desiredPadding: 60,
       });
 
       await this.boardObjectRepo.updatePosition(boardObj.object_id, position);
+    } else if (typeof positionSpec === 'object') {
+      await this.boardObjectRepo.updatePosition(boardObj.object_id, positionSpec);
     }
 
     return this.boardObjectRepo.updateZone(
