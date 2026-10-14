@@ -109,3 +109,31 @@ export function isCurrentCatalogInstall(
     Object.keys(server.headers ?? {}).length === 0
   );
 }
+
+/**
+ * `isCurrentCatalogInstall` for a caller that cannot re-probe the endpoint —
+ * the widget resolving an install the Catalog drawer just made. The prescription
+ * is whichever of Connect's three outcomes the row's auth claims, and only if
+ * Connect could have produced it for this entry: open, the entry's OAuth recipe,
+ * or a bearer key under the entry's reviewed bearer recipe.
+ */
+export function isCurrentCatalogInstallOfEntry(
+  server: Parameters<typeof isCurrentCatalogInstall>[0],
+  entry: MCPCatalogEntry & { remote_url: string }
+): boolean {
+  const type = server.auth?.type ?? 'none';
+  const prescribed: MCPAuth | undefined =
+    type === 'oauth'
+      ? catalogOAuthConfig(entry)
+      : type === 'bearer' && entry.credentials?.scheme === 'bearer'
+        ? { type: 'bearer', token: server.auth?.token }
+        : type === 'none'
+          ? { type: 'none' }
+          : undefined;
+  return Boolean(
+    prescribed &&
+      isCurrentCatalogInstall(server, entry, prescribed, {
+        reconcileMissingCompatibilityMode: true,
+      })
+  );
+}

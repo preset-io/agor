@@ -38,9 +38,18 @@ import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { Forbidden } from '@agor/core/feathers';
 import { isMCPServerUsableBy } from '@agor/core/mcp';
-import type { GatewayChannel, MCPServer, MCPServerID, Session, UserID } from '@agor/core/types';
+import { findCatalogEntry, loadCatalog } from '@agor/core/mcp-catalog';
+import type {
+  GatewayChannel,
+  MCPCatalogEntry,
+  MCPServer,
+  MCPServerID,
+  Session,
+  UserID,
+} from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { z } from 'zod';
+import { isCurrentCatalogInstallOfEntry } from '../../services/mcp-catalog-install-policy.js';
 import {
   mcpOAuthGrantIsConnected,
   resolveMCPOAuthGrantLiveness,
@@ -334,38 +343,15 @@ async function attachToSession(
   return { attached: true };
 }
 
-/**
- * Resolve the widget from a completed browser connect — an OAuth sign-in, or a
- * catalog-drawer connect for an entry pinned by name.
- *
- * `evidence.attempt_id` is logged for correlation and otherwise unused.
- * `evidence.mcp_server_id` is read only when no server is pinned, and then only
- * names a candidate the checks below accept or refuse: the decision comes
- * entirely from rows this daemon owns.
- */
-async function resolveOAuthWidgetFromCallback(
-  ctx: WidgetSubmitCtx,
-  evidence: WidgetDaemonVerifiedEvidence,
-  params: OAuthWidgetParams
-): Promise<OAuthWidgetResultMeta> {
-  // The role floor and the gateway identity question are both re-asked by
-  // `authorizeOAuthWidgetResolve`, which `submissions.ts` runs before the
-  // claim. Repeating the role floor here keeps this function safe to call
-  // directly (tests do) and costs nothing.
-  assertOAuthWidgetRoleFloor(ctx.submitterRole, params.oauthMode);
+/** What either resolve lane hands the shared tail: a server ready to check. */
+interface ResolvedTarget {
+  server: MCPServer;
+  mcpServerId: MCPServerID;
+  oauthMode: OAuthWidgetParams['oauthMode'];
+}
 
-  // a. The server must still exist, still be usable by this caller, and still
-  // be enabled. A pinned server must still be an OAuth server in the mode it
-  // was minted for; a catalog-drawer connect must have produced an install of
-  // the pinned entry.
-  const mcpServerId = (params.mcpServerId ?? evidence.mcp_server_id) as MCPServerID | undefined;
-  if (!mcpServerId) {
-    throw new Forbidden(`Connect "${params.serverName}" from the card first, then try again.`);
-  }
-  const serversService = ctx.app.service('mcp-servers') as unknown as McpServersGetService;
-  const server = await serversService.get(mcpServerId, {
-    user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
-  });
+/** Ownership the resolver needs for any server it is about to attach. */
+function assertUsableByResolver(ctx: WidgetSubmitCtx, server: MCPServer): void {
   // The pure ownership predicate, not the params-shaped `isMcpServerUsableByCaller`:
   // that one reads `params.provider` to classify the caller and would treat
   // this provider-less daemon-side call as INTERNAL, i.e. always allowed. The
@@ -375,45 +361,94 @@ async function resolveOAuthWidgetFromCallback(
   if (!isAdmin && !isMCPServerUsableBy(server, ctx.submitterUserId)) {
     throw new Forbidden('That MCP server is not available to you');
   }
-  if (
-    !params.mcpServerId &&
-    (server.source !== 'catalog' || server.catalog_entry_name !== params.catalogEntryName)
-  ) {
-    throw new Forbidden(`That MCP server is not a catalog install of "${params.serverName}"`);
-  }
-  const authType = server.auth?.type ?? 'none';
-  if (!server.enabled || (params.mcpServerId && authType !== 'oauth')) {
+}
+
+function loadServerForResolver(ctx: WidgetSubmitCtx, mcpServerId: string): Promise<MCPServer> {
+  const serversService = ctx.app.service('mcp-servers') as unknown as McpServersGetService;
+  return serversService.get(mcpServerId, {
+    user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
+  });
+}
+
+/**
+ * Pinned lane: the server named at mint time, and only it. It must still be an
+ * enabled OAuth server in the mode it was minted for; the browser's server id
+ * is ignored.
+ */
+async function resolvePinnedServer(
+  ctx: WidgetSubmitCtx,
+  params: OAuthWidgetParams & { mcpServerId: string }
+): Promise<ResolvedTarget> {
+  const server = await loadServerForResolver(ctx, params.mcpServerId);
+  assertUsableByResolver(ctx, server);
+  if (!server.enabled || server.auth?.type !== 'oauth') {
     throw new Forbidden(
       `"${params.serverName}" is no longer an enabled OAuth MCP server; reconfigure it and ask again.`
     );
   }
-  const oauthMode = (server.auth?.oauth_mode ?? 'per_user') as OAuthWidgetParams['oauthMode'];
-  if (params.mcpServerId && oauthMode !== params.oauthMode) {
+  if ((server.auth.oauth_mode ?? 'per_user') !== params.oauthMode) {
     throw new Forbidden(
       `"${params.serverName}" changed OAuth mode since this request was made; ask again.`
     );
   }
-  // Catalog connect writes a bearer or open row only after the live endpoint
-  // accepted it, so such an install is ready as it stands. Only OAuth still
-  // needs the grant read below.
-  if (authType !== 'oauth') {
-    const { attached } = await attachToSession(ctx, mcpServerId);
-    return {
-      mcp_server_id: mcpServerId,
-      name: server.display_name || server.name || params.serverName,
-      oauth_mode: params.oauthMode,
-      attached,
-    };
-  }
-  assertOAuthWidgetRoleFloor(ctx.submitterRole, oauthMode);
+  return {
+    server,
+    mcpServerId: params.mcpServerId as MCPServerID,
+    oauthMode: params.oauthMode,
+  };
+}
 
-  // b. THE check. Credentials belong to the prompt actor resolving this
-  // widget, not to the Session owner (`mcp-egress/gateway.ts`,
-  // `register-routes.ts`), so the grant is looked up under the resolver.
-  //
-  // Fails closed if the database handle is missing: unlike the env_vars
-  // widget's optional session-selection write, this read IS the authorization,
-  // so a missing handle must refuse rather than skip.
+/**
+ * Catalog lane: the install the Catalog drawer reports, accepted only while it
+ * is still a current install of the pinned entry — the entry's endpoint,
+ * transport, no custom headers, and an auth prescription Connect could have
+ * written (`isCurrentCatalogInstallOfEntry`). Provenance fields alone survive
+ * ordinary edits, so a row retargeted elsewhere or switched to no auth is
+ * refused here rather than attached.
+ */
+async function resolveCatalogInstall(
+  ctx: WidgetSubmitCtx,
+  params: OAuthWidgetParams,
+  mcpServerId: string | undefined
+): Promise<ResolvedTarget> {
+  if (!mcpServerId) {
+    throw new Forbidden(`Connect "${params.serverName}" from the card first, then try again.`);
+  }
+  const server = await loadServerForResolver(ctx, mcpServerId);
+  assertUsableByResolver(ctx, server);
+  const entry = params.catalogEntryName
+    ? findCatalogEntry(await loadCatalog(), params.catalogEntryName)
+    : undefined;
+  if (
+    !server.enabled ||
+    !entry?.remote_url ||
+    !isCurrentCatalogInstallOfEntry(server, entry as MCPCatalogEntry & { remote_url: string })
+  ) {
+    throw new Forbidden(
+      `That MCP server is not a current catalog install of "${params.serverName}"`
+    );
+  }
+  const oauthMode = (server.auth?.oauth_mode ?? 'per_user') as OAuthWidgetParams['oauthMode'];
+  if (server.auth?.type === 'oauth') assertOAuthWidgetRoleFloor(ctx.submitterRole, oauthMode);
+  return { server, mcpServerId: mcpServerId as MCPServerID, oauthMode };
+}
+
+/**
+ * The grant check both lanes share for an OAuth server. Credentials belong to
+ * the prompt actor resolving this widget, not to the Session owner
+ * (`mcp-egress/gateway.ts`, `register-routes.ts`), so the grant is looked up
+ * under the resolver.
+ *
+ * Fails closed if the database handle is missing: unlike the env_vars widget's
+ * optional session-selection write, this read IS the authorization, so a
+ * missing handle must refuse rather than skip.
+ */
+async function assertResolverGrantConnected(
+  ctx: WidgetSubmitCtx,
+  mcpServerId: MCPServerID,
+  serverName: string,
+  attemptId: string | undefined
+): Promise<void> {
   const db = (ctx.app as unknown as { get?: (key: string) => unknown }).get?.('database') as
     | GrantLookupDatabase
     | undefined;
@@ -433,18 +468,12 @@ async function resolveOAuthWidgetFromCallback(
   // from a grant row this daemon owns, read under the RESOLVER's identity (D3)
   // — not the age of that grant's access token. Requiring `live` here while
   // the mint gate accepts a refreshable grant would refuse a finish for the
-  // exact user the mint gate would have connected for free, and that is not
-  // hypothetical: the B1 lane is built for someone who signs in and comes back
-  // later, by which time an hour-lived access token has lapsed and only its
-  // refresh token is left. The old refusal told them to go and complete a
-  // sign-in they had already completed.
+  // exact user the mint gate would have connected for free: someone who signs
+  // in and comes back after an hour-lived access token has lapsed.
   //
   // A refresh this daemon started can still be in flight at exactly the moment
-  // the browser POSTs. Now that a refreshable grant counts, the only rows that
-  // reach here unconnected-and-`refreshing` are the ones with no spendable
-  // refresh token on file (`ambiguous`, or none at all), so the settle wait is
-  // narrower than it was — but it is the same race, and one short look still
-  // turns it into a success instead of advice to redo a sign-in that worked.
+  // the browser POSTs; one short look turns that race into a success instead
+  // of advice to redo a sign-in that worked.
   if (!mcpOAuthGrantIsConnected(liveness) && liveness.reason === 'refreshing') {
     await new Promise((resolve) => setTimeout(resolve, GRANT_REFRESH_SETTLE_MS));
     liveness = await readLiveness();
@@ -452,24 +481,51 @@ async function resolveOAuthWidgetFromCallback(
 
   if (!mcpOAuthGrantIsConnected(liveness)) {
     console.info(
-      `[widgets] event=oauth_widget_unverified server_id=${mcpServerId} reason=${liveness.reason} attempt_id=${evidence.attempt_id ?? 'none'}`
+      `[widgets] event=oauth_widget_unverified server_id=${mcpServerId} reason=${liveness.reason} attempt_id=${attemptId ?? 'none'}`
     );
-    // The copy has to distinguish "you have not signed in" from "you have, and
-    // Agor is still finishing". Telling the user who just completed a provider
-    // sign-in to go and complete it is false, and it sends them back through a
-    // flow that already worked. Both reopen the widget for a retry; only the
-    // instruction differs.
+    // "You have not signed in" and "you have, and Agor is still finishing"
+    // need different instructions; both reopen the widget for a retry.
     throw new Forbidden(
       liveness.reason === 'refreshing'
-        ? `Agor is still finishing the connection to "${params.serverName}". Wait a moment, then press Connect again — you should not need to sign in again.`
-        : `Sign-in to "${params.serverName}" has not completed. Finish the provider sign-in, then try Connect again.`
+        ? `Agor is still finishing the connection to "${serverName}". Wait a moment, then press Connect again — you should not need to sign in again.`
+        : `Sign-in to "${serverName}" has not completed. Finish the provider sign-in, then try Connect again.`
     );
   }
+}
 
-  // c. Only now — the grant exists, so the server is useful the moment the
-  // agent sees it.
+/**
+ * Resolve the widget from a completed browser connect — an OAuth sign-in, or a
+ * catalog-drawer connect for an entry pinned by name.
+ *
+ * `evidence.attempt_id` is logged for correlation and otherwise unused.
+ * `evidence.mcp_server_id` is read only by the catalog lane, and then only
+ * names a candidate it accepts or refuses: the decision comes entirely from
+ * rows this daemon owns.
+ */
+async function resolveOAuthWidgetFromCallback(
+  ctx: WidgetSubmitCtx,
+  evidence: WidgetDaemonVerifiedEvidence,
+  params: OAuthWidgetParams
+): Promise<OAuthWidgetResultMeta> {
+  // The role floor and the gateway identity question are both re-asked by
+  // `authorizeOAuthWidgetResolve`, which `submissions.ts` runs before the
+  // claim. Repeating the role floor here keeps this function safe to call
+  // directly (tests do) and costs nothing.
+  assertOAuthWidgetRoleFloor(ctx.submitterRole, params.oauthMode);
+
+  const { server, mcpServerId, oauthMode } = params.mcpServerId
+    ? await resolvePinnedServer(ctx, { ...params, mcpServerId: params.mcpServerId })
+    : await resolveCatalogInstall(ctx, params, evidence.mcp_server_id);
+
+  // Catalog connect writes a bearer or open row only after the live endpoint
+  // accepted it, so such a current install is ready as it stands. OAuth needs
+  // the grant.
+  if (server.auth?.type === 'oauth') {
+    await assertResolverGrantConnected(ctx, mcpServerId, params.serverName, evidence.attempt_id);
+  }
+
+  // Only now is the server useful the moment the agent sees it.
   const { attached } = await attachToSession(ctx, mcpServerId);
-
   return {
     mcp_server_id: mcpServerId,
     name: server.display_name || server.name || params.serverName,
