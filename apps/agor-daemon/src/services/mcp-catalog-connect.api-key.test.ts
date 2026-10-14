@@ -197,8 +197,15 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     return context;
   };
 
+  // What each patch asked to write, before any hook rewrites it.
+  const patchData: Record<string, unknown>[] = [];
+  const recordPatchData = async (context: { data?: unknown }) => {
+    patchData.push(structuredClone(context.data) as Record<string, unknown>);
+    return context;
+  };
+
   app.service('mcp-servers').hooks({
-    before: registered.before,
+    before: { ...registered.before, patch: [recordPatchData, ...(registered.before.patch ?? [])] },
     after: Object.fromEntries(
       Object.entries(registered.after).map(([method, hooks]) => [
         method,
@@ -264,6 +271,7 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     },
     /** The row as it actually sits in the database, past every hook. */
     stored: () => repo.findAll({}),
+    patchData: () => patchData,
   };
 }
 
@@ -674,6 +682,64 @@ describe('a vendor credential recipe, end to end', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.auth?.token).toBe(ROTATED_KEY);
     expect(rows[0]?.headers?.['x-environment-id']).toBe('7');
+  });
+
+  it.each([
+    ['a prefix and extra fields', RECIPE, FIELDS],
+    [
+      'a vendor header',
+      {
+        ...CURATED,
+        name: 'com.example/header-mcp',
+        remote_url: 'https://header.example.com/mcp',
+        credentials: { ...CURATED.credentials, header: 'api-key' },
+      } as unknown as MCPCatalogEntry,
+      undefined,
+    ],
+  ])(
+    'reconnects with %s as an auth-only rotation of a current install',
+    async (_label, entry, fields) => {
+      const daemon = await buildDaemon(entry);
+      const alice = await daemon.addUser('alice@agor.live');
+      const first = await daemon.connectAs(alice, WORKING_KEY, fields);
+      const patchesBefore = daemon.patchData().length;
+
+      const second = await daemon.connectAs(alice, ROTATED_KEY, fields);
+
+      expect(second.mcp_server.mcp_server_id).toBe(first.mcp_server.mcp_server_id);
+      // A full reconciliation would also rewrite enabled/transport/scope/url.
+      expect(
+        daemon
+          .patchData()
+          .slice(patchesBefore)
+          .map((data) => Object.keys(data).sort())
+      ).toEqual([['auth', ...(fields ? ['headers'] : []), 'replace_auth']]);
+      expect((await daemon.stored())[0]?.auth?.token).toBe(ROTATED_KEY);
+    }
+  );
+
+  it('reconciles an install whose custom header names drifted from the recipe', async () => {
+    const daemon = await buildDaemon(RECIPE);
+    const alice = await daemon.addUser('alice@agor.live');
+    const first = await daemon.connectAs(alice, WORKING_KEY, FIELDS);
+    await daemon.patch(alice, first.mcp_server.mcp_server_id, {
+      headers: {
+        'x-environment-id': MCP_HEADER_REDACTED_SENTINEL,
+        'x-workspace-key': MCP_HEADER_REDACTED_SENTINEL,
+        'x-extra': 'user-added',
+      },
+    });
+    const patchesBefore = daemon.patchData().length;
+
+    await daemon.connectAs(alice, ROTATED_KEY, FIELDS);
+
+    expect(daemon.patchData().slice(patchesBefore)).toEqual([
+      expect.objectContaining({ enabled: true, transport: 'http' }),
+    ]);
+    expect(Object.keys((await daemon.stored())[0]?.headers ?? {}).sort()).toEqual([
+      'x-environment-id',
+      'x-workspace-key',
+    ]);
   });
 
   it.each([

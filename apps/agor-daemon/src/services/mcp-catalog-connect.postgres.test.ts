@@ -698,6 +698,41 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       }
     });
 
+    it('projects bearer routing fields and custom header names, never their values', async () => {
+      const actor = await buildTenant('candidate-projection');
+      await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
+        await new MCPServerRepository(scoped).create({
+          name: `vendor-${generateId()}`,
+          transport: 'http',
+          url: RESOURCE,
+          scope: 'session',
+          source: 'user',
+          owner_user_id: actor.user.user_id,
+          enabled: true,
+          headers: { 'x-environment-id': 'raw-header-secret' },
+          auth: {
+            type: 'bearer',
+            token: 'raw-token-secret',
+            token_header: 'api-key',
+            token_prefix: 'Key ',
+          },
+        });
+        const [candidate] = await new MCPCatalogCandidateRepository(scoped).listForUser(
+          actor.user.user_id
+        );
+        expect(candidate?.server.headers).toEqual({
+          'x-environment-id': MCP_HEADER_REDACTED_SENTINEL,
+        });
+        expect(candidate?.server.auth).toEqual({
+          type: 'bearer',
+          token: MCP_HEADER_REDACTED_SENTINEL,
+          token_header: 'api-key',
+          token_prefix: 'Key ',
+        });
+        expect(JSON.stringify(candidate)).not.toMatch(/raw-(header|token)-secret/);
+      });
+    });
+
     it('keeps the newer bearer credential when an older PostgreSQL rotation resumes', async () => {
       probeRemoteAuthType.mockResolvedValue('credentials');
       const actor = await buildTenant('bearer-rotation-race');

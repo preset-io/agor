@@ -36,9 +36,9 @@ function createMCPCatalogConnectService(
   const candidate = (value: MCPServer): MCPCatalogServerCandidate => ({
     server: {
       ...value,
-      headers: Object.keys(value.headers ?? {}).length
-        ? { __configured__: MCP_HEADER_REDACTED_SENTINEL }
-        : {},
+      headers: Object.fromEntries(
+        Object.keys(value.headers ?? {}).map((name) => [name, MCP_HEADER_REDACTED_SENTINEL])
+      ),
       auth: redactMCPAuthSecrets(value.auth),
       created_at: new Date(value.created_at ?? 0),
       updated_at: new Date(value.updated_at ?? 0),
@@ -409,9 +409,12 @@ function buildApp(
         created_at: new Date(0),
         updated_at: new Date(0),
         ...(server as unknown as MCPServer),
-        headers: Object.keys((server.headers as Record<string, string> | undefined) ?? {}).length
-          ? { __configured__: MCP_HEADER_REDACTED_SENTINEL }
-          : {},
+        headers: Object.fromEntries(
+          Object.keys((server.headers as Record<string, string> | undefined) ?? {}).map((name) => [
+            name,
+            MCP_HEADER_REDACTED_SENTINEL,
+          ])
+        ),
         ...(safeAuth ? { auth: safeAuth } : {}),
       },
       has_row_secret: Boolean(originalAuth?.type === 'bearer' && originalAuth.token),

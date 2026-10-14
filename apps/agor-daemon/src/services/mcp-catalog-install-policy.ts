@@ -79,20 +79,26 @@ export function catalogCredentialAuth(entry: MCPCatalogEntry, token: string): MC
 }
 
 /**
- * Whether a current install of `entry` carries custom headers: exactly when a
- * credential recipe declares extra fields. Values (and, on candidate
- * projections, names) are redacted, so presence is the comparable fact; every
- * credential connect rewrites the full set anyway.
+ * Whether `headers` name exactly the custom headers a current install of
+ * `entry` carries: its credential recipe's declared fields, or none. Values
+ * are redacted on candidate projections, so names are the comparable fact.
  */
-function expectsCatalogHeaders(entry: MCPCatalogEntry, prescribed: MCPAuth): boolean {
-  return prescribed.type === 'bearer' && Boolean(entry.credentials?.fields?.length);
+function hasCatalogHeaderNames(
+  headers: Record<string, string> | undefined,
+  entry: MCPCatalogEntry,
+  prescribed: MCPAuth
+): boolean {
+  const names = (values: string[]) => values.map((name) => name.toLowerCase()).sort();
+  const declared =
+    prescribed.type === 'bearer' ? (entry.credentials?.fields ?? []).map((f) => f.header) : [];
+  return JSON.stringify(names(Object.keys(headers ?? {}))) === JSON.stringify(names(declared));
 }
 
 /**
  * Canonical current-install predicate shared by Connect reuse and OAuth policy.
  * Historical source/stamp alone is never authority: the row must still match
  * the current entry's endpoint, transport, credential routing, and header
- * policy (none, unless its credential recipe declares extra fields). Imported/edited/removed rows therefore fail closed.
+ * names (none, unless its credential recipe declares extra fields). Imported/edited/removed rows therefore fail closed.
  */
 export function isCurrentCatalogInstall(
   server: Pick<
@@ -131,6 +137,6 @@ export function isCurrentCatalogInstall(
       prescribed,
       options.reconcileMissingCompatibilityMode === true
     ) &&
-    Object.keys(server.headers ?? {}).length > 0 === expectsCatalogHeaders(entry, prescribed)
+    hasCatalogHeaderNames(server.headers, entry, prescribed)
   );
 }

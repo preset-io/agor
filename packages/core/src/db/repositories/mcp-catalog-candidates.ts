@@ -41,8 +41,10 @@ type CandidateRow = {
   oauth_authorization_url: unknown;
   oauth_token_url: unknown;
   oauth_grant_type: unknown;
+  token_header: unknown;
+  token_prefix: unknown;
   insecure: unknown;
-  has_headers: unknown;
+  header_names: unknown;
   has_env: unknown;
   has_row_secret: unknown;
   has_oauth_client_secret: unknown;
@@ -75,6 +77,8 @@ function authFrom(row: CandidateRow): MCPAuth | undefined {
     return {
       type: 'bearer',
       ...(row.has_row_secret ? { token: MCP_HEADER_REDACTED_SENTINEL } : {}),
+      ...(stringValue(row.token_header) ? { token_header: stringValue(row.token_header) } : {}),
+      ...(stringValue(row.token_prefix) ? { token_prefix: stringValue(row.token_prefix) } : {}),
     };
   }
   if (type !== 'oauth') return undefined;
@@ -125,9 +129,10 @@ export class MCPCatalogCandidateRepository {
     try {
       const authType = jsonExtract(this.db, mcpServers.data, 'auth.type');
       const headerJson = jsonExtract(this.db, mcpServers.data, 'headers');
-      const hasHeaders = isPostgresDatabase(this.db)
-        ? sql<boolean>`coalesce(${mcpServers.data}->'headers', '{}'::jsonb) <> '{}'::jsonb`
-        : sql<boolean>`exists(select 1 from json_each(coalesce(${headerJson}, '{}')) limit 1)`;
+      // Header names only; values never leave the database.
+      const headerNames = isPostgresDatabase(this.db)
+        ? sql`(select coalesce(json_agg(k), '[]'::json) from jsonb_object_keys(case when jsonb_typeof(${mcpServers.data}->'headers') = 'object' then ${mcpServers.data}->'headers' else '{}'::jsonb end) as k)`
+        : sql`(select json_group_array(key) from json_each(coalesce(${headerJson}, '{}')) where key is not null)`;
       const envJson = jsonExtract(this.db, mcpServers.data, 'env');
       const hasEnv = isPostgresDatabase(this.db)
         ? sql<boolean>`coalesce(${mcpServers.data}->'env', '{}'::jsonb) <> '{}'::jsonb`
@@ -176,8 +181,10 @@ export class MCPCatalogCandidateRepository {
         ),
         oauth_token_url: jsonExtract(this.db, mcpServers.data, 'auth.oauth_token_url'),
         oauth_grant_type: jsonExtract(this.db, mcpServers.data, 'auth.oauth_grant_type'),
+        token_header: jsonExtract(this.db, mcpServers.data, 'auth.token_header'),
+        token_prefix: jsonExtract(this.db, mcpServers.data, 'auth.token_prefix'),
         insecure: jsonExtract(this.db, mcpServers.data, 'auth.insecure'),
-        has_headers: hasHeaders,
+        header_names: headerNames,
         has_env: hasEnv,
         has_row_secret: hasRowSecret,
         has_oauth_client_secret: sql<boolean>`${jsonExtract(this.db, mcpServers.data, 'auth.oauth_client_secret')} is not null`,
@@ -219,7 +226,11 @@ export class MCPCatalogCandidateRepository {
           ...(row.catalog_entry_name ? { catalog_entry_name: row.catalog_entry_name } : {}),
           ...(stringValue(row.url) ? { url: stringValue(row.url) } : {}),
           ...(row.has_env ? { env: { __configured__: MCP_HEADER_REDACTED_SENTINEL } } : {}),
-          headers: row.has_headers ? { __configured__: MCP_HEADER_REDACTED_SENTINEL } : {},
+          headers: Object.fromEntries(
+            (parseJson<unknown[]>(row.header_names) ?? [])
+              .filter((name): name is string => typeof name === 'string')
+              .map((name) => [name, MCP_HEADER_REDACTED_SENTINEL])
+          ),
           ...(authFrom(row) ? { auth: authFrom(row) } : {}),
           ...(parseJson<MCPServer['tools']>(row.tools) ? { tools: parseJson(row.tools) } : {}),
           ...(parseJson<MCPServer['resources']>(row.resources)
