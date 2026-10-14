@@ -125,6 +125,10 @@ network addresses, wholly inside `10.0.0.0/8`, `172.16.0.0/12`,
 `192.168.0.0/16`, or `100.64.0.0/10`. Loopback, link-local (`169.254.0.0/16`),
 `0.0.0.0/8`, and public ranges cannot be listed.
 
+The list is installed once at daemon startup; any change, including removing an
+entry, needs a daemon restart. Operator docs:
+`apps/agor-docs/content/guide/config-yaml.mdx` (Private outbound destinations).
+
 ### Sandpack, local/private Agor URLs, and Chrome Private Network Access
 
 Artifacts commonly render inside the hosted Sandpack iframe
