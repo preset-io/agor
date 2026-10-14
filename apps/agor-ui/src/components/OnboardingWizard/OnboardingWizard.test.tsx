@@ -23,11 +23,13 @@
  * the accessible-name computation entirely and are used throughout instead.
  */
 
+import type { MCPCatalogEntry } from '@agor/core/types';
 import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { catalogEntry } from '../Marketplace/MCPCatalogModal.test-fixtures';
 import { OnboardingWizard } from './OnboardingWizard';
 
 const { TEST_BOARD_ID } = vi.hoisted(() => ({
@@ -76,9 +78,10 @@ function makeBoard(
 function renderWizard(
   overrides: Partial<ComponentProps<typeof OnboardingWizard>> & {
     boardById?: Map<string, Board>;
+    catalog?: MCPCatalogEntry[];
   } = {}
 ) {
-  const { boardById, ...componentOverrides } = overrides;
+  const { boardById, catalog = [], ...componentOverrides } = overrides;
   agorStore.setState({
     ...EMPTY_MAPS,
     ...(boardById ? { boardById } : {}),
@@ -105,7 +108,7 @@ function renderWizard(
         on: vi.fn(),
         off: vi.fn(),
         get: vi.fn(async () => ({ state: 'no_auth' })),
-        find: vi.fn(async () => ({ data: [] })),
+        find: vi.fn(async () => ({ data: name === 'mcp-catalog' ? catalog : [] })),
       };
     }),
   };
@@ -1063,7 +1066,7 @@ describe('OnboardingWizard', () => {
           sourceRemoteUrl: undefined,
           templateId: 'personal-assistant',
           agent: 'claude-code',
-          connectedMcpServerIds: [],
+          requestedTools: [],
         },
         expect.objectContaining({ isCurrent: expect.any(Function) })
       )
@@ -1163,7 +1166,7 @@ describe('OnboardingWizard', () => {
           sourceRemoteUrl: undefined,
           templateId: null,
           agent: null,
-          connectedMcpServerIds: [],
+          requestedTools: [],
         },
         expect.objectContaining({ isCurrent: expect.any(Function) })
       )
@@ -1615,25 +1618,37 @@ describe('OnboardingWizard', () => {
     expect(attempt.isCurrent()).toBe(false);
   });
 
-  it('tools step is a browsable wall with nothing to select or store', async () => {
+  it('tools step: picked tiles survive Back and Next and reach completion', async () => {
     const onComplete = vi.fn();
-    renderWizard({ onComplete, initialStep: 'tools' });
+    renderWizard({
+      onComplete,
+      initialStep: 'tools',
+      catalog: [
+        { ...catalogEntry, name: 'com.notion/mcp', title: 'Notion' },
+        { ...catalogEntry, name: 'app.linear/linear', title: 'Linear' },
+      ],
+    });
 
     expect(screen.getByText('Connect your teammate')).toBeInTheDocument();
     expect(
-      screen.getByText(
-        'Your teammate can work with all of these tools. Connect one now, or skip and do it later.'
-      )
+      screen.getByText('Pick the tools you use. Your teammate will help you connect them.')
     ).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Search tools')).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(screen.getByText('Skip for now')).toBeInTheDocument();
+    const notion = () => screen.getByText('Notion').closest('button') as HTMLButtonElement;
+    await screen.findByText('Notion');
+    fireEvent.click(notion());
+    expect(notion()).toHaveAttribute('aria-pressed', 'true');
+
+    clickButton('Back'); // → AI
+    await findAndClickButton(/skip for now/i); // AI → tools
+    await screen.findByText('Notion');
+    expect(notion()).toHaveAttribute('aria-pressed', 'true');
 
     clickButton(/^continue →/i);
     clickButton(/open my board/i);
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(onComplete.mock.calls[0][0]).toMatchObject({ connectedMcpServerIds: [] });
-    expect(onComplete.mock.calls[0][0]).not.toHaveProperty('suggestedIntegrations');
+    expect(onComplete.mock.calls[0][0]).toMatchObject({
+      requestedTools: [{ name: 'Notion', catalogEntryName: 'com.notion/mcp' }],
+    });
   });
 });
 

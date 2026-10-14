@@ -758,7 +758,6 @@ function AppContent() {
         AVAILABLE_AGENTS
       );
     const seeded = await seedOnboardingTeammate({
-      connectedMcpServerIds: result.connectedMcpServerIds,
       frameworkRepo: readyFrameworkRepo,
       boardId: result.boardId,
       teammateName: result.teammateName,
@@ -769,6 +768,7 @@ function AppContent() {
       startInitialTurn: result.agent != null,
       // Template persona for the first-session opener.
       templateId: result.templateId,
+      requestedTools: result.requestedTools,
       user: {
         name: currentUser.name,
         email: currentUser.email,

@@ -1,18 +1,10 @@
 import type { MCPCatalogEntry } from '@agor/core/types';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
+import type { RequestedCatalogTool } from '../../utils/teammateBootstrapPrompt';
 import { getTeammateTemplate, type TeammateTemplate } from '../../utils/teammateTemplates';
-import {
-  catalogEntry,
-  catalogUser,
-  makeCatalogClient,
-} from '../Marketplace/MCPCatalogModal.test-fixtures';
+import { catalogEntry, makeCatalogClient } from '../Marketplace/MCPCatalogModal.test-fixtures';
 import { OnboardingToolsStep } from './OnboardingToolsStep';
-
-vi.mock('../Marketplace/CatalogTab', () => ({
-  CatalogTab: ({ context }: { context: { mode: string; entryName: string } }) => (
-    <div data-testid="catalog-drawer" data-mode={context.mode} data-entry={context.entryName} />
-  ),
-}));
 
 const entries: MCPCatalogEntry[] = [
   { ...catalogEntry, name: 'io.github.github/github-mcp-server', title: 'GitHub' },
@@ -28,28 +20,30 @@ const entries: MCPCatalogEntry[] = [
 ];
 
 function renderStep(template?: TeammateTemplate) {
-  const api = makeCatalogClient(entries);
-  vi.mocked(api.client.service('mcp-catalog/readiness').get).mockImplementation(
-    async (key: string) =>
-      ({
-        catalog_key: key,
-        state: key === 'com.notion/mcp' ? 'installed_ready' : 'oauth_required',
-      }) as never
-  );
-  render(
-    <OnboardingToolsStep
-      client={api.client}
-      user={catalogUser}
-      connected
-      authGeneration={1}
-      template={template}
-      onConnected={vi.fn()}
-    />
-  );
-  return api;
+  const onPickedChange = vi.fn();
+  const { client } = makeCatalogClient(entries);
+  function Step() {
+    const [picked, setPicked] = useState<RequestedCatalogTool[]>([]);
+    return (
+      <OnboardingToolsStep
+        client={client}
+        connected
+        template={template}
+        picked={picked}
+        onPickedChange={(next) => {
+          onPickedChange(next);
+          setPicked(next);
+        }}
+      />
+    );
+  }
+  render(<Step />);
+  return onPickedChange;
 }
 
-const tile = (name: string) => screen.getByRole('button', { name: `${name}: view details` });
+const tile = (name: string) => screen.getByRole('button', { name });
+const search = (value: string) =>
+  fireEvent.change(screen.getByPlaceholderText('Search tools'), { target: { value } });
 
 describe('OnboardingToolsStep', () => {
   it('shows the whole catalog as a wall, narrowed by search and category', async () => {
@@ -59,14 +53,14 @@ describe('OnboardingToolsStep', () => {
     expect(tile('Linear')).toBeInTheDocument();
     expect(screen.queryByText('Write and update docs.')).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByPlaceholderText('Search tools'), { target: { value: 'not' } });
+    search('not');
     expect(tile('Notion')).toBeInTheDocument();
     expect(screen.queryByText('GitHub')).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByPlaceholderText('Search tools'), { target: { value: 'zzz' } });
+    search('zzz');
     expect(screen.getByText('No tools match "zzz".')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByPlaceholderText('Search tools'), { target: { value: '' } });
+    search('');
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by category' }));
     fireEvent.click(await screen.findByTitle('Productivity'));
     await waitFor(() => expect(screen.queryByText('GitHub')).not.toBeInTheDocument());
@@ -80,36 +74,27 @@ describe('OnboardingToolsStep', () => {
   });
 
   it("lists the picked template's tools first and hides none", async () => {
-    const order = () =>
-      screen.getAllByRole('button', { name: /: view details$/ }).map((el) => el.ariaLabel);
+    const order = () => screen.getAllByRole('button', { pressed: false }).map((el) => el.ariaLabel);
     renderStep();
     await screen.findByText('GitHub');
-    expect(order()).toEqual([
-      'Linear: view details',
-      'Notion: view details',
-      'GitHub: view details',
-    ]);
+    expect(order()).toEqual(['Linear', 'Notion', 'GitHub']);
     cleanup();
 
     // Chief of staff: Notion by name, then productivity, then the rest.
     renderStep(getTeammateTemplate('chief-of-staff'));
     await screen.findByText('GitHub');
-    expect(order()).toEqual([
-      'Notion: view details',
-      'Linear: view details',
-      'GitHub: view details',
-    ]);
+    expect(order()).toEqual(['Notion', 'Linear', 'GitHub']);
 
     // A category (or search) keeps the Catalog's order.
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by category' }));
     fireEvent.click(await screen.findByTitle('Productivity'));
     await waitFor(() => expect(screen.queryByText('GitHub')).not.toBeInTheDocument());
-    expect(order()).toEqual(['Linear: view details', 'Notion: view details']);
+    expect(order()).toEqual(['Linear', 'Notion']);
   });
 
   it('shows the Catalog logo (letter fallback), display title and category on each tile', async () => {
     renderStep();
-    const notion = await screen.findByRole('button', { name: 'Notion: view details' });
+    const notion = await screen.findByRole('button', { name: 'Notion' });
     expect(within(notion).getByRole('img', { name: 'Notion logo' })).toHaveAttribute(
       'src',
       'https://www.google.com/s2/favicons?domain=notion.so&sz=64'
@@ -120,18 +105,29 @@ describe('OnboardingToolsStep', () => {
     expect(within(github).getByText('Dev tools')).toBeInTheDocument();
   });
 
-  it('marks connected tools from caller-scoped readiness', async () => {
-    renderStep();
-    await waitFor(() => expect(within(tile('Notion')).getByText('Connected')).toBeInTheDocument());
-    expect(within(tile('Linear')).queryByText('Connected')).not.toBeInTheDocument();
-  });
+  it('toggles picks by Catalog id, keeps them through filtering and opens nothing', async () => {
+    const onPickedChange = renderStep();
+    const notion = await screen.findByRole('button', { name: 'Notion' });
+    expect(notion).toHaveAccessibleDescription('Write and update docs.');
+    expect(notion).toHaveAttribute('aria-pressed', 'false');
 
-  it('opens the shared Catalog drawer in onboarding mode from a tile', async () => {
-    renderStep();
-    expect(screen.queryByTestId('catalog-drawer')).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: 'Linear: view details' }));
-    const drawer = screen.getByTestId('catalog-drawer');
-    expect(drawer).toHaveAttribute('data-mode', 'onboarding');
-    expect(drawer).toHaveAttribute('data-entry', 'app.linear/linear');
+    fireEvent.click(notion);
+    expect(notion).toHaveAttribute('aria-pressed', 'true');
+    expect(onPickedChange).toHaveBeenLastCalledWith([
+      { name: 'Notion', catalogEntryName: 'com.notion/mcp' },
+    ]);
+    expect(document.querySelector('.ant-drawer, [role="dialog"]')).toBeNull();
+
+    search('lin');
+    fireEvent.click(tile('Linear'));
+    search('');
+    expect(tile('Notion')).toHaveAttribute('aria-pressed', 'true');
+    expect(tile('Linear')).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(tile('Notion'));
+    expect(tile('Notion')).toHaveAttribute('aria-pressed', 'false');
+    expect(onPickedChange).toHaveBeenLastCalledWith([
+      { name: 'Linear', catalogEntryName: 'app.linear/linear' },
+    ]);
   });
 });

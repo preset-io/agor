@@ -169,30 +169,19 @@ describe('seedOnboardingTeammate', () => {
     expect(onWarn).not.toHaveBeenCalled();
   });
 
-  it('attaches confirmed Catalog tools without confusing their idle session with the bootstrap', async () => {
+  it('lists picked tools in the first prompt without attaching any server', async () => {
     createTeammateBranchMock.mockResolvedValue({
       branch_id: 'branch-1',
       board_id: 'board-1',
     } as Branch);
     startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
     const { input } = setup({
-      connectedMcpServerIds: ['server-1'],
-      sessionById: new Map([
-        [
-          'catalog-session',
-          { session_id: 'catalog-session', branch_id: 'branch-1', title: 'GitHub' } as Session,
-        ],
-      ]),
+      requestedTools: [{ name: 'Notion', catalogEntryName: 'com.notion/mcp' }],
     });
     await seedOnboardingTeammate(input);
-    expect(startTeammateBootstrapSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionConfig: expect.objectContaining({
-          mcpServerIds: ['server-1'],
-          title: '🤖 Rusty — first session',
-        }),
-      })
-    );
+    const { sessionConfig } = startTeammateBootstrapSessionMock.mock.calls[0][0];
+    expect(sessionConfig.initialPrompt).toContain('Notion (com.notion/mcp)');
+    expect(sessionConfig).not.toHaveProperty('mcpServerIds');
   });
 
   it('returns the durable session when daemon-side initialization is incomplete', async () => {

@@ -1,5 +1,11 @@
 import { BLANK_TEMPLATE_ID, getTeammateTemplate } from './teammateTemplates';
 
+/** A Catalog tool the user picked in onboarding and wants help connecting. */
+export interface RequestedCatalogTool {
+  name: string;
+  catalogEntryName: string;
+}
+
 export interface TeammateBootstrapPromptInput {
   localHome?: boolean;
   displayName: string;
@@ -13,6 +19,8 @@ export interface TeammateBootstrapPromptInput {
    * to the personal, persona-led path.
    */
   templateId?: string | null;
+  /** Tools picked in onboarding; the first session offers to help connect them. */
+  requestedTools?: readonly RequestedCatalogTool[] | null;
 }
 
 export interface TeammateBootstrapPromptContext {
@@ -30,6 +38,7 @@ export interface TeammateBootstrapPromptContext {
   templateTitle?: string;
   /** Prompt-only template's remit (no starter branch carries its playbook). */
   templateRemit?: string;
+  requestedTools?: readonly RequestedCatalogTool[];
   firstSession: true;
 }
 
@@ -58,6 +67,13 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
 
   if (context.templateRemit) {
     lines.push(`- Template remit: ${context.templateRemit}`);
+  }
+
+  if (context.requestedTools?.length) {
+    const tools = context.requestedTools.map((tool) => `${tool.name} (${tool.catalogEntryName})`);
+    lines.push(
+      `- The user picked these tools and wants help installing and connecting them through the Agor MCP Catalog: ${tools.join(', ')}. Use each reviewed Catalog entry; never register a guessed endpoint.`
+    );
   }
 
   if (context.user?.name) {
@@ -120,6 +136,7 @@ export function buildTeammateBootstrapPromptContext({
   userName,
   userEmail,
   templateId,
+  requestedTools,
   localHome,
 }: TeammateBootstrapPromptInput): TeammateBootstrapPromptContext {
   const normalizedUserName = userName?.trim();
@@ -146,6 +163,7 @@ export function buildTeammateBootstrapPromptContext({
       : {}),
     ...(templateTitle ? { templateTitle } : {}),
     ...(templateRemit ? { templateRemit } : {}),
+    ...(requestedTools?.length ? { requestedTools } : {}),
     ...(localHome ? { localHome: true } : {}),
     firstSession: true,
   };

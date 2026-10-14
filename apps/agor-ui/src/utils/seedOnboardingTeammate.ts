@@ -6,12 +6,12 @@ import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
   buildTeammateFirstSessionTitle,
+  type RequestedCatalogTool,
 } from './teammateBootstrapPrompt';
 import { createTeammateBranch, type TeammateCreationDeps } from './teammateCreation';
 import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
 
 export interface SeedOnboardingTeammateInput {
-  connectedMcpServerIds?: string[];
   /** Framework repo the teammate branches from — undefined while it's still cloning. */
   frameworkRepo: Repo | undefined;
   /** Board the wizard already created; the teammate is seeded onto it (no second board). */
@@ -36,6 +36,8 @@ export interface SeedOnboardingTeammateInput {
   startInitialTurn: boolean;
   /** Chosen gallery template id (persona); null/undefined = blank starter. */
   templateId?: string | null;
+  /** Tools picked in onboarding, listed in the first-session prompt. */
+  requestedTools?: readonly RequestedCatalogTool[];
   user?: { name?: string | null; email?: string | null } | null;
   /** Identity that initiated onboarding; the daemon independently validates it. */
   expectedUserId: UserID;
@@ -280,6 +282,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       userName: input.user?.name,
       userEmail: input.user?.email,
       templateId: input.templateId,
+      requestedTools: input.requestedTools,
       localHome: getTeammateConfig(branch)?.localHome,
     });
     const initialization = await startTeammateBootstrapSession({
@@ -289,9 +292,6 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       sessionConfig: {
         branch_id: branch.branch_id,
         agent: input.agent,
-        ...(input.connectedMcpServerIds?.length
-          ? { mcpServerIds: input.connectedMcpServerIds }
-          : {}),
         title: buildTeammateFirstSessionTitle({
           displayName: teammateName,
           emoji: input.teammateEmoji,

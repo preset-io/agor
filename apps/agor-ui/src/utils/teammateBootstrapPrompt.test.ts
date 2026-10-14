@@ -97,6 +97,25 @@ describe('buildTeammateBootstrapPrompt', () => {
     expect(prompt).toContain('set up from the Researcher template to help Max');
   });
 
+  it('asks for help connecting the tools picked in onboarding, and only then', () => {
+    const prompt = buildTeammateBootstrapPrompt({
+      displayName: 'Scout',
+      requestedTools: [
+        { name: 'Stripe', catalogEntryName: 'com.stripe/mcp' },
+        { name: 'Notion', catalogEntryName: 'com.notion/mcp' },
+      ],
+    });
+    expect(prompt).toContain(
+      '- The user picked these tools and wants help installing and connecting them through the Agor MCP Catalog: Stripe (com.stripe/mcp), Notion (com.notion/mcp).'
+    );
+    for (const requestedTools of [undefined, []]) {
+      expect(buildTeammateBootstrapPrompt({ displayName: 'Scout', requestedTools })).toBe(
+        buildTeammateBootstrapPrompt({ displayName: 'Scout' })
+      );
+    }
+    expect(buildTeammateBootstrapPrompt({ displayName: 'Scout' })).not.toContain('picked these');
+  });
+
   it('treats the blank starter as no template (no persona, fallback opener)', () => {
     const prompt = buildTeammateBootstrapPrompt({
       displayName: 'Board Bot',

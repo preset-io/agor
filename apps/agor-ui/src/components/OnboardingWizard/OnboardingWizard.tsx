@@ -39,6 +39,7 @@ import { useAuthenticatedAuthorityScope } from '../../hooks/useAuthorityOperatio
 import { findFrameworkRepo } from '../../hooks/useFrameworkRepo';
 import { useAgorStore } from '../../store/agorStore';
 import { type ActionErrorCopy, describeActionError } from '../../utils/connectionErrors';
+import type { RequestedCatalogTool } from '../../utils/teammateBootstrapPrompt';
 import {
   BLANK_TEMPLATE_ID,
   DEFAULT_TEMPLATE_ID,
@@ -376,7 +377,8 @@ export interface OnboardingCompletionResult {
   templateId?: string | null;
   /** Agent selected in the LLM step, used for the teammate's bootstrap session. */
   agent?: AgenticToolName | null;
-  connectedMcpServerIds?: string[];
+  /** Tools picked on the tools step, listed in the teammate's first prompt. */
+  requestedTools?: RequestedCatalogTool[];
   // May run async (teammate creation) — the wizard awaits it and shows a
   // loading state until it resolves, so the modal covers the whole operation.
 }
@@ -508,8 +510,6 @@ export function OnboardingWizard({
   // ── Step state ──────────────────────────────────────────────────────────
   const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'workspace');
 
-  // Connections made in the Catalog drawer. Catalog owns policy and secrets.
-  const [connectedMcpServerIds, setConnectedMcpServerIds] = useState<string[]>([]);
   const createdBoardIdRef = useRef<string | null>(null);
 
   // ── Step 2: LLM ─────────────────────────────────────────────────────────
@@ -542,6 +542,8 @@ export function OnboardingWizard({
     DEFAULT_TEMPLATE_ID
   );
   const [invalidSavedTemplateId, setInvalidSavedTemplateId] = useState<string | null>(null);
+  // Tools picked on the tools step; the teammate's first session helps connect them.
+  const [requestedTools, setRequestedTools] = useState<RequestedCatalogTool[]>([]);
   // Final completion owns the resumable board saga. Connecting tools creates no workspace.
   const [boardError, setBoardError] = useState<string | null>(null);
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
@@ -561,7 +563,7 @@ export function OnboardingWizard({
   useEffect(() => {
     if (!open) return;
     setCurrentStep(initialStep || 'workspace');
-    setConnectedMcpServerIds([]);
+    setRequestedTools([]);
     createdBoardIdRef.current = null;
     setSelectedAgent(null);
     setApiKey('');
@@ -1019,6 +1021,7 @@ export function OnboardingWizard({
       setSelectedTemplateId(null);
       setInvalidSavedTemplateId(null);
     }
+    if (currentStep === 'tools') setRequestedTools([]);
     // Skipping the LLM step must not leave a merely *highlighted* provider
     // behind. Selecting a card sets `selectedAgent` before any key is entered,
     // and completion reads a non-null agent as "there is a model to run on" —
@@ -1180,7 +1183,7 @@ export function OnboardingWizard({
                   sourceRemoteUrl: resolveTemplateSourceRemoteUrl(selectedTemplateId),
                   templateId: selectedTemplateId,
                   agent: selectedAgent,
-                  connectedMcpServerIds,
+                  requestedTools,
                 },
                 completionAttempt
               )
@@ -1216,7 +1219,7 @@ export function OnboardingWizard({
   }, [
     currentStep,
     isCurrent,
-    connectedMcpServerIds,
+    requestedTools,
     ensureBoard,
     selectedAgent,
     agentIsVerifiedConnected,
@@ -1778,13 +1781,10 @@ export function OnboardingWizard({
       {renderStepBadge('Connect your teammate')}
       <OnboardingToolsStep
         client={client}
-        user={user}
         connected={onboardingAuthority.connectionReady && isCurrent()}
-        authGeneration={onboardingAuthority.authGeneration}
         template={getTeammateTemplate(selectedTemplateId)}
-        onConnected={(serverId) =>
-          setConnectedMcpServerIds((ids) => (ids.includes(serverId) ? ids : [...ids, serverId]))
-        }
+        picked={requestedTools}
+        onPickedChange={setRequestedTools}
       />
     </>
   );

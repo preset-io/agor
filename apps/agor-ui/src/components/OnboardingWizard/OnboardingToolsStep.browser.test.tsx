@@ -1,13 +1,13 @@
-import { cleanup, configure, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, configure, render, screen, within } from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
-import { MemoryRouter } from 'react-router-dom';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import type { RequestedCatalogTool } from '../../utils/teammateBootstrapPrompt';
 import {
   catalogEntry,
-  catalogUser,
   githubHandoffEntry,
   makeCatalogClient,
 } from '../Marketplace/MCPCatalogModal.test-fixtures';
@@ -31,30 +31,28 @@ const entries = [
 ];
 
 function Harness({ api }: { api: ReturnType<typeof makeCatalogClient> }) {
+  const [picked, setPicked] = useState<RequestedCatalogTool[]>([]);
   return (
     <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
       <App>
-        <MemoryRouter>
-          <section
-            aria-label="Onboarding tools"
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              width: 'calc(100% - 32px)',
-              maxWidth: 666,
-              height: 560,
-              margin: '16px auto',
-            }}
-          >
-            <OnboardingToolsStep
-              client={api.client}
-              user={catalogUser}
-              connected
-              authGeneration={1}
-              onConnected={vi.fn()}
-            />
-          </section>
-        </MemoryRouter>
+        <section
+          aria-label="Onboarding tools"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            width: 'calc(100% - 32px)',
+            maxWidth: 666,
+            height: 560,
+            margin: '16px auto',
+          }}
+        >
+          <OnboardingToolsStep
+            client={api.client}
+            connected
+            picked={picked}
+            onPickedChange={setPicked}
+          />
+        </section>
       </App>
     </ConfigProvider>
   );
@@ -63,7 +61,7 @@ function Harness({ api }: { api: ReturnType<typeof makeCatalogClient> }) {
 describe('onboarding tools wall in Chromium', () => {
   it('keeps the toolbar on one row and lays tiles out in 3 columns (2 on narrow phones)', async () => {
     render(<Harness api={makeCatalogClient(entries)} />);
-    const github = await screen.findByRole('button', { name: 'GitHub: view details' });
+    const github = await screen.findByRole('button', { name: 'GitHub' });
 
     const search = screen.getByPlaceholderText('Search tools').getBoundingClientRect();
     const category = screen
@@ -75,9 +73,7 @@ describe('onboarding tools wall in Chromium', () => {
       screen.getByRole('region', { name: 'Onboarding tools' }).getBoundingClientRect().right + 0.5
     );
 
-    const tiles = entries.map((entry) =>
-      screen.getByRole('button', { name: `${entry.title}: view details` })
-    );
+    const tiles = entries.map((entry) => screen.getByRole('button', { name: entry.title }));
     const firstRowTop = Math.min(...tiles.map((tile) => tile.getBoundingClientRect().top));
     const columns = tiles.filter(
       (tile) => Math.abs(tile.getBoundingClientRect().top - firstRowTop) < 1
@@ -90,18 +86,26 @@ describe('onboarding tools wall in Chromium', () => {
     expect(screen.queryByText(githubHandoffEntry.benefit)).not.toBeInTheDocument();
   });
 
-  it('opens the existing Catalog drawer from a tile and restores focus on close', async () => {
-    const api = makeCatalogClient(entries);
-    render(<Harness api={api} />);
-    const tile = await screen.findByRole('button', { name: 'GitHub: view details' });
-    await userEvent.click(tile);
+  it('toggles a pick with a primary-colour outline and opens no drawer', async () => {
+    render(<Harness api={makeCatalogClient(entries)} />);
+    const github = await screen.findByRole('button', { name: 'GitHub' });
+    const border = () => getComputedStyle(github).borderTopColor;
+    const unpicked = border();
 
-    const dialog = await screen.findByRole('dialog', { name: /GitHub/ });
-    await within(dialog).findByPlaceholderText('Paste your GitHub bearer access token');
-    expect(document.querySelectorAll('.ant-drawer')).toHaveLength(1);
-    expect(api.client.service('mcp-catalog/start-session').create).not.toHaveBeenCalled();
+    await userEvent.click(github);
+    expect(github).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.hover(screen.getByPlaceholderText('Search tools'));
+    const { colorPrimary } = theme.getDesignToken({ algorithm: theme.darkAlgorithm });
+    const probe = document.createElement('span');
+    probe.style.color = colorPrimary;
+    document.body.append(probe);
+    expect(border()).toBe(getComputedStyle(probe).color);
+    probe.remove();
+    expect(document.querySelector('.ant-drawer')).toBeNull();
 
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(tile).toHaveFocus());
+    await userEvent.click(github);
+    expect(github).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.hover(screen.getByPlaceholderText('Search tools'));
+    expect(border()).toBe(unpicked);
   });
 });

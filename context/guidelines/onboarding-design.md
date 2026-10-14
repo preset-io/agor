@@ -38,14 +38,14 @@ Legacy `preferences.onboarding.goals` and `persona` stay untouched: no migration
   and the category filter use the Catalog's order. Every tool stays visible and nothing is
   preselected. No template or "Start from scratch" keeps
   the curated order. Names must exist in the Catalog (a unit test checks).
-- **No selection, nothing stored.** Only connections confirmed in the Catalog drawer pass, as
-  server IDs, to the first teammate session at completion. Back and Skip never delete connections.
+- **Tiles are picks.** Clicking toggles a pick (`aria-pressed`, antd primary outlined button); it
+  opens nothing. Picks live in wizard state as `{ name, catalogEntryName }`, survive Back/Next and
+  filtering, clear on Skip, and reach the first-session prompt at completion. Not stored.
 - The grid replaces the old one-row-per-provider layout: 3 columns, 2 at ≤480px. A tile is a
   button with the Catalog's own logo (`CatalogEntryAvatar` + `icon_url`, letter fallback), the
   Catalog display title, and the category label as one secondary line; the description lives in a
-  hover-only Tooltip and in the button's `aria-description`. No focus trigger: focus returning from
-  the drawer would reopen it away from the pointer. "Connected" comes from caller-scoped readiness
-  (`useCatalogReadiness`), never inferred.
+  hover-only Tooltip and in the button's `aria-description`. No per-tile connection status:
+  onboarding connects nothing, and the teammate checks live state.
 - Logo hosts must stay in the daemon's default CSP `img-src` (`MCP_CATALOG_CSP_IMG_SRCS`);
   a blocked image falls back to the letter.
 - AntD components and theme tokens only; sentence case.
@@ -58,20 +58,12 @@ Legacy `preferences.onboarding.goals` and `persona` stay untouched: no migration
   today. Auto-rotation pauses on hover/focus and is off under reduced motion; tips are not in a
   live region and hide on error. Slow and error states are unchanged.
 
-## In-context Catalog
+## Connecting tools
 
-- A tile opens the existing `CatalogTab` / `CatalogDetailDrawer` through the shared `CatalogDrawer`
-  seam with an explicit `context.mode: 'onboarding'`: no pathname detection, spacing overrides,
-  second auth API or state machine, or completing onboarding just to open a drawer. Onboarding
-  renders only the drawers.
-- Catalog owns consent, readiness, policy, secure token input, the OAuth popup, and durable
-  attempt + caller-scoped credential confirmation. Installation is not proof of OAuth success.
-- Browsing creates nothing; Connect is install-only (no board, branch or session). No tryouts,
-  session actions or starter prompts in onboarding; ready connections offer **Return to
-  onboarding**.
-- Cancellation erases private input; owner/generation replacement fences stale continuations.
-  Tokens and auth state never leave the drawer. Workspace creation happens at completion.
-- GitHub uses the reviewed `io.github.github/github-mcp-server` PAT recipe.
+- Onboarding opens no Catalog drawer and connects nothing. The first-session prompt lists the
+  picks (name + Catalog id); the teammate helps install each through its reviewed Catalog entry,
+  where consent, policy, secure token input and OAuth live, never through a guessed endpoint.
+  With no picks the prompt is unchanged.
 - **Slack is gateway messaging, not MCP.** Slack MCP is absent from Catalog (no DCR; needs an
   approved confidential app): don't re-add it, offer generic registration, or use gateway tokens
   for MCP. Onboarding no longer offers Slack gateway setup; the teammate helps later, using one

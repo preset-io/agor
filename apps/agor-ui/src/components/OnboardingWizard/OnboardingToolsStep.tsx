@@ -1,12 +1,12 @@
 import type { MCPCatalogEntry } from '@agor/core/types';
-import type { AgorClient, User } from '@agor-live/client';
-import { CheckCircleFilled, SearchOutlined } from '@ant-design/icons';
+import type { AgorClient } from '@agor-live/client';
+import { SearchOutlined } from '@ant-design/icons';
 import { Alert, Button, Flex, Input, Select, Skeleton, Tooltip, Typography, theme } from 'antd';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
+import type { RequestedCatalogTool } from '../../utils/teammateBootstrapPrompt';
 import { sortToolsForTemplate, type TeammateTemplate } from '../../utils/teammateTemplates';
 import { CatalogEntryAvatar } from '../Marketplace/CatalogEntryAvatar';
-import { CatalogTab } from '../Marketplace/CatalogTab';
 import {
   ALL_CATEGORIES,
   CATEGORY_LABELS,
@@ -15,7 +15,6 @@ import {
   DEFAULT_SORT,
   entryTitle,
 } from '../Marketplace/catalogPresentation';
-import { useCatalogReadiness } from '../Marketplace/useCatalogReadiness';
 import {
   type CatalogFilterState,
   isFilterActive,
@@ -24,47 +23,25 @@ import {
 
 interface Props {
   client: AgorClient | null;
-  user?: User | null;
   connected: boolean;
-  authGeneration: number;
   /** Template picked in step 1; its preferred tools are listed first. */
   template?: TeammateTemplate;
-  onConnected: (serverId: string) => void;
-}
-
-interface TileProps {
-  entry: MCPCatalogEntry;
-  client: AgorClient | null;
-  connected: boolean;
-  authGeneration: number;
-  userId?: string;
-  readinessRevision: number;
-  onOpen: (event: React.MouseEvent<HTMLElement>) => void;
+  /** Tools the user picked; the teammate's first session helps connect them. */
+  picked: readonly RequestedCatalogTool[];
+  onPickedChange: (picked: RequestedCatalogTool[]) => void;
 }
 
 function ToolTile({
   entry,
-  client,
-  connected,
-  authGeneration,
-  userId,
-  readinessRevision,
-  onOpen,
-}: TileProps) {
+  picked,
+  onToggle,
+}: {
+  entry: MCPCatalogEntry;
+  picked: boolean;
+  onToggle: () => void;
+}) {
   const { token } = theme.useToken();
-  const statusId = useId();
   const title = entryTitle(entry);
-  const { readiness, refresh } = useCatalogReadiness({
-    client,
-    entryKey: entry.name,
-    ready: connected,
-    authGeneration,
-    userId,
-  });
-  useEffect(() => {
-    if (readinessRevision > 0) void refresh();
-  }, [readinessRevision, refresh]);
-  const isConnected = readiness?.state === 'installed_ready';
 
   return (
     <Tooltip
@@ -78,11 +55,13 @@ function ToolTile({
     >
       <Button
         block
-        aria-label={`${title}: view details`}
+        aria-label={title}
         aria-description={entry.benefit}
-        aria-describedby={isConnected ? statusId : undefined}
-        aria-haspopup="dialog"
-        onClick={onOpen}
+        aria-pressed={picked}
+        // A pick is the theme's primary outline; the tile text keeps its own colours.
+        color={picked ? 'primary' : 'default'}
+        variant="outlined"
+        onClick={onToggle}
         style={{
           height: '100%',
           minHeight: token.controlHeightLG,
@@ -110,11 +89,6 @@ function ToolTile({
             <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
               {CATEGORY_LABELS[entry.category]}
             </Typography.Text>
-            {isConnected && (
-              <Typography.Text id={statusId} type="success" style={{ fontSize: token.fontSizeSM }}>
-                <CheckCircleFilled /> Connected
-              </Typography.Text>
-            )}
           </Flex>
         </Flex>
       </Button>
@@ -122,13 +96,12 @@ function ToolTile({
   );
 }
 
-function ToolsForIdentity({
+export function OnboardingToolsStep({
   client,
-  user,
   connected,
-  authGeneration,
   template,
-  onConnected,
+  picked,
+  onPickedChange,
 }: Props) {
   const { token } = theme.useToken();
   const narrow = useMediaQuery('(max-width: 480px)');
@@ -136,21 +109,20 @@ function ToolsForIdentity({
   const { matches, status, error, retry } = useCatalogSearch(client, connected, filters, 1);
   // The template orders the default view only; a search or category keeps the Catalog's order.
   const tools = isFilterActive(filters) ? matches : sortToolsForTemplate(matches, template);
-  const [readinessRevision, setReadinessRevision] = useState(0);
-  const [entry, setEntry] = useState<string>();
-  const trigger = useRef<HTMLElement | null>(null);
-  const close = () => {
-    setEntry(undefined);
-    const source = trigger.current;
-    requestAnimationFrame(() => {
-      if (source?.isConnected) source.focus();
-    });
-  };
+  const isPicked = (entry: MCPCatalogEntry) =>
+    picked.some((tool) => tool.catalogEntryName === entry.name);
+  // Picks are kept by Catalog id, so they survive search and the category filter.
+  const toggle = (entry: MCPCatalogEntry) =>
+    onPickedChange(
+      isPicked(entry)
+        ? picked.filter((tool) => tool.catalogEntryName !== entry.name)
+        : [...picked, { name: entryTitle(entry), catalogEntryName: entry.name }]
+    );
 
   return (
     <Flex vertical gap={token.marginSM} style={{ flex: '1 1 auto', minHeight: 0 }}>
       <Typography.Paragraph style={{ color: token.colorTextSecondary, margin: 0 }}>
-        Your teammate can work with all of these tools. Connect one now, or skip and do it later.
+        Pick the tools you use. Your teammate will help you connect them.
       </Typography.Paragraph>
       <Flex gap={token.marginXS}>
         <Input
@@ -211,15 +183,8 @@ function ToolsForIdentity({
               <ToolTile
                 key={item.name}
                 entry={item}
-                client={client}
-                connected={connected}
-                authGeneration={authGeneration}
-                userId={user?.user_id}
-                readinessRevision={readinessRevision}
-                onOpen={(event) => {
-                  trigger.current = event.currentTarget;
-                  setEntry(item.name);
-                }}
+                picked={isPicked(item)}
+                onToggle={() => toggle(item)}
               />
             ))}
           </div>
@@ -228,37 +193,9 @@ function ToolsForIdentity({
           type="secondary"
           style={{ fontSize: token.fontSizeSM, margin: `${token.marginSM}px 0 0` }}
         >
-          You can connect more tools anytime from the Catalog, or ask your teammate to help.
+          You can connect more tools anytime from the Catalog.
         </Typography.Paragraph>
       </div>
-      {entry && (
-        <CatalogTab
-          client={client}
-          currentUser={user}
-          connected={connected}
-          connecting={!connected}
-          authGeneration={authGeneration}
-          context={{
-            mode: 'onboarding',
-            entryName: entry,
-            onClose: close,
-            onConnected: (serverId) => {
-              onConnected(serverId);
-              setReadinessRevision((value) => value + 1);
-            },
-          }}
-        />
-      )}
     </Flex>
-  );
-}
-
-/** Replacement identity/auth generation destroys drawers and any retained private input. */
-export function OnboardingToolsStep(props: Props) {
-  return (
-    <ToolsForIdentity
-      key={`${props.user?.user_id}:${props.user?.role}:${props.authGeneration}:${props.connected}`}
-      {...props}
-    />
   );
 }
