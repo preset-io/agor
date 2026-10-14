@@ -91,8 +91,8 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 24px;
   background: rgba(7, 16, 15, 0.42);
-  backdrop-filter: blur(9px) saturate(1.15);
   -webkit-backdrop-filter: blur(9px) saturate(1.15);
+  backdrop-filter: blur(9px) saturate(1.15);
 }
 
 @supports not (backdrop-filter: blur(1px)) {
