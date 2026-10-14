@@ -35,10 +35,11 @@ export function isIosDevice(nav: Pick<Navigator, 'userAgent' | 'maxTouchPoints'>
 }
 
 /**
- * iOS Safari zooms into any focused field under 16px and stays zoomed.
- * `maximum-scale=1` stops that focus zoom; iOS still allows pinch-zoom (it
- * ignores maximum-scale for user gestures). Other browsers would block
- * pinch-zoom with it, so only iOS gets it.
+ * iOS zooms into any focused field under 16px and stays zoomed.
+ * `maximum-scale=1` stops that focus zoom. Safari and SFSafariViewController
+ * ignore it for pinch-zoom, but WKWebView in-app browsers honor it by default,
+ * so pinch-zoom is lost there. Other browsers would lose it too, so only iOS
+ * gets it.
  */
 export function preventIosInputZoom(doc: Document = document): void {
   if (!isIosDevice(doc.defaultView?.navigator ?? navigator)) return;

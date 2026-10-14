@@ -269,8 +269,8 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
       <Tooltip
         // The label is a button for actionable pills, so the same explanation
         // keyboard users receive on focus is available to pointer users on hover.
-        // A tap emulates hover, so touch keeps focus only.
-        trigger={touchInput ? 'focus' : ['hover', 'focus']}
+        // Touch inherits the app's no-trigger default (TouchTooltipConfig).
+        trigger={touchInput ? undefined : ['hover', 'focus']}
         title={
           needsConfiguration && !configureAllowed
             ? configureBlockedReason

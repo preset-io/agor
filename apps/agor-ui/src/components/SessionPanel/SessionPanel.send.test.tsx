@@ -420,11 +420,25 @@ describe('SessionPanel composer send', () => {
     await waitFor(() => expect(getPromptDraft('user-a', 'session-1')).toBe('and a follow-up'));
   });
 
-  it('sends on Enter from a hardware keyboard', async () => {
+  function asTouch() {
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...matchMedia(query),
+      matches: query === TOUCH_INPUT_QUERY,
+    }));
+    onTestFinished(() => vi.mocked(window.matchMedia).mockRestore());
+  }
+
+  // A touch device with a hardware keyboard (iPad): soft keyboards never send these modifiers.
+  it.each([
+    ['Cmd', { metaKey: true }],
+    ['Ctrl', { ctrlKey: true }],
+  ])('sends on %s+Enter from a hardware keyboard on a touch device', async (_name, modifier) => {
+    asTouch();
     const { onSendPrompt } = renderSessionPanel();
     const textarea = screen.getByPlaceholderText(/Prompt here/i);
     fireEvent.change(textarea, { target: { value: 'Line one' } });
-    expect(fireEvent.keyDown(textarea, { key: 'Enter' })).toBe(false);
+    expect(fireEvent.keyDown(textarea, { key: 'Enter', ...modifier })).toBe(false);
     await waitFor(() =>
       expect(onSendPrompt).toHaveBeenCalledWith('session-1', 'Line one', 'allow-all')
     );
@@ -432,12 +446,7 @@ describe('SessionPanel composer send', () => {
 
   // iOS Return fires a real Enter keydown, which sent multi-line prompts mid-typing.
   it('lets Return on a touch keyboard insert a newline; only Send sends', async () => {
-    const matchMedia = window.matchMedia;
-    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
-      ...matchMedia(query),
-      matches: query === TOUCH_INPUT_QUERY,
-    }));
-    onTestFinished(() => vi.mocked(window.matchMedia).mockRestore());
+    asTouch();
     const { onSendPrompt } = renderSessionPanel();
     const textarea = screen.getByPlaceholderText(/Prompt here/i);
     fireEvent.change(textarea, { target: { value: 'Line one\nline two' } });

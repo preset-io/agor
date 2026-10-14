@@ -98,7 +98,7 @@ export function BranchHeaderPill({
   compact = false,
 }: BranchHeaderPillProps) {
   const { token } = theme.useToken();
-  // A tap emulates hover, so touch shows the identity tooltip on focus only.
+  // Touch inherits the app's no-trigger tooltip default (TouchTooltipConfig).
   const touchInput = useIsTouchInput();
   const confirmNuke = useConfirmNukeEnvironment();
   const effectiveEnv = getEffectiveEnv(repo);
@@ -260,7 +260,7 @@ export function BranchHeaderPill({
       }}
     >
       {/* Section 1: Repo + Branch — click opens either the supplied identity URL or the branch modal. */}
-      <Tooltip title={identityTooltip} trigger={touchInput ? 'focus' : ['hover', 'focus']}>
+      <Tooltip title={identityTooltip} trigger={touchInput ? undefined : ['hover', 'focus']}>
         {identityLink && isInternalIdentityLink ? (
           <Link
             to={identityLink}
