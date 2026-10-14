@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   BOARD_GRID_SIZE,
   layoutAlignedRectangles,
@@ -675,5 +675,26 @@ describe('placeLayoutAroundFixedObstacles', () => {
 
     expect(result.origin).toEqual({ x: 100, y: 360 });
     expect(result.placements[0]).toMatchObject({ x: 100, y: 360 });
+  });
+});
+
+describe('compact packing work bound', () => {
+  it.each([10, 40, 1000])('bounds geometry ordering work for %i rectangles', (count) => {
+    const compare = vi.spyOn(String.prototype, 'localeCompare');
+    try {
+      const result = layoutCompactRectangles(
+        Array.from({ length: count }, (_, index) => ({
+          id: `item-${index}`,
+          width: 200 + index * 20,
+          height: 100 + index * 20,
+        })),
+        { gapX: 20, gapY: 20, gridSize: 20 }
+      );
+      if (count === 10) expectNoOverlap(result.placements);
+      expect(result.placements).toHaveLength(count);
+      expect(compare.mock.calls.length).toBeLessThan(count * Math.ceil(Math.log2(count)) * 75);
+    } finally {
+      compare.mockRestore();
+    }
   });
 });

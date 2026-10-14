@@ -578,7 +578,8 @@ const clusterSeparated = (
  * Pack heterogeneous canvas rectangles into a compact deterministic cluster.
  *
  * Unlike `layoutRectangles`, this is intentionally not a fixed row/column
- * grid. Every item is placed on the corner frontier created by prior items.
+ * grid. Tiny selections use a bounded corner search; larger collections use
+ * a constant portfolio of shelves with O(n log n) ordering work.
  * The larger enclosing dimension wins first, then area, perimeter, and
  * movement from the supplied source geometry. Input order remains stable in
  * the returned array, and source geometry resolves equally compact
@@ -696,92 +697,175 @@ export function layoutCompactRectangles(
     return 0;
   };
 
-  let beam: ClusterState[] = [{ placements: [] }];
-  for (const [stackIndex, item] of searchItems.entries()) {
-    const nextByGeometry = new Map<string, ClusterState>();
-    for (const state of beam) {
-      const candidateByKey = new Map<string, { x: number; y: number }>();
-      const addCandidate = (x: number, y: number) => {
-        candidateByKey.set(`${x}:${y}`, { x, y });
-      };
-      addCandidate(0, 0);
-      for (const existing of state.placements) {
-        const left = existing.x - item.width - gapX;
-        const right = existing.x + existing.width + gapX;
-        const above = existing.y - item.height - gapY;
-        const below = existing.y + existing.height + gapY;
-        addCandidate(right, existing.y);
-        addCandidate(left, existing.y);
-        addCandidate(existing.x, below);
-        addCandidate(existing.x, above);
-        addCandidate(right, existing.y + existing.height - item.height);
-        addCandidate(left, existing.y + existing.height - item.height);
-        addCandidate(existing.x + existing.width - item.width, below);
-        addCandidate(existing.x + existing.width - item.width, above);
-      }
-      for (const candidate of candidateByKey.values()) {
-        const previousPlacement = state.placements[state.placements.length - 1];
-        if (
-          options.preserveInputOrder &&
-          (candidate.x < 0 ||
-            candidate.y < 0 ||
-            (previousPlacement &&
-              (candidate.y < previousPlacement.y ||
-                (candidate.y === previousPlacement.y && candidate.x < previousPlacement.x))))
-        )
-          continue;
-        if (
-          !state.placements.every((existing) =>
-            clusterSeparated(
-              existing,
-              { ...candidate, width: item.width, height: item.height },
-              gapX,
-              gapY
+  let placed: ClusterPlacement[];
+  if (items.length <= 5) {
+    // Keep the exact corner search for tiny selections only. Its size is a
+    // constant, not a function of board size.
+    let beam: ClusterState[] = [{ placements: [] }];
+    for (const [stackIndex, item] of searchItems.entries()) {
+      const nextByGeometry = new Map<string, ClusterState>();
+      for (const state of beam) {
+        const candidateByKey = new Map<string, { x: number; y: number }>();
+        const addCandidate = (x: number, y: number) => {
+          candidateByKey.set(`${x}:${y}`, { x, y });
+        };
+        addCandidate(0, 0);
+        for (const existing of state.placements) {
+          const left = existing.x - item.width - gapX;
+          const right = existing.x + existing.width + gapX;
+          const above = existing.y - item.height - gapY;
+          const below = existing.y + existing.height + gapY;
+          addCandidate(right, existing.y);
+          addCandidate(left, existing.y);
+          addCandidate(existing.x, below);
+          addCandidate(existing.x, above);
+          addCandidate(right, existing.y + existing.height - item.height);
+          addCandidate(left, existing.y + existing.height - item.height);
+          addCandidate(existing.x + existing.width - item.width, below);
+          addCandidate(existing.x + existing.width - item.width, above);
+        }
+        for (const candidate of candidateByKey.values()) {
+          const previousPlacement = state.placements[state.placements.length - 1];
+          if (
+            options.preserveInputOrder &&
+            (candidate.x < 0 ||
+              candidate.y < 0 ||
+              (previousPlacement &&
+                (candidate.y < previousPlacement.y ||
+                  (candidate.y === previousPlacement.y && candidate.x < previousPlacement.x))))
+          )
+            continue;
+          if (
+            !state.placements.every((existing) =>
+              clusterSeparated(
+                existing,
+                { ...candidate, width: item.width, height: item.height },
+                gapX,
+                gapY
+              )
             )
           )
-        )
-          continue;
-        const placements = normalizeState([
-          ...state.placements,
-          {
+            continue;
+          const placements = normalizeState([
+            ...state.placements,
+            {
+              ...item,
+              ...candidate,
+              row: 0,
+              column: 0,
+              stackIndex,
+              deckDepth: 0,
+            },
+          ]);
+          const frame = stateBounds(placements);
+          if (frame.width > usableWidth || frame.height > usableHeight) continue;
+          const key = [...placements]
+            .sort((left, right) => left.id.localeCompare(right.id))
+            .map((placement) => `${placement.id}:${placement.x}:${placement.y}`)
+            .join('|');
+          const next = { placements };
+          const previous = nextByGeometry.get(key);
+          if (!previous || compareStates(next, previous) < 0) nextByGeometry.set(key, next);
+        }
+      }
+      beam = [...nextByGeometry.values()].sort(compareStates).slice(0, COMPACT_LAYOUT_BEAM_WIDTH);
+      if (beam.length === 0) {
+        // Preserve the all-or-nothing contract used by bounded zone layout: an
+        // unsuccessful solve still returns deterministic collision-free
+        // geometry, but names every rectangle outside the requested frame so
+        // callers can refuse the write without partially moving anything.
+        const fallback = layoutCompactRectangles(sourceItems, { ...options, bounds: undefined });
+        return {
+          ...fallback,
+          overflowingItemIds: bounds ? overflowingIds(fallback.placements, bounds) : [],
+        };
+      }
+    }
+
+    placed = beam.sort(compareStates)[0]?.placements ?? [];
+  } else {
+    // A constant portfolio of next-fit shelves costs O(n) per trial, after
+    // the stable largest-first O(n log n) ordering. Never enumerate an
+    // expanding corner frontier or score/sort copies of partial layouts.
+    const candidates: ClusterState[] = [];
+    for (const transpose of [false, true]) {
+      if (transpose && options.preserveInputOrder) continue;
+      const axisLimit = transpose ? usableHeight : usableWidth;
+      const widest = Math.max(...searchItems.map((item) => (transpose ? item.height : item.width)));
+      const area = searchItems.reduce(
+        (sum, item) => sum + (item.width + gapX) * (item.height + gapY),
+        0
+      );
+      const target = Math.max(widest, Math.sqrt(area));
+      const widths = new Set([
+        widest,
+        ...[0.75, 1, 1.25, 1.5, 2].map((factor) =>
+          Math.min(axisLimit, ceilToGrid(Math.max(widest, target * factor), gridSize))
+        ),
+        axisLimit,
+      ]);
+      for (const shelfWidth of widths) {
+        if (!Number.isFinite(shelfWidth) || shelfWidth < widest) continue;
+        let cursor = 0;
+        let offset = 0;
+        let shelfHeight = 0;
+        const placements: ClusterPlacement[] = [];
+        for (const [stackIndex, item] of searchItems.entries()) {
+          const width = transpose ? item.height : item.width;
+          const height = transpose ? item.width : item.height;
+          const acrossGap = transpose ? gapY : gapX;
+          const downGap = transpose ? gapX : gapY;
+          if (cursor > 0 && cursor + width > shelfWidth) {
+            offset += shelfHeight + downGap;
+            cursor = 0;
+            shelfHeight = 0;
+          }
+          placements.push({
             ...item,
-            ...candidate,
+            x: transpose ? offset : cursor,
+            y: transpose ? cursor : offset,
             row: 0,
             column: 0,
             stackIndex,
             deckDepth: 0,
-          },
-        ]);
-        const frame = stateBounds(placements);
-        if (frame.width > usableWidth || frame.height > usableHeight) continue;
-        const key = [...placements]
-          .sort((left, right) => left.id.localeCompare(right.id))
-          .map((placement) => `${placement.id}:${placement.x}:${placement.y}`)
-          .join('|');
-        const next = { placements };
-        const previous = nextByGeometry.get(key);
-        if (!previous || compareStates(next, previous) < 0) nextByGeometry.set(key, next);
+          });
+          cursor += width + acrossGap;
+          shelfHeight = Math.max(shelfHeight, height);
+        }
+        candidates.push({ placements });
       }
     }
-    beam = [...nextByGeometry.values()].sort(compareStates).slice(0, COMPACT_LAYOUT_BEAM_WIDTH);
-    if (beam.length === 0) {
-      // Preserve the all-or-nothing contract used by bounded zone layout: an
-      // unsuccessful solve still returns deterministic collision-free
-      // geometry, but names every rectangle outside the requested frame so
-      // callers can refuse the write without partially moving anything.
-      const fallback = layoutCompactRectangles(sourceItems, { ...options, bounds: undefined });
-      return {
-        ...fallback,
-        overflowingItemIds: bounds ? overflowingIds(fallback.placements, bounds) : [],
-      };
-    }
+    const contained = candidates.filter((candidate) => {
+      const frame = stateBounds(candidate.placements);
+      return frame.width <= usableWidth && frame.height <= usableHeight;
+    });
+    // Score each complete candidate once. Including movement preserves
+    // source geometry as the tie-breaker and keeps repeat arrangements stable.
+    const scored = (contained.length ? contained : candidates).map((candidate) => ({
+      candidate,
+      score: stateScore(candidate),
+    }));
+    scored.sort((a, b) => {
+      for (let i = 0; i < a.score.length; i += 1) {
+        const delta = a.score[i] - b.score[i];
+        if (delta !== 0) return delta;
+      }
+      return 0;
+    });
+    placed = scored[0]?.candidate.placements ?? [];
   }
-
-  const placed = beam.sort(compareStates)[0]?.placements;
-  if (!placed) throw new Error('Unable to select a compact rectangle layout.');
+  if (placed.length !== items.length)
+    throw new Error('Unable to select a compact rectangle layout.');
 
   const rowYs = [...new Set(placed.map((item) => item.y))].sort((a, b) => a - b);
   const rowByY = new Map(rowYs.map((y, row) => [y, row]));
+  const columnById = new Map<string, number>();
+  const rowCounts = new Map<number, number>();
+  for (const item of [...placed].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    const column = rowCounts.get(item.y) ?? 0;
+    columnById.set(item.id, column);
+    rowCounts.set(item.y, column + 1);
+  }
   const placementById = new Map(placed.map((placement) => [placement.id, placement]));
   const placements = items.map((source, index) => {
     const item = placementById.get(source.id);
@@ -792,13 +876,13 @@ export function layoutCompactRectangles(
       x: item.x + padding,
       y: item.y + padding,
       row: rowByY.get(item.y) ?? 0,
-      column: placed.filter((peer) => peer.y === item.y && peer.x < item.x).length,
+      column: columnById.get(item.id) ?? 0,
       stackIndex: index,
     };
   });
   const contentWidth = Math.max(...placed.map((item) => item.x + item.width));
   const contentHeight = Math.max(...placed.map((item) => item.y + item.height));
-  const columns = Math.max(1, ...rowYs.map((y) => placed.filter((item) => item.y === y).length));
+  const columns = Math.max(1, ...rowCounts.values());
   return {
     mode: 'cluster',
     placements,
