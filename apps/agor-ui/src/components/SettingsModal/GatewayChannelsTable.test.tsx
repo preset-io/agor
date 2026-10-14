@@ -287,12 +287,28 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     // Step 0 owns the universal basics; platform options live on later steps.
     expect(screen.getByText('Channel Type')).toBeInTheDocument();
     expect(screen.getByText('Name')).toBeInTheDocument();
-    expect(screen.getByText('Target Branch')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'AI Teammate' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Specific branch' })).not.toBeChecked();
     expect(screen.getByText('Enabled')).toBeInTheDocument();
     // Slack-specific options (App Name / Surfaces) are not shown yet.
     expect(screen.queryByText('Surfaces')).not.toBeInTheDocument();
     // Slack owns identity later — no generic "Post messages as".
     expect(screen.queryByText('Post messages as')).not.toBeInTheDocument();
+  });
+
+  it('preserves the chosen target on Back and resets it when creation is cancelled', async () => {
+    renderTable(makeClient().client);
+    clickButton(/Add Channel/);
+    fireEvent.click(screen.getByRole('radio', { name: 'Specific branch' }));
+    await advanceToOptions();
+    clickButton(/^Back$/);
+    await waitForStep('Channel');
+    expect(screen.getByRole('radio', { name: 'Specific branch' })).toBeChecked();
+    expect(screen.getByLabelText('branch-select')).toHaveValue('branch-1');
+    clickButton(/^Cancel$/);
+    clickButton(/Add Channel/);
+    expect(screen.getByRole('radio', { name: 'AI Teammate' })).toBeChecked();
+    expect(screen.getByLabelText('branch-select')).toHaveValue('');
   });
 
   it('keeps one footer on every step: Back disabled on step 0, primary verb on the last step', async () => {
@@ -384,35 +400,41 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     ).toBeInTheDocument();
   });
 
-  it('creates the channel from the final step', async () => {
-    const { client, channelCreate } = makeClient();
-    renderTable(client);
-    clickButton(/Add Channel/);
+  it.each(['AI Teammate', 'Specific branch'])(
+    'creates the channel targeting %s with only a branch ID',
+    async (targetMode) => {
+      const { client, channelCreate } = makeClient();
+      renderTable(client);
+      clickButton(/Add Channel/);
 
-    await advanceToTokensStep();
-    fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
-    fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
+      fireEvent.click(screen.getByRole('radio', { name: targetMode }));
+      await advanceToTokensStep();
+      fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
+      fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
 
-    // The submit verb appears only on the final step; it drives the create call.
-    clickButton(/Create channel/);
+      // The submit verb appears only on the final step; it drives the create call.
+      clickButton(/Create channel/);
 
-    await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
-    // Slack defaults to aligning users, so the channel is valid with no run-as
-    // user: align_slack_users is true and no agor_user_id was collected.
-    expect(channelCreate.mock.calls[0][0]).toMatchObject({
-      channel_type: 'slack',
-      config: {
-        bot_token: 'xoxb-test',
-        app_token: 'xapp-test',
-        align_slack_users: true,
-        // The wizard only creates inbound/Socket-Mode Slack channels, so it
-        // records connection_mode:'socket' — this is what makes
-        // getRequiredSecretFields require app_token for UI-created channels.
-        connection_mode: 'socket',
-      },
-    });
-    expect(channelCreate.mock.calls[0][0].agor_user_id).toBeFalsy();
-  });
+      await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
+      // Slack defaults to aligning users, so the channel is valid with no run-as
+      // user: align_slack_users is true and no agor_user_id was collected.
+      expect(channelCreate.mock.calls[0][0]).toMatchObject({
+        channel_type: 'slack',
+        config: {
+          bot_token: 'xoxb-test',
+          app_token: 'xapp-test',
+          align_slack_users: true,
+          // The wizard only creates inbound/Socket-Mode Slack channels, so it
+          // records connection_mode:'socket' — this is what makes
+          // getRequiredSecretFields require app_token for UI-created channels.
+          connection_mode: 'socket',
+        },
+      });
+      expect(channelCreate.mock.calls[0][0].target_branch_id).toBe('branch-1');
+      expect(channelCreate.mock.calls[0][0]).not.toHaveProperty('target_kind');
+      expect(channelCreate.mock.calls[0][0].agor_user_id).toBeFalsy();
+    }
+  );
 
   it('blocks a second create after a lost reply until the form changes', async () => {
     const { client, channelCreate } = makeClient();
@@ -550,6 +572,12 @@ function expandPanel(title: string) {
 }
 
 describe('GatewayChannelsTable Slack edit mode', () => {
+  it('leaves an existing branch target unchanged without showing the creation mode selector', () => {
+    renderEditTable(makeClient().client, makeSlackChannel());
+    expect(screen.queryByRole('radio', { name: 'AI Teammate' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('branch-select')).toHaveValue('branch-1');
+  });
+
   it('renders the OpenCode model catalog for a stable self-owned gateway', () => {
     const { client } = makeClient();
     renderEditTable(client, {
