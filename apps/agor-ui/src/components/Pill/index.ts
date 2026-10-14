@@ -32,4 +32,4 @@ export {
   UserPill,
 } from './Pill';
 export { SessionMetadataCard } from './SessionMetadataCard';
-export { TimerPill } from './TimerPill';
+export { TimerPill, useElapsedDuration } from './TimerPill';

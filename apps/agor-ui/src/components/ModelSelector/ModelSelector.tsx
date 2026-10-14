@@ -53,10 +53,27 @@ export interface ModelSelectorProps {
   compact?: boolean;
   getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
   /**
+   * Render the model list as rows instead of a Select (composer menus). Tools
+   * with their own picker keep it.
+   */
+  renderRows?: (rows: {
+    options: ModelRowOption[];
+    currentModel: string;
+    select: (model: string) => void;
+  }) => React.ReactNode;
+  /**
    * Render the Claude Code advisor model select inline. Surfaces that relocate
    * the advisor into an "Advanced" area (e.g. NewSessionModal) pass `false`.
    */
   showAdvisor?: boolean;
+}
+
+export interface ModelRowOption {
+  value: string;
+  label: string;
+  description?: string;
+  isDefault: boolean;
+  accountDependent: boolean;
 }
 
 interface DynamicModelOption {
@@ -148,6 +165,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   compact = false,
   getPopupContainer,
   showAdvisor = true,
+  renderRows,
 }) => {
   const { token } = theme.useToken();
 
@@ -455,6 +473,25 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       isDefault: false,
       searchText: currentModel.toLowerCase(),
     });
+  }
+
+  if (renderRows) {
+    const options: ModelRowOption[] = aliasOptions.map((o) => ({
+      value: o.value,
+      label: o.label,
+      description: o.description,
+      isDefault: o.isDefault,
+      accountDependent: o.availability === 'provider-dependent',
+    }));
+    if (currentModel && !options.some((o) => o.value === currentModel)) {
+      options.unshift({
+        value: currentModel,
+        label: getModelDisplayName(effectiveTool, currentModel),
+        isDefault: false,
+        accountDependent: false,
+      });
+    }
+    return renderRows({ options, currentModel, select: selectAlias });
   }
 
   const renderAliasOption = (optionValue: string) => {

@@ -4,5 +4,6 @@ export {
   getPermissionModeColor,
   getPermissionModeLabel,
   getPermissionModeMeta,
+  getPermissionModes,
   PermissionModeSelector,
 } from './PermissionModeSelector';

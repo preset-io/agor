@@ -147,14 +147,14 @@ describe('SessionPanel composer send', () => {
     const onSendPrompt = vi.fn();
     stagePromptDraftSeed('user-a', 'session-1', 'Editable Catalog starter');
 
-    const { container } = renderSessionPanel({ onSendPrompt });
+    renderSessionPanel({ onSendPrompt });
     const textarea = screen.getByPlaceholderText(/Prompt here/i);
     expect(textarea).toHaveValue('Editable Catalog starter');
     expect(onSendPrompt).not.toHaveBeenCalled();
     expect(screen.queryByText('Starter prompt suggestion')).not.toBeInTheDocument();
 
     fireEvent.change(textarea, { target: { value: 'Edited before sending' } });
-    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    fireEvent.click(screen.getByTestId('composer-circle') as HTMLButtonElement);
 
     await waitFor(() =>
       expect(onSendPrompt).toHaveBeenCalledWith(
@@ -217,7 +217,7 @@ describe('SessionPanel composer send', () => {
     const onSendPrompt = vi.fn(() => admitted.promise);
     stagePromptDraftSeed('user-a', 'session-1', 'Catalog starter');
     const view = renderSessionPanel({ onSendPrompt });
-    fireEvent.click(view.container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    fireEvent.click(view.getByTestId('composer-circle') as HTMLButtonElement);
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledOnce());
     view.rerenderSession(makeSession({ session_id: 'session-other' as Session['session_id'] }));
     await act(async () => {
@@ -232,7 +232,7 @@ describe('SessionPanel composer send', () => {
     const upload = deferred<UploadFilesToSessionResult>();
     uploadMockState.uploadFilesToSession.mockReturnValue(upload.promise);
     const onSendPrompt = vi.fn();
-    const { container } = renderSessionPanel({ onSendPrompt });
+    renderSessionPanel({ onSendPrompt });
 
     const dropZone = screen.getByLabelText('Composer attachments and input drop zone');
     const sendStartFile = new File(['image'], 'chart.png', { type: 'image/png' });
@@ -246,7 +246,7 @@ describe('SessionPanel composer send', () => {
     const textarea = screen.getByPlaceholderText(/Prompt here/i);
     fireEvent.change(textarea, { target: { value: 'Compare this chart' } });
 
-    const sendButton = container.querySelector('button.ant-btn-primary');
+    const sendButton = screen.getByTestId('composer-circle');
     expect(sendButton).toBeInstanceOf(HTMLButtonElement);
     fireEvent.click(sendButton as HTMLButtonElement);
 
@@ -284,7 +284,7 @@ describe('SessionPanel composer send', () => {
     const upload = deferred<UploadFilesToSessionResult>();
     uploadMockState.uploadFilesToSession.mockReturnValue(upload.promise);
     const onSendPrompt = vi.fn();
-    const { container, rerenderSession } = renderSessionPanel({ onSendPrompt });
+    const { rerenderSession } = renderSessionPanel({ onSendPrompt });
 
     const dropZone = screen.getByLabelText('Composer attachments and input drop zone');
     const sendStartFile = new File(['old image'], 'old-session-chart.png', {
@@ -300,7 +300,7 @@ describe('SessionPanel composer send', () => {
     const textarea = screen.getByPlaceholderText(/Prompt here/i);
     fireEvent.change(textarea, { target: { value: 'Old session prompt snapshot' } });
 
-    const sendButton = container.querySelector('button.ant-btn-primary');
+    const sendButton = screen.getByTestId('composer-circle');
     expect(sendButton).toBeInstanceOf(HTMLButtonElement);
     fireEvent.click(sendButton as HTMLButtonElement);
 
@@ -357,12 +357,12 @@ describe('SessionPanel composer send', () => {
   it('does not clear a replacement composer after an old identity send completes', async () => {
     const send = deferred<boolean>();
     const onSendPrompt = vi.fn().mockReturnValue(send.promise);
-    const { container, rerenderUser } = renderSessionPanel({ onSendPrompt });
+    const { rerenderUser } = renderSessionPanel({ onSendPrompt });
 
     fireEvent.change(screen.getByPlaceholderText(/Prompt here/i), {
       target: { value: 'User A prompt' },
     });
-    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    fireEvent.click(screen.getByTestId('composer-circle') as HTMLButtonElement);
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
 
     rerenderUser(undefined);
@@ -377,12 +377,12 @@ describe('SessionPanel composer send', () => {
   it("does not clear a later caller's identical text or attachments after admission", async () => {
     const send = deferred<boolean>();
     const onSendPrompt = vi.fn().mockReturnValue(send.promise);
-    const { container, rerenderUser } = renderSessionPanel({ onSendPrompt });
+    const { rerenderUser } = renderSessionPanel({ onSendPrompt });
 
     fireEvent.change(screen.getByPlaceholderText(/Prompt here/i), {
       target: { value: 'Identical prompt' },
     });
-    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    fireEvent.click(screen.getByTestId('composer-circle') as HTMLButtonElement);
     await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(1));
 
     rerenderUser('user-b');
@@ -455,7 +455,7 @@ describe('SessionPanel composer send', () => {
     expect(fireEvent.keyDown(textarea, { key: 'Enter' })).toBe(true);
     expect(onSendPrompt).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    fireEvent.click(screen.getByTestId('composer-circle'));
     await waitFor(() =>
       expect(onSendPrompt).toHaveBeenCalledWith('session-1', 'Line one\nline two', 'allow-all')
     );
@@ -491,7 +491,7 @@ describe('SessionPanel composer send', () => {
   it('ignores a rapid second send while the first attachment upload is still in flight', async () => {
     const upload = deferred<UploadFilesToSessionResult>();
     const onSendPrompt = vi.fn();
-    const { container } = renderSessionPanel({ onSendPrompt });
+    renderSessionPanel({ onSendPrompt });
 
     const dropZone = screen.getByLabelText('Composer attachments and input drop zone');
     const file = new File(['rapid image'], 'rapid-chart.png', { type: 'image/png' });
@@ -505,7 +505,7 @@ describe('SessionPanel composer send', () => {
     const textarea = screen.getByPlaceholderText(/Prompt here/i);
     fireEvent.change(textarea, { target: { value: 'Summarize this rapid chart' } });
 
-    const sendButton = container.querySelector('button.ant-btn-primary');
+    const sendButton = screen.getByTestId('composer-circle');
     expect(sendButton).toBeInstanceOf(HTMLButtonElement);
 
     let attemptedSecondSend = false;
@@ -558,7 +558,7 @@ describe('SessionPanel composer send', () => {
     const upload = deferred<UploadFilesToSessionResult>();
     uploadMockState.uploadFilesToSession.mockReturnValue(upload.promise);
     const onSendPrompt = vi.fn();
-    const { container } = renderSessionPanel({ onSendPrompt });
+    renderSessionPanel({ onSendPrompt });
 
     const dropZone = screen.getByLabelText('Composer attachments and input drop zone');
     const file = new File(['chart'], 'uploading-chart.png', { type: 'image/png' });
@@ -572,13 +572,13 @@ describe('SessionPanel composer send', () => {
     const textarea = screen.getByPlaceholderText(/Prompt here/i);
     fireEvent.change(textarea, { target: { value: 'Summarize this while upload locks actions' } });
 
-    const sendButton = container.querySelector('button.ant-btn-primary');
+    const sendButton = screen.getByTestId('composer-circle');
     expect(sendButton).toBeInstanceOf(HTMLButtonElement);
     fireEvent.click(sendButton as HTMLButtonElement);
 
     await waitFor(() => expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledTimes(1));
     await waitFor(() => {
-      expect(sendButton).toBeDisabled();
+      expect(sendButton).toHaveAttribute('aria-disabled', 'true');
       expect(screen.getByTestId('upload-bar-btn')).toBeDisabled();
     });
 
@@ -601,7 +601,7 @@ describe('SessionPanel composer send', () => {
     const reason = 'A file exceeds the upload size limit (reference: request-123)';
     uploadMockState.uploadFilesToSession.mockRejectedValue(new Error(reason));
     const onSendPrompt = vi.fn();
-    const { container } = renderSessionPanel({ onSendPrompt });
+    renderSessionPanel({ onSendPrompt });
     fireEvent.drop(screen.getByLabelText('Composer attachments and input drop zone'), {
       dataTransfer: {
         types: ['Files'],
@@ -610,7 +610,7 @@ describe('SessionPanel composer send', () => {
     });
     const textarea = screen.getByPlaceholderText(/Prompt here/i);
     fireEvent.change(textarea, { target: { value: 'Describe this chart' } });
-    const sendButton = container.querySelector('button.ant-btn-primary');
+    const sendButton = screen.getByTestId('composer-circle');
     expect(sendButton).toBeInstanceOf(HTMLButtonElement);
     fireEvent.click(sendButton as HTMLButtonElement);
 
@@ -640,7 +640,7 @@ describe('SessionPanel composer send', () => {
       ],
     });
     const onSendPrompt = vi.fn().mockResolvedValue(false);
-    const { container } = renderSessionPanel({ onSendPrompt });
+    renderSessionPanel({ onSendPrompt });
 
     const dropZone = screen.getByLabelText('Composer attachments and input drop zone');
     const file = new File(['preserve image'], 'preserve-chart.png', { type: 'image/png' });
@@ -654,7 +654,7 @@ describe('SessionPanel composer send', () => {
     const textarea = screen.getByPlaceholderText(/Prompt here/i);
     fireEvent.change(textarea, { target: { value: 'Keep this prompt if submit fails' } });
 
-    const sendButton = container.querySelector('button.ant-btn-primary');
+    const sendButton = screen.getByTestId('composer-circle');
     expect(sendButton).toBeInstanceOf(HTMLButtonElement);
     fireEvent.click(sendButton as HTMLButtonElement);
 
@@ -686,7 +686,7 @@ describe('SessionPanel composer send', () => {
 
     const forkButton = screen.getByLabelText('Fork session');
     const spawnButton = screen.getByLabelText('Spawn subsession');
-    const btwButton = screen.getByLabelText('Ask side question via BTW fork');
+    const btwButton = screen.getByLabelText('BTW fork');
     expect(forkButton).toBeDisabled();
     expect(spawnButton).toBeDisabled();
     expect(btwButton).toBeDisabled();
@@ -847,7 +847,7 @@ describe('SessionPanel send after a lost connection', () => {
     const view = renderSessionPanel({ onSendPrompt });
     const textarea = screen.getByPlaceholderText(/Prompt here/i);
     fireEvent.change(textarea, { target: { value: 'Ship it' } });
-    fireEvent.click(view.container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    fireEvent.click(view.getByTestId('composer-circle') as HTMLButtonElement);
     return { showError, textarea };
   }
 

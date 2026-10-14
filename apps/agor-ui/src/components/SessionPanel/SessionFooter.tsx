@@ -1,3 +1,5 @@
+import type { ContextUsageSnapshot } from '@agor/core/types';
+import { GEMINI_MANUAL_MESSAGE, isGeminiManualMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   AgenticToolCapabilities,
   AgenticToolName,
@@ -10,61 +12,79 @@ import type {
   Session,
   Task,
 } from '@agor-live/client';
-import { getDefaultModelForTool, SessionStatus } from '@agor-live/client';
 import {
+  getDefaultModelForTool,
+  getDefaultPermissionMode,
+  mapToCodexPermissionConfig,
+  SessionStatus,
+  shortId,
+} from '@agor-live/client';
+import {
+  ApiOutlined,
+  ArrowUpOutlined,
   BranchesOutlined,
   ClockCircleOutlined,
-  EllipsisOutlined,
+  CopyOutlined,
   ForkOutlined,
   IdcardOutlined,
+  InfoCircleOutlined,
   LockOutlined,
   NumberOutlined,
   PaperClipOutlined,
-  PercentageOutlined,
-  PushpinFilled,
-  PushpinOutlined,
+  PieChartOutlined,
+  PlusOutlined,
   QuestionCircleOutlined,
-  RobotOutlined,
-  SendOutlined,
   SettingOutlined,
-  StopOutlined,
-  ToolOutlined,
+  UnorderedListOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import {
-  Badge,
-  Button,
-  Divider,
-  Drawer,
-  Flex,
-  Popover,
-  Space,
-  Spin,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import type { ButtonProps } from 'antd';
+import { Button, Divider, Flex, Progress, Segmented, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
-import { useFooterPreferences } from '../../hooks/useFooterPreferences';
+import { setComposerFocused } from '../../hooks/useComposerFocus';
+import { useElementWidth } from '../../hooks/useElementWidth';
+import { COMPACT_PIN_LIMIT, useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
-import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
+import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { useSessionUsage } from '../../hooks/useSessionUsage';
+import { copyToClipboard } from '../../utils/clipboard';
 import { LOST_CONNECTION_TOOLTIP } from '../../utils/connectionErrors';
+import { getContextWindowColor, resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { useThemedMessage } from '../../utils/message';
 import { CompactNotice } from '../CompactNotice';
-import { EffortSelector } from '../EffortSelector';
+import { EFFORT_OPTIONS } from '../EffortSelector';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
+import { summarizeSessionMcpServers } from '../MCPServer/mcp-session-summary';
 import type { ModelConfig } from '../ModelSelector';
 import { ModelSelector } from '../ModelSelector';
-import { PermissionModeSelector } from '../PermissionModeSelector';
-import { ContextWindowPill, TimerPill } from '../Pill';
-import { getModelDisplayName } from '../Pill/modelDisplay';
-import { SessionIdsList } from '../SessionIds';
-import { Tag } from '../Tag';
+import {
+  CODEX_APPROVAL_POLICIES,
+  CODEX_SANDBOX_MODES,
+  getPermissionModeLabel,
+  getPermissionModeMeta,
+  getPermissionModes,
+} from '../PermissionModeSelector';
+import { getModelChipLabel } from '../Pill/modelDisplay';
+import { useElapsedDuration } from '../Pill/TimerPill';
+import {
+  ComposerMenu,
+  ComposerMenuBack,
+  ComposerMenuNote,
+  ComposerMenuRow,
+  ComposerMenuSection,
+  ComposerPinToggle,
+} from './ComposerMenu';
+import {
+  getComposerCircleState,
+  isPermissionNonDefault,
+  NARROW_COMPOSER_WIDTH,
+  splitPinnedActions,
+} from './composerState';
 import { RecoveryActions } from './RecoveryActions';
+import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
-import { SessionUsagePopover } from './SessionUsagePopover';
 
 export interface SessionFooterProps {
   // Session data for chips
@@ -72,7 +92,6 @@ export interface SessionFooterProps {
   currentUserId?: string;
   footerTimerTask: Task | null;
   latestContextWindow: { used: number; limit: number; taskMetadata: unknown } | null;
-  footerGradient?: string;
   // MCP data for Tools chip
   sessionMcpServerIds: string[];
   unauthedMcpServers: MCPServer[];
@@ -113,12 +132,24 @@ export interface SessionFooterProps {
   onEffortChange: (v: EffortLevel | undefined) => void;
   onPermissionModeChange: (v: PermissionMode) => void;
   onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
-  // Prompt textarea rendered between the two bars
+  /** Attachment tray and text, rendered inside the card. */
   promptInputSlot: React.ReactNode;
+  /** Queued messages, shown above the card. */
+  queueSlot?: React.ReactNode;
+  /** Files dropped anywhere on the card. */
+  onFilesDrop: (files: File[]) => void;
+  onDropActiveChange?: (active: boolean) => void;
 }
 
-// Height of the mobile info-bar chips (MCP / effort / model) so they line up.
-const MOBILE_CHIP_HEIGHT = 22;
+type ComposerMenuId = 'plus' | 'model' | 'permissions' | 'details' | 'details-context';
+
+const formatTokenCount = (count: number) =>
+  count >= 1000 ? `${(count / 1000).toFixed(count >= 100_000 ? 0 : 1)}k` : String(count);
+
+/** Visible size of the phone circle; its touch target stays 44px. */
+const CIRCLE_VISUAL_COMPACT = 36;
+
+const PINNABLE_ACTIONS = ['upload', 'advanced-upload', 'fork', 'btw-fork', 'spawn'];
 
 // Memoized: the panel re-renders once per animation frame while its session
 // streams (reactive-session notifies), and this footer is a large subtree of
@@ -130,7 +161,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   currentUserId,
   footerTimerTask,
   latestContextWindow,
-  footerGradient,
   sessionMcpServerIds,
   unauthedMcpServers,
   mcpServerById,
@@ -168,38 +198,51 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   onPermissionModeChange,
   onCodexPermissionChange,
   promptInputSlot,
+  queueSlot,
+  onFilesDrop,
+  onDropActiveChange,
 }) => {
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
   const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
   const { token } = theme.useToken();
-  // Below the shell breakpoint the chip row collapses to a compact model+effort
-  // bar and "More" opens a bottom sheet instead of a popover, so the full
-  // controls stay reachable on a phone without a separate lossy composer.
+  const { showSuccess } = useThemedMessage();
+  // One card at every width: phones get 44px targets and bottom sheets,
+  // desktop gets 32px controls and popovers anchored to their trigger.
   const isMobile = useIsMobileViewport();
   const reducedMotion = usePrefersReducedMotion();
-  // Leave desktop pin preferences intact; secondary actions remain in More on
-  // phones so they cannot push Stop/Queue outside the viewport.
-  const actionSize = isMobile ? 'middle' : 'small';
-  const touchActionStyle: React.CSSProperties | undefined = isMobile
-    ? { minHeight: MOBILE_TOUCH_TARGET, minWidth: MOBILE_TOUCH_TARGET }
-    : undefined;
-  const [moreOpen, setMoreOpen] = React.useState(false);
-  const moreContentRef = React.useRef<HTMLFieldSetElement>(null);
-  const getMorePopupContainer = React.useCallback(
-    (triggerNode: HTMLElement) =>
-      moreContentRef.current ?? triggerNode.parentElement ?? triggerNode,
-    []
-  );
+  const cardRef = React.useRef<HTMLDivElement>(null);
+  const cardWidth = useElementWidth(cardRef);
+  const narrow = !isMobile && cardWidth > 0 && cardWidth < NARROW_COMPOSER_WIDTH;
+  const [cardFocused, setCardFocused] = React.useState(false);
+  const [textFocused, setTextFocused] = React.useState(false);
+  // On phones the tab bar hides while the text has focus; the composer then owns the bottom inset.
+  // Only the text field counts: a tapped button must not shift the row mid-tap.
+  const keyboardUp = isMobile && textFocused;
+  React.useEffect(() => {
+    setComposerFocused(keyboardUp);
+  }, [keyboardUp]);
+  React.useEffect(() => () => setComposerFocused(false), []);
   const [prefs, setPref] = useFooterPreferences();
-  const pinnedItems = prefs.pinnedItems;
-  // The phone bar keeps only Attach; the other pinned actions stay in the controls sheet.
-  const barPinnedItems = isMobile ? pinnedItems.filter((item) => item === 'upload') : pinnedItems;
+  const pinKey = isMobile ? 'pinnedItemsCompact' : 'pinnedItems';
+  const pinnedItems = prefs[pinKey];
+  const availableActions = PINNABLE_ACTIONS.filter((id) =>
+    id === 'fork' || id === 'btw-fork'
+      ? toolCaps?.supportsSessionFork !== false
+      : id === 'spawn'
+        ? toolCaps?.supportsChildSpawn !== false
+        : true
+  );
+  const { row: rowPins, folded: foldedPins } = splitPinnedActions(
+    pinnedItems,
+    availableActions,
+    isMobile || narrow ? COMPACT_PIN_LIMIT : undefined
+  );
   const togglePin = (id: string) => {
-    setPref({
-      pinnedItems: pinnedItems.includes(id)
-        ? pinnedItems.filter((p) => p !== id)
-        : [...pinnedItems, id],
-    });
+    if (pinnedItems.includes(id)) {
+      setPref({ [pinKey]: pinnedItems.filter((p) => p !== id) });
+    } else if (!isMobile || pinnedItems.length < COMPACT_PIN_LIMIT) {
+      setPref({ [pinKey]: [...pinnedItems, id] });
+    }
   };
   const pinnedChips = prefs.pinnedChips;
   const toggleChip = (id: string) => {
@@ -210,21 +253,16 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     });
   };
 
-  // Model name + token counts for individual chips. A brand-new session hasn't
-  // persisted its model into model_config yet — it's resolved from tool/user
-  // defaults at runtime — so fall back to the tool's default model. Without this
-  // the chip wouldn't render (and its click-to-change popover would be
-  // unreachable) until the user first changed the model via Session Settings.
+  // A new session resolves its model at runtime, so the chip falls back to the tool default.
   const effectiveModel =
     session.model_config?.model ?? getDefaultModelForTool(session.agentic_tool);
-  const modelName = effectiveModel
-    ? getModelDisplayName(
-        session.model_config?.provider
-          ? `${session.model_config.provider}/${effectiveModel}`
-          : effectiveModel
-      )
-    : null;
-  const modelChipMinWidth = token.controlHeight * 3;
+  const elapsed = useElapsedDuration({
+    status: footerTimerTask?.status ?? 'pending',
+    startedAt: footerTimerTask?.message_range?.start_timestamp || footerTimerTask?.created_at,
+    endedAt: footerTimerTask?.message_range?.end_timestamp || footerTimerTask?.completed_at,
+    durationMs: footerTimerTask?.duration_ms,
+  });
+  const workingElapsed = elapsed.hasTiming ? <span>· {elapsed.label}</span> : null;
 
   // Signature of the currently-disconnected servers. Dismissal is keyed by it,
   // so hiding the notice sticks — until a *different* server disconnects, which
@@ -243,17 +281,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   );
   const showMcpNotice =
     unauthedMcpServers.length > 0 && dismissedMcpSignature !== unauthedSignature;
-  // A disconnected install needs a working recovery control even when the
-  // user previously unpinned Tools. Reveal the MCP badge for as long as any
-  // attached server needs authentication; once recovered, the saved pin
-  // preference takes effect again.
-  const showMcpControl = pinnedChips.includes('tools') || unauthedMcpServers.length > 0;
   const mcpNoticeMessage =
     unauthedMcpServers.length === 1
-      ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Open the MCP badge to connect it.`
-      : `${unauthedMcpServers.length} MCP servers aren’t connected. Open the MCP badge to connect them.`;
+      ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Open Session details to connect it.`
+      : `${unauthedMcpServers.length} MCP servers aren’t connected. Open Session details to connect them.`;
 
-  const composerAttachmentActionTooltip = 'Attachments are only supported for normal Send for now';
+  const composerAttachmentActionTooltip = 'Attachments only work with Send for now';
   const composerUploadTooltip = 'Uploading files...';
   const uploadDisabled = connectionDisabled || composerAttachmentUploading;
   const advancedUploadDisabled = uploadDisabled;
@@ -261,568 +294,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const btwForkDisabled = connectionDisabled || !hasInput || composerAttachmentsPresent;
   const spawnDisabled = connectionDisabled || isRunning || composerAttachmentsPresent;
   const sendDisabled = connectionDisabled || composerAttachmentUploading || !hasInput;
-
-  // Overflow menu scale: one row height, one label size, one control height.
-  const rowHeight = isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight;
-  const controlHeight = isMobile ? token.controlHeight : token.controlHeightSM;
-  const labelFontSize = isMobile ? token.fontSize : token.fontSizeSM;
-
-  const sectionHeaderStyle: React.CSSProperties = {
-    padding: `${token.paddingXS}px ${token.paddingSM}px ${token.paddingXXS}px`,
-    fontSize: token.fontSizeSM,
-    fontWeight: token.fontWeightStrong,
-    color: token.colorTextTertiary,
-    userSelect: 'none',
-  };
-
-  const overflowRowStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: token.marginXS,
-    padding: `0 ${token.paddingXXS}px 0 ${token.paddingSM}px`,
-    height: rowHeight,
-  };
-  // Label stays on the first control line even when a control grows taller.
-  const settingRowStyle: React.CSSProperties = {
-    ...overflowRowStyle,
-    height: 'auto',
-    minHeight: rowHeight,
-    boxSizing: 'border-box',
-    paddingBlock: (rowHeight - controlHeight) / 2,
-    alignItems: 'flex-start',
-    cursor: 'default',
-  };
-  const labelGroupStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: token.marginXS,
-    flex: 1,
-    minWidth: 0,
-    height: controlHeight,
-  };
-  const settingNameStyle: React.CSSProperties = { ...labelGroupStyle, minWidth: 'max-content' };
-  const settingControlStyle: React.CSSProperties = {
-    display: 'flex',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    minHeight: controlHeight,
-    flex: 2,
-    minWidth: 0,
-    pointerEvents: managedByPreset ? 'none' : undefined,
-    opacity: managedByPreset ? 0.65 : undefined,
-  };
-  const iconStyle: React.CSSProperties = {
-    fontSize: token.fontSize,
-    color: token.colorTextSecondary,
-    flexShrink: 0,
-  };
-  const labelStyle: React.CSSProperties = {
-    fontSize: labelFontSize,
-    flex: 1,
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  };
-  const pinToggle = (pinned: boolean, label: string, tooltip: string, onToggle: () => void) => (
-    <Tooltip title={tooltip} placement="right">
-      <Button
-        type="text"
-        size={actionSize}
-        aria-label={label}
-        style={{
-          ...touchActionStyle,
-          flexShrink: 0,
-          color: pinned ? token.colorPrimary : token.colorTextTertiary,
-        }}
-        icon={
-          pinned ? (
-            <PushpinFilled style={{ fontSize: token.fontSizeSM }} />
-          ) : (
-            <PushpinOutlined style={{ fontSize: token.fontSizeSM }} />
-          )
-        }
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle();
-        }}
-      />
-    </Tooltip>
-  );
-  const itemPin = (id: string, name: string) =>
-    pinToggle(
-      pinnedItems.includes(id),
-      `${pinnedItems.includes(id) ? 'Unpin' : 'Pin'} ${name}`,
-      pinnedItems.includes(id) ? 'Unpin from bar' : 'Pin to bar',
-      () => togglePin(id)
-    );
-  const chipPin = (id: string, name: string) =>
-    pinToggle(
-      pinnedChips.includes(id),
-      `${pinnedChips.includes(id) ? 'Hide' : 'Show'} ${name}`,
-      pinnedChips.includes(id) ? 'Hide from info bar' : 'Show in info bar',
-      () => toggleChip(id)
-    );
-
-  // One effort control, shown in the controls panel and again in the phone chip bar.
-  const renderEffortSelector = (size: 'small' | 'middle') =>
-    toolCaps?.reasoningEffortLevels ? (
-      <EffortSelector
-        value={effortLevel}
-        onChange={onEffortChange}
-        levels={toolCaps.reasoningEffortLevels}
-        fallbackValue={toolCaps.defaultReasoningEffort}
-        allowInherited={!toolCaps.defaultReasoningEffort}
-        size={size}
-        compact
-        plain
-      />
-    ) : null;
-  const moreButton = (
-    <Tooltip title="More options">
-      <Button
-        size={actionSize}
-        style={touchActionStyle}
-        type="text"
-        icon={<EllipsisOutlined />}
-        aria-label="More options"
-        onClick={isMobile ? () => setMoreOpen(true) : undefined}
-      />
-    </Tooltip>
-  );
-
-  const moreContent = (
-    <fieldset
-      ref={moreContentRef}
-      aria-label="More options"
-      onMouseDown={(event) => event.stopPropagation()}
-      style={{
-        width: isMobile ? '100%' : 260,
-        minWidth: 0,
-        padding: '6px 0',
-        margin: 0,
-        border: 0,
-      }}
-    >
-      <div style={sectionHeaderStyle}>Settings</div>
-
-      <div style={settingRowStyle}>
-        <span style={settingNameStyle}>
-          <RobotOutlined style={iconStyle} />
-          <Typography.Text style={{ ...labelStyle, color: token.colorTextSecondary }}>
-            Model
-          </Typography.Text>
-        </span>
-        <div
-          style={settingControlStyle}
-          title={
-            managedByPreset ? 'Managed by preset; switch presets in Session Settings' : undefined
-          }
-        >
-          <div style={{ width: '100%', minWidth: 0 }}>
-            <ModelSelector
-              key={session.session_id}
-              value={modelConfig}
-              onCommit={onModelConfigCommit}
-              agentic_tool={session.agentic_tool}
-              client={client}
-              branchId={session.branch_id}
-              catalogEnabled={session.created_by === currentUserId}
-              compact={!isMobile}
-              getPopupContainer={getMorePopupContainer}
-            />
-          </div>
-        </div>
-      </div>
-
-      {supportsLiveEffort && (
-        <div style={settingRowStyle}>
-          <span style={settingNameStyle}>
-            <PercentageOutlined style={iconStyle} />
-            <Typography.Text style={{ ...labelStyle, color: token.colorTextSecondary }}>
-              Effort
-            </Typography.Text>
-          </span>
-          <div style={settingControlStyle}>{renderEffortSelector(actionSize)}</div>
-        </div>
-      )}
-
-      <div style={settingRowStyle}>
-        <span style={settingNameStyle}>
-          <LockOutlined style={iconStyle} />
-          <Typography.Text style={{ ...labelStyle, color: token.colorTextSecondary }}>
-            Permissions
-          </Typography.Text>
-        </span>
-        <div style={settingControlStyle}>
-          <PermissionModeSelector
-            value={permissionMode}
-            onChange={onPermissionModeChange}
-            agentic_tool={session.agentic_tool}
-            codexSandboxMode={codexSandboxMode}
-            codexApprovalPolicy={codexApprovalPolicy}
-            onCodexChange={onCodexPermissionChange}
-            compact
-            iconOnly={false}
-            plain
-            size={actionSize}
-          />
-        </div>
-      </div>
-
-      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
-
-      <div style={sectionHeaderStyle}>Actions</div>
-
-      {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
-      <div
-        role="button"
-        tabIndex={uploadDisabled ? -1 : 0}
-        style={{
-          ...overflowRowStyle,
-          opacity: uploadDisabled ? 0.4 : 1,
-          cursor: uploadDisabled ? 'not-allowed' : 'pointer',
-        }}
-        onClick={
-          uploadDisabled
-            ? undefined
-            : () => {
-                setMoreOpen(false);
-                onAttachFiles();
-              }
-        }
-        onKeyDown={
-          uploadDisabled
-            ? undefined
-            : (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  setMoreOpen(false);
-                  onAttachFiles();
-                }
-              }
-        }
-      >
-        <Tooltip
-          title={
-            composerAttachmentUploading
-              ? composerUploadTooltip
-              : connectionDisabled
-                ? LOST_CONNECTION_TOOLTIP
-                : 'Attach files to prompt'
-          }
-          placement="left"
-        >
-          <span style={labelGroupStyle}>
-            <PaperClipOutlined style={iconStyle} />
-            <Typography.Text style={labelStyle}>Attach files</Typography.Text>
-          </span>
-        </Tooltip>
-        {itemPin('upload', 'Upload')}
-      </div>
-
-      {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
-      <div
-        role="button"
-        tabIndex={advancedUploadDisabled ? -1 : 0}
-        style={{
-          ...overflowRowStyle,
-          opacity: advancedUploadDisabled ? 0.4 : 1,
-          cursor: advancedUploadDisabled ? 'not-allowed' : 'pointer',
-        }}
-        onClick={
-          advancedUploadDisabled
-            ? undefined
-            : () => {
-                setMoreOpen(false);
-                onUploadOpen();
-              }
-        }
-        onKeyDown={
-          advancedUploadDisabled
-            ? undefined
-            : (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  setMoreOpen(false);
-                  onUploadOpen();
-                }
-              }
-        }
-      >
-        <Tooltip
-          title={
-            composerAttachmentUploading
-              ? composerUploadTooltip
-              : connectionDisabled
-                ? LOST_CONNECTION_TOOLTIP
-                : 'Upload files with options'
-          }
-          placement="left"
-        >
-          <span style={labelGroupStyle}>
-            <UploadOutlined style={iconStyle} />
-            <Typography.Text style={labelStyle}>Advanced upload</Typography.Text>
-          </span>
-        </Tooltip>
-        {itemPin('advanced-upload', 'Advanced upload')}
-      </div>
-
-      {toolCaps?.supportsSessionFork !== false && (
-        // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
-        <div
-          role="button"
-          aria-disabled={forkDisabled}
-          aria-label="Fork session"
-          tabIndex={forkDisabled ? -1 : 0}
-          style={{
-            ...overflowRowStyle,
-            opacity: forkDisabled ? 0.4 : 1,
-            cursor: forkDisabled ? 'not-allowed' : 'pointer',
-          }}
-          onClick={
-            forkDisabled
-              ? undefined
-              : () => {
-                  setMoreOpen(false);
-                  onFork();
-                }
-          }
-          onKeyDown={
-            forkDisabled
-              ? undefined
-              : (e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setMoreOpen(false);
-                    onFork();
-                  }
-                }
-          }
-        >
-          <Tooltip
-            title={
-              connectionDisabled
-                ? LOST_CONNECTION_TOOLTIP
-                : composerAttachmentsPresent
-                  ? composerAttachmentActionTooltip
-                  : 'Fork this session'
-            }
-            placement="left"
-          >
-            <span style={labelGroupStyle}>
-              <ForkOutlined style={iconStyle} />
-              <Typography.Text style={labelStyle}>Fork session</Typography.Text>
-            </span>
-          </Tooltip>
-          {itemPin('fork', 'Fork')}
-        </div>
-      )}
-
-      {toolCaps?.supportsSessionFork !== false && (
-        // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
-        <div
-          role="button"
-          aria-disabled={btwForkDisabled}
-          aria-label="Ask side question via BTW fork"
-          tabIndex={btwForkDisabled ? -1 : 0}
-          style={{
-            ...overflowRowStyle,
-            opacity: btwForkDisabled ? 0.4 : 1,
-            cursor: btwForkDisabled ? 'not-allowed' : 'pointer',
-          }}
-          onClick={
-            btwForkDisabled
-              ? undefined
-              : () => {
-                  setMoreOpen(false);
-                  onBtwSend();
-                }
-          }
-          onKeyDown={
-            btwForkDisabled
-              ? undefined
-              : (e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setMoreOpen(false);
-                    onBtwSend();
-                  }
-                }
-          }
-        >
-          <Tooltip
-            title={
-              composerAttachmentsPresent
-                ? composerAttachmentActionTooltip
-                : connectionDisabled || !hasInput
-                  ? 'Needs input and a live connection'
-                  : 'Ask a side question via an ephemeral fork'
-            }
-            placement="left"
-          >
-            <span style={labelGroupStyle}>
-              <QuestionCircleOutlined style={iconStyle} />
-              <Typography.Text style={labelStyle}>BTW fork</Typography.Text>
-            </span>
-          </Tooltip>
-          {itemPin('btw-fork', 'BTW fork')}
-        </div>
-      )}
-
-      {toolCaps?.supportsChildSpawn !== false && (
-        // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
-        <div
-          role="button"
-          aria-disabled={spawnDisabled}
-          aria-label="Spawn subsession"
-          tabIndex={spawnDisabled ? -1 : 0}
-          style={{
-            ...overflowRowStyle,
-            opacity: spawnDisabled ? 0.4 : 1,
-            cursor: spawnDisabled ? 'not-allowed' : 'pointer',
-          }}
-          onClick={
-            spawnDisabled
-              ? undefined
-              : () => {
-                  setMoreOpen(false);
-                  onSpawnOpen();
-                }
-          }
-          onKeyDown={
-            spawnDisabled
-              ? undefined
-              : (e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setMoreOpen(false);
-                    onSpawnOpen();
-                  }
-                }
-          }
-        >
-          <Tooltip
-            title={
-              connectionDisabled
-                ? 'Disconnected'
-                : composerAttachmentsPresent
-                  ? composerAttachmentActionTooltip
-                  : isRunning
-                    ? 'Session is running'
-                    : 'Spawn a child subsession'
-            }
-            placement="left"
-          >
-            <span style={labelGroupStyle}>
-              <BranchesOutlined style={iconStyle} />
-              <Typography.Text style={labelStyle}>Spawn subsession</Typography.Text>
-            </span>
-          </Tooltip>
-          {itemPin('spawn', 'Spawn')}
-        </div>
-      )}
-
-      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
-
-      <div style={sectionHeaderStyle}>Info bar</div>
-
-      {footerTimerTask && (
-        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <ClockCircleOutlined style={iconStyle} />
-          <Typography.Text style={labelStyle}>Timer</Typography.Text>
-          {chipPin('timer', 'timer')}
-        </div>
-      )}
-
-      <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-        <ToolOutlined style={iconStyle} />
-        <Typography.Text style={labelStyle}>Tools</Typography.Text>
-        {chipPin('tools', 'tools')}
-      </div>
-
-      {modelName && (
-        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <RobotOutlined style={iconStyle} />
-          <Typography.Text style={labelStyle}>Model</Typography.Text>
-          {chipPin('model', 'model')}
-        </div>
-      )}
-
-      <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-        <NumberOutlined style={iconStyle} />
-        <Typography.Text style={labelStyle}>Usage</Typography.Text>
-        {chipPin('tokens', 'usage')}
-      </div>
-
-      {latestContextWindow && latestContextWindow.limit > 0 && (
-        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <PercentageOutlined style={iconStyle} />
-          <Typography.Text style={labelStyle}>Context %</Typography.Text>
-          {chipPin('context', 'context')}
-        </div>
-      )}
-
-      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
-
-      <Popover
-        trigger="click"
-        placement="topLeft"
-        title={
-          <span>
-            <IdcardOutlined style={{ marginRight: 8 }} />
-            Session IDs
-          </span>
-        }
-        content={
-          <div style={{ width: 400, maxWidth: '90vw' }}>
-            <SessionIdsList session={session} />
-          </div>
-        }
-      >
-        {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
-        <div
-          role="button"
-          tabIndex={0}
-          style={{ ...overflowRowStyle, cursor: 'pointer' }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              e.currentTarget.click();
-            }
-          }}
-        >
-          <IdcardOutlined style={iconStyle} />
-          <Typography.Text style={labelStyle}>Session IDs</Typography.Text>
-          {chipPin('session-ids', 'session IDs')}
-        </div>
-      </Popover>
-
-      {onOpenSessionSettings && (
-        <>
-          <Divider style={{ margin: `${token.marginXXS}px 0` }} />
-          <Button
-            block
-            type="text"
-            icon={<SettingOutlined style={{ fontSize: token.fontSize }} />}
-            aria-label="Session settings"
-            style={{
-              height: rowHeight,
-              justifyContent: 'flex-start',
-              paddingInline: token.paddingSM,
-              fontSize: labelFontSize,
-            }}
-            onClick={() => {
-              setMoreOpen(false);
-              onOpenSessionSettings(session.session_id);
-            }}
-          >
-            Session settings
-          </Button>
-        </>
-      )}
-    </fieldset>
-  );
 
   const stopTooltip = connectionDisabled
     ? LOST_CONNECTION_TOOLTIP
@@ -834,33 +305,876 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   const recoveryFailed = recoveryTask?.sdk_failure?.termination === 'unverified';
   const showStop = !recoveryFailed && (isRunning || stopRequestInFlight);
+  const stopBusy = stopRequestInFlight || isStopping;
+  const stopDisabled = connectionDisabled || !isRunning || stopBusy;
   // isRunning also includes stopping for the action controls. Only advertise
   // active work here, not permission/input waits or a stale offline state.
   const showActivity =
     session.status === SessionStatus.RUNNING && !stopRequestInFlight && !connectionDisabled;
 
-  const sendLabel = isRunning && hasInput ? 'Queue' : 'Send';
-  const sendTooltip = connectionDisabled
-    ? LOST_CONNECTION_TOOLTIP
-    : composerAttachmentUploading
-      ? composerUploadTooltip
-      : isRunning
-        ? 'Queue message'
-        : 'Send';
+  const circleState = getComposerCircleState({ stopAvailable: showStop, isRunning, hasInput });
+  const circleLabel =
+    circleState === 'stop' ? 'Stop' : circleState === 'queue' ? 'Queue message' : 'Send';
+  const circleDisabled = circleState === 'stop' ? stopDisabled : sendDisabled;
+  const circleTooltip =
+    circleState === 'stop' ? (
+      stopTooltip
+    ) : connectionDisabled ? (
+      LOST_CONNECTION_TOOLTIP
+    ) : composerAttachmentUploading ? (
+      composerUploadTooltip
+    ) : circleState === 'queue' ? (
+      'Queue message Enter'
+    ) : (
+      <>
+        <div>Send Enter</div>
+        <div>New line Shift+Enter</div>
+      </>
+    );
+  // Stop is the inverse solid fill; an empty Send is a quiet filled circle.
+  const circleVariant: Pick<ButtonProps, 'color' | 'variant'> = circleDisabled
+    ? { color: 'default', variant: 'filled' }
+    : circleState === 'stop'
+      ? { color: 'default', variant: 'solid' }
+      : { color: 'primary', variant: 'solid' };
+
+  const controlSize = isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight;
+  const rowButtonStyle: React.CSSProperties = {
+    minWidth: controlSize,
+    height: controlSize,
+    flexShrink: 0,
+  };
+  const actionTooltip = (fallback: string, reason?: string) =>
+    connectionDisabled ? LOST_CONNECTION_TOOLTIP : (reason ?? fallback);
+  const pinnedActionButtons: Record<string, React.ReactNode> = {
+    upload: (
+      <Tooltip
+        title={actionTooltip(
+          'Attach files',
+          composerAttachmentUploading ? composerUploadTooltip : undefined
+        )}
+      >
+        <Button
+          type="text"
+          aria-label="Attach files"
+          icon={<PaperClipOutlined />}
+          onClick={onAttachFiles}
+          disabled={uploadDisabled}
+          style={rowButtonStyle}
+          data-testid="upload-bar-btn"
+        />
+      </Tooltip>
+    ),
+    'advanced-upload': (
+      <Tooltip
+        title={actionTooltip(
+          'Advanced upload',
+          composerAttachmentUploading ? composerUploadTooltip : undefined
+        )}
+      >
+        <Button
+          type="text"
+          aria-label="Advanced upload"
+          icon={<UploadOutlined />}
+          onClick={onUploadOpen}
+          disabled={advancedUploadDisabled}
+          style={rowButtonStyle}
+        />
+      </Tooltip>
+    ),
+    fork: (
+      <Tooltip
+        title={actionTooltip(
+          'Fork session',
+          composerAttachmentsPresent ? composerAttachmentActionTooltip : undefined
+        )}
+      >
+        <Button
+          type="text"
+          aria-label="Fork session"
+          icon={<ForkOutlined />}
+          onClick={onFork}
+          disabled={forkDisabled}
+          style={rowButtonStyle}
+          data-testid="fork-bar-btn"
+        />
+      </Tooltip>
+    ),
+    'btw-fork': (
+      <Tooltip
+        title={actionTooltip(
+          'BTW fork',
+          composerAttachmentsPresent ? composerAttachmentActionTooltip : undefined
+        )}
+      >
+        <Button
+          type="text"
+          aria-label="BTW fork"
+          icon={<QuestionCircleOutlined />}
+          onClick={onBtwSend}
+          disabled={btwForkDisabled}
+          style={rowButtonStyle}
+          data-testid="btw-fork-bar-btn"
+        />
+      </Tooltip>
+    ),
+    spawn: (
+      <Tooltip
+        title={actionTooltip(
+          'Spawn subsession',
+          composerAttachmentsPresent
+            ? composerAttachmentActionTooltip
+            : isRunning
+              ? 'Not while the session is running'
+              : undefined
+        )}
+      >
+        <Button
+          type="text"
+          aria-label="Spawn subsession"
+          icon={<BranchesOutlined />}
+          onClick={onSpawnOpen}
+          disabled={spawnDisabled}
+          style={rowButtonStyle}
+        />
+      </Tooltip>
+    ),
+  };
+
+  const effortName = supportsLiveEffort
+    ? EFFORT_OPTIONS.find(
+        (option) => option.value === (effortLevel ?? toolCaps?.defaultReasoningEffort)
+      )?.label
+    : undefined;
+  const modelChipName = effectiveModel ? getModelChipLabel(modelLabel ?? effectiveModel) : 'Model';
+  const modelChipLabel = effortName && !narrow ? `${modelChipName} · ${effortName}` : modelChipName;
+  const modelChipAriaLabel = `Model ${modelChipName}${effortName ? `, ${effortName} effort` : ''}. Change`;
+  const permissionMeta = getPermissionModeMeta(session.agentic_tool, permissionMode);
+  const showPermissionChip = isPermissionNonDefault(session.agentic_tool, permissionMode, {
+    sandboxMode: codexSandboxMode,
+    approvalPolicy: codexApprovalPolicy,
+  });
+  const permissionChipName =
+    session.agentic_tool === 'codex'
+      ? `${codexSandboxMode}, ${codexApprovalPolicy}`
+      : getPermissionModeLabel(session.agentic_tool, permissionMode);
+  const permissionChipLabel =
+    session.agentic_tool === 'codex'
+      ? codexApprovalPolicy
+      : (permissionMeta?.shortLabel ?? permissionChipName);
+  const chipStyle: React.CSSProperties = {
+    height: controlSize,
+    minWidth: 0,
+    flexShrink: 1,
+    paddingInline: token.paddingXS,
+    fontSize: token.fontSize,
+  };
+
+  const [openMenu, setOpenMenu] = React.useState<ComposerMenuId | null>(null);
+  const [plusPage, setPlusPage] = React.useState<'main' | 'details'>('main');
+  const [modelPage, setModelPage] = React.useState<'model' | 'permissions'>('model');
+  const runAction = (action: () => void) => () => {
+    setOpenMenu(null);
+    action();
+  };
+  const [detailsPage, setDetailsPage] = React.useState<'main' | 'mcp'>('main');
+  const detailsOpen = openMenu === 'details' || openMenu === 'details-context';
+  const { usage, loading: usageLoading } = useSessionUsage(
+    client,
+    session.session_id,
+    detailsOpen || (openMenu === 'plus' && plusPage === 'details'),
+    currentUserId
+  );
+  // #2808: usage is fetched only when disclosed. Keep the last snapshot for the info line.
+  const [knownUsage, setKnownUsage] = React.useState<{ sessionId: string; total: number } | null>(
+    null
+  );
+  React.useEffect(() => {
+    if (usage) setKnownUsage({ sessionId: session.session_id, total: usage.total });
+  }, [usage, session.session_id]);
+  const knownUsageTotal =
+    knownUsage?.sessionId === session.session_id ? knownUsage.total : undefined;
+  const mcpSummary = summarizeSessionMcpServers(
+    sessionMcpServerIds,
+    mcpServerById,
+    userAuthenticatedMcpServerIds
+  );
+  const contextSnapshot = (
+    latestContextWindow?.taskMetadata as
+      | { normalized_sdk_response?: { contextUsageSnapshot?: ContextUsageSnapshot } }
+      | undefined
+  )?.normalized_sdk_response?.contextUsageSnapshot;
+  const contextLimit = contextSnapshot?.maxTokens ?? latestContextWindow?.limit ?? 0;
+  const contextPercent =
+    latestContextWindow && contextLimit > 0
+      ? Math.round(
+          resolveContextWindowPercentage(
+            contextSnapshot?.totalTokens ?? latestContextWindow.used,
+            contextLimit,
+            contextSnapshot
+          )
+        )
+      : null;
+  const contextColor =
+    contextPercent === null
+      ? token.colorTextTertiary
+      : getContextWindowColor(contextPercent, {
+          normal: token.colorPrimary,
+          warning: token.colorWarning,
+          critical: token.colorError,
+        });
+  const signInWarning =
+    unauthedMcpServers.length === 1
+      ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} needs sign-in`
+      : unauthedMcpServers.length > 1
+        ? `${unauthedMcpServers.length} MCP servers need sign-in`
+        : null;
+  const usageValue = usage ? `${formatTokenCount(usage.total)} tokens` : usageLoading ? '…' : '';
+  const infoItems = [
+    pinnedChips.includes('timer') && elapsed.hasTiming ? elapsed.label : null,
+    pinnedChips.includes('tools') && mcpSummary.attachedCount > 0
+      ? `MCP ${mcpSummary.attachedCount}`
+      : null,
+    pinnedChips.includes('tokens') && knownUsageTotal !== undefined
+      ? `${formatTokenCount(knownUsageTotal)} tokens`
+      : null,
+    pinnedChips.includes('session-ids') ? shortId(session.session_id) : null,
+  ].filter((item): item is string => Boolean(item));
+
+  const infoPin = (id: string, name: string) => {
+    const pinned = pinnedChips.includes(id);
+    return (
+      <ComposerPinToggle
+        pinned={pinned}
+        label={`${pinned ? 'Hide' : 'Show'} ${name}`}
+        tooltip={pinned ? 'Hide from info bar' : 'Show in info bar'}
+        onToggle={() => toggleChip(id)}
+      />
+    );
+  };
+  const copyId = (id: string, what: string) => async () => {
+    await copyToClipboard(id);
+    showSuccess(`${what} copied`);
+  };
+  const detailsMain = (
+    <>
+      {!isMobile && <ComposerMenuSection>Session details</ComposerMenuSection>}
+      <ComposerMenuRow
+        label="Timer"
+        icon={<ClockCircleOutlined />}
+        value={elapsed.hasTiming ? elapsed.label : 'Not started'}
+        trailing={infoPin('timer', 'timer')}
+      />
+      <ComposerMenuRow
+        label="MCP tools"
+        icon={<ApiOutlined />}
+        value={String(mcpSummary.attachedCount)}
+        drill
+        onClick={() => setDetailsPage('mcp')}
+        trailing={infoPin('tools', 'MCP tools')}
+      />
+      {unauthedMcpServers.map((server) => (
+        <Flex
+          key={server.mcp_server_id}
+          align="center"
+          gap={token.marginXS}
+          style={{ paddingInline: token.paddingSM, paddingBottom: token.paddingXXS }}
+        >
+          <Typography.Text
+            style={{ flex: 1, fontSize: token.fontSizeSM, color: token.colorWarningText }}
+          >
+            {`${server.display_name || server.name} needs sign-in. Its tools are off until you connect.`}
+          </Typography.Text>
+          <Button size="small" onClick={() => setDetailsPage('mcp')}>
+            Connect
+          </Button>
+        </Flex>
+      ))}
+      <ComposerMenuRow
+        label="Usage"
+        icon={<NumberOutlined />}
+        value={usageValue}
+        trailing={infoPin('tokens', 'usage')}
+      />
+      <ComposerMenuRow
+        label="Context"
+        icon={<PieChartOutlined />}
+        value={
+          contextPercent === null
+            ? 'Unknown'
+            : `${contextPercent}% of ${formatTokenCount(contextLimit)}`
+        }
+        trailing={infoPin('context', 'context')}
+      />
+      {contextPercent !== null && (
+        <div style={{ paddingInline: token.paddingSM }}>
+          <Progress
+            percent={contextPercent}
+            showInfo={false}
+            size="small"
+            strokeColor={contextColor}
+            aria-label={`Context ${contextPercent}% used`}
+          />
+        </div>
+      )}
+      <ComposerMenuRow
+        label="Session IDs"
+        icon={<IdcardOutlined />}
+        value={shortId(session.session_id)}
+        trailing={infoPin('session-ids', 'session IDs')}
+      />
+      <ComposerMenuRow
+        label="Copy session ID"
+        icon={<CopyOutlined />}
+        onClick={copyId(session.session_id, 'Session ID')}
+      />
+      {session.sdk_session_id && (
+        <ComposerMenuRow
+          label="Copy agent session ID"
+          icon={<CopyOutlined />}
+          onClick={copyId(session.sdk_session_id, 'Agent session ID')}
+        />
+      )}
+      <ComposerMenuNote>
+        Pin an item to show it in the info bar under the composer. MCP sign-in problems always show.
+      </ComposerMenuNote>
+    </>
+  );
+  const detailsContent =
+    detailsPage === 'mcp' ? (
+      <>
+        <ComposerMenuBack label="Session details" onBack={() => setDetailsPage('main')} />
+        <div style={{ padding: `0 ${token.paddingSM}px ${token.paddingXS}px` }}>
+          <SessionMcpFooterControl
+            inline
+            client={client}
+            currentUserId={currentUserId}
+            sessionId={session.session_id}
+            sessionMcpServerIds={sessionMcpServerIds}
+            mcpServerById={mcpServerById}
+            userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
+          />
+        </div>
+      </>
+    ) : (
+      detailsMain
+    );
+  const openDetails = (menu: 'details' | 'details-context') => (open: boolean) => {
+    setDetailsPage('main');
+    setOpenMenu(open ? menu : null);
+  };
+  const infoTextStyle: React.CSSProperties = {
+    height: isMobile ? MOBILE_TOUCH_TARGET : token.controlHeightSM,
+    paddingInline: token.sizeXXS / 2,
+    fontSize: token.fontSizeSM,
+    color: token.colorTextTertiary,
+    minWidth: 0,
+  };
+  const showContextInInfo = contextPercent !== null && pinnedChips.includes('context');
+  const infoLineVisible =
+    (showContextInInfo || infoItems.length > 0 || signInWarning) && !(keyboardUp && !signInWarning);
+  const infoLine = infoLineVisible && (
+    <Flex
+      align="center"
+      style={{ minWidth: 0, paddingInline: token.paddingXS }}
+      data-testid="composer-info-line"
+    >
+      {showContextInInfo && (
+        <ComposerMenu
+          above={cardRef}
+          sheet={isMobile}
+          title="Session details"
+          open={openMenu === 'details-context'}
+          onOpenChange={openDetails('details-context')}
+          content={detailsContent}
+        >
+          <Tooltip title="Context window" open={openMenu === 'details-context' ? false : undefined}>
+            <Button
+              type="text"
+              size="small"
+              aria-label={`Context ${contextPercent}% used. Session details`}
+              onClick={isMobile ? () => openDetails('details-context')(true) : undefined}
+              style={{ ...infoTextStyle, gap: token.sizeXXS }}
+            >
+              <Progress
+                type="circle"
+                size={token.fontSizeSM}
+                percent={contextPercent ?? 0}
+                showInfo={false}
+                strokeWidth={16}
+                strokeColor={contextColor}
+                aria-hidden
+              />
+              {contextPercent}%
+            </Button>
+          </Tooltip>
+        </ComposerMenu>
+      )}
+      {(infoItems.length > 0 || signInWarning) && (
+        <ComposerMenu
+          above={cardRef}
+          sheet={isMobile}
+          title="Session details"
+          open={openMenu === 'details'}
+          onOpenChange={openDetails('details')}
+          content={detailsContent}
+        >
+          <Button
+            type="text"
+            size="small"
+            aria-label={`Session details. ${[...infoItems, signInWarning].filter(Boolean).join(', ')}`}
+            onClick={isMobile ? () => openDetails('details')(true) : undefined}
+            style={infoTextStyle}
+          >
+            <Typography.Text ellipsis style={{ fontSize: token.fontSizeSM, color: 'inherit' }}>
+              {showContextInInfo && infoItems.length > 0 ? '· ' : ''}
+              {infoItems.join(' · ')}
+              {signInWarning && (
+                <span style={{ color: token.colorWarningText }}>
+                  {infoItems.length > 0 ? ' · ' : ''}
+                  {signInWarning}
+                </span>
+              )}
+            </Typography.Text>
+          </Button>
+        </ComposerMenu>
+      )}
+    </Flex>
+  );
+
+  const attachmentsHint = composerAttachmentsPresent ? composerAttachmentActionTooltip : undefined;
+  const actionRows: Record<
+    string,
+    { label: string; hint: string; icon: React.ReactNode; onClick: () => void; disabled: boolean }
+  > = {
+    upload: {
+      label: 'Attach files',
+      hint: 'Photos, screenshots and files',
+      icon: <PaperClipOutlined />,
+      onClick: onAttachFiles,
+      disabled: uploadDisabled,
+    },
+    'advanced-upload': {
+      label: 'Advanced upload',
+      hint: 'Choose where files go',
+      icon: <UploadOutlined />,
+      onClick: onUploadOpen,
+      disabled: advancedUploadDisabled,
+    },
+    fork: {
+      label: 'Fork session',
+      hint: attachmentsHint ?? 'Copy this session and branch off',
+      icon: <ForkOutlined />,
+      onClick: onFork,
+      disabled: forkDisabled,
+    },
+    'btw-fork': {
+      label: 'BTW fork',
+      hint: attachmentsHint ?? 'Ask a side question in a throwaway fork',
+      icon: <QuestionCircleOutlined />,
+      onClick: onBtwSend,
+      disabled: btwForkDisabled,
+    },
+    spawn: {
+      label: 'Spawn subsession',
+      hint:
+        attachmentsHint ??
+        (isRunning ? 'Not while the session is running' : 'Start a child session for a subtask'),
+      icon: <BranchesOutlined />,
+      onClick: onSpawnOpen,
+      disabled: spawnDisabled,
+    },
+  };
+  const pinsFull = isMobile && pinnedItems.length >= COMPACT_PIN_LIMIT;
+  const renderActionRow = (id: string) => {
+    const row = actionRows[id];
+    const pinned = pinnedItems.includes(id);
+    return (
+      <ComposerMenuRow
+        key={id}
+        label={row.label}
+        hint={connectionDisabled ? LOST_CONNECTION_TOOLTIP : row.hint}
+        icon={row.icon}
+        disabled={row.disabled}
+        onClick={runAction(row.onClick)}
+        trailing={
+          <ComposerPinToggle
+            pinned={pinned}
+            label={
+              pinned ? `Unpin ${row.label} from the composer` : `Pin ${row.label} to the composer`
+            }
+            tooltip={pinned ? 'Unpin from the composer' : 'Pin to the composer'}
+            disabled={!pinned && pinsFull}
+            onToggle={() => togglePin(id)}
+          />
+        }
+      />
+    );
+  };
+  const plusMenuContent = (
+    <>
+      <ComposerMenuSection>Add to message</ComposerMenuSection>
+      {['upload', 'advanced-upload']
+        .filter((id) => availableActions.includes(id))
+        .map(renderActionRow)}
+      <ComposerMenuSection>Session</ComposerMenuSection>
+      {['fork', 'btw-fork', 'spawn']
+        .filter((id) => availableActions.includes(id))
+        .map(renderActionRow)}
+      <ComposerMenuNote>
+        {pinsFull
+          ? 'The composer fits 2 pins on a phone. Unpin one to add another.'
+          : 'Pin an action to keep it in the composer row.'}
+      </ComposerMenuNote>
+      {foldedPins.map((id) => (
+        <ComposerMenuNote key={id}>
+          {`${actionRows[id].label} stays in here until the panel is wider.`}
+        </ComposerMenuNote>
+      ))}
+      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
+      <ComposerMenuRow
+        label="Session details"
+        icon={<InfoCircleOutlined />}
+        drill
+        onClick={() => {
+          setDetailsPage('main');
+          setPlusPage('details');
+        }}
+      />
+      {onOpenSessionSettings && (
+        <ComposerMenuRow
+          label="Session settings"
+          icon={<SettingOutlined />}
+          onClick={runAction(() => onOpenSessionSettings(session.session_id))}
+        />
+      )}
+    </>
+  );
+
+  const plusButton = (
+    <ComposerMenu
+      above={cardRef}
+      sheet={isMobile}
+      title="Add files and actions"
+      open={openMenu === 'plus'}
+      onOpenChange={(open) => {
+        setPlusPage('main');
+        setOpenMenu(open ? 'plus' : null);
+      }}
+      content={
+        plusPage === 'details' ? (
+          <>
+            {detailsPage === 'main' && (
+              <ComposerMenuBack label="Add files and actions" onBack={() => setPlusPage('main')} />
+            )}
+            {detailsContent}
+          </>
+        ) : (
+          plusMenuContent
+        )
+      }
+    >
+      <Tooltip title="Add files and actions" open={openMenu === 'plus' ? false : undefined}>
+        <Button
+          type="text"
+          aria-label="Add files and actions"
+          aria-haspopup="dialog"
+          aria-expanded={openMenu === 'plus'}
+          icon={<PlusOutlined />}
+          onClick={
+            isMobile
+              ? () => {
+                  setPlusPage('main');
+                  setOpenMenu('plus');
+                }
+              : undefined
+          }
+          style={rowButtonStyle}
+        />
+      </Tooltip>
+    </ComposerMenu>
+  );
+
+  const effortLevels = toolCaps?.reasoningEffortLevels ?? [];
+  const permissionModes = getPermissionModes(session.agentic_tool);
+  const defaultPermissionMode = getDefaultPermissionMode(session.agentic_tool);
+  const presetNote = managedByPreset ? (
+    <ComposerMenuNote>Managed by preset. Switch presets in session settings.</ComposerMenuNote>
+  ) : null;
+  const defaultTag = <span style={{ fontSize: token.fontSizeSM }}>default</span>;
+  const permissionRadioRows = (
+    title: string,
+    rows: { value: string; label: string; description?: string; isDefault?: boolean }[],
+    current: string,
+    onSelect: (value: string) => void
+  ) => (
+    <div role="radiogroup" aria-label={title}>
+      <ComposerMenuSection>{title}</ComposerMenuSection>
+      {rows.map((row) => (
+        <ComposerMenuRow
+          key={row.value}
+          label={row.label}
+          hint={row.description}
+          checked={row.value === current}
+          value={row.isDefault ? defaultTag : undefined}
+          disabled={managedByPreset}
+          onClick={() => onSelect(row.value)}
+        />
+      ))}
+    </div>
+  );
+  const codexDefaults = mapToCodexPermissionConfig(defaultPermissionMode);
+  const permissionsPage = (
+    <>
+      <ComposerMenuBack label="Model" onBack={() => setModelPage('model')} />
+      {presetNote}
+      {session.agentic_tool === 'gemini' && isGeminiManualMode(permissionMode) && (
+        <ComposerMenuNote>
+          {GEMINI_MANUAL_MESSAGE} If your settings are managed, ask a workspace admin to update the
+          preset.
+        </ComposerMenuNote>
+      )}
+      {session.agentic_tool === 'codex' ? (
+        <>
+          {permissionRadioRows(
+            'Sandbox',
+            CODEX_SANDBOX_MODES.map((mode) => ({
+              ...mode,
+              isDefault: mode.value === codexDefaults.sandboxMode,
+            })),
+            codexSandboxMode,
+            (value) => onCodexPermissionChange(value as CodexSandboxMode, codexApprovalPolicy)
+          )}
+          {permissionRadioRows(
+            'Approval',
+            CODEX_APPROVAL_POLICIES.map((policy) => ({
+              ...policy,
+              isDefault: policy.value === codexDefaults.approvalPolicy,
+            })),
+            codexApprovalPolicy,
+            (value) => onCodexPermissionChange(codexSandboxMode, value as CodexApprovalPolicy)
+          )}
+        </>
+      ) : (
+        permissionRadioRows(
+          'Permissions',
+          permissionModes.map((mode) => ({
+            value: mode.mode,
+            label: mode.label,
+            description: mode.description,
+            isDefault: mode.mode === defaultPermissionMode,
+          })),
+          permissionMode,
+          (value) => onPermissionModeChange(value as PermissionMode)
+        )
+      )}
+    </>
+  );
+  // The rows check the same model the chip names, even before the session stores one.
+  const modelRowsValue: ModelConfig | undefined =
+    modelConfig ?? (effectiveModel ? { mode: 'alias', model: effectiveModel } : undefined);
+  const modelPageContent = (
+    <>
+      {presetNote}
+      <ModelSelector
+        key={session.session_id}
+        value={modelRowsValue}
+        onCommit={onModelConfigCommit}
+        agentic_tool={session.agentic_tool}
+        client={client}
+        branchId={session.branch_id}
+        catalogEnabled={session.created_by === currentUserId}
+        compact
+        showAdvisor={false}
+        renderRows={({ options, currentModel, select }) => (
+          <div
+            role="radiogroup"
+            aria-label="Model"
+            style={{ maxHeight: 'min(320px, 40dvh)', overflowY: 'auto' }}
+          >
+            <ComposerMenuSection>Model</ComposerMenuSection>
+            {options.map((option) => (
+              <ComposerMenuRow
+                key={option.value}
+                label={option.label}
+                hint={option.description}
+                checked={option.value === currentModel}
+                value={option.isDefault ? defaultTag : undefined}
+                disabled={managedByPreset}
+                onClick={() => select(option.value)}
+              />
+            ))}
+          </div>
+        )}
+      />
+      {effortLevels.length > 0 && (
+        <>
+          <ComposerMenuSection>Effort</ComposerMenuSection>
+          <div style={{ paddingInline: token.paddingXS, paddingBottom: token.paddingXXS }}>
+            <Segmented
+              block
+              aria-label="Effort"
+              size={isMobile ? 'large' : 'middle'}
+              disabled={managedByPreset}
+              value={effortLevel ?? toolCaps?.defaultReasoningEffort}
+              onChange={(value) => onEffortChange(value as EffortLevel)}
+              styles={{ label: { paddingInline: token.paddingXXS, fontSize: token.fontSizeSM } }}
+              options={EFFORT_OPTIONS.filter((option) => effortLevels.includes(option.value)).map(
+                (option) => ({
+                  value: option.value,
+                  label: option.label,
+                  title: option.description,
+                })
+              )}
+            />
+          </div>
+        </>
+      )}
+      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
+      <ComposerMenuRow
+        label="Permissions"
+        icon={<LockOutlined />}
+        value={permissionChipName}
+        drill
+        onClick={() => setModelPage('permissions')}
+      />
+      {onOpenSessionSettings && (
+        <ComposerMenuRow
+          label="Session settings"
+          icon={<SettingOutlined />}
+          onClick={runAction(() => onOpenSessionSettings(session.session_id))}
+        />
+      )}
+    </>
+  );
+  const modelMenuContent = modelPage === 'permissions' ? permissionsPage : modelPageContent;
+  const openModelMenu = (menu: 'model' | 'permissions') => (open: boolean) => {
+    setModelPage(menu === 'permissions' ? 'permissions' : 'model');
+    setOpenMenu(open ? menu : null);
+  };
+
+  const modelChip = (
+    <ComposerMenu
+      above={cardRef}
+      sheet={isMobile}
+      title="Model"
+      open={openMenu === 'model'}
+      onOpenChange={openModelMenu('model')}
+      content={modelMenuContent}
+    >
+      <Tooltip title="Model and effort" open={openMenu === 'model' ? false : undefined}>
+        <Button
+          type="text"
+          aria-label={modelChipAriaLabel}
+          aria-haspopup="dialog"
+          aria-expanded={openMenu === 'model'}
+          onClick={isMobile ? () => openModelMenu('model')(true) : undefined}
+          style={chipStyle}
+          data-testid="model-chip"
+        >
+          <Typography.Text ellipsis style={{ minWidth: 0, fontSize: token.fontSize }}>
+            {modelChipLabel}
+          </Typography.Text>
+        </Button>
+      </Tooltip>
+    </ComposerMenu>
+  );
+
+  const permissionChip = showPermissionChip && (
+    <ComposerMenu
+      above={cardRef}
+      sheet={isMobile}
+      title="Permissions"
+      open={openMenu === 'permissions'}
+      onOpenChange={openModelMenu('permissions')}
+      content={modelMenuContent}
+    >
+      <Tooltip title="Permissions" open={openMenu === 'permissions' ? false : undefined}>
+        <Button
+          type="text"
+          aria-label={`Permissions: ${permissionChipName}. Change`}
+          aria-haspopup="dialog"
+          aria-expanded={openMenu === 'permissions'}
+          onClick={isMobile ? () => openModelMenu('permissions')(true) : undefined}
+          style={{ ...chipStyle, color: token.colorWarningText }}
+          data-testid="permission-chip"
+        >
+          <Typography.Text ellipsis style={{ minWidth: 0, color: 'inherit' }}>
+            {permissionChipLabel}
+          </Typography.Text>
+        </Button>
+      </Tooltip>
+    </ComposerMenu>
+  );
+
+  const workingLine = showStop && (
+    <Flex
+      align="center"
+      gap={token.marginXS}
+      style={{
+        minHeight: isMobile ? token.controlHeight : token.controlHeightSM,
+        paddingInlineEnd: token.paddingXXS,
+        fontSize: token.fontSizeSM,
+        color: token.colorTextSecondary,
+      }}
+      data-testid="composer-working-line"
+    >
+      <span
+        aria-hidden
+        className={showActivity && !reducedMotion ? 'status-dot-run' : undefined}
+        style={{
+          width: token.sizeXS,
+          height: token.sizeXS,
+          borderRadius: '50%',
+          background: stopBusy ? token.colorWarning : token.colorPrimary,
+          flexShrink: 0,
+        }}
+      />
+      <span role="status" aria-label={showActivity ? 'Agent is working' : undefined}>
+        {stopBusy ? 'Stopping' : 'Working'}
+      </span>
+      {workingElapsed}
+      <span style={{ flex: 1 }} />
+      {circleState !== 'stop' && (
+        <Tooltip title={stopTooltip}>
+          <Button
+            type="text"
+            size="small"
+            aria-label="Stop the agent"
+            aria-busy={stopBusy}
+            loading={stopBusy}
+            disabled={stopDisabled}
+            onClick={onStop}
+            style={{
+              fontSize: token.fontSizeSM,
+              ...(isMobile
+                ? { minHeight: MOBILE_TOUCH_TARGET, minWidth: MOBILE_TOUCH_TARGET }
+                : {}),
+            }}
+          >
+            Stop
+          </Button>
+        </Tooltip>
+      )}
+    </Flex>
+  );
+
+  const pinnedRow = rowPins.map((id) => (
+    <React.Fragment key={id}>{pinnedActionButtons[id]}</React.Fragment>
+  ));
 
   return (
     <div
       style={{
         position: 'relative',
         flexShrink: 0,
-        background: token.colorBgContainer,
-        borderTop: `1px solid ${token.colorBorder}`,
-        // Keep all padding longhand: an undefined desktop paddingBottom clears
+        // Keep all padding longhand: an undefined paddingBottom would clear
         // the bottom inset supplied by a padding shorthand in React.
         paddingTop: token.paddingXS,
-        paddingInline: isMobile ? token.padding : token.paddingLG,
-        // On phones the tab bar below owns the bottom safe area.
-        paddingBottom: token.sizeUnit * 2,
+        paddingInline: token.paddingXS,
+        paddingBottom: keyboardUp
+          ? `calc(${token.paddingXS}px + env(safe-area-inset-bottom))`
+          : token.paddingXS,
         marginLeft: -token.sizeUnit * 6,
         marginRight: -token.sizeUnit * 6,
       }}
@@ -874,464 +1188,123 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         onReopen={onStop}
         error={recoveryError}
       />
-      {/* Context window gradient overlay */}
-      {footerGradient && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: footerGradient,
-            pointerEvents: 'none',
-            zIndex: 0,
-          }}
+
+      {/* Unauthorized MCP servers block their tools silently; nudge above the composer. */}
+      {showMcpNotice && (
+        <CompactNotice
+          type="warning"
+          message={mcpNoticeMessage}
+          onDismiss={() => setDismissedMcpSignature(unauthedSignature)}
+          dismissLabel="Dismiss MCP connection notice"
+          data-testid="mcp-disconnected-notice"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          style={{ marginBottom: token.marginXS }}
         />
       )}
 
-      <div style={{ position: 'relative', zIndex: 1 }}>
-        {/* Row 1: Info bar (always shown on mobile as the compact chip bar).
-            Desktop wraps. Phones keep one line: the model chip truncates first,
-            then the row scrolls. */}
-        {(isMobile ||
-          showMcpControl ||
-          (footerTimerTask && pinnedChips.includes('timer')) ||
-          (modelName && pinnedChips.includes('model')) ||
-          pinnedChips.includes('tokens') ||
-          (latestContextWindow &&
-            latestContextWindow.limit > 0 &&
-            pinnedChips.includes('context')) ||
-          pinnedChips.includes('session-ids')) && (
-          <div
-            style={{
-              display: 'flex',
-              gap: token.sizeUnit,
-              alignItems: 'center',
-              ...(isMobile
-                ? {
-                    // The scroll box clips both axes; inset it so focus rings stay visible.
-                    padding: token.sizeUnit,
-                    margin: `-${token.sizeUnit}px -${token.sizeUnit}px ${token.sizeUnit}px`,
-                    flexWrap: 'nowrap',
-                    whiteSpace: 'nowrap',
-                    overflowX: 'auto',
-                    scrollbarWidth: 'none',
-                  }
-                : { marginBottom: token.sizeUnit * 2, flexWrap: 'wrap' }),
-            }}
-            data-testid="info-bar"
-          >
-            {footerTimerTask && pinnedChips.includes('timer') && (
-              <div
-                style={{ display: 'inline-flex', alignItems: 'center', height: 22 }}
-                data-testid="timer-chip"
-              >
-                <TimerPill
-                  status={footerTimerTask.status}
-                  startedAt={
-                    footerTimerTask.message_range?.start_timestamp || footerTimerTask.created_at
-                  }
-                  endedAt={
-                    footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at
-                  }
-                  durationMs={footerTimerTask.duration_ms}
-                  lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
-                  latestExecutorPulse={footerTimerTask.latest_executor_pulse}
-                />
-              </div>
-            )}
+      {queueSlot}
 
-            {showMcpControl && (
-              <SessionMcpFooterControl
-                client={client}
-                currentUserId={currentUserId}
-                sessionId={session.session_id}
-                sessionMcpServerIds={sessionMcpServerIds}
-                mcpServerById={mcpServerById}
-                userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
-              />
-            )}
-
-            {/* Compact effort control (mobile chip bar only) */}
-            {isMobile && supportsLiveEffort && toolCaps?.reasoningEffortLevels && (
-              <div
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  height: MOBILE_CHIP_HEIGHT,
-                  pointerEvents: managedByPreset ? 'none' : undefined,
-                  opacity: managedByPreset ? 0.65 : undefined,
-                }}
-              >
-                {renderEffortSelector('small')}
-              </div>
-            )}
-
-            {/* Model chip. On mobile it just opens the controls sheet, so there
-                is no popover to render; desktop keeps the click-to-change popover. */}
-            {modelName &&
-              (isMobile ? (
-                <Button
-                  size="small"
-                  icon={<RobotOutlined />}
-                  onClick={() => setMoreOpen(true)}
-                  aria-label={`Model and session controls: ${modelName}`}
-                  title={modelName}
-                  style={{
-                    height: MOBILE_CHIP_HEIGHT,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: token.marginXXS,
-                    minWidth: modelChipMinWidth,
-                  }}
-                  data-testid="model-chip"
-                >
-                  <Typography.Text ellipsis style={{ minWidth: 0, fontSize: token.fontSizeSM }}>
-                    {modelName}
-                  </Typography.Text>
-                </Button>
-              ) : (
-                pinnedChips.includes('model') && (
-                  <Popover
-                    trigger={managedByPreset ? [] : 'click'}
-                    placement="topLeft"
-                    title="Model"
-                    overlayStyle={{ maxWidth: 'none' }}
-                    overlayInnerStyle={{ padding: 8 }}
-                    content={
-                      <div style={{ width: 420 }}>
-                        {managedByPreset ? (
-                          <Typography.Text>
-                            Managed by preset. Switch presets in Session Settings.
-                          </Typography.Text>
-                        ) : (
-                          <ModelSelector
-                            key={session.session_id}
-                            value={modelConfig}
-                            onCommit={onModelConfigCommit}
-                            agentic_tool={session.agentic_tool}
-                            client={client}
-                            branchId={session.branch_id}
-                            catalogEnabled={session.created_by === currentUserId}
-                          />
-                        )}
-                      </div>
-                    }
-                  >
-                    <Tag
-                      icon={<RobotOutlined />}
-                      color="default"
-                      truncate
-                      title={modelName}
-                      style={{
-                        cursor: managedByPreset ? 'default' : 'pointer',
-                        height: 22,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                      }}
-                      data-testid="model-chip"
-                    >
-                      {modelName}
-                    </Tag>
-                  </Popover>
-                )
-              ))}
-
-            {pinnedChips.includes('tokens') && (
-              <SessionUsagePopover
-                key={`${session.session_id}:${currentUserId}`}
-                client={client ?? null}
-                sessionId={session.session_id}
-                userId={currentUserId}
-              />
-            )}
-
-            {/* Context % chip */}
-            {latestContextWindow &&
-              latestContextWindow.limit > 0 &&
-              pinnedChips.includes('context') && (
-                <ContextWindowPill
-                  used={latestContextWindow.used}
-                  limit={latestContextWindow.limit}
-                  taskMetadata={
-                    latestContextWindow.taskMetadata as React.ComponentProps<
-                      typeof ContextWindowPill
-                    >['taskMetadata']
-                  }
-                />
-              )}
-
-            {/* Session IDs chip */}
-            {pinnedChips.includes('session-ids') && (
-              <Popover
-                trigger="click"
-                placement="topLeft"
-                title={
-                  <span>
-                    <IdcardOutlined style={{ marginRight: 8 }} />
-                    Session IDs
-                  </span>
-                }
-                content={
-                  <div style={{ width: 400, maxWidth: '90vw' }}>
-                    <SessionIdsList session={session} />
-                  </div>
-                }
-              >
-                <Tag
-                  icon={<IdcardOutlined />}
-                  color="default"
-                  style={{
-                    cursor: 'pointer',
-                    height: 22,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                  }}
-                  data-testid="session-ids-chip"
-                >
-                  IDs
-                </Tag>
-              </Popover>
-            )}
-          </div>
-        )}
-
-        {/* Unauthorized MCP servers block their tools silently; nudge above the composer. */}
-        {showMcpNotice && (
-          <CompactNotice
-            type="warning"
-            message={mcpNoticeMessage}
-            onDismiss={() => setDismissedMcpSignature(unauthedSignature)}
-            dismissLabel="Dismiss MCP connection notice"
-            data-testid="mcp-disconnected-notice"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-            style={{ marginBottom: token.marginXS }}
-          />
-        )}
-
-        {/* Rows 2–3 — Prompt textarea and action bar. On phones they form one
-            chat bar: the input grows upward and the buttons stay aligned with
-            its last line. */}
+      <SessionComposerDropZone
+        disabled={composerAttachmentUploading}
+        onDragActiveChange={onDropActiveChange}
+        onFilesDrop={onFilesDrop}
+        radius={token.borderRadius * 2}
+      >
         <div
+          ref={cardRef}
+          data-testid="composer-card"
+          onFocus={(event) => {
+            setCardFocused(true);
+            setTextFocused(event.target instanceof HTMLTextAreaElement);
+          }}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              setCardFocused(false);
+              setTextFocused(false);
+            }
+          }}
           style={{
+            ...glassSurfaceStyle(token, 0.7),
             display: 'flex',
-            flexWrap: isMobile ? 'nowrap' : 'wrap',
-            alignItems: isMobile ? 'flex-end' : 'center',
-            gap: token.sizeUnit,
+            flexDirection: 'column',
+            gap: token.sizeXXS,
+            borderRadius: token.borderRadius * 2,
+            borderWidth: token.lineWidth,
+            borderStyle: token.lineType,
+            borderColor: cardFocused ? token.colorPrimary : token.colorBorder,
+            boxShadow: cardFocused
+              ? `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`
+              : undefined,
+            padding: `${token.paddingXXS + 2}px ${token.paddingXXS + 2}px ${token.paddingXXS + 2}px ${token.paddingSM}px`,
+            transition: reducedMotion ? undefined : `border-color ${token.motionDurationFast}`,
           }}
         >
-          {/* One tree position at every width, so crossing the breakpoint never
-              remounts PromptInput (and drops its unsaved text). It comes first so
-              desktop reads input then toolbar; there it takes its own row. */}
-          <div
-            style={
-              isMobile
-                ? { flex: 1, minWidth: 0 }
-                : { flexBasis: '100%', minWidth: 0, marginBottom: token.sizeUnit }
-            }
-          >
+          {workingLine}
+          <Flex vertical gap={token.sizeXS} style={{ minWidth: 0 }}>
             {promptInputSlot}
-          </div>
-
-          {/* Left group (drawn before the input on phones) */}
-          <Space size={4} style={isMobile ? { order: -1 } : undefined}>
-            {barPinnedItems.includes('upload') && (
-              <Tooltip
-                title={
-                  composerAttachmentUploading
-                    ? composerUploadTooltip
-                    : connectionDisabled
-                      ? LOST_CONNECTION_TOOLTIP
-                      : 'Attach files'
+          </Flex>
+          <Flex align="center" gap={token.sizeXXS} style={{ minWidth: 0 }}>
+            {plusButton}
+            {pinnedRow}
+            {modelChip}
+            {permissionChip}
+            <span style={{ flex: 1 }} />
+            <Tooltip title={circleTooltip}>
+              <Button
+                {...circleVariant}
+                shape="circle"
+                aria-label={circleLabel}
+                aria-disabled={circleDisabled || undefined}
+                aria-busy={circleState === 'stop' ? stopBusy : undefined}
+                loading={circleState === 'stop' && stopBusy}
+                icon={
+                  circleState === 'stop' ? (
+                    <span
+                      aria-hidden
+                      style={{
+                        display: 'inline-block',
+                        width: token.sizeXS + 2,
+                        height: token.sizeXS + 2,
+                        borderRadius: token.borderRadiusXS,
+                        background: 'currentColor',
+                      }}
+                    />
+                  ) : circleState === 'queue' ? (
+                    <UnorderedListOutlined />
+                  ) : (
+                    <ArrowUpOutlined />
+                  )
                 }
-              >
-                <Button
-                  size={actionSize}
-                  style={touchActionStyle}
-                  type="text"
-                  aria-label="Attach files"
-                  title="Attach files"
-                  icon={<PaperClipOutlined />}
-                  onClick={onAttachFiles}
-                  disabled={uploadDisabled}
-                  data-testid="upload-bar-btn"
-                />
-              </Tooltip>
-            )}
-            {barPinnedItems.includes('advanced-upload') && (
-              <Tooltip
-                title={
-                  composerAttachmentUploading
-                    ? composerUploadTooltip
-                    : connectionDisabled
-                      ? LOST_CONNECTION_TOOLTIP
-                      : 'Advanced upload'
+                // Keep the keyboard up on phones and focus in the text after a tap.
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={
+                  circleDisabled ? undefined : circleState === 'stop' ? onStop : onSendPrompt
                 }
-              >
-                <Button
-                  size={actionSize}
-                  style={touchActionStyle}
-                  type="text"
-                  aria-label="Advanced upload"
-                  title="Advanced upload"
-                  icon={<UploadOutlined />}
-                  onClick={onUploadOpen}
-                  disabled={advancedUploadDisabled}
-                />
-              </Tooltip>
-            )}
-            {barPinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
-              <Tooltip title={connectionDisabled ? LOST_CONNECTION_TOOLTIP : 'Fork Session'}>
-                <Button
-                  size={actionSize}
-                  style={touchActionStyle}
-                  type="text"
-                  aria-label="Fork session"
-                  icon={<ForkOutlined />}
-                  onClick={onFork}
-                  disabled={forkDisabled}
-                  data-testid="fork-bar-btn"
-                />
-              </Tooltip>
-            )}
-            {/* Dynamically pinned items */}
-            {barPinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
-              <Tooltip title="BTW fork">
-                <Button
-                  size={actionSize}
-                  style={touchActionStyle}
-                  type="text"
-                  aria-label="Ask side question via BTW fork"
-                  icon={<QuestionCircleOutlined />}
-                  onClick={onBtwSend}
-                  disabled={btwForkDisabled}
-                  data-testid="btw-fork-bar-btn"
-                />
-              </Tooltip>
-            )}
-            {barPinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
-              <Tooltip title="Spawn subsession">
-                <Button
-                  size={actionSize}
-                  style={touchActionStyle}
-                  type="text"
-                  aria-label="Spawn subsession"
-                  icon={<BranchesOutlined />}
-                  onClick={onSpawnOpen}
-                  disabled={spawnDisabled}
-                />
-              </Tooltip>
-            )}
-            {isMobile ? (
-              moreButton
-            ) : (
-              <Popover
-                open={moreOpen}
-                onOpenChange={setMoreOpen}
-                trigger="click"
-                placement="topLeft"
-                content={moreContent}
-                title={null}
-              >
-                {moreButton}
-              </Popover>
-            )}
-          </Space>
-
-          {/* Right group */}
-          <Flex
-            align="center"
-            gap={token.marginXS}
-            style={{ marginInlineStart: 'auto', flexShrink: 0 }}
-          >
-            {/* Reserve the compact slot so activity changes never move controls.
-                Phones keep it for screen readers only; Stop already shows work.
-                Spin inherits the shared reduced-motion rule in index.css. */}
-            <Flex
-              align="center"
-              justify="center"
-              style={
-                isMobile ? VISUALLY_HIDDEN_STYLE : { width: token.controlHeightXS, flexShrink: 0 }
-              }
-            >
-              {showActivity && (
-                <span role="status" aria-label="Agent is working" style={{ display: 'flex' }}>
-                  <Spin size="small" aria-hidden="true" />
-                </span>
-              )}
-            </Flex>
-            {/* Flex avoids inline baseline/descender space around the controls. */}
-            <Flex align="center" gap={token.sizeUnit}>
-              {showStop && (
-                <Tooltip title={stopTooltip}>
-                  <Button
-                    danger
-                    aria-label="Stop"
-                    aria-busy={stopRequestInFlight || isStopping}
-                    size={actionSize}
-                    style={touchActionStyle}
-                    icon={<StopOutlined />}
-                    loading={stopRequestInFlight || isStopping}
-                    onClick={onStop}
-                    disabled={connectionDisabled || !isRunning || stopRequestInFlight || isStopping}
-                  >
-                    {/* Desktop keeps text labels; phones are icon-only touch targets. */}
-                    {isMobile ? null : 'Stop'}
-                  </Button>
-                </Tooltip>
-              )}
-              <Tooltip title={sendTooltip}>
-                <Badge
-                  count={queuedTasks.length > 0 ? queuedTasks.length : 0}
-                  size="small"
-                  offset={[-2, 2]}
-                  styles={{ root: { display: 'inline-flex' } }}
-                  style={{
-                    boxShadow: 'none',
-                    backgroundColor: token.colorTextTertiary,
-                    fontSize: 10,
-                  }}
-                >
-                  <Button
-                    type="primary"
-                    aria-label={sendLabel}
-                    size={actionSize}
-                    style={touchActionStyle}
-                    icon={<SendOutlined />}
-                    onClick={onSendPrompt}
-                    disabled={sendDisabled}
-                  >
-                    {isMobile ? null : sendLabel}
-                  </Button>
-                </Badge>
-              </Tooltip>
-            </Flex>
+                style={{
+                  width: controlSize,
+                  height: controlSize,
+                  minWidth: controlSize,
+                  flexShrink: 0,
+                  boxShadow: 'none',
+                  // Phones: a 36px fill inside the 44px target keeps the circle clear of the card edge.
+                  ...(isMobile && {
+                    border: 'none',
+                    padding: (MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2,
+                    backgroundClip: 'content-box',
+                  }),
+                  transition: reducedMotion ? 'none' : undefined,
+                  cursor: circleDisabled ? 'not-allowed' : undefined,
+                }}
+                data-testid="composer-circle"
+              />
+            </Tooltip>
           </Flex>
         </div>
-      </div>
+      </SessionComposerDropZone>
 
-      {/* Mobile: the "More" popover becomes a bottom sheet so the full control
-          set (model / effort / permissions / attach / fork / spawn / btw /
-          info-bar toggles / session settings) stays reachable on a phone. */}
-      {isMobile && (
-        <Drawer
-          open={moreOpen}
-          onClose={() => setMoreOpen(false)}
-          placement="bottom"
-          height="85%"
-          title="Session controls"
-          {...reducedMotionSurface(reducedMotion)}
-          styles={{
-            content: glassSurfaceStyle(token, 0.85),
-            body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)', overflowY: 'auto' },
-          }}
-        >
-          {moreContent}
-        </Drawer>
-      )}
+      {infoLine}
     </div>
   );
 };

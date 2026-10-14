@@ -16,6 +16,7 @@ import type {
 } from '@agor-live/client';
 import {
   getDefaultPermissionMode,
+  getTeammateConfig,
   hasFullSessionDetails,
   hasMinimumRole,
   isAgenticToolName,
@@ -76,7 +77,7 @@ import {
   unconfirmedMessage,
   withRawDetail,
 } from '../../utils/connectionErrors';
-import { getContextWindowGradient, selectLatestContextWindow } from '../../utils/contextWindow';
+import { selectLatestContextWindow } from '../../utils/contextWindow';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -109,9 +110,9 @@ import { appendComposerText } from './composerText';
 import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionAttachmentTray } from './SessionAttachmentTray';
-import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
+import { SessionQueue } from './SessionQueue';
 import { buildSpawnPromptContext } from './spawn-prompt-context';
 import {
   isStopTransportAmbiguous,
@@ -335,21 +336,18 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         skills={skills}
         enableKnowledgeMentions
         kbLinkTarget="absolute-route"
-        highlightWhenEmpty
-        // Body-size text like desktop; iOS focus zoom is off via the viewport
-        // (preventIosInputZoom). The shared textarea also applies these metrics
-        // to its mention highlight overlay. Block padding makes one line a full
-        // touch-target tall.
-        textareaStyle={
-          isMobile
-            ? {
-                fontSize: token.fontSize,
-                paddingBlock:
-                  (MOBILE_TOUCH_TARGET - 2 * token.lineWidth - token.fontSize * token.lineHeight) /
-                  2,
-              }
-            : undefined
-        }
+        variant="borderless"
+        // Body-size text; iOS focus zoom is off via the viewport
+        // (preventIosInputZoom). The card owns the inset, so the text keeps
+        // only block padding: one line is a full touch target on phones.
+        textareaStyle={{
+          fontSize: token.fontSize,
+          paddingInline: 0,
+          ...(isMobile && {
+            paddingBlock:
+              (MOBILE_TOUCH_TARGET - 2 * token.lineWidth - token.fontSize * token.lineHeight) / 2,
+          }),
+        }}
       />
     );
   }
@@ -705,20 +703,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return acc;
   }, [branch?.issue_url, branch?.pull_request_url]);
 
-  const footerGradient = React.useMemo(() => {
-    if (!latestContextWindow) return undefined;
-    return getContextWindowGradient(
-      latestContextWindow.used,
-      latestContextWindow.limit,
-      latestContextWindow.taskMetadata.normalized_sdk_response?.contextUsageSnapshot,
-      {
-        normal: token.colorSuccessBg,
-        warning: token.colorWarningBg,
-        critical: token.colorErrorBg,
-      }
-    );
-  }, [latestContextWindow, token.colorSuccessBg, token.colorWarningBg, token.colorErrorBg]);
-
   const footerTimerTask = React.useMemo(() => {
     if (tasks.length === 0) return null;
 
@@ -864,14 +848,25 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         ? session
         : null;
   const sessionCustomContext = fullSession?.custom_context as Record<string, unknown> | undefined;
+  const queueSlot = React.useMemo(
+    () =>
+      session ? (
+        <SessionQueue
+          client={client}
+          session={session}
+          queuedTasks={queuedTasks}
+          isRunning={isRunning}
+          onStop={stableFooterHandlers.onStop}
+          onEdit={(text) => promptRef.current?.insertText(text)}
+        />
+      ) : null,
+    [client, session, queuedTasks, isRunning, stableFooterHandlers]
+  );
+  const teammateName = branch ? getTeammateConfig(branch)?.displayName?.trim() : undefined;
   const promptInputSlot = React.useMemo(() => {
     if (!session) return null;
     return (
-      <SessionComposerDropZone
-        disabled={composerAttachmentUploading}
-        onDragActiveChange={setComposerDropActive}
-        onFilesDrop={addComposerAttachments}
-      >
+      <>
         {composerAttachmentValidationError && (
           <Alert
             type="error"
@@ -898,15 +893,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           inputValueRef={inputValueRef}
           onSubmit={stableFooterHandlers.onSendPrompt}
           hasExternalInput={hasComposerAttachments}
-          placeholder={
-            isMobileShell
-              ? isRunning
-                ? 'Queue here…'
+          placeholder={`${
+            isRunning
+              ? 'Queue a follow-up'
+              : teammateName
+                ? `Message ${teammateName}…`
                 : 'Prompt here…'
-              : isRunning
-                ? 'Queue here… @ for mentions, : for emoji'
-                : 'Prompt here… @ for mentions, : for emoji'
-          }
+          }${isMobileShell ? '' : ' @ to mention, / for commands'}`}
           autoSize={{ minRows: 1, maxRows: isMobileShell ? 5 : 10 }}
           client={client}
           userById={userById}
@@ -934,7 +927,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             event.target.value = '';
           }}
         />
-      </SessionComposerDropZone>
+      </>
     );
   }, [
     session,
@@ -947,6 +940,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     hasComposerAttachments,
     isMobileShell,
     isRunning,
+    teammateName,
     client,
     userById,
     addComposerAttachments,
@@ -1515,7 +1509,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       currentUserId={currentUserId}
       footerTimerTask={footerTimerTask}
       latestContextWindow={latestContextWindow}
-      footerGradient={footerGradient}
       sessionMcpServerIds={sessionMcpServerIds}
       unauthedMcpServers={unauthedMcpServers}
       mcpServerById={mcpServerById}
@@ -1553,6 +1546,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onPermissionModeChange={stableFooterHandlers.onPermissionModeChange}
       onCodexPermissionChange={stableFooterHandlers.onCodexPermissionChange}
       promptInputSlot={promptInputSlot}
+      queueSlot={queueSlot}
+      onFilesDrop={addComposerAttachments}
+      onDropActiveChange={setComposerDropActive}
     />
   ) : null;
 
