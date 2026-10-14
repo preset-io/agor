@@ -30,6 +30,8 @@ interface ComposerMenuProps {
   sheet: boolean;
   content: React.ReactNode;
   children: React.ReactElement;
+  /** The popover sits above this element (the composer card) instead of over it. */
+  above?: React.RefObject<HTMLElement | null>;
 }
 
 /** One composer menu: a popover on desktop, a bottom sheet on phones. Never nested. */
@@ -40,11 +42,22 @@ export function ComposerMenu({
   sheet,
   content,
   children,
+  above,
 }: ComposerMenuProps) {
   const { token } = theme.useToken();
   const reducedMotion = usePrefersReducedMotion();
   const anchorRef = React.useRef<HTMLSpanElement>(null);
   const panelRef = React.useRef<HTMLDivElement>(null);
+  // Distance from the trigger's top up to the card's top, so the popover clears the card.
+  const [lift, setLift] = React.useState(0);
+  const measureLift = React.useCallback(() => {
+    const trigger = anchorRef.current?.getBoundingClientRect();
+    const card = above?.current?.getBoundingClientRect();
+    setLift(trigger && card ? Math.max(0, trigger.top - card.top) : 0);
+  }, [above]);
+  React.useLayoutEffect(() => {
+    if (open && !sheet) measureLift();
+  }, [open, sheet, measureLift]);
 
   const close = () => {
     onOpenChange(false);
@@ -100,6 +113,7 @@ export function ComposerMenu({
       onOpenChange={onOpenChange}
       trigger="click"
       placement="topLeft"
+      align={{ offset: [0, -(token.sizeXS + lift)] }}
       arrow={false}
       destroyOnHidden
       styles={{

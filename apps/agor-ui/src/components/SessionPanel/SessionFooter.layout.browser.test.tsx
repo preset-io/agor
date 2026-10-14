@@ -201,6 +201,27 @@ it.each([360, 390, 430])(
   }
 );
 
+it('opens desktop menus above the card, anchored to their trigger', async () => {
+  await page.viewport(1280, 800);
+  render(panel(SessionStatus.IDLE, false));
+  for (const [trigger, name] of [
+    [() => screen.getByRole('button', { name: 'Add files and actions' }), 'Add files and actions'],
+    [() => screen.getByTestId('model-chip'), 'Model'],
+  ] as const) {
+    const button = trigger();
+    await userEvent.click(button);
+    const menu = await screen.findByRole('dialog', { name });
+    await waitFor(() => {
+      const popup = menu.closest('.ant-popover')!.getBoundingClientRect();
+      expect(popup.bottom).toBeLessThanOrEqual(card().getBoundingClientRect().top);
+      // Still anchored to its trigger: left edges line up.
+      expect(Math.abs(popup.left - button.getBoundingClientRect().left)).toBeLessThanOrEqual(1);
+    });
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name })).toBeNull());
+  }
+});
+
 it('retains the bottom inset when resizing from mobile to desktop', async () => {
   await page.viewport(390, 700);
   render(panel(SessionStatus.RUNNING, false));
