@@ -1,4 +1,4 @@
-import type { Branch, Repo } from '@agor-live/client';
+import type { Branch, Repo, Session } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
@@ -118,4 +118,16 @@ describe('BranchCard compact toggle', () => {
     expect(onAutoZoneInteraction).toHaveBeenCalledWith('branch-1');
     expect(onToggleCompact).toHaveBeenCalledWith('branch-1', false);
   });
+});
+
+it('uses the normal card width when collapsed despite an existing session peek', () => {
+  localStorage.setItem(
+    'agor:branch-card:peeked-session-ids:branch-1',
+    JSON.stringify(['session-1'])
+  );
+  const { container } = renderCard({
+    compact: true,
+    sessions: [{ session_id: 'session-1', status: 'idle', archived: false } as unknown as Session],
+  });
+  expect(container.querySelector('.ant-card')).toHaveStyle({ width: '500px' });
 });

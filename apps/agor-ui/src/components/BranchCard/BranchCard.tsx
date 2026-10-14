@@ -430,7 +430,7 @@ const BranchCardComponent = ({
       onPointerDownCapture={() => onAutoZoneInteraction?.(branch.branch_id)}
       onFocusCapture={() => onAutoZoneInteraction?.(branch.branch_id)}
       style={{
-        width: panelMode ? '100%' : peekedSessions.length > 0 ? 880 : 500,
+        width: panelMode ? '100%' : !compact && peekedSessions.length > 0 ? 880 : 500,
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition:
           'background-color 0.2s ease-in-out, box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
@@ -550,7 +550,7 @@ const BranchCardComponent = ({
           */}
           {compact && !inPopover && !panelMode && (
             <CompactSessionPicker
-              sessions={sessions}
+              sessions={peekableSessions}
               branchId={branch.branch_id}
               selectedSessionId={selectedSessionId}
               onSessionClick={onSessionClick}

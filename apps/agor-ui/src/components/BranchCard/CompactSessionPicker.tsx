@@ -43,11 +43,13 @@ export const CompactSessionPicker = ({
 
   const ordered = useMemo(
     () =>
-      [...sessions].sort((a, b) => {
-        const left = Date.parse(b.last_updated ?? '') || 0;
-        const right = Date.parse(a.last_updated ?? '') || 0;
-        return left - right;
-      }),
+      sessions
+        .filter((session) => !session.archived)
+        .sort((a, b) => {
+          const left = Date.parse(b.last_updated ?? '') || 0;
+          const right = Date.parse(a.last_updated ?? '') || 0;
+          return left - right;
+        }),
     [sessions]
   );
 

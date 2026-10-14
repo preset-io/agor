@@ -116,3 +116,16 @@ describe('CompactSessionPicker', () => {
     });
   });
 });
+
+it('omits archived sessions from the collapsed picker and count', () => {
+  renderCard({
+    compact: true,
+    sessions: [
+      session('live', 'Live session', '2026-08-01'),
+      { ...session('old', 'Archived session', '2026-08-02'), archived: true },
+    ],
+  });
+  expect(screen.getByLabelText('Sessions (1)')).toBeTruthy();
+  fireEvent.click(screen.getByLabelText('Sessions (1)'));
+  expect(screen.queryByText('Archived session')).toBeNull();
+});
