@@ -54,7 +54,10 @@ import {
 import { getSessionUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { catalogServerTransport } from '../../services/mcp-catalog-install-policy.js';
+import {
+  catalogServerTransport,
+  isCurrentCatalogInstallOfEntry,
+} from '../../services/mcp-catalog-install-policy.js';
 import {
   mcpOAuthGrantIsConnected,
   resolveMCPOAuthGrantLiveness,
@@ -353,7 +356,13 @@ type OAuthWidgetTarget =
       disclosureRefusal?: string;
     }
   /** The endpoint turned out to need no sign-in; there is nothing to authorize. */
-  | { short_circuit: true; server: MCPServer; label: string }
+  | {
+      short_circuit: true;
+      server: MCPServer;
+      label: string;
+      /** An existing keyed install, rather than an endpoint with no auth. */
+      alreadyConnected?: true;
+    }
   /**
    * The entry needs a credential the user must enter (an API key). Nothing is
    * installed: the card opens the catalog drawer, whose Connect is the install.
@@ -446,17 +455,66 @@ function disclosureTooLongMessage(entry: MCPCatalogEntry): string {
 }
 
 /**
- * A catalog-connect target, refused now if the drawer's install would be.
+ * The caller's own (or shared) enabled install of `entry` that still matches
+ * it — the same `isCurrentCatalogInstallOfEntry` the resolve lane accepts —
+ * preferring one the caller owns.
+ */
+async function findUsableCatalogInstall(
+  ctx: McpContext,
+  entry: MCPCatalogEntry
+): Promise<MCPServer | undefined> {
+  if (!entry.remote_url) return undefined;
+  const result = (await ctx.app.service('mcp-servers').find({
+    ...ctx.baseServiceParams,
+    query: {
+      enabled: true,
+      source: 'catalog',
+      catalogEntryName: entry.name,
+      usableByUserId: ctx.userId,
+      $limit: 50,
+    },
+  })) as MCPServer[] | { data: MCPServer[] };
+  const rows = (Array.isArray(result) ? result : result.data).filter(
+    (server) =>
+      isMcpServerUsableByCaller(server, ctx.baseServiceParams) &&
+      isCurrentCatalogInstallOfEntry(server, entry as MCPCatalogEntry & { remote_url: string })
+  );
+  return rows.find((server) => server.owner_user_id === ctx.userId) ?? rows[0];
+}
+
+/**
+ * Where a request for an entry the drawer connects ends up.
  *
- * The OAuth lane learns member policy from its mint-time install; this lane
- * installs nothing, so it asks the same write decision the install will meet
- * (side-effect free) and refuses with the same words, rather than minting a
- * card whose Connect the drawer then disables.
+ * An existing usable install wins, exactly as on the OAuth lane, where Connect
+ * would reuse it: an open or keyed install is attached and resumed, and an
+ * OAuth one goes through the ordinary pinned card (or attaches, if signed in).
+ * Only with nothing installed is a drawer card minted — refused first if the
+ * drawer's install would be. The OAuth lane learns member policy from its
+ * mint-time install; this one asks the same side-effect-free write decision
+ * and refuses with the same words, rather than minting a card whose Connect
+ * the drawer then disables.
  */
 async function catalogConnectTarget(
   ctx: McpContext,
   entry: MCPCatalogEntry
 ): Promise<OAuthWidgetTarget> {
+  const existing = await findUsableCatalogInstall(ctx, entry);
+  if (existing) {
+    return existing.auth?.type === 'oauth'
+      ? {
+          server: existing,
+          catalogEntryName: entry.name,
+          ...(entry.permission_disclosure
+            ? { permissionDisclosure: entry.permission_disclosure }
+            : {}),
+        }
+      : {
+          short_circuit: true,
+          server: existing,
+          label: catalogDisplayName(entry),
+          ...(existing.auth?.type === 'bearer' ? { alreadyConnected: true as const } : {}),
+        };
+  }
   const installParams: AuthenticatedParams & McpCatalogInstallParams = {
     ...ctx.baseServiceParams,
     mcpCatalogInstall: { entry_name: entry.name },
@@ -816,7 +874,10 @@ async function attachAndResume(
       attached,
     } satisfies OAuthWidgetResultMeta,
   });
-  await supersedePendingOAuthWidgets(ctx, sessionId, { mcpServerId: server.mcp_server_id });
+  await supersedePendingOAuthWidgets(ctx, sessionId, {
+    mcpServerId: server.mcp_server_id,
+    catalogEntryName: server.catalog_entry_name,
+  });
   await queueWidgetAutoResume(
     ctx,
     sessionId,
@@ -863,12 +924,13 @@ const OAUTH_SUPERSEDE_SCAN_LIMIT = 200;
 async function supersedePendingOAuthWidgets(
   ctx: McpContext,
   sessionId: SessionID,
-  target: { mcpServerId: string } | { catalogEntryName: string }
+  target: { mcpServerId?: string; catalogEntryName?: string }
 ): Promise<void> {
+  // Either pin identifies the same connection: a pinned OAuth card for a
+  // catalog install and a drawer card for that entry both drive one connect.
   const matches = (params: OAuthWidgetParams | undefined) =>
-    'mcpServerId' in target
-      ? params?.mcpServerId === target.mcpServerId
-      : !params?.mcpServerId && params?.catalogEntryName === target.catalogEntryName;
+    (target.mcpServerId !== undefined && params?.mcpServerId === target.mcpServerId) ||
+    (target.catalogEntryName !== undefined && params?.catalogEntryName === target.catalogEntryName);
   try {
     const store = (ctx.app as unknown as { get?: (key: string) => unknown }).get?.(
       WIDGET_RESOLUTION_STORE_KEY
@@ -1061,11 +1123,14 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
         return mintCatalogConnectWidget(ctx, session, resolved.entry, args.reason);
       }
       if ('short_circuit' in resolved) {
-        // The entry needs no sign-in at all. Attach and resume rather than
-        // rendering a Connect button that would open a flow nobody asked for.
+        // Nothing to sign in to — an open endpoint, or a key already on file.
+        // Attach and resume rather than rendering a Connect button that would
+        // open a flow nobody asked for.
         return attachAndResume(ctx, session, resolved.server, {
           label: resolved.label,
-          connected: 'needs no sign-in',
+          connected: resolved.alreadyConnected
+            ? 'was already connected for you'
+            : 'needs no sign-in',
         });
       }
       const { server, catalogEntryName, permissionDisclosure, disclosureRefusal } = resolved;
@@ -1115,6 +1180,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // same flow and would each queue their own auto-resume.
       await supersedePendingOAuthWidgets(ctx, targetSessionId, {
         mcpServerId: server.mcp_server_id,
+        catalogEntryName,
       });
 
       const widgetId = await mintWidgetMessage(ctx, {
