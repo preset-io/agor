@@ -32,6 +32,7 @@ import type {
   GatewayConnectionTestResult,
 } from '../../types/gateway';
 import {
+  discordChannelInScope,
   discordOutboundChannelTarget,
   discordResponseModeAdmits,
   discordResponseModeMayAdmit,
@@ -85,6 +86,20 @@ const DISCORD_PUBLIC_THREAD_TYPES = new Set<number>([
   DiscordChannelType.PublicThread,
 ]);
 const DISCORD_TEXT_MESSAGE_TYPES = new Set([0, 19]);
+/** Dispatches after which the cached guild record (roles, @everyone permissions) may be stale. */
+const DISCORD_GUILD_CHANGE_EVENTS = new Set<string>([
+  GatewayDispatchEvents.GuildUpdate,
+  GatewayDispatchEvents.GuildRoleCreate,
+  GatewayDispatchEvents.GuildRoleUpdate,
+  GatewayDispatchEvents.GuildRoleDelete,
+]);
+/** Dispatches after which a cached channel record may be stale (e.g. made private). */
+const DISCORD_CHANNEL_CHANGE_EVENTS = new Set<string>([
+  GatewayDispatchEvents.ChannelUpdate,
+  GatewayDispatchEvents.ChannelDelete,
+  GatewayDispatchEvents.ThreadUpdate,
+  GatewayDispatchEvents.ThreadDelete,
+]);
 const DISCORD_NONCE_RECOVERY_WINDOW_MS = 5 * 60_000;
 const DISCORD_ADMINISTRATOR_PERMISSION = PermissionFlagsBits.Administrator;
 const DISCORD_ALL_PERMISSIONS = (1n << 64n) - 1n;
@@ -731,6 +746,19 @@ function isPublicParentChannel(channel: Record<string, unknown> | null, guildId:
   }
 }
 
+/**
+ * Whether @everyone can view a channel, from its guild-level permissions and
+ * the channel's overwrites; a role-gated channel is private even without a deny.
+ */
+function everyoneCanView(
+  guild: Record<string, unknown> | null,
+  channel: Record<string, unknown> | null,
+  guildId: string
+): boolean {
+  const permissions = effectiveChannelPermissions(guild, { roles: [] }, channel, guildId, '');
+  return (permissions & DISCORD_VIEW_CHANNEL_PERMISSION) !== 0n;
+}
+
 function permissionBits(value: unknown): bigint {
   try {
     return typeof value === 'string' || typeof value === 'number' ? BigInt(value) : 0n;
@@ -817,6 +845,7 @@ export class DiscordConnector implements GatewayConnector {
   private gateway: DiscordGatewayTransport | null = null;
   private botUserId: string | null = null;
   private readonly channelInfoCache = new Map<string, Record<string, unknown>>();
+  private guildInfo: Record<string, unknown> | null = null;
   private lastSequence = -1;
   private dispatchChain: Promise<void> = Promise.resolve();
   private stopped = false;
@@ -1028,17 +1057,42 @@ export class DiscordConnector implements GatewayConnector {
     return channel;
   }
 
-  /** An allowlisted parent channel record, from the listener's cache when present. */
+  /**
+   * An allowed parent channel record, from the listener's cache when present.
+   * Listed channels are checked at startup; an unlisted one admitted by
+   * `allow_all_public_channels` must be a public parent in the guild.
+   */
   private async getAllowedParentChannel(
     parentChannelId: string
   ): Promise<Record<string, unknown> | null> {
-    if (!configuredChannelIds(this.config).includes(parentChannelId)) return null;
-    const cached = this.cachedChannelInfo(parentChannelId);
-    if (cached) return cached;
-    const parent = await this.getProviderRecord(Routes.channel(parentChannelId));
-    if (parent?.id !== parentChannelId) return null;
-    this.cacheChannelInfo(parentChannelId, parent);
-    return parent;
+    if (!discordChannelInScope(this.config, parentChannelId)) return null;
+    let parent = this.cachedChannelInfo(parentChannelId) ?? null;
+    if (!parent) {
+      parent = await this.getProviderRecord(Routes.channel(parentChannelId));
+      if (parent?.id !== parentChannelId) return null;
+      this.cacheChannelInfo(parentChannelId, parent);
+    }
+    if (configuredChannelIds(this.config).includes(parentChannelId)) return parent;
+    const guildId = configuredString(this.config, 'guild_id');
+    if (parent.guild_id !== guildId || !isPublicParentChannel(parent, guildId)) return null;
+    return everyoneCanView(await this.getGuildInfo(), parent, guildId) ? parent : null;
+  }
+
+  /** The configured guild's record, cached until a guild or role change dispatch. */
+  private async getGuildInfo(): Promise<Record<string, unknown> | null> {
+    this.guildInfo ??= await this.getProviderRecord(
+      Routes.guild(configuredString(this.config, 'guild_id'))
+    );
+    return this.guildInfo;
+  }
+
+  /** Whether a parent channel is allowed; only an unlisted one needs a lookup. */
+  private async isAllowedParentChannel(channelId: string): Promise<boolean> {
+    if (!isDiscordSnowflake(channelId) || !discordChannelInScope(this.config, channelId)) {
+      return false;
+    }
+    if (configuredChannelIds(this.config).includes(channelId)) return true;
+    return (await this.getAllowedParentChannel(channelId)) !== null;
   }
 
   private async verifyExistingPublicThread(
@@ -1196,7 +1250,7 @@ export class DiscordConnector implements GatewayConnector {
       ) {
         throw new DiscordDirectMessageError('discord_dm_channel_mismatch');
       }
-    } else if (!configuredChannelIds(this.config).includes(parentChannelId)) {
+    } else if (!(await this.isAllowedParentChannel(parentChannelId))) {
       throw new Error('Discord replies must remain in an allowed channel');
     }
     const explicitReply = metadata?.[DISCORD_METADATA_KEY.replyToMessageId];
@@ -1359,7 +1413,8 @@ export class DiscordConnector implements GatewayConnector {
       parentChannelId = snowflake(thread?.parent_id);
       threadChannelId = parsed.channelId;
     }
-    if (!parentChannelId || !configuredChannelIds(this.config).includes(parentChannelId)) {
+    // Callers pass the result through requireChannelHistoryAccess, which checks an unlisted parent.
+    if (!parentChannelId || !discordChannelInScope(this.config, parentChannelId)) {
       throw new Error(
         'Could not resolve an allowed Discord parent channel for this session; pass discordChannelId.'
       );
@@ -1383,7 +1438,6 @@ export class DiscordConnector implements GatewayConnector {
     kind: 'messages' | 'forum'
   ): Promise<Record<string, unknown>> {
     const guildId = configuredString(this.config, 'guild_id');
-    const allowedChannelIds = configuredChannelIds(this.config);
     const denied = () =>
       new Error(
         `Discord channel ${channelId} is not an allowed channel, or a public thread under one, for this gateway channel.`
@@ -1392,12 +1446,13 @@ export class DiscordConnector implements GatewayConnector {
     const target = await get(Routes.channel(channelId));
     if (!target || target.id !== channelId || target.guild_id !== guildId) throw denied();
     let parent: Record<string, unknown> | null = target;
-    if (!allowedChannelIds.includes(channelId)) {
+    // An in-scope parent that is not listed is held to the public check below.
+    if (!discordChannelInScope(this.config, channelId) || !channelKind(target)) {
       const parentChannelId = snowflake(target.parent_id);
       if (
         !DISCORD_PUBLIC_THREAD_TYPES.has(target.type as number) ||
         !parentChannelId ||
-        !allowedChannelIds.includes(parentChannelId)
+        !discordChannelInScope(this.config, parentChannelId)
       ) {
         throw denied();
       }
@@ -1405,6 +1460,12 @@ export class DiscordConnector implements GatewayConnector {
       if (parent?.id !== parentChannelId || parent.guild_id !== guildId) throw denied();
     }
     if (!isPublicParentChannel(parent, guildId)) throw denied();
+    if (
+      !configuredChannelIds(this.config).includes(String(parent?.id)) &&
+      !everyoneCanView(await get(Routes.guild(guildId)), parent, guildId)
+    ) {
+      throw denied();
+    }
     // Checked after the allowlist so a denial never reveals a channel's kind.
     if (kind === 'messages' && isForumChannel(target)) {
       throw new Error(
@@ -1612,26 +1673,30 @@ export class DiscordConnector implements GatewayConnector {
       };
     }
 
-    const configuredChannelIdsList = configuredChannelIds(this.config);
     let isThread = false;
     let parentId: string | undefined;
-    if (!configuredChannelIdsList.includes(channelId)) {
+    if (!configuredChannelIds(this.config).includes(channelId)) {
       let channel = this.cachedChannelInfo(channelId);
-      if (!channel) {
-        try {
+      try {
+        if (!channel) {
           channel = asRecord(await this.transport.rest.get(Routes.channel(channelId))) ?? undefined;
           if (channel) this.cacheChannelInfo(channelId, channel);
-        } catch {
+        }
+        if (
+          channel &&
+          channel.guild_id === guildId &&
+          DISCORD_PUBLIC_THREAD_TYPES.has(channel.type as number)
+        ) {
+          parentId = snowflake(channel.parent_id);
+          isThread = parentId !== undefined && (await this.isAllowedParentChannel(parentId));
+          if (!isThread) return { accepted: false };
+        } else if (!(await this.isAllowedParentChannel(channelId))) {
           return { accepted: false };
         }
+      } catch {
+        return { accepted: false };
       }
-      parentId = snowflake(channel?.parent_id);
-      isThread =
-        channel?.guild_id === guildId &&
-        DISCORD_PUBLIC_THREAD_TYPES.has(channel?.type as number) &&
-        configuredChannelIdsList.includes(parentId ?? '');
     }
-    if (!configuredChannelIdsList.includes(channelId) && !isThread) return { accepted: false };
     if (
       !mentioned &&
       !discordResponseModeAdmits(this.config, {
@@ -1685,6 +1750,15 @@ export class DiscordConnector implements GatewayConnector {
     payload: GatewayDispatchPayload,
     callback: GatewayInboundCallback
   ): Promise<{ messageId?: string }> {
+    if (DISCORD_GUILD_CHANGE_EVENTS.has(payload.t)) {
+      this.guildInfo = null;
+      return {};
+    }
+    if (DISCORD_CHANNEL_CHANGE_EVENTS.has(payload.t)) {
+      const changedChannelId = snowflake(asRecord(payload.d)?.id);
+      if (changedChannelId) this.channelInfoCache.delete(changedChannelId);
+      return {};
+    }
     if (payload.t !== GatewayDispatchEvents.MessageCreate) return {};
     const message = asRecord(payload.d);
     if (!message) return {};
@@ -1715,6 +1789,7 @@ export class DiscordConnector implements GatewayConnector {
     this.validateForListener();
     this.stopped = false;
     this.dispatchChain = Promise.resolve();
+    this.guildInfo = null;
     const bot = asRecord(await this.transport.rest.get(Routes.user('@me')));
     const botUserId = snowflake(bot?.id);
     if (!botUserId) {
@@ -2037,6 +2112,11 @@ export class DiscordConnector implements GatewayConnector {
           : { verification: { status: 'verified' as const, warnings: [] } }),
         failures,
         notVerifiable: [
+          ...(this.config.allow_all_public_channels === true
+            ? [
+                'All public channels are allowed; this probe samples only the listed channels. Each unlisted channel is checked to be public when a message arrives.',
+              ]
+            : []),
           ...(isDiscordDirectMessagesEnabled(this.config)
             ? [
                 'Direct messages are enabled; end-to-end DM delivery cannot be proven by this probe.',

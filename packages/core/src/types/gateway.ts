@@ -198,7 +198,15 @@ export interface DiscordGatewayConfig {
   bot_token?: string;
   application_id?: string;
   guild_id?: string;
+  /** Explicitly allowed public parent channels; per-channel settings key off this list. */
   allowed_channel_ids?: string[];
+  /**
+   * Opt-in: also admit every public text or forum channel in the guild (and
+   * public threads under one) without listing it. See {@link discordChannelInScope}.
+   */
+  allow_all_public_channels?: boolean;
+  /** Parent channels excluded under `allow_all_public_channels`, with their threads. */
+  denied_channel_ids?: string[];
   allowed_user_ids?: string[];
   allowed_role_ids?: string[];
   message_content_enabled?: boolean;
@@ -249,6 +257,24 @@ export function isDiscordNoReply(text: string): boolean {
       .replace(/^```[a-z]*\s+/i, '')
       .replace(/^[`*_~"'>\s]+|[`*_~"'.\s]+$/g, '')
       .toLowerCase() === DISCORD_NO_REPLY_SENTINEL
+  );
+}
+
+/**
+ * Whether a parent channel ID is in the gateway's configured scope: listed, or
+ * any channel not denied under `allow_all_public_channels`. Unlisted channels
+ * still need the connector's per-channel public-parent check before use.
+ */
+export function discordChannelInScope(
+  config: Pick<
+    DiscordGatewayConfig,
+    'allowed_channel_ids' | 'allow_all_public_channels' | 'denied_channel_ids'
+  >,
+  channelId: string
+): boolean {
+  if (config.denied_channel_ids?.includes(channelId)) return false;
+  return (
+    config.allow_all_public_channels === true || !!config.allowed_channel_ids?.includes(channelId)
   );
 }
 
@@ -614,12 +640,40 @@ export function validateDiscordConfig(
   const allowedChannelIds = Array.isArray(rawAllowedChannelIds)
     ? rawAllowedChannelIds.filter((item): item is string => typeof item === 'string')
     : [];
+  const allowAllPublicChannels = raw.allow_all_public_channels === true;
   if (
+    raw.allow_all_public_channels !== undefined &&
+    typeof raw.allow_all_public_channels !== 'boolean'
+  ) {
+    errors.push('allow_all_public_channels must be a boolean');
+  }
+  if (allowAllPublicChannels) {
+    if (
+      rawAllowedChannelIds !== undefined &&
+      (!Array.isArray(rawAllowedChannelIds) ||
+        rawAllowedChannelIds.some((item) => !isDiscordSnowflake(item)))
+    ) {
+      errors.push('allowed_channel_ids must contain only Discord snowflakes');
+    }
+  } else if (
     !Array.isArray(rawAllowedChannelIds) ||
     allowedChannelIds.length === 0 ||
     rawAllowedChannelIds.some((item) => !isDiscordSnowflake(item))
   ) {
     errors.push('allowed_channel_ids must contain one or more Discord snowflakes');
+  }
+  const rawDeniedChannelIds = raw.denied_channel_ids;
+  if (rawDeniedChannelIds !== undefined) {
+    if (
+      !Array.isArray(rawDeniedChannelIds) ||
+      rawDeniedChannelIds.some((item) => !isDiscordSnowflake(item))
+    ) {
+      errors.push('denied_channel_ids must contain only Discord snowflakes');
+    } else if (rawDeniedChannelIds.length > 0 && !allowAllPublicChannels) {
+      errors.push('denied_channel_ids requires allow_all_public_channels');
+    } else if (rawDeniedChannelIds.some((id) => allowedChannelIds.includes(id))) {
+      errors.push('denied_channel_ids must not include an allowed channel');
+    }
   }
 
   if (options.requireBotToken !== false) {

@@ -436,6 +436,54 @@ describe('GatewayChannelsTable Discord edit', () => {
     expect(checked).toBe(false);
     expect(updates.config.agent_tools).toEqual({ channel_history: false });
   }, 30_000);
+  it('keeps all public channels and their exclusions through an edit', async () => {
+    const allPublic = {
+      ...storedChannel,
+      config: {
+        ...storedChannel.config,
+        allowed_channel_ids: [],
+        allow_all_public_channels: true,
+        denied_channel_ids: ['723456789012345678'],
+      },
+    } as unknown as GatewayChannel;
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    renderTable(makeClient().client, { channels: [allPublic], onUpdate });
+    fireEvent.click(screen.getByTitle('Edit'));
+    const toggle = await screen.findByLabelText('All public channels');
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByLabelText('Excluded channel IDs')).toBeInTheDocument();
+    clickButton(/^Save$/);
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1), ASYNC);
+    expect(onUpdate.mock.calls[0]![1].config).toMatchObject({
+      allowed_channel_ids: [],
+      allow_all_public_channels: true,
+      denied_channel_ids: ['723456789012345678'],
+    });
+  }, 30_000);
+
+  it('requires a listed channel again once all public channels is turned off', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const allPublic = {
+      ...storedChannel,
+      config: { ...storedChannel.config, allowed_channel_ids: [], allow_all_public_channels: true },
+    } as unknown as GatewayChannel;
+    renderTable(makeClient().client, { channels: [allPublic], onUpdate });
+    fireEvent.click(screen.getByTitle('Edit'));
+    fireEvent.click(await screen.findByLabelText('All public channels'));
+    await waitFor(() => expect(screen.queryByLabelText('Excluded channel IDs')).toBeNull());
+    clickButton(/^Save$/);
+    expect(
+      (
+        await screen.findAllByText(
+          'Add at least one Discord channel ID, or allow all public channels.',
+          undefined,
+          ASYNC
+        )
+      )[0]
+    ).toBeVisible();
+    expect(onUpdate).not.toHaveBeenCalled();
+  }, 30_000);
+
   it('keeps the edit open and names a non-numeric Discord ID', async () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     const invalid = {

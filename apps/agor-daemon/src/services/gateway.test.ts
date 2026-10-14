@@ -250,9 +250,9 @@ function makeGatewayHarness(args: {
   // depends on how a minimal database double happens to be detected.
   (service as unknown as { durableListenerOwnership: boolean }).durableListenerOwnership = false;
   const create = service.create.bind(service);
-  service.create = (data) => {
-    if (getCurrentTenantDatabaseScope()) return create(data);
-    return runWithTenantDatabaseScope(db, 'tenant-channel', () => create(data));
+  service.create = (data, params) => {
+    if (getCurrentTenantDatabaseScope()) return create(data, params);
+    return runWithTenantDatabaseScope(db, 'tenant-channel', () => create(data, params));
   };
   const routeMessage = service.routeMessage.bind(service);
   service.routeMessage = (data) => {
@@ -3264,6 +3264,54 @@ describe('GatewayService Discord beta routing', () => {
       expect(sessionsCreate).not.toHaveBeenCalled();
     }
   );
+
+  it('admits an unlisted channel only from the listener in all-public-channels mode, never a denied one', async () => {
+    const allChannel = (config: Record<string, unknown>) =>
+      ({
+        ...discordChannel,
+        config: { ...discordChannel.config, allowed_channel_ids: [], ...config },
+      }) as GatewayChannel;
+    const unlisted = () => {
+      const inbound = validDiscordInbound();
+      inbound.thread_id = 'discord:message:923456789012345678:523456789012345678';
+      inbound.metadata = { ...inbound.metadata, discord_channel_id: '923456789012345678' };
+      return inbound;
+    };
+    const deniedThread = () => {
+      const inbound = validDiscordInbound();
+      inbound.thread_id = 'discord:thread:923456789012345678:723456789012345678';
+      inbound.metadata = {
+        ...inbound.metadata,
+        discord_channel_id: '723456789012345678',
+        discord_parent_channel_id: '923456789012345678',
+        discord_is_thread: true,
+      };
+      return inbound;
+    };
+    const admitted = makeGatewayHarness({
+      channel: allChannel({ allow_all_public_channels: true }),
+    });
+    await expect(admitted.service.create(unlisted())).resolves.toMatchObject({ success: true });
+    const transported = makeGatewayHarness({
+      channel: allChannel({ allow_all_public_channels: true }),
+    });
+    await expect(
+      transported.service.create(unlisted(), { provider: 'rest' } as never)
+    ).resolves.toMatchObject({ success: false });
+    expect(transported.sessionsCreate).not.toHaveBeenCalled();
+    for (const [config, inbound] of [
+      [{}, unlisted()],
+      [{ allow_all_public_channels: true, denied_channel_ids: ['923456789012345678'] }, unlisted()],
+      [
+        { allow_all_public_channels: true, denied_channel_ids: ['923456789012345678'] },
+        deniedThread(),
+      ],
+    ] as const) {
+      const h = makeGatewayHarness({ channel: allChannel(config) });
+      await expect(h.service.create(inbound)).resolves.toMatchObject({ success: false });
+      expect(h.sessionsCreate).not.toHaveBeenCalled();
+    }
+  });
 
   it('stages Discord images through the existing owner-bound upload prompt path', async () => {
     const imageChannel = {

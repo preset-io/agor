@@ -2984,6 +2984,8 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       application_id: '111111111111111111',
       guild_id: '222222222222222222',
       allowed_channel_ids: ['333333333333333333'],
+      allow_all_public_channels: false,
+      denied_channel_ids: [],
       allowed_user_ids: ['444444444444444444'],
       allowed_role_ids: [],
       message_content_enabled: true,
@@ -3027,6 +3029,37 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       ).content[0].text
     );
     expect(imagePayload.config_hint.files).toBe(true);
+  });
+
+  it('accepts an empty Discord channel list only with the explicit all-public-channels opt-in', async () => {
+    const tools = await captureTools('admin');
+    const schema = tools.agor_gateway_discord_setup.cfg.inputSchema;
+    const base = {
+      applicationId: '111111111111111111',
+      guildId: '222222222222222222',
+      messageContentAcknowledged: true,
+      allowedUserIds: ['444444444444444444'],
+      agorUserId: '00000000-0000-4000-8000-000000000001',
+    };
+    expect(schema.safeParse(base).success).toBe(false);
+    expect(schema.safeParse({ ...base, deniedChannelIds: ['555555555555555555'] }).success).toBe(
+      false
+    );
+    const parsed = schema.safeParse({
+      ...base,
+      allowAllPublicChannels: true,
+      deniedChannelIds: ['555555555555555555'],
+    });
+    expect(parsed.success).toBe(true);
+    const payload = JSON.parse(
+      (await tools.agor_gateway_discord_setup.handler(parsed.data)).content[0].text
+    );
+    expect(payload.config_hint).toMatchObject({
+      allowed_channel_ids: [],
+      allow_all_public_channels: true,
+      denied_channel_ids: ['555555555555555555'],
+    });
+    expect(payload.validation).toEqual({ ok: true, errors: [] });
   });
 
   it('keeps Discord setup and channel creation admin-only', async () => {

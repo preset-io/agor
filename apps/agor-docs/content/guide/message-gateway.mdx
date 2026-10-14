@@ -273,8 +273,8 @@ Turning this on adds a scope and two events. Update the app manifest and reinsta
 Discord is intentionally narrow and explicit:
 
 - Each enabled row names one bot application, one guild, and one or more
-  allowlisted public parent channels: text channels, or forum channels, where
-  the bot answers mentions inside posts. A privileged **Message Content** intent
+  allowlisted public parent channels (or opts in to all public channels, below):
+  text channels, or forum channels, where the bot answers mentions inside posts. A privileged **Message Content** intent
   must be enabled in Discord and acknowledged in the Agor configuration. A
   structured mention outside inline or fenced code is the wake-up trigger;
   mention text is not a substitute for the intent.
@@ -289,6 +289,19 @@ Discord is intentionally narrow and explicit:
   channel, bot/self messages, webhooks, embeds, components, stickers, polls,
   and server messages without a structured mention are ignored. DMs are off by default. Attachment handling
   is controlled separately by the explicit `files` capability below.
+- To answer in every public channel without listing each one, opt in with
+  `allow_all_public_channels: true` (**All public channels** in Settings). The
+  bot then also admits mentions in any public text or forum channel of the
+  guild, and public threads or forum posts under one, including channels added
+  later. Unlike Slack, an empty channel list never means "all": a Discord bot
+  usually sees every channel its role can access, so this mode is explicit.
+  A channel is public only if @everyone can view it; in a server that gates
+  channels behind a role, list those channels instead.
+  `denied_channel_ids` (**Excluded channel IDs**) skips channels such as staff
+  or moderation rooms, with their threads. Author allowlists, mention-only
+  defaults, and the guild check still apply. Proactive sends and per-forum
+  `response_modes` still use listed channels, so list a forum to give it a
+  response mode.
 - `files:false` is the default text-only behavior. With the explicit
   `files:true` capability, a live message may include image (PNG, JPEG, GIF,
   WebP) and text (.txt, .log, .md, .csv, .json) attachments; each is downloaded
@@ -783,7 +796,7 @@ authoritative mutation transaction.
 ### Discord
 
 - **Bot does not respond.** Confirm the row is enabled, has a valid bot token, and passes the shared configuration checks. The bot must be in the configured guild and public text or forum channel with permission to view, read history, and send messages (in threads, for a forum).
-- **Mentions are ignored.** Confirm the privileged Message Content intent is enabled and acknowledged. The structured bot mention is required on every prompt. The author must also match an allowed user ID or hold an allowed role ID, and the message must be in the configured public parent channel.
+- **Mentions are ignored.** Confirm the privileged Message Content intent is enabled and acknowledged. The structured bot mention is required on every prompt. The author must also match an allowed user ID or hold an allowed role ID, and the message must be in a listed public parent channel, or in any public channel that is not excluded when **All public channels** is on. A channel hidden from @everyone counts as private.
 - **Content is narrow and explicit.** DMs, private threads, embeds, components, stickers, polls, webhooks, and bot/self messages are outside the contract. `files:false` keeps the channel text-only; opt-in `files:true` passes image and text attachments to the agent, staged through the existing owner-bound upload/materialization path. Other attachments do not block the message; the agent names the files it could not read.
 - **Catch-up did not run.** REST catch-up is bounded and only runs after a live structured mention. A human reply without a mention does not create a Task; a failed history read or Task admission leaves the admitted cursor unchanged.
 - **Reconnects.** Discord Gateway sequence/session state is process-local. Agor does not expose durable Discord resume/checkpoint configuration; the next live mention uses bounded REST catch-up after the last admitted cursor.

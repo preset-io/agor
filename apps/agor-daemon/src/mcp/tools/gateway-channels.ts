@@ -257,6 +257,8 @@ const DISCORD_PUBLIC_CONFIG_KEYS = new Set([
   'application_id',
   'guild_id',
   'allowed_channel_ids',
+  'allow_all_public_channels',
+  'denied_channel_ids',
   'allowed_user_ids',
   'allowed_role_ids',
   'message_content_enabled',
@@ -1183,9 +1185,21 @@ const discordSetupSchema = z
       .describe('Explicitly acknowledge that the privileged Message Content intent is enabled.'),
     allowedChannelIds: z
       .array(z.string().refine(isDiscordSnowflake, 'Must be a Discord channel snowflake.'))
-      .min(1)
+      .default([])
       .describe(
-        'One or more public text or forum channel snowflakes allowed for inbound traffic. In a forum, the bot answers mentions inside posts.'
+        'Public text or forum channel snowflakes allowed for inbound traffic; at least one unless allowAllPublicChannels is true. In a forum, the bot answers mentions inside posts. List a forum here to give it a responseModes entry.'
+      ),
+    allowAllPublicChannels: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Explicit opt-in: also answer in every public text or forum channel of the guild (and public threads under one) without listing it. User/role allowlists and mention-only still apply. Proactive outbound still targets listed channels only.'
+      ),
+    deniedChannelIds: z
+      .array(z.string().refine(isDiscordSnowflake, 'Must be a Discord channel snowflake.'))
+      .default([])
+      .describe(
+        'With allowAllPublicChannels, parent channels to exclude (with their threads), e.g. staff or moderation channels.'
       ),
     allowedUserIds: z
       .array(z.string().refine(isDiscordSnowflake, 'Must be a Discord user snowflake.'))
@@ -1289,6 +1303,20 @@ const discordSetupSchema = z
       .default(1440),
   })
   .superRefine((value, issue) => {
+    if (value.allowedChannelIds.length === 0 && !value.allowAllPublicChannels) {
+      issue.addIssue({
+        code: 'custom',
+        path: ['allowedChannelIds'],
+        message: 'Provide at least one allowed Discord channel ID, or set allowAllPublicChannels.',
+      });
+    }
+    if (value.deniedChannelIds.length > 0 && !value.allowAllPublicChannels) {
+      issue.addIssue({
+        code: 'custom',
+        path: ['deniedChannelIds'],
+        message: 'deniedChannelIds requires allowAllPublicChannels.',
+      });
+    }
     if (value.allowedUserIds.length === 0 && value.allowedRoleIds.length === 0) {
       issue.addIssue({
         code: 'custom',
@@ -1990,6 +2018,8 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         guildId: args.guildId,
         messageContentAcknowledged: args.messageContentAcknowledged,
         allowedChannelIds: args.allowedChannelIds,
+        allowAllPublicChannels: args.allowAllPublicChannels,
+        deniedChannelIds: args.deniedChannelIds,
         allowedUserIds: args.allowedUserIds,
         allowedRoleIds: args.allowedRoleIds,
         agorUserId: args.agorUserId,
@@ -2025,7 +2055,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           artifact.messageContent.instruction,
           'First create the secret-free config-complete draft with channelType:"discord" and enabled:false. Then call agor_widgets_request_gateway_token; never request or pass the Discord bot token in chat or an MCP argument.',
           'Wait for the verified/redacted widget result before enabling or reporting the channel as connected.',
-          'Keep the channel and author allowlists explicit. Discord ignores webhooks, bot/self messages, wrong guild/channel, and unmentioned server messages unless a forum channel has a response_modes entry (starters or all); DMs are off by default and require directMessages:true plus live server membership and an allowed user or role; files:true passes bounded image and text attachments to the agent; other files are skipped and the agent is told to name them, while embeds, stickers, and polls are rejected.',
+          'Keep the author allowlists explicit, and the channel allowlist too unless the admin explicitly chose allowAllPublicChannels (every public channel, minus deniedChannelIds). Discord ignores webhooks, bot/self messages, wrong guild/channel, and unmentioned server messages unless a forum channel has a response_modes entry (starters or all); DMs are off by default and require directMessages:true plus live server membership and an allowed user or role; files:true passes bounded image and text attachments to the agent; other files are skipped and the agent is told to name them, while embeds, stickers, and polls are rejected.',
         ],
         validation: artifact.validation,
         caveats: [

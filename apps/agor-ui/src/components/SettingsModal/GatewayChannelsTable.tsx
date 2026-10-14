@@ -448,6 +448,8 @@ function createStepFields(
   if (type === 'discord' && step === 2) {
     return [
       'discord_allowed_channel_ids',
+      'discord_allow_all_public_channels',
+      'discord_denied_channel_ids',
       'discord_respond_starters_channel_ids',
       'discord_respond_all_channel_ids',
       'discord_files',
@@ -498,6 +500,8 @@ const CONNECTION_PROBE_FIELDS = new Set<string>([
   'discord_application_id',
   'discord_guild_id',
   'discord_allowed_channel_ids',
+  'discord_allow_all_public_channels',
+  'discord_denied_channel_ids',
   'discord_allowed_user_ids',
   'discord_allowed_role_ids',
   'discord_respond_starters_channel_ids',
@@ -564,7 +568,10 @@ function discordConfigError(action: string, prefix: string, errors: string[]): A
     if (label)
       return { message: `Couldn't ${action}. Use the numeric Discord ID for ${label}.`, raw };
     if (error === 'allowed_channel_ids must contain one or more Discord snowflakes') {
-      return { message: `Couldn't ${action}. Add at least one Discord channel ID.`, raw };
+      return {
+        message: `Couldn't ${action}. Add at least one Discord channel ID, or allow all public channels.`,
+        raw,
+      };
     }
   }
   return { message: `Couldn't ${action}.`, raw };
@@ -1599,6 +1606,9 @@ const DiscordSetupFields: React.FC<{
   const channelHistoryEnabled =
     (Form.useWatch('discord_channel_history', form) as boolean | undefined) ??
     resolveDiscordAgentTools(config?.agent_tools).channel_history;
+  const allowAllPublicChannels =
+    (Form.useWatch('discord_allow_all_public_channels', form) as boolean | undefined) ??
+    config?.allow_all_public_channels === true;
   const applicationId = Form.useWatch('discord_application_id', form) as string | undefined;
   const allowedUserIds =
     (Form.useWatch('discord_allowed_user_ids', form) as string[] | undefined) ?? [];
@@ -1615,9 +1625,12 @@ const DiscordSetupFields: React.FC<{
     }
     return Promise.resolve();
   };
-  const validateNonEmptySnowflakes = (_: unknown, value: unknown) => {
+  const validateAllowedChannels = (_: unknown, value: unknown) => {
+    if (allowAllPublicChannels) return validateSnowflakes(_, value);
     if (!Array.isArray(value) || value.length === 0) {
-      return Promise.reject(new Error('Add at least one Discord channel or author allowlist ID.'));
+      return Promise.reject(
+        new Error('Add at least one Discord channel ID, or allow all public channels.')
+      );
     }
     return validateSnowflakes(_, value);
   };
@@ -1759,11 +1772,31 @@ const DiscordSetupFields: React.FC<{
           <Form.Item
             label="Allowed public channel IDs"
             name="discord_allowed_channel_ids"
-            rules={[{ validator: validateNonEmptySnowflakes }]}
-            tooltip="One or more public text or forum channels. Inbound and outbound traffic is restricted to this list; proactive messages can target text channels only."
+            dependencies={['discord_allow_all_public_channels']}
+            rules={[{ validator: validateAllowedChannels }]}
+            tooltip="Public text or forum channels. Inbound traffic is restricted to this list unless all public channels are allowed; proactive messages always target a listed text channel."
           >
             <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="Channel snowflakes" />
           </Form.Item>
+          <Form.Item
+            name="discord_allow_all_public_channels"
+            label="All public channels"
+            valuePropName="checked"
+            initialValue={false}
+            help="Also answer mentions in every public text or forum channel the bot can see, including channels added later. User and role allowlists still apply."
+          >
+            <Switch />
+          </Form.Item>
+          {allowAllPublicChannels && (
+            <Form.Item
+              label="Excluded channel IDs"
+              name="discord_denied_channel_ids"
+              rules={[{ validator: validateSnowflakes }]}
+              tooltip="Public channels the bot ignores, such as staff or moderation channels. Threads and forum posts under them are ignored too."
+            >
+              <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="Channel snowflakes" />
+            </Form.Item>
+          )}
           <Form.Item
             label="Answer new forum posts in"
             name="discord_respond_starters_channel_ids"
@@ -2051,6 +2084,7 @@ function readFormStringRecord(value: unknown): Record<string, string> | undefine
 
 function toDiscordSetupDecisions(values: Record<string, unknown>): DiscordSetupDecisions {
   const alignUsers = readFormBoolean(values.discord_align_users, false);
+  const allowAllPublicChannels = readFormBoolean(values.discord_allow_all_public_channels, false);
   const catch_up = {
     max_pages: readFormNumber(
       values.discord_catch_up_max_pages,
@@ -2084,6 +2118,10 @@ function toDiscordSetupDecisions(values: Record<string, unknown>): DiscordSetupD
     guildId: readFormString(values.discord_guild_id) ?? '',
     messageContentAcknowledged: readFormBoolean(values.discord_message_content_enabled, false),
     allowedChannelIds: readFormStringArray(values.discord_allowed_channel_ids),
+    allowAllPublicChannels,
+    deniedChannelIds: allowAllPublicChannels
+      ? readFormStringArray(values.discord_denied_channel_ids)
+      : [],
     allowedUserIds: readFormStringArray(values.discord_allowed_user_ids),
     allowedRoleIds: readFormStringArray(values.discord_allowed_role_ids),
     agorUserId: alignUsers ? null : readFormString(values.agor_user_id),
@@ -4532,6 +4570,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.discord_application_id = config?.application_id;
       formValues.discord_guild_id = config?.guild_id;
       formValues.discord_allowed_channel_ids = (config?.allowed_channel_ids as string[]) ?? [];
+      formValues.discord_allow_all_public_channels = config?.allow_all_public_channels === true;
+      formValues.discord_denied_channel_ids = (config?.denied_channel_ids as string[]) ?? [];
       formValues.discord_allowed_user_ids = (config?.allowed_user_ids as string[]) ?? [];
       formValues.discord_allowed_role_ids = (config?.allowed_role_ids as string[]) ?? [];
       formValues.discord_message_content_enabled = config?.message_content_enabled ?? false;
