@@ -269,8 +269,9 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
       <Tooltip
         // The label is a button for actionable pills, so the same explanation
         // keyboard users receive on focus is available to pointer users on hover.
-        // Touch inherits the app's no-trigger default (TouchTooltipConfig).
-        trigger={touchInput ? undefined : ['hover', 'focus']}
+        // On touch a tap runs the primary action; without one, the tap toggles
+        // this status instead (a tap emulates hover, so hover/focus is off).
+        trigger={touchInput ? (primaryAction ? undefined : 'click') : ['hover', 'focus']}
         title={
           needsConfiguration && !configureAllowed
             ? configureBlockedReason
@@ -363,8 +364,11 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
                 onEdit(server);
               }}
               style={{
-                marginLeft: 8,
-                padding: 0,
+                // Touch pads the 11px icon to a finger-sized hit area; the
+                // negative margin keeps the pill's layout unchanged.
+                ...(touchInput
+                  ? { padding: 8, margin: '-8px -8px -8px 0' }
+                  : { marginLeft: 8, padding: 0 }),
                 background: 'transparent',
                 border: 'none',
                 color: 'inherit',
