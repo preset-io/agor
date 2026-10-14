@@ -716,6 +716,7 @@ function compareField(a: ZoneLayoutSortItem, b: ZoneLayoutSortItem, sortBy: Zone
 function isMissingSortValue(item: ZoneLayoutSortItem, sortBy: ZoneLayoutSortBy): boolean {
   if (sortBy === 'priority') {
     if (item.rank !== undefined && Number.isFinite(item.rank)) return false;
+    if (typeof item.priority === 'number' && Number.isFinite(item.priority)) return false;
     const label = normalizedLabel(item.priority);
     return !label || !(label in PRIORITY_RANKS);
   }

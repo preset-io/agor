@@ -916,6 +916,10 @@ export function placeLayoutAroundFixedObstacles<T extends RectanglePlacement>(
   const gridSize = finiteNonNegative(options.gridSize, 0);
   const snap = (value: number): number =>
     gridSize > 0 ? Math.round(value / gridSize) * gridSize : value;
+  const snapDown = (value: number): number =>
+    gridSize > 0 ? Math.floor(value / gridSize) * gridSize : value;
+  const snapUp = (value: number): number =>
+    gridSize > 0 ? Math.ceil(value / gridSize) * gridSize : value;
   const gapX = finiteNonNegative(options.gapX, 0);
   const gapY = finiteNonNegative(options.gapY, 0);
   const desiredOrigin = {
@@ -1044,12 +1048,14 @@ export function placeLayoutAroundFixedObstacles<T extends RectanglePlacement>(
     }
 
     const { obstacle, entry } = collision;
+    // Snap away from the obstacle: rounding to the nearest grid line can land
+    // an off-lattice edge back inside the gap on every side.
     const candidates = [
-      { x: obstacle.x - gapX - entry.x - entry.placement.width, y: origin.y },
-      { x: obstacle.x + obstacle.width + gapX - entry.x, y: origin.y },
-      { x: origin.x, y: obstacle.y - gapY - entry.y - entry.placement.height },
-      { x: origin.x, y: obstacle.y + obstacle.height + gapY - entry.y },
-    ].map(({ x, y }) => ({ x: snap(x), y: snap(y) }));
+      { x: snapDown(obstacle.x - gapX - entry.x - entry.placement.width), y: origin.y },
+      { x: snapUp(obstacle.x + obstacle.width + gapX - entry.x), y: origin.y },
+      { x: origin.x, y: snapDown(obstacle.y - gapY - entry.y - entry.placement.height) },
+      { x: origin.x, y: snapUp(obstacle.y + obstacle.height + gapY - entry.y) },
+    ];
     for (const candidate of candidates) {
       const candidateKey = key(candidate);
       if (queued.has(candidateKey)) continue;

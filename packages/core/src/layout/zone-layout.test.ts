@@ -379,6 +379,19 @@ describe('sortZoneLayoutItems', () => {
     expect(result.map(({ id }) => id)).toEqual(['ranked', 'urgent', 'low', 'missing']);
   });
 
+  it('sorts a numeric card priority as a rank instead of a missing value', () => {
+    const result = sortZoneLayoutItems(
+      [
+        item('missing'),
+        item('low', { priority: 'low' }),
+        item('numeric-top', { priority: 0 }),
+        item('numeric-mid', { priority: 2.5 }),
+      ],
+      { sortBy: 'priority', sortDirection: 'asc' }
+    );
+    expect(result.map(({ id }) => id)).toEqual(['numeric-top', 'numeric-mid', 'low', 'missing']);
+  });
+
   it('sorts latest first without pulling missing timestamps forward', () => {
     const result = sortZoneLayoutItems(
       [

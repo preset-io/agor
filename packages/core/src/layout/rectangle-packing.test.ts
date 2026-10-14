@@ -4,6 +4,7 @@ import {
   layoutAlignedRectangles,
   layoutCompactRectangles,
   layoutRectangles,
+  placeLayoutAroundFixedObstacles,
   type RectanglePlacement,
   snapBoardGridPoint,
 } from './rectangle-packing';
@@ -642,5 +643,37 @@ describe('layoutRectangles', () => {
     );
 
     expect(noisy).toEqual(base);
+  });
+});
+
+describe('placeLayoutAroundFixedObstacles', () => {
+  it('clears an off-lattice obstacle edge instead of rounding back into its gap', () => {
+    // 500 + 64 and 300 + 48 are off the 20px lattice. Rounding either edge to
+    // the nearest grid line lands inside the gap on all four sides.
+    const result = placeLayoutAroundFixedObstacles(
+      [
+        {
+          id: 'moving',
+          x: 100,
+          y: 100,
+          width: 500,
+          height: 300,
+          row: 0,
+          column: 0,
+          stackIndex: 0,
+          deckDepth: 0,
+        },
+      ],
+      {
+        desiredOrigin: { x: 100, y: 100 },
+        obstacles: [{ id: 'fixed', x: 0, y: 0, width: 500, height: 300 }],
+        gapX: 64,
+        gapY: 48,
+        gridSize: BOARD_GRID_SIZE,
+      }
+    );
+
+    expect(result.origin).toEqual({ x: 100, y: 360 });
+    expect(result.placements[0]).toMatchObject({ x: 100, y: 360 });
   });
 });

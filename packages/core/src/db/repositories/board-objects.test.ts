@@ -1093,6 +1093,37 @@ describe('BoardObjectRepository.updateCompact', () => {
   });
 });
 
+describe('BoardObjectRepository.clearZoneReferences', () => {
+  dbTest('keeps collapsed residents collapsed when their zone is deleted', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const boardObjectRepo = new BoardObjectRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+    const boardId = await createBoard(db);
+    const created = await boardObjectRepo.create({
+      board_id: boardId,
+      branch_id: branch.branch_id,
+      zone_id: 'zone-1',
+      position: { x: 10, y: 20 },
+    });
+    await boardObjectRepo.updateCompact(created.object_id, true);
+    await boardObjectRepo.updateSize(created.object_id, { width: 500, height: 64 });
+
+    const [cleared] = await boardObjectRepo.clearZoneReferences(boardId, 'zone-1', {
+      x: 100,
+      y: 200,
+    });
+
+    expect(cleared).toMatchObject({
+      compact: true,
+      position: { x: 110, y: 220 },
+      size: { width: 500, height: 64 },
+    });
+    expect(cleared.zone_id).toBeUndefined();
+  });
+});
+
 // ============================================================================
 // UpdateZone
 // ============================================================================

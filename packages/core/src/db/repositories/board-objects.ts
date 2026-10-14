@@ -799,8 +799,8 @@ export class BoardObjectRepository {
           await update(this.db, boardObjects)
             .set({
               data: {
+                ...data,
                 position: absolutePosition,
-                size: data.size,
                 zone_id: undefined,
               },
             })
