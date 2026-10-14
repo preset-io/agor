@@ -22,6 +22,14 @@ const state = vi.hoisted(() => ({
   events: [] as SDK.ServerGeminiStreamEvent[][],
 }));
 vi.mock('../../config.js', () => ({ getDaemonUrl: vi.fn(async () => 'http://localhost:3030') }));
+vi.mock('@agor/core/mcp', async (original) => {
+  const { renderMCPTokenHeader } = await import('@agor/core/tools/mcp/http-headers');
+  return {
+    ...(await original<typeof import('@agor/core/mcp')>()),
+    getMcpServersForSession: vi.fn(async () => []),
+    resolveScopedMCPAuthHeaders: vi.fn(async ({ server }) => renderMCPTokenHeader(server.auth)),
+  };
+});
 vi.mock('./runtime.js', async (original) => ({
   ...(await original<typeof import('./runtime.js')>()),
   enterGeminiRuntime: vi.fn(async () => async () => {}),
@@ -97,6 +105,7 @@ vi.mock('@agor/core/agentic-integrations', () => ({
   })),
 }));
 
+import { getMcpServersForSession } from '@agor/core/mcp';
 import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
 import { GeminiPromptService, resolveGeminiInvocationModel } from './prompt-service.js';
 import { findGeminiRecording } from './runtime.js';
@@ -217,6 +226,48 @@ describe('Gemini prompt boundary', () => {
       usage: { input_tokens: 4, output_tokens: 2 },
     });
     expect(state.dispose).toHaveBeenCalledOnce();
+  });
+  it('treats vendor token header recipes as resolved MCP auth', async () => {
+    vi.mocked(getMcpServersForSession).mockResolvedValueOnce([
+      {
+        server: {
+          name: 'pagerduty',
+          transport: 'http',
+          url: 'https://pd.example.com/mcp',
+          auth: { type: 'bearer', token: 'pd-key', token_prefix: 'Token token=' },
+        },
+      },
+      {
+        server: {
+          name: 'similarweb',
+          transport: 'http',
+          url: 'https://sw.example.com/mcp',
+          auth: { type: 'bearer', token: 'sw-key', token_header: 'api-key' },
+        },
+      },
+    ] as never);
+    state.events = [[event('content', 'answer'), event('finished', {})]];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await collect(
+        new GeminiPromptService(
+          messages,
+          sessions,
+          'fake-key',
+          branches,
+          undefined,
+          {} as never,
+          {} as never,
+          false
+        )
+      );
+      const { mcpServers } = state.config.mock.calls[0][0];
+      expect(mcpServers.pagerduty.headers).toEqual({ Authorization: 'Token token=pd-key' });
+      expect(mcpServers.similarweb.headers).toEqual({ 'api-key': 'sw-key' });
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('credential_unavailable');
+    } finally {
+      warn.mockRestore();
+    }
   });
   it('records every tool result and sums model turns, keeping last context usage', async () => {
     state.events = [

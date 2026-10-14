@@ -8,6 +8,7 @@
  */
 
 import { isUserEnvPlaceholder } from '../../mcp/template-patterns';
+import type { MCPAuth } from '../../types/mcp';
 
 export const MCP_HEADER_REDACTED_SENTINEL = '••••••••';
 
@@ -166,6 +167,28 @@ export function renderMCPTokenHeader(auth: {
   const name = auth.token_header ?? 'Authorization';
   const prefix = auth.token_prefix ?? (auth.token_header === undefined ? 'Bearer ' : '');
   return { [name]: `${prefix}${auth.token}` };
+}
+
+/**
+ * Whether `headers` carry the credential `auth` prescribes: the bearer row's
+ * token header and prefix (see `renderMCPTokenHeader`), or
+ * `Authorization: Bearer` for JWT and OAuth. Vacuously true without auth.
+ */
+export function hasPrescribedMCPAuthHeader(
+  auth: Pick<MCPAuth, 'type' | 'token_header' | 'token_prefix'> | undefined,
+  headers: Record<string, string> | undefined
+): boolean {
+  if (!auth || auth.type === 'none') return true;
+  const [[name, prefix]] = Object.entries(
+    renderMCPTokenHeader(auth.type === 'bearer' ? { ...auth, token: '' } : { token: '' })
+  );
+  const value = Object.entries(headers ?? {}).find(
+    ([key]) => key.toLowerCase() === name.toLowerCase()
+  )?.[1];
+  if (value === undefined) return false;
+  return (
+    value.toLowerCase().startsWith(prefix.toLowerCase()) && value.slice(prefix.length).trim() !== ''
+  );
 }
 
 export function mergeMCPRemoteHeaders(options: {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   canonicalMCPCustomHeaderEntries,
   findDuplicateMCPCustomHeaderName,
+  hasPrescribedMCPAuthHeader,
   isReservedMCPCustomHeaderName,
   isValidMCPHeaderName,
   MCP_HEADER_REDACTED_SENTINEL,
@@ -152,5 +153,27 @@ describe('renderMCPTokenHeader', () => {
         auth: renderMCPTokenHeader({ token: 'k', token_header: 'api-key' }),
       })
     ).toEqual({ 'x-environment-id': '42', 'api-key': 'k' });
+  });
+
+  it('recognises the resolved header each auth prescribes', () => {
+    const pagerDuty = { type: 'bearer' as const, token_prefix: 'Token token=' };
+    const similarweb = { type: 'bearer' as const, token_header: 'api-key' };
+    expect(
+      hasPrescribedMCPAuthHeader(pagerDuty, renderMCPTokenHeader({ ...pagerDuty, token: 'k' }))
+    ).toBe(true);
+    expect(
+      hasPrescribedMCPAuthHeader(similarweb, renderMCPTokenHeader({ ...similarweb, token: 'k' }))
+    ).toBe(true);
+    expect(hasPrescribedMCPAuthHeader({ type: 'oauth' }, { authorization: 'Bearer t' })).toBe(true);
+    expect(hasPrescribedMCPAuthHeader(undefined, undefined)).toBe(true);
+    expect(hasPrescribedMCPAuthHeader({ type: 'none' }, undefined)).toBe(true);
+
+    expect(hasPrescribedMCPAuthHeader(pagerDuty, { Authorization: 'Bearer k' })).toBe(false);
+    expect(hasPrescribedMCPAuthHeader(pagerDuty, { Authorization: 'Token token=' })).toBe(false);
+    expect(hasPrescribedMCPAuthHeader(similarweb, { Authorization: 'Bearer k' })).toBe(false);
+    expect(hasPrescribedMCPAuthHeader({ type: 'bearer' }, { Authorization: 'Bearer ' })).toBe(
+      false
+    );
+    expect(hasPrescribedMCPAuthHeader({ type: 'jwt' }, undefined)).toBe(false);
   });
 });
