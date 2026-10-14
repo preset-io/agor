@@ -680,7 +680,18 @@ describe('placeLayoutAroundFixedObstacles', () => {
 
 describe('compact packing work bound', () => {
   it.each([10, 40, 1000])('bounds geometry ordering work for %i rectangles', (count) => {
-    const compare = vi.spyOn(String.prototype, 'localeCompare');
+    const originalCompare = String.prototype.localeCompare;
+    const limit = count * Math.ceil(Math.log2(count)) * 75;
+    let operations = 0;
+    const compare = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(function (
+      this: string,
+      ...args
+    ) {
+      // Fail fast if the frontier search returns: the larger cases must not
+      // turn a regression into an uninterruptible CPU/memory exhaustion test.
+      if (++operations >= limit) throw new Error(`Compact ordering exceeded ${limit} operations`);
+      return originalCompare.apply(this, args);
+    });
     try {
       const result = layoutCompactRectangles(
         Array.from({ length: count }, (_, index) => ({
@@ -692,7 +703,7 @@ describe('compact packing work bound', () => {
       );
       if (count === 10) expectNoOverlap(result.placements);
       expect(result.placements).toHaveLength(count);
-      expect(compare.mock.calls.length).toBeLessThan(count * Math.ceil(Math.log2(count)) * 75);
+      expect(operations).toBeLessThan(limit);
     } finally {
       compare.mockRestore();
     }
