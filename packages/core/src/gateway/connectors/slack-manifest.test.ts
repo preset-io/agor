@@ -111,6 +111,29 @@ describe('requiredBotScopes', () => {
     );
   });
 
+  it('adds reactions:read for inbound reactions and omits it otherwise', () => {
+    expect(requiredBotScopes(withOptions({ inboundReactions: true }))).toEqual([
+      'chat:write',
+      'im:history',
+      'im:read',
+      'reactions:read',
+      'users:read',
+    ]);
+    expect(requiredBotScopes(baseOptions)).not.toContain('reactions:read');
+    expect(requiredBotScopes(withOptions({ inboundReactions: false }))).not.toContain(
+      'reactions:read'
+    );
+  });
+
+  it('inbound reactions and the agent reaction tools request independent scopes', () => {
+    expect(
+      requiredBotScopes(withOptions({ inboundReactions: true, agentTools: { reactions: true } }))
+    ).toEqual(expect.arrayContaining(['reactions:read', 'reactions:write']));
+    expect(requiredBotScopes(withOptions({ agentTools: { reactions: true } }))).not.toContain(
+      'reactions:read'
+    );
+  });
+
   it('adds reactions:write for the reactions capability and omits it otherwise', () => {
     expect(requiredBotScopes(withOptions({ agentTools: { reactions: true } }))).toEqual([
       'chat:write',
@@ -301,6 +324,23 @@ describe('requiredBotEvents', () => {
     ]);
   });
 
+  it('inbound reactions add reaction_added and reaction_removed', () => {
+    expect(requiredBotEvents(withOptions({ inboundReactions: true }))).toEqual([
+      'message.im',
+      'reaction_added',
+      'reaction_removed',
+    ]);
+    expect(
+      requiredBotEvents(withOptions({ inboundReactions: true, publicChannels: true }))
+    ).toEqual(['app_mention', 'message.im', 'reaction_added', 'reaction_removed']);
+  });
+
+  it('agent reaction tools do not subscribe to reaction events', () => {
+    expect(requiredBotEvents(withOptions({ agentTools: { reactions: true } }))).toEqual([
+      'message.im',
+    ]);
+  });
+
   it('outbound and alignUsers do not add events', () => {
     expect(requiredBotEvents(withOptions({ outbound: true, alignUsers: true }))).toEqual([
       'message.im',
@@ -309,6 +349,16 @@ describe('requiredBotEvents', () => {
 });
 
 describe('buildSlackManifest', () => {
+  it('carries inbound reaction scope and events into the manifest', () => {
+    const manifest = buildSlackManifest(withOptions({ inboundReactions: true }));
+    expect(manifest.oauth_config.scopes.bot).toContain('reactions:read');
+    expect(manifest.settings.event_subscriptions.bot_events).toEqual([
+      'message.im',
+      'reaction_added',
+      'reaction_removed',
+    ]);
+  });
+
   it('uses appName as bot display name when botDisplayName is omitted', () => {
     expect(buildSlackManifest(baseOptions).features.bot_user.display_name).toBe('Agor');
   });

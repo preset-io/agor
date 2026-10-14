@@ -68,6 +68,30 @@ for (const specifier of specifiers) {
   }
 }
 
+// Entries that read a copied asset beside themselves. Importing succeeds even
+// when the path is wrong (e.g. a `__dirname` shim hoisted into a shared chunk
+// at the package root), so read each asset through its public loader.
+const assetLoaders = [
+  [
+    `${pkg.name}/mcp-catalog`,
+    async (m) => assertNonEmpty(await m.loadCuratedCatalog(), 'curated.yaml entries'),
+  ],
+  [
+    `${pkg.name}/templates/session-context`,
+    async (m) => assertNonEmpty(await m.loadAgorSystemPromptTemplate(), 'agor-system-prompt.md'),
+  ],
+];
+function assertNonEmpty(value, label) {
+  if (!value?.length) throw new Error(`${label} loaded empty`);
+}
+for (const [specifier, check] of assetLoaders) {
+  try {
+    await check(await import(specifier));
+  } catch (error) {
+    failures.push({ specifier: `${specifier} (asset)`, error });
+  }
+}
+
 if (failures.length > 0) {
   for (const { specifier, error } of failures) {
     console.error(`[core] ${specifier} failed to import under Node:\n  ${error?.stack ?? error}\n`);

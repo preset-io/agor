@@ -302,6 +302,12 @@ export function requestBoardReload(
   reload.request();
 }
 
+// Canvas placements outlive their branches: archive keeps the stored position
+// for a future unarchive. Read only the placements of active branches (and
+// cards). Keep the default large page: small offset pages can silently skip
+// unchanged rows when an archive and create leave the total unchanged.
+// Unarchiving onto a loaded board marks it incomplete (`markArrivalIncomplete`),
+// so its reload reads the restored placement.
 async function fetchBoardPartition(
   client: AgorClient,
   boardId: string,
@@ -323,9 +329,13 @@ async function fetchBoardPartition(
       }),
     }) as Promise<Session[]>,
     canUseMemberWorkspaceServices
-      ? client
-          .service('board-objects')
-          .findAll({ query: { board_id: boardId, $limit: PAGINATION.DEFAULT_LIMIT } })
+      ? (client.service('board-objects').findAll({
+          query: {
+            board_id: boardId,
+            exclude_archived_branches: true,
+            $limit: PAGINATION.DEFAULT_LIMIT,
+          },
+        }) as Promise<BoardPartitionSnapshot['boardObjects']>)
       : Promise.resolve(null),
     client
       .service('cards')
@@ -338,7 +348,7 @@ async function fetchBoardPartition(
     boardId,
     branches,
     sessions,
-    boardObjects: boardObjects as BoardPartitionSnapshot['boardObjects'],
+    boardObjects,
     cards,
     board,
     // Every read is an unbounded `findAll`.

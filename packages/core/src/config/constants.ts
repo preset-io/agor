@@ -146,6 +146,12 @@ export const PAGINATION = {
 } as const;
 
 /**
+ * Error message thrown by the client `findAll()` helper when offset pagination
+ * sees the collection change between pages.
+ */
+export const PAGINATION_CHURN_MESSAGE = 'Paginated findAll() changed while pages were being read';
+
+/**
  * Knowledge document list pages. Access, sort and paging are evaluated in SQL,
  * and only the returned page is attributed or hydrated, so a list never pulls
  * the whole corpus. Callers that genuinely need every readable document (the

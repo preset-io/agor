@@ -10,13 +10,13 @@
       "source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "default": "./dist/index.js"
     },
     "./pure": {
       "source": "./src/pure.ts",
       "types": "./dist/pure.d.ts",
       "import": "./dist/pure.js",
-      "require": "./dist/pure.cjs"
+      "default": "./dist/pure.js"
     }
   },
   "scripts": {

@@ -49,6 +49,8 @@ interface MobileBoardPageProps {
    * may be missing, so the panel never infers "empty" or "no access".
    */
   boardReady?: boolean;
+  /** Current workspace tool availability is known; resets on workspace switches. */
+  settingsHydrated: boolean;
 }
 
 /** Board screen: board switcher, then the desktop board panel tabs led by a view-only canvas. */
@@ -68,6 +70,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   onToggleReaction,
   onDeleteComment,
   boardReady = true,
+  settingsHydrated,
 }) => {
   const { boardId = '' } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
@@ -174,6 +177,15 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           onUpdateBoard={onUpdateBoard}
         />
       </div>
+      {!settingsHydrated && (
+        <Typography.Text
+          role="status"
+          type="secondary"
+          style={{ padding: token.paddingSM, flexShrink: 0 }}
+        >
+          Loading agentic tool availability
+        </Typography.Text>
+      )}
       {board ? (
         <div style={{ flex: 1, minHeight: 0 }}>
           <BoardTeammatePanel

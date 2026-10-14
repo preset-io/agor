@@ -202,7 +202,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const repoById = useAgorStore(selectRepoById);
   const branchById = useAgorStore(selectBranchById);
   const userById = useAgorStore(selectUserById);
-  const agenticToolSettings = useAgorStore((s) => s.agenticToolSettingsByName);
+  const settingsHydrated = useAgorStore((s) => s.agenticToolSettingsHydrated);
 
   const [moreOpen, setMoreOpen] = useState(false);
   const [askPickerOpen, setAskPickerOpen] = useState(false);
@@ -362,16 +362,21 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
   // Every Ask tap creates a new session on the primary branch (never continues one).
   const startPrimarySession = useCallback(
-    (branch: Branch) =>
-      createAndOpenSession(
+    (branch: Branch) => {
+      // Read the current workspace snapshot again after an asynchronous primary lookup or pick.
+      const settings = agorStore.getState();
+      if (!settings.agenticToolSettingsHydrated) return;
+      return createAndOpenSession(
         branch,
-        resolveAvailableUserAgenticTool(user, agenticToolSettings, AVAILABLE_AGENTS)
-      ),
-    [createAndOpenSession, user, agenticToolSettings]
+        resolveAvailableUserAgenticTool(user, settings.agenticToolSettingsByName, AVAILABLE_AGENTS)
+      );
+    },
+    [createAndOpenSession, user]
   );
 
   const askPrimaryAssistant = useCallback(async () => {
-    if (!client || creatingSessionRef.current) return;
+    if (!client || creatingSessionRef.current || !agorStore.getState().agenticToolSettingsHydrated)
+      return;
     const branch = primaryBranch ?? (await refreshPrimaryBranch());
     if (branch === undefined) return;
     // No primary, or a failed lookup: the mobile-native sheet shows the
@@ -625,6 +630,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onToggleReaction={onToggleReaction}
                 onDeleteComment={onDeleteComment}
                 boardReady={boardReady}
+                settingsHydrated={settingsHydrated}
               />
             }
           />
@@ -662,7 +668,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         onSelect={handleTabSelect}
         homeBadge={homeBadge}
         moreBadge={commentsBadge}
-        askPending={creatingSession}
+        askPending={creatingSession || !settingsHydrated}
       />
 
       <Drawer
