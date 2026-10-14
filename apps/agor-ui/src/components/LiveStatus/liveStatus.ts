@@ -28,16 +28,17 @@ export function thoughtForLabel(startedAt?: number, endedAt?: number): string {
   return `Thought for ${formatElapsed((endedAt - startedAt) / 1000)}`;
 }
 
-/** The step the working line names, without its timer. */
+/** The step the working line names, without its timer. `tool` is the one running or awaiting approval. */
 export function workingStep({
   awaiting,
-  runningTool,
+  tool,
 }: {
   awaiting?: 'approval' | 'input';
-  runningTool?: string;
+  tool?: string;
 }): string {
-  if (awaiting === 'approval') return 'Waiting for approval';
+  if (awaiting === 'approval')
+    return tool ? `Waiting for approval · ${tool}` : 'Waiting for approval';
   if (awaiting === 'input') return 'Asked a question';
-  if (runningTool) return `Running: ${runningTool}`;
+  if (tool) return `Running: ${tool}`;
   return 'Working…';
 }

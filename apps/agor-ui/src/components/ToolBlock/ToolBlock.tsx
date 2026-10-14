@@ -18,7 +18,6 @@ import { Button, Tag, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 import { useRetainTaskDetailsWhile } from '../../hooks/useTaskDetailRetention';
-import { LiveLabel } from '../LiveStatus';
 
 /** Shared disclosure for both lazy task hydration and already-loaded tool groups.
  * A button keeps keyboard semantics without requiring a fixed Collapse body:
@@ -37,6 +36,7 @@ export function ToolDisclosureHeader({
   expanded: boolean;
   onClick: () => void;
   loading?: boolean;
+  /** Busy for assistive tech; the turn's working line carries the shimmer. */
   executing?: boolean;
 }) {
   const { token } = theme.useToken();
@@ -86,7 +86,7 @@ export function ToolDisclosureHeader({
           textAlign: 'left',
         }}
       >
-        <LiveLabel active={executing}>{label}</LiveLabel>
+        {label}
       </span>
       {expanded ? (
         <UpOutlined style={{ flexShrink: 0, fontSize: '0.75em' }} />
