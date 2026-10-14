@@ -345,6 +345,15 @@ describe('TeamsGatewayWorker inbound admission', () => {
         auth: 'provider_token',
       },
     ];
+    // Channel files live in SharePoint and are found later over Graph, so a bare channel mention is admitted.
+    const bareChannel = makeWorker({ activity: activity({ text: '' }) });
+    await bareChannel.worker.checkOnce();
+    expect(bareChannel.create).toHaveBeenCalledOnce();
+    const bareGroup = makeWorker({
+      activity: activity({ text: '', conversationType: 'groupChat' }),
+    });
+    await bareGroup.worker.checkOnce();
+    expect(bareGroup.create).not.toHaveBeenCalled();
     const imageOnly = makeWorker({ activity: activity({ text: '', files }) });
     await imageOnly.worker.checkOnce();
     expect(imageOnly.create.mock.calls[0][0]).toMatchObject({ text: '', files });

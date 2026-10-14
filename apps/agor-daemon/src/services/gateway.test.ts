@@ -2465,14 +2465,15 @@ describe('GatewayService durable listener delivery fences', () => {
     });
     const eventId = '01927f9d-0000-7000-8000-0000000000b1' as never;
     const taskId = '01927f9d-0000-7000-8000-0000000000b2' as never;
-    const { service, promptCreate, sessionsGet } = makeGatewayHarness({
+    const { service, promptCreate, sessionsGet, threadMapRepo } = makeGatewayHarness({
       channel,
       existingMapping: mapping,
     });
+    // The first attempt admitted the Task but died before writing the cursor it earned.
     const priorTask = vi.fn(async () => ({
       task_id: taskId,
       session_id: mapping.session_id,
-      metadata: { gateway_inbound_event_id: eventId },
+      metadata: { gateway_inbound_event_id: eventId, gateway_teams_cursor: '1616990000009' },
     }));
     Object.assign(service as unknown as Record<string, unknown>, {
       taskRepo: { findById: priorTask },
@@ -2500,6 +2501,10 @@ describe('GatewayService durable listener delivery fences', () => {
     expect(priorTask).toHaveBeenCalledWith(taskId);
     expect(promptCreate).not.toHaveBeenCalled();
     expect(sessionsGet).not.toHaveBeenCalled();
+    expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).toHaveBeenCalledWith(
+      mapping.id,
+      '1616990000009'
+    );
   });
 
   it('keeps the stable-Task shortcut off for non-durable non-Teams providers', async () => {
@@ -7709,5 +7714,8 @@ describe('GatewayService Teams proactive DMs', () => {
       'map-dm',
       '1791924500000'
     );
+    expect(promptCreate.mock.calls[0][0].metadata).toMatchObject({
+      gateway_teams_cursor: '1791924500000',
+    });
   });
 });

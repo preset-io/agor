@@ -154,6 +154,7 @@ export async function fetchTeamsProviderHistory(
     let previousPageMin: string | null = null;
     let descending = true;
     let reachedCursor = false;
+    let reachedTrigger = false;
     const pageCap = Math.ceil(limit / GRAPH_PAGE_SIZE) + 1;
     for (let page = 0; next && page < pageCap && !reachedCursor; page += 1) {
       const body = await authorizedJson(runtime, GRAPH_SCOPE, next);
@@ -172,14 +173,15 @@ export async function fetchTeamsProviderHistory(
         descending = false;
       }
       if (ids.length) previousPageMin = ids[ids.length - 1];
+      if (ids.some((id) => compareIds(id, trigger) <= 0)) reachedTrigger = true;
       reachedCursor =
         descending &&
         after !== undefined &&
         ids.length > 0 &&
         compareIds(ids[ids.length - 1], after) <= 0;
     }
-    // Newest-first pages past the cap still prove a contiguous tail up to the mention.
-    if (next && !reachedCursor && !descending) return incomplete;
+    // Newest-first pages past the cap prove a contiguous tail only once they reach the mention.
+    if (next && !reachedCursor && (!descending || !reachedTrigger)) return incomplete;
     earlierOmitted = Boolean(next && !reachedCursor);
   } catch (error) {
     // RSC is granted per team and never appears in token roles; 403 is the only signal.

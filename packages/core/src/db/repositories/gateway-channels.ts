@@ -978,7 +978,13 @@ export class GatewayChannelRepository
       fullId = await this.resolveId(id);
 
       const updated = isTeamsCredentialOnlyConfigPatch(updates)
-        ? await this.updateTeamsCredentialOnly(id, fullId, updates)
+        ? await this.updateTeamsCredentialOnly(
+            id,
+            fullId,
+            updates,
+            verifiedProviderInstallationId,
+            expectedProviderConfigGeneration
+          )
         : isGatewayProviderAuthorityPatch(updates)
           ? await this.updateAuthority(
               id,
@@ -1028,11 +1034,13 @@ export class GatewayChannelRepository
     };
   }
 
-  /** Rotate only the Teams app password without fencing active gateway work. */
+  /** Rotate only the Teams app password without fencing active gateway work; a probed rotation must still match the app it verified. */
   private async updateTeamsCredentialOnly(
     id: string,
     fullId: string,
-    updates: Partial<GatewayChannel>
+    updates: Partial<GatewayChannel>,
+    verifiedProviderInstallationId?: string,
+    expectedProviderConfigGeneration?: number
   ): Promise<GatewayChannelRow | null> {
     return runDatabaseTransaction(
       this.db,
@@ -1048,6 +1056,16 @@ export class GatewayChannelRepository
         }
 
         const current = await this.rowToChannel(currentRow);
+        if (
+          (expectedProviderConfigGeneration !== undefined &&
+            current.provider_config_generation !== expectedProviderConfigGeneration) ||
+          (verifiedProviderInstallationId !== undefined &&
+            current.config.app_id !== verifiedProviderInstallationId)
+        ) {
+          throw new RepositoryError(
+            'Provider verification became stale while the gateway configuration changed'
+          );
+        }
         const config = mergeGatewayChannelConfigPatch(
           current.config,
           updates.config,

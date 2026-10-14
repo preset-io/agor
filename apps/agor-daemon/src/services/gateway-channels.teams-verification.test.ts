@@ -161,9 +161,13 @@ describe('GatewayChannelsService Teams credential verification', () => {
 
     stubProbe(true);
     await service.patch(enabled.id, { config: { app_password: 'rotated' } });
-    expect(updateWithVerifiedProviderInstallation).not.toHaveBeenCalled();
-    expect(repository.update).toHaveBeenCalledWith(enabled.id, {
-      config: { app_password: 'rotated' },
-    });
+    // The repository fences the rotation on the probed app and generation without bumping it.
+    expect(repository.update).not.toHaveBeenCalled();
+    expect(updateWithVerifiedProviderInstallation).toHaveBeenCalledWith(
+      enabled.id,
+      { config: { app_password: 'rotated' } },
+      appId,
+      enabled.provider_config_generation
+    );
   });
 });

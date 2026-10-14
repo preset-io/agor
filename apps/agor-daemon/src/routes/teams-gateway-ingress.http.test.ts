@@ -434,6 +434,31 @@ describe('registered Teams HTTP ingress with real SDK JWT verification', {
     });
   }
 
+  ownedDbTest(
+    'queues a bare channel mention, whose files only Graph can see, but not a bare chat mention',
+    async ({ db }) => {
+      await withRoute(db, async ({ sign, post }) => {
+        const mention = {
+          type: 'mention',
+          text: '<at>Agor</at>',
+          mentioned: { id: `28:${config.app_id}` },
+        };
+        const groupChat = activity({
+          id: 'group-1',
+          conversation: { id: '19:group@thread.v2', conversationType: 'groupChat' },
+          text: '<at>Agor</at>',
+          entities: [mention],
+        });
+        expect((await post(sign(), groupChat)).status).toBe(200);
+        await expectNoPersistence(db);
+        const bare = channelMessage('1616990000004', true);
+        bare.text = '<at>Agor</at>';
+        expect((await post(sign(), bare)).status).toBe(200);
+        expect(await select(db).from(gatewayInboundEvents).all()).toHaveLength(1);
+      });
+    }
+  );
+
   ownedDbTest('ignores reactions unless the channel opted in', async ({ db }) => {
     await withRoute(db, async ({ sign, post }) => {
       expect((await post(sign(), reaction('reaction-1'))).status).toBe(200);

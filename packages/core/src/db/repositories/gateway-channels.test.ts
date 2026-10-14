@@ -791,6 +791,24 @@ describe('GatewayChannelRepository', () => {
       expect(authorityChanged.provider_config_generation).toBe(
         channel.provider_config_generation + 1
       );
+
+      // A rotation probed against the old app must not land on the app that replaced it.
+      await expect(
+        repo.updateWithVerifiedProviderInstallation(
+          channel.id,
+          { config: { app_password: 'old-app-secret' } },
+          'teams-app',
+          channel.provider_config_generation
+        )
+      ).rejects.toThrow('Provider verification became stale');
+      const current = await repo.updateWithVerifiedProviderInstallation(
+        channel.id,
+        { config: { app_password: 'new-app-secret' } },
+        'new-app',
+        authorityChanged.provider_config_generation
+      );
+      expect(current.config.app_password).toBe('new-app-secret');
+      expect(current.provider_config_generation).toBe(authorityChanged.provider_config_generation);
     });
 
     it('rejects unsupported capability requests and empty allowlists', () => {

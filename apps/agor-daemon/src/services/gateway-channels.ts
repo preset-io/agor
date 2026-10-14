@@ -428,10 +428,9 @@ export class GatewayChannelsService extends DrizzleService<
         effectiveConfig,
         data.agor_user_id !== undefined ? data.agor_user_id : current.agor_user_id
       );
-      if (authorityPatch) {
-        verifiedProviderInstallationId = installationId;
-        expectedProviderConfigGeneration = current.provider_config_generation;
-      }
+      // A rotation carries the probe's app and generation too, so a concurrent app switch cannot take its secret.
+      verifiedProviderInstallationId = installationId;
+      expectedProviderConfigGeneration = current.provider_config_generation;
     }
     if (verifiedProviderInstallationId !== undefined) {
       if (id === null || Array.isArray(id)) {

@@ -206,11 +206,16 @@ export class TeamsGatewayWorker {
     const reaction =
       activity.activityType === 'messageReaction' &&
       isTeamsReactionEventType(activity.metadata?.teams_event_type);
+    const conversationType = activity.conversationType.toLowerCase();
+    // A channel mention may carry only SharePoint files, which the activity omits.
     const admissible =
       reaction ||
       (activity.activityType === 'message' &&
-        (!!activity.text.trim() || !!activity.files?.length || !!activity.skippedFiles?.length) &&
-        (activity.conversationType.toLowerCase() === 'personal' || activity.hasMention));
+        (!!activity.text.trim() ||
+          !!activity.files?.length ||
+          !!activity.skippedFiles?.length ||
+          conversationType === 'channel') &&
+        (conversationType === 'personal' || activity.hasMention));
     let result: { sessionId?: string; taskId?: TaskID } = {};
     if (admissible) {
       if (!this.gatewayService) {

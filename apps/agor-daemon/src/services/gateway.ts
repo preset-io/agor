@@ -5774,6 +5774,18 @@ export class GatewayService {
             liveDiscordCursor
           );
         }
+        // Teams records the cursor its admission earned, since a history fallback earns none.
+        const teamsCursor = priorTask.metadata?.gateway_teams_cursor;
+        if (
+          channel.channel_type === 'teams' &&
+          typeof teamsCursor === 'string' &&
+          TEAMS_MESSAGE_ID.test(teamsCursor)
+        ) {
+          await this.threadMapRepo.advanceTeamsLastAdmittedActivityId(
+            existingMapping.id,
+            teamsCursor
+          );
+        }
         await this.markSeedInitialPromptAdmitted(
           existingMapping,
           data.gateway_inbound_event_id,
@@ -7202,6 +7214,9 @@ export class GatewayService {
       const gatewayTaskMetadata = {
         ...(data.gateway_inbound_event_id
           ? { gateway_inbound_event_id: data.gateway_inbound_event_id }
+          : {}),
+        ...(channel.channel_type === 'teams' && teamsCursorToWrite
+          ? { gateway_teams_cursor: teamsCursorToWrite }
           : {}),
         ...(typeof data.metadata?.processing_comment_id === 'number'
           ? {
