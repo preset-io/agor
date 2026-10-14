@@ -496,6 +496,46 @@ describe('oauth widget — catalog-connect resolution', () => {
     expect(livenessStub).not.toHaveBeenCalled();
   });
 
+  it('refuses an OAuth entry install with OAuth removed but the catalog URL kept', async () => {
+    const ASANA_ENTRY = {
+      name: 'com.asana/mcp',
+      remote_url: 'https://mcp.asana.com/sse',
+      transport: 'sse',
+      auth_type: 'oauth',
+      oauth: { configured_client: { setup_url: 'https://app.asana.com', secret_required: true } },
+      permission_disclosure: 'Reads and writes tasks.',
+    };
+    vi.mocked(loadCatalog).mockResolvedValue([ASANA_ENTRY] as never);
+    const { ctx, attachSpy } = makeCtx({
+      server: {
+        ...API_KEY_INSTALL(),
+        mcp_server_id: 'srv-asana',
+        catalog_entry_name: 'com.asana/mcp',
+        transport: 'sse',
+        url: 'https://mcp.asana.com/sse',
+        auth: { type: 'none' },
+      },
+    });
+    if (oauthWidget.resolution !== 'daemon_verified') throw new Error('wrong resolution kind');
+    await expect(
+      oauthWidget.resolveFromDaemonVerification(
+        ctx,
+        { mcp_server_id: 'srv-asana' },
+        { ...CATALOG_CONNECT_PARAMS, catalogEntryName: 'com.asana/mcp' }
+      )
+    ).rejects.toThrow(/not a current catalog install/);
+    expect(attachSpy).not.toHaveBeenCalled();
+    expect(livenessStub).not.toHaveBeenCalled();
+  });
+
+  it('refuses a keyed entry install with the key removed', async () => {
+    const { ctx, attachSpy } = makeCtx({
+      server: { ...API_KEY_INSTALL(), auth: { type: 'none' } },
+    });
+    await expect(resolveWith(ctx, 'srv-github')).rejects.toThrow(/not a current catalog install/);
+    expect(attachSpy).not.toHaveBeenCalled();
+  });
+
   it('refuses an install edited to carry custom headers', async () => {
     const { ctx, attachSpy } = makeCtx({
       server: { ...API_KEY_INSTALL(), headers: { 'X-Forward': 'somewhere' } },
@@ -511,7 +551,8 @@ describe('oauth widget — catalog-connect resolution', () => {
     expect(attachSpy).not.toHaveBeenCalled();
   });
 
-  it('still requires a grant when the drawer found OAuth after all', async () => {
+  it('still requires a grant for an OAuth entry install', async () => {
+    vi.mocked(loadCatalog).mockResolvedValue([{ ...GITHUB_ENTRY, auth_type: 'oauth' }] as never);
     const { ctx, attachSpy } = makeCtx({
       server: { ...API_KEY_INSTALL(), auth: { type: 'oauth', oauth_mode: 'per_user' } },
     });

@@ -112,10 +112,14 @@ export function isCurrentCatalogInstall(
 
 /**
  * `isCurrentCatalogInstall` for a caller that cannot re-probe the endpoint —
- * the widget resolving an install the Catalog drawer just made. The prescription
- * is whichever of Connect's three outcomes the row's auth claims, and only if
- * Connect could have produced it for this entry: open, the entry's OAuth recipe,
- * or a bearer key under the entry's reviewed bearer recipe.
+ * the widget resolving an install the Catalog drawer just made.
+ *
+ * The allowed auth comes from the ENTRY, never from the row: an OAuth entry
+ * admits only its OAuth recipe (the caller still checks the grant), a key only
+ * under the entry's reviewed bearer recipe, and an open row only for an entry
+ * that declares no auth. A row whose auth was edited to something the entry
+ * does not prescribe — say an OAuth install with OAuth removed — is not a
+ * current install, even with the catalog URL kept.
  */
 export function isCurrentCatalogInstallOfEntry(
   server: Parameters<typeof isCurrentCatalogInstall>[0],
@@ -123,11 +127,11 @@ export function isCurrentCatalogInstallOfEntry(
 ): boolean {
   const type = server.auth?.type ?? 'none';
   const prescribed: MCPAuth | undefined =
-    type === 'oauth'
+    type === 'oauth' && entry.auth_type === 'oauth'
       ? catalogOAuthConfig(entry)
       : type === 'bearer' && entry.credentials?.scheme === 'bearer'
         ? { type: 'bearer', token: server.auth?.token }
-        : type === 'none'
+        : type === 'none' && entry.auth_type === 'none'
           ? { type: 'none' }
           : undefined;
   return Boolean(
