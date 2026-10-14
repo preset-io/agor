@@ -104,6 +104,9 @@ export const TEAMMATE_TEMPLATES = [
     remit:
       'Desired outcome: a useful recurring brief from Slack and connected docs. A first win is a digest of the channels and docs they care about.',
     preferredTools: [
+      'com.googleapis.gmailmcp/mcp',
+      'com.googleapis.calendarmcp/mcp',
+      'ai.granola/mcp',
       'com.notion/mcp',
       'app.fellow/mcp',
       'com.atlassian/atlassian-mcp-server',
@@ -121,6 +124,7 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '🔎',
     remit:
       'Desired outcome: active research on demand. A first win is one evidence-backed finding about the competitor, market, or dataset they care about.',
+    preferredTools: ['ai.jina/mcp'],
     preferredToolCategories: ['search', 'data-storage', 'productivity'],
   },
   {
@@ -208,7 +212,7 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '📐',
     sourceBranch: 'template/deal-desk-revops-analyst',
     ...BUILT_IN_TEMPLATE_SOURCE,
-    preferredTools: ['com.attio/mcp', 'com.stripe/mcp'],
+    preferredTools: ['com.attio/mcp', 'com.stripe/mcp', 'com.hubspot/mcp', 'com.salesforce/mcp'],
     preferredToolCategories: ['productivity', 'messaging'],
   },
   {
@@ -220,7 +224,12 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '🎯',
     sourceBranch: 'template/sales-outbound-analyst',
     ...BUILT_IN_TEMPLATE_SOURCE,
-    preferredTools: ['com.attio/mcp', 'com.apify/apify-mcp-server'],
+    preferredTools: [
+      'com.attio/mcp',
+      'com.apify/apify-mcp-server',
+      'com.hubspot/mcp',
+      'com.salesforce/mcp',
+    ],
     preferredToolCategories: ['messaging', 'search', 'productivity'],
   },
   {
