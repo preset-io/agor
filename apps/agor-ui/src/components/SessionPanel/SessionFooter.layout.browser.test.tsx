@@ -211,12 +211,16 @@ it('opens desktop menus above the card, anchored to their trigger', async () => 
     const button = trigger();
     await userEvent.click(button);
     const menu = await screen.findByRole('dialog', { name });
-    await waitFor(() => {
-      const popup = menu.closest('.ant-popover')!.getBoundingClientRect();
-      expect(popup.bottom).toBeLessThanOrEqual(card().getBoundingClientRect().top);
-      // Still anchored to its trigger: left edges line up.
-      expect(Math.abs(popup.left - button.getBoundingClientRect().left)).toBeLessThanOrEqual(1);
-    });
+    await waitFor(
+      () => {
+        const popup = menu.closest('.ant-popover')!.getBoundingClientRect();
+        expect(popup.bottom).toBeLessThanOrEqual(card().getBoundingClientRect().top);
+        // Still anchored to its trigger: left edges line up.
+        expect(Math.abs(popup.left - button.getBoundingClientRect().left)).toBeLessThanOrEqual(1);
+        // The popover realigns after it measures the card; allow for a loaded CI runner.
+      },
+      { timeout: 5000 }
+    );
     await userEvent.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog', { name })).toBeNull());
   }
