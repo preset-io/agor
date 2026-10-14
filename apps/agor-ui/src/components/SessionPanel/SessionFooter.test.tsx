@@ -9,7 +9,15 @@ import type {
   Task,
 } from '@agor-live/client';
 import { SessionStatus } from '@agor-live/client';
-import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -400,6 +408,29 @@ describe('info line and Session details', () => {
     expect(JSON.parse(localStorage.getItem('agor-footer-prefs') ?? '{}').pinnedChips).not.toContain(
       'context'
     );
+  });
+
+  it('leaves usage out until a snapshot is known, then shows the tokens', async () => {
+    const get = vi.fn().mockResolvedValue({
+      usage_summary: {
+        total: 24_100,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheCreation: 0,
+        cost: 0,
+      },
+    });
+    const client = { service: () => ({ get }) } as unknown as SessionFooterProps['client'];
+    renderFooter({ client, latestContextWindow: contextWindow(36_000) });
+    expect(screen.getByTestId('composer-info-line')).not.toHaveTextContent(/Usage|tokens/);
+    expect(get).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /^Context 18% used/ }));
+    await screen.findByRole('dialog', { name: 'Session details' });
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-info-line')).toHaveTextContent('24.1k tokens')
+    );
+    expect(get).toHaveBeenCalledOnce();
   });
 
   it('shows the timer from the latest task', () => {
