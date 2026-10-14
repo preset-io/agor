@@ -62,6 +62,24 @@ async function select(label: string, option: string) {
 describe('GatewayTargetFields', () => {
   withTestAuthority();
 
+  it.each(['AI Teammate', 'Specific branch'])(
+    'keeps %s selection compact without repeating visible labels or help',
+    async (mode) => {
+      render(<Harness client={makeClient().client} />);
+      fireEvent.click(screen.getByRole('radio', { name: mode }));
+      const picker = await screen.findByRole('combobox', {
+        name: mode === 'AI Teammate' ? 'AI Teammate' : 'Target Branch',
+      });
+      expect(picker).toHaveAttribute('aria-required', 'true');
+      expect(screen.getAllByText('AI Teammate')).toHaveLength(1);
+      expect(screen.queryByText('Target Branch')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Recommended: work with an AI Teammate/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Use a specific branch for a custom workflow/)
+      ).not.toBeInTheDocument();
+    }
+  );
+
   it('never validates an empty suggested name during target selection or mode changes', async () => {
     const errors: string[] = [];
     render(

@@ -1,5 +1,5 @@
 import type { AgorClient, Branch } from '@agor-live/client';
-import { Form, Radio, Typography, theme } from 'antd';
+import { Form, Radio } from 'antd';
 import { useState } from 'react';
 import { teammateLabel } from '@/utils/teammateLabels';
 import { BranchSelect } from './BranchSelect';
@@ -14,7 +14,6 @@ export function GatewayTargetFields({
   channelTypeLabel: string;
 }) {
   const form = Form.useFormInstance();
-  const { token } = theme.useToken();
   const targetKind = Form.useWatch('target_kind', form) ?? 'teammate';
   const teammatesOnly = targetKind === 'teammate';
   const targetId = Form.useWatch('target_branch_id', form);
@@ -44,7 +43,6 @@ export function GatewayTargetFields({
         />
       </Form.Item>
       <Form.Item
-        label={teammatesOnly ? 'AI Teammate' : 'Target Branch'}
         name="target_branch_id"
         rules={[
           {
@@ -54,14 +52,10 @@ export function GatewayTargetFields({
               : 'Please select a target branch',
           },
         ]}
-        extra={
-          teammatesOnly
-            ? "Recommended: work with an AI Teammate through this channel. New sessions use the teammate's branch."
-            : 'Use a specific branch for a custom workflow or a long-lived branch without a teammate.'
-        }
       >
         <BranchSelect
           key={targetKind}
+          aria-label={teammatesOnly ? 'AI Teammate' : 'Target Branch'}
           client={client}
           teammatesOnly={teammatesOnly}
           onChange={(_id, branch) => setSelectedBranch(branch)}
@@ -74,11 +68,7 @@ export function GatewayTargetFields({
         />
       </Form.Item>
       <Form.Item
-        label={
-          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-            Channel name
-          </Typography.Text>
-        }
+        label="Channel name"
         required={false}
         name="name"
         hidden={!targetId}
