@@ -609,6 +609,32 @@ export const knowledgeDocumentQueryValidator = getValidator(
 );
 
 /**
+ * Ajv's ValidationError carries every detail in `errors` and none in `message`,
+ * which is the bare string "validation failed". Feathers' validateQuery hook
+ * rethrows it as `BadRequest(error.message, error.errors)`, so a caller that
+ * only renders the message — an MCP tool result, a CLI error line — is told
+ * that something was rejected and nothing about what. Fold the field paths and
+ * reasons into the message so the rejection names itself wherever it surfaces.
+ * `data` still carries the full structured errors for anyone reading them.
+ */
+function describeQueryValidationErrors(errors: unknown): string | null {
+  if (!Array.isArray(errors) || errors.length === 0) return null;
+  const described = errors
+    .slice(0, 5)
+    .map((error) => {
+      const { instancePath, message } = (error ?? {}) as {
+        instancePath?: string;
+        message?: string;
+      };
+      const field = instancePath ? instancePath.replace(/^\//, '').replace(/\//g, '.') : 'query';
+      return `${field} ${message ?? 'is invalid'}`;
+    })
+    .join('; ');
+  const overflow = errors.length > 5 ? ` (+${errors.length - 5} more)` : '';
+  return `${described}${overflow}`;
+}
+
+/**
  * Reject a `search` of more than `MAX_SEARCH_TOKENS` distinct terms: each one
  * is a substring test of every candidate row (`searchCondition`).
  */
@@ -628,7 +654,17 @@ export function assertSearchTerms(search: unknown): void {
 export function typedValidateQuery(
   validator: Parameters<typeof validateQueryFn>[0]
 ): (context: unknown) => Promise<void> {
-  return validateQueryFn(validator) as unknown as (context: unknown) => Promise<void>;
+  const validate = validateQueryFn(validator) as unknown as (context: unknown) => Promise<void>;
+  return async (context: unknown) => {
+    try {
+      return await validate(context);
+    } catch (error) {
+      const badRequest = error as { name?: string; message?: string; data?: unknown };
+      const described = describeQueryValidationErrors(badRequest?.data);
+      if (described) badRequest.message = `Invalid query: ${described}`;
+      throw error;
+    }
+  };
 }
 
 // Re-export validateQuery for direct usage
