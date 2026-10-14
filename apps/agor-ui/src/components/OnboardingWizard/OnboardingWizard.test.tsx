@@ -549,7 +549,7 @@ describe('OnboardingWizard', () => {
     );
     await waitFor(() => expect(screen.getByText(/^continue →/i).closest('button')).toBeEnabled());
     clickButton(/^continue →/i);
-    expect(await screen.findByText('Connect your teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Pick your tools')).toBeInTheDocument();
     expect(screen.queryByText('Your teammate is almost ready.')).not.toBeInTheDocument();
     for (const service of ['repos', 'branches', 'sessions']) {
       expect(client.service).not.toHaveBeenCalledWith(service);
@@ -1027,6 +1027,33 @@ describe('OnboardingWizard', () => {
     });
   });
 
+  it('falls back to Personal assistant and its avatar when a pick is cleared', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete });
+
+    await screen.findByText('Hi New, meet your teammate');
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    const researcher = () =>
+      screen.getByText('Researcher').closest('[role="button"]') as HTMLElement;
+    fireEvent.click(researcher());
+    fireEvent.click(researcher()); // deselect
+    clickButton(/^continue →/i);
+    await findAndClickButton(/skip for now/i); // llm → tools
+    // A named teammate gets the picks in its first prompt.
+    expect(
+      await screen.findByText('Pick the tools you use. Your teammate will help you connect them.')
+    ).toBeInTheDocument();
+    await findAndClickButton(/skip for now/i); // tools → done
+    clickButton(/meet rusty/i);
+
+    await waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ templateId: 'personal-assistant', teammateEmoji: '🧑‍💼' }),
+        expect.anything()
+      )
+    );
+  });
+
   it('completes the full flow and calls onComplete with the created board', async () => {
     const onComplete = vi.fn();
     const { client } = renderWizard({ onComplete });
@@ -1142,7 +1169,7 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
-    expect(await screen.findByText('Connect your teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Pick your tools')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Your teammate is almost ready.')).toBeInTheDocument();
@@ -1473,7 +1500,7 @@ describe('OnboardingWizard', () => {
     // Recovery clears the derived validation error immediately rather than
     // leaving a stale copy in the independent board-creation error state.
     clickButton('Back'); // done → tools
-    await screen.findByText('Connect your teammate');
+    await screen.findByText('Pick your tools');
     clickButton('Back'); // tools → llm
     await screen.findByText('Connect your AI');
     clickButton('Back'); // llm → workspace
@@ -1484,7 +1511,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue →$/i);
     await screen.findByText('Connect your AI');
     clickButton(/skip for now/i); // llm → tools
-    await screen.findByText('Connect your teammate');
+    await screen.findByText('Pick your tools');
     clickButton(/skip for now/i); // tools → done
 
     expect(await screen.findByText('Rusty is almost ready.')).toBeInTheDocument();
@@ -1629,9 +1656,12 @@ describe('OnboardingWizard', () => {
       ],
     });
 
-    expect(screen.getByText('Connect your teammate')).toBeInTheDocument();
+    expect(screen.getByText('Pick your tools')).toBeInTheDocument();
+    // No teammate named yet, so the copy says picks need one; they are kept either way.
     expect(
-      screen.getByText('Pick the tools you use. Your teammate will help you connect them.')
+      screen.getByText(
+        "Pick the tools you use. Name your teammate in step 1 and they'll help you connect them."
+      )
     ).toBeInTheDocument();
     const notion = () => screen.getByText('Notion').closest('button') as HTMLButtonElement;
     await screen.findByText('Notion');

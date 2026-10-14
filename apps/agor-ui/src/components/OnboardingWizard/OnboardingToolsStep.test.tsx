@@ -28,6 +28,7 @@ function renderStep(template?: TeammateTemplate) {
       <OnboardingToolsStep
         client={client}
         connected
+        hasTeammate
         template={template}
         picked={picked}
         onPickedChange={(next) => {

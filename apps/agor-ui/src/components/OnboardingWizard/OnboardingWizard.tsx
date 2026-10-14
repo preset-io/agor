@@ -5,9 +5,8 @@ import { ToolBetaBadge } from '../ToolIcon/ToolBetaBadge';
  *
  * Steps: workspace (name + template gallery) → llm → tools → done
  *
- * Tools is a browsable Catalog wall; each tile opens the existing Catalog drawer.
- * Explicit Connect saves only the MCP connection, without provisioning a workspace;
- * ordinary Back/Skip never create resources or discard completed connections.
+ * Tools is a browsable Catalog wall of picks; nothing connects in onboarding. Picks
+ * go to the teammate's first prompt, and Back/Skip never create resources.
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
@@ -544,7 +543,7 @@ export function OnboardingWizard({
   const [invalidSavedTemplateId, setInvalidSavedTemplateId] = useState<string | null>(null);
   // Tools picked on the tools step; the teammate's first session helps connect them.
   const [requestedTools, setRequestedTools] = useState<RequestedCatalogTool[]>([]);
-  // Final completion owns the resumable board saga. Connecting tools creates no workspace.
+  // Final completion owns the resumable board saga.
   const [boardError, setBoardError] = useState<string | null>(null);
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
   const boardCreationConfirmedRef = useRef(false);
@@ -1132,8 +1131,8 @@ export function OnboardingWizard({
         break;
       }
       case 'workspace': {
-        // Naming and Catalog Connect do not provision a workspace. Final completion
-        // owns provisioning. Skip remains the no-teammate path.
+        // Naming does not provision a workspace; final completion owns provisioning.
+        // Skip remains the no-teammate path.
         goToStep('llm');
         break;
       }
@@ -1755,11 +1754,12 @@ export function OnboardingWizard({
 
   // Selecting a template sets the default avatar (and later the source branch),
   // but never the name — the name stays personal and user-chosen. Clearing a
-  // pick (deselect) falls back to the default template and avatar.
+  // pick (deselect) falls back to the default template and its avatar.
   const applyTemplate = (templateId: TeammateGalleryCardId | null) => {
-    setSelectedTemplateId(templateId ?? DEFAULT_TEMPLATE_ID);
+    const effectiveId = templateId ?? DEFAULT_TEMPLATE_ID;
+    setSelectedTemplateId(effectiveId);
     setInvalidSavedTemplateId(null);
-    setTeammateEmoji(getTeammateTemplate(templateId)?.emoji || '🤖');
+    setTeammateEmoji(getTeammateTemplate(effectiveId)?.emoji || '🤖');
   };
 
   const renderWorkspace = () => (
@@ -1778,11 +1778,12 @@ export function OnboardingWizard({
 
   const renderTools = () => (
     <>
-      {renderStepBadge('Connect your teammate')}
+      {renderStepBadge('Pick your tools')}
       <OnboardingToolsStep
         client={client}
         connected={onboardingAuthority.connectionReady && isCurrent()}
         template={getTeammateTemplate(selectedTemplateId)}
+        hasTeammate={Boolean(teammateName.trim())}
         picked={requestedTools}
         onPickedChange={setRequestedTools}
       />

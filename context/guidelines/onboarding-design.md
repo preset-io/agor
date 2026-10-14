@@ -41,6 +41,7 @@ Legacy `preferences.onboarding.goals` and `persona` stay untouched: no migration
 - **Tiles are picks.** Clicking toggles a pick (`aria-pressed`, antd primary outlined button); it
   opens nothing. Picks live in wizard state as `{ name, catalogEntryName }`, survive Back/Next and
   filtering, clear on Skip, and reach the first-session prompt at completion. Not stored.
+  With no teammate named yet, the copy says picks need one (step 1) instead of promising help.
 - The grid replaces the old one-row-per-provider layout: 3 columns, 2 at ≤480px. A tile is a
   button with the Catalog's own logo (`CatalogEntryAvatar` + `icon_url`, letter fallback), the
   Catalog display title, and the category label as one secondary line; the description lives in a

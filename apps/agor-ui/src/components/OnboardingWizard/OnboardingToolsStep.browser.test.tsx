@@ -49,6 +49,7 @@ function Harness({ api }: { api: ReturnType<typeof makeCatalogClient> }) {
           <OnboardingToolsStep
             client={api.client}
             connected
+            hasTeammate
             picked={picked}
             onPickedChange={setPicked}
           />

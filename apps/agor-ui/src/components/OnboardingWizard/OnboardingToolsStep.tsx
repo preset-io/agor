@@ -26,6 +26,8 @@ interface Props {
   connected: boolean;
   /** Template picked in step 1; its preferred tools are listed first. */
   template?: TeammateTemplate;
+  /** Without a named teammate there is no first session to hand picks to (yet). */
+  hasTeammate: boolean;
   /** Tools the user picked; the teammate's first session helps connect them. */
   picked: readonly RequestedCatalogTool[];
   onPickedChange: (picked: RequestedCatalogTool[]) => void;
@@ -100,6 +102,7 @@ export function OnboardingToolsStep({
   client,
   connected,
   template,
+  hasTeammate,
   picked,
   onPickedChange,
 }: Props) {
@@ -122,7 +125,9 @@ export function OnboardingToolsStep({
   return (
     <Flex vertical gap={token.marginSM} style={{ flex: '1 1 auto', minHeight: 0 }}>
       <Typography.Paragraph style={{ color: token.colorTextSecondary, margin: 0 }}>
-        Pick the tools you use. Your teammate will help you connect them.
+        {hasTeammate
+          ? 'Pick the tools you use. Your teammate will help you connect them.'
+          : "Pick the tools you use. Name your teammate in step 1 and they'll help you connect them."}
       </Typography.Paragraph>
       <Flex gap={token.marginXS}>
         <Input
