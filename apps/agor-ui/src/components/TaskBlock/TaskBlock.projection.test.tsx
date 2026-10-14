@@ -179,12 +179,12 @@ describe('TaskBlock persisted result projections (production grouping and render
         expect(screen.getByRole('note')).toHaveTextContent('may not be valid JSON');
       };
       assertNotice();
-      fireEvent.click(within(chain).getByText('Thinking', { exact: true }));
+      fireEvent.click(within(chain).getByText('Thought', { exact: true }));
       assertNotice();
       expect(within(chain).getAllByText((text) => text.startsWith(summary)).length).toBeGreaterThan(
         0
       );
-      fireEvent.click(within(chain).getByText('Thinking', { exact: true }));
+      fireEvent.click(within(chain).getByText('Thought', { exact: true }));
       assertNotice();
       // Closing the whole chain hides both its result and notice; reopening restores one.
       fireEvent.click(within(chain).getByRole('button', { name: 'Reasoning' }));
@@ -214,7 +214,7 @@ describe('TaskBlock persisted result projections (production grouping and render
     const { task, call, result } = fixture([{ type: 'text', text: summary }]);
     render(<Harness task={task} messages={[call, result]} />);
     fireEvent.click(screen.getByRole('button', { name: 'Reasoning' }));
-    fireEvent.click(screen.getByText('Thinking', { exact: true }));
+    fireEvent.click(screen.getByText('Thought', { exact: true }));
     expect(screen.getAllByText(summary).length).toBeGreaterThan(0);
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
@@ -268,13 +268,12 @@ describe('TaskBlock persisted result projections (production grouping and render
     // Do not expose a second shortened result preview while its owning tool
     // (and notice) is collapsed. The intact outer Task thought remains.
     expect(screen.queryByText('Nested synthetic summary')).not.toBeInTheDocument();
-    expect(screen.getAllByText('Thinking', { exact: true })).toHaveLength(1);
+    expect(screen.getAllByText('Thought', { exact: true })).toHaveLength(1);
     fireEvent.click(screen.getByText('Read', { exact: true }));
     expect(screen.getAllByRole('note')).toHaveLength(1);
     expect(screen.getAllByText('Nested synthetic summary')).toHaveLength(1);
     expect(screen.getByRole('note')).toHaveTextContent('Transcript shortened: content');
-    for (const thought of screen.getAllByText('Thinking', { exact: true }))
-      fireEvent.click(thought);
+    for (const thought of screen.getAllByText('Thought', { exact: true })) fireEvent.click(thought);
     expect(screen.getAllByRole('note')).toHaveLength(1);
     expect(screen.getByText('synthetic.txt', { exact: true })).toBeVisible();
   });

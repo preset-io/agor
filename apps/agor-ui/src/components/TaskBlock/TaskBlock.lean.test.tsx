@@ -662,7 +662,7 @@ it('remounts message blocks once when cached detail is evicted, not on live upda
   const block = (text: string) => screen.getByText(text).closest('[data-conversation-block]');
   const prompt = block('Retained prompt');
   const answer = block('Visible answer');
-  expect(screen.getByText('Extended Thinking')).toBeVisible();
+  expect(screen.getByText('Thought for a while')).toBeVisible();
 
   // A live update that still carries detail keeps the mounted block.
   rerender(render_([messages[0], { ...full }], true));
@@ -672,13 +672,13 @@ it('remounts message blocks once when cached detail is evicted, not on live upda
   rerender(render_([messages[0], evicted], false));
   await waitFor(() => expect(block('Visible answer')).not.toBe(answer));
   expect(block('Retained prompt')).toBe(prompt);
-  expect(screen.queryByText('Extended Thinking')).toBeNull();
+  expect(screen.queryByText('Thought for a while')).toBeNull();
   expect(screen.getByRole('button', { name: 'Reasoning' })).toBeVisible();
   const remounted = block('Visible answer');
 
   // Reloading persisted detail restores reasoning without another remount.
   rerender(render_([messages[0], full], true));
-  expect(screen.getByText('Extended Thinking')).toBeVisible();
+  expect(screen.getByText('Thought for a while')).toBeVisible();
   expect(block('Visible answer')).toBe(remounted);
 });
 

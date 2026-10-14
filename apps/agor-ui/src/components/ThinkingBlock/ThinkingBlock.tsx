@@ -1,49 +1,57 @@
 /**
- * ThinkingBlock - Displays Claude's extended thinking content
+ * ThinkingBlock - A model's extended thinking, collapsed to one quiet line.
  *
- * Features:
- * - Collapsible thinking content (collapsed by default to reduce noise)
- * - Supports streaming updates in real-time
- * - Markdown rendering for structured thinking
- * - Visual distinction from regular message content
+ * Live: a shimmering label that escalates with time, plus a timer.
+ * Done: "Thought for 12s". The reasoning itself opens on demand.
  */
 
-import { BulbOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
-import { Collapse, Typography, theme } from 'antd';
+import { DownOutlined, RightOutlined } from '@ant-design/icons';
+import { Button, theme } from 'antd';
 import type React from 'react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { TEXT_TRUNCATION } from '../../constants/ui';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useRetainTaskDetailsWhile } from '../../hooks/useTaskDetailRetention';
+import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { CollapsibleText } from '../CollapsibleText';
-
-const { Text } = Typography;
+import {
+  formatElapsed,
+  LiveLabel,
+  thinkingLabel,
+  thoughtForLabel,
+  useTickingNow,
+} from '../LiveStatus';
 
 interface ThinkingBlockProps {
   /** Thinking content (markdown) */
   content: string;
   /** Whether content is still streaming */
   isStreaming?: boolean;
+  /** Client clock (ms) when this tab first saw the thinking. */
+  startedAt?: number;
+  /** Client clock (ms) when the thinking ended. */
+  endedAt?: number;
   /** Whether to default to expanded state */
   defaultExpanded?: boolean;
   /** A reader asked for this turn's detail: open on mount (and keep the turn). */
   revealRequested?: boolean;
 }
 
-/**
- * ThinkingBlock - Collapsible thinking content display
- *
- * Shows Claude's extended thinking process in a visually distinct,
- * collapsible block. Defaults to collapsed to keep conversation focused
- * on actual responses.
- */
 export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
   content,
   isStreaming = false,
+  startedAt,
+  endedAt,
   defaultExpanded = false,
   revealRequested = false,
 }) => {
   const { token } = theme.useToken();
+  const touch = useIsTouchInput();
+  const bodyId = useId();
   const [expanded, setExpanded] = useState(defaultExpanded || revealRequested);
+  const [mountedAt] = useState(Date.now);
+  const now = useTickingNow(isStreaming);
   useRetainTaskDetailsWhile(expanded && (!!content || isStreaming));
 
   // Don't render if no content
@@ -51,61 +59,65 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
     return null;
   }
 
-  const thinkingHeader = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: token.sizeUnit }}>
-      <BulbOutlined style={{ color: token.colorTextSecondary, fontSize: 14 }} />
-      <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-        Extended Thinking
-        {isStreaming && ' (streaming...)'}
-      </Text>
-    </div>
-  );
+  const elapsedSeconds = Math.max(0, now - (startedAt ?? mountedAt)) / 1000;
+  const label = isStreaming ? thinkingLabel(elapsedSeconds) : thoughtForLabel(startedAt, endedAt);
+  // History has no live region; only thinking this tab watched announces its steps.
+  const watchedLive = isStreaming || startedAt !== undefined;
+  const Chevron = expanded ? DownOutlined : RightOutlined;
 
   return (
-    <Collapse
-      activeKey={expanded ? ['thinking'] : []}
-      onChange={(keys) => setExpanded(keys.includes('thinking'))}
-      expandIcon={({ isActive }) => (isActive ? <DownOutlined /> : <RightOutlined />)}
-      style={{
-        background: token.colorWarningBg,
-        border: `1px solid ${token.colorWarningBorder}`,
-        borderRadius: token.borderRadius,
-        marginBottom: token.sizeUnit * 1.5,
-      }}
-      items={[
-        {
-          key: 'thinking',
-          label: thinkingHeader,
-          style: { border: 'none' },
-          styles: {
-            header: {
-              padding: `${token.sizeUnit * 0.75}px ${token.sizeUnit * 1.5}px`,
-              background: 'transparent',
-              border: 'none',
-            },
-            body: {
-              padding: `${token.sizeUnit * 0.5}px ${token.sizeUnit * 1.5}px`,
-              background: 'transparent',
-              fontSize: token.fontSizeSM,
-            },
-          },
-          children: content ? (
-            <CollapsibleText
-              maxLines={TEXT_TRUNCATION.DEFAULT_LINES}
-              preserveWhitespace
-              style={{
-                fontSize: token.fontSizeSM,
-                margin: 0,
-                color: token.colorTextSecondary,
-              }}
-            >
-              {content}
-            </CollapsibleText>
-          ) : (
-            <Text type="secondary">Thinking...</Text>
-          ),
-        },
-      ]}
-    />
+    <div style={{ marginBottom: token.marginXS }}>
+      <Button
+        type="text"
+        block
+        aria-expanded={expanded}
+        aria-controls={expanded ? bodyId : undefined}
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          justifyContent: 'flex-start',
+          height: 'auto',
+          minHeight: touch ? MOBILE_TOUCH_TARGET : undefined,
+          paddingInline: 0,
+          gap: token.marginXS,
+          fontSize: token.fontSizeSM,
+          color: token.colorTextSecondary,
+        }}
+      >
+        <LiveLabel active={isStreaming}>{label}</LiveLabel>
+        {isStreaming && (
+          <span
+            aria-hidden="true"
+            style={{ color: token.colorTextTertiary, fontVariantNumeric: 'tabular-nums' }}
+          >
+            · {formatElapsed(elapsedSeconds)}
+          </span>
+        )}
+        <Chevron aria-hidden="true" style={{ fontSize: '0.75em' }} />
+      </Button>
+      {/* Announces the copy step, never the per-second timer. */}
+      {watchedLive && (
+        <span role="status" style={VISUALLY_HIDDEN_STYLE}>
+          {label}
+        </span>
+      )}
+      {expanded && (
+        <div
+          id={bodyId}
+          style={{
+            marginTop: token.marginXXS,
+            paddingInlineStart: token.paddingSM,
+            borderInlineStart: `2px solid ${token.colorBorderSecondary}`,
+          }}
+        >
+          <CollapsibleText
+            maxLines={TEXT_TRUNCATION.DEFAULT_LINES}
+            preserveWhitespace
+            style={{ fontSize: token.fontSize, margin: 0, color: token.colorTextSecondary }}
+          >
+            {content || label}
+          </CollapsibleText>
+        </div>
+      )}
+    </div>
   );
 };

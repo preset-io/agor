@@ -94,7 +94,13 @@ interface ThinkingContentBlock {
 interface MessageBlockProps {
   message:
     | Message
-    | (Message & { isStreaming?: boolean; thinkingContent?: string; isThinking?: boolean });
+    | (Message & {
+        isStreaming?: boolean;
+        thinkingContent?: string;
+        isThinking?: boolean;
+        thinkingStartedAt?: number;
+        thinkingEndedAt?: number;
+      });
   userById?: Map<string, User>;
   currentUserId?: string;
   isTaskRunning?: boolean; // Whether the task is running (for loading state)
@@ -555,8 +561,14 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
     );
   }
 
-  // Skip rendering if message has no content
-  if (!message.content || (typeof message.content === 'string' && message.content.trim() === '')) {
+  // Skip rendering if message has no content; a thinking-only stream renders its ThinkingBlock.
+  const streamingThinking = 'thinkingContent' in message ? message.thinkingContent : undefined;
+  const isThinking = 'isThinking' in message ? !!message.isThinking : false;
+  if (
+    !streamingThinking &&
+    !isThinking &&
+    (!message.content || (typeof message.content === 'string' && message.content.trim() === ''))
+  ) {
     return null;
   }
 
@@ -763,13 +775,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
         .map((block) => block.transcript_truncation)
     : [];
 
-  // Also check for streaming thinking content
-  const streamingThinking = 'thinkingContent' in message ? message.thinkingContent : undefined;
-  const isThinking = 'isThinking' in message ? message.isThinking : false;
-
   // Skip rendering if message has no meaningful content
-  const hasThinking =
-    thinkingBlocks.length > 0 || (streamingThinking && streamingThinking.length > 0);
+  const hasThinking = thinkingBlocks.length > 0 || !!streamingThinking || isThinking;
   const hasTextBefore = textBeforeTools.some((text) => text.trim().length > 0);
   const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
   const hasTools = toolBlocks.length > 0;
@@ -851,6 +858,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
         <ThinkingBlock
           content={streamingThinking || thinkingBlocks.join('\n\n')}
           isStreaming={isThinking}
+          startedAt={'thinkingStartedAt' in message ? message.thinkingStartedAt : undefined}
+          endedAt={'thinkingEndedAt' in message ? message.thinkingEndedAt : undefined}
           defaultExpanded={false}
           revealRequested={revealReasoning}
         />

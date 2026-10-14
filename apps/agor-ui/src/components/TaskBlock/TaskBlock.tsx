@@ -377,6 +377,20 @@ function messageHasTool(message: Message, toolUseId: string): boolean {
   );
 }
 
+function hasStreamedThinking(message: Message): boolean {
+  return (
+    ('isThinking' in message && !!message.isThinking) ||
+    ('thinkingContent' in message && !!message.thinkingContent)
+  );
+}
+
+/** A live thinking line with no reply text yet: not a speaker bubble. */
+function isThinkingOnlyStream(message: Message): boolean {
+  return (
+    hasStreamedThinking(message) && typeof message.content === 'string' && !message.content.trim()
+  );
+}
+
 function isAgentChainMessage(message: Message): boolean {
   // EXCEPTION: User messages with ONLY tool_result blocks are part of agent execution
   // (tool results are technically "user" role per Anthropic API, but they're automated responses)
@@ -387,6 +401,9 @@ function isAgentChainMessage(message: Message): boolean {
 
   // Only agent messages beyond this point
   if (message.role !== MessageRole.ASSISTANT) return false;
+
+  // Streamed thinking renders as its own line through MessageBlock's ThinkingBlock.
+  if (hasStreamedThinking(message)) return false;
 
   // String content - this is user-facing response, NOT agent chain
   if (typeof message.content === 'string') {
@@ -845,7 +862,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       const grouped = new Set<string>();
       let previousSpeaker: ReturnType<typeof getMessageSpeaker> = null;
       for (const block of blocks) {
-        if (block.type !== 'message' || isSdkStatusMessage(block.message)) {
+        if (
+          block.type !== 'message' ||
+          isSdkStatusMessage(block.message) ||
+          isThinkingOnlyStream(block.message)
+        ) {
           previousSpeaker = null;
           continue;
         }

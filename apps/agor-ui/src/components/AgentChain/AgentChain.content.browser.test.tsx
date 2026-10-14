@@ -35,7 +35,7 @@ it.each<ContentBlock>([
   render(<AgentChain messages={[message([block, { type: 'text', text: 'Surviving thought' }])]} />);
   await userEvent.click(screen.getByRole('button', { name: 'Reasoning', expanded: false }));
   expect(screen.getByText('Surviving thought')).toBeVisible();
-  expect(screen.getAllByText('Thinking', { exact: true })).toHaveLength(1);
+  expect(screen.getAllByText('Thought', { exact: true })).toHaveLength(1);
   expect(screen.queryByText('Not a text-block field')).not.toBeInTheDocument();
 });
 
