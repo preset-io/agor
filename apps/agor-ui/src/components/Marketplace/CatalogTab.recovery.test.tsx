@@ -328,124 +328,7 @@ it('can connect again after closing a drawer with a pending installation', async
   expect(api.connect).toHaveBeenCalledTimes(2);
 });
 
-describe('explicit onboarding context', () => {
-  it('installs without teammate reads, sessions, navigation or prompt staging and returns locally', async () => {
-    const api = buildClient();
-    const onConnected = vi.fn();
-    const onClose = vi.fn();
-    render(
-      <MemoryRouter>
-        <CatalogTab
-          client={api.client}
-          connected
-          connecting={false}
-          authGeneration={1}
-          currentUser={USER}
-          context={{ mode: 'onboarding', entryName: ENTRY.name, onConnected, onClose }}
-        />
-      </MemoryRouter>
-    );
-    const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
-    await dialog.findByText('No account expected');
-    fireEvent.click(
-      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
-    );
-    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
-    await dialog.findByText('Connected and ready');
-    expect(api.connect).toHaveBeenCalledWith({
-      catalog_key: ENTRY.name,
-      acknowledged_disclosure: ENTRY.permission_disclosure,
-      sharing: 'private',
-    });
-    expect(onConnected).toHaveBeenCalledExactlyOnceWith('server-1');
-    expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
-    expect(api.getPrimaryTeammate).not.toHaveBeenCalled();
-    expect(api.startSession).not.toHaveBeenCalled();
-    expect(mockNavigate).not.toHaveBeenCalled();
-    expect(consumePromptDraftSeed(USER.user_id, SESSION_ID)).toBe('');
-    expect(dialog.queryByRole('combobox')).not.toBeInTheDocument();
-    expect(dialog.queryByRole('button', { name: /Start.*session/ })).not.toBeInTheDocument();
-    expect(dialog.queryByText(/new session|try.*server|starter prompt/i)).not.toBeInTheDocument();
-    fireEvent.click(dialog.getByRole('button', { name: 'Return to onboarding' }));
-    expect(onClose).toHaveBeenCalledOnce();
-  });
-
-  it('redacts failed installation details and retries locally without session side effects', async () => {
-    const api = buildClient();
-    api.connect.mockRejectedValueOnce(new Error('secret-test-value echoed by a failed provider'));
-    const onConnected = vi.fn();
-    render(
-      <MemoryRouter>
-        <CatalogTab
-          client={api.client}
-          connected
-          connecting={false}
-          authGeneration={1}
-          currentUser={USER}
-          context={{ mode: 'onboarding', entryName: ENTRY.name, onConnected, onClose: vi.fn() }}
-        />
-      </MemoryRouter>
-    );
-    const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
-    await dialog.findByText('No account expected');
-    fireEvent.click(
-      dialog.getByRole('checkbox', { name: 'I understand what this server can access' })
-    );
-    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
-    await dialog.findByText("Couldn't connect this server.");
-    expect(dialog.queryByRole('button', { name: 'Details' })).not.toBeInTheDocument();
-    expect(screen.queryByText(/secret-test-value/)).not.toBeInTheDocument();
-    await waitFor(() =>
-      expect(dialog.getByRole('button', { name: 'Connect' })).not.toHaveClass('ant-btn-loading')
-    );
-    fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
-    await dialog.findByText('Connected and ready');
-    expect(api.connect).toHaveBeenCalledTimes(2);
-    expect(api.startSession).not.toHaveBeenCalled();
-    expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
-    expect(onConnected).toHaveBeenCalledExactlyOnceWith('server-1');
-  });
-});
-
-it.each(['missing', 'error'] as const)(
-  'keeps the onboarding drawer mounted across %s Catalog retry',
-  async (initial) => {
-    const api = buildClient();
-    if (initial === 'missing')
-      api.catalogRead.mockResolvedValueOnce({ total: 0, limit: 1, skip: 0, data: [] });
-    else api.catalogRead.mockRejectedValueOnce(new Error('fixture catalog unavailable'));
-    render(
-      <MemoryRouter>
-        <CatalogTab
-          client={api.client}
-          connected
-          connecting={false}
-          authGeneration={1}
-          currentUser={USER}
-          context={{
-            mode: 'onboarding',
-            entryName: ENTRY.name,
-            onConnected: vi.fn(),
-            onClose: vi.fn(),
-          }}
-        />
-      </MemoryRouter>
-    );
-    const dialog = await screen.findByRole('dialog', { name: 'Catalog' });
-    const root = dialog.closest('.ant-drawer');
-    const retry = await within(dialog).findByRole('button', { name: 'Retry' });
-    fireEvent.click(retry);
-    await screen.findByText(ENTRY.benefit);
-    expect(document.querySelector('.ant-drawer')).toBe(root);
-    expect(document.querySelectorAll('.ant-drawer')).toHaveLength(1);
-    expect(api.catalogRead).toHaveBeenCalledTimes(2);
-    expect(api.connect).not.toHaveBeenCalled();
-    expect(api.startSession).not.toHaveBeenCalled();
-    expect(mockNavigate).not.toHaveBeenCalled();
-  }
-);
-
-describe.each(['catalog', 'onboarding'] as const)('fresh Connect OAuth authority in %s', (mode) => {
+describe('fresh Connect OAuth authority in catalog', () => {
   it.each([
     {
       name: 'stale positive badge, no live grant',
@@ -493,7 +376,6 @@ describe.each(['catalog', 'onboarding'] as const)('fresh Connect OAuth authority
     };
     api.connect.mockResolvedValue({ ...response, mcp_server: { ...response.mcp_server, auth } });
     agorStore.setState({ userAuthenticatedMcpServerIds: new Set(cached ? ['server-1'] : []) });
-    const onConnected = vi.fn();
     render(
       <MemoryRouter>
         <CatalogTab
@@ -502,15 +384,10 @@ describe.each(['catalog', 'onboarding'] as const)('fresh Connect OAuth authority
           connecting={false}
           authGeneration={1}
           currentUser={USER}
-          context={
-            mode === 'onboarding'
-              ? { mode, entryName: ENTRY.name, onConnected, onClose: vi.fn() }
-              : undefined
-          }
         />
       </MemoryRouter>
     );
-    if (mode === 'catalog') await openDrawer();
+    await openDrawer();
     const dialog = within(await screen.findByRole('dialog', { name: /DeepWiki/ }));
     await dialog.findByText('No account expected');
     fireEvent.click(
@@ -518,15 +395,12 @@ describe.each(['catalog', 'onboarding'] as const)('fresh Connect OAuth authority
     );
     fireEvent.click(dialog.getByRole('button', { name: 'Connect' }));
     if (ready) {
-      await dialog.findByText(
-        mode === 'onboarding' ? 'Connected and ready' : 'Added to My Servers'
-      );
+      await dialog.findByText('Added to My Servers');
       expect(dialog.queryByRole('button', { name: /Continue sign-in/ })).not.toBeInTheDocument();
     } else {
       await dialog.findByRole('button', { name: /Continue sign-in/ });
-      expect(dialog.queryByText('Connected and ready')).not.toBeInTheDocument();
+      expect(dialog.queryByText('Connection status: Connected and ready.')).not.toBeInTheDocument();
     }
-    expect(onConnected).toHaveBeenCalledTimes(mode === 'onboarding' && ready ? 1 : 0);
     expect(api.client.service).not.toHaveBeenCalledWith('mcp-servers/oauth-start');
     expect(api.getPrimaryTeammateCandidates).not.toHaveBeenCalled();
     expect(api.startSession).not.toHaveBeenCalled();

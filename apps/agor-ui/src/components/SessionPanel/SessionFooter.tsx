@@ -324,11 +324,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   };
-  // Phones skip hover tooltips: a tap leaves them over the sheet and buttons.
-  // Gated by viewport width, not pointer type, to match the phone layout switch.
-  const hoverTooltip = (title: React.ReactNode) => (isMobile ? undefined : title);
   const pinToggle = (pinned: boolean, label: string, tooltip: string, onToggle: () => void) => (
-    <Tooltip title={hoverTooltip(tooltip)} placement="right">
+    <Tooltip title={tooltip} placement="right">
       <Button
         type="text"
         size={actionSize}
@@ -382,7 +379,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       />
     ) : null;
   const moreButton = (
-    <Tooltip title={hoverTooltip('More options')}>
+    <Tooltip title="More options">
       <Button
         size={actionSize}
         style={touchActionStyle}
@@ -507,13 +504,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         }
       >
         <Tooltip
-          title={hoverTooltip(
+          title={
             composerAttachmentUploading
               ? composerUploadTooltip
               : connectionDisabled
                 ? LOST_CONNECTION_TOOLTIP
                 : 'Attach files to prompt'
-          )}
+          }
           placement="left"
         >
           <span style={labelGroupStyle}>
@@ -554,13 +551,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         }
       >
         <Tooltip
-          title={hoverTooltip(
+          title={
             composerAttachmentUploading
               ? composerUploadTooltip
               : connectionDisabled
                 ? LOST_CONNECTION_TOOLTIP
                 : 'Upload files with options'
-          )}
+          }
           placement="left"
         >
           <span style={labelGroupStyle}>
@@ -604,13 +601,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }
         >
           <Tooltip
-            title={hoverTooltip(
+            title={
               connectionDisabled
                 ? LOST_CONNECTION_TOOLTIP
                 : composerAttachmentsPresent
                   ? composerAttachmentActionTooltip
                   : 'Fork this session'
-            )}
+            }
             placement="left"
           >
             <span style={labelGroupStyle}>
@@ -655,13 +652,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }
         >
           <Tooltip
-            title={hoverTooltip(
+            title={
               composerAttachmentsPresent
                 ? composerAttachmentActionTooltip
                 : connectionDisabled || !hasInput
                   ? 'Needs input and a live connection'
                   : 'Ask a side question via an ephemeral fork'
-            )}
+            }
             placement="left"
           >
             <span style={labelGroupStyle}>
@@ -706,7 +703,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }
         >
           <Tooltip
-            title={hoverTooltip(
+            title={
               connectionDisabled
                 ? 'Disconnected'
                 : composerAttachmentsPresent
@@ -714,7 +711,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   : isRunning
                     ? 'Session is running'
                     : 'Spawn a child subsession'
-            )}
+            }
             placement="left"
           >
             <span style={labelGroupStyle}>
@@ -1143,13 +1140,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           <Space size={4} style={isMobile ? { order: -1 } : undefined}>
             {barPinnedItems.includes('upload') && (
               <Tooltip
-                title={hoverTooltip(
+                title={
                   composerAttachmentUploading
                     ? composerUploadTooltip
                     : connectionDisabled
                       ? LOST_CONNECTION_TOOLTIP
                       : 'Attach files'
-                )}
+                }
               >
                 <Button
                   size={actionSize}
@@ -1166,13 +1163,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             )}
             {barPinnedItems.includes('advanced-upload') && (
               <Tooltip
-                title={hoverTooltip(
+                title={
                   composerAttachmentUploading
                     ? composerUploadTooltip
                     : connectionDisabled
                       ? LOST_CONNECTION_TOOLTIP
                       : 'Advanced upload'
-                )}
+                }
               >
                 <Button
                   size={actionSize}
@@ -1187,9 +1184,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </Tooltip>
             )}
             {barPinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
-              <Tooltip
-                title={hoverTooltip(connectionDisabled ? LOST_CONNECTION_TOOLTIP : 'Fork Session')}
-              >
+              <Tooltip title={connectionDisabled ? LOST_CONNECTION_TOOLTIP : 'Fork Session'}>
                 <Button
                   size={actionSize}
                   style={touchActionStyle}
@@ -1204,7 +1199,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             )}
             {/* Dynamically pinned items */}
             {barPinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
-              <Tooltip title={hoverTooltip('BTW fork')}>
+              <Tooltip title="BTW fork">
                 <Button
                   size={actionSize}
                   style={touchActionStyle}
@@ -1218,7 +1213,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </Tooltip>
             )}
             {barPinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
-              <Tooltip title={hoverTooltip('Spawn subsession')}>
+              <Tooltip title="Spawn subsession">
                 <Button
                   size={actionSize}
                   style={touchActionStyle}
@@ -1271,7 +1266,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             {/* Flex avoids inline baseline/descender space around the controls. */}
             <Flex align="center" gap={token.sizeUnit}>
               {showStop && (
-                <Tooltip title={hoverTooltip(stopTooltip)}>
+                <Tooltip title={stopTooltip}>
                   <Button
                     danger
                     aria-label="Stop"
@@ -1288,7 +1283,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   </Button>
                 </Tooltip>
               )}
-              <Tooltip title={hoverTooltip(sendTooltip)}>
+              <Tooltip title={sendTooltip}>
                 <Badge
                   count={queuedTasks.length > 0 ? queuedTasks.length : 0}
                   size="small"

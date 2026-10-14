@@ -24,6 +24,7 @@ import {
 import { Badge, Button, Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useRef, useState } from 'react';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
@@ -629,6 +630,7 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
   style,
 }) => {
   const { token } = theme.useToken();
+  const touchInput = useIsTouchInput();
   // Prefer SDK session ID (more useful for CLI/logs) over Agor internal ID
   const displayId = sdkSessionId || sessionId;
   const idShort = shortId(displayId);
@@ -668,7 +670,8 @@ export const SessionIdPill: React.FC<SessionIdPillProps> = ({
           />
         </div>
       }
-      trigger="hover"
+      // A tap emulates hover; on touch the IDs open and close on tap instead.
+      trigger={touchInput ? 'click' : 'hover'}
       placement="top"
       mouseEnterDelay={0.3}
     >

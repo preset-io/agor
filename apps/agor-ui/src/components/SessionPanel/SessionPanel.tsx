@@ -57,6 +57,7 @@ import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useSessionGenealogyTargets } from '../../hooks/useSessionGenealogyTargets';
@@ -68,6 +69,7 @@ import {
   selectUserAuthenticatedMcpServerIds,
   selectUserById,
 } from '../../store/selectors';
+import { isComposerSendKey } from '../../utils/composerKeys';
 import {
   formatActionError,
   notConnectedMessage,
@@ -127,9 +129,6 @@ export type { PermissionMode };
 // The parent reads/clears the value imperatively via a ref.
 // ---------------------------------------------------------------------------
 
-// iOS Safari zooms into inputs below 16px.
-const MOBILE_COMPOSER_FONT_SIZE = 16;
-
 export interface PromptInputHandle {
   getValue: () => string;
   /** Empty the composer, or leave only `remainder` (text typed after a send began). */
@@ -148,7 +147,7 @@ interface PromptInputProps {
   onHasInputChange: (hasInput: boolean) => void;
   /** Kept in sync so memoized children can read the latest value */
   inputValueRef: React.MutableRefObject<string>;
-  /** Called on Enter (without Shift) when there is sendable composer content */
+  /** Called on a send keypress (`isComposerSendKey`) when there is sendable composer content */
   onSubmit: () => void;
   hasExternalInput?: boolean;
   // Forwarded to AutocompleteTextarea
@@ -191,6 +190,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     ref
   ) => {
     const isMobile = useIsMobileViewport();
+    const touchInput = useIsTouchInput();
     const { token } = theme.useToken();
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
@@ -307,14 +307,13 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
 
     const handleKeyPress = React.useCallback(
       (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          if (valueRef.current.trim() || hasExternalInput) {
-            onSubmit();
-          }
+        if (!isComposerSendKey(e, touchInput)) return;
+        e.preventDefault();
+        if (valueRef.current.trim() || hasExternalInput) {
+          onSubmit();
         }
       },
-      [hasExternalInput, onSubmit]
+      [hasExternalInput, onSubmit, touchInput]
     );
 
     return (
@@ -337,17 +336,16 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         enableKnowledgeMentions
         kbLinkTarget="absolute-route"
         highlightWhenEmpty
-        // Preserve the mobile composer's iOS no-autozoom threshold. The shared
-        // textarea also applies these metrics to its mention highlight overlay.
-        // Block padding makes one line a full touch-target tall.
+        // Body-size text like desktop; iOS focus zoom is off via the viewport
+        // (preventIosInputZoom). The shared textarea also applies these metrics
+        // to its mention highlight overlay. Block padding makes one line a full
+        // touch-target tall.
         textareaStyle={
           isMobile
             ? {
-                fontSize: MOBILE_COMPOSER_FONT_SIZE,
+                fontSize: token.fontSize,
                 paddingBlock:
-                  (MOBILE_TOUCH_TARGET -
-                    2 * token.lineWidth -
-                    MOBILE_COMPOSER_FONT_SIZE * token.lineHeight) /
+                  (MOBILE_TOUCH_TARGET - 2 * token.lineWidth - token.fontSize * token.lineHeight) /
                   2,
               }
             : undefined
@@ -1787,15 +1785,33 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             {totalMatches > 1 && (
               <Space size={2}>
                 <Tooltip title="Previous (Shift+Enter)">
-                  <Button type="text" size="small" icon={<UpOutlined />} onClick={goPrev} />
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label="Previous match"
+                    icon={<UpOutlined />}
+                    onClick={goPrev}
+                  />
                 </Tooltip>
                 <Tooltip title="Next (Enter)">
-                  <Button type="text" size="small" icon={<DownOutlined />} onClick={goNext} />
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label="Next match"
+                    icon={<DownOutlined />}
+                    onClick={goNext}
+                  />
                 </Tooltip>
               </Space>
             )}
             <Tooltip title="Close search (Esc)">
-              <Button type="text" size="small" icon={<CloseOutlined />} onClick={closeSearch} />
+              <Button
+                type="text"
+                size="small"
+                aria-label="Close search"
+                icon={<CloseOutlined />}
+                onClick={closeSearch}
+              />
             </Tooltip>
           </div>
         </div>

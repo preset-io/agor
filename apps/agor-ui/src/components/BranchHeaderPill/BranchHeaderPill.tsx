@@ -15,6 +15,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Tooltip, theme } from 'antd';
 import { Link } from 'react-router-dom';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEnvironmentAccessUrls } from '../../utils/environmentAccessUrls';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
@@ -97,6 +98,8 @@ export function BranchHeaderPill({
   compact = false,
 }: BranchHeaderPillProps) {
   const { token } = theme.useToken();
+  // Touch inherits the app's no-trigger tooltip default (TouchTooltipConfig).
+  const touchInput = useIsTouchInput();
   const confirmNuke = useConfirmNukeEnvironment();
   const effectiveEnv = getEffectiveEnv(repo);
   const hasConfig = effectiveEnv.hasConfig;
@@ -257,7 +260,7 @@ export function BranchHeaderPill({
       }}
     >
       {/* Section 1: Repo + Branch — click opens either the supplied identity URL or the branch modal. */}
-      <Tooltip title={identityTooltip} trigger={['hover', 'focus']}>
+      <Tooltip title={identityTooltip} trigger={touchInput ? undefined : ['hover', 'focus']}>
         {identityLink && isInternalIdentityLink ? (
           <Link
             to={identityLink}

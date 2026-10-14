@@ -33,8 +33,10 @@ import {
 } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutationGate } from '../../contexts/ConnectionContext';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { commentMentionsUser } from '../../utils/commentMentions';
+import { isComposerSendKey } from '../../utils/composerKeys';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { AgorEmojiPicker } from '../EmojiPickerInput';
 import { MarkdownRenderer } from '../MarkdownRenderer';
@@ -304,6 +306,7 @@ const CommentThread: React.FC<{
   alwaysShowActions,
 }) => {
   const { token } = theme.useToken();
+  const touchInput = useIsTouchInput();
   const [showReplyInput, setShowReplyInput] = useState(false);
   const [replyValue, setReplyValue] = useState('');
   const [isHovered, setIsHovered] = useState(false);
@@ -494,13 +497,12 @@ const CommentThread: React.FC<{
                 value={replyValue}
                 onChange={setReplyValue}
                 onKeyPress={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    if (replyValue.trim()) {
-                      onReply(comment.comment_id, replyValue);
-                      setReplyValue('');
-                      setShowReplyInput(false);
-                    }
+                  if (!isComposerSendKey(e, touchInput)) return;
+                  e.preventDefault();
+                  if (replyValue.trim()) {
+                    onReply(comment.comment_id, replyValue);
+                    setReplyValue('');
+                    setShowReplyInput(false);
                   }
                 }}
                 placeholder="Reply... (type @ for autocomplete)"
@@ -552,6 +554,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   alwaysShowActions,
 }) => {
   const { token } = theme.useToken();
+  const touchInput = useIsTouchInput();
   const isMobile = useIsMobileViewport();
   const [filter, setFilter] = useState<FilterMode>('active');
   const [commentInputValue, setCommentInputValue] = useState('');
@@ -884,12 +887,11 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
             value={commentInputValue}
             onChange={setCommentInputValue}
             onKeyPress={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                if (commentInputValue.trim() && mutationGate.canMutate) {
-                  sendComment(commentInputValue);
-                  setCommentInputValue('');
-                }
+              if (!isComposerSendKey(e, touchInput)) return;
+              e.preventDefault();
+              if (commentInputValue.trim() && mutationGate.canMutate) {
+                sendComment(commentInputValue);
+                setCommentInputValue('');
               }
             }}
             placeholder={

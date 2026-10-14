@@ -5,10 +5,12 @@ import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { memo, useMemo, useRef, useState } from 'react';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useSessionAccess } from '../../hooks/useSessionAccess';
 import { useSharedTeammates } from '../../hooks/useSharedTeammates';
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { makeLatestOwnSessionSelector, makeTeammatesSelector } from '../../store/selectors';
+import { isComposerSendKey } from '../../utils/composerKeys';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { teammateEmoji, teammateLabel, teammateOption } from '../../utils/teammateLabels';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
@@ -196,6 +198,7 @@ export const HomeAskBox = memo(function HomeAskBox({
 }: HomeAskBoxProps) {
   const { token } = theme.useToken();
   const compact = useHomeCompact();
+  const touchInput = useIsTouchInput();
   const { authGeneration } = useConnectionState();
   // Missing settings mean “enabled” to the fallback resolver. Wait for the
   // current workspace snapshot before choosing a tool, without blocking drafts.
@@ -294,7 +297,7 @@ export const HomeAskBox = memo(function HomeAskBox({
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+            if (!isComposerSendKey(e, touchInput)) return;
             e.preventDefault();
             send(e.metaKey || e.ctrlKey ? 'open' : 'background');
           }}

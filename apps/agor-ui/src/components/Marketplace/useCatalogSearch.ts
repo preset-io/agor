@@ -55,10 +55,10 @@ export function isFilterActive(filters: CatalogFilterState): boolean {
 export type CatalogStatus = 'loading' | 'ready' | 'error';
 
 export interface CatalogSearchResult {
-  /** Visible reviewed inventory for identity-based navigation, independent of paging. */
-  allEntries: MCPCatalogEntry[];
   /** The current page of matching entries. */
   entries: MCPCatalogEntry[];
+  /** Every matching entry, unpaged. */
+  matches: MCPCatalogEntry[];
   status: CatalogStatus;
   /** Entries matching the active filters. Meaningful only when `ready`. */
   matchCount: number;
@@ -140,7 +140,7 @@ export function useCatalogSearch(
 
   return {
     entries,
-    allEntries: catalog ?? [],
+    matches: matched,
     status,
     matchCount: matched.length,
     catalogSize: catalog?.length ?? null,
