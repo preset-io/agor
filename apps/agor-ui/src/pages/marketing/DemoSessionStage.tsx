@@ -656,6 +656,7 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
           onPermissionModeChange={NOOP}
           onCodexPermissionChange={NOOP}
           promptInputSlot={promptInputSlot}
+          onFilesDrop={NOOP}
         />
       </div>
 

@@ -80,6 +80,7 @@ import {
   splitPinnedActions,
 } from './composerState';
 import { RecoveryActions } from './RecoveryActions';
+import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 
 export interface SessionFooterProps {
@@ -130,8 +131,11 @@ export interface SessionFooterProps {
   onEffortChange: (v: EffortLevel | undefined) => void;
   onPermissionModeChange: (v: PermissionMode) => void;
   onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
-  // Prompt textarea rendered between the two bars
+  /** Attachment tray and text, rendered inside the card. */
   promptInputSlot: React.ReactNode;
+  /** Files dropped anywhere on the card. */
+  onFilesDrop: (files: File[]) => void;
+  onDropActiveChange?: (active: boolean) => void;
 }
 
 type ComposerMenuId = 'plus' | 'model' | 'permissions' | 'details' | 'details-context';
@@ -190,6 +194,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   onPermissionModeChange,
   onCodexPermissionChange,
   promptInputSlot,
+  onFilesDrop,
+  onDropActiveChange,
 }) => {
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
   const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
@@ -1164,82 +1170,93 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         />
       )}
 
-      <div
-        ref={cardRef}
-        data-testid="composer-card"
-        onFocus={() => setCardFocused(true)}
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-            setCardFocused(false);
-          }
-        }}
-        style={{
-          ...glassSurfaceStyle(token, 0.7),
-          display: 'flex',
-          flexDirection: 'column',
-          gap: token.sizeXXS,
-          borderRadius: token.borderRadius * 2,
-          borderWidth: token.lineWidth,
-          borderStyle: token.lineType,
-          borderColor: cardFocused ? token.colorPrimary : token.colorBorder,
-          boxShadow: cardFocused
-            ? `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`
-            : undefined,
-          padding: `${token.paddingXXS + 2}px ${token.paddingXXS + 2}px ${token.paddingXXS + 2}px ${token.paddingSM}px`,
-          transition: reducedMotion ? undefined : `border-color ${token.motionDurationFast}`,
-        }}
+      <SessionComposerDropZone
+        disabled={composerAttachmentUploading}
+        onDragActiveChange={onDropActiveChange}
+        onFilesDrop={onFilesDrop}
+        radius={token.borderRadius * 2}
       >
-        {workingLine}
-        <div style={{ minWidth: 0 }}>{promptInputSlot}</div>
-        <Flex align="center" gap={token.sizeXXS} style={{ minWidth: 0 }}>
-          {plusButton}
-          {pinnedRow}
-          {modelChip}
-          {permissionChip}
-          <span style={{ flex: 1 }} />
-          <Tooltip title={circleTooltip}>
-            <Button
-              {...circleVariant}
-              shape="circle"
-              aria-label={circleLabel}
-              aria-disabled={circleDisabled || undefined}
-              aria-busy={circleState === 'stop' ? stopBusy : undefined}
-              loading={circleState === 'stop' && stopBusy}
-              icon={
-                circleState === 'stop' ? (
-                  <span
-                    aria-hidden
-                    style={{
-                      display: 'inline-block',
-                      width: token.sizeXS + 2,
-                      height: token.sizeXS + 2,
-                      borderRadius: token.borderRadiusXS,
-                      background: 'currentColor',
-                    }}
-                  />
-                ) : circleState === 'queue' ? (
-                  <UnorderedListOutlined />
-                ) : (
-                  <ArrowUpOutlined />
-                )
-              }
-              // Keep the keyboard up on phones and focus in the text after a tap.
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={circleDisabled ? undefined : circleState === 'stop' ? onStop : onSendPrompt}
-              style={{
-                width: controlSize,
-                height: controlSize,
-                minWidth: controlSize,
-                flexShrink: 0,
-                boxShadow: 'none',
-                transition: reducedMotion ? 'none' : undefined,
-                cursor: circleDisabled ? 'not-allowed' : undefined,
-              }}
-              data-testid="composer-circle"
-            />
-          </Tooltip>
-        </Flex>
-      </div>
+        <div
+          ref={cardRef}
+          data-testid="composer-card"
+          onFocus={() => setCardFocused(true)}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              setCardFocused(false);
+            }
+          }}
+          style={{
+            ...glassSurfaceStyle(token, 0.7),
+            display: 'flex',
+            flexDirection: 'column',
+            gap: token.sizeXXS,
+            borderRadius: token.borderRadius * 2,
+            borderWidth: token.lineWidth,
+            borderStyle: token.lineType,
+            borderColor: cardFocused ? token.colorPrimary : token.colorBorder,
+            boxShadow: cardFocused
+              ? `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`
+              : undefined,
+            padding: `${token.paddingXXS + 2}px ${token.paddingXXS + 2}px ${token.paddingXXS + 2}px ${token.paddingSM}px`,
+            transition: reducedMotion ? undefined : `border-color ${token.motionDurationFast}`,
+          }}
+        >
+          {workingLine}
+          <Flex vertical gap={token.sizeXS} style={{ minWidth: 0 }}>
+            {promptInputSlot}
+          </Flex>
+          <Flex align="center" gap={token.sizeXXS} style={{ minWidth: 0 }}>
+            {plusButton}
+            {pinnedRow}
+            {modelChip}
+            {permissionChip}
+            <span style={{ flex: 1 }} />
+            <Tooltip title={circleTooltip}>
+              <Button
+                {...circleVariant}
+                shape="circle"
+                aria-label={circleLabel}
+                aria-disabled={circleDisabled || undefined}
+                aria-busy={circleState === 'stop' ? stopBusy : undefined}
+                loading={circleState === 'stop' && stopBusy}
+                icon={
+                  circleState === 'stop' ? (
+                    <span
+                      aria-hidden
+                      style={{
+                        display: 'inline-block',
+                        width: token.sizeXS + 2,
+                        height: token.sizeXS + 2,
+                        borderRadius: token.borderRadiusXS,
+                        background: 'currentColor',
+                      }}
+                    />
+                  ) : circleState === 'queue' ? (
+                    <UnorderedListOutlined />
+                  ) : (
+                    <ArrowUpOutlined />
+                  )
+                }
+                // Keep the keyboard up on phones and focus in the text after a tap.
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={
+                  circleDisabled ? undefined : circleState === 'stop' ? onStop : onSendPrompt
+                }
+                style={{
+                  width: controlSize,
+                  height: controlSize,
+                  minWidth: controlSize,
+                  flexShrink: 0,
+                  boxShadow: 'none',
+                  transition: reducedMotion ? 'none' : undefined,
+                  cursor: circleDisabled ? 'not-allowed' : undefined,
+                }}
+                data-testid="composer-circle"
+              />
+            </Tooltip>
+          </Flex>
+        </div>
+      </SessionComposerDropZone>
 
       {infoLine}
     </div>

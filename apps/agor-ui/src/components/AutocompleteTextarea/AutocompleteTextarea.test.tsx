@@ -195,13 +195,13 @@ describe('AutocompleteTextarea', () => {
     fireEvent.change(textarea, { target: { value: '@arc', selectionStart: 4 } });
     await waitForDebounce();
 
-    await screen.findByText('KNOWLEDGE BASE');
+    await screen.findByText('Knowledge base');
     expect(screen.getByText('Architecture Overview')).toBeInTheDocument();
     expect(screen.queryByText('guides/architecture.md')).not.toBeInTheDocument();
-    expect(screen.getByText('FILES & FOLDERS')).toBeInTheDocument();
+    expect(screen.getByText('Files and folders')).toBeInTheDocument();
     expect(screen.getByText('src/architecture.ts')).toBeInTheDocument();
-    expect(document.body.textContent?.indexOf('FILES & FOLDERS')).toBeLessThan(
-      document.body.textContent?.indexOf('KNOWLEDGE BASE') ?? Number.POSITIVE_INFINITY
+    expect(document.body.textContent?.indexOf('Files and folders')).toBeLessThan(
+      document.body.textContent?.indexOf('Knowledge base') ?? Number.POSITIVE_INFINITY
     );
     expect(kbSearchFind).toHaveBeenCalledWith({
       query: { q: 'arc', mode: 'text', limit: 8, include_chunks: false },
@@ -237,7 +237,7 @@ describe('AutocompleteTextarea', () => {
     fireEvent.change(textarea, { target: { value: '@arc', selectionStart: 4 } });
     await waitForDebounce();
 
-    expect(screen.queryByText('KNOWLEDGE BASE')).not.toBeInTheDocument();
+    expect(screen.queryByText('Knowledge base')).not.toBeInTheDocument();
     expect(kbSearchFind).not.toHaveBeenCalled();
     expect(kbDocumentsFind).not.toHaveBeenCalled();
   });
