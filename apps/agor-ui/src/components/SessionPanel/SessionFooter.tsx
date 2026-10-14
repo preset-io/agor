@@ -835,11 +835,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         ? 'Agor is checking that the previous work has stopped.'
         : 'Stop';
 
-  const stopLabel = isStopping
-    ? recoveryTask?.termination_request?.cause === 'user_stop'
-      ? 'Stopping'
-      : 'Recovering'
-    : 'Stop';
   const recoveryFailed = recoveryTask?.sdk_failure?.termination === 'unverified';
   const showStop = !recoveryFailed && (isRunning || stopRequestInFlight);
   // isRunning also includes stopping for the action controls. Only advertise
@@ -1279,18 +1274,31 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 <Tooltip title={hoverTooltip(stopTooltip)}>
                   <Button
                     danger
-                    aria-label={stopLabel}
+                    aria-label="Stop"
                     aria-busy={stopRequestInFlight || isStopping}
                     size={actionSize}
                     style={touchActionStyle}
+                    // Keep the action compact and stable; the task banner owns recovery status.
+                    styles={{
+                      icon: {
+                        width: token.fontSizeLG,
+                        height: token.fontSizeLG,
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      },
+                    }}
                     icon={
-                      stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
+                      stopRequestInFlight || isStopping ? (
+                        <Spin size="small" aria-hidden="true" />
+                      ) : (
+                        <StopOutlined />
+                      )
                     }
                     onClick={onStop}
                     disabled={connectionDisabled || !isRunning || stopRequestInFlight || isStopping}
                   >
                     {/* Desktop keeps text labels; phones are icon-only touch targets. */}
-                    {isMobile ? null : isStopping ? `${stopLabel}…` : stopLabel}
+                    {isMobile ? null : 'Stop'}
                   </Button>
                 </Tooltip>
               )}

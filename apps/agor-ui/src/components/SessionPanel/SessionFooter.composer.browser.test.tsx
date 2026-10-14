@@ -69,6 +69,53 @@ const props: SessionFooterProps = {
   promptInputSlot: <textarea aria-label="Fixture composer" style={{ width: '100%' }} />,
 };
 
+it.each([390, 1280])('keeps Stop stable through shutdown and recovery at %dpx', async (width) => {
+  await page.viewport(width, 900);
+  const onStop = vi.fn();
+  const footer = (state: Partial<SessionFooterProps> = {}) => (
+    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
+      <App>
+        <main style={{ paddingInline: 24 }}>
+          <SessionFooter {...props} {...state} onStop={onStop} />
+        </main>
+      </App>
+    </ConfigProvider>
+  );
+  const view = render(footer());
+  const stop = screen.getByRole('button', { name: 'Stop' });
+  const queue = screen.getByRole('button', { name: 'Queue' });
+  const stopBounds = stop.getBoundingClientRect().toJSON();
+  const queueBounds = queue.getBoundingClientRect().toJSON();
+  expect(stop).toBeEnabled();
+  await userEvent.click(stop);
+  expect(onStop).toHaveBeenCalledOnce();
+
+  const states: Partial<SessionFooterProps>[] = [
+    { stopRequestInFlight: true },
+    ...(['user_stop', 'heartbeat_lost'] as const).map((cause) => ({
+      isStopping: true,
+      session: { ...props.session, status: SessionStatus.STOPPING },
+      recoveryTask: {
+        ...props.footerTimerTask,
+        status: TaskStatus.STOPPING,
+        termination_request: { cause, requested_at: '2026-01-01T00:00:00Z' },
+      } as Task,
+    })),
+  ];
+  for (const state of states) {
+    view.rerender(footer(state));
+    expect(screen.getByRole('button', { name: 'Stop' })).toBe(stop);
+    expect(stop.textContent).toBe(width < 1024 ? '' : 'Stop');
+    expect(stop).toBeDisabled();
+    expect(stop).toHaveAttribute('aria-busy', 'true');
+    expect(stop.querySelector('.ant-spin')).toBeVisible();
+    expect(stop.getBoundingClientRect().toJSON()).toEqual(stopBounds);
+    expect(queue.getBoundingClientRect().toJSON()).toEqual(queueBounds);
+    stop.click();
+    expect(onStop).toHaveBeenCalledOnce();
+  }
+});
+
 it.each([
   [360, 740, false],
   [390, 844, true],
