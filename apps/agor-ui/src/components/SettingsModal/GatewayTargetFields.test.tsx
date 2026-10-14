@@ -26,11 +26,19 @@ function makeClient(rows = [ada, ordinary, branch('old', 'Archived', true, true)
   return { client, find };
 }
 
-function Harness({ client, onFinish = vi.fn() }: { client: AgorClient; onFinish?: () => void }) {
+function Harness({
+  client,
+  onFinish = vi.fn(),
+  channelTypeLabel = 'Slack',
+}: {
+  client: AgorClient;
+  onFinish?: () => void;
+  channelTypeLabel?: string;
+}) {
   const [form] = Form.useForm();
   return (
     <Form form={form} layout="vertical" onFinish={onFinish} aria-label="Gateway target">
-      <GatewayTargetFields client={client} />
+      <GatewayTargetFields client={client} channelTypeLabel={channelTypeLabel} />
       <Button htmlType="submit">Continue</Button>
       <Button onClick={() => form.resetFields()}>Reset</Button>
     </Form>
@@ -39,7 +47,8 @@ function Harness({ client, onFinish = vi.fn() }: { client: AgorClient; onFinish?
 
 async function select(label: string, option: string) {
   fireEvent.mouseDown(screen.getByRole('combobox', { name: label }));
-  fireEvent.click(await screen.findByTitle(option));
+  const item = await screen.findByTitle(option);
+  await act(async () => fireEvent.click(item));
 }
 
 describe('GatewayTargetFields', () => {
@@ -68,6 +77,7 @@ describe('GatewayTargetFields', () => {
     fireEvent.click(screen.getByText('Continue'));
     await waitFor(() =>
       expect(onFinish).toHaveBeenCalledWith({
+        name: 'AI Ada · Slack',
         target_kind: 'teammate',
         target_branch_id: 'teammate-1',
       })
@@ -93,6 +103,7 @@ describe('GatewayTargetFields', () => {
     fireEvent.click(screen.getByText('Continue'));
     await waitFor(() =>
       expect(onFinish).toHaveBeenCalledWith({
+        name: 'Long-lived branch · Slack',
         target_kind: 'branch',
         target_branch_id: 'branch-1',
       })
@@ -104,7 +115,7 @@ describe('GatewayTargetFields', () => {
     expect(await screen.findByText('Please select an AI Teammate')).toBeInTheDocument();
     expect(onFinish).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('radio', { name: 'Specific branch' }));
-    fireEvent.click(screen.getByText('Reset'));
+    await act(async () => fireEvent.click(screen.getByText('Reset')));
     expect(screen.getByRole('radio', { name: 'AI Teammate' })).toBeChecked();
   });
 
@@ -114,10 +125,12 @@ describe('GatewayTargetFields', () => {
     render(<Harness client={makeClient([ada, support]).client} onFinish={onFinish} />);
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'AI Teammate' }));
     expect(await screen.findByTitle('AI Ada (Ada)')).toBeInTheDocument();
-    fireEvent.click(await screen.findByTitle('AI Ada (support-teammate)'));
+    const supportOption = await screen.findByTitle('AI Ada (support-teammate)');
+    await act(async () => fireEvent.click(supportOption));
     fireEvent.click(screen.getByText('Continue'));
     await waitFor(() =>
       expect(onFinish).toHaveBeenCalledWith({
+        name: 'AI Ada · Slack',
         target_kind: 'teammate',
         target_branch_id: ordinary.branch_id,
       })
@@ -140,10 +153,11 @@ describe('GatewayTargetFields', () => {
     expect(await screen.findByText('Loading AI Teammates…')).toBeInTheDocument();
     await act(async () => pending.resolve({ data: [ada] }));
     await screen.findByTitle('AI Ada (Ada)');
-    fireEvent.keyDown(picker, { key: 'Enter', keyCode: 13 });
+    await act(async () => fireEvent.keyDown(picker, { key: 'Enter', keyCode: 13 }));
     fireEvent.click(screen.getByText('Continue'));
     await waitFor(() =>
       expect(onFinish).toHaveBeenCalledWith({
+        name: 'AI Ada · Slack',
         target_kind: 'teammate',
         target_branch_id: 'teammate-1',
       })
@@ -157,6 +171,70 @@ describe('GatewayTargetFields', () => {
     expect(screen.getByRole('radio', { name: 'AI Teammate' })).toBeChecked();
     fireEvent.click(screen.getByRole('radio', { name: 'Specific branch' }));
     expect(await screen.findByRole('combobox', { name: 'Target Branch' })).toBeInTheDocument();
+  });
+
+  it('shows the name only after selecting a target and follows target/platform changes', async () => {
+    const { client } = makeClient();
+    const view = render(<Harness client={client} />);
+    expect(screen.queryByRole('button', { name: 'Rename gateway' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Display name' })).not.toBeInTheDocument();
+    await select('AI Teammate', 'AI Ada (Ada)');
+    expect(await screen.findByText('AI Ada · Slack')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Rename gateway' })).toBeVisible();
+    view.rerender(<Harness client={client} channelTypeLabel="Discord" />);
+    expect(await screen.findByText('AI Ada · Discord')).toBeVisible();
+    fireEvent.click(screen.getByRole('radio', { name: 'Specific branch' }));
+    await screen.findByRole('combobox', { name: 'Target Branch' });
+    expect(screen.queryByRole('button', { name: 'Rename gateway' })).not.toBeInTheDocument();
+    await select('Target Branch', 'Long-lived branch');
+    expect(await screen.findByText('Long-lived branch · Discord')).toBeVisible();
+  });
+
+  it('preserves a custom name across target/platform changes and resets customization with the draft', async () => {
+    const { client } = makeClient();
+    const onFinish = vi.fn();
+    const view = render(<Harness client={client} onFinish={onFinish} />);
+    await select('AI Teammate', 'AI Ada (Ada)');
+    fireEvent.click(screen.getByRole('button', { name: 'Rename gateway' }));
+    const input = screen.getByRole('textbox', { name: 'Display name' });
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue('AI Ada · Slack');
+    fireEvent.change(input, { target: { value: 'Support inbox' } });
+    view.rerender(<Harness client={client} onFinish={onFinish} channelTypeLabel="Discord" />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Specific branch' }));
+    await screen.findByRole('combobox', { name: 'Target Branch' });
+    await select('Target Branch', 'Long-lived branch');
+    expect(screen.getByRole('textbox', { name: 'Display name' })).toHaveValue('Support inbox');
+    fireEvent.click(screen.getByText('Continue'));
+    await waitFor(() =>
+      expect(onFinish).toHaveBeenCalledWith({
+        name: 'Support inbox',
+        target_kind: 'branch',
+        target_branch_id: 'branch-1',
+      })
+    );
+    await act(async () => fireEvent.click(screen.getByText('Reset')));
+    expect(screen.queryByRole('textbox', { name: 'Display name' })).not.toBeInTheDocument();
+    await select('AI Teammate', 'AI Ada (Ada)');
+    expect(await screen.findByText('AI Ada · Discord')).toBeVisible();
+  });
+
+  it('keeps suggesting until text is actually changed, then validates a blank custom name', async () => {
+    const { client } = makeClient();
+    const onFinish = vi.fn();
+    const view = render(<Harness client={client} onFinish={onFinish} />);
+    await select('AI Teammate', 'AI Ada (Ada)');
+    fireEvent.click(screen.getByRole('button', { name: 'Rename gateway' }));
+    view.rerender(<Harness client={client} onFinish={onFinish} channelTypeLabel="Discord" />);
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: 'Display name' })).toHaveValue('AI Ada · Discord')
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'Display name' }), {
+      target: { value: '   ' },
+    });
+    fireEvent.click(screen.getByText('Continue'));
+    expect(await screen.findByText('Please enter a display name')).toBeVisible();
+    expect(onFinish).not.toHaveBeenCalled();
   });
 
   it('searches teammates on the server without relying on the loaded branch store', async () => {

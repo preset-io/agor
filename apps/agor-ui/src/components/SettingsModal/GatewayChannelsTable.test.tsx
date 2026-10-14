@@ -12,11 +12,23 @@ import { StandaloneSettingsDrillProvider } from './SettingsDrill';
 // jsdom is pathologically slow. Replace them with trivial native inputs so the
 // wizard's required identity fields can be filled instantly and deterministically.
 vi.mock('./BranchSelect', () => ({
-  BranchSelect: ({ value, onChange }: { value?: string; onChange?: (value: string) => void }) => (
+  BranchSelect: ({
+    value,
+    onChange,
+  }: {
+    value?: string;
+    onChange?: (value: string, branch?: Branch) => void;
+  }) => (
     <input
       aria-label="branch-select"
       value={value ?? ''}
-      onChange={(e) => onChange?.(e.target.value)}
+      onChange={(e) =>
+        onChange?.(e.target.value, {
+          branch_id: e.target.value,
+          name: 'main',
+          ref: 'main',
+        } as Branch)
+      }
     />
   ),
 }));
@@ -247,11 +259,16 @@ function selectChannelType(label: string) {
 }
 
 /** Fill the universal "Channel" step (step 0) and advance to "Options" (step 1). */
-async function advanceToOptions() {
-  fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
-    target: { value: 'My Slack' },
+async function advanceToOptions(displayName?: string) {
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
   });
-  fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
+  if (displayName !== undefined) {
+    fireEvent.click(screen.getByLabelText('Rename gateway'));
+    fireEvent.change(screen.getByLabelText('Display name'), {
+      target: { value: displayName },
+    });
+  }
   clickButton(/^Continue$/);
   await waitFor(() => expect(getButton(/^Back$/).disabled).toBe(false));
 }
@@ -260,15 +277,15 @@ async function advanceToOptions() {
  * Advance from "Options" to the "Create app" step (step 2). Slack defaults to
  * aligning Slack users, so no run-as user is required and no user-select renders.
  */
-async function advanceToCreateAppStep() {
-  await advanceToOptions();
+async function advanceToCreateAppStep(displayName?: string) {
+  await advanceToOptions(displayName);
   clickButton(/^Continue$/);
   await waitForStep('Create app');
 }
 
 /** Advance all the way to the final "Tokens & test" step (step 3). */
-async function advanceToTokensStep() {
-  await advanceToCreateAppStep();
+async function advanceToTokensStep(displayName?: string) {
+  await advanceToCreateAppStep(displayName);
   clickButton(/^Continue$/);
   await waitForStep('Tokens & test');
 }
@@ -286,7 +303,9 @@ describe('GatewayChannelsTable Slack create wizard', () => {
 
     // Step 0 owns the universal basics; platform options live on later steps.
     expect(screen.getByText('Channel Type')).toBeInTheDocument();
-    expect(screen.getByText('Name')).toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText('e.g., Team Slack, Personal Discord')
+    ).not.toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'AI Teammate' })).toBeChecked();
     expect(screen.getByRole('radio', { name: 'Specific branch' })).not.toBeChecked();
     expect(screen.getByText('Enabled')).toBeInTheDocument();
@@ -400,15 +419,20 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     ).toBeInTheDocument();
   });
 
-  it.each(['AI Teammate', 'Specific branch'])(
-    'creates the channel targeting %s with only a branch ID',
-    async (targetMode) => {
+  it.each([
+    { targetMode: 'AI Teammate', displayName: undefined },
+    { targetMode: 'Specific branch', displayName: undefined },
+    { targetMode: 'AI Teammate', displayName: 'Support inbox' },
+  ])(
+    'creates the channel targeting $targetMode with display name $displayName',
+    async ({ targetMode, displayName }) => {
       const { client, channelCreate } = makeClient();
       renderTable(client);
       clickButton(/Add Channel/);
 
       fireEvent.click(screen.getByRole('radio', { name: targetMode }));
-      await advanceToTokensStep();
+      await advanceToTokensStep(displayName);
+      expect(screen.getByLabelText('App Name')).toHaveValue('Agor');
       fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
       fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
 
@@ -430,6 +454,7 @@ describe('GatewayChannelsTable Slack create wizard', () => {
           connection_mode: 'socket',
         },
       });
+      expect(channelCreate.mock.calls[0][0].name).toBe(displayName ?? 'main · Slack');
       expect(channelCreate.mock.calls[0][0].target_branch_id).toBe('branch-1');
       expect(channelCreate.mock.calls[0][0]).not.toHaveProperty('target_kind');
       expect(channelCreate.mock.calls[0][0].agor_user_id).toBeFalsy();
@@ -572,6 +597,32 @@ function expandPanel(title: string) {
 }
 
 describe('GatewayChannelsTable Slack edit mode', () => {
+  it.each(['Team Slack', 'main · Slack'])(
+    'preserves saved name %s on target changes and allows explicit renaming',
+    async (savedName) => {
+      const onUpdate = vi.fn().mockResolvedValue(undefined);
+      renderEditTable(
+        makeClient().client,
+        { ...makeSlackChannel(), name: savedName },
+        { onUpdate }
+      );
+      expect(screen.queryByRole('button', { name: 'Rename gateway' })).not.toBeInTheDocument();
+      const name = screen.getByLabelText('Name');
+      expect(name).toHaveValue(savedName);
+      fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-2' } });
+      expect(name).toHaveValue(savedName);
+      fireEvent.change(name, { target: { value: 'Support route' } });
+      clickButton(/^Save$/);
+      await waitFor(() =>
+        expect(onUpdate).toHaveBeenCalledWith(
+          'channel-1',
+          expect.objectContaining({ name: 'Support route', target_branch_id: 'branch-2' }),
+          expect.any(Function)
+        )
+      );
+    }
+  );
+
   it('leaves an existing branch target unchanged without showing the creation mode selector', () => {
     renderEditTable(makeClient().client, makeSlackChannel());
     expect(screen.queryByRole('radio', { name: 'AI Teammate' })).not.toBeInTheDocument();
@@ -1241,11 +1292,10 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
     selectChannelType('GitHub');
     await waitForAvailableStep('Credentials');
 
-    // Step 0 (Channel): GitHub picks identity later, so only name + branch here.
-    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
-      target: { value: 'My GH' },
+    // Step 0 (Channel): GitHub picks identity later; selecting a target supplies the name.
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     });
-    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     clickButton(/^Continue$/);
     await waitForStep('Create app');
 
@@ -1273,7 +1323,7 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
       channel_type: 'github',
-      name: 'My GH',
+      name: 'main · GitHub',
       target_branch_id: 'branch-1',
       config: { app_id: 111, watch_repos: ['preset-io/agor'] },
     });
@@ -1295,10 +1345,9 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     await waitForAvailableStep('Setup');
 
     // Step 0 for Teams includes the generic "Post messages as" identity.
-    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
-      target: { value: 'My Teams' },
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     });
-    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
     clickButton(/^Continue$/);
     await waitForStep('Setup');
@@ -1318,7 +1367,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
       channel_type: 'teams',
-      name: 'My Teams',
+      name: 'main · Microsoft Teams',
       target_branch_id: 'branch-1',
       agor_user_id: 'user-1',
       config: { app_id: 'app-123', tenant_id: 'tenant-123' },

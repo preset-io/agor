@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, GatewayChannel, MCPServer, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -7,11 +7,23 @@ import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { StandaloneSettingsDrillProvider } from './SettingsDrill';
 
 vi.mock('./BranchSelect', () => ({
-  BranchSelect: ({ value, onChange }: { value?: string; onChange?: (value: string) => void }) => (
+  BranchSelect: ({
+    value,
+    onChange,
+  }: {
+    value?: string;
+    onChange?: (value: string, branch?: Branch) => void;
+  }) => (
     <input
       aria-label="branch-select"
       value={value ?? ''}
-      onChange={(event) => onChange?.(event.target.value)}
+      onChange={(event) =>
+        onChange?.(event.target.value, {
+          branch_id: event.target.value,
+          name: 'main',
+          ref: 'main',
+        } as Branch)
+      }
     />
   ),
 }));
@@ -213,10 +225,9 @@ async function fillDiscordWizard({
   clickButton(/Add Channel/);
   selectDiscord();
   await waitForAvailableStep('Access');
-  fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
-    target: { value: 'My Discord' },
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
   });
-  fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
   clickButton(/^Continue$/);
   await waitForStep('Create app');
 
@@ -301,7 +312,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
     await createDraft(channelCreate);
 
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
-      name: 'My Discord',
+      name: 'main · Discord',
       channel_type: 'discord',
       target_branch_id: 'branch-1',
       agor_user_id: 'user-1',
@@ -381,7 +392,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
 describe('GatewayChannelsTable Discord edit', () => {
   const storedChannel = {
     id: 'channel-discord',
-    name: 'My Discord',
+    name: 'main · Discord',
     channel_type: 'discord',
     target_branch_id: 'branch-1',
     agor_user_id: 'user-1',

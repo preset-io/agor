@@ -2361,16 +2361,24 @@ const ChannelFormFields: React.FC<{
             </Select>
           </Form.Item>
 
-          <Form.Item
-            label="Name"
-            name="name"
-            rules={[{ required: true, message: 'Please enter a channel name' }]}
-          >
-            <Input placeholder="e.g., Team Slack, Personal Discord" />
-          </Form.Item>
+          {mode === 'edit' && (
+            <Form.Item
+              label="Name"
+              name="name"
+              rules={[{ required: true, message: 'Please enter a channel name' }]}
+            >
+              <Input placeholder="e.g., Team Slack, Personal Discord" />
+            </Form.Item>
+          )}
 
           {mode === 'create' ? (
-            <GatewayTargetFields client={client} />
+            <GatewayTargetFields
+              client={client}
+              channelTypeLabel={
+                CHANNEL_TYPE_OPTIONS.find((option) => option.value === channelType)?.label ??
+                channelType
+              }
+            />
           ) : (
             <Form.Item
               label="Target Branch"

@@ -17,7 +17,7 @@ interface BranchSelectProps
   > {
   client: AgorClient | null;
   value?: string;
-  onChange?: (value: string) => void;
+  onChange?: (value: string, branch?: Branch) => void;
   placeholder?: string;
   disabled?: boolean;
   teammatesOnly?: boolean;
@@ -84,6 +84,7 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
       .filter((b) => !teammatesOnly || (isTeammate(b) && !b.archived))
       .map((b) => ({
         value: b.branch_id,
+        branch: b,
         // Keep branch context in the text label, including the selected value
         // and accessible option name, not just in the open dropdown.
         label: teammatesOnly ? `${teammateLabel(b)} (${labelOf(b)})` : labelOf(b),
@@ -94,7 +95,7 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
     <Select
       {...accessibilityProps}
       value={value}
-      onChange={onChange}
+      onChange={(id, option) => onChange?.(id, Array.isArray(option) ? undefined : option?.branch)}
       placeholder={placeholder}
       disabled={disabled}
       showSearch
