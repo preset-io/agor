@@ -31,6 +31,12 @@ The reader's first pass is the headline only; sub-bullets are for the curious. K
 
 Every release-version bump PR must include its finalized changelog section; a version bump without release notes is incomplete. Starting with 0.25.1, release automation creates and validates the corresponding tag. Historical 0.23/0.24 headings link to the reconstructed release-boundary commit because tags were not consistently created; do not create retroactive tags solely to backfill this file.
 
+## Unreleased
+
+### Security
+
+- **Operator-pinned private outbound destinations** — `security.private_outbound_destinations` lets the daemon reach specific internal HTTPS hosts that the outbound private-address guard would otherwise block. Each listed host must resolve only to IPv4 addresses inside its configured private or CGNAT CIDRs, and unlisted hosts are unchanged. ([#3091](https://github.com/preset-io/agor/pull/3091))
+
 ## 0.27.0 (2026-10-13)
 
 Release preparation covers merged changes from `v0.26.10` (`cdb77a0a`) through `77515f80`, plus the bundle-size work in this release: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.10...77515f802e126fb3fa3130ffaa2065552a52ccbb). This entry does not imply publication or deployment.
