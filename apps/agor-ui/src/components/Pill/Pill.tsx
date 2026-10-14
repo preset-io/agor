@@ -23,7 +23,7 @@ import {
 } from '@ant-design/icons';
 import { Badge, Button, Collapse, Popover, Tooltip, theme } from 'antd';
 import type React from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
@@ -347,7 +347,7 @@ const ContextWindowPopoverContent: React.FC<{
     <div
       onKeyDown={(event) => {
         if (event.key !== 'Escape') return;
-        event.stopPropagation();
+        // Let AntD handle dismissal so it also cancels pending hover timers.
         onEscape();
       }}
       style={{ width: 400, maxWidth: '90vw' }}
@@ -437,23 +437,9 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   // Restore focus only for keyboard dismissal, never for hover or outside clicks.
-  // After keyboard dismissal a resting pointer must not reopen the popover: the browser
-  // re-dispatches mouseenter (without movement) once the popup leaves or relayouts under it.
-  // Hover-open stays suppressed until the pointer really moves or the user re-activates the pill.
-  const [hoverSuppressed, setHoverSuppressed] = useState(false);
-  const closeWithKeyboard = () => {
-    setHoverSuppressed(true);
-    setOpen(false);
+  const restoreTriggerFocus = () => {
     triggerRef.current?.focus();
   };
-  useEffect(() => {
-    if (!hoverSuppressed) return;
-    const releaseOnRealMove = (event: PointerEvent) => {
-      if (event.movementX !== 0 || event.movementY !== 0) setHoverSuppressed(false);
-    };
-    document.addEventListener('pointermove', releaseOnRealMove, true);
-    return () => document.removeEventListener('pointermove', releaseOnRealMove, true);
-  }, [hoverSuppressed]);
   // Prefer the executor-supplied snapshot — its totalTokens/maxTokens are
   // authoritative (agent-reported), and its `percentage` matches the agent's
   // own "Context XX% used" display (e.g. Codex applies a baseline subtraction
@@ -489,16 +475,13 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
           limit={effectiveLimit}
           percentage={percentage}
           taskMetadata={taskMetadata}
-          onEscape={closeWithKeyboard}
+          onEscape={restoreTriggerFocus}
         />
       }
       title={null}
       trigger={['hover', 'click']}
       open={open}
-      onOpenChange={(next) => {
-        if (next && hoverSuppressed) return;
-        setOpen(next);
-      }}
+      onOpenChange={setOpen}
       placement="top"
       mouseEnterDelay={0.3}
     >
@@ -507,15 +490,6 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
         type="text"
         aria-label={`Context window ${hasLimit ? `${percentage}% used` : 'usage unknown'}; show token breakdown`}
         aria-expanded={open}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.stopPropagation();
-            closeWithKeyboard();
-          } else if (event.key === 'Enter' || event.key === ' ') {
-            setHoverSuppressed(false);
-          }
-        }}
-        onPointerDown={() => setHoverSuppressed(false)}
         style={{
           padding: 0,
           height: 'auto',

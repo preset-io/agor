@@ -191,7 +191,7 @@ describe('SessionFooter', () => {
       { wrapper: Wrapper }
     );
     expect(screen.getByRole('button', { name: /stop/i })).toBeDisabled();
-    expect(container.querySelector('.ant-spin')).toBeInTheDocument();
+    expect(container.querySelector('[data-icon="loading"]')).toBeInTheDocument();
     expect(container.querySelector('[data-icon="stop"]')).not.toBeInTheDocument();
   });
 
@@ -713,9 +713,10 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
     view.rerender(<SessionFooter {...baseProps} stopRequestInFlight onStop={onStop} />);
     expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} isRunning isStopping onStop={onStop} />);
-    const recovering = screen.getByRole('button', { name: 'Recovering' });
+    const recovering = screen.getByRole('button', { name: 'Stop' });
     expect(recovering).toBeDisabled();
-    expect(recovering.textContent).toBe(width < 1024 ? '' : 'Recovering…');
+    expect(recovering).toHaveAttribute('aria-busy', 'true');
+    expect(recovering.textContent).toBe(width < 1024 ? '' : 'Stop');
     fireEvent.click(recovering);
     expect(onStop).not.toHaveBeenCalled();
     view.rerender(
@@ -732,9 +733,10 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
         onStop={onStop}
       />
     );
-    const stopping = screen.getByRole('button', { name: 'Stopping' });
+    const stopping = screen.getByRole('button', { name: 'Stop' });
     expect(stopping).toBeDisabled();
-    expect(stopping.textContent).toBe(width < 1024 ? '' : 'Stopping…');
+    expect(stopping).toHaveAttribute('aria-busy', 'true');
+    expect(stopping.textContent).toBe(width < 1024 ? '' : 'Stop');
     view.rerender(<SessionFooter {...baseProps} isRunning connectionDisabled onStop={onStop} />);
     expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} />);
