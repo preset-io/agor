@@ -968,12 +968,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       )}
     </>
   );
+  // The rows check the same model the chip names, even before the session stores one.
+  const modelRowsValue: ModelConfig | undefined =
+    modelConfig ?? (effectiveModel ? { mode: 'alias', model: effectiveModel } : undefined);
   const modelPageContent = (
     <>
       {presetNote}
       <ModelSelector
         key={session.session_id}
-        value={modelConfig}
+        value={modelRowsValue}
         onCommit={onModelConfigCommit}
         agentic_tool={session.agentic_tool}
         client={client}
