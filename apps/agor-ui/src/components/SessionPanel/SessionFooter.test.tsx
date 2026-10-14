@@ -350,13 +350,16 @@ describe('phone pins', () => {
     expect(within(sheet).getByLabelText('Pin BTW fork')).toBeDisabled();
   });
 
-  it('hide the tab bar while the composer has focus', () => {
+  it('hide the tab bar while the text has focus, not when a row button does', () => {
     const focus = renderHook(() => useComposerFocused());
-    renderFooter();
+    renderFooter({ promptInputSlot: <textarea aria-label="Prompt" /> });
     const plus = screen.getByLabelText('Add files and actions');
     act(() => plus.focus());
+    expect(focus.result.current).toBe(false);
+    const text = screen.getByLabelText('Prompt');
+    act(() => text.focus());
     expect(focus.result.current).toBe(true);
-    act(() => plus.blur());
+    act(() => text.blur());
     expect(focus.result.current).toBe(false);
   });
 
