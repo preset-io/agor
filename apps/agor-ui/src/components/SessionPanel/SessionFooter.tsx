@@ -40,6 +40,7 @@ import {
 import type { ButtonProps } from 'antd';
 import { Button, Divider, Flex, Progress, Segmented, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
+import { setComposerFocused } from '../../hooks/useComposerFocus';
 import { useElementWidth } from '../../hooks/useElementWidth';
 import { COMPACT_PIN_LIMIT, useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
@@ -205,6 +206,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const cardWidth = useElementWidth(cardRef);
   const narrow = !isMobile && cardWidth > 0 && cardWidth < NARROW_COMPOSER_WIDTH;
   const [cardFocused, setCardFocused] = React.useState(false);
+  // On phones the tab bar hides while the composer has focus; the composer then owns the bottom inset.
+  const keyboardUp = isMobile && cardFocused;
+  React.useEffect(() => {
+    setComposerFocused(keyboardUp);
+  }, [keyboardUp]);
+  React.useEffect(() => () => setComposerFocused(false), []);
   const [prefs, setPref] = useFooterPreferences();
   const pinKey = isMobile ? 'pinnedItemsCompact' : 'pinnedItems';
   const pinnedItems = prefs[pinKey];
@@ -651,8 +658,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   };
   const showContextInInfo = contextPercent !== null && pinnedChips.includes('context');
   const infoLineVisible =
-    (showContextInInfo || infoItems.length > 0 || signInWarning) &&
-    !(isMobile && cardFocused && !signInWarning);
+    (showContextInInfo || infoItems.length > 0 || signInWarning) && !(keyboardUp && !signInWarning);
   const infoLine = infoLineVisible && (
     <Flex
       align="center"
@@ -1136,7 +1142,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         // the bottom inset supplied by a padding shorthand in React.
         paddingTop: token.paddingXS,
         paddingInline: token.paddingXS,
-        paddingBottom: token.paddingXS,
+        paddingBottom: keyboardUp
+          ? `calc(${token.paddingXS}px + env(safe-area-inset-bottom))`
+          : token.paddingXS,
         marginLeft: -token.sizeUnit * 6,
         marginRight: -token.sizeUnit * 6,
       }}
