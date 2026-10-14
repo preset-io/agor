@@ -1,3 +1,5 @@
+import { normalizeZoneLayoutPolicy, zoneLayoutBinding } from '@agor/core/layout/zone-layout';
+import type { BoardZoneLayoutDefaultsExpected } from '@agor/core/types';
 import type {
   AgorClient,
   Board,
@@ -6,8 +8,9 @@ import type {
   EffectiveCapabilityPolicyAccess,
   Group,
   User,
+  ZoneLayoutPolicy,
 } from '@agor-live/client';
-import { Alert, Form, Modal, Skeleton } from 'antd';
+import { Alert, Checkbox, Form, Modal, Skeleton, Space, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 import { useAgorStore } from '../../store/agorStore';
@@ -16,6 +19,7 @@ import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormField
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BoardCapabilityPolicyModalEditor } from '../permissions/CapabilityPolicyEditor';
 import { OwnershipTransfer } from '../permissions/CapabilityPolicyEditor/OwnershipTransfer';
+import { ZoneLayoutPolicyEditor } from '../SessionCanvas/canvas/ZoneLayoutPolicyEditor';
 import { DrillInFrame, useDrillFormDraft } from '../SettingsModal/SettingsDrill';
 
 export interface BoardEditModalProps {
@@ -60,6 +64,13 @@ export function BoardEditModal({
   const [loadedBoard, setLoadedBoard] = useState<Board | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [zoneDefaults, setZoneDefaults] = useState<ZoneLayoutPolicy>(() =>
+    normalizeZoneLayoutPolicy(undefined)
+  );
+  const [initialZoneDefaults, setInitialZoneDefaults] = useState<ZoneLayoutPolicy>(() =>
+    normalizeZoneLayoutPolicy(undefined)
+  );
+  const [applyZoneDefaultsToExisting, setApplyZoneDefaultsToExisting] = useState(false);
   const permissionUsers = useMemo(() => {
     const knownUsers = new Map(userById);
     for (const user of allUsers) knownUsers.set(user.user_id, user);
@@ -129,6 +140,10 @@ export function BoardEditModal({
         // editor mounts against fully-initialized field values (rather than
         // relying on render batching). loadedBoard is set last, below.
         form.resetFields();
+        const normalizedZoneDefaults = normalizeZoneLayoutPolicy(fresh.zone_layout_defaults);
+        setZoneDefaults(normalizedZoneDefaults);
+        setInitialZoneDefaults(normalizedZoneDefaults);
+        setApplyZoneDefaultsToExisting(false);
         form.setFieldsValue({
           name: fresh.name,
           icon: fresh.icon,
@@ -175,7 +190,10 @@ export function BoardEditModal({
   // (covers programmatic edits such as background presets) or a policy draft.
   const isFormDirty = useDrillFormDraft(form, loadedBoard);
   const isDirty = () =>
-    isFormDirty() || (policy !== null && JSON.stringify(policy) !== JSON.stringify(loadedPolicy));
+    isFormDirty() ||
+    applyZoneDefaultsToExisting ||
+    JSON.stringify(zoneDefaults) !== JSON.stringify(initialZoneDefaults) ||
+    (policy !== null && JSON.stringify(policy) !== JSON.stringify(loadedPolicy));
 
   const close = () => {
     form.resetFields();
@@ -187,11 +205,59 @@ export function BoardEditModal({
     try {
       setSaving(true);
       await form.validateFields();
-      const updated = await onUpdate?.(
-        board.board_id,
-        extractBoardFormValues(form, { includeLegacyPermissions: false })
+      // The normalized permission service is the only supported persistence
+      // route for board access. Generic board writes reject legacy fields, so they
+      // must never hitchhike on an otherwise unrelated settings/defaults save.
+      const formValues = extractBoardFormValues(form, {
+        includeLegacyPermissions: false,
+      });
+      const generalSettingsChanged = Object.entries(formValues).some(
+        ([field, value]) =>
+          JSON.stringify(value) !== JSON.stringify(loadedBoard?.[field as keyof Board])
       );
-      if (updated === false) return;
+      if (
+        client &&
+        (applyZoneDefaultsToExisting ||
+          JSON.stringify(zoneDefaults) !== JSON.stringify(initialZoneDefaults))
+      ) {
+        // Refresh only the optimistic baseline, not the user's draft. A zone
+        // created or edited while this editor is open must not poison retries.
+        const fresh = await client.service('boards').get(board.board_id);
+        const expected: BoardZoneLayoutDefaultsExpected = {
+          defaults: normalizeZoneLayoutPolicy(fresh.zone_layout_defaults),
+          zones: Object.fromEntries(
+            Object.entries(fresh.objects ?? {}).flatMap(([objectId, object]) =>
+              object.type === 'zone'
+                ? [
+                    [
+                      objectId,
+                      {
+                        binding: zoneLayoutBinding(object),
+                        layout: normalizeZoneLayoutPolicy(object.layout),
+                      },
+                    ] as const,
+                  ]
+                : []
+            )
+          ),
+        };
+        await client.service('boards').patch(board.board_id, {
+          _action: 'setZoneLayoutDefaults',
+          defaults: normalizeZoneLayoutPolicy(zoneDefaults),
+          applyToExisting: applyZoneDefaultsToExisting,
+          expected,
+        } as unknown as Partial<Board>);
+        // If a later settings/permission write fails, retry from the saved
+        // defaults rather than repeatedly applying the same zone mutation.
+        setInitialZoneDefaults(zoneDefaults);
+        setApplyZoneDefaultsToExisting(false);
+      }
+      // Layout is the conflict-prone write: do it before general settings so
+      // a rejected layout cannot leave unrelated settings half-saved.
+      if (generalSettingsChanged) {
+        const updated = await onUpdate?.(board.board_id, formValues);
+        if (updated === false) return;
+      }
       await syncPermissions();
       close();
     } catch (error) {
@@ -216,6 +282,34 @@ export function BoardEditModal({
         form={form}
         backgroundResetSignal={loadedBoard.board_id}
         canEditGeneral={canEditGeneral}
+        zoneDefaultsEditor={
+          <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              title="One policy for new and inherited zones"
+              description="New zones follow these defaults. Existing zones remain explicit overrides unless you intentionally apply the policy below; inherited zones continue following future changes."
+            />
+            <ZoneLayoutPolicyEditor
+              value={zoneDefaults}
+              onChange={setZoneDefaults}
+              disabled={!canEditGeneral}
+              idPrefix="board-zone-defaults"
+            />
+            <Checkbox
+              checked={applyZoneDefaultsToExisting}
+              disabled={!canEditGeneral}
+              onChange={(event) => setApplyZoneDefaultsToExisting(event.target.checked)}
+            >
+              Apply to existing zones
+            </Checkbox>
+            <Typography.Text type="secondary">
+              This resets every existing zone to these values and makes it follow the board
+              defaults. Zone names, colors, prompts, positions, sizes, and locks are preserved.
+              Clear this checkbox to preserve current overrides.
+            </Typography.Text>
+          </Space>
+        }
         capabilityPolicyEditor={
           policy ? (
             <BoardCapabilityPolicyModalEditor

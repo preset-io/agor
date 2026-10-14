@@ -1,7 +1,8 @@
 import type { AgorClient, Board, BoardCapabilityPolicies, User, UserID } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { Form, Input } from 'antd';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { App as AntApp, Form, Input } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { StandaloneSettingsDrillProvider } from '../SettingsModal/SettingsDrill';
 import { BoardEditModal } from './BoardEditModal';
 
 const showError = vi.hoisted(() => vi.fn());
@@ -51,9 +52,11 @@ vi.mock('../permissions/CapabilityPolicyEditor', () => ({
 vi.mock('../forms/BoardFormFields', () => ({
   BoardFormFields: ({
     capabilityPolicyEditor,
+    zoneDefaultsEditor,
     canEditGeneral,
   }: {
     capabilityPolicyEditor?: React.ReactNode;
+    zoneDefaultsEditor?: React.ReactNode;
     canEditGeneral?: boolean;
   }) => (
     <>
@@ -62,10 +65,23 @@ vi.mock('../forms/BoardFormFields', () => ({
       </Form.Item>
       <div data-testid="board-modal-can-edit-general" data-value={String(canEditGeneral)} />
       {capabilityPolicyEditor}
+      {zoneDefaultsEditor && (
+        <div data-testid="board-zone-defaults-editor">{zoneDefaultsEditor}</div>
+      )}
     </>
   ),
-  extractBoardFormValues: (form: { getFieldValue: (name: string) => unknown }) => ({
+  extractBoardFormValues: (
+    form: { getFieldValue: (name: string) => unknown },
+    options?: { includeLegacyPermissions?: boolean }
+  ) => ({
     name: form.getFieldValue('name'),
+    ...(options?.includeLegacyPermissions === false
+      ? {}
+      : {
+          access_mode: 'shared',
+          default_others_can: 'session',
+          default_others_fs_access: 'read',
+        }),
   }),
   isCustomCSS: () => false,
 }));
@@ -106,6 +122,7 @@ function makeClient(
   accessError?: Error
 ) {
   const get = vi.fn().mockResolvedValue(freshBoard);
+  const boardPatch = vi.fn().mockResolvedValue({ changed: true, changed_zone_ids: [] });
   const permissionsFind = vi
     .fn()
     .mockImplementation(() =>
@@ -118,11 +135,12 @@ function makeClient(
     .mockImplementation(async (_id: unknown, value: unknown) => value);
   return {
     get,
+    boardPatch,
     permissionsFind,
     permissionsPatch,
     client: {
       service: (name: string) => {
-        if (name === 'boards') return { get };
+        if (name === 'boards') return { get, patch: boardPatch };
         if (name === 'boards/:id/permissions') {
           return {
             find: permissionsFind,
@@ -156,6 +174,32 @@ describe('BoardEditModal', () => {
     showError.mockReset();
   });
 
+  it('does not attach retired permission fields to a settings write when saving settings', async () => {
+    const { client } = makeClient();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={vi.fn()}
+        onUpdate={onUpdate}
+      />
+    );
+
+    fireEvent.change(await screen.findByLabelText('Name'), {
+      target: { value: 'Fictional planning board' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(onUpdate).toHaveBeenCalledWith(listedBoard.board_id, {
+        name: 'Fictional planning board',
+      })
+    );
+  });
+
   it('keeps a pending transfer and its completion result across same-board realtime updates', async () => {
     const { client: baseClient, get } = makeClient();
     const owner = { user_id: policy.primary_owner_user_id, role: 'admin', name: 'Owner' } as User;
@@ -179,30 +223,44 @@ describe('BoardEditModal', () => {
       <BoardEditModal board={board} client={client} currentUser={owner} open onClose={onClose} />
     );
     const { rerender } = render(editor(listedBoard));
-    const transferButton = await screen.findByRole('button', { name: 'Transfer ownership' });
+    const transferButton = await screen.findByLabelText('Transfer ownership');
     fireEvent.click(transferButton);
-    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Successor owner' }));
+    // The settings modal now includes a full zone editor. Scope ownership
+    // queries to its own dialog instead of repeatedly computing accessibility
+    // for every unrelated AntD control in the underlying settings form.
+    const transferDialog = within(
+      screen.getByText('Transfer board ownership').closest<HTMLElement>('[role="dialog"]')!
+    );
+    fireEvent.mouseDown(transferDialog.getByRole('combobox', { name: 'Successor owner' }));
     fireEvent.click(await screen.findByText('Reed'));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Transfer ownership' }).at(-1)!);
+    fireEvent.click(transferDialog.getByRole('button', { name: 'Transfer ownership' }));
     await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(patch).toHaveBeenCalledWith(
+      null,
+      { expected_owner_user_id: owner.user_id, target_user_id: successor.user_id },
+      { route: { id: listedBoard.board_id } }
+    );
 
     // The canonical patched event can arrive before the command's reply.
     rerender(editor({ ...freshBoard, primary_owner_user_id: successor.user_id }));
-    expect(screen.getByRole('combobox', { name: 'Successor owner' })).toBeInTheDocument();
+    const pendingSuccessor = transferDialog.getByRole('combobox', { name: 'Successor owner' });
+    expect(pendingSuccessor).toBeInTheDocument();
+    expect(pendingSuccessor).toBeDisabled();
+    expect(onClose).not.toHaveBeenCalled();
     await act(async () =>
       complete({
         scope: 'management_only',
         previous_owner_access: { capabilities: ['board.view'], fs_access: 'none' },
       })
     );
-    await screen.findByRole('button', { name: 'Done' });
+    await transferDialog.findByRole('button', { name: 'Done' });
     rerender(
       editor({ ...freshBoard, primary_owner_user_id: successor.user_id, name: 'Realtime refresh' })
     );
-    expect(screen.getByText(/board.view/)).toBeInTheDocument();
+    expect(transferDialog.getByText(/board.view/)).toBeInTheDocument();
     expect(get).toHaveBeenCalledOnce();
     expect(onClose).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(transferDialog.getByRole('button', { name: 'Done' }));
     expect(onClose).toHaveBeenCalledOnce();
   });
 
@@ -250,6 +308,10 @@ describe('BoardEditModal', () => {
       'data-value',
       'false'
     );
+    expect(screen.getByRole('spinbutton', { name: 'Horizontal gap' })).toBeDisabled();
+    expect(screen.getByRole('spinbutton', { name: 'Vertical gap' })).toBeDisabled();
+    expect(screen.getByRole('spinbutton', { name: 'Zone inner padding' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Apply to existing zones' })).toBeDisabled();
   });
 
   it('loads the latest board and normalized permission package before saving', async () => {
@@ -276,6 +338,129 @@ describe('BoardEditModal', () => {
       expect(onUpdate).toHaveBeenCalledWith(listedBoard.board_id, { name: 'Renamed' })
     );
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('saves zone defaults atomically and applies them only by explicit intent', async () => {
+    const current = {
+      ...freshBoard,
+      zone_layout_defaults: { mode: 'manual', preset: 'grid', gap: 24 },
+      objects: {
+        review: {
+          type: 'zone',
+          x: 0,
+          y: 0,
+          width: 620,
+          height: 400,
+          label: 'Fictional review',
+          layout: { mode: 'manual', preset: 'grid', gap: 40 },
+        },
+      },
+    } as Board;
+    const { client, get, boardPatch } = makeClient();
+    get.mockResolvedValue(current);
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={vi.fn()}
+        onUpdate={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    const spacing = await screen.findByRole('spinbutton', { name: 'Horizontal gap' });
+    fireEvent.change(spacing, { target: { value: '8' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Apply to existing zones' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(boardPatch).toHaveBeenCalledOnce());
+    expect(boardPatch).toHaveBeenCalledWith(
+      listedBoard.board_id,
+      expect.objectContaining({
+        _action: 'setZoneLayoutDefaults',
+        defaults: expect.objectContaining({ columnGap: 8, rowGap: 24, padding: 20 }),
+        applyToExisting: true,
+        expected: expect.objectContaining({
+          zones: {
+            review: expect.objectContaining({ binding: 'override' }),
+          },
+        }),
+      })
+    );
+  });
+
+  it.each(['spacing', 'apply'] as const)(
+    'guards and saves embedded zone defaults when changing %s',
+    async (change) => {
+      const { client, boardPatch } = makeClient();
+      const onClose = vi.fn();
+      render(
+        <AntApp>
+          <StandaloneSettingsDrillProvider section="boards">
+            <BoardEditModal
+              board={listedBoard}
+              client={client}
+              open
+              embedded
+              onClose={onClose}
+              onUpdate={vi.fn()}
+            />
+          </StandaloneSettingsDrillProvider>
+        </AntApp>
+      );
+      const editor = await screen.findByTestId('board-zone-defaults-editor');
+      if (change === 'spacing') {
+        fireEvent.change(within(editor).getByLabelText('Horizontal gap'), {
+          target: { value: '8' },
+        });
+      } else {
+        fireEvent.click(within(editor).getByLabelText('Apply to existing zones'));
+      }
+      fireEvent.click(screen.getByText('Cancel'));
+      const confirm = await waitFor(() => {
+        const dialog = document.querySelector('.ant-modal-confirm');
+        expect(dialog).not.toBeNull();
+        return dialog as HTMLElement;
+      });
+      expect(confirm).toHaveTextContent('Discard unsaved changes?');
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Keep editing' }));
+      await waitFor(() =>
+        expect(document.querySelector('.ant-modal-confirm')).not.toBeInTheDocument()
+      );
+      fireEvent.click(screen.getByText('Save'));
+      await waitFor(() => expect(boardPatch).toHaveBeenCalledOnce());
+      expect(boardPatch).toHaveBeenCalledWith(
+        listedBoard.board_id,
+        expect.objectContaining({
+          _action: 'setZoneLayoutDefaults',
+          applyToExisting: change === 'apply',
+          ...(change === 'spacing' ? { defaults: expect.objectContaining({ columnGap: 8 }) } : {}),
+        })
+      );
+      await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    }
+  );
+
+  it('does not send a defaults action for an unchanged save', async () => {
+    const { client, boardPatch } = makeClient();
+    const onClose = vi.fn();
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={onClose}
+        onUpdate={onUpdate}
+      />
+    );
+
+    await screen.findByDisplayValue('Fresh name');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(boardPatch).not.toHaveBeenCalled();
   });
 
   it('still persists deliberately edited permissions through the policy service', async () => {
@@ -436,6 +621,7 @@ describe('BoardEditModal', () => {
       />
     );
     await screen.findByDisplayValue('Fresh name');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Awaited name' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
     await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
     expect(onClose).not.toHaveBeenCalled();
@@ -458,6 +644,7 @@ describe('BoardEditModal', () => {
       />
     );
     await screen.findByDisplayValue('Fresh name');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Rejected name' } });
     const save = await screen.findByRole('button', { name: 'Save' });
     fireEvent.click(save);
     await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
@@ -467,4 +654,66 @@ describe('BoardEditModal', () => {
     expect(save).toBeEnabled();
     expect(onClose).not.toHaveBeenCalled();
   });
+});
+
+it('refreshes the zone snapshot at save without resetting the settings draft', async () => {
+  const { client, get, boardPatch } = makeClient();
+  const onUpdate = vi.fn().mockResolvedValue(undefined);
+  render(
+    <BoardEditModal
+      board={listedBoard}
+      client={client}
+      open
+      onClose={vi.fn()}
+      onUpdate={onUpdate}
+    />
+  );
+  fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Draft name' } });
+  fireEvent.click(screen.getByLabelText('Apply to existing zones'));
+  const concurrent = {
+    ...freshBoard,
+    objects: {
+      'new-zone': { type: 'zone', x: 0, y: 0, width: 800, height: 600, layout: { columnGap: 80 } },
+    },
+  } as Board;
+  get.mockResolvedValue(concurrent);
+  boardPatch.mockImplementation(async (_id, data) => {
+    expect(data.expected.zones).toHaveProperty('new-zone');
+    return { changed: true, changed_zone_ids: [] };
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() =>
+    expect(onUpdate).toHaveBeenCalledWith(listedBoard.board_id, { name: 'Draft name' })
+  );
+  expect(boardPatch.mock.invocationCallOrder[0]).toBeLessThan(
+    onUpdate.mock.invocationCallOrder[0]!
+  );
+});
+
+it('does not write general settings or permissions when the layout defaults write fails, and can retry', async () => {
+  const { client, boardPatch, permissionsPatch } = makeClient();
+  const onUpdate = vi.fn().mockResolvedValue(undefined);
+  const onClose = vi.fn();
+  render(
+    <BoardEditModal
+      board={listedBoard}
+      client={client}
+      open
+      onClose={onClose}
+      onUpdate={onUpdate}
+    />
+  );
+  fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Draft name' } });
+  fireEvent.click(screen.getByLabelText('Apply to existing zones'));
+  fireEvent.click(screen.getByText('Change board access'));
+  boardPatch.mockRejectedValueOnce(new Error('Concurrent layout change'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(showError).toHaveBeenCalled());
+  expect(onUpdate).not.toHaveBeenCalled();
+  expect(permissionsPatch).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  expect(onUpdate).toHaveBeenCalledWith(listedBoard.board_id, { name: 'Draft name' });
+  expect(permissionsPatch).toHaveBeenCalledTimes(1);
 });
