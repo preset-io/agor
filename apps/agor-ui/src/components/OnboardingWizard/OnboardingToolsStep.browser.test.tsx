@@ -1,4 +1,4 @@
-import { cleanup, configure, render, screen, within } from '@testing-library/react';
+import { cleanup, configure, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -124,5 +124,17 @@ describe('onboarding tools wall in Chromium', () => {
     await userEvent.hover(screen.getByPlaceholderText('Search tools'));
     expect(getComputedStyle(github).boxShadow).not.toContain('inset');
     expect(size()).toEqual(unpickedSize);
+  });
+
+  it('waits half a second before showing a tile tooltip', async () => {
+    render(<Harness api={makeCatalogClient(entries)} />);
+    const github = await screen.findByRole('button', { name: 'GitHub' });
+    const openTooltip = () => document.querySelector('.ant-tooltip:not(.ant-tooltip-hidden)');
+
+    await userEvent.hover(github);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(openTooltip()).toBeNull();
+    await waitFor(() => expect(openTooltip()).toHaveTextContent(githubHandoffEntry.benefit));
+    await userEvent.hover(screen.getByPlaceholderText('Search tools'));
   });
 });

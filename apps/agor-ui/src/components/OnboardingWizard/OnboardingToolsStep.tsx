@@ -54,6 +54,8 @@ function ToolTile({
           {entry.benefit}
         </>
       }
+      // Skimming the grid shouldn't flash a tooltip on every tile.
+      mouseEnterDelay={0.5}
     >
       <Button
         block
