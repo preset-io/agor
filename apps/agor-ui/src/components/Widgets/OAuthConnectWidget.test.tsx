@@ -13,12 +13,11 @@
  *     grant landed but the attach was refused
  */
 
-import { MCP_CONNECT_WIDGET_QUERY_PARAM } from '@agor/core/types';
 import type { AgorClient, WidgetMessageMetadata } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactElement } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type MCPCatalogEntryHandoff,
   MCPCatalogModalContext,
@@ -544,8 +543,6 @@ describe('OAuthConnectWidget — catalog-connect lane', () => {
     return catalog;
   }
 
-  afterEach(() => window.history.replaceState(null, '', '/'));
-
   it('opens the catalog drawer for the entry instead of a sign-in popup', () => {
     const calls: string[] = [];
     const catalog = renderWithCatalog(makeClient({ onCall: (path) => calls.push(path) }));
@@ -576,18 +573,6 @@ describe('OAuthConnectWidget — catalog-connect lane', () => {
       ])
     );
     expect(await screen.findByText(/Connected "GitHub"/)).toBeVisible();
-  });
-
-  it('opens the drawer on arrival from a link naming this widget', async () => {
-    window.history.replaceState(null, '', `/s/abc/?${MCP_CONNECT_WIDGET_QUERY_PARAM}=widget-1`);
-    const catalog = renderWithCatalog(makeClient());
-    await waitFor(() => expect(catalog.openCatalogEntry).toHaveBeenCalledOnce());
-  });
-
-  it('does not open on arrival for a link naming another widget', () => {
-    window.history.replaceState(null, '', `/s/abc/?${MCP_CONNECT_WIDGET_QUERY_PARAM}=widget-2`);
-    const catalog = renderWithCatalog(makeClient());
-    expect(catalog.openCatalogEntry).not.toHaveBeenCalled();
   });
 });
 

@@ -48,7 +48,6 @@
  *   - already_present           ✓ Already connected (⚠️ if it could not be attached)
  */
 
-import { MCP_CONNECT_WIDGET_QUERY_PARAM } from '@agor/core/types';
 import type { AgorClient, MCPOAuthStartFailure, WidgetMessageMetadata } from '@agor-live/client';
 import {
   ApiOutlined,
@@ -68,6 +67,7 @@ import { useAgorStore } from '@/store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '@/store/selectors';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { formatActionError, notConnectedMessage } from '@/utils/connectionErrors';
+import { consumeMcpConnectIntent } from '@/utils/mcpConnectIntent';
 import { oauthAttemptFailureMessage, waitForMCPOAuthAttempt } from '@/utils/mcpOAuthAttempt';
 import { useThemedMessage } from '@/utils/message';
 import { CompactNotice } from '../CompactNotice';
@@ -75,13 +75,6 @@ import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBl
 import { useWidgetReplay, WIDGET_ALREADY_ANSWERED_MESSAGE } from './widgetReplay';
 
 const { Text, Paragraph } = Typography;
-
-/** Whether this page was opened by a link asking to open this widget's drawer. */
-function openedForWidget(widgetId: string): boolean {
-  return (
-    new URLSearchParams(window.location.search).get(MCP_CONNECT_WIDGET_QUERY_PARAM) === widgetId
-  );
-}
 
 interface OAuthWidgetParams {
   /** Absent when the widget is pinned only to `catalogEntryName`. */
@@ -264,13 +257,11 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
   };
 
   // A relayed session link names this widget: open its drawer on arrival.
-  const openCatalogOnArrival = useRef(Boolean(catalogEntryName) && openedForWidget(widgetId));
   // biome-ignore lint/correctness/useExhaustiveDependencies: once, on arrival
   useEffect(() => {
-    if (!openCatalogOnArrival.current || !catalogEntryName || !client) return;
-    openCatalogOnArrival.current = false;
-    openCatalogDrawer(catalogEntryName);
-  }, [client]);
+    if (!catalogEntryName || !client || !catalog) return;
+    if (consumeMcpConnectIntent(widgetId)) openCatalogDrawer(catalogEntryName);
+  }, [client, catalog]);
 
   const connect = async () => {
     if (state === 'starting' || state === 'pending' || state === 'connected') return;
