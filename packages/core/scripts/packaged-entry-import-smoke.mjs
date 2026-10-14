@@ -23,7 +23,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -102,13 +101,10 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-// Check both runtime export conditions for the browser-safe Teams artifact;
-// source-condition tests cannot detect a mismatched named build output path.
+// Check the browser-safe Teams artifact's build output; source-condition tests
+// cannot detect a mismatched named build output path.
 const teamsSpecifier = `${pkg.name}/gateway/teams-manifest`;
-for (const manifest of [
-  await import(teamsSpecifier),
-  createRequire(import.meta.url)(teamsSpecifier),
-]) {
+for (const manifest of [await import(teamsSpecifier)]) {
   assert.equal(
     manifest.teamsGatewayCallbackUrl({
       gatewayChannelId: 'packaged-smoke',
@@ -122,6 +118,6 @@ for (const manifest of [
   );
 }
 
-console.log(`[core] packaged entry import smoke ok (${specifiers.length} entries; Teams ESM/CJS)`);
+console.log(`[core] packaged entry import smoke ok (${specifiers.length} entries; Teams manifest)`);
 // Some entries start timers or open handles at top level; this check is done.
 process.exit(0);

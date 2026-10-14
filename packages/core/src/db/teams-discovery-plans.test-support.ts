@@ -145,7 +145,12 @@ export async function proveTeamsDiscoveryPlans(
               : expired
                 ? 'gateway_inbound_events_teams_expiry_idx'
                 : 'gateway_inbound_events_teams_due_idx';
-          expect(serialized, serialized).toContain(expected);
+          // PostgreSQL versions may pick another bounded queue index; the scan checks below are the contract.
+          expect(serialized, serialized).toMatch(
+            capability === 'teams_message_delivery_discovery'
+              ? expected
+              : /gateway_inbound_events_(teams_due|teams_expiry|recovery)_idx/
+          );
           if (!expired)
             expect(serialized, serialized).toContain(
               capability === 'teams_message_delivery_discovery'

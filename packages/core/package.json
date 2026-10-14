@@ -458,7 +458,7 @@
       "source": "./src/gateway/connectors/teams-manifest.ts",
       "types": "./dist/gateway/connectors/teams-manifest.d.ts",
       "import": "./dist/gateway/connectors/teams-manifest.js",
-      "require": "./dist/gateway/connectors/teams-manifest.cjs"
+      "default": "./dist/gateway/connectors/teams-manifest.js"
     },
     "./git/pure": {
       "source": "./src/git/pure.ts",

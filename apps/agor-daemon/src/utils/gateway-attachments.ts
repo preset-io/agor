@@ -299,7 +299,7 @@ export async function ingestProviderInboundFiles(args: {
       fail(file, `credential unavailable code=${gatewayFailureCode(error)}`);
       continue;
     }
-    if (!request || !request.isAllowedUrl(file.url_private_download)) {
+    if (!request?.isAllowedUrl(file.url_private_download)) {
       fail(file, 'unsupported type or URL');
       continue;
     }
