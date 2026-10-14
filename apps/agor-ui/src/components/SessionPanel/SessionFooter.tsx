@@ -209,8 +209,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const cardWidth = useElementWidth(cardRef);
   const narrow = !isMobile && cardWidth > 0 && cardWidth < NARROW_COMPOSER_WIDTH;
   const [cardFocused, setCardFocused] = React.useState(false);
-  // On phones the tab bar hides while the composer has focus; the composer then owns the bottom inset.
-  const keyboardUp = isMobile && cardFocused;
+  const [textFocused, setTextFocused] = React.useState(false);
+  // On phones the tab bar hides while the text has focus; the composer then owns the bottom inset.
+  // Only the text field counts: a tapped button must not shift the row mid-tap.
+  const keyboardUp = isMobile && textFocused;
   React.useEffect(() => {
     setComposerFocused(keyboardUp);
   }, [keyboardUp]);
@@ -246,11 +248,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     });
   };
 
-  // Model name + token counts for individual chips. A brand-new session hasn't
-  // persisted its model into model_config yet — it's resolved from tool/user
-  // defaults at runtime — so fall back to the tool's default model. Without this
-  // the chip wouldn't render (and its click-to-change popover would be
-  // unreachable) until the user first changed the model via Session Settings.
+  // A new session resolves its model at runtime, so the chip falls back to the tool default.
   const effectiveModel =
     session.model_config?.model ?? getDefaultModelForTool(session.agentic_tool);
   const elapsed = useElapsedDuration({
@@ -278,16 +276,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   );
   const showMcpNotice =
     unauthedMcpServers.length > 0 && dismissedMcpSignature !== unauthedSignature;
-  // A disconnected install needs a working recovery control even when the
-  // user previously unpinned Tools. Reveal the MCP badge for as long as any
-  // attached server needs authentication; once recovered, the saved pin
-  // preference takes effect again.
   const mcpNoticeMessage =
     unauthedMcpServers.length === 1
       ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Open Session details to connect it.`
       : `${unauthedMcpServers.length} MCP servers aren’t connected. Open Session details to connect them.`;
 
-  const composerAttachmentActionTooltip = 'Attachments are only supported for normal Send for now';
+  const composerAttachmentActionTooltip = 'Attachments only work with Send for now';
   const composerUploadTooltip = 'Uploading files...';
   const uploadDisabled = connectionDisabled || composerAttachmentUploading;
   const advancedUploadDisabled = uploadDisabled;
@@ -729,9 +723,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     </Flex>
   );
 
-  const attachmentsHint = composerAttachmentsPresent
-    ? 'Attachments only work with Send for now'
-    : undefined;
+  const attachmentsHint = composerAttachmentsPresent ? composerAttachmentActionTooltip : undefined;
   const actionRows: Record<
     string,
     { label: string; hint: string; icon: React.ReactNode; onClick: () => void; disabled: boolean }
@@ -1188,10 +1180,14 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         <div
           ref={cardRef}
           data-testid="composer-card"
-          onFocus={() => setCardFocused(true)}
+          onFocus={(event) => {
+            setCardFocused(true);
+            setTextFocused(event.target instanceof HTMLTextAreaElement);
+          }}
           onBlur={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
               setCardFocused(false);
+              setTextFocused(false);
             }
           }}
           style={{
