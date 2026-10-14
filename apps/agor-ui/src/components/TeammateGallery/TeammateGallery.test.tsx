@@ -117,46 +117,22 @@ describe('TeammateGallery', () => {
     expect(onChange).toHaveBeenLastCalledWith('competitive-analyst');
   });
 
-  it('single-click toggles: unselected card selects, the selected card deselects', () => {
+  it('is select-only: the selected card ignores clicks and Enter/Space', () => {
     const onChange = vi.fn();
     render(<TeammateGallery value="legal-analyst" onChange={onChange} />);
 
-    // Click an unselected card → selects it.
     fireEvent.click(cardFor('Product manager'));
     expect(onChange).toHaveBeenLastCalledWith('product-manager');
 
-    // Click the already-selected card → clears the pick (single click, no dblclick).
+    // Re-selecting the current pick changes nothing; there is no deselect.
+    onChange.mockClear();
     fireEvent.click(cardFor('Legal analyst'));
-    expect(onChange).toHaveBeenLastCalledWith(null);
-  });
-
-  it('keyboard (Enter/Space) toggles both ways', () => {
-    const onChange = vi.fn();
-    render(<TeammateGallery value="legal-analyst" onChange={onChange} />);
-
-    // Enter on the already-selected card clears it.
     fireEvent.keyDown(cardFor('Legal analyst'), { key: 'Enter' });
-    expect(onChange).toHaveBeenLastCalledWith(null);
-
-    // Space on a different (unselected) card selects it.
-    onChange.mockClear();
-    fireEvent.keyDown(cardFor('Product manager'), { key: ' ' });
-    expect(onChange).toHaveBeenLastCalledWith('product-manager');
+    fireEvent.keyDown(cardFor('Legal analyst'), { key: ' ' });
+    expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('single-click / keyboard also toggles the blank starter off when selected', () => {
-    const onChange = vi.fn();
-    render(<TeammateGallery value="blank" onChange={onChange} />);
-
-    fireEvent.click(cardFor('Start from scratch'));
-    expect(onChange).toHaveBeenLastCalledWith(null);
-
-    onChange.mockClear();
-    fireEvent.keyDown(cardFor('Start from scratch'), { key: 'Enter' });
-    expect(onChange).toHaveBeenLastCalledWith(null);
-  });
-
-  it('compact variant is one even grid: icon, title, one description line, blank last', () => {
+  it('compact variant is one even grid: icon, title, one description line, blank first', () => {
     render(
       <TeammateGalleryCards
         value="personal-assistant"
@@ -170,8 +146,8 @@ describe('TeammateGallery', () => {
       gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
     });
     const order = cardOrder();
-    expect(order[0]).toBe('Personal assistant');
-    expect(order.at(-1)).toBe('Start from scratch');
+    expect(order[0]).toBe('Start from scratch');
+    expect(order[1]).toBe('Personal assistant');
     expect(order).toHaveLength(12);
 
     const assistant = cardFor('Personal assistant');
@@ -285,16 +261,16 @@ describe('TeammateGallery', () => {
     }
   );
 
-  it('renders Start from scratch as a full-width dashed card, last in the All view', () => {
+  it('renders Start from scratch as a full-width dashed card, first in the All view', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
     const blankStyle = cardFor('Start from scratch').getAttribute('style') ?? '';
     // Spans every column of the auto-fit grid → full-width row.
     expect(blankStyle).toContain('grid-column: 1 / -1');
     // Understated "build your own" affordance: dashed border.
     expect(blankStyle).toContain('border-style: dashed');
-    // Closes the grid; the templates keep their normal (non-spanning) cells.
-    expect(cardOrder().at(-1)).toBe('Start from scratch');
-    expect(cardOrder()[0]).toBe('Personal assistant');
+    // Opens the grid; the templates keep their normal (non-spanning) cells.
+    expect(cardOrder()[0]).toBe('Start from scratch');
+    expect(cardOrder()[1]).toBe('Personal assistant');
     expect(cardFor('Competitive analyst').getAttribute('style') ?? '').not.toContain('grid-column');
   });
 

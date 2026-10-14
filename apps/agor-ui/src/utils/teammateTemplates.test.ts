@@ -20,8 +20,9 @@ import {
 } from './teammateTemplates';
 
 describe('TEAMMATE_TEMPLATES', () => {
-  it('lists prompt-only templates first, then branch templates, in display order', () => {
+  it('lists the blank starter, then prompt-only and branch templates, in display order', () => {
     expect(TEAMMATE_GALLERY_CARDS.map((t) => t.id)).toEqual([
+      BLANK_TEMPLATE_ID,
       'personal-assistant',
       'researcher',
       'engineering-assistant',
@@ -33,7 +34,6 @@ describe('TEAMMATE_TEMPLATES', () => {
       'deal-desk',
       'sales-outbound',
       'legal-analyst',
-      BLANK_TEMPLATE_ID,
     ]);
     expect(DEFAULT_TEMPLATE_ID).toBe('personal-assistant');
     for (const template of TEAMMATE_GALLERY_CARDS) {
@@ -94,9 +94,9 @@ describe('TEAMMATE_TEMPLATES', () => {
     expect(TEAMMATE_TEMPLATES.find((t) => t.id === 'product-manager')?.emoji).toBe('🧭');
   });
 
-  it('appends the blank starter to the gallery cards, never to the templates', () => {
+  it('puts the blank starter first in the gallery cards, never in the templates', () => {
     expect(TEAMMATE_GALLERY_CARDS).toHaveLength(12);
-    expect(TEAMMATE_GALLERY_CARDS.at(-1)).toBe(BLANK_TEMPLATE);
+    expect(TEAMMATE_GALLERY_CARDS[0]).toBe(BLANK_TEMPLATE);
     expect(BLANK_TEMPLATE.title).toBe('Start from scratch');
     expect(BLANK_TEMPLATE.description).toBe('A blank teammate you shape as you chat.');
     expect(TEAMMATE_TEMPLATES).not.toContain(BLANK_TEMPLATE);
@@ -142,9 +142,9 @@ describe('categories', () => {
 });
 
 describe('galleryCardsForFilter', () => {
-  it('All view lists every template in display order with blank last', () => {
+  it('All view lists the blank starter first, then every template in display order', () => {
     const ids = galleryCardsForFilter('all').map((t) => t.id);
-    expect(ids).toEqual([...TEAMMATE_TEMPLATES.map((t) => t.id), BLANK_TEMPLATE_ID]);
+    expect(ids).toEqual([BLANK_TEMPLATE_ID, ...TEAMMATE_TEMPLATES.map((t) => t.id)]);
   });
 
   it('a category filter returns only that category in default order, no blank', () => {

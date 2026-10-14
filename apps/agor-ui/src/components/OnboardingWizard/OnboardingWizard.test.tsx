@@ -1027,7 +1027,7 @@ describe('OnboardingWizard', () => {
     });
   });
 
-  it('falls back to Personal assistant and its avatar when a pick is cleared', async () => {
+  it('keeps a template when its selected card is clicked again', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete });
 
@@ -1036,7 +1036,8 @@ describe('OnboardingWizard', () => {
     const researcher = () =>
       screen.getByText('Researcher').closest('[role="button"]') as HTMLElement;
     fireEvent.click(researcher());
-    fireEvent.click(researcher()); // deselect
+    fireEvent.click(researcher()); // select-only: no deselect
+    expect(researcher()).toHaveAttribute('aria-pressed', 'true');
     clickButton(/^continue →/i);
     await findAndClickButton(/skip for now/i); // llm → tools
     // A named teammate gets the picks in its first prompt.
@@ -1048,7 +1049,7 @@ describe('OnboardingWizard', () => {
 
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith(
-        expect.objectContaining({ templateId: 'personal-assistant', teammateEmoji: '🧑‍💼' }),
+        expect.objectContaining({ templateId: 'researcher', teammateEmoji: '🔎' }),
         expect.anything()
       )
     );

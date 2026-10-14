@@ -13,7 +13,7 @@ interface OnboardingTeammateGalleryStepProps {
   /** Local-home disclosure, only for teammates created from the public framework. */
   showPublicStarterNote: boolean;
   selectedTemplateId: TeammateGalleryCardId | null;
-  onTemplateChange: (templateId: TeammateGalleryCardId | null) => void;
+  onTemplateChange: (templateId: TeammateGalleryCardId) => void;
   teammateName: string;
   onTeammateNameChange: (name: string) => void;
   teammateEmoji: string;

@@ -234,7 +234,7 @@ export const TEAMMATE_TEMPLATES = [
 export type TeammateTemplateId = (typeof TEAMMATE_TEMPLATES)[number]['id'];
 
 /**
- * The blank starter card, shown last. Kept separate from TEAMMATE_TEMPLATES so
+ * The blank starter card, shown first. Kept separate from TEAMMATE_TEMPLATES so
  * it is never categorized. Its `sourceBranch` is the framework repo default; the
  * wiring resolves it to the repo's own default branch (the public template's for
  * a github.com private fork).
@@ -253,8 +253,8 @@ export type TeammateGalleryCardId = TeammateTemplateId | typeof BLANK_TEMPLATE_I
 /** Onboarding's recommended, preselected starting point. */
 export const DEFAULT_TEMPLATE_ID = 'personal-assistant' satisfies TeammateTemplateId;
 
-/** Every card shown in the gallery: all templates plus the blank starter. */
-export const TEAMMATE_GALLERY_CARDS = [...TEAMMATE_TEMPLATES, BLANK_TEMPLATE] as const;
+/** Every card shown in the gallery: the blank starter, then all templates. */
+export const TEAMMATE_GALLERY_CARDS = [BLANK_TEMPLATE, ...TEAMMATE_TEMPLATES] as const;
 export type TeammateGalleryCard = (typeof TEAMMATE_GALLERY_CARDS)[number];
 
 export function getTeammateTemplate(id?: string | null): TeammateGalleryCard | undefined {
@@ -350,7 +350,7 @@ export type GalleryFilter = 'all' | TeammateCategoryId;
 
 /**
  * Cards to render for the active filter: `all` is every template in display
- * order with the blank starter last; a category shows only its templates.
+ * order after the blank starter; a category shows only its templates.
  */
 export function galleryCardsForFilter(filter: GalleryFilter): readonly TeammateGalleryCard[] {
   if (filter !== 'all') {

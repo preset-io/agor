@@ -1753,13 +1753,11 @@ export function OnboardingWizard({
   };
 
   // Selecting a template sets the default avatar (and later the source branch),
-  // but never the name — the name stays personal and user-chosen. Clearing a
-  // pick (deselect) falls back to the default template and its avatar.
-  const applyTemplate = (templateId: TeammateGalleryCardId | null) => {
-    const effectiveId = templateId ?? DEFAULT_TEMPLATE_ID;
-    setSelectedTemplateId(effectiveId);
+  // but never the name — the name stays personal and user-chosen.
+  const applyTemplate = (templateId: TeammateGalleryCardId) => {
+    setSelectedTemplateId(templateId);
     setInvalidSavedTemplateId(null);
-    setTeammateEmoji(getTeammateTemplate(effectiveId)?.emoji || '🤖');
+    setTeammateEmoji(getTeammateTemplate(templateId)?.emoji || '🤖');
   };
 
   const renderWorkspace = () => (
