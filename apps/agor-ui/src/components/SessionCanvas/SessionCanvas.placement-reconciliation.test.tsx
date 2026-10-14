@@ -25,6 +25,10 @@ import { ZoneNode } from './canvas/BoardObjectNodes';
 import { MarkdownNode } from './canvas/MarkdownNode';
 import SessionCanvas from './SessionCanvas';
 
+vi.mock('../../hooks/useCanManageBoard', () => ({
+  useCanManageBoard: () => true,
+}));
+
 interface FlowNode {
   id: string;
   type?: string;
@@ -39,9 +43,9 @@ interface FlowNode {
 interface CapturedFlowProps {
   nodes: FlowNode[];
   onNodesChange?: (changes: unknown[]) => void;
-  onNodeDragStart?: (event: unknown, node: FlowNode) => void;
-  onNodeDrag?: (event: unknown, node: FlowNode) => void;
-  onNodeDragStop?: (event: unknown, node: FlowNode) => void;
+  onNodeDragStart?: (event: unknown, node: FlowNode, nodes?: FlowNode[]) => void;
+  onNodeDrag?: (event: unknown, node: FlowNode, nodes?: FlowNode[]) => void;
+  onNodeDragStop?: (event: unknown, node: FlowNode, nodes?: FlowNode[]) => void;
 }
 
 let flowProps: CapturedFlowProps | null = null;
@@ -56,6 +60,7 @@ vi.mock('reactflow', async () => {
   const React = await import('react');
   return {
     Background: () => null,
+    BackgroundVariant: { Dots: 'dots', Lines: 'lines', Cross: 'cross' },
     Controls: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
     ControlButton: ({ children, ...props }: { children?: ReactNode }) => (
       <button type="button" {...props}>
@@ -83,7 +88,20 @@ vi.mock('reactflow', async () => {
     useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
     useNodesState: (initial: FlowNode[]) => {
       const [nodes, setNodes] = React.useState(initial);
-      return [nodes, setNodes, vi.fn()];
+      return [
+        nodes,
+        setNodes,
+        (changes: Array<{ type: string; id: string; selected?: boolean }>) => {
+          setNodes((current) =>
+            current.map((node) => {
+              const change = changes.find(
+                (entry) => entry.id === node.id && entry.type === 'select'
+              );
+              return change ? { ...node, selected: change.selected } : node;
+            })
+          );
+        },
+      ];
     },
     useEdgesState: (initial: unknown[]) => {
       const [edges, setEdges] = React.useState(initial);
@@ -271,6 +289,8 @@ function resize(...zones: Array<[string, number, number]>) {
       zones.map(([id, width, height]) => ({
         type: 'dimensions',
         id,
+        // Only an interactive resize persists geometry.
+        resizing: true,
         dimensions: { width, height },
       }))
     );
@@ -1171,10 +1191,91 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     expect(patch).not.toHaveBeenCalled();
   });
 
+  it('restores selected node geometry and shows a toast when align persistence rejects', async () => {
+    let rejectWrite: ((error: Error) => void) | undefined;
+    const patch = vi.fn(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectWrite = reject;
+        })
+    );
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    renderCanvas(client);
+    await act(async () => {});
+    const ids = [BRANCH_ID, `card-${card.card_id}`];
+    const original = ids.map((id) => ({
+      ...currentNode(id),
+      position: { ...currentNode(id).position },
+    }));
+    act(() =>
+      flowProps?.onNodesChange?.(ids.map((id) => ({ type: 'select', id, selected: true })))
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'More alignment actions' }));
+    fireEvent.click(await screen.findByText('Left / start'));
+    await waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    expect(ids.map((id) => currentNode(id).position)).not.toEqual(
+      original.map((node) => node.position)
+    );
+    await act(async () => rejectWrite?.(new Error('Layout denied')));
+    await waitFor(() =>
+      expect(ids.map((id) => currentNode(id).position)).toEqual(
+        original.map((node) => node.position)
+      )
+    );
+    expect(screen.getByText(/Couldn't save the layout/)).toBeTruthy();
+    // An unrelated store repaint must not resurrect the rejected local pins.
+    act(() =>
+      agorStore.setState({ branchById: new Map([[BRANCH_ID, { ...branch, name: 'Repaint' }]]) })
+    );
+    expect(ids.map((id) => currentNode(id).position)).toEqual(
+      original.map((node) => node.position)
+    );
+  });
+
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
     setRealtimeAuthorityScope(null);
+  });
+
+  it('correlates every entity in a grouped drag and drops only superseded members', async () => {
+    vi.useFakeTimers();
+    const patch = vi.fn(async (_id: string, data: Partial<BoardEntityObject>) => {
+      const result = { ...reviewingCardPlacement, ...data };
+      boardObjectPatched(result);
+      return result;
+    });
+    const client = { service: () => ({ patch }) } as unknown as AgorClient;
+    render(
+      <ConnectionProvider value={CONNECTED}>
+        <SessionCanvas board={board} client={client} branches={[branch]} />
+      </ConnectionProvider>
+    );
+    await act(async () => {});
+    const dragged = [
+      { ...currentNode(BRANCH_ID), positionAbsolute: { x: 1800, y: 1320 } },
+      { ...currentNode(`card-${card.card_id}`), positionAbsolute: { x: 3010, y: 480 } },
+    ];
+    act(() => {
+      flowProps?.onNodeDragStart?.({}, dragged[0], dragged);
+      flowProps?.onNodeDrag?.({}, dragged[0], dragged);
+      flowProps?.onNodeDragStop?.({}, dragged[0], dragged);
+    });
+    act(() =>
+      boardObjectPatched({
+        ...implementingPlacement,
+        zone_id: REVIEWING_ZONE_ID,
+        position: { x: 20, y: 100 },
+      })
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(501);
+    });
+    expect(patch).toHaveBeenCalledExactlyOnceWith('board-object-card', {
+      placement_write_id: expect.any(String),
+      position: { x: 120, y: 400 },
+      zone_id: REVIEWING_ZONE_ID,
+    });
   });
 
   it('persists a second drag after the first pending PATCH is acknowledged', async () => {
