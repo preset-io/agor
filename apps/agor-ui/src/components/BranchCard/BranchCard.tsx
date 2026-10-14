@@ -44,6 +44,7 @@ import {
 } from '../BranchFilesystemRecovery';
 import { BranchWorkspaceStatus } from '../BranchWorkspaceStatus';
 import { EnvironmentPill } from '../EnvironmentPill';
+import { FadeText } from '../FadeText';
 import { MarkdownPreview } from '../MarkdownRenderer';
 import { CreatedByTag } from '../metadata';
 import { IssuePill, PullRequestPill } from '../Pill';
@@ -499,18 +500,12 @@ const BranchCardComponent = ({
               // location — render the agent name in the prominent slot
               // and drop the repo/branch subtitle. Repo + branch are still
               // available in the branch settings modal for power users.
-              <Typography.Title
-                level={4}
-                style={{ margin: 0, fontWeight: 600 }}
-                ellipsis={{ tooltip: teammateConfig?.displayName ?? branch.name }}
-              >
-                {teammateConfig?.displayName ?? branch.name}
+              <Typography.Title level={4} style={{ margin: 0, fontWeight: 600 }}>
+                <FadeText>{teammateConfig?.displayName ?? branch.name}</FadeText>
               </Typography.Title>
             ) : (
               <>
-                <Typography.Text strong ellipsis={{ tooltip: branch.name }}>
-                  {branch.name}
-                </Typography.Text>
+                <FadeText strong>{branch.name}</FadeText>
                 <Typography.Text
                   type="secondary"
                   style={{ fontSize: 12 }}

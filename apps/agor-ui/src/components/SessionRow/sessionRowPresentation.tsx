@@ -66,7 +66,7 @@ export function getSessionRowFill(
   return selected ? token.colorFillSecondary : 'transparent';
 }
 
-/** Single-line title that ellipsizes; parents are a touch heavier to anchor structure. */
+/** Single-line title for FadeText; parents are a touch heavier to anchor structure. */
 export function getSessionRowTitleStyle(
   token: GlobalToken,
   { read, parent = false, hug = false }: { read: boolean; parent?: boolean; hug?: boolean }
@@ -77,9 +77,6 @@ export function getSessionRowTitleStyle(
     color: read ? token.colorTextSecondary : undefined,
     flex: hug ? '0 1 auto' : 1,
     minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
   };
 }
 
