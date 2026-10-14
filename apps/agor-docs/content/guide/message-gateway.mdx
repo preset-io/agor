@@ -650,7 +650,9 @@ final answer back into the same chat or channel thread.
   is installed in and Agor has received a message from. The person's reply needs
   no mention: it goes to their own personal-chat session, not the session that
   sent the DM, and includes the DMs sent since their last message as context. If
-  the channel restricts user IDs, the recipient must be on that list.
+  the channel restricts user IDs, the recipient must be on that list. DMs are
+  unavailable while the channel restricts team or channel IDs, because those
+  allowlists refuse personal-chat replies.
 - **Reactions (off by default).** With **Deliver reactions to sessions**
   (`inbound_reactions: true`), a reaction to one of the bot's messages in a
   conversation that already has a session reaches that session as a short

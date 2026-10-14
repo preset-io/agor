@@ -184,9 +184,10 @@ export class GatewayOutboundMessageRepository {
     );
   }
 
-  /** The proactive send that posted this provider message through one gateway channel, if any. */
+  /** The proactive send that posted this message into one conversation (its seed thread or its DM chat), if any. */
   async findByPlatformMessage(
     gatewayChannelId: GatewayChannelID,
+    conversationThreadId: string,
     platformMessageId: string
   ): Promise<GatewayOutboundMessage | null> {
     const row = await select(this.db)
@@ -194,7 +195,12 @@ export class GatewayOutboundMessageRepository {
       .where(
         and(
           eq(gatewayOutboundMessages.gateway_channel_id, gatewayChannelId),
-          eq(gatewayOutboundMessages.platform_message_id, platformMessageId)
+          eq(gatewayOutboundMessages.platform_message_id, platformMessageId),
+          // Message IDs are unique only within a conversation.
+          or(
+            eq(gatewayOutboundMessages.platform_thread_id, conversationThreadId),
+            eq(gatewayOutboundMessages.platform_channel_id, conversationThreadId)
+          )
         )
       )
       .one();

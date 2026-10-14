@@ -157,9 +157,11 @@ allowlist, outside the outbox. `outbound_enabled` gates only proactive sends.
   session executor uploads. One deadline covers all of a message's files and
   fits the inbound lease with catch-up. Channel activities omit SharePoint
   files, so a channel mention is re-read over Graph (`ChannelMessage.Read.Group`)
-  inside that deadline; a `reference` file is read only if its drive is the
-  channel's `filesFolder` drive (`ChannelSettings.Read.Group`), through the
-  driveItem's short-lived `downloadUrl`. That read needs a tenant admin grant
+  inside that deadline; a `reference` file is read only if it sits under the
+  channel's own `filesFolder` (`ChannelSettings.Read.Group`), not merely in the
+  team library every channel shares, through the driveItem's short-lived
+  `downloadUrl`. When the message itself cannot be read, the activity's own
+  file notes stand. That read needs a tenant admin grant
   (`Sites.Selected` on the team site, or `Files.Read.All`); without it, and for
   group-chat files and other types, the file is named in the prompt as unread,
   so an attachment-only mention is still admitted.
@@ -242,9 +244,10 @@ row. The send is synchronous and not durable, as on Slack and Discord.
   seeded session skips catch-up and moves the cursor to itself; later mentions
   read catch-up as usual. Answers go through the outbox.
 - A `user:<email | Entra object ID>` target is resolved with the Bot Connector
-  member API on the teams of fenced anchors (inside `allowed_team_ids`); the
-  recipient must also pass `allowed_user_aad_object_ids`, since their reply
-  would be refused otherwise. `POST v3/conversations` opens (or reuses) the
+  member API on the teams of fenced anchors; the recipient must pass
+  `allowed_user_aad_object_ids`, and DMs are refused while `allowed_team_ids`
+  or `allowed_channel_ids` is set, since ingress refuses personal-chat replies
+  under either. `POST v3/conversations` opens (or reuses) the
   1:1 chat; it posts nothing, so its failures are reported as not sent. The
   send is recorded with the chat ID as its thread and is never a seed: the
   reply lands in the person's one personal-chat session, whose next prompt
@@ -259,8 +262,8 @@ message. Teams reports reactions only on the bot's own messages. A reaction
 reaches only a conversation that already has a session; it never creates one,
 consumes a seed, reads catch-up, moves the cursor, or posts a notice when it is
 refused. A channel reaction must name its thread through the conversation's
-root message, or it is ignored. The prompt quotes the reacted message from the
-conversation's deliveries or proactive sends. Limits are per daemon process:
+root message, or it is ignored. The prompt quotes the reacted message from that
+conversation's own deliveries or proactive sends. Limits are per daemon process:
 one prompt per reaction per minute, three per conversation per minute.
 
 ## Migration

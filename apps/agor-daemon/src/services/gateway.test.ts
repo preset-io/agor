@@ -1088,6 +1088,33 @@ describe('GatewayService user alignment operational logs', () => {
     expect(prompt).not.toContain('tempauth');
   });
 
+  it('keeps the activity SharePoint note when the channel message cannot be read', async () => {
+    const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
+    const channel = await (
+      service as unknown as { channelRepo: { findByKey: () => Promise<GatewayChannel> } }
+    ).channelRepo.findByKey();
+    Object.assign(channel.config, { files: true, catch_up: { mode: 'off' } });
+    // Without the team's message-read consent the connector reports nothing it could check.
+    const fetchChannelMessageFiles = vi.fn(async () => null);
+    vi.spyOn(teamsConnectorCache, 'get').mockReturnValue({ fetchChannelMessageFiles } as never);
+    const channelThread = '19:general@thread.tacv2';
+    await teamsFileCreate(service, channel, [], [{ name: 'image.png', reason: 'channel_file' }], {
+      thread_id: `${channelThread}|1616989510408`,
+      metadata: { teams_conversation_type: 'channel', teams_has_mention: true },
+      teams_catch_up: {
+        activity_id: '1616990132035',
+        timestamp: '2021-03-29T04:02:12.035Z',
+        service_url: 'https://smba.trafficmanager.net/amer/',
+        team_id: channelThread,
+        team_group_id: null,
+      },
+    });
+    expect(fetchChannelMessageFiles).toHaveBeenCalledOnce();
+    expect(String(promptCreate.mock.calls[0][0].prompt)).toContain(
+      '"image.png" (stored in SharePoint'
+    );
+  });
+
   it('names Teams files as turned off without downloading when files is off', async () => {
     const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
     const channel = await (
@@ -7611,6 +7638,15 @@ describe('GatewayService Teams proactive DMs', () => {
     const unlisted = dmHarness({ config: { allowed_user_aad_object_ids: ['aad-other'] } });
     await expect(unlisted.emit()).rejects.toThrow('allowed_user_aad_object_ids');
     expect(unlisted.sendPersonalMessage).not.toHaveBeenCalled();
+    // Ingress refuses personal chats under a team or channel allowlist, so the reply could never land.
+    for (const config of [
+      { allowed_team_ids: ['19:team@thread.tacv2'] },
+      { allowed_channel_ids: ['19:c@thread.tacv2'] },
+    ]) {
+      const restricted = dmHarness({ config });
+      await expect(restricted.emit()).rejects.toThrow('restricts teams or channels');
+      expect(restricted.findMember).not.toHaveBeenCalled();
+    }
     const unreachable = dmHarness({
       findMember: vi.fn(async () => {
         throw new TeamsMemberLookupError('teams_member_lookup_http_503', true);

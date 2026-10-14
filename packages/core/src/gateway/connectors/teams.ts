@@ -731,7 +731,7 @@ export class TeamsConnector implements GatewayConnector {
   }
 
   /** Readable files attached to a verified channel message; access checks belong to the caller. */
-  fetchChannelMessageFiles(req: TeamsChannelFilesRequest): Promise<TeamsChannelFilesResult> {
+  fetchChannelMessageFiles(req: TeamsChannelFilesRequest): Promise<TeamsChannelFilesResult | null> {
     return fetchTeamsChannelMessageFiles(this.config, req);
   }
 

@@ -56,12 +56,18 @@ function reference(name: string, contentUrl = FILE_URL) {
 }
 
 const reply = (attachments: unknown[]) => json(graphMessage(REPLY_ID, { attachments }));
-const folder = () => json({ id: 'folder', parentReference: { driveId: DRIVE_ID } });
+const folder = () =>
+  json({
+    id: 'folder',
+    webUrl: 'https://contoso.sharepoint.com/sites/Team/Shared%20Documents/General',
+    parentReference: { driveId: DRIVE_ID },
+  });
 const driveItem = (overrides: Record<string, unknown> = {}) =>
   json({
     id: 'item',
     size: 2048,
     file: { mimeType: 'image/png' },
+    webUrl: FILE_URL,
     parentReference: { driveId: DRIVE_ID },
     '@microsoft.graph.downloadUrl': DOWNLOAD_URL,
     ...overrides,
@@ -80,8 +86,8 @@ describe('Teams channel message files', () => {
 
     const result = await fetchTeamsChannelMessageFiles(config, request(), { fetchImpl });
 
-    expect(result.skipped).toEqual([]);
-    expect(result.files).toEqual([
+    expect(result?.skipped).toEqual([]);
+    expect(result?.files).toEqual([
       expect.objectContaining({
         name: 'image.png',
         mimetype: 'image/png',
@@ -89,7 +95,7 @@ describe('Teams channel message files', () => {
         url_private_download: DOWNLOAD_URL,
       }),
     ]);
-    expect(result.files[0]).not.toHaveProperty('auth');
+    expect(result?.files[0]).not.toHaveProperty('auth');
     expect(graphCalls(fetchImpl)).toEqual([REPLY_URL, FOLDER_URL, SHARES_URL]);
   });
 
@@ -102,24 +108,39 @@ describe('Teams channel message files', () => {
 
     const result = await fetchTeamsChannelMessageFiles(config, request(), { fetchImpl });
 
-    expect(result.files).toEqual([]);
-    expect(result.skipped).toEqual([
+    expect(result?.files).toEqual([]);
+    expect(result?.skipped).toEqual([
       { name: 'image.png', reason: 'channel_file' },
       { name: 'notes.md', reason: 'channel_file' },
     ]);
   });
 
-  it('refuses a referenced file outside the channel drive', async () => {
-    const fetchImpl = fakeFetch((url) => {
-      if (url === REPLY_URL) return reply([reference('image.png')]);
-      if (url === FOLDER_URL) return folder();
-      if (url === SHARES_URL) return driveItem({ parentReference: { driveId: 'b!other-site' } });
-    });
+  it("refuses a referenced file outside the channel's own folder", async () => {
+    const otherChannel =
+      'https://contoso.sharepoint.com/sites/Team/Shared%20Documents/Finance/image.png';
+    for (const item of [
+      { parentReference: { driveId: 'b!other-site' } },
+      // Every channel of a team shares the team's library, so the same drive is not enough.
+      { webUrl: otherChannel },
+      {
+        webUrl:
+          'https://contoso.sharepoint.com/sites/Team/Shared%20Documents/General%2F..%2FFinance/image.png',
+      },
+      {
+        webUrl:
+          'https://contoso.sharepoint.com/sites/Team/Shared%20Documents/General-archive/image.png',
+      },
+    ]) {
+      const fetchImpl = fakeFetch((url) => {
+        if (url === REPLY_URL) return reply([reference('image.png')]);
+        if (url === FOLDER_URL) return folder();
+        if (url === SHARES_URL) return driveItem(item);
+      });
 
-    const result = await fetchTeamsChannelMessageFiles(config, request(), { fetchImpl });
+      const result = await fetchTeamsChannelMessageFiles(config, request(), { fetchImpl });
 
-    expect(result.files).toEqual([]);
-    expect(result.skipped).toEqual([{ name: 'image.png', reason: 'invalid' }]);
+      expect(result).toEqual({ files: [], skipped: [{ name: 'image.png', reason: 'invalid' }] });
+    }
   });
 
   it('skips unreadable types and disabled files without reading SharePoint', async () => {
@@ -151,10 +172,10 @@ describe('Teams channel message files', () => {
       url === REPLY_URL ? json({ error: { code: 'Forbidden' } }, 403) : undefined
     );
 
-    await expect(fetchTeamsChannelMessageFiles(config, request(), { fetchImpl })).resolves.toEqual({
-      files: [],
-      skipped: [],
-    });
+    // Null, not empty: the activity's own file list must stand when the message is unreadable.
+    await expect(
+      fetchTeamsChannelMessageFiles(config, request(), { fetchImpl })
+    ).resolves.toBeNull();
     await fetchTeamsChannelMessageFiles(config, request(), { fetchImpl });
     expect(graphCalls(fetchImpl)).toEqual([REPLY_URL]);
   });

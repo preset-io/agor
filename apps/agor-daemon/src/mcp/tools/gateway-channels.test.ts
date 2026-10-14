@@ -1327,6 +1327,8 @@ describe('agor_gateway_channels MCP tools', () => {
       '#project-updates',
       'channel_name:project-updates',
       'user@example.com',
+      'user:ada@contoso.com',
+      'user:6f1a2b3c-0000-4000-8000-0123456789ab',
     ]) {
       const parsed = tools.agor_gateway_emit_message.cfg.inputSchema.safeParse({
         gatewayChannelId: 'chan-1',

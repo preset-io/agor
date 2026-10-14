@@ -132,10 +132,12 @@ describe('GatewayOutboundMessageRepository', () => {
         (row) => row.message_text
       )
     ).toEqual(['text-1791924437861']);
-    expect((await repo.findByPlatformMessage(channel.id, '1791924437861'))?.message_text).toBe(
-      'text-1791924437861'
-    );
-    expect(await repo.findByPlatformMessage(generateId(), '1791924437861')).toBeNull();
+    expect(
+      (await repo.findByPlatformMessage(channel.id, 'a:chat', '1791924437861'))?.message_text
+    ).toBe('text-1791924437861');
+    // The same message ID in another conversation is a different message.
+    expect(await repo.findByPlatformMessage(channel.id, 'a:other', '1791924437861')).toBeNull();
+    expect(await repo.findByPlatformMessage(generateId(), 'a:chat', '1791924437861')).toBeNull();
   });
 
   dbTest('admits a seed by canonical thread or provider alias', async ({ db }) => {

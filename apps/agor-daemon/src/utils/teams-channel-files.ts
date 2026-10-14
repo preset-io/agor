@@ -32,7 +32,7 @@ export async function readTeamsChannelMessageFiles(args: {
   const rootMessageId = args.threadId.slice(separator + 1);
   if (!channelId || !TEAMS_MESSAGE_ID.test(rootMessageId)) return undefined;
   try {
-    return await args.connector.fetchChannelMessageFiles({
+    const result = await args.connector.fetchChannelMessageFiles({
       team: {
         teamId: trigger.team_id,
         teamGroupId: trigger.team_group_id,
@@ -45,6 +45,7 @@ export async function readTeamsChannelMessageFiles(args: {
       cacheScope: teamsGraphCacheScope(args.channel, args.tenantId),
       signal: args.signal,
     });
+    return result ?? undefined;
   } catch (error) {
     console.warn(`[gateway.teams.files] event=unavailable code=${gatewayFailureCode(error)}`);
     return undefined;

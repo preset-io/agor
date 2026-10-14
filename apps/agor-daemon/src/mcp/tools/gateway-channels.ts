@@ -347,7 +347,7 @@ const outboundTargetSchema = z
   .string()
   .trim()
   .regex(
-    /^(user:\d{17,20}|channel:[^:\s]+|channel:19:[A-Za-z0-9_-]+@thread\.(?:tacv2|skype)|channel_name:[^\s]+|#[^\s]+|(?:email:|user_email:)?[^@\s]+@[^@\s]+\.[^@\s]+)$/
+    /^(user:\d{17,20}|user:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|channel:[^:\s]+|channel:19:[A-Za-z0-9_-]+@thread\.(?:tacv2|skype)|channel_name:[^\s]+|#[^\s]+|(?:email:|user_email:)?[^@\s]+@[^@\s]+\.[^@\s]+)$/
   )
   .describe(
     'Outbound target: Slack channel:C123, #project-updates, channel_name:project-updates, or user@example.com; Discord channel:<snowflake> or user:<snowflake> (when DMs are enabled); Microsoft Teams channel:<19:…@thread.tacv2> (a standard channel; see known_channels in agor_gateway_outbound_targets_list) or user:<work email or Entra object ID> for a DM to a member of a team the bot is in. Thread targets are intentionally not supported for a new seed.'

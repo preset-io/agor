@@ -5246,7 +5246,11 @@ export class GatewayService {
       );
       const message = delivery ? await this.messagesRepo.findById(delivery.message_id) : null;
       if (message) return gatewayMessageText(message);
-      const sent = await this.outboundRepo.findByPlatformMessage(channel.id, reactedMessageId);
+      const sent = await this.outboundRepo.findByPlatformMessage(
+        channel.id,
+        mapping.thread_id,
+        reactedMessageId
+      );
       return sent?.message_text ?? null;
     } catch (error) {
       // The reaction still reaches the session without the quote.
@@ -5314,6 +5318,12 @@ export class GatewayService {
     user: string
   ): Promise<EmitGatewayMessageResult> {
     const config = channel.config as TeamsGatewayConfig;
+    // Personal chats carry no team or channel, so either allowlist refuses every DM reply at ingress.
+    if (config.allowed_team_ids?.length || config.allowed_channel_ids?.length) {
+      throw new Error(
+        'Teams DMs are unavailable while this gateway channel restricts teams or channels, so a reply would be refused.'
+      );
+    }
     const connector = teamsConnectorCache.get(getCurrentTenantId(), channel);
     const { anchor, member } = await this.resolveTeamsDirectMessageRecipient(
       channel,
@@ -5445,7 +5455,6 @@ export class GatewayService {
     const anchors = await this.teamsAddressRepo.loadFencedTeamAnchors({
       channel,
       limit: TEAMS_ANCHOR_TEAMS,
-      allowedTeamIds: (channel.config as TeamsGatewayConfig).allowed_team_ids,
     });
     let lookupFailed = false;
     for (const anchor of anchors) {

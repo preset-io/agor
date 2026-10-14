@@ -45,16 +45,36 @@ function sharesUrl(contentUrl: string): string {
   return `${GRAPH_ORIGIN}/v1.0/shares/u!${encoded}/driveItem`;
 }
 
+/** The decoded path of a SharePoint web URL, or null when it is not one. */
+function sharePointPath(value: unknown): { origin: string; path: string } | null {
+  if (!isTeamsFileDownloadUrl(value)) return null;
+  try {
+    const url = new URL(value as string);
+    const path = decodeURIComponent(url.pathname).replace(/\/+$/, '');
+    return path.split('/').some((segment) => segment === '..' || segment === '.')
+      ? null
+      : { origin: url.origin, path };
+  } catch {
+    return null;
+  }
+}
+
+/** Every channel of a team shares one document library, so the file must sit under this channel's folder. */
+function isUnderFolder(itemUrl: unknown, folder: { origin: string; path: string }): boolean {
+  const item = sharePointPath(itemUrl);
+  return !!item && item.origin === folder.origin && item.path.startsWith(`${folder.path}/`);
+}
+
 function isForbidden(error: unknown): boolean {
   return error instanceof TeamsGraphHttpError && (error.status === 403 || error.status === 401);
 }
 
-/** Readable files of one channel message as pre-authenticated SharePoint URLs; only the channel's own drive is read. */
+/** Readable files of one channel message as pre-authenticated SharePoint URLs, only from the channel's own folder; null when the message cannot be read. */
 export async function fetchTeamsChannelMessageFiles(
   config: TeamsGatewayConfig,
   req: TeamsChannelFilesRequest,
   options: { fetchImpl?: typeof fetch } = {}
-): Promise<TeamsChannelFilesResult> {
+): Promise<TeamsChannelFilesResult | null> {
   const { channelId, rootMessageId, messageId } = req;
   if (
     !TEAMS_CHANNEL_ID_PATTERN.test(channelId) ||
@@ -72,7 +92,7 @@ export async function fetchTeamsChannelMessageFiles(
   };
   const result: TeamsChannelFilesResult = { files: [], skipped: [] };
   const groupId = await resolveTeamGroupId(runtime, req.team);
-  if (isTeamsRscDenied(runtime, groupId)) return result;
+  if (isTeamsRscDenied(runtime, groupId)) return null;
   const channelUrl = graphChannelMessagesUrl(groupId, channelId);
   const messageUrl =
     rootMessageId === messageId
@@ -84,7 +104,7 @@ export async function fetchTeamsChannelMessageFiles(
   } catch (error) {
     if (error instanceof TeamsGraphHttpError && error.status === 403) {
       markTeamsRscDenied(runtime, groupId);
-      return result;
+      return null;
     }
     throw error;
   }
@@ -110,6 +130,7 @@ export async function fetchTeamsChannelMessageFiles(
   };
 
   let channelDriveId: string | null;
+  let channelFolder: { origin: string; path: string } | null;
   try {
     const folder = await authorizedJson(
       runtime,
@@ -117,11 +138,12 @@ export async function fetchTeamsChannelMessageFiles(
       `${GRAPH_ORIGIN}/v1.0/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/filesFolder`
     );
     channelDriveId = text(asRecord(folder.parentReference).driveId);
+    channelFolder = sharePointPath(folder.webUrl);
   } catch (error) {
     if (isForbidden(error)) return unreadable();
     throw error;
   }
-  if (!channelDriveId) return unreadable();
+  if (!channelDriveId || !channelFolder) return unreadable();
 
   for (const [index, candidate] of candidates.entries()) {
     let item: Record<string, unknown>;
@@ -138,6 +160,7 @@ export async function fetchTeamsChannelMessageFiles(
     const size = item.size;
     if (
       text(asRecord(item.parentReference).driveId) !== channelDriveId ||
+      !isUnderFolder(item.webUrl, channelFolder) ||
       !item.file ||
       !isTeamsFileDownloadUrl(downloadUrl)
     ) {
