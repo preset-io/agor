@@ -244,7 +244,8 @@ it.each([
     // The info line sits under the card on one line, with phone-sized targets.
     const infoLine = screen.getByTestId('composer-info-line');
     expect(infoLine).toHaveTextContent('4%');
-    expect(infoLine).toHaveTextContent('Usage');
+    // Usage is lazy: no snapshot yet, so no usage segment.
+    expect(infoLine).not.toHaveTextContent(/Usage|tokens/);
     const info = infoLine.getBoundingClientRect();
     expect(info.top).toBeGreaterThanOrEqual(card.bottom);
     expect(info.right).toBeLessThanOrEqual(window.innerWidth);

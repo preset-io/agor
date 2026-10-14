@@ -489,6 +489,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     detailsOpen || (openMenu === 'plus' && plusPage === 'details'),
     currentUserId
   );
+  // #2808: usage is fetched only when disclosed. Keep the last snapshot for the info line.
+  const [knownUsage, setKnownUsage] = React.useState<{ sessionId: string; total: number } | null>(
+    null
+  );
+  React.useEffect(() => {
+    if (usage) setKnownUsage({ sessionId: session.session_id, total: usage.total });
+  }, [usage, session.session_id]);
+  const knownUsageTotal =
+    knownUsage?.sessionId === session.session_id ? knownUsage.total : undefined;
   const mcpSummary = summarizeSessionMcpServers(
     sessionMcpServerIds,
     mcpServerById,
@@ -530,7 +539,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     pinnedChips.includes('tools') && mcpSummary.attachedCount > 0
       ? `MCP ${mcpSummary.attachedCount}`
       : null,
-    pinnedChips.includes('tokens') ? 'Usage' : null,
+    pinnedChips.includes('tokens') && knownUsageTotal !== undefined
+      ? `${formatTokenCount(knownUsageTotal)} tokens`
+      : null,
     pinnedChips.includes('session-ids') ? shortId(session.session_id) : null,
   ].filter((item): item is string => Boolean(item));
 
