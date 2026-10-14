@@ -1483,7 +1483,7 @@ describe('GatewayChannelsTable Teams identity edits', () => {
 });
 
 describe('gateway inventory boundaries', () => {
-  it('labels a disabled Teams channel as experimental in the merged inventory', () => {
+  it('lists a disabled Teams channel in the merged inventory', () => {
     const user = makeUser();
     const channel = {
       ...makeSlackChannel(),
@@ -1501,7 +1501,7 @@ describe('gateway inventory boundaries', () => {
         currentUser={user}
       />
     );
-    expect(screen.getByText('Teams · Experimental')).toBeInTheDocument();
+    expect(screen.getByText('teams')).toBeInTheDocument();
     expect(screen.getByText('Disabled')).toBeInTheDocument();
   });
 

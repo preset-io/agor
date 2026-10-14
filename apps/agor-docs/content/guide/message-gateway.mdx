@@ -40,7 +40,7 @@ Things that still warrant caution:
 
 The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack or Discord bot in a supported channel, mention `@agor` on a GitHub PR, or mention the configured assistant in a Shortcut story comment, and Agor spins up a coding session on the right branch with the right agent, then routes responses back to the platform. In Slack and Discord channel-like surfaces, every prompt requires an explicit bot mention.
 
-> Currently supports **Slack**, **Discord**, **GitHub**, **Shortcut**, and **Microsoft Teams (Experimental)**.
+> Currently supports **Slack**, **Discord**, **GitHub**, **Shortcut**, and **Microsoft Teams**.
 
 <img
   src="/screenshots/marketing/agor-marketing-slack-thread.png"
@@ -119,7 +119,7 @@ Slack DM                    Agor Daemon                    Agent
 
 Standalone SQLite installations use process-local listeners.
 
-> **Teams (Experimental)** has no listener: Teams calls Agor's
+> **Teams** has no listener: Teams calls Agor's
 > `/gateway/teams/:gatewayChannelId/activities` route on whichever daemon receives
 > the request, and every daemon processes queued activities. It behaves the same on
 > SQLite and PostgreSQL.
@@ -606,9 +606,8 @@ Follow-up mentions in the same Shortcut thread continue the existing session. Co
 
 ## Setting Up Microsoft Teams Integration
 
-Microsoft Teams support is **Experimental** until live provider validation is
-complete. It works in personal chats, group chats, and standard team channels of
-one Microsoft Entra tenant.
+Microsoft Teams works in personal chats, group chats, and standard team channels
+of one Microsoft Entra tenant.
 
 ### How It Works
 

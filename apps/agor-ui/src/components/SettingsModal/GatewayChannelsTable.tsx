@@ -2485,7 +2485,6 @@ const ChannelFormFields: React.FC<{
                 </Typography.Link>
                 , add the Microsoft Teams channel, and set its messaging endpoint to this channel's
                 callback URL. The channel is enabled only after Agor verifies these credentials.
-                Teams delivery is experimental until live provider QA is complete.
               </span>
             }
           />
@@ -2807,7 +2806,6 @@ const ChannelFormFields: React.FC<{
                   <Space>
                     {opt.icon}
                     {opt.label}
-                    {opt.value === 'teams' && <Tag color="gold">Experimental</Tag>}
                     {opt.comingSoon && <Tag style={{ marginInlineStart: 4 }}>Coming soon</Tag>}
                   </Space>
                 </Select.Option>
@@ -5020,11 +5018,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           name={channel.name}
           query={searchTerm}
           icon={getChannelTypeIcon(channel.channel_type)}
-          metadata={
-            <Tag color={channel.channel_type === 'teams' ? 'gold' : undefined}>
-              {channel.channel_type === 'teams' ? 'Teams · Experimental' : channel.channel_type}
-            </Tag>
-          }
+          metadata={<Tag>{channel.channel_type}</Tag>}
         />
       ),
     },

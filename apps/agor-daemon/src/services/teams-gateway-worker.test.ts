@@ -12,7 +12,7 @@ function channel(): GatewayChannel {
   return {
     id: 'channel-1' as never,
     channel_key: 'channel-key',
-    name: 'Teams experimental',
+    name: 'Teams',
     channel_type: 'teams',
     enabled: true,
     created_by: 'user-1' as never,
