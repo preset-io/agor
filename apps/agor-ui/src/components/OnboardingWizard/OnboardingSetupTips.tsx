@@ -7,6 +7,7 @@ import {
   TeamOutlined,
 } from '@ant-design/icons';
 import { Card, Carousel, ConfigProvider, Flex, Typography, theme } from 'antd';
+import { useState } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 
 /** Shown while completion runs. `name` is mid-sentence, `Name` starts a sentence. */
@@ -51,6 +52,8 @@ const SETUP_TIPS = [
 export function OnboardingSetupTips({ teammateName }: { teammateName?: string }) {
   const { token } = theme.useToken();
   const reducedMotion = usePrefersReducedMotion();
+  // Slick's pauseOnFocus ignores the dots, so pause while anything inside has focus.
+  const [focused, setFocused] = useState(false);
   const name = teammateName || 'your teammate';
   const Name = teammateName || 'Your teammate';
 
@@ -62,39 +65,45 @@ export function OnboardingSetupTips({ teammateName }: { teammateName?: string })
     >
       {/* Carousel dots paint with colorBgContainer, invisible on a dark card. */}
       <ConfigProvider theme={{ components: { Carousel: { colorBgContainer: token.colorText } } }}>
-        <Carousel
-          effect="fade"
-          autoplay={!reducedMotion}
-          autoplaySpeed={6000}
-          speed={reducedMotion ? 0 : 500}
-          pauseOnHover
-          pauseOnFocus
-          pauseOnDotsHover
+        <div
+          onFocus={() => setFocused(true)}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
+          }}
         >
-          {SETUP_TIPS.map(({ icon: Icon, title, line }) => (
-            <div key={title}>
-              <Flex
-                gap={token.marginSM}
-                align="flex-start"
-                style={{ paddingBottom: token.paddingXL }}
-              >
-                <Icon
-                  aria-hidden
-                  style={{
-                    fontSize: token.fontSizeLG,
-                    color: token.colorPrimary,
-                    // Center on the title's first line.
-                    marginTop: (token.fontSize * token.lineHeight - token.fontSizeLG) / 2,
-                  }}
-                />
-                <Flex vertical>
-                  <Typography.Text strong>{title}</Typography.Text>
-                  <Typography.Text type="secondary">{line(name, Name)}</Typography.Text>
+          <Carousel
+            effect="fade"
+            autoplay={!reducedMotion && !focused}
+            autoplaySpeed={6000}
+            speed={reducedMotion ? 0 : 500}
+            pauseOnHover
+            pauseOnDotsHover
+          >
+            {SETUP_TIPS.map(({ icon: Icon, title, line }) => (
+              <div key={title}>
+                <Flex
+                  gap={token.marginSM}
+                  align="flex-start"
+                  style={{ paddingBottom: token.paddingXL }}
+                >
+                  <Icon
+                    aria-hidden
+                    style={{
+                      fontSize: token.fontSizeLG,
+                      color: token.colorPrimary,
+                      // Center on the title's first line.
+                      marginTop: (token.fontSize * token.lineHeight - token.fontSizeLG) / 2,
+                    }}
+                  />
+                  <Flex vertical>
+                    <Typography.Text strong>{title}</Typography.Text>
+                    <Typography.Text type="secondary">{line(name, Name)}</Typography.Text>
+                  </Flex>
                 </Flex>
-              </Flex>
-            </div>
-          ))}
-        </Carousel>
+              </div>
+            ))}
+          </Carousel>
+        </div>
       </ConfigProvider>
     </Card>
   );

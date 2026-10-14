@@ -1,55 +1,48 @@
-import { render, screen } from '@testing-library/react';
-import type { CarouselProps } from 'antd';
+import { act, render, screen } from '@testing-library/react';
 import { OnboardingSetupTips } from './OnboardingSetupTips';
 
-const motion = vi.hoisted(() => ({ reduced: false, props: null as CarouselProps | null }));
+const motion = vi.hoisted(() => ({ reduced: false }));
 vi.mock('../../hooks/usePrefersReducedMotion', () => ({
   usePrefersReducedMotion: () => motion.reduced,
 }));
-vi.mock('antd', async (importOriginal) => {
-  const antd = await importOriginal<typeof import('antd')>();
-  return {
-    ...antd,
-    Carousel: (props: CarouselProps) => {
-      motion.props = props;
-      return <div>{props.children}</div>;
-    },
-  };
-});
+
+const currentTip = () => document.querySelector('.slick-current')?.textContent;
+const wait = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
 
 describe('OnboardingSetupTips', () => {
-  it('rotates every 6s with dots, pausing on hover and focus', () => {
+  it('rotates every 6s and holds still while a dot has keyboard focus', () => {
     motion.reduced = false;
     render(<OnboardingSetupTips teammateName="Ada" />);
-    expect(motion.props).toMatchObject({
-      autoplay: true,
-      autoplaySpeed: 6000,
-      effect: 'fade',
-      pauseOnHover: true,
-      pauseOnFocus: true,
-    });
-    expect(motion.props?.dots).not.toBe(false);
     expect(
       screen.getByText('Schedule Ada to send a morning summary or check on things every day.')
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'Ada saves notes and decisions to Knowledge and picks up where you left off.'
-      )
-    ).toBeInTheDocument();
+
+    const first = currentTip();
+    wait(7000);
+    const second = currentTip();
+    expect(second).not.toBe(first);
+
+    const dot = screen.getAllByRole('button')[0];
+    act(() => dot.focus());
+    wait(20000);
+    expect(currentTip()).toBe(second);
+
+    act(() => dot.blur());
+    wait(7000);
+    expect(currentTip()).not.toBe(second);
   });
 
-  it('does not autoplay or animate under reduced motion', () => {
+  it('does not rotate under reduced motion', () => {
     motion.reduced = true;
     render(<OnboardingSetupTips />);
-    expect(motion.props).toMatchObject({ autoplay: false, speed: 0 });
     expect(
       screen.getByText('Share your board so everyone can work with your teammate.')
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'Your teammate saves notes and decisions to Knowledge and picks up where you left off.'
-      )
-    ).toBeInTheDocument();
+    const first = currentTip();
+    wait(20000);
+    expect(currentTip()).toBe(first);
   });
 });
