@@ -139,6 +139,8 @@ interface MakeAppOpts {
   server?: Record<string, unknown> | null;
   catalogEntry?: Record<string, unknown> | null;
   connectResult?: Record<string, unknown>;
+  /** `mcp-catalog/readiness` answer for a configured-app entry. */
+  readiness?: Record<string, unknown>;
   sessionCreator?: string;
   /** Make the attach fail for a reason other than the owner-or-admin rule. */
   attachError?: Error;
@@ -184,6 +186,12 @@ function makeApp(opts: MakeAppOpts = {}) {
         record('mcp-catalog', 'get', args);
         if (opts.catalogEntry === null) throw new Error('not found');
         return opts.catalogEntry ?? NOTION_ENTRY;
+      },
+    },
+    'mcp-catalog/readiness': {
+      get: async (...args) => {
+        record('mcp-catalog/readiness', 'get', args);
+        return opts.readiness ?? { catalog_key: 'com.notion/mcp', state: 'oauth_required' };
       },
     },
     'mcp-catalog/connect': {
@@ -495,6 +503,56 @@ describe('agor_widgets_request_oauth — catalog install', () => {
     expect(vi.mocked(authorizeMcpServerWrite).mock.calls[0][1]).toMatchObject({
       mcpCatalogInstall: { entry_name: 'com.notion/mcp' },
     });
+  });
+
+  const ASANA_ENTRY = {
+    ...NOTION_ENTRY,
+    name: 'com.asana/mcp',
+    oauth: {
+      configured_client: { setup_url: 'https://app.asana.com/0/my-apps', secret_required: true },
+    },
+  };
+
+  it('sends a customer-owned OAuth app entry with no shared install to the drawer', async () => {
+    // Connect refuses without the app's client ID/secret, which only the
+    // drawer's secure form collects.
+    const { app, calls } = makeApp({ catalogEntry: ASANA_ENTRY });
+    const tools = registerAndCapture({ app });
+
+    const result = payload(
+      await tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.asana/mcp' })
+    );
+
+    expect(result.status).toBe('requested');
+    const readiness = calls.find((c) => c.service === 'mcp-catalog/readiness');
+    expect(readiness?.args[0]).toBe('com.asana/mcp');
+    expect(readiness?.args[1]).toMatchObject({ query: { sharing: 'shared' } });
+    expect(calls.find((c) => c.service === 'mcp-catalog/connect')).toBeUndefined();
+    const params = appendStub.mock.calls[0][0].metadata.widget.params;
+    expect(params.mcpServerId).toBeUndefined();
+    expect(params.catalogEntryName).toBe('com.asana/mcp');
+  });
+
+  it('reuses a shared install that already carries the OAuth app as the ordinary OAuth card', async () => {
+    const { app, calls } = makeApp({
+      catalogEntry: ASANA_ENTRY,
+      readiness: {
+        catalog_key: 'com.asana/mcp',
+        state: 'oauth_required',
+        shared_configuration_available: true,
+      },
+    });
+    const tools = registerAndCapture({ app });
+
+    const result = payload(
+      await tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.asana/mcp' })
+    );
+
+    expect(result.status).toBe('requested');
+    const connect = calls.find((c) => c.service === 'mcp-catalog/connect');
+    // No app credentials: the shared row's app is reused as-is.
+    expect(connect?.args[0]).toEqual({ catalog_key: 'com.asana/mcp', sharing: 'shared' });
+    expect(appendStub.mock.calls[0][0].metadata.widget.params.mcpServerId).toBe('srv-notion');
   });
 
   it('falls back to a catalog-connect card when the live endpoint asks for a key', async () => {
@@ -1202,7 +1260,7 @@ describe('agor_widgets_request_oauth — what a gateway agent can relay', () => 
     );
     expect(url.searchParams.get(MCP_CONNECT_WIDGET_QUERY_PARAM)).toBe(result.widget_id);
     expect(result.relay_to_user).toContain(result.session_url);
-    expect(result.relay_to_user).toMatch(/don't paste the key/);
+    expect(result.relay_to_user).toMatch(/don't paste keys or secrets/);
   });
 
   /**

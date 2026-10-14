@@ -30,6 +30,8 @@ import type {
   GatewayChannel,
   MCPCatalogConnectResult,
   MCPCatalogEntry,
+  MCPCatalogReadiness,
+  MCPCatalogSharing,
   MCPServer,
   MessageID,
   Session,
@@ -470,8 +472,9 @@ async function catalogConnectTarget(
 
 /**
  * Turn a catalog entry name into an installed, inert server row — or, for an
- * entry that needs a key the user must type, into a catalog-connect target
- * with nothing installed (see {@link mintCatalogConnectWidget}).
+ * entry that needs something the user must type (a key, or their own OAuth
+ * app's credentials), into a catalog-connect target with nothing installed
+ * (see {@link mintCatalogConnectWidget}).
  *
  * Goes through `mcp-catalog/connect`, which is the only reviewed path that
  * probes the endpoint, derives the auth prescription from the live answer
@@ -532,6 +535,19 @@ async function installCatalogOAuthServer(
   // A key the user types can only go through the catalog drawer's own Connect,
   // so there is nothing to install here.
   if (entry.auth_type === 'credentials') return catalogConnectTarget(ctx, entry);
+  // A customer-owned OAuth app is entered once, in the drawer, by whoever
+  // creates the install; connect refuses without it. Only an existing shared
+  // install already carries one — the same readiness answer the drawer reads to
+  // decide `reusesSharedApp` — and then connect reuses it as `shared`.
+  let sharing: MCPCatalogSharing | undefined;
+  if (entry.oauth?.configured_client) {
+    const readiness = (await ctx.app.service('mcp-catalog/readiness').get(entry.name, {
+      ...ctx.baseServiceParams,
+      query: { sharing: 'shared' },
+    })) as MCPCatalogReadiness;
+    if (!readiness.shared_configuration_available) return catalogConnectTarget(ctx, entry);
+    sharing = 'shared';
+  }
 
   // Caller params verbatim — in particular, KEEP `provider`. Connect stamps
   // catalog provenance only for a transport-bearing caller:
@@ -544,7 +560,10 @@ async function installCatalogOAuthServer(
   try {
     result = (await ctx.app
       .service('mcp-catalog/connect')
-      .create({ catalog_key: entry.name }, ctx.baseServiceParams)) as MCPCatalogConnectResult;
+      .create(
+        { catalog_key: entry.name, ...(sharing ? { sharing } : {}) },
+        ctx.baseServiceParams
+      )) as MCPCatalogConnectResult;
   } catch (error) {
     // The live endpoint asked for a key the entry did not advertise. Same
     // answer as a `credentials` entry: the user enters it in the drawer.
@@ -681,16 +700,17 @@ function widgetReason(reason: string | undefined, serverName: string): string {
 
 /**
  * Mint a Connect card for a catalog entry the user connects through the
- * catalog drawer — an entry that needs a key the user types.
+ * catalog drawer — an entry that needs a key, or the user's own OAuth app
+ * credentials, typed into the drawer's secure form.
  *
  * Nothing is installed or attached here. The card opens the same drawer the
  * MCP Catalog uses, whose Connect calls `mcp-catalog/connect` straight from the
  * browser, so member policy, egress, and secret storage are that path's and
- * the key never reaches this tool or the agent. The card then resolves with
+ * no secret reaches this tool or the agent. The card then resolves with
  * the install it made, which the resolve handler accepts only if it is a
  * caller-usable install of this entry.
  *
- * No Slack card, because a key cannot be typed into Slack: a gateway user gets
+ * No Slack card, because a secret cannot be typed into Slack: a gateway user gets
  * a session link that opens the drawer on arrival.
  */
 async function mintCatalogConnectWidget(
@@ -730,7 +750,7 @@ async function mintCatalogConnectWidget(
     ...gatewayRelayFields(
       link,
       (url) =>
-        `Open ${url} to connect "${serverName}" with your own key. Please don't paste the key into this chat.`
+        `Open ${url} to connect "${serverName}". Please don't paste keys or secrets into this chat.`
     ),
   });
 }
@@ -953,7 +973,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
     'agor_widgets_request_oauth',
     {
       description:
-        "Ask the user to connect a third-party MCP server account (Notion, Linear, GitHub, ...) by rendering an inline Connect card. For an OAuth server it runs the real sign-in in their browser; for a catalog entry that needs an API key or token it opens the MCP Catalog's own secure key form, so the key goes straight from the browser to Agor. " +
+        "Ask the user to connect a third-party MCP server account (Notion, Linear, GitHub, ...) by rendering an inline Connect card. For an OAuth server it runs the real sign-in in their browser; for a catalog entry that needs an API key, token, or the user's own OAuth app it opens the MCP Catalog's own secure form, so secrets go straight from the browser to Agor. " +
         'PREFER this tool whenever the user asks you to "connect me to X" or a task needs an MCP server they have not authorized: call it instead of telling them to open Settings or the MCP Catalog. ' +
         'Resolve the server FIRST: use `agor_mcp_catalog_list` to turn a product name into a `catalogEntryName` (e.g. "Notion" -> "com.notion/mcp"), or `agor_mcp_servers_list` for a server that already exists. NEVER invent a URL — pass exactly one of `mcpServerId` or `catalogEntryName`. ' +
         'FIRE-AND-FORGET: the widget renders inline at the end of your turn; end your turn after calling. You will receive a user-role message when it resolves. ' +

@@ -108,8 +108,7 @@ A later request naming the installed server re-reads the entry's disclosure
 and refuses if the entry left the catalog. If such installs ever stop being
 inert, redesign this first.
 
-An entry that needs a key (`auth_type: credentials`, or a probe answering
-`credential_requirement: 'required'`) installs nothing at mint. Its card pins
+An entry that needs a key (`auth_type: credentials`, or a probe answering `credential_requirement: 'required'`), or an `oauth.configured_client` entry with no reusable shared install (the readiness `shared_configuration_available` answer the drawer uses; with one, the card connects `shared` and signs in inline), installs nothing at mint. Its card pins
 only `catalogEntryName`, and Connect opens this drawer for that entry
 (`openCatalogEntry` on the catalog modal context, mounting `CatalogTab` in its
 handoff mode), so policy, the key field, egress and storage are the drawer's

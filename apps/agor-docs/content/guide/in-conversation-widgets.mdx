@@ -106,11 +106,11 @@ Clicking it runs the ordinary browser OAuth flow: a pop-up opens, you sign in wi
 
 A workspace-wide (shared) connection says so on the card, and only an admin can mint or complete one: everyone in the Agor workspace would use the account you sign in with.
 
-### Servers that need an API key
+### Servers that need an API key or your own OAuth app
 
-Some catalog entries, such as GitHub, take a personal access token or API key instead of a sign-in. For those, **Connect** opens the same MCP Catalog drawer you would reach from the Catalog, with the key field for that entry. The key goes straight from your browser to Agor, is checked against the server, and is stored for you alone; the agent never sees it. Your organization's MCP member policy applies exactly as it does in the Catalog. Once the server is added, it is attached to the session and the agent resumes.
+Some catalog entries, such as GitHub, take a personal access token or API key instead of a sign-in; others, such as Asana, sign in through an OAuth app your organization registers. For those, **Connect** opens the same MCP Catalog drawer you would reach from the Catalog, with the key or OAuth app fields for that entry (an OAuth app then continues to the provider sign-in). If an admin already set up a shared installation with its OAuth app, the card signs you in directly instead. The key goes straight from your browser to Agor, is checked against the server, and is stored for you alone; the agent never sees it. Your organization's MCP member policy applies exactly as it does in the Catalog. Once the server is added, it is attached to the session and the agent resumes.
 
-From a Slack, Discord, or GitHub thread, the link the agent relays opens that drawer directly. There is no Slack card for these servers because a key cannot be entered in Slack.
+From a Slack, Discord, or GitHub thread, the link the agent relays opens that drawer directly. There is no Slack card for these servers because a secret cannot be entered in Slack.
 
 ### What happens after you sign in
 
