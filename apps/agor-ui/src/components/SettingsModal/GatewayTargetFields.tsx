@@ -46,6 +46,11 @@ export function GatewayTargetFields({ client }: { client: AgorClient | null }) {
           key={targetKind}
           client={client}
           teammatesOnly={teammatesOnly}
+          emptyText={
+            teammatesOnly
+              ? 'No AI Teammates available. Create a teammate first, or choose Specific branch.'
+              : undefined
+          }
           placeholder={teammatesOnly ? 'Select an AI Teammate' : 'Select a branch'}
         />
       </Form.Item>

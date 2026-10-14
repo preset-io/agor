@@ -21,6 +21,8 @@ interface BranchSelectProps
   placeholder?: string;
   disabled?: boolean;
   teammatesOnly?: boolean;
+  /** Optional empty-state guidance supplied by the selector's caller. */
+  emptyText?: string;
 }
 
 const labelOf = (branch: Branch) =>
@@ -40,6 +42,7 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
   placeholder = 'Select a branch',
   disabled = false,
   teammatesOnly = false,
+  emptyText,
   ...accessibilityProps
 }) => {
   const [searchText, setSearchText] = useState('');
@@ -79,7 +82,12 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
         : branches;
     return rows
       .filter((b) => !teammatesOnly || (isTeammate(b) && !b.archived))
-      .map((b) => ({ value: b.branch_id, label: teammatesOnly ? teammateLabel(b) : labelOf(b) }));
+      .map((b) => ({
+        value: b.branch_id,
+        // Keep branch context in the text label, including the selected value
+        // and accessible option name, not just in the open dropdown.
+        label: teammatesOnly ? `${teammateLabel(b)} (${labelOf(b)})` : labelOf(b),
+      }));
   }, [branches, saved, teammatesOnly]);
 
   return (
@@ -102,8 +110,8 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
               ? 'Unable to load AI Teammates. Check your connection and try again.'
               : search
                 ? 'No matching AI Teammates.'
-                : 'No AI Teammates available. Create a teammate first, or choose Specific branch.'
-          : undefined
+                : (emptyText ?? 'No AI Teammates available.')
+          : emptyText
       }
     />
   );

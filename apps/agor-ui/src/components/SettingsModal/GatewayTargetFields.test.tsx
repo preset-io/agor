@@ -1,5 +1,5 @@
 import type { AgorClient, Branch } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Button, Form } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../../store/agorStore';
@@ -29,7 +29,7 @@ function makeClient(rows = [ada, ordinary, branch('old', 'Archived', true, true)
 function Harness({ client, onFinish = vi.fn() }: { client: AgorClient; onFinish?: () => void }) {
   const [form] = Form.useForm();
   return (
-    <Form form={form} layout="vertical" onFinish={onFinish}>
+    <Form form={form} layout="vertical" onFinish={onFinish} aria-label="Gateway target">
       <GatewayTargetFields client={client} />
       <Button htmlType="submit">Continue</Button>
       <Button onClick={() => form.resetFields()}>Reset</Button>
@@ -62,9 +62,9 @@ describe('GatewayTargetFields', () => {
         query: { teammate: true, archived: false, $limit: 50, $sort: { name: 1 } },
       })
     );
-    await select('AI Teammate', 'AI Ada');
+    await select('AI Teammate', 'AI Ada (Ada)');
     expect(screen.queryByTitle('Long-lived branch')).not.toBeInTheDocument();
-    expect(screen.queryByTitle('AI Archived')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('AI Archived (Archived (archived))')).not.toBeInTheDocument();
     fireEvent.click(screen.getByText('Continue'));
     await waitFor(() =>
       expect(onFinish).toHaveBeenCalledWith({
@@ -78,7 +78,7 @@ describe('GatewayTargetFields', () => {
     const { client, find } = makeClient();
     const onFinish = vi.fn();
     render(<Harness client={client} onFinish={onFinish} />);
-    await select('AI Teammate', 'AI Ada');
+    await select('AI Teammate', 'AI Ada (Ada)');
     fireEvent.click(screen.getByRole('radio', { name: 'Specific branch' }));
     await screen.findByRole('combobox', { name: 'Target Branch' });
     fireEvent.click(screen.getByText('Continue'));
@@ -108,6 +108,27 @@ describe('GatewayTargetFields', () => {
     expect(screen.getByRole('radio', { name: 'AI Teammate' })).toBeChecked();
   });
 
+  it('distinguishes duplicate teammate display names and submits the chosen branch', async () => {
+    const support = { ...ada, branch_id: ordinary.branch_id, name: 'support-teammate' };
+    const onFinish = vi.fn();
+    render(<Harness client={makeClient([ada, support]).client} onFinish={onFinish} />);
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'AI Teammate' }));
+    expect(await screen.findByTitle('AI Ada (Ada)')).toBeInTheDocument();
+    fireEvent.click(await screen.findByTitle('AI Ada (support-teammate)'));
+    fireEvent.click(screen.getByText('Continue'));
+    await waitFor(() =>
+      expect(onFinish).toHaveBeenCalledWith({
+        target_kind: 'teammate',
+        target_branch_id: ordinary.branch_id,
+      })
+    );
+    expect(
+      within(screen.getByRole('form', { name: 'Gateway target' })).getByText(
+        'AI Ada (support-teammate)'
+      )
+    ).toBeInTheDocument();
+  });
+
   it('shows loading and supports selecting a teammate with the keyboard', async () => {
     const pending = deferred<{ data: Branch[] }>();
     const { client, find } = makeClient();
@@ -118,7 +139,7 @@ describe('GatewayTargetFields', () => {
     fireEvent.keyDown(picker, { key: 'ArrowDown', keyCode: 40 });
     expect(await screen.findByText('Loading AI Teammates…')).toBeInTheDocument();
     await act(async () => pending.resolve({ data: [ada] }));
-    await screen.findByTitle('AI Ada');
+    await screen.findByTitle('AI Ada (Ada)');
     fireEvent.keyDown(picker, { key: 'Enter', keyCode: 13 });
     fireEvent.click(screen.getByText('Continue'));
     await waitFor(() =>
@@ -165,6 +186,6 @@ describe('GatewayTargetFields', () => {
     await act(async () => old.resolve({ data: [ada] }));
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'AI Teammate' }));
     expect(await screen.findByText(/No AI Teammates available/)).toBeInTheDocument();
-    expect(screen.queryByText('AI Ada')).not.toBeInTheDocument();
+    expect(screen.queryByText('AI Ada (Ada)')).not.toBeInTheDocument();
   });
 });
