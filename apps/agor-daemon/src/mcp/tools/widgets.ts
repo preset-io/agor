@@ -23,6 +23,7 @@ import { getBaseUrl } from '@agor/core/config';
 import { generateId, MessagesRepository } from '@agor/core/db';
 import { findCatalogEntry, loadCatalog } from '@agor/core/mcp-catalog';
 import type {
+  AuthenticatedParams,
   ChannelType,
   EnvVarMetadata,
   EnvVarScope,
@@ -51,6 +52,7 @@ import {
 import { getSessionUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { catalogServerTransport } from '../../services/mcp-catalog-install-policy.js';
 import {
   mcpOAuthGrantIsConnected,
   resolveMCPOAuthGrantLiveness,
@@ -62,7 +64,11 @@ import {
   classifyGatewayReadFailure,
   type GatewayReadFailureCategory,
 } from '../../utils/gateway-read-failure.js';
-import { isMcpServerUsableByCaller } from '../../utils/mcp-server-authorization.js';
+import {
+  authorizeMcpServerWrite,
+  isMcpServerUsableByCaller,
+  type McpCatalogInstallParams,
+} from '../../utils/mcp-server-authorization.js';
 import { findHostTaskForSession } from '../../utils/session-tasks.js';
 import {
   type EnvVarsParams,
@@ -438,6 +444,31 @@ function disclosureTooLongMessage(entry: MCPCatalogEntry): string {
 }
 
 /**
+ * A catalog-connect target, refused now if the drawer's install would be.
+ *
+ * The OAuth lane learns member policy from its mint-time install; this lane
+ * installs nothing, so it asks the same write decision the install will meet
+ * (side-effect free) and refuses with the same words, rather than minting a
+ * card whose Connect the drawer then disables.
+ */
+async function catalogConnectTarget(
+  ctx: McpContext,
+  entry: MCPCatalogEntry
+): Promise<OAuthWidgetTarget> {
+  const installParams: AuthenticatedParams & McpCatalogInstallParams = {
+    ...ctx.baseServiceParams,
+    mcpCatalogInstall: { entry_name: entry.name },
+  };
+  await runWithMcpTenantDatabaseScope(ctx, (db) =>
+    authorizeMcpServerWrite(db, installParams, {
+      method: 'create',
+      data: { transport: catalogServerTransport(entry) },
+    })
+  );
+  return { catalog_connect: true, entry };
+}
+
+/**
  * Turn a catalog entry name into an installed, inert server row — or, for an
  * entry that needs a key the user must type, into a catalog-connect target
  * with nothing installed (see {@link mintCatalogConnectWidget}).
@@ -500,7 +531,7 @@ async function installCatalogOAuthServer(
   const permissionDisclosure = entry.permission_disclosure || undefined;
   // A key the user types can only go through the catalog drawer's own Connect,
   // so there is nothing to install here.
-  if (entry.auth_type === 'credentials') return { catalog_connect: true, entry };
+  if (entry.auth_type === 'credentials') return catalogConnectTarget(ctx, entry);
 
   // Caller params verbatim — in particular, KEEP `provider`. Connect stamps
   // catalog provenance only for a transport-bearing caller:
@@ -517,7 +548,7 @@ async function installCatalogOAuthServer(
   } catch (error) {
     // The live endpoint asked for a key the entry did not advertise. Same
     // answer as a `credentials` entry: the user enters it in the drawer.
-    if (readCredentialRequirement(error) === 'required') return { catalog_connect: true, entry };
+    if (readCredentialRequirement(error) === 'required') return catalogConnectTarget(ctx, entry);
     throw error;
   }
   const server = result.mcp_server;

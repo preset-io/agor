@@ -41,6 +41,12 @@ vi.mock('../../services/mcp-oauth-grant-liveness.js', async (importOriginal) => 
   ...(await importOriginal<typeof import('../../services/mcp-oauth-grant-liveness.js')>()),
   resolveMCPOAuthGrantLiveness: vi.fn(),
 }));
+// The member-policy write decision reads the tenant database; its own suite
+// covers it. Here it only has to allow or refuse.
+vi.mock('../../utils/mcp-server-authorization.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/mcp-server-authorization.js')>()),
+  authorizeMcpServerWrite: vi.fn(async () => ({})),
+}));
 /**
  * Widget rows the supersede sweep will find, and the calls it made. Reassigned
  * per test; the repository stub below reads them.
@@ -79,6 +85,7 @@ import {
   resolveMCPOAuthGrantLiveness,
 } from '../../services/mcp-oauth-grant-liveness.js';
 import { appendSystemMessage } from '../../utils/append-system-message.js';
+import { authorizeMcpServerWrite } from '../../utils/mcp-server-authorization.js';
 import { registerAllWidgets } from '../../widgets/index.js';
 import { _resetWidgetRegistryForTests } from '../../widgets/registry.js';
 import { summarizeMcpServer } from './mcp-servers.js';
@@ -470,6 +477,24 @@ describe('agor_widgets_request_oauth — catalog install', () => {
     });
     // No Slack card: a key cannot be entered in Slack.
     expect(widget.slack_connect_due_at).toBeUndefined();
+  });
+
+  it('refuses at mint, in the install wording, when member policy forbids the install', async () => {
+    vi.mocked(authorizeMcpServerWrite).mockRejectedValueOnce(
+      new Error(
+        'Your organization does not allow members to add MCP servers, so this entry cannot be installed; ask an admin to add it'
+      )
+    );
+    const { app } = makeApp({ catalogEntry: { ...NOTION_ENTRY, auth_type: 'credentials' } });
+    const tools = registerAndCapture({ app });
+
+    await expect(
+      tools.agor_widgets_request_oauth.cb({ catalogEntryName: 'com.notion/mcp' })
+    ).rejects.toThrow(/does not allow members to add MCP servers/);
+    expect(appendStub).not.toHaveBeenCalled();
+    expect(vi.mocked(authorizeMcpServerWrite).mock.calls[0][1]).toMatchObject({
+      mcpCatalogInstall: { entry_name: 'com.notion/mcp' },
+    });
   });
 
   it('falls back to a catalog-connect card when the live endpoint asks for a key', async () => {
