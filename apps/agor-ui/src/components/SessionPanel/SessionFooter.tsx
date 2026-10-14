@@ -132,6 +132,8 @@ export interface SessionFooterProps {
   onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
   /** Attachment tray and text, rendered inside the card. */
   promptInputSlot: React.ReactNode;
+  /** Queued messages, shown above the card. */
+  queueSlot?: React.ReactNode;
   /** Files dropped anywhere on the card. */
   onFilesDrop: (files: File[]) => void;
   onDropActiveChange?: (active: boolean) => void;
@@ -191,6 +193,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   onPermissionModeChange,
   onCodexPermissionChange,
   promptInputSlot,
+  queueSlot,
   onFilesDrop,
   onDropActiveChange,
 }) => {
@@ -1173,6 +1176,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           style={{ marginBottom: token.marginXS }}
         />
       )}
+
+      {queueSlot}
 
       <SessionComposerDropZone
         disabled={composerAttachmentUploading}

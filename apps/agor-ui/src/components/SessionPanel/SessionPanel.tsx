@@ -112,6 +112,7 @@ import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionAttachmentTray } from './SessionAttachmentTray';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
+import { SessionQueue } from './SessionQueue';
 import { buildSpawnPromptContext } from './spawn-prompt-context';
 import {
   isStopTransportAmbiguous,
@@ -847,6 +848,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         ? session
         : null;
   const sessionCustomContext = fullSession?.custom_context as Record<string, unknown> | undefined;
+  const queueSlot = React.useMemo(
+    () =>
+      session ? (
+        <SessionQueue
+          client={client}
+          session={session}
+          queuedTasks={queuedTasks}
+          isRunning={isRunning}
+          onStop={stableFooterHandlers.onStop}
+          onEdit={(text) => promptRef.current?.insertText(text)}
+        />
+      ) : null,
+    [client, session, queuedTasks, isRunning, stableFooterHandlers]
+  );
   const teammateName = branch ? getTeammateConfig(branch)?.displayName?.trim() : undefined;
   const promptInputSlot = React.useMemo(() => {
     if (!session) return null;
@@ -1531,6 +1546,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onPermissionModeChange={stableFooterHandlers.onPermissionModeChange}
       onCodexPermissionChange={stableFooterHandlers.onCodexPermissionChange}
       promptInputSlot={promptInputSlot}
+      queueSlot={queueSlot}
       onFilesDrop={addComposerAttachments}
       onDropActiveChange={setComposerDropActive}
     />
