@@ -61,8 +61,8 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       // Use the same hooked patch path as set_zone/UI drags, not a direct
       // repository/custom-method write: tenant scope, board capabilities and
       // realtime delivery stay owned by the existing service boundary.
-      const service = ctx.app.service('board-objects');
-      const object = await service.get(args.objectId, ctx.baseServiceParams);
+      const boardObjectsService = ctx.app.service('board-objects');
+      const object = await boardObjectsService.get(args.objectId, ctx.baseServiceParams);
       let position = args.position;
       if (object.zone_id) {
         const board = await ctx.app.service('boards').get(object.board_id, ctx.baseServiceParams);
@@ -78,7 +78,9 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       } else if (typeof position === 'string') {
         throw new Error('An anchor requires a zone; use absolute {x,y} for an unpinned entity');
       }
-      return textResult(await service.patch(object.object_id, { position }, ctx.baseServiceParams));
+      return textResult(
+        await boardObjectsService.patch(object.object_id, { position }, ctx.baseServiceParams)
+      );
     }
   );
 
