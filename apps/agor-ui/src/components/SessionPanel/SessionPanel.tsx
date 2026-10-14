@@ -76,7 +76,7 @@ import {
   unconfirmedMessage,
   withRawDetail,
 } from '../../utils/connectionErrors';
-import { getContextWindowGradient, selectLatestContextWindow } from '../../utils/contextWindow';
+import { selectLatestContextWindow } from '../../utils/contextWindow';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -335,21 +335,18 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         skills={skills}
         enableKnowledgeMentions
         kbLinkTarget="absolute-route"
-        highlightWhenEmpty
-        // Body-size text like desktop; iOS focus zoom is off via the viewport
-        // (preventIosInputZoom). The shared textarea also applies these metrics
-        // to its mention highlight overlay. Block padding makes one line a full
-        // touch-target tall.
-        textareaStyle={
-          isMobile
-            ? {
-                fontSize: token.fontSize,
-                paddingBlock:
-                  (MOBILE_TOUCH_TARGET - 2 * token.lineWidth - token.fontSize * token.lineHeight) /
-                  2,
-              }
-            : undefined
-        }
+        variant="borderless"
+        // Body-size text; iOS focus zoom is off via the viewport
+        // (preventIosInputZoom). The card owns the inset, so the text keeps
+        // only block padding: one line is a full touch target on phones.
+        textareaStyle={{
+          fontSize: token.fontSize,
+          paddingInline: 0,
+          ...(isMobile && {
+            paddingBlock:
+              (MOBILE_TOUCH_TARGET - 2 * token.lineWidth - token.fontSize * token.lineHeight) / 2,
+          }),
+        }}
       />
     );
   }
@@ -704,20 +701,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
     return acc;
   }, [branch?.issue_url, branch?.pull_request_url]);
-
-  const footerGradient = React.useMemo(() => {
-    if (!latestContextWindow) return undefined;
-    return getContextWindowGradient(
-      latestContextWindow.used,
-      latestContextWindow.limit,
-      latestContextWindow.taskMetadata.normalized_sdk_response?.contextUsageSnapshot,
-      {
-        normal: token.colorSuccessBg,
-        warning: token.colorWarningBg,
-        critical: token.colorErrorBg,
-      }
-    );
-  }, [latestContextWindow, token.colorSuccessBg, token.colorWarningBg, token.colorErrorBg]);
 
   const footerTimerTask = React.useMemo(() => {
     if (tasks.length === 0) return null;
@@ -1515,7 +1498,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       currentUserId={currentUserId}
       footerTimerTask={footerTimerTask}
       latestContextWindow={latestContextWindow}
-      footerGradient={footerGradient}
       sessionMcpServerIds={sessionMcpServerIds}
       unauthedMcpServers={unauthedMcpServers}
       mcpServerById={mcpServerById}
