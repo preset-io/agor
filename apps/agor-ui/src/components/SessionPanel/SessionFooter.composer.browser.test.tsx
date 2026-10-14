@@ -108,7 +108,7 @@ it.each([390, 1280])('keeps Stop stable through shutdown and recovery at %dpx', 
     expect(stop.textContent).toBe(width < 1024 ? '' : 'Stop');
     expect(stop).toBeDisabled();
     expect(stop).toHaveAttribute('aria-busy', 'true');
-    expect(stop.querySelector('.ant-spin')).toBeVisible();
+    expect(stop.querySelector('[data-icon="loading"]')).toBeVisible();
     expect(stop.getBoundingClientRect().toJSON()).toEqual(stopBounds);
     expect(queue.getBoundingClientRect().toJSON()).toEqual(queueBounds);
     stop.click();

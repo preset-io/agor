@@ -191,7 +191,7 @@ describe('SessionFooter', () => {
       { wrapper: Wrapper }
     );
     expect(screen.getByRole('button', { name: /stop/i })).toBeDisabled();
-    expect(container.querySelector('.ant-spin')).toBeInTheDocument();
+    expect(container.querySelector('[data-icon="loading"]')).toBeInTheDocument();
     expect(container.querySelector('[data-icon="stop"]')).not.toBeInTheDocument();
   });
 

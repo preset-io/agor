@@ -1278,22 +1278,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     aria-busy={stopRequestInFlight || isStopping}
                     size={actionSize}
                     style={touchActionStyle}
-                    // Keep the action compact and stable; the task banner owns recovery status.
-                    styles={{
-                      icon: {
-                        width: token.fontSizeLG,
-                        height: token.fontSizeLG,
-                        justifyContent: 'center',
-                        flexShrink: 0,
-                      },
-                    }}
-                    icon={
-                      stopRequestInFlight || isStopping ? (
-                        <Spin size="small" aria-hidden="true" />
-                      ) : (
-                        <StopOutlined />
-                      )
-                    }
+                    icon={<StopOutlined />}
+                    loading={stopRequestInFlight || isStopping}
                     onClick={onStop}
                     disabled={connectionDisabled || !isRunning || stopRequestInFlight || isStopping}
                   >
