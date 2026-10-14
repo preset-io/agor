@@ -3485,15 +3485,20 @@ describe('subset arrange fixed geometry regressions', () => {
   });
   it('avoids entityType-excluded placements on the free canvas', async () => {
     const f = fixture();
-    await f.handler('agor_boards_auto_arrange')({
-      boardId: 'board-1',
-      entityType: 'card',
-      columns: 1,
-      startX: 20,
-      startY: 80,
-    });
+    const result = JSON.parse(
+      (
+        await f.handler('agor_boards_auto_arrange')({
+          boardId: 'board-1',
+          entityType: 'card',
+          columns: 1,
+          startX: 20,
+          startY: 80,
+        })
+      ).content[0].text
+    );
     const patch = f.entityPatch.mock.calls[0][1] as { position: { x: number; y: number } };
     expect(separated(patch.position, f.entities[1].position)).toBe(true);
+    expect(patch.position).toEqual({ x: result.appliedStartX, y: result.appliedStartY });
   });
   it.each([
     { lockedArtifact: false, noExcludedBranch: false },

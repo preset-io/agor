@@ -1424,14 +1424,14 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         height: plan.layout.height,
         appliedGapX: Math.max(gapX, gapY),
         appliedGapY: Math.max(gapX, gapY),
-        appliedStartX: startX,
-        appliedStartY: startY,
+        appliedStartX: positioned.origin.x,
+        appliedStartY: positioned.origin.y,
         avoidedZoneIds,
         unusableSizeObjectIds,
         warning:
           [
             avoidedZoneIds.length > 0
-              ? `The default layout origin would have covered ${avoidedZoneIds.length} existing zone(s); the layout was placed below every zone at y=${startY}. Pass startY to override.`
+              ? `The default layout origin would have covered ${avoidedZoneIds.length} existing zone(s); the layout was placed below every zone at y=${positioned.origin.y}. Pass startY to override.`
               : null,
             unusableSizeObjectIds.length > 0
               ? `Ignored an unusable persisted size on ${unusableSizeObjectIds.join(', ')} and laid them out at the nominal size for their kind.`
