@@ -16,6 +16,7 @@ import type {
 } from '@agor-live/client';
 import {
   getDefaultPermissionMode,
+  getTeammateConfig,
   hasFullSessionDetails,
   hasMinimumRole,
   isAgenticToolName,
@@ -846,6 +847,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         ? session
         : null;
   const sessionCustomContext = fullSession?.custom_context as Record<string, unknown> | undefined;
+  const teammateName = branch ? getTeammateConfig(branch)?.displayName?.trim() : undefined;
   const promptInputSlot = React.useMemo(() => {
     if (!session) return null;
     return (
@@ -876,15 +878,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           inputValueRef={inputValueRef}
           onSubmit={stableFooterHandlers.onSendPrompt}
           hasExternalInput={hasComposerAttachments}
-          placeholder={
-            isMobileShell
-              ? isRunning
-                ? 'Queue here…'
+          placeholder={`${
+            isRunning
+              ? 'Queue a follow-up'
+              : teammateName
+                ? `Message ${teammateName}…`
                 : 'Prompt here…'
-              : isRunning
-                ? 'Queue here… @ for mentions, : for emoji'
-                : 'Prompt here… @ for mentions, : for emoji'
-          }
+          }${isMobileShell ? '' : ' @ to mention, / for commands'}`}
           autoSize={{ minRows: 1, maxRows: isMobileShell ? 5 : 10 }}
           client={client}
           userById={userById}
@@ -925,6 +925,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     hasComposerAttachments,
     isMobileShell,
     isRunning,
+    teammateName,
     client,
     userById,
     addComposerAttachments,
