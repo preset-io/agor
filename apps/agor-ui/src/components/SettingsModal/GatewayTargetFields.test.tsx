@@ -123,7 +123,7 @@ describe('GatewayTargetFields', () => {
       })
     );
     expect(
-      within(screen.getByRole('form', { name: 'Gateway target' })).getByText(
+      within(screen.getByRole('form', { name: 'Gateway target' })).getByTitle(
         'AI Ada (support-teammate)'
       )
     ).toBeInTheDocument();
