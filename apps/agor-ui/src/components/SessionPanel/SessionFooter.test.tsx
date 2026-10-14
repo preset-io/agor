@@ -13,6 +13,7 @@ import { act, fireEvent, render, renderHook, screen, within } from '@testing-lib
 import { App, ConfigProvider } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useComposerFocused } from '../../hooks/useComposerFocus';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { agorStore } from '../../store/agorStore';
 import type { ModelSelectorProps } from '../ModelSelector';
@@ -347,6 +348,16 @@ describe('phone pins', () => {
     ).toBeInTheDocument();
     // jsdom cannot compute AntD's disabled-button border styles, so skip role queries here.
     expect(within(sheet).getByLabelText('Pin BTW fork')).toBeDisabled();
+  });
+
+  it('hide the tab bar while the composer has focus', () => {
+    const focus = renderHook(() => useComposerFocused());
+    renderFooter();
+    const plus = screen.getByLabelText('Add files and actions');
+    act(() => plus.focus());
+    expect(focus.result.current).toBe(true);
+    act(() => plus.blur());
+    expect(focus.result.current).toBe(false);
   });
 
   it('give the row 44px targets', () => {
