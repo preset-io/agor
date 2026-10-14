@@ -35,6 +35,7 @@ export function GatewayNameInput({
       <Input
         {...accessibilityProps}
         aria-label="Channel name"
+        aria-required
         value={value}
         autoFocus
         onChange={(event) => {

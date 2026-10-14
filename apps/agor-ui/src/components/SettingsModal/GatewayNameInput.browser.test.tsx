@@ -48,6 +48,7 @@ describe.each([false, true])('Gateway name preview (dark: %s)', (dark) => {
     expect(rename).toHaveFocus();
     await userEvent.keyboard('{Enter}');
     const input = screen.getByRole('textbox', { name: 'Channel name' });
+    expect(input).toHaveAttribute('aria-required', 'true');
     await waitFor(() => expect(input).toHaveFocus());
     expect(input).toHaveValue(name);
   });

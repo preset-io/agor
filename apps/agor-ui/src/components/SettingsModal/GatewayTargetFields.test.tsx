@@ -241,6 +241,7 @@ describe('GatewayTargetFields', () => {
     await select('AI Teammate', 'AI Ada (Ada)');
     fireEvent.click(screen.getByRole('button', { name: 'Rename gateway' }));
     const input = screen.getByRole('textbox', { name: 'Channel name' });
+    expect(input).toHaveAttribute('aria-required', 'true');
     expect(input).toHaveFocus();
     expect(input).toHaveValue('AI Ada · Slack');
     fireEvent.change(input, { target: { value: 'Support inbox' } });
