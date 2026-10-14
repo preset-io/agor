@@ -257,6 +257,21 @@ it('removes the standalone live spinner while retaining startup, stopping and ap
   expect(container.querySelector('.ant-thought-chain-motion-blink')).toBeNull();
 });
 
+it("lets the working line carry a running turn's timer, then shows the turn duration", () => {
+  const timed = {
+    ...task,
+    started_at: '2026-09-01T00:00:00.000Z',
+    completed_at: '2026-09-01T00:00:20.000Z',
+  };
+  const { rerender } = render(view({ task: { ...timed, status: TaskStatus.RUNNING } }));
+  expect(screen.getByText('Working…')).toBeVisible();
+  expect(screen.queryByText('00:20')).toBeNull();
+  expect(document.querySelector('[data-task-block] .anticon-hourglass')).toBeNull();
+  rerender(view({ task: timed }));
+  expect(screen.queryByText('Working…')).toBeNull();
+  expect(screen.getByText('00:20')).toBeVisible();
+});
+
 it('keeps one live line: the running tool, or live thinking instead of the working line', () => {
   const running = { ...task, status: TaskStatus.RUNNING };
   const tool = message(2, MessageRole.ASSISTANT, [
