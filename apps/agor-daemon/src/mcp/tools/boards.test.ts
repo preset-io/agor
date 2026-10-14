@@ -1921,7 +1921,7 @@ describe('board layout tools with branch entities present', () => {
 
     expect(result.isError).toBeFalsy();
     expect(boardObjectsFind).toHaveBeenCalledWith(
-      expect.objectContaining({ query: expect.objectContaining({ entity_type: 'branch' }) })
+      expect.objectContaining({ query: expect.objectContaining({ board_id: 'board-1' }) })
     );
     expect(entityPatches).toEqual([
       {
@@ -2112,7 +2112,7 @@ describe('board layout tools with branch entities present', () => {
 
     expect(result.isError).toBeFalsy();
     expect(boardObjectsFind).toHaveBeenCalledWith(
-      expect.objectContaining({ query: expect.objectContaining({ entity_type: 'branch' }) })
+      expect.objectContaining({ query: expect.objectContaining({ board_id: 'board-1' }) })
     );
     expect(JSON.parse(result.content[0].text)).toMatchObject({ applied: true, arranged: 1 });
   });
@@ -3358,5 +3358,206 @@ describe('management ownership transfer tool', () => {
       },
       { ...baseServiceParams, route: { id: 'resource-id' } }
     );
+  });
+});
+
+// Exercise the legacy subset writers with the same fixed geometry as Arrange Board.
+describe('subset arrange fixed geometry regressions', () => {
+  function fixture(
+    options: {
+      pinned?: boolean;
+      lockedZone?: boolean;
+      lockedArtifact?: boolean;
+      noExcludedBranch?: boolean;
+    } = {}
+  ) {
+    const zone = {
+      type: 'zone',
+      x: 1000,
+      y: 1000,
+      width: 812,
+      height: 812,
+      locked: options.lockedZone,
+      layout: { resize: 'fixed', padding: 20 },
+    };
+    const entities = [
+      {
+        object_id: 'card-1',
+        board_id: 'board-1',
+        entity_type: 'card',
+        card_id: 'card-1',
+        zone_id: options.pinned ? 'zone-1' : undefined,
+        position: { x: 20, y: 80 },
+        size: { width: 200, height: 100 },
+        created_at: '2026-01-01',
+      },
+      {
+        object_id: 'branch-1',
+        board_id: 'board-1',
+        entity_type: 'branch',
+        branch_id: 'branch-1',
+        zone_id: options.pinned ? 'zone-1' : undefined,
+        position: { x: 20, y: 80 },
+        size: { width: 200, height: 100 },
+        created_at: '2026-01-02',
+      },
+    ];
+    if (options.noExcludedBranch) entities.splice(1);
+    const objects = {
+      'zone-1': zone,
+      ...(options.lockedArtifact
+        ? {
+            'artifact-1': {
+              type: 'artifact',
+              x: options.pinned ? 1020 : 20,
+              y: options.pinned ? 1080 : 80,
+              width: 200,
+              height: 100,
+              locked: true,
+            },
+          }
+        : {}),
+    };
+    const entityPatch = vi.fn(async (_id: string, data: unknown, _params: unknown) => data);
+    const boardPatch = vi.fn(async (_id: string, data: unknown) => data);
+    const find = vi.fn(async ({ query }: { query: Record<string, unknown> }) => ({
+      data: entities.filter(
+        (entity) =>
+          (!query.entity_type || entity.entity_type === query.entity_type) &&
+          (!query.zone_id || entity.zone_id === query.zone_id)
+      ),
+    }));
+    const params = { provider: 'mcp', tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } };
+    const app = {
+      service(name: string) {
+        if (name === 'boards')
+          return { get: vi.fn(async () => ({ board_id: 'board-1', objects })), patch: boardPatch };
+        if (name === 'board-objects') return { find, patch: entityPatch };
+        if (name === 'cards')
+          return {
+            find: vi.fn(async () => ({ data: [{ card_id: 'card-1' }] })),
+            get: vi.fn(async () => ({ title: 'Card' })),
+          };
+        if (name === 'branches')
+          return { find: vi.fn(async () => ({ data: [{ branch_id: 'branch-1' }] })) };
+        throw new Error(name);
+      },
+    };
+    return {
+      entities,
+      objects,
+      entityPatch,
+      boardPatch,
+      params,
+      handler: (name: string) =>
+        registerAndCaptureHandler(name, { app, userId: 'user-1', baseServiceParams: params }),
+    };
+  }
+  function separated(a: { x: number; y: number }, b: { x: number; y: number }) {
+    return a.x + 200 <= b.x || b.x + 200 <= a.x || a.y + 100 <= b.y || b.y + 100 <= a.y;
+  }
+  it('stores includePinned placements relative to their retained zone', async () => {
+    const f = fixture({ pinned: true });
+    const result = JSON.parse(
+      (
+        await f.handler('agor_boards_auto_arrange')({
+          boardId: 'board-1',
+          includePinned: true,
+          columns: 1,
+          startX: 2000,
+          startY: 2000,
+        })
+      ).content[0].text
+    );
+    const patch = f.entityPatch.mock.calls[0][1] as { position: { x: number; y: number } };
+    expect(patch.position.x + 1000).toBe(result.updates[0].position.x);
+    expect(patch.position.y + 1000).toBe(result.updates[0].position.y);
+    expect(f.entityPatch.mock.calls[0][2]).toEqual(f.params);
+  });
+  it('does not move locked canvas roots in auto_arrange', async () => {
+    const f = fixture({ lockedZone: true, lockedArtifact: true });
+    await f.handler('agor_boards_auto_arrange')({
+      boardId: 'board-1',
+      includeZones: true,
+      columns: 1,
+    });
+    expect(f.boardPatch).not.toHaveBeenCalled();
+  });
+  it('avoids entityType-excluded placements on the free canvas', async () => {
+    const f = fixture();
+    await f.handler('agor_boards_auto_arrange')({
+      boardId: 'board-1',
+      entityType: 'card',
+      columns: 1,
+      startX: 20,
+      startY: 80,
+    });
+    const patch = f.entityPatch.mock.calls[0][1] as { position: { x: number; y: number } };
+    expect(separated(patch.position, f.entities[1].position)).toBe(true);
+  });
+  it.each([
+    { lockedArtifact: false, noExcludedBranch: false },
+    { lockedArtifact: true, noExcludedBranch: true },
+    { lockedArtifact: true, noExcludedBranch: false },
+  ])(
+    'avoids excluded branches and locked artifacts inside a zone ($lockedArtifact/$noExcludedBranch)',
+    async (options) => {
+      const f = fixture({ pinned: true, ...options });
+      await f.handler('agor_boards_auto_arrange_zone')({
+        boardId: 'board-1',
+        zoneId: 'zone-1',
+        entityType: 'card',
+        columns: 1,
+      });
+      const patch = f.boardPatch.mock.calls[0][1] as {
+        placements: Record<string, { position: { x: number; y: number } }>;
+      };
+      expect(separated(patch.placements['card-1'].position, { x: 20, y: 80 })).toBe(true);
+      expect(Object.keys(patch.placements)).toEqual(['card-1']);
+    }
+  );
+  it('retains exact dimensions of a fixed off-grid zone', async () => {
+    const f = fixture({ pinned: true });
+    await f.handler('agor_boards_auto_arrange_zone')({
+      boardId: 'board-1',
+      zoneId: 'zone-1',
+      columns: 1,
+    });
+    const patch = f.boardPatch.mock.calls[0][1] as {
+      objects: Record<string, { width: number; height: number }>;
+    };
+    expect(patch.objects['zone-1']?.width ?? 812).toBe(812);
+    expect(patch.objects['zone-1']?.height ?? 812).toBe(812);
+  });
+  it('refuses to resize or pack a locked zone', async () => {
+    const f = fixture({ pinned: true, lockedZone: true });
+    const result = await f.handler('agor_boards_auto_arrange_zone')({
+      boardId: 'board-1',
+      zoneId: 'zone-1',
+      resize: 'both',
+      columns: 1,
+    });
+    expect(f.boardPatch).not.toHaveBeenCalled();
+    expect(JSON.parse(result.content[0].text).applied).toBe(false);
+  });
+  it('does not dispatch layout mutations when the same board id is denied in another tenant', async () => {
+    const patch = vi.fn();
+    const params = { provider: 'mcp', tenant: { tenant_id: 'tenant-b', source: 'auth_claim' } };
+    const get = vi.fn(async (_id: string, received: object) => {
+      expect(received).toMatchObject(params);
+      throw new Error('Board not found in caller tenant');
+    });
+    const handler = registerAndCaptureHandler('agor_boards_auto_arrange', {
+      app: {
+        service: (name: string) =>
+          name === 'boards' ? { get, patch } : { find: vi.fn(async () => ({ data: [] })), patch },
+      },
+      userId: 'user-1',
+      baseServiceParams: params,
+    });
+    await expect(handler({ boardId: 'board-1', columns: 1 })).rejects.toThrow(
+      'Board not found in caller tenant'
+    );
+    expect(patch).not.toHaveBeenCalled();
   });
 });

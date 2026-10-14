@@ -271,6 +271,14 @@ export async function planZoneEntityPlacement(
     zoneId,
     excludeObjectId: options.excludeObjectId,
   });
+  // Pin/create uses the same fixed canvas geometry as zone arrange. A locked
+  // artifact cannot move out of the new entity's way, so reserve its rectangle.
+  for (const object of Object.values(board.objects ?? {})) {
+    if (object.type !== 'artifact' || object.locked !== true) continue;
+    const size = getCanvasObjectDimensions(object);
+    if (!rectanglesOverlap({ x: object.x, y: object.y, ...size }, zone)) continue;
+    occupants.push({ x: object.x - zone.x, y: object.y - zone.y, ...size });
+  }
   const slot = planZoneSlot(zone, occupants, {
     entityWidth: options.entityWidth ?? BRANCH_CARD_WIDTH,
     entityHeight: options.entityHeight ?? BRANCH_CARD_HEIGHT,
@@ -278,7 +286,9 @@ export async function planZoneEntityPlacement(
     titleInset: frame.headerInset,
     gapX: policy.columnGap,
     gapY: policy.rowGap,
-    resize: policy.resize ?? (policy.autoResizeHeight ? 'height' : 'fixed'),
+    resize: zone.locked
+      ? 'fixed'
+      : (policy.resize ?? (policy.autoResizeHeight ? 'height' : 'fixed')),
   });
   return {
     ...slot,
