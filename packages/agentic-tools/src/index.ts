@@ -6,6 +6,8 @@ import type {
   AgenticToolIntegrationRegistry,
 } from './types.js';
 
+export { filterClaudeSdkCommands } from './claude-commands.js';
+
 export type {
   AgenticToolDisplayNames,
   AgenticToolIntegration,

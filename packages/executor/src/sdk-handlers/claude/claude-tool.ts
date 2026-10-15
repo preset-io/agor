@@ -401,6 +401,7 @@ export class ClaudeTool implements ITool {
             await this.sessionsRepo.update(sessionId, {
               custom_context: {
                 slash_commands: event.slashCommands,
+                terminal_slash_commands: event.terminalSlashCommands,
                 skills: event.skills,
               },
             });

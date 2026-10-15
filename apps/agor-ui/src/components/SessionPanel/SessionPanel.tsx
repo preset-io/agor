@@ -1,4 +1,4 @@
-import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
+import { AGENTIC_TOOL_CAPABILITIES, filterClaudeSdkCommands } from '@agor/agentic-tools';
 import type {
   AgenticToolName,
   AgorClient,
@@ -866,6 +866,19 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const sessionCustomContext = fullSession?.custom_context as Record<string, unknown> | undefined;
   const promptInputSlot = React.useMemo(() => {
     if (!session) return null;
+    const terminalCommands = Array.isArray(sessionCustomContext?.terminal_slash_commands)
+      ? sessionCustomContext.terminal_slash_commands
+      : undefined;
+    const slashCommands = Array.isArray(sessionCustomContext?.slash_commands)
+      ? sessionCustomContext.slash_commands
+      : undefined;
+    const skills = Array.isArray(sessionCustomContext?.skills)
+      ? sessionCustomContext.skills
+      : undefined;
+    // All active claude-code sessions use the SDK, including gateway sessions
+    // opened in the web UI. Also filter old saved inventories before another turn
+    // refreshes them; other tools and historical CLI inventories are unchanged.
+    const claudeSdk = session.agentic_tool === 'claude-code';
     return (
       <SessionComposerDropZone
         disabled={composerAttachmentUploading}
@@ -915,13 +928,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           showFilesDropOverlay={false}
           suppressEmptyHighlight={composerDropActive}
           slashCommands={
-            Array.isArray(sessionCustomContext?.slash_commands)
-              ? sessionCustomContext.slash_commands
-              : undefined
+            claudeSdk && slashCommands
+              ? filterClaudeSdkCommands(slashCommands, terminalCommands)
+              : slashCommands
           }
-          skills={
-            Array.isArray(sessionCustomContext?.skills) ? sessionCustomContext.skills : undefined
-          }
+          skills={claudeSdk && skills ? filterClaudeSdkCommands(skills, terminalCommands) : skills}
         />
         <input
           ref={attachmentInputRef}

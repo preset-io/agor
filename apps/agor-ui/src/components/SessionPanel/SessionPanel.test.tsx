@@ -324,6 +324,90 @@ describe('SessionPanel search control', () => {
     }
   });
 
+  it.each(['web', 'gateway'] as const)(
+    'hides CLI-only commands in a saved Claude SDK %s inventory before the next turn',
+    (surface) => {
+      renderPanel({
+        activeSession: {
+          ...session,
+          agentic_tool: 'claude-code',
+          custom_context: {
+            ...(surface === 'gateway'
+              ? {
+                  gateway_source: {
+                    channel_type: 'slack',
+                    channel_id: 'channel',
+                    channel_name: 'test',
+                    thread_id: 'thread',
+                  },
+                }
+              : {}),
+            slash_commands: [
+              '/usage',
+              'login',
+              '/config',
+              'terminal-setup',
+              '/doctor',
+              'vim',
+              'compact',
+              'plugin:review',
+            ],
+            skills: ['doctor', 'custom-skill'],
+          },
+        } as unknown as Session,
+      });
+      expect(autocomplete.props?.slashCommands).toEqual(['compact', 'plugin:review']);
+      expect(autocomplete.props?.skills).toEqual(['custom-skill']);
+    }
+  );
+
+  it('honors fresh SDK terminal metadata without hiding newly supported commands', () => {
+    renderPanel({
+      activeSession: {
+        ...session,
+        agentic_tool: 'claude-code',
+        custom_context: {
+          slash_commands: ['compact', 'usage', 'config', 'doctor', 'new-terminal'],
+          terminal_slash_commands: ['doctor', 'new-terminal'],
+          skills: ['doctor', 'project-review'],
+        },
+      } as unknown as Session,
+    });
+    expect(autocomplete.props?.slashCommands).toEqual(['compact', 'usage', 'config']);
+    expect(autocomplete.props?.skills).toEqual(['project-review']);
+  });
+
+  it('treats an empty current SDK terminal inventory differently from legacy missing metadata', () => {
+    renderPanel({
+      activeSession: {
+        ...session,
+        agentic_tool: 'claude-code',
+        custom_context: { slash_commands: ['usage', 'config'], terminal_slash_commands: [] },
+      } as unknown as Session,
+    });
+    expect(autocomplete.props?.slashCommands).toEqual(['usage', 'config']);
+  });
+
+  it.each(['codex', 'claude-code-cli'] as const)(
+    'does not impose Claude SDK discovery rules on %s inventories',
+    (agenticTool) => {
+      renderPanel({
+        activeSession: {
+          ...session,
+          agentic_tool: agenticTool,
+          custom_context: { slash_commands: ['usage', 'login', 'config', 'doctor', 'vim'] },
+        } as unknown as Session,
+      });
+      expect(autocomplete.props?.slashCommands).toEqual([
+        'usage',
+        'login',
+        'config',
+        'doctor',
+        'vim',
+      ]);
+    }
+  );
+
   it('reads composer inventories from a full store row but never from a lean one', () => {
     const fullRow = {
       ...session,

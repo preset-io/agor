@@ -25,6 +25,7 @@ type Harness = {
   tool: ClaudeTool;
   outgoing: Partial<Message>[];
   persisted: Message[];
+  sessionsRepo: { update: ReturnType<typeof vi.fn> };
 };
 
 function createHarness(classifiedKind?: 'missing_credential'): Harness {
@@ -85,6 +86,7 @@ function createHarness(classifiedKind?: 'missing_credential'): Harness {
     ),
     outgoing,
     persisted,
+    sessionsRepo,
   };
 }
 
@@ -142,6 +144,28 @@ async function execute(tool: ClaudeTool, mode: 'streaming' | 'non-streaming', ta
   }
   return tool.executePrompt(sessionId, 'prompt', taskId);
 }
+
+describe('ClaudeTool command discovery persistence', () => {
+  it('persists the filtered SDK inventories and terminal metadata together', async () => {
+    const processor = new SDKMessageProcessor({ sessionId: generateId() as SessionID });
+    promptState.events = await processor.process({
+      type: 'system',
+      subtype: 'init',
+      slash_commands: ['compact', 'usage', 'doctor'],
+      terminal_slash_commands: ['doctor'],
+      skills: ['doctor', 'project-review'],
+    } as never);
+    const harness = createHarness();
+    await execute(harness.tool, 'streaming', generateId() as TaskID);
+    expect(harness.sessionsRepo.update).toHaveBeenCalledWith(expect.any(String), {
+      custom_context: {
+        slash_commands: ['compact', 'usage'],
+        terminal_slash_commands: ['doctor'],
+        skills: ['project-review'],
+      },
+    });
+  });
+});
 
 describe('ClaudeTool provider-failure settlement', () => {
   beforeEach(() => {

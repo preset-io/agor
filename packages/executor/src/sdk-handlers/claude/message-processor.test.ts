@@ -123,6 +123,49 @@ describe('SDKMessageProcessor result logging', () => {
   });
 });
 
+describe('SDKMessageProcessor command discovery', () => {
+  it('removes runtime-tagged terminal commands from both command and skill inventories', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'init',
+        slash_commands: ['compact', 'doctor', 'exit', 'future-terminal', 'plugin:review'],
+        terminal_slash_commands: ['doctor', 'exit', 'future-terminal'],
+        skills: ['doctor', 'plugin:review'],
+      })
+    );
+    expect(events).toEqual([
+      {
+        type: 'slash_commands_discovered',
+        slashCommands: ['compact', 'plugin:review'],
+        terminalSlashCommands: ['doctor', 'exit', 'future-terminal'],
+        skills: ['plugin:review'],
+        agentSessionId: undefined,
+      },
+    ]);
+  });
+
+  it('preserves built-ins supported by the current SDK and stamps an empty terminal inventory', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'init',
+        slash_commands: ['compact', 'clear', 'context', 'usage', 'config', 'custom-command'],
+        skills: ['custom-command'],
+      })
+    );
+    expect(events).toEqual([
+      {
+        type: 'slash_commands_discovered',
+        slashCommands: ['compact', 'clear', 'context', 'usage', 'config', 'custom-command'],
+        terminalSlashCommands: [],
+        skills: ['custom-command'],
+        agentSessionId: undefined,
+      },
+    ]);
+  });
+});
+
 describe('SDKMessageProcessor system event suppression', () => {
   it('keeps command discovery silent while preserving the init event', async () => {
     const processor = createProcessor();
@@ -143,6 +186,7 @@ describe('SDKMessageProcessor system event suppression', () => {
         {
           type: 'slash_commands_discovered',
           slashCommands: ['/compact'],
+          terminalSlashCommands: [],
           skills: ['example-skill'],
           agentSessionId: undefined,
         },

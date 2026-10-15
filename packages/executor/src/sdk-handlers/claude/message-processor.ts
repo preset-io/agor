@@ -11,6 +11,7 @@
  * - Yield structured events for database persistence
  */
 
+import { filterClaudeSdkCommands } from '@agor/agentic-tools';
 import { projectClaudeResultResponse, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
 import {
   SUPPRESSED_CLAUDE_STATUSES,
@@ -133,6 +134,7 @@ export type ProcessedEvent =
   | {
       type: 'slash_commands_discovered';
       slashCommands: string[];
+      terminalSlashCommands: string[];
       skills: string[];
       agentSessionId?: string;
     }
@@ -682,13 +684,21 @@ export class SDKMessageProcessor {
 
       // Capture available slash commands and skills for autocomplete
       if (initMsg.slash_commands || initMsg.skills) {
-        this.state.slashCommands = initMsg.slash_commands || [];
-        this.state.skills = initMsg.skills || [];
+        // The pinned SDK already excludes non-headless commands. Its optional
+        // terminal list also removes terminal-oriented bundled skills (doctor,
+        // etc.). Persist [] when absent to distinguish fresh from legacy data.
+        const terminalSlashCommands = initMsg.terminal_slash_commands ?? [];
+        this.state.slashCommands = filterClaudeSdkCommands(
+          initMsg.slash_commands || [],
+          terminalSlashCommands
+        );
+        this.state.skills = filterClaudeSdkCommands(initMsg.skills || [], terminalSlashCommands);
 
         // Emit event so claude-tool can persist to session for UI autocomplete
         events.push({
           type: 'slash_commands_discovered',
           slashCommands: this.state.slashCommands,
+          terminalSlashCommands,
           skills: this.state.skills,
           agentSessionId: this.state.capturedAgentSessionId,
         });
