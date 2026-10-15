@@ -1024,6 +1024,30 @@ describe('Marketplace server inventory and settings', () => {
     expect(screen.getByRole('button', { name: 'Refresh tools' })).toBeEnabled();
   });
 
+  const sharedOverview: MCPMarketplaceOverview = {
+    ...overview,
+    servers: [{ ...overview.servers[0], shared: true }],
+  };
+
+  it('tags a Shared server and lets a member manage it under allow_crud', async () => {
+    renderTab(sharedOverview, { policy: 'allow_crud' });
+    expect(screen.getByText('Shared')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+    const remove = await screen.findByRole('button', { name: 'Remove GitHub server' });
+    await waitFor(() => expect(remove).toBeEnabled());
+    expect(screen.getByRole('switch', { name: 'GitHub: issues.create on' })).toBeEnabled();
+  });
+
+  it('does not treat a Shared server as the member own under allow_private_only', async () => {
+    renderTab(sharedOverview, { policy: 'allow_private_only' });
+    fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+    const tool = await screen.findByRole('switch', { name: 'GitHub: issues.create on' });
+    await waitFor(() => expect(tool).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Remove GitHub server' })).toBeDisabled();
+    // Discovery on a Shared row stays admin-only, as for any server the member does not own.
+    expect(screen.getByRole('button', { name: 'Refresh tools' })).toBeDisabled();
+  });
+
   it('keeps transport authority narrow for member-owned stdio servers', async () => {
     renderTab({
       ...overview,

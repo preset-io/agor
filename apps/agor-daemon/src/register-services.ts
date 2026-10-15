@@ -409,6 +409,7 @@ import {
   isMcpGrantOwnerEntitled,
   isSessionMcpServerLinkVisibleToCaller,
   loadMcpServerForCaller,
+  mayCallerManageSharedMcpServers,
   registerMcpCapabilityRoleFloor,
   resolveMcpCaller,
 } from './utils/mcp-server-authorization.js';
@@ -4508,7 +4509,7 @@ export async function registerMCPServices(
   app.use(
     '/mcp-marketplace',
     new MCPMarketplaceService(
-      new MCPMarketplaceRepository(db, async (userId, serverIds) => {
+      new MCPMarketplaceRepository(db, async (userId, serverIds, options) => {
         // Marketplace receives only this closed boolean map. The daemon reuses the same
         // mode/binding authority as execution and refresh; no token, client,
         // issuer, resource, or binding material crosses the service boundary.
@@ -4518,8 +4519,10 @@ export async function registerMCPServices(
           serverIds,
           serverRepository: marketplaceServerRepository,
           tokenRepository: marketplaceTokenRepository,
+          includeShared: options?.includeShared,
         });
-      })
+      }),
+      (params) => mayCallerManageSharedMcpServers(db, params)
     ),
     { methods: ['find'] }
   );

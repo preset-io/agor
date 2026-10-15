@@ -28,6 +28,8 @@ export interface MCPMarketplaceServer {
   /** Nonsecret transport discriminator used only to predict action capability. */
   transport: MCPTransport;
   catalog_entry_name?: string;
+  /** Shared (workspace) server with no owner; listed only to callers who may manage it. */
+  shared?: boolean;
   enabled: boolean;
   tools: MCPMarketplaceTool[];
   /** Last successful daemon capability discovery; absent means never discovered. */

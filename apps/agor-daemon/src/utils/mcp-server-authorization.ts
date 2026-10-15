@@ -693,6 +693,25 @@ export function isMcpServerUsableByCaller(
 }
 
 /**
+ * Whether the caller may manage Shared (ownerless) servers, and so sees them in
+ * the Marketplace's My Servers list. The same rule {@link authorizeMcpServerWrite}
+ * applies to a shared row: admins always, members only when the policy lets
+ * them manage shared configuration ({@link mayMemberManageMCPServer}).
+ */
+export async function mayCallerManageSharedMcpServers(
+  db: McpServerWriteAuthorizationDatabase,
+  params: AuthenticatedParams | undefined
+): Promise<boolean> {
+  const caller = resolveMcpCaller(params);
+  if (caller.kind !== 'user') return false;
+  const user = caller.user;
+  if (hasMinimumRole(user.role, ROLES.ADMIN)) return true;
+  if (!isAtLeastMemberRole(user.role)) return false;
+  const policy = await resolveMcpMemberPolicy(db, user.user_id, params?.tenant?.tenant_id);
+  return mayMemberManageMCPServer({ owner_user_id: null }, policy, user.user_id);
+}
+
+/**
  * Load a server named by a caller-supplied ID and enforce the direct-use
  * boundary. OAuth and discovery endpoints act on the saved configuration or
  * shared credential, so they cannot rely on session attachment checks.

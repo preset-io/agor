@@ -31,6 +31,7 @@ import { visibleSessionReferenceAccessExists } from './branch-access';
 type SafeServerRow = {
   session_count: number;
   mcp_server_id: string;
+  owner_user_id: string | null;
   name: string;
   transport: MCPMarketplaceServer['transport'];
   enabled: unknown;
@@ -55,8 +56,18 @@ type SafeServerRow = {
 
 export type MCPMarketplaceOAuthAuthorityResolver = (
   userId: UserID,
-  serverIds: readonly MCPServerID[]
+  serverIds: readonly MCPServerID[],
+  options?: MCPMarketplaceOverviewOptions
 ) => Promise<ReadonlyMap<MCPServerID, boolean>>;
+
+export interface MCPMarketplaceOverviewOptions {
+  /**
+   * Also list Shared (ownerless) servers. The daemon decides this from the
+   * same authority that lets the caller change a shared row; the repository
+   * only applies the answer.
+   */
+  includeShared?: boolean;
+}
 
 type SafeAttachmentRow = {
   session_id: string;
@@ -210,8 +221,16 @@ export class MCPMarketplaceRepository {
     private readonly isOAuthGrantAuthorized?: MCPMarketplaceOAuthAuthorityResolver
   ) {}
 
-  async overviewForUser(userId: UserID, now = Date.now()): Promise<MCPMarketplaceOverview> {
+  async overviewForUser(
+    userId: UserID,
+    now = Date.now(),
+    options: MCPMarketplaceOverviewOptions = {}
+  ): Promise<MCPMarketplaceOverview> {
     try {
+      // Another user's private row never appears here, admins included.
+      const listedServers = options.includeShared
+        ? or(eq(mcpServers.owner_user_id, userId), isNull(mcpServers.owner_user_id))!
+        : eq(mcpServers.owner_user_id, userId);
       const displayName = jsonExtract(this.db, mcpServers.data, 'display_name');
       const description = jsonExtract(this.db, mcpServers.data, 'description');
       const tools = jsonExtract(this.db, mcpServers.data, 'tools');
@@ -234,6 +253,7 @@ export class MCPMarketplaceRepository {
 
       const serverRows = (await select(this.db, {
         mcp_server_id: mcpServers.mcp_server_id,
+        owner_user_id: mcpServers.owner_user_id,
         name: mcpServers.name,
         session_count: sql<number>`(select count(*) from ${sessionMcpServers} where ${sessionMcpServers.mcp_server_id} = ${mcpServers.mcp_server_id})`,
         transport: mcpServers.transport,
@@ -273,9 +293,9 @@ export class MCPMarketplaceRepository {
             )
           )
         )
-        // Deliberately no admin exception; ownerless/global rows are excluded.
-        // Marketplace personal inventory means the current caller's private rows.
-        .where(eq(mcpServers.owner_user_id, userId))
+        // Deliberately no admin exception for other users' private rows.
+        // Shared rows are listed only when the caller may manage them.
+        .where(listedServers)
         .orderBy(desc(mcpServers.updated_at), desc(mcpServers.created_at))
         .all()) as SafeServerRow[];
 
@@ -296,10 +316,12 @@ export class MCPMarketplaceRepository {
         .innerJoin(branches, eq(branches.branch_id, sessions.branch_id))
         .where(
           and(
-            eq(mcpServers.owner_user_id, userId),
+            listedServers,
             // A private server is valid only in its owner's Session. Keep the
             // invariant at this read boundary too so pre-enforcement stale rows
-            // cannot surface as somebody else's session metadata.
+            // cannot surface as somebody else's session metadata. A shared
+            // server lists only the caller's own Sessions for the same reason;
+            // session_count still counts every attachment.
             eq(sessions.created_by, userId),
             visibleSessionReferenceAccessExists(this.db, userId, sessionMcpServers.session_id)
           )
@@ -331,6 +353,7 @@ export class MCPMarketplaceRepository {
           ...(stringValue(row.description) ? { description: stringValue(row.description) } : {}),
           source: row.source,
           ...(row.catalog_entry_name ? { catalog_entry_name: row.catalog_entry_name } : {}),
+          ...(row.owner_user_id ? {} : { shared: true }),
           enabled: Boolean(row.enabled),
           tools: readTools(row.tools_json, row.permissions_json),
           ...(iso(row.capabilities_discovered_at as string | number | Date | null)
@@ -359,7 +382,7 @@ export class MCPMarketplaceRepository {
       // projection during stale-while-refresh instead of showing a definite
       // reconnect requirement.
       const oauthAuthority = this.isOAuthGrantAuthorized
-        ? await this.isOAuthGrantAuthorized(userId, oauthServerIds)
+        ? await this.isOAuthGrantAuthorized(userId, oauthServerIds, options)
         : new Map<MCPServerID, boolean>();
       const credentials = serverRows
         .map((row) => credentialFrom(row, now, oauthAuthority))

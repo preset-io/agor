@@ -532,6 +532,7 @@ describe('Catalog responsive layout (real browser)', () => {
           name: 'long-server',
           display_name: 'A deliberately long server display name',
           source: 'user',
+          shared: true,
           transport: 'http',
           enabled: true,
           tools: [],
@@ -559,6 +560,7 @@ describe('Catalog responsive layout (real browser)', () => {
     );
 
     expect(screen.getByText('A deliberately long server display name')).toBeVisible();
+    expectReachableInViewport(screen.getByText('Shared'));
     const settings = screen.getByRole('button', {
       name: 'Settings for A deliberately long server display name',
     });

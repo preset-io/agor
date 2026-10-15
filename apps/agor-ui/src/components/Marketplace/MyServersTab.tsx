@@ -180,7 +180,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
   const authorityFor = useCallback(
     (server: MCPMarketplaceServer) => ({
-      owner_user_id: currentUser?.user_id,
+      // The overview lists the caller's own rows plus Shared (ownerless) ones.
+      owner_user_id: server.shared ? undefined : currentUser?.user_id,
       transport: server.transport,
     }),
     [currentUser?.user_id]
@@ -763,6 +764,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
             {server.source === 'catalog' ? 'Catalog' : 'Manual'}
           </Text>
+          {server.shared && <Tag>Shared</Tag>}
           {!server.enabled && <Tag color="default">Disabled</Tag>}
         </Space>
       </Flex>

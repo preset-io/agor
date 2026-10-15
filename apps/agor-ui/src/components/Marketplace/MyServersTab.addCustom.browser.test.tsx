@@ -131,6 +131,7 @@ function Harness({
           name: server.name,
           display_name: server.display_name,
           source: 'user' as const,
+          ...(server.owner_user_id === null ? { shared: true } : {}),
         })),
       ],
     }));
@@ -266,6 +267,75 @@ it('adds a custom HTTP server from the empty state and opens it', async () => {
   // The new server is listed as Manual and its settings drawer opens.
   expect(await screen.findByLabelText('Remove Acme server')).toBeInTheDocument();
   expect(screen.getAllByText('Manual').length).toBeGreaterThan(0);
+});
+
+it('lists a Shared server an admin adds, tagged, and opens it', async () => {
+  const { create } = mount(emptyOverview, { role: 'admin' });
+  const dialog = await openCreateDialog();
+  // Admins are also offered stdio, so pick the remote transport explicitly.
+  await act(() => userEvent.fill(within(dialog).getByLabelText('Name (Internal ID)'), 'acme'));
+  await act(() => userEvent.fill(within(dialog).getByLabelText('Display Name (Optional)'), 'Acme'));
+  await chooseOption(dialog, 'Transport', 'HTTP');
+  await act(() =>
+    userEvent.fill(within(dialog).getByLabelText('URL'), 'https://mcp.example.com/mcp')
+  );
+  await chooseOption(dialog, 'Auth Type', 'Bearer Token');
+  await act(() => userEvent.fill(within(dialog).getByLabelText('Token'), 'fictional-token'));
+  await chooseOption(dialog, 'Installation ownership', 'Shared (workspace)');
+  expect(within(dialog).getByText('Shared configuration can share credentials')).toBeVisible();
+  const save = within(dialog).getByRole('button', { name: 'Create' });
+  await waitFor(() => expect(save).toBeEnabled());
+  await act(() => userEvent.click(save));
+
+  await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  expect(create.mock.calls[0]?.[0]).toMatchObject({ owner_user_id: null, name: 'acme' });
+  // The settings drawer opens on the new server, and its row says it is Shared.
+  const remove = await screen.findByLabelText('Remove Acme server');
+  await waitFor(() => expect(remove).toBeEnabled());
+  const row = document
+    .querySelector('[data-marketplace-settings-server-id="01900000-0000-7000-8000-0000000000b2"]')
+    ?.closest('tr, .ant-card');
+  if (!(row instanceof HTMLElement)) throw new Error('server row not found');
+  expect(within(row).getByText('Shared')).toBeVisible();
+});
+
+it('shows an existing Shared server to an admin with its actions', async () => {
+  mount(
+    {
+      ...emptyOverview,
+      servers: [
+        { ...existing, shared: true },
+        {
+          ...existing,
+          mcp_server_id: '01900000-0000-7000-8000-0000000000a2' as MCPServerID,
+          name: 'own',
+          display_name: 'Own',
+        },
+      ],
+    },
+    { role: 'admin' }
+  );
+  expect(await screen.findByText('Shared')).toBeVisible();
+  // Only the ownerless row is tagged.
+  expect(screen.getAllByText('Shared')).toHaveLength(1);
+  await act(() => userEvent.click(screen.getByRole('button', { name: 'Settings for Existing' })));
+  const remove = await screen.findByLabelText('Remove Existing server');
+  await waitFor(() => expect(remove).toBeEnabled());
+});
+
+it('keeps a Shared server read-only for a member whose policy cannot manage one', async () => {
+  // The daemon does not list it here; if a stale overview still does, nothing is offered.
+  mount(
+    { ...emptyOverview, servers: [{ ...existing, shared: true }] },
+    { policy: 'allow_private_only' }
+  );
+  expect(await screen.findByText('Shared')).toBeVisible();
+  // The policy answer has landed once this member's own add is offered.
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: /Add custom server/ })).toBeEnabled()
+  );
+  await act(() => userEvent.click(screen.getByRole('button', { name: 'Settings for Existing' })));
+  expect(await screen.findByLabelText('Remove Existing server')).toBeDisabled();
 });
 
 it('opens from the toolbar and resets the draft after cancel', async () => {
