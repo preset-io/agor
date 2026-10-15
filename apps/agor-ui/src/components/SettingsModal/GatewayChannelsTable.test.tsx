@@ -325,6 +325,9 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     expect(screen.getByRole('radio', { name: 'Specific branch' })).toBeChecked();
     expect(screen.getByLabelText('branch-select')).toHaveValue('branch-1');
     clickButton(/^Cancel$/);
+    await waitFor(() => expect(queryButton(/^Discard$/)).toBeDefined());
+    clickButton(/^Discard$/);
+    await waitFor(() => expect(queryButton(/Add Channel/)).toBeDefined());
     clickButton(/Add Channel/);
     expect(screen.getByRole('radio', { name: 'AI Teammate' })).toBeChecked();
     expect(screen.getByLabelText('branch-select')).toHaveValue('');
@@ -1242,10 +1245,9 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
     clickButton(/Add Channel/);
     selectChannelType('GitHub');
     await waitForAvailableStep('Credentials');
-    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
-      target: { value: 'My GH' },
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     });
-    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     clickButton(/^Continue$/);
     await waitForStep('Create app');
   }
@@ -1460,7 +1462,11 @@ describe('GatewayChannelsTable unsaved-changes guard', () => {
   it('asks before the create wizard Cancel discards a typed name', async () => {
     renderTable(null);
     clickButton(/Add Channel/);
-    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
+    });
+    fireEvent.click(screen.getByLabelText('Rename gateway'));
+    fireEvent.change(screen.getByLabelText('Channel name'), {
       target: { value: 'Draft channel' },
     });
     clickButton(/^Cancel$/);

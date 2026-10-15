@@ -381,9 +381,18 @@ describe('GatewayChannelsTable Discord create wizard', () => {
       )
     ).toBeInTheDocument();
     expect(getButton(/Create secure draft/)).toBeDisabled();
-    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+    for (const step of ['Access', 'Create app', 'Channel']) {
+      clickButton(/^Back$/);
+      await waitForStep(step);
+    }
+    fireEvent.click(screen.getByLabelText('Rename gateway'));
+    fireEvent.change(screen.getByLabelText('Channel name'), {
       target: { value: 'My Discord 2' },
     });
+    for (const step of ['Create app', 'Access', 'Token & test']) {
+      clickButton(/^Continue$/);
+      await waitForStep(step);
+    }
     expect(getButton(/Create secure draft/)).toBeEnabled();
     expect(channelCreate).toHaveBeenCalledTimes(1);
   }, 30_000);
