@@ -119,6 +119,8 @@ vi.mock('@agor/core/agentic-integrations', () => ({
   })),
 }));
 
+import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
+import { renderMCPTokenHeader } from '@agor/core/tools/mcp/http-headers';
 import {
   realMcpScoping,
   shippedAsanaInstall,
@@ -248,6 +250,53 @@ describe('Gemini prompt boundary', () => {
       usage: { input_tokens: 4, output_tokens: 2 },
     });
     expect(state.dispose).toHaveBeenCalledOnce();
+  });
+  it('treats vendor token header recipes as resolved MCP auth', async () => {
+    vi.mocked(getMcpServersForSession).mockResolvedValueOnce([
+      {
+        server: {
+          name: 'pagerduty',
+          transport: 'http',
+          url: 'https://pd.example.com/mcp',
+          auth: { type: 'bearer', token: 'pd-key', token_prefix: 'Token token=' },
+        },
+      },
+      {
+        server: {
+          name: 'similarweb',
+          transport: 'http',
+          url: 'https://sw.example.com/mcp',
+          auth: { type: 'bearer', token: 'sw-key', token_header: 'api-key' },
+        },
+      },
+    ] as never);
+    const render = (async ({ server }: { server: { auth: { token: string } } }) =>
+      renderMCPTokenHeader(server.auth)) as never;
+    vi.mocked(resolveScopedMCPAuthHeaders)
+      .mockImplementationOnce(render)
+      .mockImplementationOnce(render);
+    state.events = [[event('content', 'answer'), event('finished', {})]];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await collect(
+        new GeminiPromptService(
+          messages,
+          sessions,
+          'fake-key',
+          branches,
+          undefined,
+          {} as never,
+          {} as never,
+          false
+        )
+      );
+      const { mcpServers } = state.config.mock.calls[0][0];
+      expect(mcpServers.pagerduty.headers).toEqual({ Authorization: 'Token token=pd-key' });
+      expect(mcpServers.similarweb.headers).toEqual({ 'api-key': 'sw-key' });
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('credential_unavailable');
+    } finally {
+      warn.mockRestore();
+    }
   });
   it('records every tool result and sums model turns, keeping last context usage', async () => {
     state.events = [

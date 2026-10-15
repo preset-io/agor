@@ -26,7 +26,10 @@ import {
   normalizeDiscoveredMCPCapabilities,
   resolveMcpServerTemplates,
 } from '@agor/core/mcp';
-import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import {
+  hasPrescribedMCPAuthHeader,
+  mergeMCPRemoteHeaders,
+} from '@agor/core/tools/mcp/http-headers';
 import { fetchJWTToken, resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import { OAuthRefreshAuthorityCancelledError } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
@@ -1199,7 +1202,7 @@ export class MCPEgressGateway {
         cacheNamespace: `${claims.tid}:${server.mcp_server_id}:${claims.config_version}`,
         disableProcessTokenCache: true,
       });
-      if (server.auth && server.auth.type !== 'none' && !authHeaders?.Authorization) {
+      if (!hasPrescribedMCPAuthHeader(server.auth, authHeaders)) {
         throw new MCPEgressGatewayError(
           401,
           'credential_resolution_failed',

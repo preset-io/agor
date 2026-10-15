@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import { renderMCPTokenHeader } from '../tools/mcp/http-headers';
 import { catalogServerSlug } from '../types/mcp-catalog';
 import { load as loadYaml } from '../yaml';
 import {
@@ -162,6 +163,64 @@ describe('auth_type', () => {
         `${VALID_ENTRY}    auth_type: credentials\n    credentials:\n      scheme: bearer\n      acquisition_url: https://example.com/tokens\n      oauth_challenge_compatible: false\n`
       )
     ).toThrow(CuratedCatalogError);
+  });
+
+  describe('credential recipes', () => {
+    const recipe = (lines: string) =>
+      parseCuratedCatalog(
+        `${VALID_ENTRY}    auth_type: credentials\n    credentials:\n      scheme: bearer\n      acquisition_url: https://example.com/tokens\n${lines}`
+      )[0];
+
+    it('carries a vendor header, literal prefix, and extra fields', () => {
+      const entry = recipe(
+        `      prefix: "Token token="\n      fields:\n        - key: environment_id\n          label: Environment ID\n          header: x-environment-id\n          secret: false\n`
+      );
+      expect(entry.credentials).toMatchObject({
+        prefix: 'Token token=',
+        fields: [
+          {
+            key: 'environment_id',
+            label: 'Environment ID',
+            header: 'x-environment-id',
+            secret: false,
+          },
+        ],
+      });
+      expect(recipe('      header: api-key\n').credentials?.header).toBe('api-key');
+    });
+
+    it.each([
+      ['a transport-controlled secret header', '      header: Host\n'],
+      ['an invalid header name', '      header: "api key"\n'],
+      ['a prefix starting with a space', '      prefix: " Token"\n'],
+      ['a prefix with a control character', '      prefix: "Token\\t"\n'],
+      [
+        'a field aimed at Authorization',
+        '      fields:\n        - { key: a, label: A, header: Authorization, secret: true }\n',
+      ],
+      [
+        'a field sharing the secret header',
+        '      header: api-key\n      fields:\n        - { key: a, label: A, header: API-Key, secret: true }\n',
+      ],
+      [
+        'two fields on one header',
+        '      fields:\n        - { key: a, label: A, header: x-id, secret: false }\n        - { key: b, label: B, header: X-ID, secret: false }\n',
+      ],
+      [
+        'a duplicated field key',
+        '      fields:\n        - { key: a, label: A, header: x-a, secret: false }\n        - { key: a, label: B, header: x-b, secret: false }\n',
+      ],
+      [
+        'a field without a secret flag',
+        '      fields:\n        - { key: a, label: A, header: x-a }\n',
+      ],
+      [
+        'an undeclared field property',
+        '      fields:\n        - { key: a, label: A, header: x-a, secret: false, value: x }\n',
+      ],
+    ])('refuses %s', (_label, lines) => {
+      expect(() => recipe(lines)).toThrow(CuratedCatalogError);
+    });
   });
 
   it('refuses a verdict only a live check could produce', () => {
@@ -331,6 +390,56 @@ entries:
 ${block}
 `;
 
+  describe('token_endpoint_auth_method', () => {
+    const configured = (method: string) =>
+      withOAuth(`      dcr_mode: disabled
+      configured_client:
+        setup_url: https://example.com/apps
+        issuer: https://auth.example.com
+        secret_required: true
+      token_endpoint_auth_method: ${method}`);
+
+    it.each(['client_secret_basic', 'client_secret_post'])(
+      'accepts %s on a configured app',
+      (method) => {
+        expect(parseCuratedCatalog(configured(method))[0].oauth?.token_endpoint_auth_method).toBe(
+          method
+        );
+      }
+    );
+
+    it('accepts a short credentials hint on the app recipe and ships one for HubSpot', async () => {
+      const [entry] = parseCuratedCatalog(
+        configured('client_secret_basic').replace(
+          'secret_required: true',
+          'secret_required: true\n        credentials_hint: Use the connector Client ID, not the App ID.'
+        )
+      );
+      expect(entry.oauth?.configured_client?.credentials_hint).toBe(
+        'Use the connector Client ID, not the App ID.'
+      );
+      const hubspot = (await loadCuratedCatalog()).find((e) => e.name === 'com.hubspot/mcp');
+      expect(hubspot?.oauth?.configured_client?.credentials_hint).toMatch(/not the numeric App ID/);
+      const slack = (await loadCuratedCatalog()).find((e) => e.name === 'com.slack/mcp');
+      expect(slack?.oauth?.configured_client?.credentials_hint).toMatch(
+        /User Token Scopes \(not bot scopes\)/
+      );
+    });
+
+    it('refuses an unsupported method', () => {
+      expect(() => parseCuratedCatalog(configured('private_key_jwt'))).toThrow(CuratedCatalogError);
+    });
+
+    it('refuses the method without a configured app, which is the only secret-bearing recipe', () => {
+      expect(() =>
+        parseCuratedCatalog(
+          withOAuth(`      client_id: public-client-123
+      token_endpoint_auth_method: client_secret_post`)
+        )
+      ).toThrow(/configured_client/);
+    });
+  });
+
   it('accepts the settings a server may need stated', () => {
     const [entry] = parseCuratedCatalog(
       withOAuth(`      scope: read:issues write:issues
@@ -393,6 +502,51 @@ ${block}
       dcr_mode: disabled`)
     );
     expect(entry.oauth).toEqual({ client_id: 'public-client-123', dcr_mode: 'disabled' });
+  });
+
+  it('accepts a stable_callback issuer for an allowlisted DCR provider', () => {
+    const [entry] = parseCuratedCatalog(
+      withOAuth(`      stable_callback:
+        issuer: https://issuer.example.com`)
+    );
+    expect(entry.oauth).toEqual({ stable_callback: { issuer: 'https://issuer.example.com' } });
+  });
+
+  it.each([
+    ['a non-URL issuer', '      stable_callback:\n        issuer: issuer.example.com'],
+    ['an unknown key', '      stable_callback:\n        issuer: https://i.example\n        uri: x'],
+    [
+      'a configured_client as well',
+      `      dcr_mode: disabled
+      stable_callback:
+        issuer: https://issuer.example.com
+      configured_client:
+        setup_url: https://issuer.example.com/apps
+        issuer: https://issuer.example.com
+        secret_required: true`,
+    ],
+  ])('refuses stable_callback with %s', (_label, block) => {
+    expect(() => parseCuratedCatalog(withOAuth(block))).toThrow(CuratedCatalogError);
+  });
+
+  it.each([
+    'http://issuer.example.com',
+    'https://user:pass@issuer.example.com',
+    'https://issuer.example.com/?tenant=a',
+    'https://issuer.example.com/#frag',
+  ])('refuses issuer %s, which the relay would reject later', (issuer) => {
+    expect(() =>
+      parseCuratedCatalog(withOAuth(`      stable_callback:\n        issuer: "${issuer}"`))
+    ).toThrow(/https URL without userinfo, query, or fragment/);
+    expect(() =>
+      parseCuratedCatalog(
+        withOAuth(`      dcr_mode: disabled
+      configured_client:
+        setup_url: https://issuer.example.com/apps
+        issuer: "${issuer}"
+        secret_required: true`)
+      )
+    ).toThrow(/https URL without userinfo, query, or fragment/);
   });
 
   it('leaves the block absent when an entry states nothing', () => {
@@ -523,7 +677,8 @@ describe('the shipped catalog', () => {
         expect.objectContaining({
           name: 'io.github.clerk/mcp-server',
           remote_url: 'https://mcp.clerk.com/mcp',
-          auth_type: 'none',
+          // 2026-10-09: Clerk moved this endpoint from no-auth to OAuth (DCR).
+          auth_type: 'oauth',
         }),
         expect.objectContaining({
           name: 'io.github.cloudinary/asset-management-mcp',
@@ -630,6 +785,40 @@ describe('the shipped catalog', () => {
     expect(entry?.oauth).not.toHaveProperty('client_id');
   });
 
+  it.each([
+    ['com.canva/mcp', 'https://mcp.canva.com', 'https://www.canva.dev/docs/apps/mcp/access/', true],
+    [
+      'com.dropbox/mcp',
+      'https://www.dropbox.com',
+      'https://help.dropbox.com/integrations/connect-dropbox-mcp-server',
+      true,
+    ],
+    // Sign in with Vercel BYO is unverified; hidden until one real connection.
+    [
+      'com.vercel/vercel-mcp',
+      'https://vercel.com',
+      'https://vercel.com/docs/sign-in-with-vercel',
+      false,
+    ],
+  ])('ships %s as a customer-owned app recipe', async (name, issuer, setupUrl, visible) => {
+    const entry = (await loadCuratedCatalog()).find((candidate) => candidate.name === name);
+    expect(entry?.oauth).toEqual({
+      dcr_mode: 'disabled',
+      configured_client: { setup_url: setupUrl, issuer, secret_required: true },
+    });
+    expect(isCatalogEntryVisible(entry!)).toBe(visible);
+  });
+
+  it.each([
+    ['com.squareup/mcp', 'https://mcp.squareup.com'],
+    ['com.intercom/mcp', 'https://mcp.intercom.com'],
+  ])('keeps %s hidden on DCR with the stable callback until allowlisted', async (name, issuer) => {
+    const entry = (await loadCuratedCatalog()).find((candidate) => candidate.name === name);
+    expect(entry).toMatchObject({ hidden: true, oauth: { stable_callback: { issuer } } });
+    expect(entry?.oauth).not.toHaveProperty('dcr_mode');
+    expect(entry?.oauth).not.toHaveProperty('configured_client');
+  });
+
   it('preserves Preset install identity and requires strict OAuth without hiding write authority', async () => {
     const entries = await loadCuratedCatalog();
     // catalog_entry_name is persisted on installs: this is a release identity,
@@ -667,20 +856,11 @@ describe('the shipped catalog', () => {
     const unsupported = [
       'io.prisma/mcp',
       'com.mongodb/mcp',
-      'com.box/mcp',
-      'com.hubspot/mcp',
-      'com.slack/mcp',
-      'com.pagerduty/mcp',
       'com.kagi/mcp',
-      'com.render/mcp',
-      // Explicit 2026-09-01 exclusions: customer OAuth clients, tenant/admin
-      // gates, callback allowlisting, preview constraints, or unusable live
-      // metadata keep these off the one-click shelf.
-      'com.google.gmail/mcp',
-      'com.google.drive/mcp',
-      'com.google.calendar/mcp',
+      // Explicit 2026-09-01 exclusions: tenant/admin gates, callback
+      // allowlisting, preview constraints, or unusable live metadata keep
+      // these off the one-click shelf.
       'com.google.chat/mcp',
-      'com.google.docs/mcp',
       'com.google.sheets/mcp',
       'com.google.slides/mcp',
       'com.google.tasks/mcp',
@@ -699,9 +879,93 @@ describe('the shipped catalog', () => {
     });
   });
 
+  it('offers no-DCR OAuth providers only through a customer-owned app or a reviewed token route', async () => {
+    const entries = await loadCuratedCatalog();
+    // 2026-10-07: these publish no registration endpoint for Agor. Each is
+    // offered only where the customer brings the client or the credential.
+    for (const name of [
+      'com.slack/mcp',
+      'com.box/mcp',
+      'com.frontapp/mcp',
+      'us.zoom/mcp',
+      'com.hubspot/mcp',
+      'com.salesforce/mcp',
+      'com.googleapis.gmailmcp/mcp',
+      'com.googleapis.calendarmcp/mcp',
+      'com.googleapis.drivemcp/mcp',
+      'com.googleapis.docsmcp/mcp',
+    ]) {
+      expect(entries.find((entry) => entry.name === name)?.oauth).toMatchObject({
+        dcr_mode: 'disabled',
+        configured_client: expect.any(Object),
+      });
+    }
+    for (const name of ['com.pagerduty/mcp', 'com.render/mcp', 'com.getdbt/mcp']) {
+      expect(entries.find((entry) => entry.name === name)).toMatchObject({
+        auth_type: 'credentials',
+        credentials: { scheme: 'bearer', oauth_challenge_compatible: true },
+      });
+    }
+    expect(entries.find((entry) => entry.name === 'com.pagerduty/mcp')?.credentials?.prefix).toBe(
+      'Token token='
+    );
+    expect(entries.find((entry) => entry.name === 'com.getdbt/mcp')?.credentials?.fields).toEqual([
+      {
+        key: 'prod_environment_id',
+        label: 'Production environment ID',
+        header: 'x-dbt-prod-environment-id',
+        secret: false,
+      },
+    ]);
+  });
+
+  it('gives every entry a starter prompt that runs without user-supplied input', async () => {
+    // A starter prompt is seeded into a new session right after connecting, so
+    // it must work as-is: no "the topic I name" or template placeholders.
+    const placeholder =
+      /\bI (?:name|link|choose|pick|specify|give|paste|describe|mention|provide|select)\b|\bI(?:'m| am) (?:using|working on)\b|<[^>]+>|\{[^}]+\}/i;
+    const offenders = (await loadCuratedCatalog())
+      .filter((entry) => placeholder.test(entry.starter_prompt))
+      .map((entry) => `${entry.name}: ${entry.starter_prompt}`);
+    expect(offenders).toEqual([]);
+  });
+
   it('carries no secret-shaped value anywhere in the file', async () => {
     const source = await fs.readFile(curatedCatalogPath(), 'utf-8');
-    expect(source).not.toMatch(/client_secret|token_url|authorization_url|api[_-]?key/i);
+    // A credential recipe's `header:` names where the user's key goes (e.g.
+    // `api-key`), and `token_endpoint_auth_method:` names a client
+    // authentication method (e.g. `client_secret_post`); neither is a value.
+    const withoutHeaderNames = source
+      .replace(/^\s*header: [!#$%&'*+.^_`|~0-9A-Za-z-]+$/gm, '')
+      .replace(/^\s*token_endpoint_auth_method: client_secret_(?:basic|post)$/gm, '');
+    expect(withoutHeaderNames).not.toMatch(
+      /client_secret|token_url|authorization_url|api[_-]?key/i
+    );
+  });
+
+  it('declares form-body token auth exactly for the shipped apps whose token endpoint requires it', async () => {
+    const entries = await loadCuratedCatalog();
+    expect(
+      entries
+        .filter((entry) => entry.oauth?.token_endpoint_auth_method === 'client_secret_post')
+        .map((entry) => entry.name)
+        .sort()
+    ).toEqual(['com.hubspot/mcp', 'com.slack/mcp']);
+  });
+
+  it('renders the shipped Similarweb recipe as its documented api-key header', async () => {
+    const entries = await loadCuratedCatalog();
+    const similarweb = entries.find((entry) => entry.name === 'com.similarweb/mcp');
+    const recipe = similarweb?.credentials;
+    expect(recipe).toMatchObject({ header: 'api-key' });
+    expect(recipe?.prefix).toBeUndefined();
+    expect(
+      renderMCPTokenHeader({
+        token: 'fake-key',
+        ...(recipe?.header ? { token_header: recipe.header } : {}),
+        ...(recipe?.prefix ? { token_prefix: recipe.prefix } : {}),
+      })
+    ).toEqual({ 'api-key': 'fake-key' });
   });
 });
 

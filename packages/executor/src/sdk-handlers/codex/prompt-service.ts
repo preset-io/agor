@@ -44,7 +44,10 @@ import {
   renderAgorSessionIdentity,
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
-import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import {
+  hasPrescribedMCPAuthHeader,
+  mergeMCPRemoteHeaders,
+} from '@agor/core/tools/mcp/http-headers';
 import {
   CODEX_LIFECYCLE_MESSAGES,
   type CodexLifecycleFailureCode,
@@ -839,27 +842,27 @@ export class CodexPromptService {
         // not log it; the server name and transport above are sufficient.
       }
 
-      // Resolve the Authorization header via the shared MCP auth helper —
-      // covers bearer / JWT (with token-mint) / OAuth (with cached & DB
-      // tokens). Codex passes the bearer through `bearer_token_env_var`,
-      // while custom headers use `env_http_headers`, so secret values stay
-      // out of the SDK's generated `--config` arguments. Non-bearer schemes
-      // log a warning since Codex's CLI only supports bearer auth.
+      // Resolve the auth header via the shared MCP auth helper — covers
+      // bearer (incl. vendor header/prefix recipes) / JWT (with token-mint) /
+      // OAuth (with cached & DB tokens). Codex passes a Bearer token through
+      // `bearer_token_env_var`; any other auth header (`Authorization: Token
+      // …`, `api-key: …`) rides `env_http_headers` with the custom headers,
+      // so secret values stay out of the SDK's generated `--config` arguments.
       try {
         const authHeaders = await resolveScopedMCPAuthHeaders(scoped, {
           surfaceAuthorityError: true,
         });
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
-        const authHeader = headers?.Authorization;
-        const missingRequiredAuth = !!server.auth && server.auth.type !== 'none' && !authHeader;
+        const missingRequiredAuth = !hasPrescribedMCPAuthHeader(server.auth, authHeaders);
         // A pre-registered OAuth client with no grant is withheld, so the CLI
         // never runs its own OAuth discovery / Dynamic Client Registration.
         if (missingRequiredAuth && signIn.recordMissingGrant(scoped)) {
           authDiagnostics.recordUnavailable();
           continue;
         }
+        const bearerToken = /^Bearer\s+(.+)$/i.exec(headers?.Authorization ?? '')?.[1];
         const customHeaders = headers ? { ...headers } : undefined;
-        if (customHeaders) delete customHeaders.Authorization;
+        if (customHeaders && bearerToken) delete customHeaders.Authorization;
         if (customHeaders && Object.keys(customHeaders).length > 0) {
           // Codex's streamable-HTTP MCP config takes `env_http_headers`: a map
           // of header NAME -> the NAME of an env var whose value Codex reads at
@@ -883,20 +886,13 @@ export class CodexPromptService {
           serverConfig.env_http_headers = envHttpHeaders;
           codexDebug(`      custom headers: ${Object.keys(customHeaders).length} header(s)`);
         }
-        if (authHeader) {
-          const bearerToken = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1];
-          if (bearerToken) {
-            const envVarName = `AGOR_MCP_${shortId(sessionId)}_${serverName.toUpperCase()}`;
-            process.env[envVarName] = bearerToken;
-            serverConfig.bearer_token_env_var = envVarName;
-            codexDebug(`      auth: ${server.auth?.type ?? 'bearer'} token via ${envVarName}`);
-          } else {
-            canRequireServer = false;
-            console.warn(
-              `      ⚠️  auth: resolved Authorization header for "${server.name}" is not a Bearer scheme (Codex CLI only supports bearer); skipping injection`
-            );
-          }
-        } else if (missingRequiredAuth) {
+        if (bearerToken) {
+          const envVarName = `AGOR_MCP_${shortId(sessionId)}_${serverName.toUpperCase()}`;
+          process.env[envVarName] = bearerToken;
+          serverConfig.bearer_token_env_var = envVarName;
+          codexDebug(`      auth: ${server.auth?.type ?? 'bearer'} token via ${envVarName}`);
+        }
+        if (missingRequiredAuth) {
           canRequireServer = false;
           authDiagnostics.recordUnavailable();
         }

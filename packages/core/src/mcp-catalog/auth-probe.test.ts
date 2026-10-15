@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { probeRemoteAuth, probeRemoteAuthType, probeRemoteBearerToken } from './auth-probe';
+import {
+  probeRemoteAuth,
+  probeRemoteAuthType,
+  probeRemoteBearerToken,
+  probeRemoteCredentialHeaders,
+} from './auth-probe';
 
 // These cover the status-to-verdict rules, so the transport is injected. The
 // outbound destination filter is not exercised here: it lives in
@@ -336,6 +341,24 @@ describe('probeRemoteBearerToken', () => {
     expect(String(spy.mock.calls[0][0])).toBe('https://example.com/mcp');
     const headers = spy.mock.calls[0][1]?.headers as Record<string, string>;
     expect(headers.authorization).toBe(`Bearer ${KEY}`);
+  });
+
+  it('sends a vendor credential recipe exactly as rendered, once', async () => {
+    const spy = mockFetch(async () => new Response(INITIALIZE_RESULT, { status: 200 }));
+
+    expect(
+      await probeRemoteCredentialHeaders(
+        'https://example.com/mcp',
+        { Authorization: `Token ${KEY}`, 'x-environment-id': '42' },
+        { fetchImpl }
+      )
+    ).toBe('accepted');
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const headers = spy.mock.calls[0][1]?.headers as Record<string, string>;
+    expect(headers.Authorization).toBe(`Token ${KEY}`);
+    expect(headers['x-environment-id']).toBe('42');
+    expect(headers.authorization).toBeUndefined();
   });
 
   it.each([401, 403])('rejects a key the endpoint answers %s to', async (status) => {

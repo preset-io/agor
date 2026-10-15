@@ -64,10 +64,41 @@ export function catalogOAuthConfig(entry: MCPCatalogEntry): MCPAuth {
 }
 
 /**
+ * The bearer-type auth a catalog credential recipe prescribes for `token`.
+ * Vendor header/scheme are stated only when the entry states them, so the
+ * ordinary `Authorization: Bearer` recipe stays the plain `{ type, token }`.
+ */
+export function catalogCredentialAuth(entry: MCPCatalogEntry, token: string): MCPAuth {
+  const recipe = entry.credentials;
+  return {
+    type: 'bearer',
+    token,
+    ...(recipe?.header ? { token_header: recipe.header } : {}),
+    ...(recipe?.prefix ? { token_prefix: recipe.prefix } : {}),
+  };
+}
+
+/**
+ * Whether `headers` name exactly the custom headers a current install of
+ * `entry` carries: its credential recipe's declared fields, or none. Values
+ * are redacted on candidate projections, so names are the comparable fact.
+ */
+function hasCatalogHeaderNames(
+  headers: Record<string, string> | undefined,
+  entry: MCPCatalogEntry,
+  prescribed: MCPAuth
+): boolean {
+  const names = (values: string[]) => values.map((name) => name.toLowerCase()).sort();
+  const declared =
+    prescribed.type === 'bearer' ? (entry.credentials?.fields ?? []).map((f) => f.header) : [];
+  return JSON.stringify(names(Object.keys(headers ?? {}))) === JSON.stringify(names(declared));
+}
+
+/**
  * Canonical current-install predicate shared by Connect reuse and OAuth policy.
  * Historical source/stamp alone is never authority: the row must still match
- * the current entry's endpoint, transport, credential routing, and no-header
- * policy. Imported/edited/removed rows therefore fail closed.
+ * the current entry's endpoint, transport, credential routing, and header
+ * names (none, unless its credential recipe declares extra fields). Imported/edited/removed rows therefore fail closed.
  */
 export function isCurrentCatalogInstall(
   server: Pick<
@@ -106,7 +137,7 @@ export function isCurrentCatalogInstall(
       prescribed,
       options.reconcileMissingCompatibilityMode === true
     ) &&
-    Object.keys(server.headers ?? {}).length === 0
+    hasCatalogHeaderNames(server.headers, entry, prescribed)
   );
 }
 

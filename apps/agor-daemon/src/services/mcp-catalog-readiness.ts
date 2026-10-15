@@ -1,4 +1,5 @@
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
+import { catalogRelayIssuer } from '@agor/core/mcp-catalog';
 import type {
   AuthenticatedParams,
   Id,
@@ -70,7 +71,8 @@ export class MCPCatalogReadinessService {
     const candidates = inventory.filter(({ server }) =>
       sharing === 'shared' ? !server.owner_user_id : server.owner_user_id === userId
     );
-    const redirectUri = entry.oauth?.configured_client ? this.deps.redirectUri?.(entry) : undefined;
+    // A customer app's callback, or an allowlisted DCR provider's stable one.
+    const redirectUri = catalogRelayIssuer(entry) ? this.deps.redirectUri?.(entry) : undefined;
     const setup = redirectUri ? { redirect_uri: redirectUri } : {};
     const knownOAuthInstall = candidates.some(
       ({ server }) =>

@@ -51,11 +51,18 @@ import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
 import { createMCPCatalogConnectService } from './mcp-catalog-connect.js';
 import { createMCPServersService } from './mcp-servers.js';
 
-const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
-  probeRemoteAuthType: vi.fn(),
-  probeRemoteBearerToken: vi.fn(),
+const { probeRemoteAuthType, probeRemoteBearerToken, probeRemoteCredentialHeaders } = vi.hoisted(
+  () => ({
+    probeRemoteAuthType: vi.fn(),
+    probeRemoteBearerToken: vi.fn(),
+    probeRemoteCredentialHeaders: vi.fn(),
+  })
+);
+vi.mock('@agor/core/mcp-catalog', () => ({
+  probeRemoteAuthType,
+  probeRemoteBearerToken,
+  probeRemoteCredentialHeaders,
 }));
-vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType, probeRemoteBearerToken }));
 
 const GITHUB = 'io.github.github/github-mcp-server';
 const DISCLOSURE = 'Reads repositories and issues you authorise.';
@@ -189,8 +196,15 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     return context;
   };
 
+  // What each patch asked to write, before any hook rewrites it.
+  const patchData: Record<string, unknown>[] = [];
+  const recordPatchData = async (context: { data?: unknown }) => {
+    patchData.push(structuredClone(context.data) as Record<string, unknown>);
+    return context;
+  };
+
   app.service('mcp-servers').hooks({
-    before: registered.before,
+    before: { ...registered.before, patch: [recordPatchData, ...(registered.before.patch ?? [])] },
     after: Object.fromEntries(
       Object.entries(registered.after).map(([method, hooks]) => [
         method,
@@ -227,9 +241,14 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     addUser: (email: string, role: UserRole = 'member') =>
       users.create({ email, name: email, role }) as Promise<User>,
     paramsFor,
-    connectAs: (caller: User, bearerToken?: string) =>
+    connectAs: (caller: User, bearerToken?: string, credentialFields?: Record<string, string>) =>
       createMCPCatalogConnectService(app, connectDeps).create(
-        { ...CONNECT_REQUEST, ...(bearerToken === undefined ? {} : { bearer_token: bearerToken }) },
+        {
+          ...CONNECT_REQUEST,
+          catalog_key: entry.name,
+          ...(bearerToken === undefined ? {} : { bearer_token: bearerToken }),
+          ...(credentialFields ? { credential_fields: credentialFields } : {}),
+        },
         paramsFor(caller)
       ),
     find: (caller: User) =>
@@ -251,6 +270,7 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     },
     /** The row as it actually sits in the database, past every hook. */
     stored: () => repo.findAll({}),
+    patchData: () => patchData,
   };
 }
 
@@ -572,5 +592,181 @@ describe('the paths an API key does not change', () => {
 
     expect(second.reused_existing_server).toBe(true);
     expect(second.mcp_server.mcp_server_id).toBe(first.mcp_server.mcp_server_id);
+  });
+});
+
+describe('a vendor credential recipe, end to end', () => {
+  /** PagerDuty-style scheme plus a dbt-style extra header. */
+  const RECIPE = {
+    ...CURATED,
+    name: 'com.example/vendor-mcp',
+    remote_url: 'https://mcp.example.com/mcp',
+    credentials: {
+      scheme: 'bearer',
+      acquisition_url: 'https://example.com/tokens',
+      prefix: 'Token token=',
+      fields: [
+        {
+          key: 'environment_id',
+          label: 'Environment ID',
+          header: 'x-environment-id',
+          secret: false,
+        },
+        { key: 'workspace_key', label: 'Workspace key', header: 'x-workspace-key', secret: true },
+      ],
+    },
+  } as unknown as MCPCatalogEntry;
+  const FIELDS = { environment_id: '4242', workspace_key: 'fake-workspace-secret-eeee' };
+
+  beforeEach(() => {
+    probeRemoteAuthType.mockReset();
+    probeRemoteAuthType.mockResolvedValue('credentials');
+    probeRemoteBearerToken.mockReset();
+    probeRemoteCredentialHeaders.mockReset();
+    probeRemoteCredentialHeaders.mockResolvedValue('accepted');
+  });
+
+  it('verifies and stores the token with its scheme, and the fields as custom headers', async () => {
+    const daemon = await buildDaemon(RECIPE);
+    const alice = await daemon.addUser('alice@agor.live');
+
+    await daemon.connectAs(alice, WORKING_KEY, FIELDS);
+
+    expect(probeRemoteBearerToken).not.toHaveBeenCalled();
+    expect(probeRemoteCredentialHeaders).toHaveBeenCalledWith('https://mcp.example.com/mcp', {
+      Authorization: `Token token=${WORKING_KEY}`,
+      'x-environment-id': '4242',
+      'x-workspace-key': FIELDS.workspace_key,
+    });
+    const [row] = await daemon.stored();
+    expect(row?.auth).toEqual({ type: 'bearer', token: WORKING_KEY, token_prefix: 'Token token=' });
+    expect(row?.headers).toEqual({
+      'x-environment-id': '4242',
+      'x-workspace-key': FIELDS.workspace_key,
+    });
+  });
+
+  it('redacts the token and every field on the reply and on reads', async () => {
+    const daemon = await buildDaemon(RECIPE);
+    const alice = await daemon.addUser('alice@agor.live');
+    const broadcast = daemon.captureBroadcasts('created');
+
+    const result = await daemon.connectAs(alice, WORKING_KEY, FIELDS);
+    const fetched = await daemon.get(alice, result.mcp_server.mcp_server_id);
+
+    for (const payload of [result, fetched, broadcast]) {
+      const text = JSON.stringify(payload);
+      expect(text).not.toContain(WORKING_KEY);
+      expect(text).not.toContain(FIELDS.workspace_key);
+    }
+    expect(fetched.auth).toMatchObject({
+      token: MCP_HEADER_REDACTED_SENTINEL,
+      token_prefix: 'Token token=',
+    });
+    expect(fetched.headers).toEqual({
+      'x-environment-id': MCP_HEADER_REDACTED_SENTINEL,
+      'x-workspace-key': MCP_HEADER_REDACTED_SENTINEL,
+    });
+  });
+
+  it('rotates the token and the fields together on one row', async () => {
+    const daemon = await buildDaemon(RECIPE);
+    const alice = await daemon.addUser('alice@agor.live');
+    const first = await daemon.connectAs(alice, WORKING_KEY, FIELDS);
+
+    const second = await daemon.connectAs(alice, ROTATED_KEY, { ...FIELDS, environment_id: '7' });
+
+    expect(second.mcp_server.mcp_server_id).toBe(first.mcp_server.mcp_server_id);
+    const rows = await daemon.stored();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.auth?.token).toBe(ROTATED_KEY);
+    expect(rows[0]?.headers?.['x-environment-id']).toBe('7');
+  });
+
+  it.each([
+    ['a prefix and extra fields', RECIPE, FIELDS],
+    [
+      'a vendor header',
+      {
+        ...CURATED,
+        name: 'com.example/header-mcp',
+        remote_url: 'https://header.example.com/mcp',
+        credentials: { ...CURATED.credentials, header: 'api-key' },
+      } as unknown as MCPCatalogEntry,
+      undefined,
+    ],
+  ])(
+    'reconnects with %s as an auth-only rotation of a current install',
+    async (_label, entry, fields) => {
+      const daemon = await buildDaemon(entry);
+      const alice = await daemon.addUser('alice@agor.live');
+      const first = await daemon.connectAs(alice, WORKING_KEY, fields);
+      const patchesBefore = daemon.patchData().length;
+
+      const second = await daemon.connectAs(alice, ROTATED_KEY, fields);
+
+      expect(second.mcp_server.mcp_server_id).toBe(first.mcp_server.mcp_server_id);
+      // A full reconciliation would also rewrite enabled/transport/scope/url.
+      expect(
+        daemon
+          .patchData()
+          .slice(patchesBefore)
+          .map((data) => Object.keys(data).sort())
+      ).toEqual([['auth', ...(fields ? ['headers'] : []), 'replace_auth']]);
+      expect((await daemon.stored())[0]?.auth?.token).toBe(ROTATED_KEY);
+    }
+  );
+
+  it('reconciles an install whose custom header names drifted from the recipe', async () => {
+    const daemon = await buildDaemon(RECIPE);
+    const alice = await daemon.addUser('alice@agor.live');
+    const first = await daemon.connectAs(alice, WORKING_KEY, FIELDS);
+    await daemon.patch(alice, first.mcp_server.mcp_server_id, {
+      headers: {
+        'x-environment-id': MCP_HEADER_REDACTED_SENTINEL,
+        'x-workspace-key': MCP_HEADER_REDACTED_SENTINEL,
+        'x-extra': 'user-added',
+      },
+    });
+    const patchesBefore = daemon.patchData().length;
+
+    await daemon.connectAs(alice, ROTATED_KEY, FIELDS);
+
+    expect(daemon.patchData().slice(patchesBefore)).toEqual([
+      expect.objectContaining({ enabled: true, transport: 'http' }),
+    ]);
+    expect(Object.keys((await daemon.stored())[0]?.headers ?? {}).sort()).toEqual([
+      'x-environment-id',
+      'x-workspace-key',
+    ]);
+  });
+
+  it.each([
+    ['a missing field', { environment_id: '4242' }, /Workspace key/],
+    ['an undeclared field', { ...FIELDS, other: 'x' }, /does not declare/],
+    [
+      'a redaction sentinel',
+      { ...FIELDS, environment_id: MCP_HEADER_REDACTED_SENTINEL },
+      /placeholder/,
+    ],
+    ['a control character', { ...FIELDS, environment_id: '42\n43' }, /control characters/],
+  ])('refuses %s before probing or storing anything', async (_label, fields, message) => {
+    const daemon = await buildDaemon(RECIPE);
+    const alice = await daemon.addUser('alice@agor.live');
+
+    await expect(daemon.connectAs(alice, WORKING_KEY, fields)).rejects.toThrow(message);
+    await expect(daemon.connectAs(alice, WORKING_KEY)).rejects.toThrow(/also needs/);
+    expect(probeRemoteCredentialHeaders).not.toHaveBeenCalled();
+    expect(await daemon.stored()).toHaveLength(0);
+  });
+
+  it('refuses fields on an entry that declares none', async () => {
+    const daemon = await buildDaemon();
+    const alice = await daemon.addUser('alice@agor.live');
+
+    await expect(daemon.connectAs(alice, WORKING_KEY, FIELDS)).rejects.toThrow(
+      /does not take extra credential fields/
+    );
+    expect(await daemon.stored()).toHaveLength(0);
   });
 });

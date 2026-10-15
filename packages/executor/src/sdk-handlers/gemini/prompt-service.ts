@@ -13,7 +13,10 @@ import {
   renderAgorSessionIdentity,
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
-import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import {
+  hasPrescribedMCPAuthHeader,
+  mergeMCPRemoteHeaders,
+} from '@agor/core/tools/mcp/http-headers';
 import { MCP_CLIENT_HINT_HEADER, MCP_CLIENT_HINTS } from '@agor/core/types';
 import { GEMINI_MANUAL_MESSAGE, isGeminiManualMode } from '@agor/core/utils/permission-mode-mapper';
 import type * as GeminiTypes from '@google/gemini-cli-core';
@@ -517,9 +520,7 @@ export class GeminiPromptService {
             headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
             if (
               server.transport !== 'stdio' &&
-              server.auth &&
-              server.auth.type !== 'none' &&
-              !authHeaders?.Authorization
+              !hasPrescribedMCPAuthHeader(server.auth, authHeaders)
             ) {
               authDiagnostics.recordUnavailable();
               // Withheld, so Gemini never runs its own OAuth discovery / Dynamic

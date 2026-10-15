@@ -8,6 +8,7 @@
  */
 
 import { isUserEnvPlaceholder } from '../../mcp/template-patterns';
+import type { MCPAuth } from '../../types/mcp';
 
 export const MCP_HEADER_REDACTED_SENTINEL = '••••••••';
 
@@ -147,14 +148,63 @@ export function restoreRedactedMCPCustomHeaders(options: {
   return normalizeMCPCustomHeaders(restored);
 }
 
+/**
+ * A literal token prefix: printable ASCII, not starting with a space, bounded.
+ * Written exactly as sent, e.g. `Token ` or PagerDuty's `Token token=`.
+ */
+export const MCP_TOKEN_PREFIX_RE = /^[!-~][ -~]{0,63}$/;
+
+/**
+ * The one header a bearer-type auth sends. `Authorization: Bearer <token>` by
+ * default; a vendor-specific header and/or literal prefix when the row names
+ * one (e.g. `Authorization: Token token=<key>`, `api-key: <key>`).
+ */
+export function renderMCPTokenHeader(auth: {
+  token: string;
+  token_header?: string;
+  token_prefix?: string;
+}): Record<string, string> {
+  const name = auth.token_header ?? 'Authorization';
+  const prefix = auth.token_prefix ?? (auth.token_header === undefined ? 'Bearer ' : '');
+  return { [name]: `${prefix}${auth.token}` };
+}
+
+/**
+ * Whether `headers` carry the credential `auth` prescribes: the bearer row's
+ * token header and prefix (see `renderMCPTokenHeader`), or
+ * `Authorization: Bearer` for JWT and OAuth. Vacuously true without auth.
+ */
+export function hasPrescribedMCPAuthHeader(
+  auth: Pick<MCPAuth, 'type' | 'token_header' | 'token_prefix'> | undefined,
+  headers: Record<string, string> | undefined
+): boolean {
+  if (!auth || auth.type === 'none') return true;
+  const [[name, prefix]] = Object.entries(
+    renderMCPTokenHeader(auth.type === 'bearer' ? { ...auth, token: '' } : { token: '' })
+  );
+  const value = Object.entries(headers ?? {}).find(
+    ([key]) => key.toLowerCase() === name.toLowerCase()
+  )?.[1];
+  if (value === undefined) return false;
+  return (
+    value.toLowerCase().startsWith(prefix.toLowerCase()) && value.slice(prefix.length).trim() !== ''
+  );
+}
+
 export function mergeMCPRemoteHeaders(options: {
   base?: Record<string, string>;
   custom?: Record<string, string>;
   auth?: Record<string, string>;
 }): Record<string, string> | undefined {
+  // Auth wins over a custom header of the same name in any casing; keeping
+  // both would let Fetch join them into one comma-separated value.
+  const authNames = new Set(Object.keys(options.auth ?? {}).map((name) => name.toLowerCase()));
+  const custom = Object.entries(normalizeMCPCustomHeaders(options.custom) ?? {}).filter(
+    ([name]) => !authNames.has(name.toLowerCase())
+  );
   const merged: Record<string, string> = {
     ...(options.base ?? {}),
-    ...(normalizeMCPCustomHeaders(options.custom) ?? {}),
+    ...Object.fromEntries(custom),
     ...(options.auth ?? {}),
   };
   return Object.keys(merged).length > 0 ? merged : undefined;

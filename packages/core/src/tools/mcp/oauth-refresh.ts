@@ -14,14 +14,14 @@ import {
   ROTATING_GRANT_OBSERVE_TIMEOUT_MS,
   refreshRotatingGrant,
 } from '../../oauth/rotating-grant-refresh';
-import type { MCPServerID, UserID } from '../../types';
+import type { MCPOAuthTokenEndpointAuthMethod, MCPServer, MCPServerID, UserID } from '../../types';
 import {
   type OutboundDnsLookup,
   OutboundPreDispatchAuthorityError,
   safeOutboundFetch,
 } from '../../utils/safe-outbound-fetch';
 import { assertMcpGrantSubjectEntitled } from './grant-entitlement';
-import { inferOAuthTokenUrl } from './oauth-auth';
+import { applyTokenEndpointClientAuth, inferOAuthTokenUrl } from './oauth-auth';
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
 export const REFRESH_BUFFER_MS = 60_000;
@@ -154,6 +154,8 @@ export interface RefreshMCPTokenOptions {
   refreshToken: string;
   clientId: string;
   clientSecret?: string;
+  /** Method chosen when the grant was issued; absent means HTTP Basic. */
+  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
   resourceUri?: string;
   /** Exact redirect used to issue this grant (required by GitLab on refresh). */
   redirectUri?: string;
@@ -195,11 +197,14 @@ export async function refreshMCPToken(
     'Content-Type': 'application/x-www-form-urlencoded',
     Accept: 'application/json',
   };
-  if (opts.clientSecret) {
-    headers.Authorization = `Basic ${Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString('base64')}`;
-  } else {
-    body.client_id = opts.clientId;
-  }
+  applyTokenEndpointClientAuth(
+    { headers, body },
+    {
+      clientId: opts.clientId,
+      clientSecret: opts.clientSecret,
+      method: opts.tokenEndpointAuthMethod,
+    }
+  );
 
   let response: Response;
   try {
@@ -323,6 +328,14 @@ export interface RefreshAndPersistDeps {
   assertCurrent?: () => void | Promise<void>;
   /** Deterministic DNS seam used by pre-dispatch authority race tests. */
   resolveDns?: OutboundDnsLookup;
+  /**
+   * Token endpoint client authentication for this server, read from the
+   * authoritative row. The daemon passes the catalog-recipe resolver it also
+   * uses for the code exchange, so both agree. Omitted means HTTP Basic.
+   */
+  resolveTokenEndpointAuthMethod?: (
+    server: MCPServer | null
+  ) => Promise<MCPOAuthTokenEndpointAuthMethod | undefined>;
 }
 
 function exactGrantMatches(
@@ -463,6 +476,8 @@ async function settleObservedRefresh(
 }
 
 async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
+  // Resolved in `prepare` (inside the authorized tenant unit), used by `exchange`.
+  let tokenEndpointAuthMethod: MCPOAuthTokenEndpointAuthMethod | undefined;
   const expected = deps.observedRefreshVersion;
   if (!expected) {
     throw new Error('PostgreSQL MCP OAuth refresh requires an observed grant version');
@@ -501,7 +516,12 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
       if (!row.oauth_refresh_token) throw new MissingRefreshTokenError();
       if (!row.oauth_client_id) throw new MissingClientIdError();
       if (!row.oauth_token_endpoint) throw new MissingTokenEndpointError();
-      await tenantWork(deps, (db) => assertGrantStillAuthorized(deps, row, db));
+      await tenantWork(deps, async (db) => {
+        await assertGrantStillAuthorized(deps, row, db);
+        tokenEndpointAuthMethod = await deps.resolveTokenEndpointAuthMethod?.(
+          await new MCPServerRepository(db).findById(deps.mcpServerId)
+        );
+      });
     },
     exchange: ({ row }) =>
       refreshMCPToken({
@@ -509,6 +529,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
         refreshToken: row.oauth_refresh_token!,
         clientId: row.oauth_client_id!,
         clientSecret: row.oauth_client_secret,
+        tokenEndpointAuthMethod,
         resourceUri: row.oauth_resource_uri,
         redirectUri: row.oauth_redirect_uri,
         allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
@@ -669,6 +690,7 @@ async function refreshStandalone(
       refreshToken: row.oauth_refresh_token,
       clientId,
       clientSecret: row.oauth_client_secret ?? server?.auth?.oauth_client_secret,
+      tokenEndpointAuthMethod: await deps.resolveTokenEndpointAuthMethod?.(server ?? null),
       resourceUri: row.oauth_resource_uri,
       redirectUri: row.oauth_redirect_uri,
       allowLocalhostHttp: true,

@@ -186,7 +186,7 @@ describe('Marketplace MCP atomic repository actions', () => {
           'grant_binding_fingerprint',
         ])
       );
-      expect(candidate.server.headers).toEqual({ __configured__: '••••••••' });
+      expect(candidate.server.headers).toEqual({ 'x-private': '••••••••' });
       const serialized = JSON.stringify(candidate);
       for (const secret of [
         'raw-header-secret',

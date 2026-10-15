@@ -521,10 +521,12 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const handleConnect = useCallback(
     async ({
       bearerToken,
+      credentialFields,
       oauthClient,
       oauthPopup,
     }: {
       bearerToken?: string;
+      credentialFields?: Record<string, string>;
       oauthClient?: { client_id: string; client_secret?: string };
       oauthPopup?: MarketplaceOAuthPopup;
     }) => {
@@ -545,6 +547,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           catalog_key: selected.name,
           sharing,
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
+          ...(bearerToken && credentialFields ? { credential_fields: credentialFields } : {}),
           ...(oauthClient ? { oauth_client: oauthClient } : {}),
         });
         if (!operation.isCurrent()) {

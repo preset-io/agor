@@ -19,6 +19,7 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { renderMCPTokenHeader } from '@agor/core/tools/mcp/http-headers';
 import type { BranchID, SessionUpdate } from '@agor/core/types';
 import type { ThreadEvent } from '@openai/codex-sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -3216,6 +3217,58 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
     } finally {
       delete process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_1;
       delete process.env.AGOR_MCP_019e3700aaaabbbbccccdddd_USERGUIDING_HEADER_2;
+    }
+  });
+
+  it('sends vendor token headers through env_http_headers, never as a Bearer token', async () => {
+    const pagerDuty = { type: 'bearer' as const, token: 'pd-key', token_prefix: 'Token token=' };
+    const similarweb = { type: 'bearer' as const, token: 'sw-key', token_header: 'api-key' };
+    mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+      {
+        server: {
+          name: 'pagerduty',
+          transport: 'http',
+          url: 'https://pd.test/mcp',
+          auth: pagerDuty,
+        },
+      },
+      {
+        server: {
+          name: 'similarweb',
+          transport: 'http',
+          url: 'https://sw.test/mcp',
+          auth: similarweb,
+        },
+      },
+    ]);
+    mcpAuthMocks.resolveMCPAuthHeaders.mockImplementation(async (auth) =>
+      renderMCPTokenHeader(auth)
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const prefix = 'AGOR_MCP_019e3700aaaabbbbccccdddd';
+    try {
+      const { servers } = await (makeService() as any).buildMcpServersConfig(
+        '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+        undefined,
+        { sessionOwnerId, requireMcpServers: true }
+      );
+      expect(servers.pagerduty.env_http_headers).toEqual({
+        Authorization: `${prefix}_PAGERDUTY_HEADER_1`,
+      });
+      expect(servers.similarweb.env_http_headers).toEqual({
+        'api-key': `${prefix}_SIMILARWEB_HEADER_1`,
+      });
+      for (const server of [servers.pagerduty, servers.similarweb]) {
+        expect(server).not.toHaveProperty('bearer_token_env_var');
+        expect(server.required).toBe(true);
+      }
+      expect(process.env[`${prefix}_PAGERDUTY_HEADER_1`]).toBe('Token token=pd-key');
+      expect(process.env[`${prefix}_SIMILARWEB_HEADER_1`]).toBe('sw-key');
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('credential_unavailable');
+    } finally {
+      warn.mockRestore();
+      delete process.env[`${prefix}_PAGERDUTY_HEADER_1`];
+      delete process.env[`${prefix}_SIMILARWEB_HEADER_1`];
     }
   });
 
