@@ -18,8 +18,9 @@ afterEach(() => {
 
 describe('UsersService credential mutation isolation', () => {
   dbTest(
-    'a Codex-only method patch preserves Claude, unlike a whole-map credential mutation',
+    'deleting Codex configuration preserves Claude, unlike a whole-map credential mutation',
     async ({ db }) => {
+      vi.stubEnv('AGOR_MASTER_SECRET', 'synthetic-credential-isolation-key');
       const guarded = createTenantScopedDatabaseProxy(db, { requireScope: true });
       const backend = new ClaudeBackendOAuth(guarded, () => ({
         available: true,
@@ -46,13 +47,35 @@ describe('UsersService credential mutation isolation', () => {
           agentic_auth_methods: { 'claude-code': 'subscription', codex: 'api_key' },
           agentic_credential_sources: { 'claude-code': 'managed_oauth' },
         });
+        await repo.setToolConfigField(
+          user.user_id,
+          'codex',
+          'OPENAI_API_KEY',
+          'synthetic-codex-key'
+        );
         const service = new UsersService(scoped, undefined, undefined, coordinator);
         const params = { user } as AuthenticatedParams;
+        expect(await service.getToolConfigField(user.user_id, 'codex', 'OPENAI_API_KEY')).toBe(
+          'synthetic-codex-key'
+        );
+        const cleared = await service.patch(
+          user.user_id,
+          { agentic_tools: { codex: { OPENAI_API_KEY: null } } },
+          params
+        );
+        expect(
+          await service.getToolConfigField(user.user_id, 'codex', 'OPENAI_API_KEY')
+        ).toBeUndefined();
+        expect(cleared.agentic_credential_sources?.['claude-code']).toBe('managed_oauth');
+        expect(retire).not.toHaveBeenCalled();
         const preserved = await service.patch(
           user.user_id,
           { agentic_auth_methods: { codex: 'api_key' } },
           params
         );
+        expect(
+          await service.getToolConfigField(user.user_id, 'codex', 'OPENAI_API_KEY')
+        ).toBeUndefined();
         expect(preserved.agentic_credential_sources?.['claude-code']).toBe('managed_oauth');
         expect(retire).not.toHaveBeenCalled();
 
