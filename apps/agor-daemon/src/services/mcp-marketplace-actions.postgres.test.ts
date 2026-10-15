@@ -37,6 +37,7 @@ import {
   MCPMarketplaceRemoveServerService,
   MCPMarketplaceToolPermissionService,
 } from './mcp-marketplace-actions';
+import { resolveMCPMarketplaceOAuthGrantAuthority } from './mcp-oauth-grant-authority';
 import { SessionMCPServersService } from './session-mcp-servers';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -163,7 +164,24 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           await new UserMCPOAuthTokenRepository(scoped, 'test-master-secret').saveToken(
             null,
             shared.mcp_server_id,
-            { accessToken: `token-${fixture.tenantId}`, expiresAt: new Date(Date.now() + 60_000) },
+            {
+              accessToken: `token-${fixture.tenantId}`,
+              clientId: 'shared-client',
+              expiresAt: new Date(Date.now() + 60_000),
+              // PostgreSQL grants must carry a configuration binding; listing
+              // scope is under test here, not binding verification.
+              grantBinding: {
+                generation: 1,
+                version: 1,
+                fingerprint: 'a'.repeat(64),
+                metadataUri: 'https://example.test/.well-known/oauth-protected-resource',
+                resourceUri: 'https://example.test/shared-mcp',
+                issuer: 'https://provider.example.test',
+                authorizationEndpoint: 'https://provider.example.test/authorize',
+                tokenEndpoint: 'https://provider.example.test/token',
+                redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
+              },
+            },
             admin.user_id as UserID
           );
           await new SessionMCPServerRepository(scoped).addServer(
@@ -176,9 +194,16 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const a = await seedShared();
       const b = await seedShared();
       const overview = await runWithTenantDatabaseScope(db, a.tenantId, (scoped) =>
-        new MCPMarketplaceRepository(scoped).overviewForUser(a.adminId, undefined, {
-          includeShared: true,
-        })
+        new MCPMarketplaceRepository(scoped, (userId, serverIds, options) =>
+          resolveMCPMarketplaceOAuthGrantAuthority({
+            db: scoped,
+            userId,
+            serverIds,
+            serverRepository: new MCPServerRepository(scoped),
+            tokenRepository: new UserMCPOAuthTokenRepository(scoped, 'test-master-secret'),
+            includeShared: options?.includeShared,
+          })
+        ).overviewForUser(a.adminId, undefined, { includeShared: true })
       );
       expect(overview.servers.map((server) => [server.mcp_server_id, server.shared])).toEqual([
         [a.sharedId, true],
