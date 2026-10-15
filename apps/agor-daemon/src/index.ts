@@ -26,6 +26,7 @@ import {
 } from '@agor/core/telemetry';
 import { patchConsole } from '@agor/core/utils/logger';
 import { extractDbFilePath } from '@agor/core/utils/path';
+import { configurePrivateOutboundDestinations } from '@agor/core/utils/safe-outbound-fetch';
 import { deriveLoopbackReachableOrigin, UI_MOUNT_PATH } from '@agor/core/utils/url';
 
 patchConsole();
@@ -203,6 +204,9 @@ async function startDaemonWithOwnedMetrics(
   // Programmatic startup must cross the same untrusted config boundary as
   // YAML before environment projection reads nested scalar values.
   assertValidRawConfig(config);
+  // Install the validated outbound allowlist before any service can issue an
+  // outbound request through safeOutboundFetch.
+  configurePrivateOutboundDestinations(config.security?.private_outbound_destinations);
 
   // Deployment environment overrides are resolved in memory. Container and
   // Kubernetes entrypoints must never materialize them back into config.yaml.
@@ -632,7 +636,25 @@ async function startDaemonWithOwnedMetrics(
       void handler(req, res);
     }) as never
   );
-  app.use(express.json({ limit: '10mb' }));
+  app.use(
+    express.json({
+      limit: '10mb',
+      verify: (req, _res, buffer) => {
+        // Teams callbacks have a much tighter provider-facing bound than the
+        // general API. Reject while parsing so an oversized body is never
+        // materialized into req.body before the ingress route can inspect it.
+        if (/^\/gateway\/teams\//i.test(req.url ?? '') && buffer.byteLength > 1_024 * 1_024) {
+          const error = new Error('Teams activity exceeds the 1 MiB limit') as Error & {
+            status?: number;
+            type?: string;
+          };
+          error.status = 413;
+          error.type = 'entity.too.large';
+          throw error;
+        }
+      },
+    })
+  );
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // --------------------------------------------------------------------------

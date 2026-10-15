@@ -66,6 +66,7 @@ export class ThreadSessionMapRepository
       status: row.status as ThreadStatus,
       metadata: (row.metadata as Record<string, unknown>) ?? null,
       discord_last_admitted_message_id: row.discord_last_admitted_message_id ?? null,
+      teams_last_admitted_activity_id: row.teams_last_admitted_activity_id ?? null,
     };
   }
 
@@ -87,6 +88,7 @@ export class ThreadSessionMapRepository
       status: data.status ?? 'active',
       metadata: data.metadata ?? null,
       discord_last_admitted_message_id: data.discord_last_admitted_message_id ?? null,
+      teams_last_admitted_activity_id: data.teams_last_admitted_activity_id ?? null,
     };
   }
 
@@ -209,6 +211,7 @@ export class ThreadSessionMapRepository
           last_message_at: insertData.last_message_at,
           metadata: insertData.metadata,
           discord_last_admitted_message_id: insertData.discord_last_admitted_message_id,
+          teams_last_admitted_activity_id: insertData.teams_last_admitted_activity_id,
         })
         .where(eq(threadSessionMap.id, fullId))
         .run();
@@ -420,7 +423,35 @@ export class ThreadSessionMapRepository
     if (!isDiscordSnowflake(cursor)) {
       throw new RepositoryError('Invalid Discord message ID');
     }
+    return this.advanceCursor(
+      id,
+      'discord_last_admitted_message_id',
+      cursor,
+      (previous) => compareDiscordSnowflakes(cursor, previous) > 0
+    );
+  }
 
+  /** Advance the Teams message cursor monotonically (epoch-ms IDs) after Task admission. */
+  async advanceTeamsLastAdmittedActivityId(
+    id: ThreadSessionMapID,
+    cursor: string
+  ): Promise<boolean> {
+    if (!/^\d{1,20}$/.test(cursor)) throw new RepositoryError('Invalid Teams message ID');
+    return this.advanceCursor(
+      id,
+      'teams_last_admitted_activity_id',
+      cursor,
+      (previous) => !/^\d{1,20}$/.test(previous) || BigInt(cursor) > BigInt(previous)
+    );
+  }
+
+  /** Write `cursor` under the row lock only when it is newer than the stored one. */
+  private advanceCursor(
+    id: ThreadSessionMapID,
+    column: 'discord_last_admitted_message_id' | 'teams_last_admitted_activity_id',
+    cursor: string,
+    isNewer: (previous: string) => boolean
+  ): Promise<boolean> {
     return runDatabaseTransaction(
       this.db,
       async (txDb) => {
@@ -430,10 +461,10 @@ export class ThreadSessionMapRepository
           .where(eq(threadSessionMap.id, id))
           .one();
         if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
-        const previous = row.discord_last_admitted_message_id;
-        if (previous && compareDiscordSnowflakes(cursor, previous) <= 0) return false;
+        const previous = row[column];
+        if (previous && !isNewer(previous)) return false;
         await update(txDb, threadSessionMap)
-          .set({ discord_last_admitted_message_id: cursor })
+          .set({ [column]: cursor })
           .where(eq(threadSessionMap.id, id))
           .run();
         return true;

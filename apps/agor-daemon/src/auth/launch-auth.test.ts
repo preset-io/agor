@@ -665,6 +665,76 @@ execution:
     expect(row?.data).not.toHaveProperty('avatar_synced_at');
   });
 
+  it.each([
+    ['internal', 'managed_oauth'],
+    ['external', 'managed_oauth'],
+    ['internal', 'subscription_token'],
+    ['external', 'subscription_token'],
+  ] as const)(
+    'preserves runtime-owned data on repeated launches with %s avatars and %s Claude credentials',
+    async (avatarAuthority, source) => {
+      const config = externalAuthorityConfig();
+      config.identity = { ...config.identity, avatar_authority: avatarAuthority };
+      mockExchange(signClaims({ unix_username: 'stable-home' }));
+      const first = await service(config).create({ launchCode: 'first' });
+      const original = (await select(db)
+        .from(users)
+        .where(eq(users.user_id, first.user.user_id))
+        .one())!;
+      // These are opaque synthetic stored values, not credentials fetched from a user.
+      // Backend OAuth intentionally has a source selector but no pasted Claude token.
+      const runtimeData = {
+        preferences: { audio: { enabled: false } },
+        agentic_credential_sources: { 'claude-code': source },
+        agentic_auth_methods: { 'claude-code': 'subscription' as const, codex: 'api_key' as const },
+        agentic_tools: {
+          'claude-code': {
+            ...(source === 'subscription_token'
+              ? { CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-sealed-token' }
+              : {}),
+            ANTHROPIC_BASE_URL: 'synthetic-sealed-base-url',
+          },
+          codex: { OPENAI_API_KEY: 'synthetic-sealed-other-provider' },
+        },
+        env_vars: {
+          TEST_VALUE: { value_encrypted: 'synthetic-sealed-env', scope: 'session' as const },
+        },
+        default_mcp_server_ids: ['synthetic-mcp'],
+        unrelated_extension: { preserved: true },
+      };
+      await update(db, users)
+        .set({ data: { ...original.data, ...runtimeData } })
+        .where(eq(users.user_id, first.user.user_id))
+        .run();
+
+      for (const login of [2, 3]) {
+        mockExchange(
+          signClaims({
+            name: `Updated ${login}`,
+            unix_username: 'stable-home',
+            avatar: `https://example.test/claim-${login}.png`,
+          })
+        );
+        const next = await service(config).create({ launchCode: `login-${login}` });
+        expect(next.user.user_id).toBe(first.user.user_id);
+        const row = (await select(db)
+          .from(users)
+          .where(eq(users.user_id, first.user.user_id))
+          .one())!;
+        expect(row.name).toBe(`Updated ${login}`);
+        expect(row.password).toBe(original.password);
+        expect(row.credential_generation).toBe(original.credential_generation);
+        const { external_identities, avatar_url, avatar_source, ...remaining } = row.data!;
+        expect(remaining).toEqual(runtimeData);
+        expect(external_identities).toHaveLength(1);
+        expect(avatar_url).toBe(
+          avatarAuthority === 'external' ? `https://example.test/claim-${login}.png` : undefined
+        );
+        expect(avatar_source).toBe(avatarAuthority === 'external' ? 'launch-auth' : undefined);
+      }
+    }
+  );
+
   it.each(['manual', 'slack'] as const)(
     'preserves an Agor-managed %s avatar while updating external identity on login',
     async (source) =>

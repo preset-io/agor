@@ -1,13 +1,98 @@
-import { UsersRepository } from '@agor/core/db';
+import {
+  createTenantScopedDatabaseProxy,
+  runWithTenantDatabaseScope,
+  UsersRepository,
+} from '@agor/core/db';
 import type { AuthenticatedParams, UserID } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as encryption from '../../../../packages/core/src/db/encryption';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { ClaudeBackendOAuth } from './claude-backend-oauth';
+import { createClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation';
 import { UsersService } from './users';
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+describe('UsersService credential mutation isolation', () => {
+  dbTest(
+    'deleting Codex configuration preserves Claude, unlike a whole-map credential mutation',
+    async ({ db }) => {
+      vi.stubEnv('AGOR_MASTER_SECRET', 'synthetic-credential-isolation-key');
+      const guarded = createTenantScopedDatabaseProxy(db, { requireScope: true });
+      const backend = new ClaudeBackendOAuth(guarded, () => ({
+        available: true,
+        storage: 'backend',
+      }));
+      // Exercise real metadata/coordinator behavior without a provider or PG grant store.
+      const retire = vi.spyOn(backend, 'retire').mockResolvedValue();
+      const coordinator = createClaudeUserCredentialPatchCoordinator(
+        { get: vi.fn().mockReturnValue({}), service: vi.fn() },
+        guarded,
+        {
+          lockExternalUserMutation: async () => {},
+          completeExternalUserMutation: async (_tenantId, _userId, work) => {
+            await work(17);
+          },
+        },
+        undefined,
+        { backend, manageClaudeRoute: false }
+      );
+      await runWithTenantDatabaseScope(guarded, 'default', async (scoped) => {
+        const repo = new UsersRepository(scoped);
+        const user = await repo.create({
+          email: 'synthetic-managed-claude@example.invalid',
+          agentic_auth_methods: { 'claude-code': 'subscription', codex: 'api_key' },
+          agentic_credential_sources: { 'claude-code': 'managed_oauth' },
+        });
+        await repo.setToolConfigField(
+          user.user_id,
+          'codex',
+          'OPENAI_API_KEY',
+          'synthetic-codex-key'
+        );
+        const service = new UsersService(scoped, undefined, undefined, coordinator);
+        const params = { user } as AuthenticatedParams;
+        expect(await service.getToolConfigField(user.user_id, 'codex', 'OPENAI_API_KEY')).toBe(
+          'synthetic-codex-key'
+        );
+        const cleared = await service.patch(
+          user.user_id,
+          { agentic_tools: { codex: { OPENAI_API_KEY: null } } },
+          params
+        );
+        expect(
+          await service.getToolConfigField(user.user_id, 'codex', 'OPENAI_API_KEY')
+        ).toBeUndefined();
+        expect(cleared.agentic_credential_sources?.['claude-code']).toBe('managed_oauth');
+        expect(retire).not.toHaveBeenCalled();
+        const preserved = await service.patch(
+          user.user_id,
+          { agentic_auth_methods: { codex: 'api_key' } },
+          params
+        );
+        expect(
+          await service.getToolConfigField(user.user_id, 'codex', 'OPENAI_API_KEY')
+        ).toBeUndefined();
+        expect(preserved.agentic_credential_sources?.['claude-code']).toBe('managed_oauth');
+        expect(retire).not.toHaveBeenCalled();
+
+        // The old UI payload redundantly included Claude. Method-only writes are
+        // explicit source transitions; no pasted token means none, then retirement.
+        const disconnected = await service.patch(
+          user.user_id,
+          {
+            agentic_auth_methods: { 'claude-code': 'subscription', codex: 'api_key' },
+          },
+          params
+        );
+        expect(disconnected.agentic_credential_sources?.['claude-code']).toBe('none');
+        expect(retire).toHaveBeenCalledExactlyOnceWith('default', user.user_id, 17);
+      });
+    }
+  );
 });
 
 describe('UsersService credential reader delegation', () => {

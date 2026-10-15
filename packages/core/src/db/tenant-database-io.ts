@@ -140,6 +140,21 @@ export async function countTenantTableRows(
   return Number(rowsOf(result)[0]?.n ?? 0);
 }
 
+/** Count one tenant's rows whose column is non-null. */
+export async function countTenantRowsWithValue(
+  db: Database,
+  tableName: string,
+  columnName: string,
+  tenantId: string,
+  tenantColumn: string = TENANT_SCOPE_COLUMN
+): Promise<number> {
+  const result = await executeRaw(
+    db,
+    sql`SELECT pg_catalog.count(*) AS n FROM ${qualifiedTable(tableName)} WHERE ${sql.identifier(tenantColumn)} = ${tenantId} AND ${sql.identifier(columnName)} IS NOT NULL`
+  );
+  return Number(rowsOf(result)[0]?.n ?? 0);
+}
+
 /**
  * Read every row a table holds for one tenant as canonical JSON lines (JSONL),
  * ordered deterministically. PostgreSQL produces each line's text

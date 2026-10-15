@@ -173,6 +173,28 @@ describe('Discord connector beta', () => {
     expect(chunks.join('')).toBe(`${'a'.repeat(1999)}\n${'b'.repeat(1999)}`);
   });
 
+  it('does not split messages that fit within the limit, even past the soft-cut threshold', () => {
+    for (const text of [`${'a '.repeat(700)}end`, `${'a '.repeat(700)}release notes 💜`]) {
+      expect(Array.from(text).length).toBeGreaterThan(1_200);
+      expect(Array.from(text).length).toBeLessThanOrEqual(2_000);
+      expect(chunkDiscordMessage(text)).toEqual([text]);
+    }
+  });
+
+  it('still splits over-limit messages at whitespace within the limit', () => {
+    const text = 'word '.repeat(900);
+    const chunks = chunkDiscordMessage(text);
+    expect(chunks.map((chunk) => Array.from(chunk).length)).toEqual([2_000, 2_000, 500]);
+    expect(chunks.join('')).toBe(text);
+  });
+
+  it('keeps cutting at the last whitespace, so resumed deliveries match their receipts', () => {
+    const text = `${'a'.repeat(1250)}\n${'word '.repeat(300)}`;
+    const chunks = chunkDiscordMessage(text);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([1996, 755]);
+    expect(chunks.join('')).toBe(text);
+  });
+
   it('does not split Unicode surrogate pairs at the chunk boundary', () => {
     const text = `${'a'.repeat(1999)}😀tail`;
     const chunks = chunkDiscordMessage(text);

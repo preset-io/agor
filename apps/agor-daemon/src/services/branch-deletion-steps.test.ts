@@ -1,9 +1,12 @@
 import {
   BranchMaintenanceRepository,
   BranchRepository,
+  branches,
   createTenantScopedDatabaseProxy,
+  eq,
   generateId,
   runWithTenantContext,
+  select,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { type AuthenticatedParams, branchDeletionCommandId, type TenantID } from '@agor/core/types';
@@ -117,5 +120,76 @@ test('deletion steps require exact authenticated command, tenant and invocation,
     await service.create({ ...input, action: 'finalize' }, params);
     expect(await new BranchRepository(db).findById(branch.branch_id)).toBeNull();
     expect(emit.mock.calls.filter((call) => call[0] === 'removed')).toHaveLength(1);
+  });
+});
+
+test('quiesce runs several committed pages per request within its budget and resumes from the durable cursor', async ({
+  db,
+}) => {
+  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const maintenance = new BranchMaintenanceRepository(db);
+  const { claim } = await maintenance.claim(branch.branch_id, 'delete', user.user_id);
+  const invocation = await maintenance.beginExecution(claim);
+  const app = {
+    get: () => ({ execution: {} }),
+    service: () => ({ emit: vi.fn() }),
+  } as unknown as Application;
+  const scoped = createTenantScopedDatabaseProxy(db, { requireScope: true });
+  // Budget 0: exactly one page per request. Large budget: drain in one request.
+  const onePage = new BranchDeletionStepsService(scoped, app, 0);
+  const drain = new BranchDeletionStepsService(scoped, app, 60_000);
+  const tenant = 'default' as TenantID;
+  const params = {
+    provider: 'rest',
+    user,
+    tenant: { tenant_id: tenant, source: 'explicit' },
+    authentication: {
+      strategy: 'jwt',
+      payload: {
+        type: EXECUTOR_SESSION_TOKEN_TYPE,
+        purpose: EXECUTOR_COMMAND_TOKEN_PURPOSE,
+        tenant_id: tenant,
+        sub: user.user_id,
+        session_id: branchDeletionCommandId(invocation),
+        branch_id: branch.branch_id,
+      },
+    },
+  } as unknown as AuthenticatedParams;
+  const input = {
+    branch_id: branch.branch_id,
+    operation_id: claim.operation_id,
+    generation: claim.generation,
+    execution_id: invocation,
+  };
+  await runWithTenantContext(tenant, async () => {
+    await onePage.create({ ...input, action: 'claim' }, params);
+    for (let request = 0; request < 2; request++)
+      expect(await onePage.create({ ...input, action: 'quiesce' }, params)).toMatchObject({
+        remaining: true,
+        pages: 1,
+      });
+    const maintenanceState = async () =>
+      (await select(db).from(branches).where(eq(branches.branch_id, branch.branch_id)).one())?.data
+        .maintenance;
+    const cursor = (await maintenanceState())?.reference_cursor;
+    expect(cursor?.table).toBeGreaterThan(0);
+    const rest = (await drain.create({ ...input, action: 'quiesce' }, params)) as {
+      remaining: boolean;
+      pages: number;
+    };
+    expect(rest.remaining).toBe(false);
+    expect(rest.pages).toBeGreaterThan(1);
+    const done = await maintenanceState();
+    expect(done?.references_done).toBe(true);
+    // A late replay after completion is a cheap no-op page, not a rescan.
+    expect(await drain.create({ ...input, action: 'quiesce' }, params)).toMatchObject({
+      remaining: false,
+      pages: 1,
+      scanned: 0,
+    });
+    // Every page still re-validates the exact invocation.
+    await expect(
+      drain.create({ ...input, generation: claim.generation + 1, action: 'quiesce' }, params)
+    ).rejects.toThrow();
   });
 });

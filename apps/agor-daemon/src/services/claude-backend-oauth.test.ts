@@ -48,4 +48,16 @@ describe('ClaudeBackendOAuth.status', () => {
       );
     }
   );
+
+  it.each([
+    ['ambiguous', true],
+    ['reauth_required', true],
+    ['disconnected', false],
+  ] as const)('reports a %s tombstone with saved=%s after token erasure', async (state, saved) => {
+    // finish()/abandoned-claim settlement erase both sealed fields, whereas
+    // retire() also marks the grant disconnected. Neither is ordinary expiry.
+    await expect(
+      statusFor({ state, sealed_access_token: null, sealed_refresh_token: null })
+    ).resolves.toMatchObject({ saved, usable: false });
+  });
 });

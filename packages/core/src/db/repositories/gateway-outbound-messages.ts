@@ -147,10 +147,11 @@ export class GatewayOutboundMessageRepository {
   }
 
   /** Stored proactive texts only; never reads provider history. */
-  async listDiscordDirectMessageSends(
+  async listDirectMessageSends(
     gatewayChannelId: GatewayChannelID,
     platformChannelId: string,
-    createdSince: Date | null
+    createdSince: Date | null,
+    channelType: 'discord' | 'teams' = 'discord'
   ): Promise<
     Pick<GatewayOutboundMessage, 'platform_message_id' | 'created_at' | 'message_text'>[]
   > {
@@ -166,7 +167,7 @@ export class GatewayOutboundMessageRepository {
         and(
           eq(gatewayOutboundMessages.gateway_channel_id, gatewayChannelId),
           eq(gatewayOutboundMessages.platform_channel_id, platformChannelId),
-          eq(gatewayOutboundMessages.channel_type, 'discord'),
+          eq(gatewayOutboundMessages.channel_type, channelType),
           createdSince ? gte(gatewayOutboundMessages.created_at, createdSince) : undefined
         )
       )
@@ -181,6 +182,29 @@ export class GatewayOutboundMessageRepository {
         message_text: row.message_text,
       })
     );
+  }
+
+  /** The proactive send that posted this message into one conversation (its seed thread or its DM chat), if any. */
+  async findByPlatformMessage(
+    gatewayChannelId: GatewayChannelID,
+    conversationThreadId: string,
+    platformMessageId: string
+  ): Promise<GatewayOutboundMessage | null> {
+    const row = await select(this.db)
+      .from(gatewayOutboundMessages)
+      .where(
+        and(
+          eq(gatewayOutboundMessages.gateway_channel_id, gatewayChannelId),
+          eq(gatewayOutboundMessages.platform_message_id, platformMessageId),
+          // Message IDs are unique only within a conversation.
+          or(
+            eq(gatewayOutboundMessages.platform_thread_id, conversationThreadId),
+            eq(gatewayOutboundMessages.platform_channel_id, conversationThreadId)
+          )
+        )
+      )
+      .one();
+    return row ? this.rowToMessage(row) : null;
   }
 
   private async findReplySeedRow(

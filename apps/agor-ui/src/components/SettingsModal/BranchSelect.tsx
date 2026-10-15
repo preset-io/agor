@@ -1,20 +1,28 @@
-import { type AgorClient, type Branch, serverSearchText } from '@agor-live/client';
-import { Select } from 'antd';
+import { type AgorClient, type Branch, isTeammate, serverSearchText } from '@agor-live/client';
+import { Select, type SelectProps } from 'antd';
 import { useMemo, useState } from 'react';
 import { useServerRead } from '@/hooks/useServerRead';
 import { rowsOf } from '@/store/idReads';
+import { teammateLabel } from '@/utils/teammateLabels';
 import { useDebouncedSearchQuery } from '../GlobalSearch/useGlobalSearch';
 
 /** Options per read; typing narrows them on the server. */
 const OPTION_LIMIT = 50;
 const NO_BRANCHES: Branch[] = [];
 
-interface BranchSelectProps {
+interface BranchSelectProps
+  extends Pick<
+    SelectProps,
+    'id' | 'aria-label' | 'aria-describedby' | 'aria-invalid' | 'aria-required'
+  > {
   client: AgorClient | null;
   value?: string;
-  onChange?: (value: string) => void;
+  onChange?: (value: string, branch?: Branch) => void;
   placeholder?: string;
   disabled?: boolean;
+  teammatesOnly?: boolean;
+  /** Optional empty-state guidance supplied by the selector's caller. */
+  emptyText?: string;
 }
 
 const labelOf = (branch: Branch) =>
@@ -33,18 +41,22 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
   onChange,
   placeholder = 'Select a branch',
   disabled = false,
+  teammatesOnly = false,
+  emptyText,
+  ...accessibilityProps
 }) => {
   const [searchText, setSearchText] = useState('');
   const { debouncedQuery } = useDebouncedSearchQuery(searchText);
   const search = debouncedQuery.trim();
-  const { data: branches = NO_BRANCHES, loading } = useServerRead(
+  const { data, loading } = useServerRead(
     client,
-    `branch-select\u0000${search}`,
+    `branch-select\u0000${teammatesOnly}\u0000${search}`,
     async (reader) =>
       rowsOf<Branch>(
         await reader.service('branches').find({
           query: {
             archived: false,
+            ...(teammatesOnly ? { teammate: true } : {}),
             ...(search ? { search: serverSearchText(search) } : {}),
             $limit: OPTION_LIMIT,
             $sort: { name: 1 },
@@ -53,6 +65,7 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
       ),
     { keepPrevious: true }
   );
+  const branches = data ?? NO_BRANCHES;
   const listed = !!value && branches.some((b) => b.branch_id === value);
   // A missing or unreadable target keeps its id and reveals nothing.
   const { data: saved } = useServerRead(
@@ -67,13 +80,22 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
       saved && !branches.some((b) => b.branch_id === saved.branch_id)
         ? [saved, ...branches]
         : branches;
-    return rows.map((b) => ({ value: b.branch_id, label: labelOf(b) }));
-  }, [branches, saved]);
+    return rows
+      .filter((b) => !teammatesOnly || (isTeammate(b) && !b.archived))
+      .map((b) => ({
+        value: b.branch_id,
+        branch: b,
+        // Keep branch context in the text label, including the selected value
+        // and accessible option name, not just in the open dropdown.
+        label: teammatesOnly ? `${teammateLabel(b)} (${labelOf(b)})` : labelOf(b),
+      }));
+  }, [branches, saved, teammatesOnly]);
 
   return (
     <Select
+      {...accessibilityProps}
       value={value}
-      onChange={onChange}
+      onChange={(id, option) => onChange?.(id, Array.isArray(option) ? undefined : option?.branch)}
       placeholder={placeholder}
       disabled={disabled}
       showSearch
@@ -81,6 +103,17 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
       onSearch={setSearchText}
       loading={loading}
       options={options}
+      notFoundContent={
+        teammatesOnly
+          ? loading
+            ? 'Loading AI Teammates…'
+            : data === undefined
+              ? 'Unable to load AI Teammates. Check your connection and try again.'
+              : search
+                ? 'No matching AI Teammates.'
+                : (emptyText ?? 'No AI Teammates available.')
+          : emptyText
+      }
     />
   );
 };

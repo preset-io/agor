@@ -10,6 +10,34 @@ import {
 } from './migrate';
 
 describe('migration status introspection', () => {
+  it.each([
+    ['sqlite', '0117_teams_gateway_ha'],
+    ['postgresql', '0118_teams_gateway_ha'],
+  ] as const)(
+    'migrates Teams HA online on %s with an explicit re-enable step',
+    (dialect, migration) => {
+      const report = introspectMigrationStatus(dialect, {
+        applied: ['0000_init'],
+        pending: [migration],
+        dbAheadOfBinary: false,
+      });
+      expect(report.requiresOfflineCutover).toBe(false);
+      expect(report.pendingMigrations[0]).toMatchObject({
+        requiresOfflineCutover: false,
+        impact: {
+          classification: 'protocol',
+          userAction: 'required',
+          rollbackCompatibility: 'compatible',
+        },
+      });
+      expect(report.pendingMigrations[0]?.impact.summary).toContain(
+        'Disables existing Teams channels'
+      );
+      expect(report.pendingMigrations[0]?.impact.summary).toContain(
+        'never replay ambiguous deliveries'
+      );
+    }
+  );
   it('classifies a later reconciliation watermark as database-ahead for an old binary', () => {
     expect(
       classifyMigrationWatermark(

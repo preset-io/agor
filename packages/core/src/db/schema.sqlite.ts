@@ -2317,7 +2317,7 @@ export const uploads = sqliteTable(
       .notNull()
       .default('active'),
     provenance: text('provenance', {
-      enum: ['browser', 'gateway-slack', 'gateway-discord', 'mcp-slack'],
+      enum: ['browser', 'gateway-slack', 'gateway-discord', 'gateway-teams', 'mcp-slack'],
     }).notNull(),
     created_at: t.timestamp('created_at').notNull(),
     expires_at: t.timestamp('expires_at'),
@@ -2395,6 +2395,11 @@ export const gatewayChannels = sqliteTable(
       .where(
         sql`${table.channel_type} = 'discord' AND ${table.enabled} = 1 AND ${table.provider_installation_id} IS NOT NULL`
       ),
+    teamsInstallationUnique: uniqueIndex('gateway_channels_teams_installation_unique')
+      .on(table.channel_type, table.provider_installation_id)
+      .where(
+        sql`${table.channel_type} = 'teams' AND ${table.enabled} = 1 AND ${table.provider_installation_id} IS NOT NULL`
+      ),
     listenerLeaseIdx: index('gateway_channels_listener_lease_idx').on(
       table.enabled,
       table.listener_lease_expires_at,
@@ -2414,9 +2419,19 @@ export const gatewayInboundEvents = sqliteTable(
     provider_event_id: text('provider_event_id').notNull(),
     thread_id: text('thread_id').notNull(),
     delivery_metadata: t.json<Record<string, unknown> | null>('delivery_metadata'),
-    status: text('status', { enum: ['processing', 'completed'] }).notNull(),
+    status: text('status', {
+      enum: ['pending', 'processing', 'completed', 'dead_letter'],
+    }).notNull(),
     processing_token: text('processing_token').notNull(),
     processing_expires_at: t.timestamp('processing_expires_at').notNull(),
+    payload_encrypted: text('payload_encrypted'),
+    payload_expires_at: t.timestamp('payload_expires_at'),
+    provider_config_generation: integer('provider_config_generation').notNull().default(1),
+    verified_app_id: text('verified_app_id'),
+    verified_tenant_id: text('verified_tenant_id'),
+    attempt_count: integer('attempt_count').notNull().default(0),
+    next_attempt_at: t.timestamp('next_attempt_at').notNull().default(sql`0`),
+    last_error_code: text('last_error_code'),
     session_id: text('session_id', { length: 36 }).references(() => sessions.session_id, {
       onDelete: 'set null',
     }),
@@ -2431,6 +2446,19 @@ export const gatewayInboundEvents = sqliteTable(
       table.gateway_channel_id,
       table.provider_event_id
     ),
+    teamsDueIdx: index('gateway_inbound_events_teams_due_idx')
+      .on(table.next_attempt_at, table.id)
+      .where(
+        sql`${table.status} IN ('pending', 'processing') AND ${table.payload_expires_at} IS NOT NULL`
+      ),
+    teamsExpiryIdx: index('gateway_inbound_events_teams_expiry_idx')
+      .on(table.payload_expires_at, table.id)
+      .where(
+        sql`${table.status} IN ('pending', 'processing') AND ${table.payload_expires_at} IS NOT NULL AND ${table.payload_encrypted} IS NOT NULL`
+      ),
+    teamsLaneIdx: index('gateway_inbound_events_teams_lane_idx')
+      .on(table.gateway_channel_id, table.thread_id, table.received_at, table.id)
+      .where(sql`${table.status} IN ('pending', 'processing')`),
     recoveryIdx: index('gateway_inbound_events_recovery_idx').on(
       table.status,
       table.processing_expires_at,
@@ -2477,6 +2505,8 @@ export const threadSessionMap = sqliteTable(
 
     // Durable Discord catch-up cursor. Provider history itself is never stored.
     discord_last_admitted_message_id: text('discord_last_admitted_message_id'),
+    // Durable Teams admission cursor. Provider history itself is never stored.
+    teams_last_admitted_activity_id: text('teams_last_admitted_activity_id'),
   },
   (table) => ({
     uniqueChannelThread: uniqueIndex('uniq_thread_map_channel_thread').on(
@@ -2540,6 +2570,116 @@ export const discordMessageDeliveries = sqliteTable(
       table.status,
       table.claim_expires_at,
       table.delivery_id
+    ),
+  })
+);
+
+/** Standalone SQLite mirror of the narrow Teams final-delivery intent. */
+export const teamsMessageDeliveries = sqliteTable(
+  'teams_message_deliveries',
+  {
+    delivery_id: text('delivery_id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    message_id: text('message_id', { length: 36 })
+      .notNull()
+      .references(() => messages.message_id, { onDelete: 'cascade' }),
+    gateway_channel_id: text('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    thread_session_map_id: text('thread_session_map_id', { length: 36 })
+      .notNull()
+      .references(() => threadSessionMap.id, { onDelete: 'cascade' }),
+    provider_installation_id: text('provider_installation_id').notNull(),
+    provider_config_generation: integer('provider_config_generation').notNull(),
+    status: text('status', {
+      enum: ['pending', 'processing', 'completed', 'canceled', 'ambiguous', 'dead_letter'],
+    })
+      .notNull()
+      .default('pending'),
+    attempt_count: integer('attempt_count').notNull().default(0),
+    next_attempt_at: t.timestamp('next_attempt_at').notNull(),
+    claim_token: text('claim_token'),
+    claim_expires_at: t.timestamp('claim_expires_at'),
+    claim_generation: integer('claim_generation').notNull().default(0),
+    ambiguous_chunk_index: integer('ambiguous_chunk_index'),
+    effect_started_at: t.timestamp('effect_started_at'),
+    chunk_receipts: t
+      .json<import('../types/gateway').TeamsMessageDeliveryChunkReceipt[]>('chunk_receipts')
+      .notNull()
+      .default([]),
+    chunk_plan_digest: text('chunk_plan_digest'),
+    last_error_code: text('last_error_code'),
+    provider_message_id: text('provider_message_id'),
+    completed_at: t.timestamp('completed_at'),
+    canceled_at: t.timestamp('canceled_at'),
+    dead_lettered_at: t.timestamp('dead_lettered_at'),
+  },
+  (table) => ({
+    messageMapUnique: uniqueIndex('teams_message_deliveries_message_map_unique').on(
+      table.message_id,
+      table.thread_session_map_id
+    ),
+    discoveryIdx: index('teams_message_deliveries_discovery_idx')
+      .on(table.next_attempt_at, table.delivery_id)
+      .where(sql`${table.status} IN ('pending', 'processing')`),
+    laneIdx: index('teams_message_deliveries_lane_idx')
+      .on(table.thread_session_map_id, table.created_at, table.delivery_id)
+      .where(sql`${table.status} IN ('pending', 'processing')`),
+    retentionIdx: index('teams_message_deliveries_retention_idx')
+      .on(table.updated_at, table.delivery_id)
+      .where(sql`${table.status} IN ('completed', 'canceled', 'ambiguous', 'dead_letter')`),
+    dueIdx: index('teams_message_deliveries_due_idx').on(
+      table.status,
+      table.next_attempt_at,
+      table.delivery_id
+    ),
+    claimIdx: index('teams_message_deliveries_claim_idx').on(
+      table.status,
+      table.claim_expires_at,
+      table.delivery_id
+    ),
+  })
+);
+
+/** Encrypted durable Teams conversation addresses; never process-local state. */
+export const teamsConversationAddresses = sqliteTable(
+  'teams_conversation_addresses',
+  {
+    address_id: text('address_id', { length: 36 }).primaryKey(),
+    gateway_channel_id: text('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    thread_id: text('thread_id').notNull(),
+    conversation_id: text('conversation_id').notNull(),
+    root_message_id: text('root_message_id'),
+    /** Plaintext team thread id, so team-wide removal events revoke every channel address. */
+    team_id: text('team_id'),
+    /** Plaintext M365 group GUID of the team when Teams sent it; Graph addresses teams by it. */
+    team_aad_group_id: text('team_aad_group_id'),
+    /** `channelData.channel.type` when Teams sent it; history and proactive sends are standard-only. */
+    teams_channel_type: text('teams_channel_type'),
+    encrypted_address: text('encrypted_address').notNull(),
+    verified_app_id: text('verified_app_id').notNull(),
+    verified_tenant_id: text('verified_tenant_id').notNull(),
+    provider_config_generation: integer('provider_config_generation').notNull(),
+    refreshed_at: t.timestamp('refreshed_at').notNull(),
+    /** Set by removal events or revoking send errors; cleared by the next verified activity. */
+    revoked_at: t.timestamp('revoked_at'),
+    revoked_reason: text('revoked_reason'),
+  },
+  (table) => ({
+    channelThreadUnique: uniqueIndex('teams_conversation_addresses_channel_thread_unique').on(
+      table.gateway_channel_id,
+      table.thread_id
+    ),
+    conversationIdx: index('teams_conversation_addresses_conversation_idx').on(
+      table.gateway_channel_id,
+      table.conversation_id
+    ),
+    teamIdx: index('teams_conversation_addresses_team_idx').on(
+      table.gateway_channel_id,
+      table.team_id
     ),
   })
 );
@@ -3136,6 +3276,10 @@ export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
 export type DiscordMessageDeliveryRow = typeof discordMessageDeliveries.$inferSelect;
 export type DiscordMessageDeliveryInsert = typeof discordMessageDeliveries.$inferInsert;
+export type TeamsMessageDeliveryRow = typeof teamsMessageDeliveries.$inferSelect;
+export type TeamsMessageDeliveryInsert = typeof teamsMessageDeliveries.$inferInsert;
+export type TeamsConversationAddressRow = typeof teamsConversationAddresses.$inferSelect;
+export type TeamsConversationAddressInsert = typeof teamsConversationAddresses.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
 export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;

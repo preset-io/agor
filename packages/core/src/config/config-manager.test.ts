@@ -2651,3 +2651,70 @@ describe('external cleanup command configuration', () => {
     ).toThrow('executor_command_template');
   });
 });
+
+describe('security.private_outbound_destinations', () => {
+  const withDestinations = (destinations: unknown) =>
+    ({ security: { private_outbound_destinations: destinations } }) as unknown as AgorConfig;
+
+  it('accepts a lowercase host pinned to private and CGNAT ranges', () => {
+    expect(() =>
+      assertValidRawConfig(
+        withDestinations([
+          {
+            host: 'internal-api.example.internal',
+            cidrs: ['10.200.0.0/24', '172.16.4.0/22', '192.168.10.10/32', '100.64.0.0/10'],
+          },
+        ])
+      )
+    ).not.toThrow();
+  });
+
+  it.each([
+    ['an IPv4 literal', '10.200.0.5'],
+    ['localhost', 'localhost'],
+    ['a .local name', 'printer.local'],
+    ['a metadata host', 'metadata.google.internal'],
+    ['a single label', 'internal'],
+    ['an uppercase name', 'Internal-API.example.internal'],
+    ['a wildcard', '*.example.internal'],
+  ])('rejects %s as host', (_label, host) => {
+    expect(() =>
+      assertValidRawConfig(withDestinations([{ host, cidrs: ['10.200.0.0/24'] }]))
+    ).toThrow('Config error: security.private_outbound_destinations[0].host');
+  });
+
+  it.each([
+    ['link-local metadata space', '169.254.0.0/16'],
+    ['a public range', '93.184.216.0/24'],
+    ['loopback', '127.0.0.0/8'],
+    ['this-network', '0.0.0.0/8'],
+    ['a range wider than its private parent', '10.0.0.0/7'],
+    ['host bits set', '10.200.0.5/24'],
+    ['IPv6', 'fd00::/8'],
+  ])('rejects %s in cidrs', (_label, cidr) => {
+    expect(() =>
+      assertValidRawConfig(
+        withDestinations([{ host: 'internal-api.example.internal', cidrs: [cidr] }])
+      )
+    ).toThrow('Config error: security.private_outbound_destinations[0].cidrs[0]');
+  });
+
+  it('rejects an empty or oversized cidrs list', () => {
+    for (const cidrs of [[], Array.from({ length: 9 }, (_, i) => `10.200.${i}.0/24`)]) {
+      expect(() =>
+        assertValidRawConfig(withDestinations([{ host: 'internal-api.example.internal', cidrs }]))
+      ).toThrow('Config error: security.private_outbound_destinations[0].cidrs');
+    }
+  });
+
+  it('rejects more than 64 entries', () => {
+    const entries = Array.from({ length: 65 }, (_, i) => ({
+      host: `svc-${i}.example.internal`,
+      cidrs: ['10.200.0.0/24'],
+    }));
+    expect(() => assertValidRawConfig(withDestinations(entries.slice(0, 64)))).not.toThrow();
+    expect(() => assertValidRawConfig(withDestinations(entries))).toThrow(
+      'Config error: security.private_outbound_destinations must be an array of at most 64 entries'
+    );
+  });
+});

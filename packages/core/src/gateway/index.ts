@@ -105,11 +105,50 @@ export {
   requiredBotScopes,
   SLACK_AGENT_TOOL_SCOPES,
 } from './connectors/slack-manifest';
+export type { NormalizedTeamsActivity, TeamsMemberIdentity } from './connectors/teams';
 export {
+  createTeamsAuthConfiguration,
   extractQuotedReplyText,
-  parseThreadId as parseTeamsThreadId,
+  fetchTeamsMemberIdentity,
+  isTeamsReactionEventType,
+  normalizeTeamsActivity,
+  normalizeTeamsReaction,
+  normalizeTeamsReactionName,
+  TEAMS_REACTION_EVENT_TYPES,
   TeamsConnector,
+  TeamsMemberLookupError,
+  type TeamsReactionEventType,
 } from './connectors/teams';
+export { teamsAddressRevocationFromActivity } from './connectors/teams-address-events';
+export type {
+  TeamsChannelFilesRequest,
+  TeamsChannelFilesResult,
+} from './connectors/teams-channel-files';
+export type { TeamsThreadHistoryRequest } from './connectors/teams-channel-history';
+export {
+  TEAMS_CHANNEL_POSTS_DEFAULT_LIMIT,
+  TEAMS_HISTORY_MAX_LIMIT,
+  TEAMS_THREAD_HISTORY_DEFAULT_LIMIT,
+} from './connectors/teams-channel-history';
+export type { TeamsTeamChannel } from './connectors/teams-graph';
+export { TEAMS_MESSAGE_ID } from './connectors/teams-graph';
+export type { TeamsProviderHistoryContext } from './connectors/teams-history';
+export {
+  buildTeamsSetupManifest,
+  TEAMS_RSC_APPLICATION_PERMISSIONS,
+  teamsGatewayCallbackUrl,
+} from './connectors/teams-manifest';
+export type {
+  PreparedTeamsSend,
+  TeamsChannelThreadResult,
+  TeamsDirectMessageResult,
+  TeamsSendOutcome,
+} from './connectors/teams-send';
+export {
+  classifyTeamsSendFailure,
+  TEAMS_MESSAGE_TEXT_BUDGET,
+  TeamsSendError,
+} from './connectors/teams-send';
 export type { GatewayContext } from './context';
 export { formatGatewayContext } from './context';
 export type {
@@ -139,11 +178,13 @@ export {
   type GatewayListenerFailureKind,
   gatewayListenerFailure,
 } from './listener-error';
+export { chunkMarkdown, utf16Length } from './markdown-chunker';
 export {
   gatewayFailureCode,
   isPermanentProviderRefusal,
   sanitizeGatewayProviderError,
 } from './provider-error';
+export { GATEWAY_READABLE_MIMES } from './readable-files';
 export { redactGatewayChannelSecrets } from './redaction';
 export {
   formatGatewayFollowUpRoutingMessage,
@@ -152,3 +193,9 @@ export {
   formatGatewaySystemMessage,
   formatGatewaySystemPayload,
 } from './system-message';
+export { safeTeamsMetadata } from './teams-metadata';
+export {
+  isAllowedTeamsServiceUrl,
+  isTeamsFileDownloadUrl,
+  isTeamsTokenHost,
+} from './teams-service-url';

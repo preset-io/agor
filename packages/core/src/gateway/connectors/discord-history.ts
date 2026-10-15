@@ -20,6 +20,7 @@ import type {
   GatewayProviderHistoryRequest,
   GatewayProviderHistoryResult,
 } from '../connector';
+import { truncateUtf8 } from '../markdown-chunker';
 import { gatewayFailureCode } from '../provider-error';
 
 /** The only REST surface needed by the Discord history reader. */
@@ -466,12 +467,6 @@ export const DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT = 50;
 export const DISCORD_CHANNEL_HISTORY_MAX_LIMIT = 200;
 
 const utf8 = new TextEncoder();
-
-function truncateUtf8(text: string, maxBytes: number): string {
-  const bytes = utf8.encode(text);
-  if (bytes.length <= maxBytes) return text;
-  return new TextDecoder().decode(bytes.slice(0, maxBytes)).replace(/�+$/, '');
-}
 
 function toChannelHistoryMessage(
   raw: Record<string, unknown>,

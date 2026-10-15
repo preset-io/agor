@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import { isIP } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
@@ -456,6 +457,97 @@ function assertBranchRbacNotDisabled(config: AgorConfig): void {
     throw new Error(
       'Config error: execution.branch_rbac: false is no longer supported; board and branch RBAC is always enabled. Remove the key (recommended) or set it to true temporarily.'
     );
+  }
+}
+
+const PRIVATE_OUTBOUND_MAX_DESTINATIONS = 64;
+const PRIVATE_OUTBOUND_MAX_CIDRS = 8;
+/** Parent ranges a pinned destination CIDR must sit wholly inside. */
+const PRIVATE_OUTBOUND_PARENT_RANGES = [
+  ['10.0.0.0', 8],
+  ['172.16.0.0', 12],
+  ['192.168.0.0', 16],
+  ['100.64.0.0', 10],
+] as const;
+const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+function ipv4ToUint32(address: string): number {
+  return address.split('.').reduce((value, octet) => value * 256 + Number(octet), 0);
+}
+
+function isContainedPrivateIpv4Cidr(cidr: string): boolean {
+  const match = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(cidr);
+  if (!match || isIP(match[1] ?? '') !== 4) return false;
+  const prefix = Number(match[2]);
+  if (prefix > 32) return false;
+  const size = 2 ** (32 - prefix);
+  const start = ipv4ToUint32(match[1] ?? '');
+  // Reject host bits so the written range is exactly the enforced range.
+  if (start % size !== 0) return false;
+  const end = start + size - 1;
+  return PRIVATE_OUTBOUND_PARENT_RANGES.some(([network, parentPrefix]) => {
+    const parentStart = ipv4ToUint32(network);
+    const parentEnd = parentStart + 2 ** (32 - parentPrefix) - 1;
+    return start >= parentStart && end <= parentEnd;
+  });
+}
+
+/**
+ * `security.private_outbound_destinations` widens the daemon's SSRF guard, so
+ * every entry is validated strictly and startup fails closed on any mistake.
+ */
+function validatePrivateOutboundDestinations(value: unknown): void {
+  if (value === undefined) return;
+  const basePath = 'security.private_outbound_destinations';
+  if (!Array.isArray(value) || value.length > PRIVATE_OUTBOUND_MAX_DESTINATIONS) {
+    throw new Error(
+      `Config error: ${basePath} must be an array of at most ${PRIVATE_OUTBOUND_MAX_DESTINATIONS} entries`
+    );
+  }
+  const seenHosts = new Set<string>();
+  for (const [index, entry] of value.entries()) {
+    const entryPath = `${basePath}[${index}]`;
+    requirePlainConfigRecord(entry, entryPath);
+    const record = entry as Record<string, unknown>;
+    const unknownKeys = Object.keys(record).filter((key) => key !== 'host' && key !== 'cidrs');
+    if (unknownKeys.length > 0) {
+      throw new Error(
+        `Config error: ${entryPath} has unrecognized key(s): ${unknownKeys.join(', ')}`
+      );
+    }
+    const { host, cidrs } = record;
+    const labels = typeof host === 'string' ? host.split('.') : [];
+    if (
+      typeof host !== 'string' ||
+      host.length > 253 ||
+      labels.length < 2 ||
+      !labels.every((label) => DNS_LABEL.test(label)) ||
+      isIP(host) !== 0 ||
+      host === 'localhost' ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local') ||
+      host === 'metadata.google.internal'
+    ) {
+      throw new Error(
+        `Config error: ${entryPath}.host must be a lowercase DNS name with at least two labels (not an IP address, localhost, *.local, or a metadata host)`
+      );
+    }
+    if (seenHosts.has(host)) {
+      throw new Error(`Config error: ${entryPath}.host '${host}' is listed more than once`);
+    }
+    seenHosts.add(host);
+    if (!Array.isArray(cidrs) || cidrs.length < 1 || cidrs.length > PRIVATE_OUTBOUND_MAX_CIDRS) {
+      throw new Error(
+        `Config error: ${entryPath}.cidrs must be an array of 1 to ${PRIVATE_OUTBOUND_MAX_CIDRS} IPv4 CIDRs`
+      );
+    }
+    for (const [cidrIndex, cidr] of cidrs.entries()) {
+      if (typeof cidr !== 'string' || !isContainedPrivateIpv4Cidr(cidr)) {
+        throw new Error(
+          `Config error: ${entryPath}.cidrs[${cidrIndex}] must be an IPv4 network/prefix inside 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, or 100.64.0.0/10 (received ${JSON.stringify(cidr)})`
+        );
+      }
+    }
   }
 }
 
@@ -1032,7 +1124,13 @@ function validateConfig(config: AgorConfig): void {
   ) {
     throw new Error('Config error: execution.branch_storage.borrow_base_objects must be a boolean');
   }
-  only(config.security, 'security', ['csp', 'cors', 'git_config_parameters']);
+  only(config.security, 'security', [
+    'csp',
+    'cors',
+    'git_config_parameters',
+    'private_outbound_destinations',
+  ]);
+  validatePrivateOutboundDestinations(config.security?.private_outbound_destinations);
   only(config.security?.csp, 'security.csp', [
     'extras',
     'override',

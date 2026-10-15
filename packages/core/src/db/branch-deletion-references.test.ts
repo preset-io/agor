@@ -1,4 +1,7 @@
-import { exerciseWideDeletionReferences } from './branch-deletion-references.test-support';
+import {
+  exerciseReadMostlyDeletionReferences,
+  exerciseWideDeletionReferences,
+} from './branch-deletion-references.test-support';
 import { createTenantScopedDatabaseProxy, runWithTenantDatabaseScope } from './tenant-scope';
 import { dbTest } from './test-helpers';
 
@@ -7,6 +10,15 @@ dbTest(
   async ({ db }) => {
     const guarded = createTenantScopedDatabaseProxy(db, { requireScope: true });
     await runWithTenantDatabaseScope(guarded, 'default', exerciseWideDeletionReferences);
+  },
+  60_000
+);
+
+dbTest(
+  'pages read-mostly through the cursor, rewrites only changed rows and merges a late writer',
+  async ({ db }) => {
+    const guarded = createTenantScopedDatabaseProxy(db, { requireScope: true });
+    await runWithTenantDatabaseScope(guarded, 'default', exerciseReadMostlyDeletionReferences);
   },
   60_000
 );

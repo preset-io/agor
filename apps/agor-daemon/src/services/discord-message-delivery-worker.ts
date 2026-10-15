@@ -9,9 +9,6 @@ import {
   GatewayChannelRepository,
   generateId,
   MessagesRepository,
-  runWithSystemDatabaseScope,
-  runWithTenantContext,
-  runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
 } from '@agor/core/db';
@@ -21,7 +18,6 @@ import {
   buildDiscordDeliveryNonce,
   chunkDiscordMessage,
   DiscordDirectMessageError,
-  gatewayFailureCode,
   getConnector,
   normalizeOutbound,
   normalizeSendReceipt,
@@ -35,51 +31,27 @@ import type {
   TenantID,
 } from '@agor/core/types';
 import { isDiscordDirectMessagesEnabled } from '@agor/core/types';
+import {
+  boundedBackoff,
+  boundedProviderCall,
+  DeliveryControlError,
+  discoverDueDeliveryRefs,
+  fairOrderByTenant,
+  GatewayDeliveryLoop,
+  isDefinitiveProviderFailure,
+  providerStatus,
+  retryAfterMs,
+} from './gateway-delivery-loop.js';
 
 const DELIVERY_LEASE_MS = 30_000;
 const DELIVERY_SCAN_BATCH = 25;
-const DELIVERY_BASE_BACKOFF_MS = 1_000;
-const DELIVERY_MAX_BACKOFF_MS = 5 * 60_000;
 const DELIVERY_MAX_ATTEMPTS = 8;
-const DELIVERY_MAX_RATE_LIMIT_DELAY_MS = 10 * 60_000;
 const DELIVERY_MAX_CONCURRENCY = 4;
 const DELIVERY_DRAIN_TIMEOUT_MS = 5_000;
 
 export const deterministicDiscordDeliveryNonce = buildDiscordDeliveryNonce;
 
-function providerStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== 'object' || Array.isArray(error)) return undefined;
-  const record = error as Record<string, unknown>;
-  const status = record.status ?? record.statusCode ?? record.code;
-  return typeof status === 'number' ? status : undefined;
-}
-
-function retryAfterMs(error: unknown): number | undefined {
-  if (!error || typeof error !== 'object' || Array.isArray(error)) return undefined;
-  const record = error as Record<string, unknown>;
-  const direct = record.retry_after_ms ?? record.retryAfterMs;
-  if (typeof direct === 'number' && Number.isFinite(direct)) return Math.max(0, direct);
-  const seconds = record.retry_after ?? record.retryAfter;
-  if (typeof seconds === 'number' && Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
-  return undefined;
-}
-
-function isDefinitiveProviderFailure(error: unknown): boolean {
-  const status = providerStatus(error);
-  return (
-    status !== undefined && status >= 400 && status < 500 && ![408, 409, 425, 429].includes(status)
-  );
-}
-
-function boundedBackoff(attempt: number, retryAfter?: number): number {
-  if (retryAfter !== undefined) {
-    return Math.min(DELIVERY_MAX_RATE_LIMIT_DELAY_MS, Math.max(0, retryAfter));
-  }
-  return Math.min(
-    DELIVERY_MAX_BACKOFF_MS,
-    DELIVERY_BASE_BACKOFF_MS * 2 ** Math.max(0, Math.min(attempt - 1, 8))
-  );
-}
+export { fairOrderByTenant };
 
 function deliveryErrorCode(error: unknown): string {
   if (error instanceof DeliveryControlError) return error.code;
@@ -93,36 +65,6 @@ function isExplicitlyRetryableProviderFailure(error: unknown): boolean {
   if (!error || typeof error !== 'object' || Array.isArray(error)) return false;
   const record = error as Record<string, unknown>;
   return record.retryable === true && record.providerAccepted !== true;
-}
-
-class DeliveryControlError extends Error {
-  constructor(
-    readonly code: string,
-    readonly terminal: 'canceled' | 'dead_letter' | 'retry'
-  ) {
-    super(code);
-    this.name = 'DeliveryControlError';
-  }
-}
-
-export function fairOrderByTenant(
-  refs: DiscordMessageDeliveryDiscoveryRef[]
-): DiscordMessageDeliveryDiscoveryRef[] {
-  const groups = new Map<string, DiscordMessageDeliveryDiscoveryRef[]>();
-  for (const ref of refs) {
-    const group = groups.get(ref.tenant_id) ?? [];
-    group.push(ref);
-    groups.set(ref.tenant_id, group);
-  }
-  const ordered: DiscordMessageDeliveryDiscoveryRef[] = [];
-  while (groups.size > 0) {
-    for (const [tenantId, group] of groups) {
-      const next = group.shift();
-      if (next) ordered.push(next);
-      if (group.length === 0) groups.delete(tenantId);
-    }
-  }
-  return ordered;
 }
 
 interface DeliveryContext {
@@ -174,29 +116,19 @@ export interface DiscordMessageDeliveryWorkerOptions {
  * inbound event Tasks are intentionally absent from this lifecycle.
  */
 export class DiscordMessageDeliveryWorker {
-  private timer: NodeJS.Timeout | null = null;
-  private running = false;
-  private stopped = false;
+  private readonly loop: GatewayDeliveryLoop<DiscordMessageDeliveryDiscoveryRef>;
   private readonly deliveryRepo: DiscordMessageDeliveryWorkerRepositories['delivery'];
   private readonly channelRepo: DiscordMessageDeliveryWorkerRepositories['channel'];
   private readonly mappingRepo: DiscordMessageDeliveryWorkerRepositories['mapping'];
   private readonly messageRepo: DiscordMessageDeliveryWorkerRepositories['message'];
-  private readonly scanBatchSize: number;
   private readonly leaseDurationMs: number;
   private readonly maxAttempts: number;
-  private readonly maxConcurrency: number;
   private readonly providerCallTimeoutMs: number;
   private readonly recoveryGraceMs: number;
-  private readonly shutdownTimeoutMs: number;
-  private readonly recoveryIntervalMs: number;
-  private readonly random: () => number;
   private readonly connectorFactory: NonNullable<
     DiscordMessageDeliveryWorkerOptions['connectorFactory']
   >;
   private readonly now: () => Date;
-  private readonly activeWork = new Set<Promise<unknown>>();
-  private readonly threadTails = new Map<string, Promise<void>>();
-  private drainPromise: Promise<void> | null = null;
 
   constructor(
     private readonly db: TenantScopeAwareDatabase,
@@ -214,15 +146,14 @@ export class DiscordMessageDeliveryWorker {
     this.messageRepo =
       options.repositories?.message ??
       bindRepositoryToTenantUnitOfWork(db, new MessagesRepository(db));
-    this.scanBatchSize = options.scanBatchSize ?? DELIVERY_SCAN_BATCH;
     this.leaseDurationMs = options.leaseDurationMs ?? DELIVERY_LEASE_MS;
     this.maxAttempts = options.maxAttempts ?? DELIVERY_MAX_ATTEMPTS;
-    this.maxConcurrency = options.maxConcurrency ?? DELIVERY_MAX_CONCURRENCY;
+    const maxConcurrency = options.maxConcurrency ?? DELIVERY_MAX_CONCURRENCY;
     this.providerCallTimeoutMs =
       options.providerCallTimeoutMs ?? Math.max(1, Math.floor(this.leaseDurationMs * 0.75));
     this.recoveryGraceMs = options.recoveryGraceMs ?? DEFAULT_DISCORD_DELIVERY_RECOVERY_GRACE_MS;
-    this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? DELIVERY_DRAIN_TIMEOUT_MS;
-    if (!Number.isSafeInteger(this.maxConcurrency) || this.maxConcurrency < 1) {
+    const shutdownTimeoutMs = options.shutdownTimeoutMs ?? DELIVERY_DRAIN_TIMEOUT_MS;
+    if (!Number.isSafeInteger(maxConcurrency) || maxConcurrency < 1) {
       throw new Error('Discord delivery concurrency must be a positive integer');
     }
     if (
@@ -235,154 +166,48 @@ export class DiscordMessageDeliveryWorker {
     if (!Number.isSafeInteger(this.recoveryGraceMs) || this.recoveryGraceMs < 1) {
       throw new Error('Discord delivery recovery grace must be a positive integer');
     }
-    if (!Number.isSafeInteger(this.shutdownTimeoutMs) || this.shutdownTimeoutMs < 1) {
+    if (!Number.isSafeInteger(shutdownTimeoutMs) || shutdownTimeoutMs < 1) {
       throw new Error('Discord delivery shutdown timeout must be a positive integer');
     }
-    this.recoveryIntervalMs = options.recoveryIntervalMs ?? 60_000;
-    this.random = options.random ?? Math.random;
     this.connectorFactory =
       options.connectorFactory ?? ((channelType, config) => getConnector(channelType, config));
     this.now = options.now ?? (() => new Date());
+    this.loop = new GatewayDeliveryLoop({
+      area: 'distributed-work.discord-message-delivery',
+      tenantId: options.tenantId,
+      scanBatchSize: options.scanBatchSize ?? DELIVERY_SCAN_BATCH,
+      maxConcurrency,
+      shutdownTimeoutMs,
+      recoveryIntervalMs: options.recoveryIntervalMs ?? 60_000,
+      random: options.random ?? Math.random,
+      discover: (limit) => this.discover(limit),
+      lane: (ref) => ref.thread_session_map_id,
+      process: (ref) => this.processRef(ref),
+      purge: () => this.deliveryRepo.purgeExpired(this.now()),
+    });
   }
 
   start(): void {
-    if (this.timer || this.running) return;
-    this.stopped = false;
-    this.schedule(Math.floor(this.random() * 1_000));
-    console.log('[distributed-work.discord-message-delivery] event="loop_started"');
+    this.loop.start();
   }
 
   async stop(): Promise<void> {
-    if (this.drainPromise) return this.drainPromise;
-    this.stopped = true;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
-    console.log('[distributed-work.discord-message-delivery] event="loop_stopped"');
-    this.drainPromise = this.drainActiveWork();
-    return this.drainPromise;
-  }
-
-  private async drainActiveWork(): Promise<void> {
-    if (this.activeWork.size === 0) return;
-    const active = Promise.allSettled([...this.activeWork]).then(() => undefined);
-    let timeout: NodeJS.Timeout | undefined;
-    await Promise.race([
-      active,
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(resolve, this.shutdownTimeoutMs);
-      }),
-    ]);
-    if (timeout) clearTimeout(timeout);
-    if (this.activeWork.size > 0) {
-      console.warn(
-        `[distributed-work.discord-message-delivery] event="drain_timeout" active=${this.activeWork.size}`
-      );
-    }
-  }
-
-  private schedule(delayMs: number): void {
-    if (this.stopped) return;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      void this.runLoopIteration();
-    }, delayMs);
-    this.timer.unref?.();
-  }
-
-  private async runLoopIteration(): Promise<void> {
-    if (this.running || this.stopped) return;
-    this.running = true;
-    try {
-      const count = await this.checkOnce();
-      this.schedule(count >= this.scanBatchSize ? 100 : this.recoveryIntervalMs);
-    } catch (error) {
-      console.warn(
-        `[distributed-work.discord-message-delivery] event=scan_failed code=${gatewayFailureCode(error)}`
-      );
-      this.schedule(this.recoveryIntervalMs);
-    } finally {
-      this.running = false;
-    }
-  }
-
-  private async discover(): Promise<DiscordMessageDeliveryDiscoveryRef[]> {
-    if (this.options.discover) return this.options.discover(this.scanBatchSize);
-    const find = (scoped: import('@agor/core/db').TenantScopedDatabase) =>
-      this.deliveryRepo.findDueRefs(scoped, {
-        limit: this.scanBatchSize,
-        now: this.now(),
-      });
-    if (this.options.tenantId) {
-      return runWithTenantDatabaseScope(this.db, this.options.tenantId, find);
-    }
-    return runWithSystemDatabaseScope(
-      this.db,
-      'discord message delivery discovery',
-      (systemDb) =>
-        this.deliveryRepo.findDueRefs(systemDb, {
-          limit: this.scanBatchSize,
-          now: this.now(),
-        }),
-      { capability: 'discord_message_delivery_discovery' }
-    );
+    return this.loop.stop();
   }
 
   /** One bounded discovery/claim pass, exposed for focused tests. */
   async checkOnce(): Promise<number> {
-    const work = this.checkOnceInternal();
-    this.activeWork.add(work);
-    try {
-      return await work;
-    } finally {
-      this.activeWork.delete(work);
-    }
+    return this.loop.checkOnce();
   }
 
-  private async checkOnceInternal(): Promise<number> {
-    const refs = await this.discover();
-    const tenants = new Set<string>(this.options.tenantId ? [this.options.tenantId] : []);
-    const orderedRefs = fairOrderByTenant(refs);
-    let nextIndex = 0;
-    const workers = Array.from(
-      { length: Math.min(this.maxConcurrency, orderedRefs.length) },
-      async () => {
-        while (nextIndex < orderedRefs.length) {
-          const ref = orderedRefs[nextIndex++];
-          const tenantId = this.options.tenantId ?? ref.tenant_id;
-          if (!tenantId) continue;
-          tenants.add(tenantId);
-          await runWithTenantContext(tenantId, () =>
-            this.withThreadOrder(tenantId, ref.thread_session_map_id, () => this.processRef(ref))
-          );
-        }
-      }
-    );
-    await Promise.all(workers);
-    for (const tenantId of tenants) {
-      await runWithTenantContext(tenantId, () => this.deliveryRepo.purgeExpired(this.now()));
-    }
-    return refs.length;
-  }
-
-  private async withThreadOrder<T>(
-    tenantId: string,
-    threadSessionMapId: string,
-    work: () => Promise<T>
-  ): Promise<T> {
-    const key = `${tenantId}:${threadSessionMapId}`;
-    const previous = this.threadTails.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolve) => {
-      release = resolve;
+  private async discover(limit: number): Promise<DiscordMessageDeliveryDiscoveryRef[]> {
+    if (this.options.discover) return this.options.discover(limit);
+    return discoverDueDeliveryRefs(this.db, {
+      tenantId: this.options.tenantId,
+      label: 'discord message delivery discovery',
+      capability: 'discord_message_delivery_discovery',
+      find: (scoped) => this.deliveryRepo.findDueRefs(scoped, { limit, now: this.now() }),
     });
-    this.threadTails.set(key, current);
-    await previous;
-    try {
-      return await work();
-    } finally {
-      release();
-      if (this.threadTails.get(key) === current) this.threadTails.delete(key);
-    }
   }
 
   private async processRef(ref: DiscordMessageDeliveryDiscoveryRef): Promise<void> {
@@ -474,23 +299,13 @@ export class DiscordMessageDeliveryWorker {
     claim: DiscordMessageDeliveryClaim,
     operation: () => Promise<T>
   ): Promise<{ claim: DiscordMessageDeliveryClaim; result: T }> {
-    let current = await this.renewClaim(claim);
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      const result = await Promise.race([
-        operation(),
-        new Promise<T>((_resolve, reject) => {
-          timer = setTimeout(
-            () => reject(new Error('Discord provider call exceeded its delivery lease bound')),
-            this.providerCallTimeoutMs
-          );
-        }),
-      ]);
-      current = await this.renewClaim(current);
-      return { claim: current, result };
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
+    return boundedProviderCall({
+      claim,
+      renew: (current) => this.renewClaim(current),
+      timeoutMs: this.providerCallTimeoutMs,
+      timeoutError: () => new Error('Discord provider call exceeded its delivery lease bound'),
+      operation,
+    });
   }
 
   private async deliverClaim(claim: DiscordMessageDeliveryClaim): Promise<void> {

@@ -49,11 +49,19 @@ const reportSchema = z
   })
   .strict();
 
+/**
+ * Wall-clock budget for one quiesce request, far below the executor's 30s
+ * request timeout. Each page commits in its own transaction, releasing the
+ * tenant reference lock so concurrent deletions and reference writers interleave.
+ */
+export const QUIESCE_REQUEST_BUDGET_MS = 2_500;
+
 /** Short independently authenticated DB steps; no replica-local response reservation. */
 export class BranchDeletionStepsService {
   constructor(
     private readonly db: TenantScopeAwareDatabase,
-    private readonly app: Application
+    private readonly app: Application,
+    private readonly quiesceBudgetMs = QUIESCE_REQUEST_BUDGET_MS
   ) {}
 
   async create(input: unknown, params?: AuthenticatedParams) {
@@ -188,6 +196,24 @@ export class BranchDeletionStepsService {
       );
       return { remaining: true };
     }
+    if (data.action === 'quiesce') {
+      // Several short pages per request, each its own tenant transaction that
+      // re-validates the exact invocation under Reference-then-Branch locks.
+      // The durable cursor is committed per page, so a lost response or a
+      // replacement daemon resumes exactly where the last commit left off.
+      const started = performance.now();
+      const progress = { remaining: true, pages: 0, scanned: 0, updated: 0 };
+      do {
+        const page = await runWithTenantDatabaseScope(this.db, tenantId, (db) =>
+          new BranchDeletionRepository(db).quiescePage(claim, execution)
+        );
+        progress.remaining = page.remaining;
+        progress.pages++;
+        progress.scanned += page.scanned;
+        progress.updated += page.updated;
+      } while (progress.remaining && performance.now() - started < this.quiesceBudgetMs);
+      return progress;
+    }
     return runWithTenantDatabaseScope(this.db, tenantId, async (db) => {
       const maintenance = new BranchMaintenanceRepository(db);
       const deletion = new BranchDeletionRepository(db);
@@ -218,8 +244,7 @@ export class BranchDeletionStepsService {
           });
           return { ok: true, sessionToken };
         }
-      } else if (data.action === 'quiesce') return deletion.quiescePage(claim, execution);
-      else if (data.action === 'storage') await deletion.verifyStorage(claim, execution);
+      } else if (data.action === 'storage') await deletion.verifyStorage(claim, execution);
       else if (data.action === 'data') return deletion.deleteDataPage(claim, execution);
       else if (data.action === 'finalize') {
         const branch = await new BranchRepository(db).findById(claim.branch_id);

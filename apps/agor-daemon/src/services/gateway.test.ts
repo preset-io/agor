@@ -23,6 +23,8 @@ import {
   DiscordThreadUnavailableError,
   GatewayListenerError,
   getConnector,
+  TeamsMemberLookupError,
+  TeamsSendError,
 } from '@agor/core/gateway';
 import type {
   GatewayChannel,
@@ -40,8 +42,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ingestDiscordInboundImages,
   ingestInboundAttachments,
+  ingestProviderInboundFiles,
 } from '../utils/gateway-attachments.js';
+import { teamsConnectorCache } from '../utils/teams-connector-cache.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
+import {
+  verifiedHttpGatewayAuthority,
+  withVerifiedHttpGatewayAuthority,
+} from './gateway-authority.js';
 import {
   fingerprintMCPOAuthGrantConfiguration,
   MCP_OAUTH_GRANT_BINDING_VERSION,
@@ -90,6 +98,7 @@ vi.mock('@agor/core/config', async (importOriginal) => {
 
 vi.mock('../utils/gateway-attachments.js', () => ({
   ingestDiscordInboundImages: vi.fn(),
+  ingestProviderInboundFiles: vi.fn(),
   ingestInboundAttachments: vi.fn(),
   buildPromptWithAttachments: vi.fn(
     (text: string, attachments: Array<{ ref: string }>) =>
@@ -138,6 +147,46 @@ const slackChannel: GatewayChannel = {
   updated_at: '2026-06-22T00:00:00.000Z',
   last_message_at: null,
 } as unknown as GatewayChannel;
+
+function makeTeamsChannel(
+  overrides: Partial<Omit<GatewayChannel, 'config'>> & { config?: Record<string, unknown> } = {}
+): GatewayChannel {
+  const { config, ...rest } = overrides;
+  return {
+    ...slackChannel,
+    id: 'teams-channel',
+    channel_type: 'teams',
+    channel_key: 'teams-key',
+    config: {
+      app_id: 'teams-app',
+      app_password: 'secret',
+      microsoft_tenant_id: 'tenant-a',
+      ...config,
+    },
+    provider_installation_id: 'teams-app',
+    provider_config_generation: 3,
+    ...rest,
+  } as GatewayChannel;
+}
+
+/** A Teams create carrying the verified inbound-event authority the worker would pass. */
+function teamsCreate(
+  service: GatewayService,
+  channel: GatewayChannel,
+  data: Parameters<GatewayService['create']>[0]
+) {
+  return service.create(
+    withVerifiedHttpGatewayAuthority(data, {
+      id: data.gateway_inbound_event_id as never,
+      gateway_channel_id: channel.id,
+      processing_token: 'claim-token',
+      provider_config_generation: channel.provider_config_generation,
+      verified_app_id: 'teams-app',
+      verified_tenant_id: 'tenant-a',
+      thread_id: data.thread_id,
+    })
+  );
+}
 
 function makeGuardedPostgresDatabase() {
   const transactions: Array<{
@@ -369,6 +418,7 @@ function makeGatewayHarness(args: {
         mapping = { ...mapping, discord_last_admitted_message_id: cursor } as ThreadSessionMap;
       return true;
     }),
+    advanceTeamsLastAdmittedActivityId: vi.fn(async () => true),
     create: vi.fn(async (data: Partial<ThreadSessionMap>) => {
       mapping = makeMapping({
         ...data,
@@ -380,6 +430,7 @@ function makeGatewayHarness(args: {
     }),
   };
   const findByEmailForAlignment = vi.fn(async () => args.alignedUser ?? null);
+  const findById = vi.fn(async () => args.alignedUser ?? null);
   const admitReplySession = vi.fn(async () =>
     args.outboundSeed
       ? {
@@ -398,11 +449,14 @@ function makeGatewayHarness(args: {
   (service as unknown as { threadMapRepo: typeof threadMapRepo }).threadMapRepo = threadMapRepo;
   (
     service as unknown as {
-      usersRepo: { findByEmailForAlignment: typeof findByEmailForAlignment };
+      usersRepo: {
+        findByEmailForAlignment: typeof findByEmailForAlignment;
+        findById: typeof findById;
+      };
     }
-  ).usersRepo = { findByEmailForAlignment };
+  ).usersRepo = { findByEmailForAlignment, findById };
   const outboundRepo = {
-    listDiscordDirectMessageSends: vi.fn(async () => []),
+    listDirectMessageSends: vi.fn(async () => []),
     admitReplySession,
     completeReplyAdmission,
   };
@@ -429,6 +483,7 @@ function makeGatewayHarness(args: {
     threadMapRepo,
     outboundRepo,
     findByEmailForAlignment,
+    findById,
     admitReplySession,
     completeReplyAdmission,
   };
@@ -449,6 +504,7 @@ afterEach(() => {
   vi.mocked(getConnector).mockReset();
   vi.mocked(ingestDiscordInboundImages).mockReset();
   vi.mocked(ingestInboundAttachments).mockReset();
+  vi.mocked(ingestProviderInboundFiles).mockReset();
 });
 
 describe('GatewayService session links', () => {
@@ -760,6 +816,354 @@ describe('GatewayService user alignment operational logs', () => {
       expect(output).not.toContain(value);
     }
   }
+
+  function teamsAlignedHarness(opts: {
+    alignedUser: User | null;
+    userMap?: Record<string, string>;
+    lookup?: () => Promise<unknown>;
+    omitMember?: boolean;
+  }) {
+    const channel = makeTeamsChannel({
+      id: 'teams-aligned-channel',
+      agor_user_id: null,
+      config: { align_teams_users: true, ...(opts.userMap ? { user_map: opts.userMap } : {}) },
+      provider_config_generation: 2,
+    });
+    const harness = makeGatewayHarness({
+      channel,
+      existingMapping: makeMapping({ channel_id: channel.id, thread_id: '19:dm-thread' }),
+      alignedUser: opts.alignedUser,
+    });
+    const lookup = vi.fn(
+      opts.lookup ??
+        (async () => ({
+          email: sensitive.email,
+          userPrincipalName: null,
+          aadObjectId: 'aad-object-1',
+        }))
+    );
+    const internals = harness.service as unknown as {
+      teamsMemberLookup: typeof lookup;
+      sendSystemMessage: (...args: unknown[]) => Promise<void>;
+    };
+    internals.teamsMemberLookup = lookup;
+    const notice = vi.spyOn(internals, 'sendSystemMessage').mockResolvedValue(undefined);
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: '19:dm-thread',
+      text: 'hello',
+      user_name: sensitive.slackUsername,
+      metadata: { teams_conversation_type: 'personal', teams_user_name: 'Ada' },
+      teams_user_aad_object_id: 'aad-object-1',
+      ...(opts.omitMember
+        ? {}
+        : {
+            teams_member: {
+              service_url: 'https://smba.trafficmanager.net/amer/',
+              conversation_id: 'a:personal-conversation',
+              team_id: null,
+              user_id: '29:user-1',
+            },
+          }),
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a1' as never,
+    };
+    const create = () => teamsCreate(harness.service, channel, data);
+    return { ...harness, channel, lookup, notice, create };
+  }
+
+  it('aligns a Teams sender by member email inside the channel tenant', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { create, lookup, findByEmailForAlignment, findById, promptCreate } = teamsAlignedHarness(
+      { alignedUser }
+    );
+    await expect(create()).resolves.toMatchObject({ success: true });
+    expect(lookup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serviceUrl: 'https://smba.trafficmanager.net/amer/',
+        conversationId: 'a:personal-conversation',
+        userId: '29:user-1',
+      })
+    );
+    expect(findByEmailForAlignment).toHaveBeenCalledWith(sensitive.email);
+    expect(findById).not.toHaveBeenCalled();
+    expect(promptCreate).toHaveBeenCalledOnce();
+    // The resolved email reaches the prompt context, and the agent learns where replies go.
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain(sensitive.email);
+    expect(prompt.startsWith('Note: Any assistant message you send')).toBe(true);
+    expect(prompt).toContain('Microsoft Teams conversation');
+    expect(log).toHaveBeenCalledWith(
+      `[gateway] Teams user alignment succeeded: source=email agor_user=${shortId(alignedUser.user_id)}`
+    );
+    expectNoSensitiveValues(log);
+  });
+
+  it('lets a Teams user_map entry override the email match', async () => {
+    const { create, lookup, findById, findByEmailForAlignment, promptCreate } = teamsAlignedHarness(
+      {
+        alignedUser,
+        userMap: { 'aad-object-1': alignedUser.user_id },
+      }
+    );
+    await expect(create()).resolves.toMatchObject({ success: true });
+    expect(findById).toHaveBeenCalledWith(alignedUser.user_id);
+    expect(lookup).not.toHaveBeenCalled();
+    expect(findByEmailForAlignment).not.toHaveBeenCalled();
+    // No email was resolved, so none is claimed in the prompt.
+    expect(String(promptCreate.mock.calls[0][0].prompt)).toContain('> From: Ada\n');
+  });
+
+  it('names attachments it cannot read and keeps the reply note with proactive sends off', async () => {
+    const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
+    const channel = await (
+      service as unknown as { channelRepo: { findByKey: () => Promise<GatewayChannel> } }
+    ).channelRepo.findByKey();
+    (channel.config as Record<string, unknown>).outbound_enabled = false;
+    await expect(
+      teamsCreate(service, channel, {
+        channel_key: channel.channel_key,
+        thread_id: '19:dm-thread',
+        text: '',
+        skipped_files: [{ name: 'report<1>.pdf', reason: 'unsupported_type' }],
+        metadata: { teams_conversation_type: 'personal' },
+        teams_user_aad_object_id: 'aad-object-1',
+        teams_member: {
+          service_url: 'https://smba.trafficmanager.net/amer/',
+          conversation_id: 'a:personal-conversation',
+          team_id: null,
+          user_id: '29:user-1',
+        },
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a3' as never,
+      })
+    ).resolves.toMatchObject({ success: true });
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain(
+      '(Attachments you could not read: "report 1 .pdf" (unsupported file type).'
+    );
+    expect(prompt).toContain('suggest pasting the text instead.');
+    expect(prompt).toContain('Note: Any assistant message you send');
+  });
+
+  function teamsFileCreate(
+    service: GatewayService,
+    channel: GatewayChannel,
+    files: Array<Record<string, unknown>>,
+    skippedFiles: Array<Record<string, unknown>> = [],
+    overrides: Record<string, unknown> = {}
+  ) {
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: '19:dm-thread',
+      text: '',
+      files: files as never,
+      ...(skippedFiles.length ? { skipped_files: skippedFiles as never } : {}),
+      metadata: { teams_conversation_type: 'personal' },
+      teams_user_aad_object_id: 'aad-object-1',
+      teams_member: {
+        service_url: 'https://smba.trafficmanager.net/amer/',
+        conversation_id: 'a:personal-conversation',
+        team_id: null,
+        user_id: '29:user-1',
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a4' as never,
+      ...overrides,
+    };
+    return teamsCreate(service, channel, data);
+  }
+
+  const teamsImage = {
+    id: 'img-1',
+    name: 'image-1',
+    mimetype: 'image/png',
+    size: -1,
+    url_private_download: 'https://smba.trafficmanager.net/amer/v3/attachments/a1/views/original',
+    auth: 'provider_token',
+  };
+  const teamsPersonalFile = {
+    id: 'file-1',
+    name: 'notes.txt',
+    mimetype: 'text/plain',
+    size: -1,
+    url_private_download: 'https://contoso-my.sharepoint.com/personal/download.aspx?tempauth=t',
+  };
+
+  it('reads Teams images with the bot token and personal files without one, under one deadline', async () => {
+    const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
+    const channel = await (
+      service as unknown as { channelRepo: { findByKey: () => Promise<GatewayChannel> } }
+    ).channelRepo.findByKey();
+    (channel.config as Record<string, unknown>).files = true;
+    const downloadToken = vi.fn(async () => 'bot-token');
+    vi.spyOn(teamsConnectorCache, 'get').mockReturnValue({ downloadToken } as never);
+    vi.mocked(ingestProviderInboundFiles).mockResolvedValue({
+      uploads: [{ ref: 'upl_image' } as never],
+      failed: 1,
+      failedNames: ['notes.txt'],
+    });
+    await expect(
+      teamsFileCreate(
+        service,
+        channel,
+        [teamsImage, teamsPersonalFile],
+        [{ name: 'spec.docx', reason: 'channel_file' }]
+      )
+    ).resolves.toMatchObject({ success: true });
+    const args = vi.mocked(ingestProviderInboundFiles).mock.calls[0][0];
+    expect(args).toMatchObject({
+      label: 'Teams',
+      provenance: 'gateway-teams',
+      signal: expect.any(AbortSignal),
+    });
+    const image = await args.requestFor(teamsImage as never);
+    expect(image?.headers).toEqual({ Authorization: 'Bearer bot-token' });
+    expect(image?.isAllowedUrl(teamsImage.url_private_download)).toBe(true);
+    expect(image?.isAllowedUrl(teamsPersonalFile.url_private_download)).toBe(false);
+    const file = await args.requestFor(teamsPersonalFile as never);
+    expect(file?.headers).toEqual({});
+    expect(file?.isAllowedUrl(teamsPersonalFile.url_private_download)).toBe(true);
+    expect(file?.isAllowedUrl(teamsImage.url_private_download)).toBe(false);
+    expect(downloadToken).toHaveBeenCalledOnce();
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain('upl_image');
+    expect(prompt).toContain(
+      'Attachments you could not read: "spec.docx" (stored in SharePoint, which Agor has not been given access to); "notes.txt" (could not be downloaded or is too large).'
+    );
+    expect(prompt).not.toContain('tempauth');
+  });
+
+  it('reads channel files over Graph and drops the activity SharePoint skip they replace', async () => {
+    const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
+    const channel = await (
+      service as unknown as { channelRepo: { findByKey: () => Promise<GatewayChannel> } }
+    ).channelRepo.findByKey();
+    Object.assign(channel.config, { files: true, catch_up: { mode: 'off' } });
+    const channelImage = {
+      id: 'channel-img',
+      name: 'image.png',
+      mimetype: 'image/png',
+      size: 2048,
+      url_private_download: 'https://contoso.sharepoint.com/sites/Team/download.aspx?tempauth=t',
+    };
+    const fetchChannelMessageFiles = vi.fn(async () => ({
+      files: [channelImage],
+      skipped: [{ name: 'deck.pptx', reason: 'unsupported_type' }],
+    }));
+    vi.spyOn(teamsConnectorCache, 'get').mockReturnValue({ fetchChannelMessageFiles } as never);
+    vi.mocked(ingestProviderInboundFiles).mockResolvedValue({
+      uploads: [{ ref: 'upl_channel' } as never],
+      failed: 0,
+    });
+    const channelThread = '19:general@thread.tacv2';
+    await expect(
+      teamsFileCreate(service, channel, [], [{ name: 'image.png', reason: 'channel_file' }], {
+        thread_id: `${channelThread}|1616989510408`,
+        metadata: { teams_conversation_type: 'channel', teams_has_mention: true },
+        teams_catch_up: {
+          activity_id: '1616990132035',
+          timestamp: '2021-03-29T04:02:12.035Z',
+          service_url: 'https://smba.trafficmanager.net/amer/',
+          team_id: channelThread,
+          team_group_id: null,
+        },
+      })
+    ).resolves.toMatchObject({ success: true });
+    expect(fetchChannelMessageFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: channelThread,
+        rootMessageId: '1616989510408',
+        messageId: '1616990132035',
+        filesEnabled: true,
+        signal: expect.any(AbortSignal),
+      })
+    );
+    const args = vi.mocked(ingestProviderInboundFiles).mock.calls[0][0];
+    expect(args.files).toEqual([channelImage]);
+    const request = await args.requestFor(channelImage as never);
+    expect(request?.headers).toEqual({});
+    expect(request?.isAllowedUrl(channelImage.url_private_download)).toBe(true);
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain('upl_channel');
+    expect(prompt).toContain('"deck.pptx" (unsupported file type)');
+    expect(prompt).not.toContain('stored in SharePoint');
+    expect(prompt).not.toContain('tempauth');
+  });
+
+  it('keeps the activity SharePoint note when the channel message cannot be read', async () => {
+    const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
+    const channel = await (
+      service as unknown as { channelRepo: { findByKey: () => Promise<GatewayChannel> } }
+    ).channelRepo.findByKey();
+    Object.assign(channel.config, { files: true, catch_up: { mode: 'off' } });
+    // Without the team's message-read consent the connector reports nothing it could check.
+    const fetchChannelMessageFiles = vi.fn(async () => null);
+    vi.spyOn(teamsConnectorCache, 'get').mockReturnValue({ fetchChannelMessageFiles } as never);
+    const channelThread = '19:general@thread.tacv2';
+    await teamsFileCreate(service, channel, [], [{ name: 'image.png', reason: 'channel_file' }], {
+      thread_id: `${channelThread}|1616989510408`,
+      metadata: { teams_conversation_type: 'channel', teams_has_mention: true },
+      teams_catch_up: {
+        activity_id: '1616990132035',
+        timestamp: '2021-03-29T04:02:12.035Z',
+        service_url: 'https://smba.trafficmanager.net/amer/',
+        team_id: channelThread,
+        team_group_id: null,
+      },
+    });
+    expect(fetchChannelMessageFiles).toHaveBeenCalledOnce();
+    expect(String(promptCreate.mock.calls[0][0].prompt)).toContain(
+      '"image.png" (stored in SharePoint'
+    );
+  });
+
+  it('names Teams files as turned off without downloading when files is off', async () => {
+    const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
+    const channel = await (
+      service as unknown as { channelRepo: { findByKey: () => Promise<GatewayChannel> } }
+    ).channelRepo.findByKey();
+    await expect(teamsFileCreate(service, channel, [teamsImage])).resolves.toMatchObject({
+      success: true,
+    });
+    expect(ingestProviderInboundFiles).not.toHaveBeenCalled();
+    expect(String(promptCreate.mock.calls[0][0].prompt)).toContain(
+      '"image-1" (attachments are turned off for this channel)'
+    );
+  });
+
+  it('rejects unmatched Teams senders (email, user_map, and member-less misses) with one not-linked notice', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const miss of [
+      {},
+      { userMap: { 'aad-object-1': '01927f9d-0000-7000-8000-0000000000aa' } },
+      { omitMember: true },
+    ]) {
+      const { channel, create, lookup, notice, promptCreate } = teamsAlignedHarness({
+        alignedUser: null,
+        ...miss,
+      });
+      await expect(create()).resolves.toEqual({ success: false, sessionId: '', created: false });
+      expect(promptCreate).not.toHaveBeenCalled();
+      if ('omitMember' in miss) expect(lookup).not.toHaveBeenCalled();
+      expect(notice).toHaveBeenCalledOnce();
+      expect(notice).toHaveBeenCalledWith(
+        channel,
+        '19:dm-thread',
+        expect.stringMatching(/isn't linked to an Agor user/)
+      );
+    }
+  });
+
+  it('retries a transient Teams member lookup instead of rejecting the sender', async () => {
+    const { create, promptCreate, notice } = teamsAlignedHarness({
+      alignedUser,
+      lookup: async () => {
+        throw new TeamsMemberLookupError('teams_member_lookup_http_503', true);
+      },
+    });
+    await expect(create()).rejects.toThrow('teams_member_lookup_http_503');
+    expect(promptCreate).not.toHaveBeenCalled();
+    expect(notice).not.toHaveBeenCalled();
+  });
 
   it('logs exact user_map and email-fallback outcomes without external identities', async () => {
     const { service, findByEmailForAlignment } = makeGatewayHarness({ alignedUser });
@@ -1256,6 +1660,61 @@ describe('GatewayService Slack thread catch-up', () => {
     });
   });
 
+  it('passes a long multi-line Slack summon to the agent whole (#2744)', async () => {
+    const longLine = 'x'.repeat(3000);
+    const currentText = `first paragraph\n\n${longLine}\nlast line (small detail at the end)`;
+    const fetchThreadHistory = vi.fn(async () => ({
+      threadId: 'C123-100.000000',
+      channel: 'C123',
+      thread_ts: '100.000000',
+      has_more: false,
+      messages: [
+        {
+          ts: '102.000000',
+          iso_time: '2026-06-22T00:00:01.000Z',
+          actor_label: 'Bob',
+          text: `context ${'y'.repeat(2000)}`,
+          is_bot: false,
+          is_trigger: false,
+        },
+        {
+          ts: '103.000000',
+          iso_time: '2026-06-22T00:00:02.000Z',
+          actor_label: 'Alice',
+          text: currentText,
+          is_bot: false,
+          is_trigger: true,
+        },
+      ],
+    }));
+    const { service, promptCreate } = makeGatewayHarness({
+      existingMapping: makeMapping({ thread_id: 'C123-100.000000' }),
+      connector: { fetchThreadHistory, sendMessage: vi.fn(async () => '104.000000') },
+    });
+
+    await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'C123-100.000000',
+      text: currentText,
+      metadata: {
+        channel: 'C123',
+        channel_type: 'im',
+        slack_message_ts: '103.000000',
+        slack_thread_ts: '100.000000',
+        slack_user_name: 'Alice',
+      },
+    });
+
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    const summon = prompt.slice(prompt.indexOf('### Current summon'));
+    expect(summon).toContain(
+      `> first paragraph\n>\n> ${longLine}\n> last line (small detail at the end)`
+    );
+    // Previous thread messages stay bounded, but the agent is told they were shortened.
+    expect(prompt).not.toContain('y'.repeat(1300));
+    expect(prompt).toContain('Some previous thread messages were shortened');
+  });
+
   it('fetches missed Slack messages after the last delivered cursor and advances the cursor', async () => {
     const sendMessage = vi.fn(async () => '104.000000');
     const fetchThreadHistory = vi.fn(async () => ({
@@ -1712,7 +2171,7 @@ describe('GatewayService startup/bootstrap hint (#1982)', () => {
     const result = await service.create({
       channel_key: 'slack-key',
       thread_id: outboundSeed.platform_thread_id,
-      text: 'Thanks, looks good.',
+      text: `Thanks, looks good.\n${'z'.repeat(2500)} end`,
       metadata: {
         channel: 'C999',
         channel_type: 'im',
@@ -1726,7 +2185,7 @@ describe('GatewayService startup/bootstrap hint (#1982)', () => {
     expect(prompt).toContain('Original proactive Agor message:');
     expect(prompt).toContain('Heads up, deploy starting soon.');
     expect(prompt).toContain('Human Slack reply:');
-    expect(prompt).toContain('Thanks, looks good.');
+    expect(prompt).toContain(`> Thanks, looks good.\n> ${'z'.repeat(2500)} end`);
     expect(completeReplyAdmission).toHaveBeenCalledWith(outboundSeed.id, 'sess-new');
     expectFinalStartupBootstrapHint(prompt);
   });
@@ -1927,6 +2386,249 @@ describe('GatewayService startup/bootstrap hint (#1982)', () => {
 });
 
 describe('GatewayService durable listener delivery fences', () => {
+  it('requires exact structured mentions in Teams group chats despite require_mention false', async () => {
+    const channel = makeTeamsChannel({
+      id: 'teams-group-mention-channel',
+      config: { require_mention: false },
+    });
+    const { service, promptCreate } = makeGatewayHarness({
+      channel,
+      existingMapping: makeMapping({ channel_id: channel.id, thread_id: '19:group@thread.v2' }),
+    });
+
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: '19:group@thread.v2',
+      text: 'display name only',
+      metadata: {
+        teams_conversation_type: 'groupChat',
+        teams_has_mention: false,
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000097' as never,
+    };
+    await expect(teamsCreate(service, channel, data)).resolves.toMatchObject({
+      success: false,
+      created: false,
+    });
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects direct Teams creates without durable ownership and accepts the verified HTTP path', async () => {
+    const channel = makeTeamsChannel({
+      id: 'teams-authority-channel',
+      config: { require_mention: true },
+    });
+    const mapping = makeMapping({
+      channel_id: channel.id,
+      thread_id: '19:channel|root-1',
+      session_id: 'sess-teams' as never,
+    });
+    const { service, promptCreate } = makeGatewayHarness({ channel, existingMapping: mapping });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: false,
+      taskRepo: { findById: vi.fn(async () => null) },
+    });
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: mapping.thread_id,
+      text: 'hello',
+      user_name: 'Ada',
+      metadata: {
+        teams_conversation_type: 'channel',
+        teams_has_mention: true,
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000099' as never,
+      idempotency_task_id: '01927f9d-0000-7000-8000-000000000098' as never,
+      idempotency_session_id: mapping.session_id,
+    };
+
+    await expect(service.create(data)).rejects.toThrow(/authority must be verified/i);
+    await expect(teamsCreate(service, channel, data)).resolves.toMatchObject({
+      success: true,
+      taskId: 'task-1',
+    });
+    // The fence travels in Feathers params, never as a hidden field on the prompt data.
+    const [promptData, promptParams] = promptCreate.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+      { gatewayAdmissionFence?: unknown },
+    ];
+    expect(verifiedHttpGatewayAuthority(promptData)).toBeUndefined();
+    expect(typeof promptParams.gatewayAdmissionFence).toBe('function');
+  });
+
+  it('reconciles a Teams queue retry from its stable Task without durable listener ownership', async () => {
+    const channel = makeTeamsChannel({ id: 'teams-retry-channel', provider_config_generation: 1 });
+    const mapping = makeMapping({
+      channel_id: channel.id,
+      thread_id: '19:retry|root',
+      session_id: 'sess-retry' as never,
+    });
+    const eventId = '01927f9d-0000-7000-8000-0000000000b1' as never;
+    const taskId = '01927f9d-0000-7000-8000-0000000000b2' as never;
+    const { service, promptCreate, sessionsGet, threadMapRepo } = makeGatewayHarness({
+      channel,
+      existingMapping: mapping,
+    });
+    // The first attempt admitted the Task but died before writing the cursor it earned.
+    const priorTask = vi.fn(async () => ({
+      task_id: taskId,
+      session_id: mapping.session_id,
+      metadata: { gateway_inbound_event_id: eventId, gateway_teams_cursor: '1616990000009' },
+    }));
+    Object.assign(service as unknown as Record<string, unknown>, {
+      taskRepo: { findById: priorTask },
+      sessionRepo: {
+        findById: vi.fn(async () => ({
+          session_id: mapping.session_id,
+          branch_id: channel.target_branch_id,
+          custom_context: { gateway_source: { channel_id: channel.id } },
+        })),
+      },
+    });
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: mapping.thread_id,
+      text: 'retry',
+      metadata: { teams_conversation_type: 'channel', teams_has_mention: true },
+      gateway_inbound_event_id: eventId,
+      idempotency_task_id: taskId,
+      idempotency_session_id: mapping.session_id,
+    };
+    await expect(teamsCreate(service, channel, data)).resolves.toMatchObject({
+      success: true,
+      taskId,
+    });
+    expect(priorTask).toHaveBeenCalledWith(taskId);
+    expect(promptCreate).not.toHaveBeenCalled();
+    expect(sessionsGet).not.toHaveBeenCalled();
+    expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).toHaveBeenCalledWith(
+      mapping.id,
+      '1616990000009'
+    );
+  });
+
+  it('keeps the stable-Task shortcut off for non-durable non-Teams providers', async () => {
+    const mapping = makeMapping();
+    const { service, promptCreate } = makeGatewayHarness({ existingMapping: mapping });
+    const findById = vi.fn(async () => null);
+    Object.assign(service as unknown as Record<string, unknown>, {
+      taskRepo: { findById },
+    });
+    await service.create({
+      channel_key: slackChannel.channel_key,
+      thread_id: mapping.thread_id,
+      text: 'slack follow-up',
+      metadata: { channel_type: 'im' },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000c1' as never,
+      idempotency_task_id: '01927f9d-0000-7000-8000-0000000000c2' as never,
+    });
+    expect(findById).not.toHaveBeenCalled();
+    expect(promptCreate).toHaveBeenCalledOnce();
+  });
+
+  describe('Teams standard-channel catch-up', () => {
+    const triggerId = '1616990132035';
+    const threadId = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2|1616989510408';
+    const channel = makeTeamsChannel({
+      id: 'teams-catch-up-channel',
+      config: {
+        catch_up: {
+          mode: 'best_effort',
+          max_messages: 50,
+          max_prompt_bytes: 16_384,
+          request_timeout_ms: 8_000,
+        },
+      },
+    });
+
+    function admit(service: GatewayService) {
+      const data = {
+        channel_key: channel.channel_key,
+        thread_id: threadId,
+        text: 'what did we decide?',
+        user_name: 'Ada',
+        metadata: { teams_conversation_type: 'channel', teams_has_mention: true },
+        teams_catch_up: {
+          activity_id: triggerId,
+          timestamp: '2021-03-29T03:55:32.035Z',
+          service_url: 'https://smba.trafficmanager.net/amer/',
+          team_id: '19:1c3bd6d47a4c4f3e8b2a9d2e7c1f0a11@thread.tacv2',
+          team_group_id: 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b',
+        },
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000095' as never,
+        idempotency_task_id: '01927f9d-0000-7000-8000-000000000094' as never,
+      };
+      return teamsCreate(service, channel, data);
+    }
+
+    function harness(fetchProviderHistory: ReturnType<typeof vi.fn>) {
+      const result = makeGatewayHarness({
+        channel,
+        existingMapping: makeMapping({
+          channel_id: channel.id,
+          thread_id: threadId,
+          session_id: 'sess-teams' as never,
+          teams_last_admitted_activity_id: '1616990000000',
+        }),
+        connector: { sendMessage: vi.fn(), fetchProviderHistory },
+      });
+      Object.assign(result.service as unknown as Record<string, unknown>, {
+        taskRepo: { findById: vi.fn(async () => null) },
+      });
+      return result;
+    }
+
+    it('admits one complete interval through the shared formatter, then advances the cursor', async () => {
+      const fetchProviderHistory = vi.fn(async () => ({
+        threadId,
+        complete: true,
+        messages: [
+          {
+            providerMessageId: '1616990032035',
+            timestamp: '2021-03-29T03:53:52.035Z',
+            actorLabel: 'Robin Kline',
+            text: 'ship on Friday',
+            isBot: false,
+            isSystem: false,
+            isRich: false,
+            isTrigger: false,
+            isMention: false,
+          },
+          {
+            providerMessageId: triggerId,
+            timestamp: '2021-03-29T03:55:32.035Z',
+            actorLabel: 'Teams participant',
+            text: '',
+            isBot: false,
+            isSystem: false,
+            isRich: false,
+            isTrigger: true,
+            isMention: true,
+          },
+        ],
+      }));
+      const { service, promptCreate, threadMapRepo } = harness(fetchProviderHistory);
+
+      await expect(admit(service)).resolves.toMatchObject({ success: true });
+      expect(fetchProviderHistory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          afterProviderCursor: '1616990000000',
+          triggerProviderCursor: triggerId,
+        })
+      );
+      const prompt = promptCreate.mock.calls[0][0].prompt as string;
+      expect(prompt).toContain('ship on Friday');
+      expect(prompt).toContain('what did we decide?');
+      expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).toHaveBeenCalledWith(
+        expect.any(String),
+        triggerId
+      );
+      expect(promptCreate.mock.invocationCallOrder[0]).toBeLessThan(
+        threadMapRepo.advanceTeamsLastAdmittedActivityId.mock.invocationCallOrder[0]
+      );
+    });
+  });
+
   it('uses short guarded tenant DB scopes while keeping provider startup outside transactions', async () => {
     const { db, observations, touch, transactions } = makeGuardedPostgresDatabase();
     expect(() => (db as unknown as { marker(): void }).marker()).toThrow(
@@ -3311,6 +4013,50 @@ describe('GatewayService Discord beta routing', () => {
       await expect(h.service.create(inbound)).resolves.toMatchObject({ success: false });
       expect(h.sessionsCreate).not.toHaveBeenCalled();
     }
+  });
+
+  it('accepts direct Discord with an event identity but rejects missing identity under durable ownership', async () => {
+    const { service, promptCreate } = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: null,
+      outboundSeed: {
+        id: 'discord-seed',
+        gateway_channel_id: discordChannel.id,
+        channel_type: 'discord',
+        platform_channel_id: '323456789012345678',
+        platform_message_id: '523456789012345678',
+        platform_thread_id: 'discord:message:323456789012345678:523456789012345678',
+        platform_permalink: null,
+        target_branch_id: discordChannel.target_branch_id,
+        emitted_by_user_id: 'user-1',
+        emitted_by_session_id: null,
+        emitted_by_task_id: null,
+        emitted_by_schedule_id: null,
+        message_text: 'proactive seed',
+        message_preview: 'proactive seed',
+        metadata: { provider_reply_aliases: [] },
+        consumed_by_session_id: null,
+        consumed_at: null,
+        created_at: '2026-06-22T00:00:00.000Z',
+        updated_at: '2026-06-22T00:00:00.000Z',
+      } as GatewayOutboundMessage,
+    });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+    });
+
+    await expect(
+      service.create({
+        ...validDiscordInbound(),
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000099' as never,
+      })
+    ).resolves.toMatchObject({ success: true, created: true });
+    expect(promptCreate).toHaveBeenCalledOnce();
+
+    await expect(service.create(validDiscordInbound())).rejects.toThrow(
+      'Direct gateway inbound delivery is unsupported on PostgreSQL without a provider event identity'
+    );
+    expect(promptCreate).toHaveBeenCalledOnce();
   });
 
   it('stages Discord images through the existing owner-bound upload prompt path', async () => {
@@ -5252,7 +5998,7 @@ describe('GatewayService outbound emit session branch binding', () => {
     vi.mocked(getConnector).mockReturnValue({ sendSlackMessage, sendDirectMessage } as never);
     const outboundRepo = {
       create: vi.fn(async (data: Record<string, unknown>) => ({ id: 'out-1', ...data })),
-      listDiscordDirectMessageSends: vi.fn(async () => []),
+      listDirectMessageSends: vi.fn(async () => []),
       admitReplySession: vi.fn(async () => null),
       completeReplyAdmission: vi.fn(async () => undefined),
     };
@@ -6161,5 +6907,863 @@ describe('GatewayService Slack inbound reactions', () => {
     });
     expect(promptCreate).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('GatewayService Teams notices', () => {
+  const teamsChannel = makeTeamsChannel({
+    id: 'teams-notice-channel',
+    config: {
+      align_teams_users: true,
+      user_map: { 'aad-mapped': '01927f9d-0000-7000-8000-0000000000aa' },
+    },
+  });
+
+  function teamsNoticeHarness() {
+    const harness = makeGatewayHarness({
+      channel: teamsChannel,
+      existingMapping: makeMapping({ channel_id: teamsChannel.id, thread_id: '19:c|root-1' }),
+    });
+    const notices = vi.fn(async () => undefined);
+    Object.assign(harness.service as unknown as Record<string, unknown>, {
+      sendTeamsSystemMessage: notices,
+    });
+    return { ...harness, notices };
+  }
+
+  it('sends routing notices but suppresses creating/queued noise like Discord', async () => {
+    const { service, notices } = teamsNoticeHarness();
+    const send = (
+      service as unknown as {
+        sendSystemMessage(
+          channel: GatewayChannel,
+          threadId: string,
+          text: string,
+          opts?: { suppressSlack?: boolean; suppressDiscord?: boolean }
+        ): Promise<void>;
+      }
+    ).sendSystemMessage.bind(service);
+    await send(teamsChannel, '19:c|root-1', 'Creating session…', {
+      suppressSlack: true,
+      suppressDiscord: true,
+    });
+    expect(notices).not.toHaveBeenCalled();
+    await send(teamsChannel, '19:c|root-1', 'Prompt was denied');
+    expect(notices).toHaveBeenCalledOnce();
+    expect(notices).toHaveBeenCalledWith(teamsChannel, '19:c|root-1', 'Agor: Prompt was denied');
+  });
+
+  it('types while a Teams chat Task works and stops when its turn ends or the daemon stops', async () => {
+    const { service } = makeGatewayHarness({
+      channel: teamsChannel,
+      existingMapping: makeMapping({
+        channel_id: teamsChannel.id,
+        thread_id: '19:c|root-1',
+        session_id: 'sess-1',
+        metadata: { teams_conversation_type: 'groupChat' },
+      }),
+    });
+    const typing = (
+      service as unknown as {
+        teamsTyping: { start: () => void; stop: () => void; stopAll: () => void };
+      }
+    ).teamsTyping;
+    const start = vi.spyOn(typing, 'start').mockImplementation(() => undefined);
+    const stop = vi.spyOn(typing, 'stop');
+    const stopAll = vi.spyOn(typing, 'stopAll');
+    await runWithTenantContext('tenant-channel', async () => {
+      await service.updateProgress({ session_id: 'sess-1', state: 'queued', task_id: 'task-1' });
+      expect(start).not.toHaveBeenCalled();
+      await service.updateProgress({ session_id: 'sess-1', state: 'working', task_id: 'task-1' });
+      expect(start).toHaveBeenCalledWith({
+        tenantId: 'tenant-channel',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        channelId: teamsChannel.id,
+        threadId: '19:c|root-1',
+      });
+      await service.updateProgress({ session_id: 'sess-1', state: 'done' });
+      expect(stop).toHaveBeenCalledWith('tenant-channel', 'sess-1');
+    });
+    await service.stopListeners();
+    expect(stopAll).toHaveBeenCalledOnce();
+  });
+
+  it('does not type in channel threads, and types with proactive sends off', async () => {
+    for (const [conversationType, outbound, types] of [
+      ['channel', true, false],
+      ['personal', false, true],
+    ] as const) {
+      const { service } = makeGatewayHarness({
+        channel: {
+          ...teamsChannel,
+          config: {
+            ...(teamsChannel.config as Record<string, unknown>),
+            outbound_enabled: outbound,
+          },
+        } as GatewayChannel,
+        existingMapping: makeMapping({
+          channel_id: teamsChannel.id,
+          thread_id: '19:c|root-1',
+          session_id: 'sess-1',
+          metadata: { teams_conversation_type: conversationType },
+        }),
+      });
+      const start = vi.spyOn(
+        (service as unknown as { teamsTyping: { start: () => void } }).teamsTyping,
+        'start'
+      );
+      await runWithTenantContext('tenant-channel', () =>
+        service.updateProgress({ session_id: 'sess-1', state: 'working', task_id: 'task-1' })
+      );
+      expect(start).toHaveBeenCalledTimes(types ? 1 : 0);
+    }
+  });
+
+  describe('session-created notice', () => {
+    const fixedChannel = makeTeamsChannel({ id: 'teams-fixed-channel' });
+    const sessionUrl = 'https://agor.example/ui/s/sess-1/';
+    const linkNotice = `Agor: Session created: [View session](${sessionUrl}).`;
+
+    function harness(existingMapping: ThreadSessionMap | null) {
+      const result = makeGatewayHarness({ channel: fixedChannel, existingMapping });
+      const notices = vi.fn(async () => undefined);
+      Object.assign(result.service as unknown as Record<string, unknown>, {
+        sendTeamsSystemMessage: notices,
+      });
+      vi.spyOn(
+        result.service as unknown as { fetchExistingSessionUrlForGatewayUser: () => unknown },
+        'fetchExistingSessionUrlForGatewayUser'
+      ).mockResolvedValue(sessionUrl);
+      return { ...result, notices };
+    }
+
+    function admit(
+      service: GatewayService,
+      threadId: string,
+      conversationType: string,
+      ids: { session?: string } = {}
+    ) {
+      const data = {
+        channel_key: fixedChannel.channel_key,
+        thread_id: threadId,
+        text: 'hello',
+        metadata: { teams_conversation_type: conversationType, teams_has_mention: true },
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000d1' as never,
+        idempotency_task_id: '01927f9d-0000-7000-8000-0000000000d2' as never,
+        ...(ids.session ? { idempotency_session_id: ids.session as never } : {}),
+      };
+      return teamsCreate(service, fixedChannel, data);
+    }
+
+    it('posts one masked link with the follow-up hint when a channel session is created', async () => {
+      const { service, notices, promptCreate } = harness(null);
+      await expect(admit(service, '19:c|root-1', 'channel')).resolves.toMatchObject({
+        success: true,
+        created: true,
+      });
+      expect(promptCreate).toHaveBeenCalledOnce();
+      expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([
+        `${linkNotice} Mention me again to follow up.`,
+      ]);
+    });
+
+    it('omits the follow-up hint in a personal chat', async () => {
+      const { service, notices } = harness(null);
+      await admit(service, 'a:personal-1', 'personal');
+      expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([linkNotice]);
+    });
+
+    it('posts nothing on a follow-up mention', async () => {
+      const { service, notices, promptCreate } = harness(
+        makeMapping({ channel_id: fixedChannel.id, thread_id: '19:c|root-1' })
+      );
+      await expect(admit(service, '19:c|root-1', 'channel')).resolves.toMatchObject({
+        success: true,
+        created: false,
+      });
+      expect(promptCreate).toHaveBeenCalledOnce();
+      expect(notices).not.toHaveBeenCalled();
+    });
+
+    it('posts nothing when a concurrent message loses the thread race', async () => {
+      const { service, notices, threadMapRepo } = harness(null);
+      threadMapRepo.findByChannelAndThread
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(
+          makeMapping({ channel_id: fixedChannel.id, thread_id: '19:c|root-1', session_id: 'w' })
+        );
+      threadMapRepo.create.mockRejectedValueOnce(new Error('mapping unique conflict'));
+      await expect(admit(service, '19:c|root-1', 'channel')).resolves.toMatchObject({
+        success: true,
+        created: false,
+      });
+      expect(notices).not.toHaveBeenCalled();
+    });
+
+    it('announces the session when a redelivered first message recovers', async () => {
+      const mapping = makeMapping({
+        channel_id: fixedChannel.id,
+        thread_id: '19:c|root-1',
+        session_id: 'sess-1',
+      });
+      const { service, notices } = harness(mapping);
+      await expect(
+        admit(service, '19:c|root-1', 'channel', { session: 'sess-1' })
+      ).resolves.toMatchObject({ success: true, created: true });
+      expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([
+        `${linkNotice} Mention me again to follow up.`,
+      ]);
+    });
+  });
+});
+
+describe('GatewayService Teams proactive sends', () => {
+  const TEAMS_CHANNEL = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2';
+  const SIBLING = '19:9b8a7f6e5d4c4b3a2f1e0d9c8b7a6f5e@thread.tacv2';
+  const ROOT = '1616990000001';
+  const channel = makeTeamsChannel({
+    id: 'teams-outbound-channel',
+    config: { outbound_enabled: true },
+  });
+  const anchorAddress = { serviceUrl: 'https://smba.trafficmanager.net/amer/' };
+  const fenced = (overrides: Record<string, unknown> = {}) => ({
+    ok: true,
+    row: {
+      thread_id: `${TEAMS_CHANNEL}|1616989510408`,
+      team_id: '19:team@thread.tacv2',
+      team_aad_group_id: 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b',
+      teams_channel_type: null,
+      ...overrides,
+    },
+    address: anchorAddress,
+  });
+
+  function emitHarness(
+    options: {
+      config?: Record<string, unknown>;
+      direct?: unknown;
+      anchors?: unknown[];
+      start?: ReturnType<typeof vi.fn>;
+      channels?: Array<{ id: string; name: string }>;
+    } = {}
+  ) {
+    const teamsChannel = {
+      ...channel,
+      config: { ...(channel.config as Record<string, unknown>), ...options.config },
+    } as GatewayChannel;
+    const harness = makeGatewayHarness({ channel: teamsChannel });
+    const create = vi.fn(async (data: Record<string, unknown>) => ({ id: 'seed-1', ...data }));
+    Object.assign(harness.outboundRepo, { create });
+    const addresses = {
+      loadFencedByConversation: vi.fn(
+        async () => options.direct ?? { ok: false, code: 'conversation_address_missing' }
+      ),
+      loadFencedTeamAnchors: vi.fn(async () => options.anchors ?? []),
+      revokeConversations: vi.fn(async () => 1),
+    };
+    (harness.service as unknown as { teamsAddressRepo: unknown }).teamsAddressRepo = addresses;
+    const startChannelThread =
+      options.start ?? vi.fn(async () => ({ rootMessageId: ROOT, sentChunks: 1 }));
+    const listTeamChannels = vi.fn(async () => options.channels ?? []);
+    vi.spyOn(teamsConnectorCache, 'get').mockReturnValue({
+      formatMessage: (text: string) => text,
+      startChannelThread,
+      listTeamChannels,
+      invalidateTokens: vi.fn(),
+    } as never);
+    const emit = (target = `channel:${TEAMS_CHANNEL}`) =>
+      runWithTenantContext('tenant-channel', () =>
+        harness.service.emitMessage({
+          gatewayChannelId: teamsChannel.id,
+          message: 'Release notes are ready',
+          target,
+          emittedByUserId: 'user-1' as UserID,
+          userRole: 'admin',
+        })
+      );
+    return { ...harness, create, addresses, startChannelThread, listTeamChannels, emit };
+  }
+
+  it('refuses when proactive sends are off or unset, before any Teams call', async () => {
+    for (const outbound of [false, undefined]) {
+      const { emit, startChannelThread, addresses } = emitHarness({
+        config: { outbound_enabled: outbound },
+      });
+      await expect(emit()).rejects.toThrow('Gateway outbound is disabled');
+      expect(addresses.loadFencedByConversation).not.toHaveBeenCalled();
+      expect(startChannelThread).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('posts into a seen channel and stores a seed keyed exactly like a reply thread', async () => {
+    const { emit, startChannelThread, create } = emitHarness({ direct: fenced() });
+    const result = await emit();
+    expect(startChannelThread).toHaveBeenCalledWith(anchorAddress, {
+      channelId: TEAMS_CHANNEL,
+      chunks: [expect.stringContaining('_To reply, @mention Agor in this thread._')],
+      signal: expect.any(AbortSignal),
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel_type: 'teams',
+        platform_channel_id: TEAMS_CHANNEL,
+        platform_message_id: ROOT,
+        platform_thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+        message_text: 'Release notes are ready',
+        platform_permalink: expect.stringContaining('groupId=fbe2bf47-16c8-47cf-b4a5-4b9b187c508b'),
+      })
+    );
+    expect(result).toMatchObject({ success: true, platform_thread_id: `${TEAMS_CHANNEL}|${ROOT}` });
+  });
+
+  it('anchors a sibling channel only when its team lists it', async () => {
+    const listed = emitHarness({
+      anchors: [fenced()],
+      channels: [{ id: SIBLING, name: 'Releases' }],
+    });
+    await expect(listed.emit(`channel:${SIBLING}`)).resolves.toMatchObject({ success: true });
+    expect(listed.listTeamChannels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: '19:team@thread.tacv2',
+        serviceUrl: anchorAddress.serviceUrl,
+      })
+    );
+    vi.restoreAllMocks();
+
+    const unlisted = emitHarness({ anchors: [fenced()], channels: [] });
+    await expect(unlisted.emit(`channel:${SIBLING}`)).rejects.toThrow(
+      'has not seen this Teams channel'
+    );
+    expect(unlisted.startChannelThread).not.toHaveBeenCalled();
+  });
+
+  it('refuses allowlist misses, private channels, and malformed targets', async () => {
+    const outsideChannels = emitHarness({
+      direct: fenced(),
+      config: { allowed_channel_ids: [SIBLING] },
+    });
+    await expect(outsideChannels.emit()).rejects.toThrow('allowed_channel_ids');
+    expect(outsideChannels.addresses.loadFencedByConversation).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+
+    const outsideTeams = emitHarness({
+      direct: fenced(),
+      config: { allowed_team_ids: ['19:other@thread.tacv2'] },
+    });
+    await expect(outsideTeams.emit()).rejects.toThrow('allowed_team_ids');
+    vi.restoreAllMocks();
+
+    // The repository's answer for a channel with any thread marked private or shared.
+    const privateChannel = emitHarness({
+      direct: { ok: false, code: 'conversation_not_standard_channel' },
+      anchors: [fenced()],
+    });
+    await expect(privateChannel.emit()).rejects.toThrow('standard channels only');
+    expect(privateChannel.addresses.loadFencedTeamAnchors).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+
+    const malformed = emitHarness({ direct: fenced() });
+    await expect(malformed.emit('channel:C123')).rejects.toThrow('channel:<19:');
+    expect(malformed.startChannelThread).not.toHaveBeenCalled();
+  });
+
+  it('never stores a seed after an ambiguous first post, and retries one short rate limit', async () => {
+    const ambiguous = emitHarness({
+      direct: fenced(),
+      start: vi.fn(async () => {
+        throw new TeamsSendError({ phase: 'send', status: 502 });
+      }),
+    });
+    await expect(ambiguous.emit()).rejects.toThrow('Teams may have posted the message');
+    expect(ambiguous.create).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+
+    const start = vi
+      .fn()
+      .mockRejectedValueOnce(new TeamsSendError({ phase: 'send', status: 429, retryAfterMs: 0 }))
+      .mockResolvedValueOnce({ rootMessageId: ROOT, sentChunks: 1 });
+    const limited = emitHarness({ direct: fenced(), start });
+    await expect(limited.emit()).resolves.toMatchObject({ success: true });
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves reply addresses alone when Teams refuses a proactive post', async () => {
+    const { emit, addresses, create } = emitHarness({
+      direct: fenced(),
+      start: vi.fn(async () => {
+        throw new TeamsSendError({
+          phase: 'send',
+          status: 403,
+          providerCode: 'BotNotInConversationRoster',
+        });
+      }),
+    });
+    await expect(emit()).rejects.toThrow('Teams API failure');
+    expect(addresses.revokeConversations).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the seed and reports a partial post when a later chunk fails', async () => {
+    const { emit, create } = emitHarness({
+      direct: fenced(),
+      start: vi.fn(async () => ({
+        rootMessageId: ROOT,
+        sentChunks: 1,
+        error: new TeamsSendError({ phase: 'send', status: 502 }),
+      })),
+    });
+    await expect(emit()).resolves.toMatchObject({ success: true, partial: true });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ partial: true }) })
+    );
+  });
+
+  it('starts the session from a mentioned reply to a seed, without catch-up', async () => {
+    const seed = {
+      id: 'seed-1',
+      platform_thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+      message_text: 'Release notes are ready',
+      emitted_by_user_id: 'user-1',
+      metadata: {},
+    } as unknown as GatewayOutboundMessage;
+    const fetchProviderHistory = vi.fn();
+    const { service, outboundRepo, promptCreate, threadMapRepo, completeReplyAdmission } =
+      makeGatewayHarness({
+        channel,
+        outboundSeed: seed,
+        connector: { sendMessage: vi.fn(), fetchProviderHistory },
+      });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      sendTeamsSystemMessage: vi.fn(async () => undefined),
+    });
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+      text: 'looks good, ship it',
+      user_name: 'Ada',
+      metadata: {
+        teams_conversation_type: 'channel',
+        teams_has_mention: true,
+        teams_user_name: 'Ada',
+      },
+      teams_catch_up: {
+        activity_id: '1616990000009',
+        timestamp: '2021-03-29T03:55:32.035Z',
+        service_url: 'https://smba.trafficmanager.net/amer/',
+        team_id: '19:team@thread.tacv2',
+        team_group_id: null,
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000b1' as never,
+    };
+    await expect(teamsCreate(service, channel, data)).resolves.toMatchObject({ success: true });
+    expect(outboundRepo.admitReplySession).toHaveBeenCalledWith(channel.id, data.thread_id);
+    expect(threadMapRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+        metadata: expect.objectContaining({ outbound_seed_id: 'seed-1' }),
+      })
+    );
+    expect(completeReplyAdmission).toHaveBeenCalledWith('seed-1', 'sess-new');
+    expect(fetchProviderHistory).not.toHaveBeenCalled();
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain(
+      'This Microsoft Teams thread began from a proactive Agor gateway message'
+    );
+    expect(prompt).toContain('Microsoft Teams sender name: Ada');
+    expect(prompt).toContain('Release notes are ready');
+    expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).toHaveBeenCalledWith(
+      'map-new',
+      '1616990000009'
+    );
+  });
+
+  it('reads catch-up on later mentions in a seeded thread', async () => {
+    const seed = {
+      id: 'seed-1',
+      platform_thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+      message_text: 'Release notes are ready',
+      emitted_by_user_id: 'user-1',
+      metadata: {},
+    } as unknown as GatewayOutboundMessage;
+    const fetchProviderHistory = vi.fn(async () => ({
+      threadId: `${TEAMS_CHANNEL}|${ROOT}`,
+      complete: true,
+      messages: [],
+    }));
+    const { service, promptCreate } = makeGatewayHarness({
+      channel,
+      outboundSeed: seed,
+      existingMapping: makeMapping({
+        channel_id: channel.id,
+        thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+        session_id: 'sess-new' as never,
+        teams_last_admitted_activity_id: '1616990000009',
+        metadata: { outbound_seed_id: 'seed-1', teams_conversation_type: 'channel' },
+      }),
+      connector: { sendMessage: vi.fn(), fetchProviderHistory },
+    });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      sendTeamsSystemMessage: vi.fn(async () => undefined),
+      taskRepo: { findById: vi.fn(async () => null) },
+    });
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+      text: 'what do you think?',
+      user_name: 'Bob',
+      metadata: { teams_conversation_type: 'channel', teams_has_mention: true },
+      teams_catch_up: {
+        activity_id: '1616990000020',
+        timestamp: '2021-03-29T03:55:32.035Z',
+        service_url: 'https://smba.trafficmanager.net/amer/',
+        team_id: '19:team@thread.tacv2',
+        team_group_id: 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b',
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000b3' as never,
+    };
+    await teamsCreate(service, channel, data);
+    expect(fetchProviderHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ afterProviderCursor: '1616990000009' })
+    );
+    expect(String(promptCreate.mock.calls[0][0].prompt)).not.toContain(
+      'began from a proactive Agor gateway message'
+    );
+  });
+
+  it('puts the reply hint in the first chunk of a long post', async () => {
+    const { startChannelThread, service } = emitHarness({ direct: fenced() });
+    await runWithTenantContext('tenant-channel', () =>
+      service.emitMessage({
+        gatewayChannelId: channel.id,
+        message: `${'a'.repeat(39_000)}\n\n${'b'.repeat(10_000)}`,
+        target: `channel:${TEAMS_CHANNEL}`,
+        emittedByUserId: 'user-1' as UserID,
+        userRole: 'admin',
+      })
+    );
+    const { chunks } = (
+      startChannelThread.mock.calls[0] as unknown as [unknown, { chunks: string[] }]
+    )[1];
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toContain('_To reply, @mention Agor in this thread._');
+    expect(chunks[1]).not.toContain('@mention Agor');
+    expect(chunks.every((chunk) => chunk.length <= 40_000)).toBe(true);
+  });
+
+  it('says the post is live when its seed cannot be recorded', async () => {
+    const { emit, create } = emitHarness({ direct: fenced() });
+    create.mockRejectedValueOnce(new Error('connection terminated'));
+    await expect(emit()).rejects.toThrow('Teams posted the message');
+  });
+
+  it('reports a live post as sent when the channel bookkeeping write fails', async () => {
+    const { emit, channelRepo } = emitHarness({ direct: fenced() });
+    channelRepo.updateLastMessage.mockRejectedValueOnce(new Error('connection terminated'));
+    await expect(emit()).resolves.toMatchObject({
+      success: true,
+      gateway_outbound_message_id: 'seed-1',
+    });
+  });
+
+  it('never admits a seed for personal chats', async () => {
+    const { service, outboundRepo } = makeGatewayHarness({
+      channel,
+      existingMapping: makeMapping({ channel_id: channel.id, thread_id: 'a:personal' }),
+    });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      sendTeamsSystemMessage: vi.fn(async () => undefined),
+    });
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: 'a:personal',
+      text: 'hello',
+      metadata: { teams_conversation_type: 'personal' },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000b2' as never,
+    };
+    await teamsCreate(service, channel, data);
+    expect(outboundRepo.admitReplySession).not.toHaveBeenCalled();
+  });
+});
+
+describe('GatewayService Teams reactions', () => {
+  const channel = makeTeamsChannel({
+    id: 'teams-reaction-channel',
+    config: { inbound_reactions: true, catch_up: { mode: 'best_effort' } },
+  });
+  const THREAD = '19:c@thread.tacv2|1616990000001';
+
+  function reactionHarness(
+    options: { config?: Record<string, unknown>; mapped?: boolean; reactedText?: string } = {}
+  ) {
+    const reactionChannel = {
+      ...channel,
+      config: { ...(channel.config as Record<string, unknown>), ...options.config },
+    } as GatewayChannel;
+    const fetchProviderHistory = vi.fn();
+    const harness = makeGatewayHarness({
+      channel: reactionChannel,
+      existingMapping:
+        options.mapped === false
+          ? null
+          : makeMapping({
+              id: 'map-r' as never,
+              channel_id: reactionChannel.id,
+              thread_id: THREAD,
+              session_id: 'sess-r' as never,
+              teams_last_admitted_activity_id: '1616990000005',
+              metadata: { teams_conversation_type: 'channel' },
+            }),
+      connector: { sendMessage: vi.fn(), fetchProviderHistory },
+    });
+    const notices = vi.fn(async () => undefined);
+    const findByProviderMessageInThread = vi.fn(async () =>
+      options.reactedText === undefined ? null : { message_id: 'msg-1' }
+    );
+    Object.assign(harness.service as unknown as Record<string, unknown>, {
+      sendTeamsSystemMessage: notices,
+      taskRepo: { findById: vi.fn(async () => null) },
+      teamsDeliveryRepo: { findByProviderMessageInThread },
+      messagesRepo: {
+        findById: vi.fn(async () => ({ content: options.reactedText, content_preview: '' })),
+      },
+    });
+    const create = (eventType = 'reaction_added') =>
+      teamsCreate(harness.service, reactionChannel, {
+        channel_key: reactionChannel.channel_key,
+        thread_id: THREAD,
+        text: '',
+        user_name: 'Ada',
+        metadata: {
+          teams_conversation_type: 'channel',
+          teams_has_mention: false,
+          teams_user_name: 'Ada',
+          teams_event_type: eventType,
+          teams_reaction: 'like',
+          teams_reaction_item_id: '1616990000009',
+        },
+        teams_catch_up: {
+          activity_id: 'reaction-abc',
+          timestamp: '2026-10-14T12:00:00.000Z',
+          service_url: 'https://smba.trafficmanager.net/amer/',
+          team_id: '19:team@thread.tacv2',
+          team_group_id: null,
+        },
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000c1' as never,
+      });
+    return { ...harness, create, notices, fetchProviderHistory, findByProviderMessageInThread };
+  }
+
+  it('prompts the mapped session with the reacted message, without catch-up or a cursor move', async () => {
+    const {
+      create,
+      promptCreate,
+      notices,
+      fetchProviderHistory,
+      threadMapRepo,
+      findByProviderMessageInThread,
+    } = reactionHarness({ reactedText: 'Shall I merge the fix?' });
+    await expect(create()).resolves.toMatchObject({ success: true, sessionId: 'sess-r' });
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain('[Teams reaction] Ada reacted "like" to your message');
+    expect(prompt).toContain('Shall I merge the fix?');
+    expect(prompt).toContain('lightweight signal, not a new request');
+    expect(findByProviderMessageInThread).toHaveBeenCalledWith('map-r', '1616990000009');
+    expect(fetchProviderHistory).not.toHaveBeenCalled();
+    expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).not.toHaveBeenCalled();
+    expect(notices).not.toHaveBeenCalled();
+  });
+
+  it('reports a removal, and still prompts when the reacted message is unknown', async () => {
+    const { create, promptCreate } = reactionHarness();
+    await create('reaction_removed');
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain('Ada removed their "like" reaction from your message');
+    expect(prompt).not.toContain('Your message:');
+  });
+
+  it('never starts a session, and does nothing when reactions are off', async () => {
+    for (const options of [{ mapped: false }, { config: { inbound_reactions: false } }]) {
+      const { create, promptCreate, sessionsCreate, notices } = reactionHarness(options);
+      await expect(create()).resolves.toMatchObject({ success: false });
+      expect(promptCreate).not.toHaveBeenCalled();
+      expect(sessionsCreate).not.toHaveBeenCalled();
+      expect(notices).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe('GatewayService Teams proactive DMs', () => {
+  const CHAT = 'a:1WFBmMYtHYGEDUX011dlEKFh3EKvfLguozxnujkAYr';
+  const channel = makeTeamsChannel({
+    id: 'teams-dm-channel',
+    config: { outbound_enabled: true },
+  });
+  const anchor = {
+    ok: true,
+    row: { thread_id: '19:c@thread.tacv2|1', team_id: '19:team@thread.tacv2' },
+    address: { serviceUrl: 'https://smba.trafficmanager.net/amer/' },
+  };
+
+  function dmHarness(
+    options: {
+      config?: Record<string, unknown>;
+      member?: Record<string, unknown> | null;
+      findMember?: ReturnType<typeof vi.fn>;
+    } = {}
+  ) {
+    const dmChannel = {
+      ...channel,
+      config: { ...(channel.config as Record<string, unknown>), ...options.config },
+    } as GatewayChannel;
+    const harness = makeGatewayHarness({ channel: dmChannel });
+    const create = vi.fn(async (data: Record<string, unknown>) => ({ id: 'dm-1', ...data }));
+    Object.assign(harness.outboundRepo, { create });
+    (harness.service as unknown as { teamsAddressRepo: unknown }).teamsAddressRepo = {
+      loadFencedTeamAnchors: vi.fn(async () => [anchor]),
+    };
+    const findMember =
+      options.findMember ??
+      vi.fn(async () =>
+        options.member === undefined
+          ? { id: '29:1ab-member', aadObjectId: 'aad-ada', email: 'ada@contoso.com' }
+          : options.member
+      );
+    const sendPersonalMessage = vi.fn(async () => ({
+      conversationId: CHAT,
+      firstMessageId: '1791924437861',
+      sentChunks: 1,
+    }));
+    vi.spyOn(teamsConnectorCache, 'get').mockReturnValue({
+      formatMessage: (text: string) => text,
+      findMember,
+      sendPersonalMessage,
+      invalidateTokens: vi.fn(),
+    } as never);
+    const emit = (target = 'user:ada@contoso.com') =>
+      runWithTenantContext('tenant-channel', () =>
+        harness.service.emitMessage({
+          gatewayChannelId: dmChannel.id,
+          message: 'Your report is ready',
+          target,
+          emittedByUserId: 'user-1' as UserID,
+          userRole: 'admin',
+        })
+      );
+    return { ...harness, create, findMember, sendPersonalMessage, emit };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('DMs a member of a known team and records the send against that chat', async () => {
+    const { emit, findMember, sendPersonalMessage, create } = dmHarness();
+    await expect(emit()).resolves.toMatchObject({
+      success: true,
+      platform_channel_id: CHAT,
+      platform_message_id: '1791924437861',
+    });
+    expect(findMember).toHaveBeenCalledWith({
+      serviceUrl: 'https://smba.trafficmanager.net/amer/',
+      conversationId: '19:team@thread.tacv2',
+      userId: 'ada@contoso.com',
+    });
+    expect(sendPersonalMessage).toHaveBeenCalledWith(anchor.address, {
+      memberId: '29:1ab-member',
+      chunks: ['Your report is ready'],
+      signal: expect.any(AbortSignal),
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform_channel_id: CHAT,
+        platform_thread_id: `${CHAT}|1791924437861`,
+        metadata: expect.objectContaining({ direct_message: true }),
+      })
+    );
+  });
+
+  it('refuses people outside the known teams or the user allowlist, before sending', async () => {
+    const outsider = dmHarness({ member: null });
+    await expect(outsider.emit()).rejects.toThrow("isn't a member of a team where Agor");
+    expect(outsider.sendPersonalMessage).not.toHaveBeenCalled();
+    const unlisted = dmHarness({ config: { allowed_user_aad_object_ids: ['aad-other'] } });
+    await expect(unlisted.emit()).rejects.toThrow('allowed_user_aad_object_ids');
+    expect(unlisted.sendPersonalMessage).not.toHaveBeenCalled();
+    // Ingress refuses personal chats under a team or channel allowlist, so the reply could never land.
+    for (const config of [
+      { allowed_team_ids: ['19:team@thread.tacv2'] },
+      { allowed_channel_ids: ['19:c@thread.tacv2'] },
+    ]) {
+      const restricted = dmHarness({ config });
+      await expect(restricted.emit()).rejects.toThrow('restricts teams or channels');
+      expect(restricted.findMember).not.toHaveBeenCalled();
+    }
+    const unreachable = dmHarness({
+      findMember: vi.fn(async () => {
+        throw new TeamsMemberLookupError('teams_member_lookup_http_503', true);
+      }),
+    });
+    await expect(unreachable.emit()).rejects.toThrow('could not be reached');
+  });
+
+  it('gives the reply the DMs sent since the last message, once', async () => {
+    const { service, promptCreate, outboundRepo, threadMapRepo } = makeGatewayHarness({
+      channel,
+      existingMapping: makeMapping({
+        id: 'map-dm' as never,
+        channel_id: channel.id,
+        thread_id: CHAT,
+        session_id: 'sess-dm' as never,
+        teams_last_admitted_activity_id: '1791924400000',
+        metadata: { teams_conversation_type: 'personal' },
+      }),
+    });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      sendTeamsSystemMessage: vi.fn(async () => undefined),
+      taskRepo: { findById: vi.fn(async () => null) },
+    });
+    outboundRepo.listDirectMessageSends.mockResolvedValueOnce([
+      // Before the cursor: already seen.
+      { platform_message_id: '1791924300000', created_at: 'x', message_text: 'old news' },
+      {
+        platform_message_id: '1791924437861',
+        created_at: 'y',
+        message_text: 'Your report is ready',
+      },
+    ] as never);
+    await teamsCreate(service, channel, {
+      channel_key: channel.channel_key,
+      thread_id: CHAT,
+      text: 'thanks, can you also email it?',
+      user_name: 'Ada',
+      metadata: { teams_conversation_type: 'personal' },
+      teams_catch_up: {
+        activity_id: '1791924500000',
+        timestamp: '2026-10-14T12:00:00.000Z',
+        service_url: 'https://smba.trafficmanager.net/amer/',
+        team_id: null,
+        team_group_id: null,
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000d1' as never,
+    });
+    expect(outboundRepo.listDirectMessageSends).toHaveBeenCalledWith(
+      channel.id,
+      CHAT,
+      expect.any(Date),
+      'teams'
+    );
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain('Your report is ready');
+    expect(prompt).not.toContain('old news');
+    expect(prompt).toContain('thanks, can you also email it?');
+    expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).toHaveBeenCalledWith(
+      'map-dm',
+      '1791924500000'
+    );
+    expect(promptCreate.mock.calls[0][0].metadata).toMatchObject({
+      gateway_teams_cursor: '1791924500000',
+    });
   });
 });
