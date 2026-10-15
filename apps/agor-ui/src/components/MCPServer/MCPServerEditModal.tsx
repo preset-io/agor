@@ -68,20 +68,6 @@ export interface MCPServerEditModalProps {
 const SHARED_NO_LONGER_ALLOWED =
   'You can no longer add shared servers, so choose Private or ask an administrator.';
 
-/** The server's config version when a conflict is only this editor's own lost-reply patch landing. */
-function versionAfterOwnLostPatch(error: unknown, sentVersion: number): number | null {
-  const { name, code, data } = (error ?? {}) as {
-    name?: unknown;
-    code?: unknown;
-    data?: { expected_config_version?: unknown; current_config_version?: unknown };
-  };
-  if (name !== 'Conflict' && code !== 409) return null;
-  return data?.expected_config_version === sentVersion &&
-    data?.current_config_version === sentVersion + 1
-    ? sentVersion + 1
-    : null;
-}
-
 /**
  * Self-contained "Edit MCP Server" modal, which also adds a server when opened
  * without one.
@@ -117,8 +103,6 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   const [createdServer, setCreatedServer] = useState<MCPServer | null>(null);
   // The form revision whose create lost its reply: Create stays off until the form changes.
   const [unconfirmedCreateRevision, setUnconfirmedCreateRevision] = useState<number | null>(null);
-  // Create mode: the config version a patch was sent with when its reply was lost.
-  const lostPatchVersionRef = useRef<number | null>(null);
   // One save at a time, from Create/Save, Save & Test, and the OAuth start alike:
   // until a create replies there is no row to patch, so a second save would add another.
   const saveInFlightRef = useRef(false);
@@ -202,7 +186,6 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
       setPolicySnapshot(null);
       setCreatedServer(null);
       setUnconfirmedCreateRevision(null);
-      lostPatchVersionRef.current = null;
       setConfigConflict(false);
       setSaveError(null);
       configVersionRef.current = 1;
@@ -294,7 +277,6 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     setManagedOAuthCompatibilityMode(undefined);
     setCreatedServer(null);
     setUnconfirmedCreateRevision(null);
-    lostPatchVersionRef.current = null;
     onClose();
   };
 
@@ -426,25 +408,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
       });
 
       if (!operation.isCurrent() || !mutationStateRef.current.allowed) return null;
-      const sentVersion = configVersionRef.current;
-      let updated: MCPServer;
-      try {
-        updated = await client.service('mcp-servers').patch(target.mcp_server_id, updates);
-        lostPatchVersionRef.current = null;
-      } catch (error) {
-        // Only the row this form created: an existing server's conflict always asks for a reload.
-        if (server) throw error;
-        const ownReplay = lostPatchVersionRef.current === sentVersion;
-        lostPatchVersionRef.current = isInFlightConnectionLossError(error) ? sentVersion : null;
-        const currentVersion = ownReplay ? versionAfterOwnLostPatch(error, sentVersion) : null;
-        if (currentVersion === null) throw error;
-        // The lost patch landed; save this form once more on top of it.
-        if (!operation.isCurrent() || !mutationStateRef.current.allowed) return null;
-        configVersionRef.current = currentVersion;
-        updated = await client
-          .service('mcp-servers')
-          .patch(target.mcp_server_id, { ...updates, expected_config_version: currentVersion });
-      }
+      const updated = await client.service('mcp-servers').patch(target.mcp_server_id, updates);
       if (!operation.isCurrent()) return null;
       setPolicySnapshot(updated);
       configVersionRef.current = updated.config_version ?? configVersionRef.current + 1;

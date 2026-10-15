@@ -514,13 +514,14 @@ function conflict(expected: number, current: number) {
   );
 }
 
-it('saves once more on top of its own patch whose reply was lost', async () => {
+it('keeps the edits after a lost patch reply and never replays past a conflict', async () => {
   const value = mount(emptyOverview);
   value.patch
     .mockRejectedValueOnce(new Error('socket has been disconnected'))
     .mockRejectedValueOnce(conflict(1, 2));
   const dialog = await openCreateDialog();
   const save = await createWithOAuth(value, dialog);
+  await act(() => userEvent.fill(within(dialog).getByLabelText('Display Name'), 'Acme 2'));
 
   await act(() => userEvent.click(save));
   expect(
@@ -528,14 +529,17 @@ it('saves once more on top of its own patch whose reply was lost', async () => {
       "The connection to Agor dropped before this was confirmed. If it didn't go through, try to save the MCP server again once the connection is back."
     )
   ).toBeVisible();
+  expect(within(dialog).getByLabelText('Display Name')).toHaveValue('Acme 2');
 
   await act(() => userEvent.click(save));
-  await waitFor(() =>
-    expect(screen.queryByRole('dialog', { name: 'Add MCP Server' })).not.toBeInTheDocument()
-  );
-  expect(value.patch).toHaveBeenCalledTimes(3);
-  expect(value.patch.mock.calls[1]?.[1]).toMatchObject({ expected_config_version: 1 });
-  expect(value.patch.mock.calls[2]?.[1]).toMatchObject({ expected_config_version: 2 });
+  expect(
+    await within(dialog).findByText(
+      'This MCP server was changed somewhere else. Load the latest version before you save again.'
+    )
+  ).toBeVisible();
+  expect(save).toBeDisabled();
+  expect(within(dialog).getByLabelText('Display Name')).toHaveValue('Acme 2');
+  expect(value.patch).toHaveBeenCalledTimes(2);
 });
 
 it('still shows the conflict when another writer changed the server it created', async () => {
