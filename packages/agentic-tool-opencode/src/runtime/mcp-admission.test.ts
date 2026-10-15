@@ -227,6 +227,7 @@ describe('MCP servers reaching the OpenCode process environment', () => {
     // The permission map is Agor-side state and must never be serialised into
     // the config the OpenCode process reads.
     expect(configContent).not.toContain('mcpToolPermissions');
+    expect(configContent).not.toContain('mcpSignInNotice');
   });
 });
 
@@ -256,4 +257,99 @@ it('adds no client hint to an external OpenCode HTTP connection', async () => {
   expect(external).toHaveLength(1);
   expect(external[0]).toMatchObject({ headers: { Authorization: 'Bearer external-token' } });
   expect(external[0]).not.toHaveProperty('headers.x-agor-mcp-client');
+});
+
+/**
+ * OpenCode fails the whole turn on a remote server it cannot authenticate, so
+ * every server the acting user has no credential for is withheld and named in
+ * the per-turn notice instead (DCR included: unlike Claude Code, Codex,
+ * Copilot and Cursor, it does not mark the server as needing auth and carry on).
+ */
+describe('MCP servers the acting user has no credential for', () => {
+  const remote = (id: string, auth: MCPServer['auth']) =>
+    ({ ...server(id), transport: 'http', url: `https://mcp.${id}.test/mcp`, auth }) as MCPServer;
+
+  async function buildFor(
+    userId: string,
+    grants: Record<string, Record<string, string>>,
+    lookupFails = false
+  ) {
+    vi.stubEnv('AGOR_USER_ENV_KEYS', '');
+    const servers = [
+      remote('asana', { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'app' }),
+      remote('dcr', { type: 'oauth' }),
+      remote('m2m', {
+        type: 'oauth',
+        oauth_grant_type: 'client_credentials',
+        oauth_client_id: 'svc',
+      }),
+      remote('linear', { type: 'bearer', token: '{{ user.env.LINEAR_API_KEY }}' }),
+    ];
+    const tool = new OpenCodeTool({
+      resolveMcpServers: (sessionId) =>
+        getMcpServersForSession(
+          sessionId,
+          {
+            sessionMCPRepo: { listEffectiveServers: vi.fn().mockResolvedValue(servers) } as never,
+            mcpServerRepo: { findAll: vi.fn().mockResolvedValue([]) } as never,
+            mcpOAuthAuthHeadersRepo: {
+              getAuthHeaders: async () => {
+                if (lookupFails) throw new Error('credential repository unavailable');
+                return Object.fromEntries(
+                  Object.entries(grants[userId] ?? {}).map(([id, authorization]) => [
+                    id,
+                    { authorization },
+                  ])
+                );
+              },
+            },
+            forUserId: userId,
+          },
+          { toolFiltering: 'intercept' }
+        ),
+      getDaemonUrl: async () => 'http://localhost:3030',
+    });
+    try {
+      return await (
+        tool as unknown as {
+          buildInvocationConfig(
+            s: string,
+            t: string
+          ): Promise<{ mcp: Record<string, unknown>; mcpSignInNotice?: string }>;
+        }
+      ).buildInvocationConfig('session-1', 'token');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }
+  const urls = (config: { mcp: Record<string, unknown> }) =>
+    Object.values(config.mcp).map((value) => (value as { url?: string }).url);
+
+  it("withholds them instead of failing the turn, using only the acting user's grants", async () => {
+    const grants = { 'user-a': { asana: 'Bearer a-asana', dcr: 'Bearer a-dcr' } };
+
+    const userB = await buildFor('user-b', grants);
+    expect(urls(userB)).toEqual(['http://localhost:3030/mcp']);
+    expect(userB.mcpSignInNotice).toContain('- mcpServerId: asana, label: "asana"');
+    expect(userB.mcpSignInNotice).toContain('- mcpServerId: dcr, label: "dcr"');
+    expect(userB.mcpSignInNotice).toContain('missing environment variables: LINEAR_API_KEY');
+    expect(JSON.stringify(userB)).not.toContain('a-asana');
+
+    // User A's grants load both OAuth servers; only the unset PAT is withheld.
+    const userA = await buildFor('user-a', grants);
+    expect(urls(userA)).toContain('https://mcp.asana.test/mcp');
+    expect(urls(userA)).toContain('https://mcp.dcr.test/mcp');
+    expect(userA.mcpSignInNotice).not.toContain('agor_widgets_request_oauth');
+    expect(userA.mcpSignInNotice).toContain('missing environment variables: LINEAR_API_KEY');
+  });
+
+  it('asks to retry, not to Connect, when the credential lookup fails', async () => {
+    const config = await buildFor('user-a', {}, true);
+    expect(urls(config)).toEqual(['http://localhost:3030/mcp']);
+    // DCR is withheld too on OpenCode, but with the retry line, not Connect.
+    expect(config.mcpSignInNotice).toMatch(/couldn't load the sign-in[^#]*asana[^#]*dcr/);
+    expect(config.mcpSignInNotice).toMatch(/machine \(client-credentials\)[^#]*m2m/);
+    expect(config.mcpSignInNotice).not.toContain('never connected');
+    expect(config.mcpSignInNotice).not.toContain('unavailable until the user connects them');
+  });
 });

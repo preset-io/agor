@@ -10,7 +10,12 @@
 
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { generateId, shortId } from '@agor/core/db';
-import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
+import {
+  getMcpServersForSession,
+  MCPOAuthAuthorityUnavailableError,
+  MCPSignInNoticeCollector,
+  resolveScopedMCPAuthHeaders,
+} from '@agor/core/mcp';
 import { DEFAULT_CURSOR_MODEL } from '@agor/core/models';
 import { renderAgorSessionIdentity } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
@@ -200,9 +205,10 @@ async function buildCursorMcpServers(args: {
   mcpToken?: string;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
   forUserId?: string;
-}): Promise<Record<string, McpServerConfig> | undefined> {
+}): Promise<{ servers?: Record<string, McpServerConfig>; signInNotice?: string }> {
   const claimed = new Set<string>();
   const mcpServers: Record<string, McpServerConfig> = {};
+  const signIn = new MCPSignInNoticeCollector();
 
   if (args.mcpToken) {
     const daemonUrl = await getDaemonUrl();
@@ -255,7 +261,28 @@ async function buildCursorMcpServers(args: {
     }
 
     if ((server.transport === 'http' || server.transport === 'sse') && server.url) {
-      const authHeaders = await resolveScopedMCPAuthHeaders(scoped);
+      let authHeaders: Record<string, string> | undefined;
+      let lookupFailed = false;
+      try {
+        authHeaders = await resolveScopedMCPAuthHeaders(scoped, { surfaceAuthorityError: true });
+      } catch (error) {
+        // A failed credential lookup is not a missing sign-in: retry advice.
+        if (signIn.recordResolutionFailure(scoped)) continue;
+        // A DCR server keeps today's behavior: loaded without credentials.
+        if (!(error instanceof MCPOAuthAuthorityUnavailableError)) throw error;
+        lookupFailed = true;
+      }
+      // Withhold servers the acting user has no credential for (see the
+      // collector); the notice tells the agent how the user fixes it.
+      if (
+        !lookupFailed &&
+        server.auth &&
+        server.auth.type !== 'none' &&
+        !authHeaders?.Authorization &&
+        signIn.recordMissingGrant(scoped)
+      ) {
+        continue;
+      }
       const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
       mcpServers[name] = {
         type: server.transport,
@@ -267,7 +294,7 @@ async function buildCursorMcpServers(args: {
 
   const count = Object.keys(mcpServers).length;
   console.log(`[cursor] Configured ${count} MCP server(s)`);
-  return count > 0 ? mcpServers : undefined;
+  return { ...(count > 0 ? { servers: mcpServers } : {}), signInNotice: signIn.render() };
 }
 
 async function getInitialUserMessages(client: AgorClient, taskId: TaskID): Promise<Message[]> {
@@ -497,7 +524,7 @@ export async function executeCursorTask(params: {
       taskId,
       tasksService: repos.tasksService,
     });
-    const mcpServers = await buildCursorMcpServers({
+    const { servers: mcpServers, signInNotice } = await buildCursorMcpServers({
       sessionId,
       taskId,
       mcpToken: session.mcp_token,
@@ -554,7 +581,12 @@ export async function executeCursorTask(params: {
       const toolCallMessageIdsByCallId = new Map<string, MessageID>();
       const rawMessages: SDKMessage[] = [];
 
-      currentRun = await agent.send(`${prompt}\n\n${renderAgorSessionIdentity(sessionId)}`, {
+      // Per-turn Agor context (identity, MCP sign-in state) rides on the
+      // provider prompt so a resumed agent sees the current state.
+      const providerPrompt = [prompt, renderAgorSessionIdentity(sessionId), signInNotice]
+        .filter(Boolean)
+        .join('\n\n');
+      currentRun = await agent.send(providerPrompt, {
         model,
         mcpServers,
         idempotencyKey: taskId,

@@ -465,7 +465,6 @@ const params = {
 
 const request = {
   catalog_key: LINEAR,
-  acknowledged_disclosure: CURATED.permission_disclosure as string,
 };
 
 /** Typed access to the stub services a test needs to make fail. */
@@ -588,7 +587,6 @@ describe('mcp-catalog/connect', () => {
     const result = await createMCPCatalogConnectService(app, deps).create(
       {
         catalog_key: LINEAR,
-        acknowledged_disclosure: CURATED.permission_disclosure,
       },
       params
     );
@@ -796,40 +794,21 @@ describe('mcp-catalog/connect', () => {
     );
   });
 
-  it('refuses a connect that never showed what the server can access', async () => {
+  it('needs no acknowledgement field: pressing Connect is the consent', async () => {
     const { app, created, deps } = buildApp(CURATED);
 
-    await expect(
-      createMCPCatalogConnectService(app, deps).create(
-        { ...request, acknowledged_disclosure: '' },
-        params
-      )
-    ).rejects.toThrow(/acknowledged_disclosure is required/);
-    expect(created.mcpServers).toHaveLength(0);
+    await createMCPCatalogConnectService(app, deps).create({ catalog_key: LINEAR }, params);
+    expect(created.mcpServers).toHaveLength(1);
   });
 
-  it('refuses a caller that sent no disclosure back', async () => {
+  it('still connects an old client that sends acknowledged_disclosure, stale or not', async () => {
     const { app, created, deps } = buildApp(CURATED);
 
-    await expect(
-      createMCPCatalogConnectService(app, deps).create(
-        { ...request, acknowledged_disclosure: '   ' },
-        params
-      )
-    ).rejects.toThrow(/acknowledged_disclosure is required/);
-    expect(created.mcpServers).toHaveLength(0);
-  });
-
-  it('refuses a disclosure that no longer matches the catalog entry', async () => {
-    const { app, created, deps } = buildApp(CURATED);
-
-    await expect(
-      createMCPCatalogConnectService(app, deps).create(
-        { ...request, acknowledged_disclosure: 'Reads nothing at all.' },
-        params
-      )
-    ).rejects.toThrow(/has changed since it was shown/);
-    expect(created.mcpServers).toHaveLength(0);
+    await createMCPCatalogConnectService(app, deps).create(
+      { ...request, acknowledged_disclosure: 'Reads nothing at all.' } as typeof request,
+      params
+    );
+    expect(created.mcpServers).toHaveLength(1);
   });
 
   it('refuses an entry with no remote endpoint', async () => {
@@ -1188,8 +1167,7 @@ describe('mcp-catalog/connect — endpoints that sign the user in', () => {
 /**
  * The endpoint's input surface, from the other side.
  *
- * Connect takes a catalog key, a branch, an agentic tool, and the disclosure
- * text — and it is reachable by any member, since installing from the shelf is
+ * Connect takes a catalog key, a branch, and an agentic tool — and it is reachable by any member, since installing from the shelf is
  * deliberately not the admin-only `POST /mcp-servers`. So the question these
  * ask is not whether the marketplace UI sends anything extra (it does not), but
  * what happens when a caller that is not the marketplace sends everything it

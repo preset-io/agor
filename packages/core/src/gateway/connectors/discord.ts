@@ -615,7 +615,7 @@ export function chunkDiscordMessage(text: string, limit = DISCORD_MESSAGE_LIMIT)
         softOffset = index + 1;
       }
     }
-    if (softOffset > startOffset && softOffset < maxOffset) {
+    if (maxOffset < tokens.length && softOffset > startOffset && softOffset < maxOffset) {
       const candidateNextState = tokens[softOffset - 1].stateAfter;
       const candidatePrefix = candidateNextState ? fencePrefix(candidateNextState) : '';
       const nextToken = tokens[softOffset];

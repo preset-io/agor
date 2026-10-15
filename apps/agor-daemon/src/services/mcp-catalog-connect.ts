@@ -224,33 +224,6 @@ function assertConnectableEntry(entry: MCPCatalogEntry): asserts entry is MCPCat
 }
 
 /**
- * Refuse a connect whose caller did not carry the entry's own access
- * disclosure back with it.
- *
- * The disclosure states what the agent will be able to reach once the server is
- * attached, and it is the last thing shown before that happens. Leaving the
- * rule in the drawer would leave the endpoint open to any client that skipped
- * the drawer — the marketplace's own UI is not the only caller a Feathers
- * service has. Comparing the text, rather than accepting a boolean, also means
- * a client holding a disclosure the curator has since rewritten is told to
- * re-read it instead of connecting against the old one.
- */
-function assertDisclosureAcknowledged(entry: MCPCatalogEntry, acknowledged: unknown): void {
-  const stored = entry.permission_disclosure.trim();
-  const shown = typeof acknowledged === 'string' ? acknowledged.trim() : '';
-  if (!shown) {
-    throw new BadRequest(
-      `acknowledged_disclosure is required: connecting ${catalogDisplayName(entry)} must follow showing what it can access`
-    );
-  }
-  if (shown !== stored) {
-    throw new BadRequest(
-      `The access disclosure for ${catalogDisplayName(entry)} has changed since it was shown; review it again before connecting`
-    );
-  }
-}
-
-/**
  * Record an endpoint that answered differently from what its entry states.
  *
  * `auth_type` is authored text about somebody else's server, and connecting is
@@ -907,7 +880,6 @@ export function createMCPCatalogConnectService(
       }
 
       assertConnectableEntry(entry);
-      assertDisclosureAcknowledged(entry, data.acknowledged_disclosure);
       // Derived from the entry and the live endpoint, never from `data` — with
       // one deliberate exception, read here and nowhere else. The request may
       // name a secret; it may not name where the secret goes, what transport

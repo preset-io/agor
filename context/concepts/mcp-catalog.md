@@ -92,17 +92,39 @@ session** asks for teammate and agent tool, creates a caller-owned idle session
 via the normal service, attaches the server, and seeds the starter prompt as
 editable unsent text.
 
-**What this can access** is expanded by default; its checkbox sits inside it
-before the destination fields and Connect, and Connect sends the exact shown
-text as `acknowledged_disclosure`. Collapsing never counts as consent.
+Consent is implied by Connect. The drawer shows a one-line access summary (the
+first sentence of `permission_disclosure`, derived in `accessSummary`, never a
+separately curated field) directly above Connect; the full statement sits in
+**What this can access**, collapsed by default. Connect carries no
+acknowledgement field and the daemon checks none — a legacy
+`acknowledged_disclosure` is ignored. Anything that renders a catalog Connect
+button must show that summary next to it.
 
-The one exception: `agor_widgets_request_oauth` installs from a catalog entry on
-an agent's request, satisfying the check with the entry's own text. This is safe
-only because that install is **inert** — `scope: 'session'`, private to the
-caller, unattached, unauthorized — and the disclosure is rendered on the widget
-above Connect. A later request naming the installed server re-reads the entry's
-disclosure and refuses if the entry left the catalog. If such installs ever stop
-being inert, redesign this exception first.
+`agor_widgets_request_oauth` with a catalog entry installs an OAuth entry on
+an agent's request so the inline card can start sign-in. That install is
+**inert** — `scope: 'session'`, private to the caller, unattached,
+unauthorized — and the full disclosure is rendered on the card above Connect.
+A later request naming the installed server re-reads the entry's disclosure
+and refuses if the entry left the catalog. If such installs ever stop being
+inert, redesign this first.
+
+Some entries need something typed into the drawer: a key (`auth_type:
+credentials`, or a probe answering `credential_requirement: 'required'`), or
+the app credentials of an `oauth.configured_client` entry. For those, a card
+installs nothing at mint unless a reusable shared install exists (the
+readiness `shared_configuration_available` answer the drawer uses), in which
+case it connects `shared` and signs in inline.
+
+When the caller already has a usable current install of the entry, the tool
+attaches it (or takes the pinned card, for OAuth) instead. Otherwise the card
+pins only `catalogEntryName`, and Connect opens this drawer for that entry
+(`openCatalogEntry` on the catalog modal context, mounting `CatalogTab` in its
+`handoff` mode), so policy, the form, egress and storage are the drawer's one
+connect path. The card resolves with the install's id, which `oauth-resolve`
+accepts only for a caller-usable install that still matches the entry
+(`isCurrentCatalogInstallOfEntry`), plus a live grant for OAuth. A gateway link
+carries `?mcp_connect=<widget id>`, captured at boot before routing, to open
+the drawer once; there is no Slack card for these.
 
 ## Retired config
 

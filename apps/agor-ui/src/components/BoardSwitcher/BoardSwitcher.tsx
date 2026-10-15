@@ -17,6 +17,7 @@ import {
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useBranchCounts } from '../../hooks/useBranchCounts';
+import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { OPEN_BOARD_SWITCHER_EVENT, onShellPicker } from '../../utils/shellEvents';
 import { BoardEditModal } from '../BoardEditModal';
@@ -26,23 +27,6 @@ const { Text } = Typography;
 const { useToken } = theme;
 
 const FILTER_THRESHOLD = 8;
-
-function useCoarsePointer() {
-  const [coarse, setCoarse] = useState(
-    () =>
-      typeof window !== 'undefined' &&
-      window.matchMedia?.('(hover: none), (pointer: coarse)').matches
-  );
-  useEffect(() => {
-    const query = window.matchMedia?.('(hover: none), (pointer: coarse)');
-    if (!query) return;
-    const update = () => setCoarse(query.matches);
-    update();
-    query.addEventListener?.('change', update);
-    return () => query.removeEventListener?.('change', update);
-  }, []);
-  return coarse;
-}
 
 interface BoardSwitcherProps {
   boards: Board[];
@@ -76,7 +60,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const screens = Grid.useBreakpoint();
-  const coarsePointer = useCoarsePointer();
+  const coarsePointer = useIsTouchInput();
 
   const currentBoard = boards.find((b) => b.board_id === currentBoardId);
   const canManage = useCanManageBoard(client, currentBoard, currentUser);
@@ -100,6 +84,20 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     setFilterText('');
     setKeyboardTooltipBoardId(null);
   }, []);
+
+  // The Dropdown closes on an outside mousedown, which iOS Safari never fires
+  // for a tap on a non-clickable element (the board tabs, the canvas). Every
+  // tap does fire pointerdown, so close on that too.
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (popupRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      closeDropdown();
+    };
+    window.addEventListener('pointerdown', closeOnOutsidePointer, true);
+    return () => window.removeEventListener('pointerdown', closeOnOutsidePointer, true);
+  }, [dropdownOpen, closeDropdown]);
 
   const handleHomeClick = useCallback(() => {
     onHomeClick?.();

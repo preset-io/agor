@@ -46,6 +46,7 @@ import { isSafeExternalUrl } from '../../utils/safeExternalUrl';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { getBoardEmoji } from '../BoardTile';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { DrillInFrame } from '../SettingsModal/SettingsDrill';
 
 const { TextArea } = Input;
 
@@ -60,6 +61,13 @@ interface CardModalProps {
   afterClose?: () => void;
   onCardUpdated?: (card: CardWithType) => void;
   onCardDeleted?: (cardId: string) => void;
+  /**
+   * Render the body as an in-place drill-in (no outer Modal) for the Workspace
+   * Settings Cards audit view. The card editor keeps its own Archive/Delete/Save
+   * footer (ownsFooter). Default false → the standalone Modal used on the canvas
+   * (SessionCanvas) is unchanged.
+   */
+  embedded?: boolean;
   /**
    * Edits are blocked for this reason (e.g. the card's board is still
    * loading, so the card shown may be stale).
@@ -83,6 +91,7 @@ const CardModalComponent = ({
   afterClose,
   onCardUpdated,
   onCardDeleted,
+  embedded = false,
   readOnlyReason,
   requireLoadedBoard = false,
 }: CardModalProps) => {
@@ -99,15 +108,23 @@ const CardModalComponent = ({
   const [saving, setSaving] = useState(false);
   const [boardAccess, setBoardAccess] = useState<EffectiveCapabilityPolicyAccess | null>(null);
 
-  // Sync local state when card changes
+  // Seeded once per opened card: a live update to the card (someone else
+  // renaming it) never resets an unsaved note or description.
+  const [baseline, setBaseline] = useState({ note: '', description: '' });
+  const cardId = card?.card_id;
+  const cardRef = useRef(card);
+  cardRef.current = card;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: seeded per open card
   useEffect(() => {
-    if (card) {
-      setNoteValue(card.note || '');
-      setDescValue(card.description || '');
-      setEditingNote(false);
-      setEditingDesc(false);
-    }
-  }, [card]);
+    const opened = cardRef.current;
+    if (!open || !opened) return;
+    const seed = { note: opened.note || '', description: opened.description || '' };
+    setBaseline(seed);
+    setNoteValue(seed.note);
+    setDescValue(seed.description);
+    setEditingNote(false);
+    setEditingDesc(false);
+  }, [open, cardId]);
 
   // Mirrors the daemon's card-mutation check (`cardAccess('mutate', ...)`),
   // which resolves to the same `board.edit` capability as the board itself.
@@ -148,7 +165,6 @@ const CardModalComponent = ({
   // modal on this card, so closing it, switching cards or unmounting destroys
   // every one still open.
   const confirmsRef = useRef(new Set<{ destroy: () => void }>());
-  const cardId = card?.card_id;
   // Captured after the commit, once the connection snapshot is published.
   // biome-ignore lint/correctness/useExhaustiveDependencies: captured on open, per card
   useEffect(() => {
@@ -198,17 +214,24 @@ const CardModalComponent = ({
           ? 'This board is unavailable for edits right now.'
           : 'This board reloaded while the card was open. Reopen it to edit.'));
 
-  const hasChanges = noteValue !== (card?.note || '') || descValue !== (card?.description || '');
+  const hasChanges = noteValue !== baseline.note || descValue !== baseline.description;
 
   const handleSave = useCallback(async () => {
     if (!card || !client || !hasChanges || !canEdit || !isOpenTicketCurrent(ticket)) return;
     setSaving(true);
+    // Send only what this draft changed, so a concurrent edit to the other
+    // field survives; the acknowledged card becomes the new baseline.
+    const changes: { note?: string; description?: string } = {};
+    if (noteValue !== baseline.note) changes.note = noteValue;
+    if (descValue !== baseline.description) changes.description = descValue;
     try {
-      const updated = await client.service('cards').patch(card.card_id, {
-        note: noteValue,
-        description: descValue,
-      });
-      onCardUpdated?.(updated as CardWithType);
+      const updated = (await client.service('cards').patch(card.card_id, changes)) as CardWithType;
+      onCardUpdated?.(updated);
+      const acked = { note: updated.note || '', description: updated.description || '' };
+      setBaseline(acked);
+      // Fields still as sent take the acknowledged value; anything typed meanwhile stays.
+      setNoteValue((current) => (current === noteValue ? acked.note : current));
+      setDescValue((current) => (current === descValue ? acked.description : current));
       setEditingNote(false);
       setEditingDesc(false);
       showSuccess('Card saved.');
@@ -222,6 +245,7 @@ const CardModalComponent = ({
     client,
     noteValue,
     descValue,
+    baseline,
     hasChanges,
     canEdit,
     isOpenTicketCurrent,
@@ -316,52 +340,44 @@ const CardModalComponent = ({
   const emoji = card.effective_emoji;
   const borderColor = card.effective_color || token.colorBorder;
 
-  return (
-    <Modal
-      open={open}
-      onCancel={onClose}
-      afterClose={afterClose}
-      width={560}
-      footer={
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <Space>
-            <ArchiveActionButton
-              tooltip={editBlockedReason ?? ''}
-              size="middle"
-              disabled={!canEdit}
-              onClick={handleArchive}
-            >
-              Archive
-            </ArchiveActionButton>
-            {/* A disabled button can't host a tooltip of its own — hence the span. */}
-            <Tooltip title={editBlockedReason}>
-              <span>
-                <Button danger icon={<DeleteOutlined />} disabled={!canEdit} onClick={handleDelete}>
-                  Delete
-                </Button>
-              </span>
-            </Tooltip>
-          </Space>
-          <Tooltip title={editBlockedReason}>
-            <span>
-              <Button
-                type="primary"
-                icon={<SaveOutlined />}
-                onClick={handleSave}
-                disabled={!hasChanges || !canEdit}
-                loading={saving}
-              >
-                Save
-              </Button>
-            </span>
-          </Tooltip>
-        </div>
-      }
-      title={null}
-      styles={{
-        body: { padding: 0 },
-      }}
-    >
+  const cardFooter = (
+    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+      <Space>
+        <ArchiveActionButton
+          tooltip={editBlockedReason ?? ''}
+          size="middle"
+          disabled={!canEdit}
+          onClick={handleArchive}
+        >
+          Archive
+        </ArchiveActionButton>
+        {/* A disabled button can't host a tooltip of its own, hence the span. */}
+        <Tooltip title={editBlockedReason}>
+          <span>
+            <Button danger icon={<DeleteOutlined />} disabled={!canEdit} onClick={handleDelete}>
+              Delete
+            </Button>
+          </span>
+        </Tooltip>
+      </Space>
+      <Tooltip title={editBlockedReason}>
+        <span>
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            onClick={handleSave}
+            disabled={!hasChanges || !canEdit}
+            loading={saving}
+          >
+            Save
+          </Button>
+        </span>
+      </Tooltip>
+    </div>
+  );
+
+  const cardBody = (
+    <>
       {/* Title bar */}
       <div
         style={{
@@ -562,6 +578,34 @@ const CardModalComponent = ({
         {card.created_by && `Created by: ${card.created_by}`}
         {card.created_at && ` • ${new Date(card.created_at).toLocaleString()}`}
       </div>
+    </>
+  );
+
+  // Drill-in mode for the Workspace Settings Cards audit view: no stacked Modal.
+  // The editor owns its Archive/Delete/Save footer; the breadcrumb backs out.
+  if (embedded) {
+    if (!open) return null;
+    return (
+      <DrillInFrame title={card.title} dirty={hasChanges} ownsFooter onBack={onClose}>
+        {cardBody}
+        <div style={{ marginTop: token.marginMD }}>{cardFooter}</div>
+      </DrillInFrame>
+    );
+  }
+
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      afterClose={afterClose}
+      width={560}
+      footer={cardFooter}
+      title={null}
+      styles={{
+        body: { padding: 0 },
+      }}
+    >
+      {cardBody}
     </Modal>
   );
 };

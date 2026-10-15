@@ -781,10 +781,13 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByText('Editing Bob')).toBeInTheDocument();
     // Personal API tokens are caller-scoped, so the entry is hidden here.
     expect(screen.queryByRole('menuitem', { name: /api tokens/i })).not.toBeInTheDocument();
-    // Groups & Access is admin-only nav; the force-password control lives there.
+    // Groups & Access is admin-only nav.
+    expect(screen.getByRole('menuitem', { name: /groups & access/i })).toBeInTheDocument();
+    // The force-password control lives in the Access panel's Danger zone (main's
+    // #2538 placement; our Phase-4 relocation to Security was superseded when the
+    // settings-redesign branch merged main's UserSettingsModal).
     fireEvent.click(screen.getByRole('menuitem', { name: /groups & access/i }));
-    await screen.findByRole('heading', { name: 'Groups & access' });
-    expect(screen.getByText(/force password change/i)).toBeInTheDocument();
+    expect(await screen.findByText(/force password change/i)).toBeInTheDocument();
   });
 
   it('hides caller-scoped Codex ChatGPT controls when an admin edits another user', async () => {
@@ -1240,6 +1243,41 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       await screen.findByText("Couldn't delete the saved configuration.", undefined, ASYNC)
     ).toBeInTheDocument();
     expect(onUpdate).toHaveBeenCalledOnce();
+  });
+
+  it('deletes Codex personal configuration without rewriting the managed Claude auth method', async () => {
+    agorStore
+      .getState()
+      .setAgenticToolSettings([
+        { tool: 'codex', enabled: true, resolution_policy: 'tenant_required' },
+      ] as never);
+    const user = makeUser({
+      agentic_tools: { codex: { OPENAI_API_KEY: true } },
+      agentic_auth_methods: { 'claude-code': 'subscription', codex: 'api_key' },
+      agentic_credential_sources: { 'claude-code': 'managed_oauth' },
+    });
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={onUpdate}
+        initialTab="codex"
+      />
+    );
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Delete saved personal configuration' })
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'OK' }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(2), ASYNC);
+    expect(onUpdate.mock.calls.map(([, patch]) => patch)).toEqual([
+      { agentic_tools: { codex: { OPENAI_API_KEY: null } } },
+      { agentic_auth_methods: { codex: 'api_key' } },
+    ]);
   });
 
   it('preserves an in-progress audio edit across navigation (no draft loss)', async () => {

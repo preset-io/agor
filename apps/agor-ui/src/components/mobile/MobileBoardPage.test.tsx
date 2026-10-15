@@ -129,11 +129,12 @@ describe('MobileBoardPage', () => {
     expect(screen.getByText('Loading agentic tool availability')).toHaveAttribute('role', 'status');
   });
 
-  it('shows the board tabs, led by a read-only canvas of this board', async () => {
+  it('shows the board tabs, led by Teammate, with a read-only canvas of this board second', async () => {
     renderPage('/m/board/board-1');
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
-    expect(tabs).toEqual(['Board', 'Teammate', 'Sessions', 'Comments']);
-    expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true');
+    expect(tabs).toEqual(['Teammate', 'Board', 'Sessions', 'Comments']);
+    expect(screen.getByRole('tab', { name: 'Teammate' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('tab', { name: 'Board' }));
     expect(await screen.findByTestId('canvas')).toBeInTheDocument();
     expect(canvas.props?.readOnly).toBe(true);
     expect(canvas.props?.branches).toEqual([branch]);
@@ -146,11 +147,13 @@ describe('MobileBoardPage', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }));
     expect(location()).toBe('/m/board/board-1?tab=all-sessions');
     fireEvent.click(screen.getByRole('tab', { name: 'Board' }));
+    expect(location()).toBe('/m/board/board-1?tab=board');
+    fireEvent.click(screen.getByRole('tab', { name: 'Teammate' }));
     expect(location()).toBe('/m/board/board-1');
   });
 
   it('opens sessions and branches tapped on the canvas', async () => {
-    const { onOpenBranch } = renderPage('/m/board/board-1');
+    const { onOpenBranch } = renderPage('/m/board/board-1?tab=board');
     await screen.findByTestId('canvas');
     act(() => canvas.props?.onOpenBranch('branch-1'));
     expect(onOpenBranch).toHaveBeenCalledWith('branch-1', 'general');
@@ -159,7 +162,7 @@ describe('MobileBoardPage', () => {
   });
 
   it('does not re-render the canvas when the shell re-renders for a session patch', async () => {
-    const { rerenderFromShell } = renderPage('/m/board/board-1');
+    const { rerenderFromShell } = renderPage('/m/board/board-1?tab=board');
     await screen.findByTestId('canvas');
     const renders = canvas.renders;
     act(() => agorStore.setState({ sessionById: new Map() } as never));

@@ -7,6 +7,7 @@ import type {
   TeammateKnowledgeGrantAccess,
 } from '@agor-live/client';
 import { getTeammateConfig, knowledgePath } from '@agor-live/client';
+import { SaveOutlined } from '@ant-design/icons';
 import {
   Alert,
   Button,
@@ -305,8 +306,10 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
                     };
                   })}
                 />
+                {/* default (not primary) + icon: a section-scoped save, visually
+                    distinct from the modal footer's primary "Save Changes". */}
                 <Button
-                  type="primary"
+                  icon={<SaveOutlined />}
                   onClick={() => patchKb(kb)}
                   loading={savingPolicy}
                   disabled={!client || !kb.primary_namespace_id}
@@ -368,7 +371,7 @@ export const KnowledgeTab: React.FC<KnowledgeTabProps> = ({ branch, client, canE
           extra={
             canEdit ? (
               <Button
-                type="primary"
+                icon={<SaveOutlined />}
                 onClick={() => patchKb(kb)}
                 loading={savingPolicy}
                 disabled={!client || !kb.primary_namespace_id}

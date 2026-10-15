@@ -257,7 +257,6 @@ describe('Catalog responsive layout (real browser)', () => {
       );
     };
     render(<SuccessHarness />);
-    fireEvent.click(screen.getByRole('checkbox'));
     const connect = screen.getByRole('button', { name: /Connect$/ });
     connect.focus();
     fireEvent.click(connect);

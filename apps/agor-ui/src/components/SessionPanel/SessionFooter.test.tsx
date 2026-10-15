@@ -23,8 +23,10 @@ import { App, ConfigProvider, theme } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { TOUCH_INPUT_QUERY } from '../../hooks/useCanHover';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { agorStore } from '../../store/agorStore';
+import { TouchTooltipConfig } from '../TouchTooltipConfig';
 import { SessionFooter, type SessionFooterProps } from './SessionFooter';
 
 vi.mock('../../hooks/useAuth', () => ({
@@ -749,7 +751,18 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
         'agor-footer-prefs',
         JSON.stringify({ pinnedItems: ['upload', 'advanced-upload', 'fork', 'btw-fork', 'spawn'] })
       );
-      render(<SessionFooter {...baseProps} isRunning hasInput />, { wrapper: Wrapper });
+      // A phone: touch input, under the app's touch tooltip default.
+      const matchMedia = window.matchMedia;
+      vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+        ...matchMedia(query),
+        matches: query === TOUCH_INPUT_QUERY,
+      }));
+      render(
+        <TouchTooltipConfig>
+          <SessionFooter {...baseProps} isRunning hasInput />
+        </TouchTooltipConfig>,
+        { wrapper: Wrapper }
+      );
       expect(screen.queryByLabelText('Fork session')).not.toBeInTheDocument();
       for (const name of ['Stop', 'Queue', 'More options', 'Attach files']) {
         const button = screen.getByLabelText(name);

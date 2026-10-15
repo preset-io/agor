@@ -1,0 +1,586 @@
+/**
+ * Schedule create / edit form. The branch's Schedules tab renders it in place
+ * of the schedules list, with its own inline Save / Cancel (no dialog).
+ *
+ * Mirrors the structure of `NewSessionModal` for visual + ergonomic
+ * consistency:
+ *
+ * - Primary fields top: name, description, prompt, cron + timezone, agent,
+ *   MCP servers.
+ * - Ghost `<Collapse>` with two panels for the secondary zone:
+ *     1. "Agentic Tool Configuration" — the same preset-or-inline picker
+ *        the session modal uses. MCP selection remains a sibling field and
+ *        is never persisted inside a preset.
+ *     2. "Schedule Settings" — retention + concurrency (schedule-specific).
+ *
+ * Reuses the same building blocks as `NewSessionModal`:
+ * - `AgentSelectionGrid` (with `variant="select"` here vs `cards` there —
+ *   schedules don't need to merchandise the agent choice).
+ * - `SessionMcpServersField` as a top-level form field.
+ * - `AgenticToolConfigurationPicker` plus independent MCP selection.
+ * - `getFormValuesFromConfig` / `buildConfigFromFormValues` to translate
+ *   between form values and the schedule's `agentic_tool_config` jsonb.
+ *
+ * Field order for the primary zone follows §6b of the design doc: name +
+ * description → prompt → cron + timezone → agent → MCP.
+ */
+
+import type {
+  AgenticToolName,
+  AgorClient,
+  BranchID,
+  MCPServer,
+  Schedule,
+  ScheduleAgenticToolConfig,
+  ScheduleCreateData,
+  SchedulePatchData,
+  User,
+} from '@agor-live/client';
+import {
+  humanizeCron,
+  isActiveScheduleAgenticToolConfig,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+} from '@agor-live/client';
+import { DownOutlined } from '@ant-design/icons';
+import {
+  Alert,
+  AutoComplete,
+  Button,
+  Collapse,
+  Form,
+  Input,
+  InputNumber,
+  Radio,
+  Space,
+  Switch,
+  Typography,
+} from 'antd';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Cron } from 'react-js-cron';
+import 'react-js-cron/dist/styles.css';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  isInFlightConnectionLossError,
+  notConnectedMessage,
+} from '../../utils/connectionErrors';
+import { useThemedMessage } from '../../utils/message';
+import {
+  type AgenticFormValues,
+  buildScheduleConfigFromFormValues,
+  getFormValuesFromConfig,
+  scheduleConfigToDefaultConfig,
+} from '../AgenticToolConfigForm';
+import {
+  AgenticToolConfigurationPicker,
+  INLINE_AGENTIC_CONFIGURATION,
+} from '../AgenticToolConfigurationPicker';
+import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
+import { ActionErrorNotice } from '../CompactNotice';
+import { DrillCrumbs, useDiscardConfirm, useDrillFormDraft } from '../SettingsModal/SettingsDrill';
+
+const { TextArea } = Input;
+const { Text } = Typography;
+
+// Curated IANA timezone list shown in the timezone AutoComplete; users
+// can also type any other IANA zone (validated server-side).
+const COMMON_TIMEZONES = [
+  'America/Los_Angeles',
+  'America/Denver',
+  'America/Chicago',
+  'America/New_York',
+  'America/Sao_Paulo',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Asia/Dubai',
+  'Asia/Kolkata',
+  'Asia/Shanghai',
+  'Asia/Tokyo',
+  'Australia/Sydney',
+  'Pacific/Auckland',
+] as const;
+
+function detectBrowserTz(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+export interface ScheduleFormProps {
+  /** Leaves the form: after Cancel (once a dirty draft is confirmed) or a save. */
+  onClose: () => void;
+  /** The branch the schedule belongs to (required for create). */
+  branchId: BranchID;
+  /** Existing schedule when editing; null/undefined when creating. */
+  schedule?: Schedule | null;
+  /** MCP server catalog. */
+  mcpServerById: Map<string, MCPServer>;
+  /** Feathers client. */
+  client: AgorClient | null;
+  /** Stable owner whose defaults resolve at each run. */
+  executionOwner?: User | null;
+  /** Authenticated caller; model catalogs are caller-scoped. */
+  currentUser?: User | null;
+  /** Fires after a successful create OR patch with the saved schedule. */
+  onSaved?: (schedule: Schedule) => void;
+  /** Hands up the draft's dirty getter while open (null on unmount) for an outer leave guard. */
+  onDraftChange?: (isDirty: (() => boolean) | null) => void;
+}
+
+const DEFAULT_CRON = '0 * * * *';
+const TIMEZONE_REQUIRED = 'Choose a timezone.';
+
+// ScheduleForm carries schedule-specific fields (cron/tz/retention/etc.)
+// plus the shared `AgenticFormValues` shape that AgenticToolConfigForm and
+// its helpers read/write. Spreading the shared interface keeps the field
+// names in lockstep with NewSessionModal and the agenticConfigHelpers.
+interface ScheduleFormValues extends AgenticFormValues {
+  mcpServerIds?: string[];
+  agenticToolPresetId?: string;
+  name?: string;
+  description?: string;
+  prompt?: string;
+  cron_expression?: string;
+  timezone_mode?: 'local' | 'utc';
+  timezone?: string;
+  agenticTool?: AgenticToolName;
+  enabled?: boolean;
+  retention?: number;
+  allow_concurrent_runs?: boolean;
+}
+
+export const ScheduleForm: React.FC<ScheduleFormProps> = ({
+  onClose,
+  branchId,
+  schedule,
+  mcpServerById,
+  client,
+  executionOwner,
+  currentUser,
+  onSaved,
+  onDraftChange,
+}) => {
+  const isEditing = Boolean(schedule?.schedule_id);
+  const { showSuccess } = useThemedMessage();
+  const [form] = Form.useForm<ScheduleFormValues>();
+
+  // Agent picker is controlled via local state because it drives which
+  // fields AgenticToolConfigForm shows (for example runtime-supported effort).
+  // The selected value is mirrored into the form as `agenticTool` so save
+  // can read it consistently with the rest of the form.
+  const configuredConfig = schedule?.agentic_tool_config;
+  const configuredActiveConfig = isActiveScheduleAgenticToolConfig(configuredConfig)
+    ? configuredConfig
+    : undefined;
+  const configuredTool = configuredConfig?.agentic_tool;
+  const configuredActiveTool = configuredActiveConfig?.agentic_tool;
+  const [agentTool, setAgentTool] = useState<AgenticToolName>(
+    configuredActiveTool ?? 'claude-code'
+  );
+  const [requiresSupportedToolSelection, setRequiresSupportedToolSelection] = useState(
+    Boolean(configuredTool && !configuredActiveTool)
+  );
+  const [showCronPicker, setShowCronPicker] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<ActionErrorCopy | null>(null);
+  // A create whose reply was lost may have landed; block a second click until the form changes.
+  const [createUnconfirmed, setCreateUnconfirmed] = useState(false);
+  const saveErrorRef = useRef<HTMLDivElement>(null);
+  const executionOwnerResolved =
+    !schedule?.created_by || executionOwner?.user_id === schedule.created_by;
+
+  // Initialize the form for the opened schedule (or a new one).
+  useEffect(() => {
+    const persistedConfig = schedule?.agentic_tool_config;
+    const activeConfig = isActiveScheduleAgenticToolConfig(persistedConfig)
+      ? persistedConfig
+      : undefined;
+    const persistedTool = persistedConfig?.agentic_tool;
+    const activeTool = activeConfig?.agentic_tool;
+    const tool = activeTool ?? 'claude-code';
+    const configValues = getFormValuesFromConfig(tool, scheduleConfigToDefaultConfig(activeConfig));
+    setAgentTool(tool);
+    setRequiresSupportedToolSelection(Boolean(persistedTool && !activeTool));
+    setShowCronPicker(false);
+    setSaveError(null);
+    setCreateUnconfirmed(false);
+    form.resetFields();
+    form.setFieldsValue({
+      name: schedule?.name ?? '',
+      description: schedule?.description ?? '',
+      prompt: schedule?.prompt ?? '',
+      cron_expression: schedule?.cron_expression ?? DEFAULT_CRON,
+      timezone_mode: schedule?.timezone_mode ?? 'local',
+      timezone: schedule?.timezone ?? detectBrowserTz(),
+      agenticTool: tool,
+      agenticToolPresetId:
+        schedule?.agentic_tool_config?.configuration_reference ??
+        schedule?.agentic_tool_config?.preset_id ??
+        INLINE_AGENTIC_CONFIGURATION,
+      enabled: schedule?.enabled ?? true,
+      retention: schedule?.retention ?? 5,
+      allow_concurrent_runs: schedule?.allow_concurrent_runs ?? false,
+      ...configValues,
+      mcpServerIds: schedule?.mcp_server_ids ?? [],
+    });
+  }, [schedule, form]);
+
+  // Draft tracking (after the seeding effect above): guards the crumb and
+  // Cancel, and is handed up to the branch editor's leave guard.
+  const isDraftDirty = useDrillFormDraft(form, schedule ?? 'new');
+  const confirmDiscard = useDiscardConfirm();
+  const leave = () => confirmDiscard(isDraftDirty(), onClose);
+  useEffect(() => {
+    onDraftChange?.(isDraftDirty);
+    return () => onDraftChange?.(null);
+  }, [isDraftDirty, onDraftChange]);
+
+  // The banner sits at the end of a long form; bring it into view next to the footer.
+  useEffect(() => {
+    if (saveError) saveErrorRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [saveError]);
+
+  // Reseed AgenticToolConfigForm fields ONLY when the user actually
+  // changes the agent — not on mount/open. A useEffect keyed on
+  // `agentTool` would clobber the just-loaded saved values on every
+  // edit-open (the original ScheduleTab carried the same warning).
+  const handleAgentToolChange = (next: AgenticToolName) => {
+    if (next === agentTool && !requiresSupportedToolSelection) return;
+    setCreateUnconfirmed(false);
+    setRequiresSupportedToolSelection(false);
+    setAgentTool(next);
+    const defaults = getFormValuesFromConfig(next);
+    form.setFieldsValue({
+      ...defaults,
+      agenticTool: next,
+      agenticToolPresetId: undefined,
+      ...(next !== 'codex' && {
+        codexSandboxMode: undefined,
+        codexApprovalPolicy: undefined,
+        codexNetworkAccess: undefined,
+        codexIncludePlugins: undefined,
+      }),
+    });
+  };
+
+  const cronValue = Form.useWatch('cron_expression', form) ?? DEFAULT_CRON;
+  const timezoneModeValue = Form.useWatch('timezone_mode', form) ?? 'local';
+
+  const humanizedCron = useMemo(() => {
+    try {
+      return humanizeCron(cronValue);
+    } catch {
+      return null;
+    }
+  }, [cronValue]);
+
+  const handleSave = async () => {
+    setSaveError(null);
+    if (!client) {
+      setSaveError({ message: notConnectedMessage('save the schedule'), raw: null });
+      return;
+    }
+    // Save is disabled here; the warning above the form says why.
+    if (requiresSupportedToolSelection) return;
+    let values: ScheduleFormValues;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
+    // `getFieldsValue(true)` includes fields rendered inside collapsed
+    // panels (which validateFields can skip).
+    const all = { ...form.getFieldsValue(true), ...values } as ScheduleFormValues;
+    const timezoneMode = all.timezone_mode ?? 'local';
+    const timezone = all.timezone?.trim();
+    if (timezoneMode === 'local' && !timezone) {
+      form.setFields([{ name: 'timezone', errors: [TIMEZONE_REQUIRED] }]);
+      return;
+    }
+    let timezoneConfig: { timezone_mode: 'local'; timezone: string } | { timezone_mode: 'utc' };
+    if (timezoneMode === 'local') {
+      // Guarded above; keep the discriminated create DTO honest without a cast.
+      if (!timezone) return;
+      timezoneConfig = { timezone_mode: 'local', timezone };
+    } else {
+      timezoneConfig = { timezone_mode: 'utc' };
+    }
+
+    setSaving(true);
+    try {
+      const payload: ScheduleCreateData = {
+        branch_id: branchId,
+        name: (all.name ?? '').trim(),
+        description: all.description?.trim() || undefined,
+        prompt: (all.prompt ?? '').trim(),
+        cron_expression: all.cron_expression ?? DEFAULT_CRON,
+        ...timezoneConfig,
+        agentic_tool_config:
+          all.agenticToolPresetId === USER_DEFAULT_AGENTIC_CONFIGURATION
+            ? {
+                agentic_tool: agentTool,
+                configuration_reference: USER_DEFAULT_AGENTIC_CONFIGURATION,
+              }
+            : all.agenticToolPresetId === WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
+              ? {
+                  agentic_tool: agentTool,
+                  configuration_reference: WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
+                }
+              : all.agenticToolPresetId && all.agenticToolPresetId !== INLINE_AGENTIC_CONFIGURATION
+                ? {
+                    agentic_tool: agentTool,
+                    preset_id: all.agenticToolPresetId as NonNullable<
+                      ScheduleAgenticToolConfig['preset_id']
+                    >,
+                  }
+                : buildScheduleConfigFromFormValues(
+                    agentTool,
+                    {
+                      modelConfig: all.modelConfig,
+                      effort: all.effort,
+                      permissionMode: all.permissionMode,
+                      codexSandboxMode: all.codexSandboxMode,
+                      codexApprovalPolicy: all.codexApprovalPolicy,
+                      codexNetworkAccess: all.codexNetworkAccess,
+                      codexIncludePlugins: all.codexIncludePlugins,
+                    },
+                    schedule?.agentic_tool_config
+                  ),
+        mcp_server_ids: all.mcpServerIds ?? [],
+        enabled: all.enabled ?? true,
+        retention: all.retention ?? 5,
+        allow_concurrent_runs: all.allow_concurrent_runs ?? false,
+      };
+
+      let saved: Schedule;
+      if (isEditing && schedule?.schedule_id) {
+        const { branch_id: _branchId, ...patchPayload } = payload;
+        saved = await client
+          .service('schedules')
+          .patch(schedule.schedule_id, patchPayload satisfies SchedulePatchData);
+      } else {
+        saved = await client.service('schedules').create(payload);
+      }
+
+      showSuccess(isEditing ? 'Schedule updated.' : 'Schedule created.');
+      onSaved?.(saved);
+      onClose();
+    } catch (e: unknown) {
+      setSaveError(describeActionError('save the schedule', e, { idempotent: isEditing }));
+      if (!isEditing) setCreateUnconfirmed(isInFlightConnectionLossError(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <DrillCrumbs
+          parent="Schedules"
+          onParent={leave}
+          current={schedule ? schedule.name || 'Untitled schedule' : 'New schedule'}
+        />
+      </div>
+      {requiresSupportedToolSelection && (
+        <Alert
+          type="warning"
+          showIcon
+          title="This schedule uses an agent that's no longer available"
+          description="Its saved settings are kept, but it can't run. Choose an agent that's still available before you save this schedule."
+          style={{ marginTop: 16 }}
+        />
+      )}
+      <Form
+        form={form}
+        layout="vertical"
+        style={{ marginTop: 16 }}
+        onValuesChange={() => setCreateUnconfirmed(false)}
+      >
+        <Form.Item name="enabled" label="Enabled" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
+          name="name"
+          label="Name"
+          rules={[{ required: true, message: 'Name is required' }]}
+        >
+          <Input placeholder="Hourly heartbeat" />
+        </Form.Item>
+
+        <Form.Item name="description" label="Description (optional)">
+          <Input placeholder="What this schedule does" />
+        </Form.Item>
+
+        <Form.Item
+          name="prompt"
+          label="Prompt template"
+          rules={[{ required: true, message: 'Prompt is required' }]}
+          help={
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Handlebars: <code>{'{{branch.*}}'}</code> <code>{'{{schedule.*}}'}</code>
+            </Text>
+          }
+        >
+          <TextArea
+            placeholder="Review the current state of {{branch.name}} and post a status update."
+            rows={6}
+          />
+        </Form.Item>
+
+        <Form.Item
+          name="cron_expression"
+          label="Cron expression"
+          rules={[{ required: true, message: 'Cron is required' }]}
+          extra={
+            <>
+              {humanizedCron && (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  ⓘ {humanizedCron}
+                </Text>
+              )}
+              {showCronPicker && (
+                <div style={{ marginTop: 12 }}>
+                  <Cron
+                    value={cronValue}
+                    setValue={(v: string) => form.setFieldValue('cron_expression', v)}
+                    clearButton={false}
+                  />
+                </div>
+              )}
+            </>
+          }
+        >
+          <Space.Compact style={{ width: '100%' }}>
+            <Input
+              value={cronValue}
+              onChange={(e) => form.setFieldValue('cron_expression', e.target.value)}
+              placeholder="0 * * * *"
+            />
+            <Button onClick={() => setShowCronPicker((s) => !s)}>
+              {showCronPicker ? 'Hide picker' : 'Edit visually'}
+            </Button>
+          </Space.Compact>
+        </Form.Item>
+
+        <Form.Item name="timezone_mode" label="Timezone mode">
+          <Radio.Group>
+            <Radio value="local">Local time</Radio>
+            <Radio value="utc">UTC</Radio>
+          </Radio.Group>
+        </Form.Item>
+
+        {timezoneModeValue === 'local' && (
+          <Form.Item
+            name="timezone"
+            label="Timezone"
+            rules={[{ required: true, whitespace: true, message: TIMEZONE_REQUIRED }]}
+          >
+            <AutoComplete
+              // AutoComplete lets the user pick from the curated list OR
+              // type any other IANA zone. The server-side validator
+              // (validateScheduleConfig) rejects unknown zones via
+              // Intl.DateTimeFormat, so free entry is safe here.
+              options={COMMON_TIMEZONES.map((tz) => ({ value: tz, label: tz }))}
+              filterOption={(input, option) =>
+                (option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+              }
+              placeholder="Type or pick an IANA zone (e.g. America/Los_Angeles, Asia/Bangkok)"
+            />
+          </Form.Item>
+        )}
+
+        <Form.Item label="Agent">
+          <AgentSelectionGrid
+            agents={AVAILABLE_AGENTS}
+            selectedAgentId={requiresSupportedToolSelection ? null : agentTool}
+            onSelect={(id) => handleAgentToolChange(id as AgenticToolName)}
+            variant="select"
+          />
+        </Form.Item>
+
+        {!requiresSupportedToolSelection && (
+          <AgenticToolConfigurationPicker
+            tool={agentTool}
+            mcpServerById={mcpServerById}
+            client={client}
+            modelCatalogClient={
+              executionOwner?.user_id && executionOwner.user_id === currentUser?.user_id
+                ? client
+                : null
+            }
+            branchId={branchId}
+            defaultResolution="schedule-run"
+            currentUser={executionOwner}
+            configurationOwnerResolved={executionOwnerResolved}
+          />
+        )}
+
+        <Collapse
+          ghost
+          destroyOnHidden={false}
+          expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+          items={[
+            {
+              key: 'schedule-settings',
+              label: <Typography.Text strong>Schedule Settings</Typography.Text>,
+              children: (
+                <>
+                  <Form.Item name="retention" label="Retention (sessions to keep; 0 = keep all)">
+                    <InputNumber min={0} />
+                  </Form.Item>
+                  <Form.Item
+                    name="allow_concurrent_runs"
+                    label="Concurrency"
+                    extra="Controls overlap for this schedule only; sibling schedules on the same branch are independent."
+                  >
+                    <Radio.Group>
+                      <Radio value={false}>
+                        Block overlapping runs from this schedule (default)
+                      </Radio>
+                      <Radio value={true}>Allow overlapping runs from this schedule</Radio>
+                    </Radio.Group>
+                  </Form.Item>
+                </>
+              ),
+            },
+          ]}
+          style={{ marginTop: 16 }}
+        />
+
+        {!isEditing && (
+          <Alert
+            style={{ marginTop: 16 }}
+            type="info"
+            showIcon
+            message="Catchup is disabled by default."
+            description="If Agor is offline when a run is due, only the most recent missed run within 2 minutes starts once it's back. Earlier missed runs are skipped."
+          />
+        )}
+        {saveError && (
+          <div ref={saveErrorRef}>
+            <ActionErrorNotice error={saveError} style={{ marginTop: 16 }} />
+          </div>
+        )}
+      </Form>
+      <Space style={{ width: '100%', justifyContent: 'flex-end', marginTop: 16 }}>
+        <Button onClick={leave} disabled={saving}>
+          Cancel
+        </Button>
+        <Button
+          type="primary"
+          loading={saving}
+          disabled={requiresSupportedToolSelection || createUnconfirmed}
+          onClick={handleSave}
+        >
+          {isEditing ? 'Save' : 'Create'}
+        </Button>
+      </Space>
+    </div>
+  );
+};

@@ -13,8 +13,8 @@ import {
   PlusOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { App, Button, Form, Input, Popconfirm, Select, Space, Tooltip, Typography } from 'antd';
-import { useMemo, useState } from 'react';
+import { App, Button, Form, Input, Popconfirm, Select, Tooltip, Typography } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
 import { formatActionError, notConnectedMessage } from '@/utils/connectionErrors';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
@@ -25,10 +25,10 @@ import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
-import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { DrillInFrame, useDrillFormDraft, useSettingsDrill } from './SettingsDrill';
 import { useSessionCounts } from './useBranchPage';
 
 interface BoardsTableProps {
@@ -56,11 +56,25 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 }) => {
   const { modal } = App.useApp();
   const { showSuccess, showError, showWarning } = useThemedMessage();
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [editingBoard, setEditingBoard] = useState<Board | null>(null);
+  // Create board is a drill-in (no stacked modal on top of Settings).
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
+  // Edit board also drills in place of the list (no stacked modal), driven by
+  // the shell drill state so the breadcrumb + leave-guards apply.
+  const editingBoard =
+    drill?.mode === 'edit' && drill.recordId ? (boardById.get(drill.recordId) ?? null) : null;
   const [archiveFilter, setArchiveFilter] = useState<'active' | 'archived' | 'all'>('active');
   const [searchTerm, setSearchTerm] = useState('');
   const [form] = Form.useForm();
+
+  const isCreating = drill?.mode === 'create';
+  // New boards start on the theme-aware default (no persisted background); the
+  // editor's Default mode reflects a fresh form.
+  useEffect(() => {
+    if (isCreating) {
+      form.resetFields();
+    }
+  }, [isCreating, form]);
+  const isCreateDirty = useDrillFormDraft(form, isCreating ? drill : null);
 
   const handleCreate = () => {
     // Validate all fields (not just 'name') so custom_context JSON rules run.
@@ -70,14 +84,14 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       .then(() => {
         onCreate?.(extractBoardFormValues(form));
         form.resetFields();
-        setCreateModalOpen(false);
+        closeDrill();
       })
       .catch(() => {
         // Antd displays inline field errors; nothing to do here.
       });
   };
 
-  const handleEdit = (board: Board) => setEditingBoard(board);
+  const handleEdit = (board: Board) => openDrill({ mode: 'edit', recordId: board.board_id });
 
   const handleDelete = (boardId: string) => {
     onDelete?.(boardId);
@@ -313,46 +327,83 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
     },
   ];
 
+  // Create board drills in place of the list (no stacked modal). Early-returned
+  // so the Content pane swaps list↔editor; the shell footer renders
+  // Create/Cancel and the breadcrumb ("Boards ›") backs out via closeDrill.
+  if (isCreating) {
+    return (
+      <DrillInFrame
+        title="Create Board"
+        saveLabel="Create"
+        dirty={isCreateDirty}
+        onSave={handleCreate}
+        onBack={() => {
+          form.resetFields();
+          closeDrill();
+        }}
+      >
+        <Form form={form} layout="vertical" preserve style={{ maxWidth: 520 }}>
+          <BoardFormFields form={form} extra={customContextField} />
+        </Form>
+      </DrillInFrame>
+    );
+  }
+
+  // Edit board drills in place of the list (BoardEditModal in embedded mode).
+  if (editingBoard) {
+    return (
+      <BoardEditModal
+        embedded
+        board={editingBoard}
+        client={client}
+        open
+        onClose={closeDrill}
+        onUpdate={onUpdate}
+        currentUser={currentUser}
+      />
+    );
+  }
+
   return (
     <div>
       <ResponsiveSettingsHeader
+        title="Boards"
         description="Create and manage boards for organizing sessions."
-        actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
-            <Select
-              value={archiveFilter}
-              onChange={(value) => setArchiveFilter(value)}
-              style={{ width: 120 }}
-              options={[
-                { value: 'active', label: 'Active' },
-                { value: 'all', label: 'All' },
-                { value: 'archived', label: 'Archived' },
-              ]}
-            />
-            <Input
-              allowClear
-              placeholder="Search name, slug, description, or ID"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              style={{ width: compact ? '100%' : 300, flex: compact ? '1 1 100%' : undefined }}
-            />
+        search={
+          <Input
+            allowClear
+            placeholder="Search name, slug, description, or ID"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        }
+        filters={
+          <Select
+            value={archiveFilter}
+            onChange={(value) => setArchiveFilter(value)}
+            style={{ width: 120 }}
+            options={[
+              { value: 'active', label: 'Active' },
+              { value: 'all', label: 'All' },
+              { value: 'archived', label: 'Archived' },
+            ]}
+          />
+        }
+        count={`${boards.length} ${boards.length === 1 ? 'board' : 'boards'}`}
+        primaryActions={
+          <>
             <Button icon={<UploadOutlined />} onClick={handleImportClick}>
               Import Board
             </Button>
             <Button
               type="primary"
               icon={<PlusOutlined />}
-              onClick={() => {
-                // New boards start on the theme-aware default (no persisted
-                // background); the editor's Default mode reflects this.
-                form.resetFields();
-                setCreateModalOpen(true);
-              }}
+              onClick={() => openDrill({ mode: 'create' })}
             >
               New Board
             </Button>
-          </Space>
-        )}
+          </>
+        }
       />
 
       <ResponsiveTable
@@ -365,32 +416,6 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         onRow={(record) => ({
           style: record.archived ? { opacity: 0.5 } : undefined,
         })}
-      />
-
-      {/* Create Board Modal */}
-      <AdaptiveSettingsModal
-        title="Create Board"
-        open={createModalOpen}
-        width={760}
-        onOk={handleCreate}
-        onCancel={() => {
-          form.resetFields();
-          setCreateModalOpen(false);
-        }}
-        okText="Create"
-      >
-        <Form form={form} layout="vertical" preserve style={{ marginTop: 16 }}>
-          <BoardFormFields form={form} extra={customContextField} />
-        </Form>
-      </AdaptiveSettingsModal>
-
-      <BoardEditModal
-        board={editingBoard}
-        client={client}
-        open={Boolean(editingBoard)}
-        onClose={() => setEditingBoard(null)}
-        onUpdate={onUpdate}
-        currentUser={currentUser}
       />
     </div>
   );

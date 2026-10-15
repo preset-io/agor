@@ -101,7 +101,8 @@ describe('PersonalApiKeysTab failures', () => {
         "The connection to Agor dropped before this was confirmed. If a new key appears in the list, revoke it and create another. Its secret can't be shown again."
       )
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^create$/i })).toBeDisabled();
+    // antd clears the button's loading state a render after the request settles.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^create$/i })).toBeDisabled());
     fireEvent.keyDown(name, { key: 'Enter', code: 'Enter', keyCode: 13 });
     expect(create).toHaveBeenCalledOnce();
     fireEvent.change(name, { target: { value: 'Laptop 2' } });

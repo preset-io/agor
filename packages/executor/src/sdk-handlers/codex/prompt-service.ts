@@ -34,6 +34,7 @@ import {
   isMCPAbortError,
   listMcpToolsWithPermission,
   MCPExternalError,
+  MCPSignInNoticeCollector,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
   resolveScopedMCPAuthHeaders,
   sanitizeMCPExternalError,
@@ -736,7 +737,7 @@ export class CodexPromptService {
       forUserId?: UserID;
       requireMcpServers?: boolean;
     }
-  ): Promise<{ servers: CodexConfigObject; total: number }> {
+  ): Promise<{ servers: CodexConfigObject; total: number; signInNotice?: string }> {
     const { forUserId, requireMcpServers = false } = context;
     codexDebug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
     codexDebug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
@@ -770,6 +771,7 @@ export class CodexPromptService {
 
     const result: CodexConfigObject = {};
     const authDiagnostics = new McpAuthDiagnosticAccumulator();
+    const signIn = new MCPSignInNoticeCollector();
     const claimedNames = new Set<string>();
 
     // Built-in Agor MCP server (streamable HTTP). Token travels via
@@ -850,6 +852,12 @@ export class CodexPromptService {
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
         const authHeader = headers?.Authorization;
         const missingRequiredAuth = !!server.auth && server.auth.type !== 'none' && !authHeader;
+        // A pre-registered OAuth client with no grant is withheld, so the CLI
+        // never runs its own OAuth discovery / Dynamic Client Registration.
+        if (missingRequiredAuth && signIn.recordMissingGrant(scoped)) {
+          authDiagnostics.recordUnavailable();
+          continue;
+        }
         const customHeaders = headers ? { ...headers } : undefined;
         if (customHeaders) delete customHeaders.Authorization;
         if (customHeaders && Object.keys(customHeaders).length > 0) {
@@ -895,19 +903,22 @@ export class CodexPromptService {
       } catch {
         authDiagnostics.recordResolutionFailure();
         canRequireServer = false;
+        // Same withholding when the credential lookup itself failed.
+        if (signIn.recordResolutionFailure(scoped)) continue;
       }
 
       applyGatewayMcpStartupGuard(serverConfig, canRequireServer);
       result[serverName] = serverConfig;
     }
 
-    const total = stdioServers.length + httpServers.length + (mcpToken ? 1 : 0);
+    const total = Object.keys(result).length;
     authDiagnostics.emitSummary('codex');
     if (total > 0) {
       console.info(`✅ [Codex MCP] Configured ${total} MCP server(s)`);
     }
 
-    return { servers: result, total };
+    const signInNotice = signIn.render();
+    return { servers: result, total, ...(signInNotice ? { signInNotice } : {}) };
   }
 
   /**
@@ -1199,14 +1210,14 @@ export class CodexPromptService {
       tasksService: this.tasksService,
     });
     const requireMcpServers = isGatewaySession(session);
-    const { servers: mcpServersConfig, total: mcpServerCount } = await this.buildMcpServersConfig(
-      sessionId,
-      mcpToken,
-      {
-        forUserId,
-        requireMcpServers,
-      }
-    );
+    const {
+      servers: mcpServersConfig,
+      total: mcpServerCount,
+      signInNotice,
+    } = await this.buildMcpServersConfig(sessionId, mcpToken, {
+      forUserId,
+      requireMcpServers,
+    });
 
     const codexConfigPayload: CodexConfigObject = {
       // Agor owns durable task continuation. Codex goals can automatically
@@ -1396,9 +1407,12 @@ export class CodexPromptService {
       // The signal is passed to Codex SDK which will throw AbortError when aborted
       codexDebug(`🎬 [Codex] Starting runStreamed() for session ${shortId(sessionId)}`);
       const turnOptions = abortController ? { signal: abortController.signal } : undefined;
-      // Refresh model-visible identity even when a fork/resume retains old SDK instructions.
-      // Keep the persisted user prompt and cached client configuration unchanged.
-      const providerPrompt = `${prompt}\n\n${renderAgorSessionIdentity(sessionId)}`;
+      // Refresh model-visible identity (and MCP sign-in state) even when a
+      // fork/resume retains old SDK instructions. Keep the persisted user
+      // prompt and cached client configuration unchanged.
+      const providerPrompt = [prompt, renderAgorSessionIdentity(sessionId), signInNotice]
+        .filter(Boolean)
+        .join('\n\n');
       const { events } = await thread.runStreamed(providerPrompt, turnOptions);
       streamReturned = true;
       codexDebug(`✅ [Codex] runStreamed() returned, starting event iteration`);

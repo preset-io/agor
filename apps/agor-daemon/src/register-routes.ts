@@ -3873,24 +3873,32 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  // The OAuth lane. The browser has finished the provider flow and is asking
-  // the daemon to check; it supplies no server id and no payload worth
-  // trusting, so everything that decides the outcome is read server-side from
-  // the pinned widget params and the persisted grant.
+  // The OAuth lane. The browser has finished the provider flow (or a catalog
+  // connect) and is asking the daemon to check; nothing it supplies is
+  // trusted, so everything that decides the outcome is read server-side from
+  // the pinned widget params, the server row, and the persisted grant.
   registerLongAuthenticatedRoute(
     app,
     '/widgets/:id/oauth-resolve',
     {
-      async create(data: { attempt_id?: unknown } | undefined, params: RouteParams) {
+      async create(
+        data: { attempt_id?: unknown; mcp_server_id?: unknown } | undefined,
+        params: RouteParams
+      ) {
         const widgetId = params.route?.id;
         if (!widgetId) throw new Error('Widget ID required');
         if (!params.user?.user_id) {
           throw new NotAuthenticated('Authentication required to resolve a widget');
         }
         const attemptId = typeof data?.attempt_id === 'string' ? data.attempt_id : undefined;
+        const mcpServerId =
+          typeof data?.mcp_server_id === 'string' ? data.mcp_server_id : undefined;
         return resolveWidget(
           widgetId,
-          { kind: 'oauth_callback', evidence: { attempt_id: attemptId } },
+          {
+            kind: 'oauth_callback',
+            evidence: { attempt_id: attemptId, mcp_server_id: mcpServerId },
+          },
           { user_id: params.user.user_id as UUID, role: params.user.role as string | undefined },
           widgetResolverDeps
         );

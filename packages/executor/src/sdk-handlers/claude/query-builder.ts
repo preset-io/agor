@@ -32,6 +32,7 @@ import {
   AGOR_MCP_SERVER_NAME,
   getMcpServersForSession,
   listMcpToolsWithPermission,
+  MCPSignInNoticeCollector,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
   resolveScopedMCPAuthHeaders,
   sanitizeMCPExternalError,
@@ -532,6 +533,7 @@ export async function setupQuery(
         const mcpConfig: MCPServersConfig = {};
         const deniedTools: string[] = [];
         const authDiagnostics = new McpAuthDiagnosticAccumulator();
+        const signIn = new MCPSignInNoticeCollector();
 
         for (const scoped of attachableServers) {
           const { server } = scoped; // Infer transport if missing (backwards compatibility)
@@ -572,10 +574,17 @@ export async function setupQuery(
               // Auth-backed remote server but no usable token. Track one concise summary below.
               authDiagnostics.recordUnavailable();
               canAlwaysLoad = false;
+              // Without a grant, Claude Code would run its own OAuth discovery
+              // and fail on Dynamic Client Registration a pre-registered client
+              // never uses. Withhold it and point the agent at Agor's Connect
+              // flow, which attaches the server once the grant lands.
+              if (signIn.recordMissingGrant(scoped)) continue;
             }
           } catch {
             authDiagnostics.recordResolutionFailure();
             canAlwaysLoad = false;
+            // Same withholding when the credential lookup itself failed.
+            if (transport !== 'stdio' && signIn.recordResolutionFailure(scoped)) continue;
           }
 
           if (canAlwaysLoad) {
@@ -610,6 +619,11 @@ export async function setupQuery(
           ...mcpConfig,
         };
         authDiagnostics.emitSummary('claude');
+        const signInNotice = signIn.render();
+        if (signInNotice) {
+          const systemPrompt = queryOptions.systemPrompt as { append: string };
+          systemPrompt.append = `${systemPrompt.append}\n\n${signInNotice}`;
+        }
         if (deniedTools.length > 0) {
           queryOptions.disallowedTools = [
             ...(queryOptions.disallowedTools as string[]),

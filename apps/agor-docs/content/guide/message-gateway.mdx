@@ -196,7 +196,7 @@ The one step neither path can cover is the **app-level token**: `connections:wri
 
 1. Open **Settings** (gear icon) → **Gateway Channels** → **Add Channel**.
 2. Select **Slack** as the channel type. A four-step wizard appears: **Channel → Options → Create app → Tokens & test**. A consistent footer carries the flow, with **Back** and **Cancel** plus a primary button that reads **Continue** on each step and **Create channel** on the last.
-3. On the **Channel** step, set the basics: **Channel Type** (Slack), a **Name** for the Agor channel, the **Target Branch** where sessions run, and whether the channel is **Enabled**. Click **Continue**.
+3. On the **Channel** step, select an **AI Teammate** to route messages to, or choose **Specific branch** for a custom workflow. Below the target picker, **Channel name** shows a suggestion such as `Mira · Slack`. Keep it or click **Rename** to enter a custom display name. The suggestion follows your target and channel type until you edit it; existing channels keep their saved names, which you can change in the edit form. Set whether the channel is **Enabled**, then click **Continue**.
 4. On the **Options** step, choose what the bot can do:
    - **App Name.** The display name for the Slack app.
    - **Surfaces.** Where the bot listens. Direct messages are always on; optionally add **Public channels** (all, or a specific list of channel IDs), **Private channels**, and **Group DMs**.
@@ -763,7 +763,7 @@ authoritative mutation transaction.
 - **Use trust or auto mode for unattended agents.** If you want the agent to operate without human approval on each tool call, set the permission mode accordingly.
 - **Attach relevant MCP servers.** A Slack-connected agent that also has GitHub MCP can create PRs, check CI status, and post updates. All from a DM.
 - **One branch per concern.** Create separate channels for different projects or responsibilities rather than funneling everything through one branch.
-- **Name channels descriptively.** When you have multiple channels, names like "Frontend Review Bot (Sonnet)" are much more useful than "Channel 1."
+- **Rename channels when more context helps.** The default name combines the target and channel type. If you connect the same target more than once, use **Rename** to distinguish purposes, such as "Mira · Slack support" and "Mira · Slack engineering". This display name does not change the Slack app's name.
 - **Keep credentials rotated.** Bot tokens and app tokens are encrypted at rest, but rotate them periodically through the channel edit UI.
 
 ## Troubleshooting

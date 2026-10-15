@@ -6,13 +6,13 @@
  * - `variant="cards"` (default) — grid of AgentSelectionCard, used when the
  *   modal wants to highlight each agent's pitch (e.g. NewSessionModal).
  * - `variant="select"` — single Antd Select dropdown, used when the picker
- *   should stay out of the way (e.g. ScheduleModal, where the prompt + cron
+ *   should stay out of the way (e.g. ScheduleForm, where the prompt + cron
  *   matter more than which agent runs them).
  *
  * Used in:
  * - NewSessionModal (cards, 2 columns)
  * - ForkSpawnModal (cards, 2 columns)
- * - ScheduleModal (select)
+ * - ScheduleForm (select)
  */
 
 import type { AgenticToolName, TenantAgenticToolName } from '@agor-live/client';

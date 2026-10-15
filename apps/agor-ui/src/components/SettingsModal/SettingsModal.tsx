@@ -17,7 +17,7 @@ import type {
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { ArrowLeftOutlined, CloseOutlined, RightOutlined, UserOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Typography, theme } from 'antd';
+import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Tag, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { useAuthenticatedAuthorityScope } from '@/hooks/useAuthorityOperationGuard';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
@@ -42,14 +42,15 @@ import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
+import { AllCardsPanel } from './AllCardsPanel';
 import { ArtifactsTable } from './ArtifactsTable';
 import { BoardsTable } from './BoardsTable';
 import { BranchesTable } from './BranchesTable';
-import { CardsTable } from './CardsTable';
+import { CardTypesPanel } from './CardTypesPanel';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { GroupsTable } from './GroupsTable';
-import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
+import { SettingsDrillProvider, useDrillShell } from './SettingsDrill';
 import { buildSettingsNav, settingsSectionMobileLabel } from './settingsNavigation';
 import { TeammatesTable } from './TeammatesTable';
 import { UsersTable } from './UsersTable';
@@ -62,7 +63,8 @@ export interface SettingsModalProps {
   onClose: () => void;
   client: AgorClient | null; // Still needed for BranchModal
   currentUser?: User | null; // Current logged-in user
-  activeTab?: string; // Control which tab is shown when modal opens
+  /** Requested section; omitted (or unknown) opens the first section the caller can see. */
+  activeTab?: string;
   onTabChange?: (tabKey: string) => void;
   onCreateBoard?: (board: Partial<Board>) => void;
   onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
@@ -120,6 +122,7 @@ export interface SettingsModalProps {
   onDeleteGatewayChannel?: (channelId: string, shouldApply?: () => boolean) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
+  /** Opens the teammate create flow (main's TeammatesTable triggers it directly). */
   onCreateTeammate?: () => void;
   branchStorageConfig?: BranchStorageConfig;
 }
@@ -129,7 +132,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onClose,
   client,
   currentUser,
-  activeTab = 'boards',
+  activeTab: requestedTab,
   onTabChange,
   onCreateBoard,
   onUpdateBoard,
@@ -149,8 +152,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onCreateUser,
   onUpdateUser,
   onDeleteUser,
-  onCreateMCPServer,
-  onDeleteMCPServer,
   onCreateGatewayChannel,
   onUpdateGatewayChannel,
   onDeleteGatewayChannel,
@@ -178,45 +179,16 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
   );
 
-  const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
-  const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
-  const [branchModalOpen, setBranchModalOpen] = useState(false);
-  // The store holds only the loaded scopes' sessions: each opening reads the branch's.
-  const branchSessions = useBranchSessions(
-    client,
-    branchModalOpen && selectedBranch ? selectedBranch.branch_id : null
-  );
-
-  const handleBranchRowClick = (branch: Branch) => {
-    // Snapshot the data when opening modal
-    setSelectedBranch(branch);
-    setSelectedRepo(repoById.get(branch.repo_id) || null);
-    setBranchModalOpen(true);
-  };
-
-  const handleBranchModalClose = () => {
-    setBranchModalOpen(false);
-    // Clear after modal closes
-    setSelectedBranch(null);
-    setSelectedRepo(null);
-  };
-
-  // Wrapper to close modal after archive/delete
-  const handleArchiveOrDeleteBranchWithClose = async (
-    branchId: string,
-    options: BranchArchiveOrDeleteOptions
-  ) => {
-    await onArchiveOrDeleteBranch?.(branchId, options);
-    handleBranchModalClose();
-  };
-
   const { token } = theme.useToken();
+  // Responsive shell: below AntD's `md` breakpoint the Modal + Sider become a
+  // full-screen Drawer with a grouped section index that drills into the same
+  // section content (and the same in-place drill-in editors).
   const screens = Grid.useBreakpoint();
   const compact = !screens.md;
   const reducedMotion = usePrefersReducedMotion();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
-  // Role gate — Agentic Tools and Gateway Channels are global admin-managed
+  // Role gate — MCP Servers and Gateway Channels are global admin-managed
   // configuration (credentials, webhook URLs, env vars). The daemon enforces
   // ADMIN role on writes for both services (see register-hooks.ts); hiding
   // the menu entries here avoids showing members a tab where every action
@@ -228,28 +200,22 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   // policy and the servers they can already use.
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
-  // The Users tab follows the MCP Servers pattern rather than the Agentic Tools
-  // one: the daemon deliberately serves the roster to members
-  // (`ensureMinimumRole(params, ROLES.MEMBER, 'list users')`), so seeing who is
-  // on the team is not something to take away. UsersTable separately exposes
-  // only the mutations the current role has authority to perform.
-  //
-  // Viewers rank below MEMBER, so the listing itself would 403 for them; they
-  // get no entry at all.
+  // The daemon serves the user roster to members
+  // (`ensureMinimumRole(params, ROLES.MEMBER, 'list users')`), so Users stays
+  // visible to them; UsersTable exposes only the mutations their role can
+  // perform. Viewers rank below MEMBER and get no Users entry at all.
   const canListUsers = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
 
   // One answer for "may this role open this section", read by both the menu and
-  // the content below. Every gated section is routable via useSettingsRoute, so
-  // gating only the menu leaves the pane reachable by URL with nothing selected
-  // in the sidebar — which is what `groups`, `gateway` and `agentic-tools`
-  // already did. Deriving both from this set is what stops the two from
-  // drifting apart again the next time a section is gated.
+  // renderContent, so a URL-routable section can't be reached with nothing
+  // selected in the sidebar.
   const canSeeSection = useCallback(
     (section: string): boolean => {
       switch (section) {
         case 'agentic-tools':
         case 'gateway':
         case 'groups':
+        case 'workspace-preferences':
           return isAdmin;
         case 'users':
           return canListUsers;
@@ -271,7 +237,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           repos: repoById.size,
           // No branch or card count: the store holds only the loaded scopes' rows.
           artifacts: artifactById.size,
-          mcp: mcpServerById.size,
           gateway: gatewayChannelById.size,
           users: userById.size,
         },
@@ -282,65 +247,128 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       boardById.size,
       repoById.size,
       artifactById.size,
-      mcpServerById.size,
       gatewayChannelById.size,
       userById.size,
     ]
   );
 
-  // Menu items for left sidebar navigation
+  // No (or an unknown) requested section opens the first one this role can see.
+  const activeTab =
+    requestedTab && settingsSectionKeys.has(requestedTab)
+      ? requestedTab
+      : (settingsNav[0]?.rows[0]?.section ?? 'about');
+
+  // Drill-in navigation: the Content pane swaps between a section's list view
+  // and its detail/edit view in place, instead of stacking a second Modal.
+  const shell = useDrillShell(activeTab as SettingsSection);
+  const { drill, openDrill, closeDrill, confirmLeaveIfDirty } = shell;
+
+  // Branches and Teammates edit the same entity (a branch) via the shared
+  // BranchModal, rendered in-place (embedded) as the section's drill-in instead
+  // of a stacked modal. The store holds only the loaded scopes' branches, so the
+  // clicked row is snapshotted; the live store copy wins when it is loaded.
+  const [branchSnapshot, setBranchSnapshot] = useState<Branch | null>(null);
+  const branchDrill =
+    drill?.mode === 'edit' &&
+    (activeTab === 'branches' || activeTab === 'teammates') &&
+    drill.recordId
+      ? (branchById.get(drill.recordId) ??
+        (branchSnapshot?.branch_id === drill.recordId ? branchSnapshot : null))
+      : null;
+  const openBranchDrill = useCallback(
+    (branch: Branch) => {
+      setBranchSnapshot(branch);
+      openDrill({ mode: 'edit', recordId: branch.branch_id });
+    },
+    [openDrill]
+  );
+  // The store holds only the loaded scopes' sessions: each opening reads the branch's.
+  const branchSessions = useBranchSessions(client, branchDrill?.branch_id ?? null);
+
+  const handleArchiveOrDeleteBranchFromDrill = useCallback(
+    async (branchId: string, options: BranchArchiveOrDeleteOptions) => {
+      await onArchiveOrDeleteBranch?.(branchId, options);
+      closeDrill();
+    },
+    [onArchiveOrDeleteBranch, closeDrill]
+  );
+
+  const handleNavClick = useCallback(
+    (key: string) => {
+      // The MCP Marketplace is intentionally NOT reachable from Settings — it
+      // lives only on the global navbar. No nav row or signpost here.
+      if (!settingsSectionKeys.has(key)) return;
+      if (key === activeTab) return;
+      confirmLeaveIfDirty(() => {
+        closeDrill();
+        onTabChange?.(key as SettingsSection);
+      });
+    },
+    [activeTab, closeDrill, confirmLeaveIfDirty, onTabChange, settingsSectionKeys]
+  );
+
+  const handleModalClose = useCallback(
+    () => confirmLeaveIfDirty(onClose),
+    [confirmLeaveIfDirty, onClose]
+  );
+
+  // Menu items for left sidebar navigation. People leads (access first), then
+  // Resources, Cards, Integrations and System.
   const menuItems: MenuProps['items'] = useMemo(
     () =>
       settingsNav.map((group) => ({
         key: group.key,
-        label: group.title,
+        label: group.badge ? (
+          <span>
+            {group.title}{' '}
+            <Tag
+              color={group.badge === 'Beta' ? 'warning' : undefined}
+              style={{ marginInlineStart: token.marginXXS, fontSize: token.fontSizeSM }}
+            >
+              {group.badge}
+            </Tag>
+          </span>
+        ) : (
+          group.title
+        ),
         type: 'group' as const,
         children: group.rows.map((row) => ({
           key: row.section,
           icon: row.icon,
-          label: row.beta ? (
-            <span>
-              {row.label}{' '}
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 600,
-                  padding: '0 4px',
-                  borderRadius: 3,
-                  background: token.colorWarningBg,
-                  color: token.colorWarningText,
-                  border: `1px solid ${token.colorWarningBorder}`,
-                  marginLeft: 4,
-                }}
-              >
-                Beta
-              </span>
-            </span>
-          ) : (
-            row.label
-          ),
+          label: row.label,
         })),
       })),
     [settingsNav, token]
   );
 
   // Mobile drill state: null = the grouped index. A deep-link opener (e.g. the
-  // "Create teammate" flow) seeds straight into its section; the generic entry
-  // (default 'boards') opens on the index. The desktop Modal path ignores this.
+  // "Create teammate" flow) seeds straight into its section; the generic mobile
+  // entry ('boards', from the More sheet) opens on the index. Desktop ignores this.
   const [mobileSection, setMobileSection] = useState<SettingsSection | null>(() =>
-    activeTab &&
-    activeTab !== 'boards' &&
-    (SETTINGS_SECTIONS as readonly string[]).includes(activeTab)
-      ? (activeTab as SettingsSection)
+    requestedTab &&
+    requestedTab !== 'boards' &&
+    (SETTINGS_SECTIONS as readonly string[]).includes(requestedTab)
+      ? (requestedTab as SettingsSection)
       : null
   );
 
   const drillIntoSection = useCallback(
     (section: SettingsSection) => {
       setMobileSection(section);
-      onTabChange?.(section);
+      if (section !== activeTab) onTabChange?.(section);
     },
-    [onTabChange]
+    [activeTab, onTabChange]
+  );
+
+  // Mobile header Back: leaves an open drill-in (guarded) and the section
+  // together, returning to the index.
+  const handleMobileBack = useCallback(
+    () =>
+      confirmLeaveIfDirty(() => {
+        closeDrill();
+        setMobileSection(null);
+      }),
+    [closeDrill, confirmLeaveIfDirty]
   );
 
   // Shared iOS-style grouped-list card wrapper for the mobile index.
@@ -351,6 +379,29 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     background: token.colorBgContainer,
     overflow: 'hidden',
   };
+
+  // The shared BranchModal, rendered in-place as the drill-in for both the
+  // Branches and Teammates sections (embedded → no stacked modal).
+  const branchEditor = branchDrill ? (
+    <BranchModal
+      embedded
+      open
+      onClose={closeDrill}
+      branch={branchDrill}
+      repo={repoById.get(branchDrill.repo_id) ?? null}
+      sessions={branchSessions}
+      boardObjects={boardObjects}
+      client={client}
+      currentUser={currentUser}
+      onUpdateBranch={onUpdateBranch}
+      onUpdateRepo={onUpdateRepo}
+      onArchiveOrDelete={handleArchiveOrDeleteBranchFromDrill}
+      onOpenSettings={() => {
+        closeDrill();
+        onTabChange?.('repos');
+      }}
+    />
+  ) : null;
 
   // Render content based on active section
   const renderContent = () => {
@@ -376,8 +427,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       case 'repos':
         return (
           <ReposTable
-            canConfigureCleanup={isAdmin}
             repoById={repoById}
+            canConfigureCleanup={isAdmin}
             identityKey={settingsAuthority.identityKey}
             operationScope={settingsAuthority.operationScope}
             onCreate={onCreateRepo}
@@ -388,56 +439,63 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         );
       case 'branches':
         return (
-          <BranchesTable
-            currentUser={currentUser}
-            client={client}
-            branchById={branchById}
-            repoById={repoById}
-            boardById={boardById}
-            onArchiveOrDelete={onArchiveOrDeleteBranch}
-            onUnarchive={onUnarchiveBranch}
-            onCreate={onCreateBranch}
-            onRowClick={handleBranchRowClick}
-            onStartEnvironment={onStartEnvironment}
-            onStopEnvironment={onStopEnvironment}
-            onClose={onClose}
-            branchStorageConfig={branchStorageConfig}
-          />
+          branchEditor ?? (
+            <BranchesTable
+              currentUser={currentUser}
+              client={client}
+              branchById={branchById}
+              repoById={repoById}
+              boardById={boardById}
+              onArchiveOrDelete={onArchiveOrDeleteBranch}
+              onUnarchive={onUnarchiveBranch}
+              onCreate={onCreateBranch}
+              onRowClick={openBranchDrill}
+              onStartEnvironment={onStartEnvironment}
+              onStopEnvironment={onStopEnvironment}
+              onClose={onClose}
+              branchStorageConfig={branchStorageConfig}
+            />
+          )
         );
       case 'teammates':
         return (
-          <TeammatesTable
-            client={client}
-            currentUser={currentUser}
-            branchById={branchById}
-            repoById={repoById}
-            boardById={boardById}
-            userById={userById}
-            onArchiveOrDelete={onArchiveOrDeleteBranch}
-            onRowClick={handleBranchRowClick}
-            onCreateTeammate={onCreateTeammate}
-            onClose={onClose}
-          />
+          branchEditor ?? (
+            <TeammatesTable
+              branchById={branchById}
+              repoById={repoById}
+              boardById={boardById}
+              userById={userById}
+              onArchiveOrDelete={onArchiveOrDeleteBranch}
+              onRowClick={openBranchDrill}
+              onCreateTeammate={onCreateTeammate}
+              currentUser={currentUser}
+              client={client}
+              onClose={onClose}
+            />
+          )
         );
+      case 'card-types':
+        return <CardTypesPanel client={client} cardTypeById={cardTypeById} />;
       case 'cards':
         return (
-          <CardsTable
+          <AllCardsPanel
             client={client}
             cardTypeById={cardTypeById}
             boardById={boardById}
-            // The resolved user's role: the table's dataset reads (with or
+            // The resolved user's role: the panel's dataset reads (with or
             // without placements) start once, at open.
             canReadPlacements={hasMinimumRole(currentUser?.role, ROLES.MEMBER)}
+            onClose={onClose}
           />
         );
       case 'artifacts':
         return (
           <ArtifactsTable
             client={client}
-            userById={userById}
             artifactById={artifactById}
             branchById={branchById}
             boardById={boardById}
+            userById={userById}
             onUpdate={onUpdateArtifact}
             onDelete={onDeleteArtifact}
             onClose={onClose}
@@ -445,17 +503,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         );
       case 'workspace-preferences':
         return <WorkspacePreferencesTab client={client} currentUser={currentUser} />;
-      case 'mcp':
-        return (
-          <MCPServersTable
-            mcpServerById={mcpServerById}
-            client={client}
-            userById={userById}
-            currentUser={currentUser}
-            onCreate={onCreateMCPServer}
-            onDelete={onDeleteMCPServer}
-          />
-        );
       case 'agentic-tools':
         return (
           <AgenticToolsSection
@@ -506,6 +553,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const drillProvider = (children: React.ReactNode) => (
+    <SettingsDrillProvider shell={shell}>{children}</SettingsDrillProvider>
+  );
+
   if (compact) {
     return (
       <Drawer
@@ -518,202 +569,195 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         height="100dvh"
         {...reducedMotionSurface(reducedMotion)}
         open={open}
-        onClose={onClose}
+        onClose={handleModalClose}
+        footer={shell.footer}
         styles={{ body: { padding: 0, overflow: 'hidden' } }}
       >
-        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
-          <Flex
-            align="center"
-            gap={token.marginXS}
-            style={{
-              padding: `${token.paddingSM}px ${token.paddingSM}px`,
-              borderBottom: `1px solid ${token.colorBorderSecondary}`,
-              background: token.colorBgElevated,
-              flex: '0 0 auto',
-            }}
-          >
-            {mobileSection ? (
+        {drillProvider(
+          <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+            <Flex
+              align="center"
+              gap={token.marginXS}
+              style={{
+                padding: `${token.paddingSM}px ${token.paddingSM}px`,
+                borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                background: token.colorBgElevated,
+                flex: '0 0 auto',
+              }}
+            >
+              {mobileSection ? (
+                <Button
+                  type="text"
+                  icon={<ArrowLeftOutlined />}
+                  aria-label="Back"
+                  onClick={handleMobileBack}
+                  style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
+                />
+              ) : (
+                <div style={{ width: MOBILE_TOUCH_TARGET }} />
+              )}
+              <Typography.Title
+                level={5}
+                ellipsis
+                style={{ margin: 0, flex: 1, minWidth: 0, textAlign: 'center' }}
+              >
+                {mobileSection ? settingsSectionMobileLabel(mobileSection) : 'Workspace Settings'}
+              </Typography.Title>
               <Button
                 type="text"
-                icon={<ArrowLeftOutlined />}
-                aria-label="Back"
-                onClick={() => setMobileSection(null)}
+                icon={<CloseOutlined />}
+                aria-label="Close settings"
+                onClick={handleModalClose}
                 style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
               />
-            ) : (
-              <div style={{ width: MOBILE_TOUCH_TARGET }} />
-            )}
-            <Typography.Title
-              level={5}
-              ellipsis
-              style={{ margin: 0, flex: 1, minWidth: 0, textAlign: 'center' }}
+            </Flex>
+            <Content
+              style={{
+                padding: mobileSection
+                  ? `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`
+                  : 0,
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                minWidth: 0,
+                width: '100%',
+                maxWidth: '100%',
+                boxSizing: 'border-box',
+              }}
             >
-              {mobileSection ? settingsSectionMobileLabel(mobileSection) : 'Settings'}
-            </Typography.Title>
-            <Button
-              type="text"
-              icon={<CloseOutlined />}
-              aria-label="Close settings"
-              onClick={onClose}
-              style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
-            />
-          </Flex>
-          <Content
-            style={{
-              padding: mobileSection
-                ? `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`
-                : 0,
-              overflowY: 'auto',
-              overflowX: 'hidden',
-              minWidth: 0,
-              width: '100%',
-              maxWidth: '100%',
-              boxSizing: 'border-box',
-            }}
-          >
-            {mobileSection ? (
-              <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>{renderContent()}</div>
-            ) : (
-              <Flex
-                vertical
-                gap={token.marginLG}
-                style={{
-                  padding: `${token.paddingMD}px ${token.padding}px ${token.paddingXL}px`,
-                }}
-              >
-                {/* Account identity summary (read-only). */}
-                {currentUser && (
-                  <div>
-                    <Typography.Text
-                      type="secondary"
-                      style={{
-                        fontSize: token.fontSizeSM,
-                        paddingInlineStart: token.paddingXS,
-                        textTransform: 'uppercase',
-                        letterSpacing: 0.4,
-                      }}
-                    >
-                      Account
-                    </Typography.Text>
-                    <div style={settingsGroupCardStyle}>
-                      <Flex align="center" gap={token.margin} style={{ padding: token.padding }}>
-                        <UserOutlined
-                          style={{ fontSize: token.fontSizeLG, color: token.colorTextSecondary }}
-                        />
-                        <Flex vertical style={{ flex: 1, minWidth: 0 }}>
-                          <Typography.Text strong ellipsis>
-                            {currentUser.name || currentUser.email || 'You'}
-                          </Typography.Text>
-                          <Typography.Text
-                            type="secondary"
-                            ellipsis
-                            style={{ fontSize: token.fontSizeSM }}
-                          >
-                            {[currentUser.email, currentUser.role].filter(Boolean).join(' · ')}
-                          </Typography.Text>
-                        </Flex>
-                      </Flex>
-                    </div>
-                  </div>
-                )}
-
-                {settingsNav.map((group) => (
-                  <div key={group.key}>
-                    <Typography.Text
-                      type="secondary"
-                      style={{
-                        fontSize: token.fontSizeSM,
-                        paddingInlineStart: token.paddingXS,
-                        textTransform: 'uppercase',
-                        letterSpacing: 0.4,
-                      }}
-                    >
-                      {group.mobileTitle ?? group.title}
-                    </Typography.Text>
-                    <div style={settingsGroupCardStyle}>
-                      {group.rows.map((row, index) => (
-                        <button
-                          key={row.section}
-                          type="button"
-                          aria-label={row.mobileLabel ?? row.label}
-                          onClick={() => drillIntoSection(row.section)}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: token.margin,
-                            width: '100%',
-                            minHeight: MOBILE_TOUCH_TARGET,
-                            padding: `${token.paddingXS}px ${token.padding}px`,
-                            cursor: 'pointer',
-                            background: 'none',
-                            border: 'none',
-                            borderTop:
-                              index === 0 ? undefined : `1px solid ${token.colorBorderSecondary}`,
-                            font: 'inherit',
-                            color: 'inherit',
-                            textAlign: 'left',
-                          }}
-                        >
-                          <span
+              {mobileSection ? (
+                <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>
+                  {renderContent()}
+                </div>
+              ) : (
+                <Flex
+                  vertical
+                  gap={token.marginLG}
+                  style={{
+                    padding: `${token.paddingMD}px ${token.padding}px ${token.paddingXL}px`,
+                  }}
+                >
+                  {/* Account identity summary (read-only). */}
+                  {currentUser && (
+                    <div>
+                      <Typography.Text
+                        type="secondary"
+                        style={{
+                          fontSize: token.fontSizeSM,
+                          paddingInlineStart: token.paddingXS,
+                          textTransform: 'uppercase',
+                          letterSpacing: 0.4,
+                        }}
+                      >
+                        Account
+                      </Typography.Text>
+                      <div style={settingsGroupCardStyle}>
+                        <Flex align="center" gap={token.margin} style={{ padding: token.padding }}>
+                          <UserOutlined
                             style={{ fontSize: token.fontSizeLG, color: token.colorTextSecondary }}
-                          >
-                            {row.icon}
-                          </span>
-                          <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }}>
-                            {row.mobileLabel ?? row.label}
-                          </Typography.Text>
-                          {row.count !== undefined && (
+                          />
+                          <Flex vertical style={{ flex: 1, minWidth: 0 }}>
+                            <Typography.Text strong ellipsis>
+                              {currentUser.name || currentUser.email || 'You'}
+                            </Typography.Text>
                             <Typography.Text
                               type="secondary"
+                              ellipsis
                               style={{ fontSize: token.fontSizeSM }}
                             >
-                              {row.count}
+                              {[currentUser.email, currentUser.role].filter(Boolean).join(' · ')}
                             </Typography.Text>
-                          )}
-                          <RightOutlined
-                            aria-hidden
-                            style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM }}
-                          />
-                        </button>
-                      ))}
+                          </Flex>
+                        </Flex>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </Flex>
-            )}
-          </Content>
-        </Layout>
-        <BranchModal
-          open={branchModalOpen}
-          onClose={handleBranchModalClose}
-          branch={selectedBranch}
-          repo={selectedRepo}
-          sessions={branchSessions}
-          boardObjects={boardObjects}
-          client={client}
-          currentUser={currentUser}
-          onUpdateBranch={onUpdateBranch}
-          onUpdateRepo={onUpdateRepo}
-          onArchiveOrDelete={handleArchiveOrDeleteBranchWithClose}
-          onOpenSettings={() => {
-            handleBranchModalClose();
-            onTabChange?.('repos');
-          }}
-          presentation="bottom-sheet"
-        />
+                  )}
+
+                  {settingsNav.map((group) => (
+                    <div key={group.key}>
+                      <Typography.Text
+                        type="secondary"
+                        style={{
+                          fontSize: token.fontSizeSM,
+                          paddingInlineStart: token.paddingXS,
+                          textTransform: 'uppercase',
+                          letterSpacing: 0.4,
+                        }}
+                      >
+                        {group.mobileTitle ?? group.title}
+                        {group.badge ? ` · ${group.badge}` : ''}
+                      </Typography.Text>
+                      <div style={settingsGroupCardStyle}>
+                        {group.rows.map((row, index) => (
+                          <button
+                            key={row.section}
+                            type="button"
+                            aria-label={row.mobileLabel ?? row.label}
+                            onClick={() => drillIntoSection(row.section)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: token.margin,
+                              width: '100%',
+                              minHeight: MOBILE_TOUCH_TARGET,
+                              padding: `${token.paddingXS}px ${token.padding}px`,
+                              cursor: 'pointer',
+                              background: 'none',
+                              border: 'none',
+                              borderTop:
+                                index === 0 ? undefined : `1px solid ${token.colorBorderSecondary}`,
+                              font: 'inherit',
+                              color: 'inherit',
+                              textAlign: 'left',
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: token.fontSizeLG,
+                                color: token.colorTextSecondary,
+                              }}
+                            >
+                              {row.icon}
+                            </span>
+                            <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }}>
+                              {row.mobileLabel ?? row.label}
+                            </Typography.Text>
+                            {row.count !== undefined && (
+                              <Typography.Text
+                                type="secondary"
+                                style={{ fontSize: token.fontSizeSM }}
+                              >
+                                {row.count}
+                              </Typography.Text>
+                            )}
+                            <RightOutlined
+                              aria-hidden
+                              style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM }}
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </Flex>
+              )}
+            </Content>
+          </Layout>
+        )}
       </Drawer>
     );
   }
 
   return (
     <Modal
-      title={null}
+      // The header bar is hidden (styles.header) but the dialog still needs an
+      // accessible name; `title` becomes rc-dialog's aria-labelledby target.
+      title="Workspace Settings"
       open={open}
-      onCancel={onClose}
-      footer={null}
+      onCancel={handleModalClose}
+      footer={shell.footer}
       closable
-      width={compact ? 'calc(100vw - 16px)' : 1200}
-      style={{ top: compact ? 8 : 40 }}
+      width={1200}
+      style={{ top: 40 }}
       styles={{
         wrapper: {
           padding: 0,
@@ -721,7 +765,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         },
         container: {
           padding: 0,
-          borderRadius: compact ? token.borderRadiusSM : token.borderRadiusLG,
+          borderRadius: token.borderRadiusLG,
           overflow: 'hidden',
         },
         header: {
@@ -729,80 +773,56 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         },
         body: {
           padding: 0,
-          height: compact ? 'calc(100dvh - 16px)' : 'calc(100vh - 200px)',
-          minHeight: compact ? 0 : 500,
-          maxHeight: compact ? 'none' : 800,
+          height: 'calc(100vh - 200px)',
+          minHeight: 500,
+          maxHeight: 800,
+        },
+        footer: {
+          margin: 0,
+          padding: '12px 24px',
+          background: token.colorBgContainer,
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
         },
       }}
       closeIcon={<CloseOutlined />}
     >
-      <Layout
-        style={{
-          height: '100%',
-          background: token.colorBgContainer,
-          flexDirection: compact ? 'column' : 'row',
-        }}
-      >
-        <Sider
-          width={compact ? '100%' : 240}
-          style={{
-            background: token.colorBgElevated,
-            borderRight: compact ? 0 : `1px solid ${token.colorBorderSecondary}`,
-            borderBottom: compact ? `1px solid ${token.colorBorderSecondary}` : 0,
-            overflow: 'auto',
-            maxHeight: compact ? 230 : undefined,
-            flex: compact ? '0 0 auto' : undefined,
-            padding: compact ? '12px 0' : '20px 0',
-          }}
-        >
-          <div
+      {drillProvider(
+        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+          <Sider
+            width={240}
             style={{
-              padding: compact ? '0 12px 10px' : '0 24px 16px',
-              fontWeight: 600,
-              fontSize: compact ? 15 : 18,
-              color: token.colorText,
+              background: token.colorBgElevated,
+              borderRight: `1px solid ${token.colorBorderSecondary}`,
+              overflow: 'auto',
+              padding: '20px 0',
             }}
           >
-            Settings
-          </div>
-          <Menu
-            mode="inline"
-            selectedKeys={[activeTab]}
-            onClick={({ key }) => {
-              if (settingsSectionKeys.has(key)) {
-                onTabChange?.(key as SettingsSection);
-              }
-            }}
-            items={menuItems}
-            style={{
-              border: 'none',
-              background: 'transparent',
-            }}
-          />
-        </Sider>
-        <Content
-          style={{ padding: compact ? '40px 12px 20px' : '40px 32px 32px', overflow: 'auto' }}
-        >
-          {renderContent()}
-        </Content>
-      </Layout>
-      <BranchModal
-        open={branchModalOpen}
-        onClose={handleBranchModalClose}
-        branch={selectedBranch}
-        repo={selectedRepo}
-        sessions={branchSessions}
-        boardObjects={boardObjects}
-        client={client}
-        currentUser={currentUser}
-        onUpdateBranch={onUpdateBranch}
-        onUpdateRepo={onUpdateRepo}
-        onArchiveOrDelete={handleArchiveOrDeleteBranchWithClose}
-        onOpenSettings={() => {
-          handleBranchModalClose();
-          onTabChange?.('repos');
-        }}
-      />
+            {/* Text-only label: at the 240px Sider width the icon + text wrapped
+                to two lines, so the leading icon was dropped. This header is the
+                only chrome that never scrolls away inside a drill-in, so the
+                distinct wording ("Workspace Settings" vs "User Settings") is
+                what now marks the surface at a glance. Mirrored in UserSettingsModal. */}
+            <div style={{ padding: '0 24px 16px' }}>
+              <span style={{ fontWeight: 600, fontSize: 18, color: token.colorText }}>
+                Workspace Settings
+              </span>
+            </div>
+            <Menu
+              mode="inline"
+              selectedKeys={[activeTab]}
+              onClick={({ key }) => handleNavClick(key)}
+              items={menuItems}
+              style={{
+                border: 'none',
+                background: 'transparent',
+              }}
+            />
+          </Sider>
+          <Content style={{ padding: '40px 32px 32px', overflow: 'auto', minWidth: 0 }}>
+            {renderContent()}
+          </Content>
+        </Layout>
+      )}
     </Modal>
   );
 };

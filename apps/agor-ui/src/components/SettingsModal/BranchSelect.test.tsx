@@ -70,6 +70,16 @@ describe('BranchSelect', { timeout: 10_000 }, () => {
     expect(get).toHaveBeenCalledExactlyOnceWith('b-9');
   });
 
+  it('keeps default empty teammate guidance independent of gateway controls', async () => {
+    const client = {
+      service: () => ({ find: vi.fn().mockResolvedValue({ data: [] }) }),
+    } as unknown as AgorClient;
+    render(<BranchSelect client={client} teammatesOnly />);
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    expect(await screen.findByText('No AI Teammates available.')).toBeInTheDocument();
+    expect(screen.queryByText(/Specific branch/)).not.toBeInTheDocument();
+  });
+
   it('keeps the bare id when the saved target is not readable', async () => {
     const get = vi.fn(async () => {
       throw new Error('Forbidden');

@@ -172,6 +172,8 @@ export async function handleBranchDelete(
   let sessionToken = payload.sessionToken;
   const correlation = `branch_id=${p.branchId} operation_id=${p.operationId} generation=${p.generation} invocation_id=${p.executionId}`;
   const pages: Partial<Record<BranchDeletionAction, number>> = {};
+  // Optional daemon-reported quiesce progress (older daemons omit it).
+  const quiesce = { db_pages: 0, rows_scanned: 0, rows_updated: 0 };
   const report = async (
     action: BranchDeletionAction,
     stage?: BranchDeletionStage,
@@ -198,7 +200,13 @@ export async function handleBranchDelete(
       category = 'http_rejected';
       if (!response.ok) throw new DeletionRequestRejected(response.status);
       category = 'malformed_response';
-      const result = (await response.json()) as { remaining?: boolean; sessionToken?: string };
+      const result = (await response.json()) as {
+        remaining?: boolean;
+        sessionToken?: string;
+        pages?: unknown;
+        scanned?: unknown;
+        updated?: unknown;
+      };
       if (!result || typeof result !== 'object') throw new Error('Invalid deletion response');
       if (
         action === 'heartbeat' &&
@@ -214,9 +222,16 @@ export async function handleBranchDelete(
       if (action === 'settled' && !('ok' in result && result.ok === true))
         throw new Error('Invalid settlement response');
       if (page) pages[action] = (pages[action] ?? 0) + 1;
+      if (action === 'quiesce') {
+        const count = (value: unknown) =>
+          typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+        quiesce.db_pages += count(result.pages);
+        quiesce.rows_scanned += count(result.scanned);
+        quiesce.rows_updated += count(result.updated);
+      }
       if ((page && !result.remaining) || action === 'settled' || action === 'finalize')
         console.info(
-          `[branch.delete] event=step_complete ${correlation} action=${action} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}`
+          `[branch.delete] event=step_complete ${correlation} action=${action} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}${action === 'quiesce' ? ` db_pages=${quiesce.db_pages} rows_scanned=${quiesce.rows_scanned} rows_updated=${quiesce.rows_updated}` : ''}`
         );
       return { remaining: result.remaining ?? false };
     } catch (error) {
@@ -227,7 +242,7 @@ export async function handleBranchDelete(
       if (category === 'transport' && error instanceof Error && error.name === 'TimeoutError')
         category = 'timeout';
       console.error(
-        `[branch.delete] event=request_failed ${correlation} action=${action} category=${category} http_status=${status ?? 'unknown'} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}`
+        `[branch.delete] event=request_failed ${correlation} action=${action} category=${category} http_status=${status ?? 'unknown'} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}${action === 'quiesce' ? ` db_pages=${quiesce.db_pages} rows_scanned=${quiesce.rows_scanned}` : ''}`
       );
       throw error;
     }

@@ -2,7 +2,10 @@ import { sql } from 'drizzle-orm';
 import { expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import { reconcileBranchDeletionReferencesBatch } from './branch-deletion-references';
-import { exerciseWideDeletionReferences } from './branch-deletion-references.test-support';
+import {
+  exerciseReadMostlyDeletionReferences,
+  exerciseWideDeletionReferences,
+} from './branch-deletion-references.test-support';
 import { createDatabase } from './client';
 import { executeRaw, rawRows } from './database-wrapper';
 import { runMigrations } from './migrate';
@@ -143,6 +146,73 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       }
     } finally {
       await (db as typeof db & { $client: { end(): Promise<void> } }).$client.end();
+    }
+  },
+  60_000
+);
+
+it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
+  'locks only rows whose references change; unrelated rows stay writable',
+  async () => {
+    const db = createDatabase({ dialect: 'postgresql', url: url! });
+    const peer = createDatabase({ dialect: 'postgresql', url: url! });
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let scanned = () => {};
+    const ready = new Promise<void>((resolve) => {
+      scanned = resolve;
+    });
+    let scanning: Promise<unknown> | undefined;
+    try {
+      await runMigrations(db, { allowOfflineCutover: true });
+      const guarded = createTenantScopedDatabaseProxy(db, { requireScope: true });
+      const tenant = `read-mostly-${generateId()}`;
+      const fixture = await runWithTenantDatabaseScope(
+        guarded,
+        tenant,
+        exerciseReadMostlyDeletionReferences
+      );
+      // Re-arm the candidates, then hold one full page's transaction open.
+      await runWithTenantDatabaseScope(guarded, tenant, async (scoped) => {
+        for (const id of fixture.candidates)
+          await new SessionRepository(scoped).update(id, {
+            callback_config: { enabled: true, callback_session_id: fixture.owned.session_id },
+          });
+      });
+      scanning = runWithTenantDatabaseScope(guarded, tenant, async (scoped) => {
+        const page = await reconcileBranchDeletionReferencesBatch(scoped, fixture.branch.branch_id);
+        expect(page.updated).toBe(fixture.candidates.length);
+        expect(page.scanned).toBeGreaterThan(fixture.unrelated.length);
+        scanned();
+        await held;
+      });
+      await Promise.race([
+        ready,
+        scanning.then(() => {
+          throw new Error('scan ended before barrier');
+        }),
+      ]);
+      const tryLock = (id: string) =>
+        runWithTenantDatabaseScope(peer, tenant, async (scoped) =>
+          rawRows(
+            await executeRaw(
+              scoped,
+              sql`SELECT session_id FROM sessions WHERE session_id = ${id} FOR UPDATE NOWAIT`
+            )
+          )
+        );
+      for (const id of fixture.unrelated) expect(await tryLock(id)).toHaveLength(1);
+      for (const id of fixture.candidates) await expect(tryLock(id)).rejects.toThrow();
+      release();
+      await scanning;
+      for (const id of fixture.candidates) expect(await tryLock(id)).toHaveLength(1);
+    } finally {
+      release();
+      await Promise.allSettled([scanning]);
+      for (const connection of [db, peer])
+        await (connection as typeof db & { $client: { end(): Promise<void> } }).$client.end();
     }
   },
   60_000

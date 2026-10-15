@@ -6,6 +6,7 @@ import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
 import { boardScopeKey } from '../../store/scopeMerge';
 import { boardCoverage } from '../../test/userScopeCoverage';
+import { StandaloneSettingsDrillProvider } from '../SettingsModal/SettingsDrill';
 import CardModal from './CardModal';
 
 const { showWarning } = vi.hoisted(() => ({ showWarning: vi.fn() }));
@@ -129,6 +130,39 @@ describe('CardModal permission gating', () => {
         })
       )
     );
+  });
+
+  it('keeps an unsaved note over a live update, saves only the note, and takes the acknowledged card', async () => {
+    const { client, patch, effectiveAccessFind } = makeClient(['board.view', 'board.edit']);
+    const remote = { ...card, title: 'Renamed card', description: 'Remote description' };
+    patch.mockImplementation(async (_id: string, data: unknown) => ({
+      ...remote,
+      ...(data as object),
+    }));
+    const view = (row: CardWithType) =>
+      withApp(<CardModal open card={row} board={board} client={client} onClose={vi.fn()} />);
+    const rendered = render(view(card));
+    await waitFor(() => expect(effectiveAccessFind).toHaveBeenCalled());
+
+    fireEvent.click(screen.getAllByText('Edit')[0].closest('button') as HTMLButtonElement);
+    fireEvent.change(screen.getByPlaceholderText("Agent's live commentary..."), {
+      target: { value: 'My unsaved note' },
+    });
+    // Someone else renames the card and edits its description.
+    rendered.rerender(view(remote));
+    expect(await screen.findByText('Renamed card')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Agent's live commentary...")).toHaveValue(
+      'My unsaved note'
+    );
+
+    const save = () => screen.getByText('Save').closest('button') as HTMLButtonElement;
+    expect(save()).toBeEnabled();
+    fireEvent.click(save());
+    // The untouched description is not sent, so the remote edit survives.
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('card-1', { note: 'My unsaved note' }));
+    // The acknowledged card is the new baseline, remote description included.
+    await waitFor(() => expect(save()).toBeDisabled());
+    expect(screen.getByText('Remote description')).toBeInTheDocument();
   });
 
   it('is read-only while its board is still loading, even with board.edit', async () => {
@@ -295,7 +329,50 @@ describe('CardModal permission gating', () => {
     expect(screen.getByText('Save').closest('button')).toBeDisabled();
   });
 
+  it('renders embedded in place (no stacked dialog) with its own Archive/Delete/Save footer', async () => {
+    const { client, effectiveAccessFind } = makeClient(['board.view', 'board.edit']);
+
+    renderWithApp(
+      <StandaloneSettingsDrillProvider>
+        <CardModal embedded open card={card} board={board} client={client} onClose={vi.fn()} />
+      </StandaloneSettingsDrillProvider>
+    );
+    await waitFor(() => expect(effectiveAccessFind).toHaveBeenCalled());
+
+    // Drill-in: no stacked Modal dialog, but the card body + its own footer render.
+    // ("A card" appears twice: the drill breadcrumb crumb and the body title bar.)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getAllByText('A card').length).toBeGreaterThan(0);
+    expect(screen.getByText('Archive')).toBeInTheDocument();
+    expect(screen.getByText('Save')).toBeInTheDocument();
+  });
+
   const openConfirmations = () => document.querySelectorAll('.ant-modal-confirm').length;
+
+  it('guards Back on a dirty embedded card: Keep editing stays, Discard leaves', async () => {
+    const { client, effectiveAccessFind } = makeClient(['board.view', 'board.edit']);
+    const onClose = vi.fn();
+    renderWithApp(
+      <StandaloneSettingsDrillProvider section="cards">
+        <CardModal embedded open card={card} board={board} client={client} onClose={onClose} />
+      </StandaloneSettingsDrillProvider>
+    );
+    await waitFor(() => expect(effectiveAccessFind).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getAllByText('Edit')[0].closest('button')).toBeEnabled());
+    fireEvent.click(screen.getAllByText('Edit')[0].closest('button') as HTMLButtonElement);
+    fireEvent.change(screen.getByPlaceholderText("Agent's live commentary..."), {
+      target: { value: 'Unsaved note' },
+    });
+
+    fireEvent.click(screen.getByText('All Cards'));
+    await waitFor(() => expect(openConfirmations()).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('All Cards'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  });
 
   it.each([
     ['Archive', 'Archive', false],

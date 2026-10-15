@@ -17,6 +17,7 @@
  *     allowed_channel_ids?: string[],               // Channel ID whitelist
  *     ingest_files?: boolean,                       // Forward message attachments (requires files:read)
  *     inbound_reactions?: boolean,                  // Deliver human reactions in mapped threads (requires reactions:read)
+ *     ingest_mime_types?: string[],                 // Extra MIME types to ingest; `type/*` allowed
  *     agent_tools?: SlackAgentToolsConfig           // Agent-callable MCP tool toggles (gated in the daemon tool layer)
  *   }
  *

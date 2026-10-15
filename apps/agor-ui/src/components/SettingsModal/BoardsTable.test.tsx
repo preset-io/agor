@@ -1,8 +1,26 @@
 import type { AgorClient, Board } from '@agor-live/client';
-import { act, fireEvent, screen, within } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeFeathersClient, mount, withTestAuthority } from '../../test/harness';
 import { BoardsTable } from './BoardsTable';
+import { renderWithSettingsShell } from './settingsDrillTestUtils';
+
+describe('BoardsTable create guard', () => {
+  it('asks before Back discards a picked background preset', async () => {
+    renderWithSettingsShell(
+      <BoardsTable client={null} boardById={new Map()} branchById={new Map()} />,
+      'boards'
+    );
+    const confirms = () => document.querySelectorAll('.ant-modal-confirm').length;
+    fireEvent.click(screen.getByRole('button', { name: /New Board/ }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'CSS' }));
+    fireEvent.click(screen.getByText('Preset'));
+    // A preset applies via setFieldsValue, which fires no onValuesChange.
+    fireEvent.click(screen.getAllByRole('button', { name: /\(/ })[0]);
+    fireEvent.click(screen.getByText('Boards'));
+    await waitFor(() => expect(confirms()).toBe(1));
+  });
+});
 
 const board = { board_id: 'board-1', name: 'Roadmap', slug: 'roadmap' } as unknown as Board;
 

@@ -1,12 +1,36 @@
+import { type Repo, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor-live/client';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { ConfigProvider, theme } from 'antd';
 import { afterEach, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
+import { EMPTY_MAPS } from '../../store/agorMaps';
+import { agorStore } from '../../store/agorStore';
 import { OnboardingWizard } from './OnboardingWizard';
+
+function seedFrameworkRepo(slug: string, remote_url: string) {
+  const repo = { repo_id: 'repo-framework', slug, remote_url, clone_status: 'ready' } as Repo;
+  agorStore.setState({ ...EMPTY_MAPS, repoById: new Map([[repo.repo_id, repo]]) });
+}
+
+function renderTeammateStep() {
+  // Real components, null client: layout evidence only, not provisioning/executor evidence.
+  render(
+    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
+      <OnboardingWizard
+        open
+        initialStep="workspace"
+        client={null}
+        onComplete={vi.fn()}
+        onUpdateUser={vi.fn(async () => undefined)}
+      />
+    </ConfigProvider>
+  );
+}
 
 const originalViewport = { width: window.innerWidth, height: window.innerHeight };
 afterEach(async () => {
   cleanup();
+  agorStore.setState({ ...EMPTY_MAPS });
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
@@ -35,18 +59,8 @@ it.each([
   [844, 430],
 ])('keeps baseline gallery space and scrollable disclosure at %dx%d', async (width, height) => {
   await page.viewport(width, height);
-  // Real components, null client: layout evidence only, not provisioning/executor evidence.
-  render(
-    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
-      <OnboardingWizard
-        open
-        initialStep="workspace"
-        client={null}
-        onComplete={vi.fn()}
-        onUpdateUser={vi.fn(async () => undefined)}
-      />
-    </ConfigProvider>
-  );
+  seedFrameworkRepo('preset-io/agor-teammate', TEAMMATE_FRAMEWORK_REPO_URL);
+  renderTeammateStep();
   await screen.findByLabelText('Teammate name');
   await act(async () => {
     await document.fonts.ready;
@@ -97,4 +111,15 @@ it.each([
     expect(hit === disclosure || disclosure.contains(hit)).toBe(true);
   }
   console.info('local-home disclosure geometry', { width, height, actual, baseline, lineCount });
+});
+
+it('hides the public-starter disclosure when onboarding uses a private framework fork', async () => {
+  seedFrameworkRepo(
+    'acme/agor-teammate-private',
+    'https://github.com/acme/agor-teammate-private.git'
+  );
+  renderTeammateStep();
+  await screen.findByLabelText('Teammate name');
+  expect(screen.getByRole('group', { name: 'Teammate template' })).toBeInTheDocument();
+  expect(screen.queryByText(/With the public starter, home files stay/)).not.toBeInTheDocument();
 });

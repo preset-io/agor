@@ -1256,6 +1256,61 @@ describe('GatewayService Slack thread catch-up', () => {
     });
   });
 
+  it('passes a long multi-line Slack summon to the agent whole (#2744)', async () => {
+    const longLine = 'x'.repeat(3000);
+    const currentText = `first paragraph\n\n${longLine}\nlast line (small detail at the end)`;
+    const fetchThreadHistory = vi.fn(async () => ({
+      threadId: 'C123-100.000000',
+      channel: 'C123',
+      thread_ts: '100.000000',
+      has_more: false,
+      messages: [
+        {
+          ts: '102.000000',
+          iso_time: '2026-06-22T00:00:01.000Z',
+          actor_label: 'Bob',
+          text: `context ${'y'.repeat(2000)}`,
+          is_bot: false,
+          is_trigger: false,
+        },
+        {
+          ts: '103.000000',
+          iso_time: '2026-06-22T00:00:02.000Z',
+          actor_label: 'Alice',
+          text: currentText,
+          is_bot: false,
+          is_trigger: true,
+        },
+      ],
+    }));
+    const { service, promptCreate } = makeGatewayHarness({
+      existingMapping: makeMapping({ thread_id: 'C123-100.000000' }),
+      connector: { fetchThreadHistory, sendMessage: vi.fn(async () => '104.000000') },
+    });
+
+    await service.create({
+      channel_key: 'slack-key',
+      thread_id: 'C123-100.000000',
+      text: currentText,
+      metadata: {
+        channel: 'C123',
+        channel_type: 'im',
+        slack_message_ts: '103.000000',
+        slack_thread_ts: '100.000000',
+        slack_user_name: 'Alice',
+      },
+    });
+
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    const summon = prompt.slice(prompt.indexOf('### Current summon'));
+    expect(summon).toContain(
+      `> first paragraph\n>\n> ${longLine}\n> last line (small detail at the end)`
+    );
+    // Previous thread messages stay bounded, but the agent is told they were shortened.
+    expect(prompt).not.toContain('y'.repeat(1300));
+    expect(prompt).toContain('Some previous thread messages were shortened');
+  });
+
   it('fetches missed Slack messages after the last delivered cursor and advances the cursor', async () => {
     const sendMessage = vi.fn(async () => '104.000000');
     const fetchThreadHistory = vi.fn(async () => ({
@@ -1712,7 +1767,7 @@ describe('GatewayService startup/bootstrap hint (#1982)', () => {
     const result = await service.create({
       channel_key: 'slack-key',
       thread_id: outboundSeed.platform_thread_id,
-      text: 'Thanks, looks good.',
+      text: `Thanks, looks good.\n${'z'.repeat(2500)} end`,
       metadata: {
         channel: 'C999',
         channel_type: 'im',
@@ -1726,7 +1781,7 @@ describe('GatewayService startup/bootstrap hint (#1982)', () => {
     expect(prompt).toContain('Original proactive Agor message:');
     expect(prompt).toContain('Heads up, deploy starting soon.');
     expect(prompt).toContain('Human Slack reply:');
-    expect(prompt).toContain('Thanks, looks good.');
+    expect(prompt).toContain(`> Thanks, looks good.\n> ${'z'.repeat(2500)} end`);
     expect(completeReplyAdmission).toHaveBeenCalledWith(outboundSeed.id, 'sess-new');
     expectFinalStartupBootstrapHint(prompt);
   });

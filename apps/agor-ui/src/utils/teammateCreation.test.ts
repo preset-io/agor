@@ -80,7 +80,8 @@ describe('createTeammateBranch', () => {
           }),
         },
         notes: 'Helps with pineapple tasks.',
-      })
+      }),
+      { silent: true }
     );
     expect(boardsService.create).toHaveBeenCalledWith({
       name: "Pineapple Helper's Board",
@@ -129,7 +130,8 @@ describe('createTeammateBranch', () => {
     expect(boardsService.ensureTeammateWelcomeNote).not.toHaveBeenCalled();
     expect(onCreateBranch).toHaveBeenCalledWith(
       repo.repo_id,
-      expect.objectContaining({ boardId: 'board-existing' })
+      expect.objectContaining({ boardId: 'board-existing' }),
+      { silent: true }
     );
     // The server already made the branch primary if the board had none; a client call would overwrite a concurrent one.
     expect(boardsService.setPrimaryTeammate).not.toHaveBeenCalled();
@@ -175,7 +177,8 @@ describe('createTeammateBranch', () => {
       expect.objectContaining({
         sourceBranch: 'template/deal-desk-revops-analyst',
         sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
-      })
+      }),
+      { silent: true }
     );
   });
 });
@@ -199,7 +202,8 @@ it.each([undefined, 'main', 'refs/heads/main', 'custom-start'])(
     );
     expect(onCreateBranch).toHaveBeenCalledWith(
       repo.repo_id,
-      expect.objectContaining({ sourceBranch })
+      expect.objectContaining({ sourceBranch }),
+      { silent: true }
     );
     expect(onCreateBranch.mock.calls[0][1]).not.toHaveProperty('sourceRemoteUrl');
   }
@@ -232,7 +236,8 @@ it.each([
       expect.objectContaining({
         sourceBranch: 'main',
         sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
-      })
+      }),
+      { silent: true }
     );
   }
 );
@@ -259,7 +264,8 @@ it.each(['acme-start', 'main', 'refs/heads/main'])(
     );
     expect(onCreateBranch).toHaveBeenCalledWith(
       repo.repo_id,
-      expect.objectContaining({ sourceBranch })
+      expect.objectContaining({ sourceBranch }),
+      { silent: true }
     );
     expect(onCreateBranch.mock.calls[0][1]).not.toHaveProperty('sourceRemoteUrl');
   }
@@ -286,7 +292,8 @@ it('uses a caller-resolved private fork even when the repo map lacks it', async 
     expect.objectContaining({
       sourceBranch: 'main',
       sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
-    })
+    }),
+    { silent: true }
   );
 });
 
