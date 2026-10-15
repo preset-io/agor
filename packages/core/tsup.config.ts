@@ -100,8 +100,8 @@ export default defineConfig({
   shims: true,
   // Don't bundle agent SDKs and Node.js-only dependencies
   external: [
-    // Independently bundled tools and tenant-aware config resolution must share
-    // the DB entrypoint's stateful authority and ambient scope, not inlined copies.
+    // Tenant-aware config resolution must use the DB entrypoint's ambient scope,
+    // not an inlined copy.
     '@agor/core/db',
     // The repository resolves curated.yaml through the catalog's own entry.
     '@agor/core/mcp-catalog',

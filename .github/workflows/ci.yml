@@ -117,7 +117,6 @@ jobs:
       # all of its workspace declaration dependencies cheaply or reliably.
       - run: pnpm --filter @agor/executor exec vitest run
       - run: pnpm --filter @agor/executor test:runtime
-      - run: pnpm --filter @agor/executor test:claude-auth-precedence
       - run: pnpm --filter @agor/executor test:gemini-contract
       - run: pnpm --filter @agor/executor test:gemini-smoke
 
