@@ -1009,10 +1009,11 @@ export const App: React.FC<AppProps> = ({
       useMemo(() => makeBranchSelector(selectedSessionBranchId), [selectedSessionBranchId])
     ) ?? null;
   // Loaded on first need; the footer's edit control waits for it.
-  const { ids: selectedSessionMcpServerIds } = useSessionMcpServerIds(
-    client,
-    effectiveSelectedSessionId
-  );
+  const {
+    ids: selectedSessionMcpServerIds,
+    failed: sessionMcpLoadFailed,
+    retry: retrySessionMcpLoad,
+  } = useSessionMcpServerIds(client, effectiveSelectedSessionId);
 
   // Narrow per-id subscription for the quick-start picker's branch — only
   // patches to that specific branch (or a socket-in-flight arrival) wake the
@@ -1541,6 +1542,8 @@ export const App: React.FC<AppProps> = ({
                               branch={selectedSessionBranch}
                               currentUserId={user?.user_id}
                               sessionMcpServerIds={selectedSessionMcpServerIds}
+                              sessionMcpLoadFailed={sessionMcpLoadFailed}
+                              onSessionMcpRetry={retrySessionMcpLoad}
                               open={!!effectiveSelectedSessionId}
                               onClose={handleCloseSessionPanel}
                               uploadPolicy={uploadPolicy}

@@ -371,6 +371,8 @@ export interface SessionPanelProps {
   branch?: Branch | null;
   currentUserId?: string;
   sessionMcpServerIds?: string[];
+  sessionMcpLoadFailed?: boolean;
+  onSessionMcpRetry?: () => void;
   open: boolean;
   onClose: () => void;
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
@@ -382,6 +384,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   branch = null,
   currentUserId,
   sessionMcpServerIds = [],
+  sessionMcpLoadFailed = false,
+  onSessionMcpRetry,
   open,
   onClose,
   uploadPolicy,
@@ -1517,6 +1521,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       latestContextWindow={latestContextWindow}
       footerGradient={footerGradient}
       sessionMcpServerIds={sessionMcpServerIds}
+      sessionMcpLoadFailed={sessionMcpLoadFailed}
+      onSessionMcpRetry={onSessionMcpRetry}
       unauthedMcpServers={unauthedMcpServers}
       mcpServerById={mcpServerById}
       userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}

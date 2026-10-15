@@ -2,7 +2,9 @@ import type { AgorClient, MCPServer } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ConfigProvider } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { agorStore } from '../../store/agorStore';
+import { makeSession, withTestAuthority } from '../../test/harness';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 
 vi.mock('@/hooks/usePermissions', () => ({
@@ -153,4 +155,57 @@ describe('session picker readable labels and refresh interaction', () => {
       expect(update).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('session footer MCP link read recovery', () => {
+  withTestAuthority('admin:admin:1', { dataAuthority: false });
+  beforeEach(() => vi.clearAllMocks());
+
+  it('replaces a rejected session MCP read with Retry and blocks edits until loaded', async () => {
+    const findLinks = vi.fn().mockRejectedValueOnce(new Error('read unavailable'));
+    const retryRead = deferred();
+    findLinks.mockReturnValueOnce(retryRead.promise);
+    const findServers = vi.fn().mockResolvedValue([shared]);
+    const client = {
+      service: (name: string) => ({
+        find: name === 'session-mcp-servers' ? findLinks : findServers,
+      }),
+    } as unknown as AgorClient;
+    agorStore
+      .getState()
+      .setMap('sessionById', new Map([['session-a', makeSession('session-a', 'branch-a')]]));
+    function Footer() {
+      const { ids, failed, retry } = useSessionMcpServerIds(client, 'session-a');
+      const props = {
+        client,
+        currentUserId: 'admin',
+        sessionId: 'session-a',
+        sessionMcpServerIds: ids,
+        sessionMcpLoadFailed: failed,
+        onSessionMcpRetry: retry,
+        mcpServerById: new Map([[shared.mcp_server_id, shared]]),
+        userAuthenticatedMcpServerIds: new Set<string>(),
+      };
+      return <SessionMcpFooterControl {...props} />;
+    }
+    render(<Footer />, {
+      wrapper: ({ children }) => (
+        <ConfigProvider theme={{ token: { motion: false } }}>{children}</ConfigProvider>
+      ),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^MCP servers\./ }));
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    expect(screen.getByText('MCP servers unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('combobox')).toBeDisabled();
+    expect(screen.getByRole('dialog').querySelector('.ant-select-loading')).not.toBeInTheDocument();
+    expect(agorStore.getState().sessionMcpLoaded.has('session-a')).toBe(false);
+    fireEvent.click(retry);
+    await waitFor(() => expect(findLinks).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('combobox')).toBeDisabled();
+    expect(update).not.toHaveBeenCalled();
+    await act(async () => retryRead.resolve([]));
+    await waitFor(() => expect(screen.getByRole('combobox')).not.toBeDisabled());
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(findLinks).toHaveBeenLastCalledWith({ query: { session_id: 'session-a' } });
+  });
 });

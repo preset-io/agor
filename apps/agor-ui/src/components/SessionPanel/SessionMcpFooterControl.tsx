@@ -23,6 +23,8 @@ export interface SessionMcpFooterControlProps {
   currentUserId?: string;
   sessionId: string;
   sessionMcpServerIds: string[];
+  sessionMcpLoadFailed?: boolean;
+  onSessionMcpRetry?: () => void;
   mcpServerById: Map<string, MCPServer>;
   userAuthenticatedMcpServerIds: Set<string>;
 }
@@ -32,6 +34,8 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
   currentUserId,
   sessionId,
   sessionMcpServerIds,
+  sessionMcpLoadFailed = false,
+  onSessionMcpRetry,
   mcpServerById,
   userAuthenticatedMcpServerIds,
 }) => {
@@ -335,13 +339,21 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
           placeholder="Attach MCP servers…"
           value={sessionMcpServerIds}
           onChange={handleChange}
-          loading={saving || loadingServers || !linksLoaded}
+          loading={saving || loadingServers || (!linksLoaded && !sessionMcpLoadFailed)}
           disabled={!callerAuthorityReady || !linksLoaded || saving || !!serversError}
           style={{ width: '100%' }}
           getPopupContainer={(trigger) =>
             popupRef.current ?? trigger.parentElement ?? document.body
           }
         />
+        {!linksLoaded && sessionMcpLoadFailed && (
+          <Space>
+            <Typography.Text type="danger">MCP servers unavailable</Typography.Text>
+            <Button size="small" onClick={onSessionMcpRetry} disabled={!callerAuthorityReady}>
+              Retry
+            </Button>
+          </Space>
+        )}
         {serversError && (
           <Typography.Text type="danger">
             {serversError === 'forbidden'
