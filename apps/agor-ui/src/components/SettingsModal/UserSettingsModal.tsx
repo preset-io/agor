@@ -1041,7 +1041,13 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     const next = { ...agenticAuthMethods, [tool]: method };
     setAgenticAuthMethods(next);
     try {
-      await onUpdate?.(user.user_id, { agentic_auth_methods: next }, operation.isCurrent);
+      // The service merges this map. Re-sending another tool's method is a
+      // credential mutation, not a no-op, and can retire its managed OAuth grant.
+      await onUpdate?.(
+        user.user_id,
+        { agentic_auth_methods: { [tool]: method } },
+        operation.isCurrent
+      );
     } catch (error) {
       if (!operation.isCurrent()) return;
       setAgenticAuthMethods(user.agentic_auth_methods ?? {});
