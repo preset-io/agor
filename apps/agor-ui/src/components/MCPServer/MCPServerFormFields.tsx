@@ -88,6 +88,8 @@ export interface MCPServerFormFieldsProps {
   onTestConnection?: () => Promise<void>;
   testing?: boolean;
   testResult?: MCPDiscoveryResult | null;
+  /** The owner is persisting this form; actions that save first wait for it. */
+  saving?: boolean;
   /** Persist current settings and return the authoritative server ID before every OAuth start. */
   onPrepareOAuthStart: () => Promise<string | null>;
   /** Whether persistent mutations/OAuth preparation remain authorized. */
@@ -131,6 +133,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   serverId,
   onTestConnection,
   testing = false,
+  saving = false,
   testResult,
   onPrepareOAuthStart,
   mutationAllowed = true,
@@ -734,7 +737,12 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   </span>
                 </Tooltip>
               ) : (
-                <Button type="primary" loading={startingOAuthFlow} onClick={handleStartOAuthFlow}>
+                <Button
+                  type="primary"
+                  loading={startingOAuthFlow}
+                  disabled={saving}
+                  onClick={handleStartOAuthFlow}
+                >
                   {oauthStartLabel}
                 </Button>
               ))}
@@ -766,6 +774,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 disabled={
                   !oauthStartAllowed ||
                   !onTestConnection ||
+                  saving ||
                   ((!!serverId || authType === 'oauth') && missingRequiredFields.length > 0)
                 }
               >

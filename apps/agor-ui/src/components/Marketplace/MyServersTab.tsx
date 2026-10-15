@@ -30,6 +30,7 @@ import {
   type ActionErrorCopy,
   describeActionError,
   formatActionError,
+  LOST_CONNECTION_TOOLTIP,
 } from '@/utils/connectionErrors';
 import { useThemedMessage } from '@/utils/message';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
@@ -159,6 +160,11 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   const policyState = policyPendingState(memberPolicy);
   // Same gates as the former Settings > MCP Servers create form.
   const canAdd = !policyState.pending && canAddMcpServer(capability);
+  const addRestriction = !connectionReady
+    ? LOST_CONNECTION_TOOLTIP
+    : policyState.pending
+      ? policyState.hint
+      : explainAddRestriction(capability);
   const createAuthorityKey =
     canAdd && currentUser ? `${currentUser.user_id}:${currentUser.role}:${authGeneration}` : null;
   const offeredTransports = useMemo(
@@ -776,10 +782,19 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     </Button>
   );
 
-  const addCustomServerButton = canAdd && (
+  const addCustomServerButton = canAdd ? (
     <Button icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
       Add custom server
     </Button>
+  ) : (
+    // A disabled button can't host a tooltip of its own — hence the span.
+    <Tooltip title={addRestriction}>
+      <span>
+        <Button icon={<PlusOutlined />} disabled>
+          Add custom server
+        </Button>
+      </span>
+    </Tooltip>
   );
   // Every branch below renders this as the first child of a Flex root, so a
   // list that appears mid-create (for example, during OAuth) keeps the form.
@@ -795,9 +810,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
       offeredScopes={offeredScopes}
       allowSharedOwnership={canAddSharedMcpServer(capability)}
       mutationAllowed={canAdd}
-      mutationBlockedReason={
-        policyState.pending ? policyState.hint : explainAddRestriction(capability)
-      }
+      mutationBlockedReason={addRestriction}
       onCreated={(server) => setCreatedServerId(server.mcp_server_id)}
       onClose={() => {
         setCreateOpen(false);
@@ -861,7 +874,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           title={policyState.pending ? policyState.hint : explainManageRestriction(capability)}
         />
       )}
-      {addCustomServerButton && <Flex justify="flex-end">{addCustomServerButton}</Flex>}
+      <Flex justify="flex-end">{addCustomServerButton}</Flex>
       <section ref={inventoryFocusTarget} tabIndex={-1} aria-label="Installed MCP server inventory">
         {compact ? (
           <Spin spinning={loading}>
