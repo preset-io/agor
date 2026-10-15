@@ -77,10 +77,12 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   const [envVarNames, setEnvVarNames] = useState<string[]>([]);
   // An unedited spawn copies the parent's links (and keeps global servers);
   // preview them without turning the preview into an explicit selection.
-  const { ids: parentMcpServerIds, loaded: parentMcpLoaded } = useSessionMcpServerIds(
-    client,
-    open && action === 'spawn' ? session?.session_id : undefined
-  );
+  const {
+    ids: parentMcpServerIds,
+    loaded: parentMcpLoaded,
+    failed: mcpLoadFailed,
+    retry: retryMcpLoad,
+  } = useSessionMcpServerIds(client, open && action === 'spawn' ? session?.session_id : undefined);
 
   const getCustomConfigDefaults = useCallback(
     (agentTool: AgenticToolName) => {
@@ -378,6 +380,8 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                   branchId={session?.branch_id}
                   inheritedMcpServerIds={parentMcpServerIds}
                   mcpLoading={!parentMcpLoaded}
+                  mcpLoadFailed={mcpLoadFailed}
+                  onMcpRetry={retryMcpLoad}
                 />
 
                 {selectedAgent === 'codex' && isInlineConfig && (

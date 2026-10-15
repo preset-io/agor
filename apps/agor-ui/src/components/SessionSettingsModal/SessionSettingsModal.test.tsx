@@ -18,7 +18,9 @@ vi.mock('../../store/selectors', () => ({
   selectMcpServerById: () => new Map(),
 }));
 // This session's MCP links as the per-session loader reports them.
-const mcpLinks = vi.hoisted(() => ({ value: { ids: [] as string[], loaded: true } }));
+const mcpLinks = vi.hoisted(() => ({
+  value: { ids: [] as string[], loaded: true, failed: false, retry: vi.fn() },
+}));
 vi.mock('../../hooks/useSessionMcpServerIds', () => ({
   useSessionMcpServerIds: () => mcpLinks.value,
 }));
@@ -33,9 +35,13 @@ vi.mock('../AgenticConfigChipRow', () => ({
   AgenticConfigChipRow: ({
     showEffort = true,
     mcpLoading = false,
+    mcpLoadFailed = false,
+    onMcpRetry,
   }: {
     showEffort?: boolean;
     mcpLoading?: boolean;
+    mcpLoadFailed?: boolean;
+    onMcpRetry?: () => void;
   }) => {
     const form = Form.useFormInstance();
     const mcp = Form.useWatch('mcpServerIds', form) as string[] | undefined;
@@ -45,6 +51,11 @@ vi.mock('../AgenticConfigChipRow', () => ({
         data-mcp={(mcp ?? []).join(',')}
         data-testid="chip-row"
       >
+        {mcpLoadFailed && (
+          <button type="button" onClick={onMcpRetry}>
+            Retry MCP
+          </button>
+        )}
         {showEffort && <div data-testid="effort-chip" />}
         <Form.Item name="agenticToolPresetId" hidden>
           <input />
@@ -145,7 +156,7 @@ const codexSession = {
 
 describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
   beforeEach(() => {
-    mcpLinks.value = { ids: [], loaded: true };
+    mcpLinks.value = { ids: [], loaded: true, failed: false, retry: vi.fn() };
   });
 
   describe('callback_config on save', () => {
@@ -232,9 +243,30 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     });
   });
 
+  it('offers retry after an MCP read failure without saving a partial selection', async () => {
+    mcpLinks.value = { ids: ['partial'], loaded: false, failed: true, retry: vi.fn() };
+    const onClose = vi.fn();
+    const onUpdateSessionMcpServers = vi.fn();
+    render(
+      <SessionSettingsModal
+        open
+        onClose={onClose}
+        session={claudeSession}
+        client={null}
+        currentUser={null}
+        onUpdateSessionMcpServers={onUpdateSessionMcpServers}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Retry MCP' }));
+    expect(mcpLinks.value.retry).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onUpdateSessionMcpServers).not.toHaveBeenCalled();
+  });
+
   it('never sends an MCP diff while the session links are loading', async () => {
     // Only a realtime event's link is in the store; the server has more.
-    mcpLinks.value = { ids: ['partial'], loaded: false };
+    mcpLinks.value = { ...mcpLinks.value, ids: ['partial'], loaded: false };
     const onClose = vi.fn();
     const onUpdateSessionMcpServers = vi.fn();
     render(
@@ -255,7 +287,7 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
   });
 
   it('seeds the MCP field when the links load while open, and sends nothing unless edited', async () => {
-    mcpLinks.value = { ids: [], loaded: false };
+    mcpLinks.value = { ...mcpLinks.value, ids: [], loaded: false };
     const onClose = vi.fn();
     const onUpdateSessionMcpServers = vi.fn();
     const props = {
@@ -268,7 +300,7 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     };
     const { rerender } = render(<SessionSettingsModal {...props} />);
 
-    mcpLinks.value = { ids: ['a', 'b'], loaded: true };
+    mcpLinks.value = { ...mcpLinks.value, ids: ['a', 'b'], loaded: true };
     rerender(<SessionSettingsModal {...props} />);
     expect(screen.getByTestId('chip-row')).toHaveAttribute('data-mcp-loading', 'false');
     await waitFor(() => expect(screen.getByTestId('chip-row')).toHaveAttribute('data-mcp', 'a,b'));
@@ -279,7 +311,7 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
   });
 
   it('reseeds an untouched selection when the links reload, so Save never detaches unseen links', async () => {
-    mcpLinks.value = { ids: ['a'], loaded: true };
+    mcpLinks.value = { ...mcpLinks.value, ids: ['a'], loaded: true };
     const onClose = vi.fn();
     const onUpdateSessionMcpServers = vi.fn();
     const props = {
@@ -292,9 +324,9 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     };
     const { rerender } = render(<SessionSettingsModal {...props} />);
     // A reconnect unloads the links; they reload with a link added meanwhile.
-    mcpLinks.value = { ids: ['a'], loaded: false };
+    mcpLinks.value = { ...mcpLinks.value, ids: ['a'], loaded: false };
     rerender(<SessionSettingsModal {...props} />);
-    mcpLinks.value = { ids: ['a', 'b'], loaded: true };
+    mcpLinks.value = { ...mcpLinks.value, ids: ['a', 'b'], loaded: true };
     rerender(<SessionSettingsModal {...props} />);
     await waitFor(() => expect(screen.getByTestId('chip-row')).toHaveAttribute('data-mcp', 'a,b'));
 
@@ -304,7 +336,7 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
   });
 
   it('keeps an edit across a reload and diffs it against the links the user saw', async () => {
-    mcpLinks.value = { ids: ['a'], loaded: true };
+    mcpLinks.value = { ...mcpLinks.value, ids: ['a'], loaded: true };
     const onUpdateSessionMcpServers = vi.fn();
     const props = {
       open: true,
@@ -316,7 +348,7 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     };
     const { rerender } = render(<SessionSettingsModal {...props} />);
     fireEvent.click(screen.getByTestId('pick-mcp')); // ['a'] -> ['mcp-1']
-    mcpLinks.value = { ids: ['a', 'b'], loaded: true };
+    mcpLinks.value = { ...mcpLinks.value, ids: ['a', 'b'], loaded: true };
     rerender(<SessionSettingsModal {...props} />);
     await waitFor(() =>
       expect(screen.getByTestId('chip-row')).toHaveAttribute('data-mcp', 'mcp-1')

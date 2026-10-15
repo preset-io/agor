@@ -69,6 +69,8 @@ export interface AgenticConfigChipRowProps {
    * chip is read-only until the form holds the complete selection.
    */
   mcpLoading?: boolean;
+  mcpLoadFailed?: boolean;
+  onMcpRetry?: () => void;
   catalogEnabled?: boolean;
   /** Require integration-owned exact model selection on direct create/edit surfaces. */
   validateModelSelection?: boolean;
@@ -134,6 +136,8 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   branchId,
   inheritedMcpServerIds,
   mcpLoading = false,
+  mcpLoadFailed = false,
+  onMcpRetry,
   catalogEnabled = true,
   validateModelSelection = false,
   fieldName = 'agenticToolPresetId',
@@ -224,11 +228,13 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     : shortModelName(tool, resolvedModel);
   const permissionLabel = getPermissionModeLabel(tool, resolvedPermission);
   const effortLabel = `Effort: ${resolvedEffort ? EFFORT_LABELS[resolvedEffort] : 'Inherited'}`;
-  const mcpLabel = mcpLoading
-    ? 'Loading MCP servers…'
-    : mcpCount > 0
-      ? `${mcpCount} MCP server${mcpCount === 1 ? '' : 's'}`
-      : 'No MCP servers';
+  const mcpLabel = mcpLoadFailed
+    ? 'MCP servers unavailable'
+    : mcpLoading
+      ? 'Loading MCP servers…'
+      : mcpCount > 0
+        ? `${mcpCount} MCP server${mcpCount === 1 ? '' : 's'}`
+        : 'No MCP servers';
   const advisorLabel = advisorModel
     ? `Advisor: ${shortModelName(tool, advisorModel)}`
     : 'Advisor: Off';
@@ -417,9 +423,18 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         icon={<ApiOutlined />}
         label={mcpLabel}
         title="MCP servers"
-        editable={!mcpLoading}
+        editable={!mcpLoading && !mcpLoadFailed}
         managedNote={
-          <Typography.Text type="secondary">Loading attached MCP servers…</Typography.Text>
+          mcpLoadFailed ? (
+            <Space orientation="vertical">
+              <Typography.Text type="secondary">
+                Could not load attached MCP servers.
+              </Typography.Text>
+              <Button onClick={onMcpRetry}>Retry</Button>
+            </Space>
+          ) : (
+            <Typography.Text type="secondary">Loading attached MCP servers…</Typography.Text>
+          )
         }
         width={360}
         testid="mcp-chip"
