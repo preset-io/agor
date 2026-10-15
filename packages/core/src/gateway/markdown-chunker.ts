@@ -142,7 +142,7 @@ export function chunkMarkdown(text: string, options: MarkdownChunkOptions): stri
         : Math.max(newlineOffset, spaceOffset);
     let endOffset = maxOffset;
     let nextState: FenceState | null = maxState;
-    if (softOffset > startOffset && softOffset < maxOffset) {
+    if (maxOffset < tokens.length && softOffset > startOffset && softOffset < maxOffset) {
       const candidateState = tokens[softOffset - 1].stateAfter;
       const candidatePrefix = candidateState ? measure(fencePrefix(candidateState)) : 0;
       const nextToken = tokens[softOffset];
