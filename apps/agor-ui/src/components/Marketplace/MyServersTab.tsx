@@ -263,6 +263,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     drawerTrigger.current = null;
     setSelectedServerId(null);
     setEditingCredentialServer(null);
+    setCreateOpen(false);
+    setCreatedServerId(null);
     setDiscoveryErrors(new Map());
   }, [active, clearRemovalFocusAuthority]);
 
