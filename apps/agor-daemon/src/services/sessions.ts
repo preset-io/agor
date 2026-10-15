@@ -244,6 +244,12 @@ export type SessionParams = QueryParams<{
     /** Internal fork/spawn/gateway create: skip branch/user MCP defaults without recording an explicit selection. */
     _skipMcpDefaults?: boolean;
     /**
+     * Internal override for whether this create records an explicit MCP selection.
+     * Children pass inherited/explicit intent so it commits with the session row;
+     * attach-only callers (MCP Catalog) pass false. Defaults to "mcpServerIds supplied".
+     */
+    _mcpSelectionExplicit?: boolean;
+    /**
      * Trusted session-admission override. Genealogical children inherit their
      * parent's SDK lineage; independent creates resolve branch intent + config.
      */
@@ -678,7 +684,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
       const createdSession = await new SessionRepository(scoped).create({
         ...createData,
-        ...(explicitMcpServerIds !== undefined && { mcp_selection_explicit: true }),
+        ...((params?._mcpSelectionExplicit ?? explicitMcpServerIds !== undefined) && {
+          mcp_selection_explicit: true,
+        }),
         sdk_home_scope: admission.scope,
       });
 
@@ -937,22 +945,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   }
 
   /**
-   * Attach MCP server IDs to a session.
-   * Only a caller-supplied selection records explicit intent; inherited or
-   * default lists (gateway channel/user defaults) keep implicit global servers.
+   * Attach MCP server IDs to a session (links only).
+   * Selection intent is recorded atomically by create(), never here.
    * Emits WebSocket events so the UI updates in real-time.
    */
-  async setMCPServers(
-    sessionId: SessionID,
-    serverIds: string[],
-    label: string,
-    options: { selectionExplicit?: boolean } = {}
-  ): Promise<void> {
-    if (options.selectionExplicit) {
-      await runWithTenantDatabaseScope(this.db, getCurrentTenantId(), (scoped) =>
-        new SessionRepository(scoped).update(sessionId, { mcp_selection_explicit: true })
-      );
-    }
+  async setMCPServers(sessionId: SessionID, serverIds: string[], label: string): Promise<void> {
     for (const serverId of serverIds) {
       try {
         await this.sessionMCPRepo.addServer(sessionId, serverId as MCPServerID);
@@ -990,16 +987,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     targetSessionId: SessionID,
     label: string
   ): Promise<void> {
-    // Record inherited explicit intent before any best-effort attachment work.
-    // Failure to read/copy intent must not silently restore implicit globals.
-    await runWithTenantDatabaseScope(this.db, getCurrentTenantId(), async (scoped) => {
-      const sessions = new SessionRepository(scoped);
-      const source = await sessions.findById(sourceSessionId);
-      if (!source) throw new EntityNotFoundError('Session', sourceSessionId);
-      if (source.mcp_selection_explicit) {
-        await sessions.update(targetSessionId, { mcp_selection_explicit: true });
-      }
-    });
     try {
       const parentServers = await this.sessionMCPRepo.listServers(sourceSessionId, true);
       for (const server of parentServers) {
@@ -1182,8 +1169,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       {
         ...params,
         _agenticConfigResolved: true,
-        // MCP links come from the parent or an explicit spawn selection below.
+        // MCP links are copied from the parent below; its intent commits with this row.
         _skipMcpDefaults: true,
+        _mcpSelectionExplicit: parent.mcp_selection_explicit === true,
         _sdkHomeScope: parent.sdk_home_scope,
       }
     );
@@ -1372,8 +1360,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       {
         ...params,
         _agenticConfigResolved: true,
-        // MCP links come from the parent or an explicit spawn selection below.
+        // MCP links come from the parent or an explicit spawn selection below;
+        // the resulting intent commits with this row, before any attachment.
         _skipMcpDefaults: true,
+        _mcpSelectionExplicit:
+          data.mcpServerIds !== undefined || parent.mcp_selection_explicit === true,
         _sdkHomeScope: parent.sdk_home_scope,
       }
     );
@@ -1384,9 +1375,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // MCP servers: explicit mcpServerIds > copy from parent
     // An explicit empty array means "no MCPs" — does NOT fall through to parent.
     if (data.mcpServerIds !== undefined) {
-      await this.setMCPServers(session.session_id as SessionID, data.mcpServerIds, 'spawn', {
-        selectionExplicit: true,
-      });
+      await this.setMCPServers(session.session_id as SessionID, data.mcpServerIds, 'spawn');
     } else {
       await this.copyMCPServers(
         parent.session_id as SessionID,

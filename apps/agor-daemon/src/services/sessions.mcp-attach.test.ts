@@ -447,6 +447,7 @@ describe('SessionsService child MCP selection intent', () => {
     const scoped = <T>(work: () => Promise<T>) =>
       runWithTenantDatabaseScope(scopedDb, 'static', work);
     return {
+      service,
       create: (input: CreateSessionInput, params?: SessionParams) =>
         scoped(() => service.create(input, params) as Promise<Session>),
       fork: (id: string) => scoped(() => service.fork(id, { prompt: 'fork' })),
@@ -567,4 +568,47 @@ describe('SessionsService child MCP selection intent', () => {
       expect(await effective(db, created, sharedServer, user.user_id)).toEqual([sharedServer]);
     }
   );
+
+  dbTest('MCP Catalog attach-only create keeps the catalog server plus globals', async ({ db }) => {
+    const { user, branch, sharedServer, attached } = await childFixture(db);
+    const service = childService(db, user.user_id);
+    const created = await service.create(
+      { ...parentInput(branch.branch_id, user.user_id), mcpServerIds: [attached.mcp_server_id] },
+      { _agenticConfigResolved: true, _mcpSelectionExplicit: false } as never
+    );
+    const stored = await new SessionRepository(db).findById(created.session_id);
+    expect(stored?.mcp_selection_explicit).toBeUndefined();
+    expect(
+      (await effective(db, created, sharedServer, user.user_id)).map((s) => s.mcp_server_id)
+    ).toEqual([sharedServer.mcp_server_id, attached.mcp_server_id]);
+  });
+
+  dbTest('child intent commits with the session row even if attachment fails', async ({ db }) => {
+    const { user, branch } = await childFixture(db);
+    const children = childService(db, user.user_id);
+    const legacyParent = await children.create(parentInput(branch.branch_id, user.user_id), {
+      _agenticConfigResolved: true,
+    } as never);
+    const explicitParent = await children.create(
+      { ...parentInput(branch.branch_id, user.user_id), mcpServerIds: [] },
+      { _agenticConfigResolved: true } as never
+    );
+    const internals = children.service as unknown as Record<string, unknown>;
+    vi.spyOn(children.service, 'setMCPServers').mockRejectedValue(new Error('attach failed'));
+    vi.spyOn(
+      internals as { copyMCPServers: () => Promise<void> },
+      'copyMCPServers'
+    ).mockRejectedValue(new Error('copy failed'));
+
+    await expect(children.spawn(legacyParent.session_id, [])).rejects.toThrow('attach failed');
+    await expect(children.fork(explicitParent.session_id)).rejects.toThrow('copy failed');
+    await expect(children.spawn(explicitParent.session_id)).rejects.toThrow('copy failed');
+
+    const all = await new SessionRepository(db).findAll();
+    const childRows = all.filter(
+      (session) => session.genealogy?.parent_session_id || session.genealogy?.forked_from_session_id
+    );
+    expect(childRows).toHaveLength(3);
+    for (const child of childRows) expect(child.mcp_selection_explicit).toBe(true);
+  });
 });

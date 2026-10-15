@@ -631,9 +631,7 @@ describe('SessionsService direct OpenCode model selection', () => {
       model_config: { mode: 'exact', provider: 'openai', model: 'gpt-child' },
       genealogy: { spawn_point_task_id: undefined },
     });
-    expect(setMCPServers).toHaveBeenCalledWith(child.session_id, explicitMcpServerIds, 'spawn', {
-      selectionExplicit: true,
-    });
+    expect(setMCPServers).toHaveBeenCalledWith(child.session_id, explicitMcpServerIds, 'spawn');
     await expect(service.fork(parentId, { prompt: 'Preset fork' })).resolves.toMatchObject({
       agentic_tool_preset_id: preset.preset_id,
       model_config: { mode: 'exact', provider: 'openai', model: 'gpt-child' },
