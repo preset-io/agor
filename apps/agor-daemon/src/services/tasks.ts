@@ -863,7 +863,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (!task.session_id || !this.app) return false;
     const runCompletionSideEffects = isCompletionSideEffectTaskStatus(status);
     try {
-      const session = await this.app.service('sessions').get(task.session_id, params);
+      // Internal read: caller params can hold the Session its auth hooks cached before commit.
+      const session = await this.app
+        .service('sessions')
+        .get(task.session_id, { tenant: params?.tenant } as TaskParams);
 
       if (session.branch_id) {
         // Preserve fire-and-forget behavior, but never let Git orchestration
