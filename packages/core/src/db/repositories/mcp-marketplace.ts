@@ -45,6 +45,7 @@ type SafeServerRow = {
   capabilities_discovered_at: unknown;
   permissions_json: unknown;
   auth_type: unknown;
+  oauth_mode: unknown;
   credential_configured: unknown;
   credential_created_at: Date | string | number | null;
   credential_updated_at: Date | string | number | null;
@@ -207,6 +208,7 @@ function credentialFrom(
       ? { server_display_name: stringValue(row.display_name) }
       : {}),
     method,
+    oauth_mode: row.oauth_mode === 'shared' ? 'shared' : 'per_user',
     status,
     detail_status: detailStatus,
     ...(expiresAt ? { expires_at: expiresAt } : {}),
@@ -268,6 +270,7 @@ export class MCPMarketplaceRepository {
         capabilities_discovered_at: capabilitiesDiscoveredAt,
         permissions_json: permissions,
         auth_type: authType,
+        oauth_mode: oauthMode,
         credential_configured: credentialConfigured,
         // OAuth metadata only. Token bytes, client registration, binding,
         // resource, issuer, and endpoint columns are intentionally absent.

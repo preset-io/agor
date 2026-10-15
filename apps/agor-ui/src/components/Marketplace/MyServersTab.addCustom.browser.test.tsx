@@ -338,6 +338,31 @@ it('keeps a Shared server read-only for a member whose policy cannot manage one'
   expect(await screen.findByLabelText('Remove Existing server')).toBeDisabled();
 });
 
+it('leaves a shared-mode OAuth grant to admins on a Shared server a member manages', async () => {
+  mount({
+    ...emptyOverview,
+    servers: [{ ...existing, shared: true }],
+    credentials: [
+      {
+        mcp_server_id: existing.mcp_server_id,
+        server_name: existing.name,
+        server_display_name: existing.display_name,
+        method: 'oauth',
+        oauth_mode: 'shared',
+        status: 'attention',
+        detail_status: 'reauthentication_required',
+      },
+    ],
+  });
+  await act(() => userEvent.click(screen.getByRole('button', { name: 'Settings for Existing' })));
+  // allow_crud lets this member change the Shared configuration ...
+  const remove = await screen.findByLabelText('Remove Existing server');
+  await waitFor(() => expect(remove).toBeEnabled());
+  // ... but the workspace grant itself stays admin-only, as the daemon enforces.
+  expect(screen.getByRole('button', { name: 'Reconnect Existing account' })).toBeDisabled();
+  expect(screen.getByLabelText('Disconnect Existing OAuth connection')).toBeDisabled();
+});
+
 it('opens from the toolbar and resets the draft after cancel', async () => {
   const { create } = mount({ ...emptyOverview, servers: [existing] });
   let dialog = await openCreateDialog();

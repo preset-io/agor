@@ -1,3 +1,4 @@
+import { isMcpGrantSubjectEntitled } from '@agor/core/mcp/member-policy';
 import type {
   MCPMarketplaceOverview,
   MCPMarketplaceServer,
@@ -367,12 +368,21 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   const canRemove = Boolean(
     selectedAuthority && !policyState.pending && canDeleteMcpServer(selectedAuthority, capability)
   );
-  const canReconnect = Boolean(
-    connectionReady && currentUser && hasMinimumRole(currentUser.role, ROLES.MEMBER)
-  );
   const selectedCredential = selectedServer
     ? credentials.get(selectedServer.mcp_server_id)
     : undefined;
+  // A shared-mode OAuth grant belongs to the workspace; the daemon lets only
+  // admins connect or disconnect it, whoever may change the configuration.
+  const grantEntitled = isMcpGrantSubjectEntitled(
+    currentUser?.role,
+    selectedCredential?.oauth_mode
+  );
+  const canReconnect = Boolean(
+    connectionReady &&
+      currentUser &&
+      hasMinimumRole(currentUser.role, ROLES.MEMBER) &&
+      grantEntitled
+  );
   const selectedStatus = marketplaceCredentialPresentation(
     selectedCredential,
     selectedServer?.enabled
@@ -994,6 +1004,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
         canRefresh={canRefresh}
         canChangeTools={canChangeTools}
         canReconnect={canReconnect}
+        canDisconnect={canChangeTools && grantEntitled}
         canRemove={canRemove}
         busy={busy}
         toolDiscoveryError={

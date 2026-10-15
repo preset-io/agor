@@ -315,10 +315,12 @@ describe('MCPMarketplaceRepository', () => {
         expect.arrayContaining([
           expect.objectContaining({
             mcp_server_id: shared.mcp_server_id,
+            oauth_mode: 'shared',
             status: 'active',
           }),
           expect.objectContaining({
             mcp_server_id: otherUsersGrant.mcp_server_id,
+            oauth_mode: 'per_user',
             status: 'not_connected',
           }),
         ])
@@ -484,6 +486,8 @@ describe('MCPMarketplaceRepository', () => {
       expect(withShared.credentials).toMatchObject([
         { mcp_server_id: shared.mcp_server_id, method: 'bearer', status: 'configured' },
       ]);
+      // The OAuth grant mode is projected only for OAuth credentials.
+      expect(withShared.credentials[0]).not.toHaveProperty('oauth_mode');
       expect(JSON.stringify(withShared)).not.toMatch(
         /shared-token-secret|shared-header-secret|shared-secret-endpoint|bob-token-secret|bob-private|Bob session/
       );

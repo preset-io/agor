@@ -86,6 +86,8 @@ export interface MCPMarketplaceCredential {
   server_name: string;
   server_display_name?: string;
   method: MCPMarketplaceCredentialMethod;
+  /** Nonsecret OAuth grant mode; present only when `method` is `oauth`. */
+  oauth_mode?: 'per_user' | 'shared';
   /** Backward-compatible coarse status from the original Marketplace DTO. */
   status: MCPMarketplaceCredentialStatus;
   /** Optional, additive status used by newer Catalog clients. */

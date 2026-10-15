@@ -45,6 +45,8 @@ export interface ServerSettingsDrawerProps {
   canRefresh: boolean;
   canChangeTools: boolean;
   canReconnect: boolean;
+  /** Defaults to `canChangeTools`; narrower when the OAuth grant is admin-only. */
+  canDisconnect?: boolean;
   canRemove: boolean;
   busy: ReadonlySet<string>;
   toolDiscoveryError?: ActionErrorCopy;
@@ -74,6 +76,7 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
   canRefresh,
   canChangeTools,
   canReconnect,
+  canDisconnect = canChangeTools,
   canRemove,
   busy,
   toolDiscoveryError,
@@ -210,7 +213,7 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
                     >
                       <Button
                         danger
-                        disabled={!canChangeTools || toolWorkActive}
+                        disabled={!canDisconnect || toolWorkActive}
                         loading={disconnectingOAuth}
                         aria-label={`Disconnect ${marketplaceServerTitle(server)} OAuth connection`}
                       >
