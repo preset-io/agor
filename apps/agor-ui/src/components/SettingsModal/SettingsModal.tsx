@@ -5,7 +5,6 @@ import type {
   Branch,
   BranchArchiveOrDeleteOptions,
   CreateLocalRepoRequest,
-  CreateMCPServerInput,
   CreateRepoRequest,
   CreateUserInput,
   GatewayChannelCreateData,
@@ -108,10 +107,6 @@ export interface SettingsModalProps {
     options?: { errorShownInline?: boolean }
   ) => void | Promise<void>;
   onDeleteUser?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
-  onCreateMCPServer?: (
-    data: CreateMCPServerInput,
-    shouldApply?: () => boolean
-  ) => void | Promise<void>;
   onDeleteMCPServer?: (serverId: string, shouldApply?: () => boolean) => void | Promise<void>;
   onCreateGatewayChannel?: (data: GatewayChannelCreateData) => void;
   onUpdateGatewayChannel?: (

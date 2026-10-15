@@ -7,7 +7,6 @@ import type {
   Branch,
   BranchArchiveOrDeleteOptions,
   CreateLocalRepoRequest,
-  CreateMCPServerInput,
   CreateRepoRequest,
   CreateUserInput,
   GatewayChannelCreateData,
@@ -243,10 +242,6 @@ export interface AppProps {
    */
   onRefreshCurrentUser?: (shouldApply: () => boolean) => Promise<unknown>;
   onDeleteUser?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
-  onCreateMCPServer?: (
-    data: CreateMCPServerInput,
-    shouldApply?: () => boolean
-  ) => void | Promise<void>;
   onDeleteMCPServer?: (mcpServerId: string, shouldApply?: () => boolean) => void | Promise<void>;
   onCreateGatewayChannel?: (data: GatewayChannelCreateData) => void;
   onUpdateGatewayChannel?: (
@@ -370,7 +365,6 @@ export const App: React.FC<AppProps> = ({
   onUpdateUser,
   onRefreshCurrentUser,
   onDeleteUser,
-  onCreateMCPServer,
   onDeleteMCPServer,
   onCreateGatewayChannel,
   onUpdateGatewayChannel,
@@ -1637,7 +1631,6 @@ export const App: React.FC<AppProps> = ({
           onCreateUser={onCreateUser}
           onUpdateUser={onUpdateUser}
           onDeleteUser={onDeleteUser}
-          onCreateMCPServer={onCreateMCPServer}
           onDeleteMCPServer={onDeleteMCPServer}
           onCreateGatewayChannel={onCreateGatewayChannel}
           onUpdateGatewayChannel={onUpdateGatewayChannel}
