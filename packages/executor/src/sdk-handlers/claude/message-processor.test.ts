@@ -130,9 +130,9 @@ describe('SDKMessageProcessor command discovery', () => {
     const events = await processor.process(
       systemMsg({
         subtype: 'init',
-        slash_commands: ['compact', 'doctor', 'exit', 'future-terminal', 'plugin:review'],
+        slash_commands: ['compact', 'doctor', 'exit', 'future-terminal', 'plugin:doctor'],
         terminal_slash_commands: ['doctor', 'exit', 'future-terminal'],
-        skills: ['doctor', 'plugin:review'],
+        skills: ['doctor', 'plugin:doctor'],
       } satisfies Pick<
         SDKSystemMessage,
         'subtype' | 'slash_commands' | 'terminal_slash_commands' | 'skills'
@@ -141,36 +141,38 @@ describe('SDKMessageProcessor command discovery', () => {
     expect(events).toEqual([
       {
         type: 'slash_commands_discovered',
-        slashCommands: ['compact', 'plugin:review'],
-        terminalSlashCommands: ['doctor', 'exit', 'future-terminal'],
-        skills: ['plugin:review'],
+        slashCommands: ['compact', 'plugin:doctor'],
+        skills: ['plugin:doctor'],
         agentSessionId: undefined,
       },
     ]);
   });
 
-  it('preserves built-ins supported by the current SDK and stamps an empty terminal inventory', async () => {
-    const processor = createProcessor();
-    const events = await processor.process(
-      systemMsg({
-        subtype: 'init',
-        slash_commands: ['compact', 'clear', 'context', 'usage', 'config', 'custom-command'],
-        skills: ['custom-command'],
-      } satisfies Pick<
-        SDKSystemMessage,
-        'subtype' | 'slash_commands' | 'terminal_slash_commands' | 'skills'
-      >)
-    );
-    expect(events).toEqual([
-      {
-        type: 'slash_commands_discovered',
-        slashCommands: ['compact', 'clear', 'context', 'usage', 'config', 'custom-command'],
-        terminalSlashCommands: [],
-        skills: ['custom-command'],
-        agentSessionId: undefined,
-      },
-    ]);
-  });
+  it.each([undefined, []])(
+    'preserves SDK-supported commands when terminal metadata is %j',
+    async (terminalCommands) => {
+      const processor = createProcessor();
+      const events = await processor.process(
+        systemMsg({
+          subtype: 'init',
+          slash_commands: ['compact', 'clear', 'context', 'usage', 'config', 'custom-command'],
+          terminal_slash_commands: terminalCommands,
+          skills: ['custom-command'],
+        } satisfies Pick<
+          SDKSystemMessage,
+          'subtype' | 'slash_commands' | 'terminal_slash_commands' | 'skills'
+        >)
+      );
+      expect(events).toEqual([
+        {
+          type: 'slash_commands_discovered',
+          slashCommands: ['compact', 'clear', 'context', 'usage', 'config', 'custom-command'],
+          skills: ['custom-command'],
+          agentSessionId: undefined,
+        },
+      ]);
+    }
+  );
 });
 
 describe('SDKMessageProcessor system event suppression', () => {
@@ -193,7 +195,6 @@ describe('SDKMessageProcessor system event suppression', () => {
         {
           type: 'slash_commands_discovered',
           slashCommands: ['/compact'],
-          terminalSlashCommands: [],
           skills: ['example-skill'],
           agentSessionId: undefined,
         },

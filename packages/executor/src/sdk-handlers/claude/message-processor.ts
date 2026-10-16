@@ -11,7 +11,6 @@
  * - Yield structured events for database persistence
  */
 
-import { filterClaudeSdkCommands } from '@agor/agentic-tools';
 import { projectClaudeResultResponse, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
 import {
   SUPPRESSED_CLAUDE_STATUSES,
@@ -134,7 +133,6 @@ export type ProcessedEvent =
   | {
       type: 'slash_commands_discovered';
       slashCommands: string[];
-      terminalSlashCommands: string[];
       skills: string[];
       agentSessionId?: string;
     }
@@ -684,21 +682,19 @@ export class SDKMessageProcessor {
 
       // Capture available slash commands and skills for autocomplete
       if (initMsg.slash_commands || initMsg.skills) {
-        // The pinned SDK already excludes non-headless commands. Its optional
-        // terminal list also removes terminal-oriented bundled skills (doctor,
-        // etc.). Persist [] when absent to distinguish fresh from legacy data.
-        const terminalSlashCommands = initMsg.terminal_slash_commands ?? [];
-        this.state.slashCommands = filterClaudeSdkCommands(
-          initMsg.slash_commands || [],
-          terminalSlashCommands
+        // The SDK supplies headless-supported commands, including custom ones.
+        // Hide entries it tags as terminal-oriented from both autocomplete lists;
+        // a bundled skill (e.g. doctor) can appear in both inventories.
+        const terminalCommands = new Set(initMsg.terminal_slash_commands ?? []);
+        this.state.slashCommands = (initMsg.slash_commands ?? []).filter(
+          (command) => !terminalCommands.has(command)
         );
-        this.state.skills = filterClaudeSdkCommands(initMsg.skills || [], terminalSlashCommands);
+        this.state.skills = (initMsg.skills ?? []).filter((skill) => !terminalCommands.has(skill));
 
         // Emit event so claude-tool can persist to session for UI autocomplete
         events.push({
           type: 'slash_commands_discovered',
           slashCommands: this.state.slashCommands,
-          terminalSlashCommands,
           skills: this.state.skills,
           agentSessionId: this.state.capturedAgentSessionId,
         });

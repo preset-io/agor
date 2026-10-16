@@ -147,7 +147,7 @@ async function execute(tool: ClaudeTool, mode: 'streaming' | 'non-streaming', ta
 }
 
 describe('ClaudeTool command discovery persistence', () => {
-  it('persists the filtered SDK inventories and terminal metadata together', async () => {
+  it('persists filtered commands and skills through the existing session context fields', async () => {
     const processor = new SDKMessageProcessor({ sessionId: generateId() as SessionID });
     const initMessage = {
       type: 'system',
@@ -165,7 +165,6 @@ describe('ClaudeTool command discovery persistence', () => {
     expect(harness.sessionsRepo.update).toHaveBeenCalledWith(expect.any(String), {
       custom_context: {
         slash_commands: ['compact', 'usage'],
-        terminal_slash_commands: ['doctor'],
         skills: ['project-review'],
       },
     });

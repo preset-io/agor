@@ -193,7 +193,6 @@ describe('toLeanSessionListRow', () => {
         teamName: 'Backend',
         scheduled_run: { schedule_id: 'sched-1' },
         slash_commands: ['/review'],
-        terminal_slash_commands: ['doctor'],
         skills: ['pdf'],
       },
     } as unknown as Session;
@@ -252,7 +251,6 @@ describe('toLeanSessionListRow', () => {
     expect(lean).not.toBe(forged);
     expect(lean.custom_context).not.toHaveProperty('scheduled_run');
     expect(lean.custom_context).not.toHaveProperty('slash_commands');
-    expect(lean.custom_context).not.toHaveProperty('terminal_slash_commands');
     expect(lean.custom_context).not.toHaveProperty('skills');
     expect(Object.getOwnPropertyDescriptor(lean, 'read_shape')).toMatchObject({
       value: SESSION_LIST_ROW_SHAPE,
