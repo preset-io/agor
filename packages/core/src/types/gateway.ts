@@ -1717,5 +1717,12 @@ export interface GatewayChatCommandReceipt {
   task_id: TaskID | null;
   queued_count: number;
   cancelled_count: number;
-  outcome: 'requested' | 'idle' | 'queue_not_empty' | 'condition_changed' | 'denied';
+  outcome:
+    | 'requested'
+    | 'idle'
+    | 'queue_not_empty'
+    | 'condition_changed'
+    | 'denied'
+    | 'ambiguous'
+    | 'not_target';
 }

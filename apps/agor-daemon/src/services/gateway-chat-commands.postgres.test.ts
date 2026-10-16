@@ -12,6 +12,7 @@ import {
   runWithTenantDatabaseScope,
   sql,
   TaskRepository,
+  ThreadSessionMapRepository,
 } from '@agor/core/db';
 import { TaskStatus } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -121,6 +122,45 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         expect(replay.claimed).toBeNull();
         expect(await new TaskRepository(tx).findQueued(f.input.sessionId)).toHaveLength(3);
         expect((await new TaskRepository(tx).findById(f.seed.active.task_id))?.status).toBe(
+          TaskStatus.RUNNING
+        );
+      });
+    });
+
+    it('resolves identical provider threads independently under tenant RLS', async () => {
+      const tenantA = `implicit-a-${generateId()}`;
+      const tenantB = `implicit-b-${generateId()}`;
+      const first = await fixture(tenantA);
+      const second = await fixture(tenantB);
+      for (const [tenant, f] of [
+        [tenantA, first],
+        [tenantB, second],
+      ] as const) {
+        await scoped(a, tenant, async (tx) => {
+          await new ThreadSessionMapRepository(tx).create({
+            channel_id: f.channel.id,
+            thread_id: f.input.threadId,
+            session_id: f.input.sessionId,
+            branch_id: f.seed.branch.branch_id,
+          });
+        });
+      }
+      await scoped(b, tenantB, async (tx) => {
+        const commands = new GatewayChatCommandRepository(tx);
+        expect(
+          await commands.resolveImplicitTarget(second.channel.id, [second.input.threadId])
+        ).toEqual({ outcome: 'selected', sessionId: second.input.sessionId });
+        expect(
+          await commands.resolveImplicitTarget(first.channel.id, [first.input.threadId])
+        ).toEqual({ outcome: 'not_target', sessionId: null });
+        await lockTenantAuthorizationFence(tx);
+        expect(
+          (await commands.execute({ ...second.input, implicitThreadIds: [second.input.threadId] }))
+            .receipt.outcome
+        ).toBe('requested');
+      });
+      await scoped(a, tenantA, async (tx) => {
+        expect((await new TaskRepository(tx).findById(first.seed.active.task_id))?.status).toBe(
           TaskStatus.RUNNING
         );
       });

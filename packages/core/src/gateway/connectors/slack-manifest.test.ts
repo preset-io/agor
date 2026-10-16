@@ -309,18 +309,21 @@ describe('requiredBotEvents', () => {
     expect(requiredBotEvents(baseOptions)).toEqual(['message.im']);
   });
 
-  it('any channel-like surface adds app_mention (and no message.channels/groups/mpim)', () => {
+  it('each channel-like surface adds mentions and its bare-command message events', () => {
     expect(requiredBotEvents(withOptions({ publicChannels: true }))).toEqual([
       'app_mention',
+      'message.channels',
       'message.im',
     ]);
     expect(requiredBotEvents(withOptions({ privateChannels: true }))).toEqual([
       'app_mention',
+      'message.groups',
       'message.im',
     ]);
     expect(requiredBotEvents(withOptions({ groupDms: true }))).toEqual([
       'app_mention',
       'message.im',
+      'message.mpim',
     ]);
   });
 
@@ -332,7 +335,13 @@ describe('requiredBotEvents', () => {
     ]);
     expect(
       requiredBotEvents(withOptions({ inboundReactions: true, publicChannels: true }))
-    ).toEqual(['app_mention', 'message.im', 'reaction_added', 'reaction_removed']);
+    ).toEqual([
+      'app_mention',
+      'message.channels',
+      'message.im',
+      'reaction_added',
+      'reaction_removed',
+    ]);
   });
 
   it('agent reaction tools do not subscribe to reaction events', () => {
@@ -455,7 +464,10 @@ describe('buildSlackManifest', () => {
           "event_subscriptions": {
             "bot_events": [
               "app_mention",
+              "message.channels",
+              "message.groups",
               "message.im",
+              "message.mpim",
             ],
           },
           "interactivity": {
@@ -510,6 +522,7 @@ describe('buildSlackManifest', () => {
           "event_subscriptions": {
             "bot_events": [
               "app_mention",
+              "message.channels",
               "message.im",
             ],
           },

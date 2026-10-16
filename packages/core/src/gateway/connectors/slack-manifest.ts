@@ -11,10 +11,9 @@
  *
  * The scope/event matrix mirrors what the Slack connector actually calls; see
  * {@link ./slack.ts}. DMs are always handled, so there is no DM toggle, and
- * channel-like surfaces trigger exclusively on `app_mention` (verified in the
- * connector's inbound filter), so no `message.channels`/`groups`/`mpim` events
- * are requested. Inbound emoji reactions are the one non-message trigger: they
- * subscribe to `reaction_added`/`reaction_removed` only when opted in.
+ * channel-like prompts trigger on `app_mention`. Message events also deliver
+ * exact bare thread commands; all other unmentioned channel messages are filtered.
+ * Inbound emoji reactions are the one non-message trigger: they subscribe to `reaction_added`/`reaction_removed` only when opted in.
  */
 
 import {
@@ -190,8 +189,8 @@ export function requiredBotScopes(opts: SlackWizardOptions): string[] {
 
 /**
  * Bot event subscriptions required for the selected capabilities,
- * de-duplicated and stable-sorted. Channel-like surfaces trigger only on
- * `app_mention`; DMs trigger on `message.im`; inbound reactions add
+ * de-duplicated and stable-sorted. Channel prompts use `app_mention`, bare
+ * thread commands use surface message events, and inbound reactions add
  * `reaction_added`/`reaction_removed`.
  */
 export function requiredBotEvents(opts: SlackWizardOptions): string[] {
@@ -200,6 +199,9 @@ export function requiredBotEvents(opts: SlackWizardOptions): string[] {
   if (hasChannelLikeSurface(opts)) {
     events.push('app_mention');
   }
+  if (opts.publicChannels) events.push('message.channels');
+  if (opts.privateChannels) events.push('message.groups');
+  if (opts.groupDms) events.push('message.mpim');
   if (opts.inboundReactions) {
     events.push('reaction_added', 'reaction_removed');
   }

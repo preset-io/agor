@@ -83,11 +83,13 @@ import {
   formatGatewaySessionCreatedMessage,
   formatGatewaySystemMessage,
   formatGatewaySystemPayload,
+  GATEWAY_COMMAND_AMBIGUOUS,
   GATEWAY_COMMAND_HELP,
   gatewayFailureCode,
   gatewayListenerFailure,
   getConnector,
   hasConnector,
+  isImplicitGatewayChatCommand,
   isPermanentProviderRefusal,
   isSlackInboundReactionEventType,
   isSlackWriteTargetAllowed,
@@ -712,7 +714,8 @@ function discordInboundMetadataIsAuthoritative(
     deniedChannels.some((id) => !snowflake(id)) ||
     metadata[DISCORD_METADATA_KEY.guildId] !== guildId ||
     (metadata[DISCORD_METADATA_KEY.hasMention] !== true &&
-      !discordResponseModeAdmitsMetadata(config, metadata))
+      !discordResponseModeAdmitsMetadata(config, metadata) &&
+      !isImplicitGatewayChatCommand(channel.channel_type, data.text, data.metadata))
   )
     return false;
   if (isThread) {
@@ -5595,13 +5598,31 @@ export class GatewayService {
     channel: GatewayChannel,
     data: PostMessageData,
     user: User,
-    sessionId: SessionID | null
+    sessionId: SessionID | null,
+    implicitThreadIds?: string[]
   ): Promise<boolean> {
     if (!supportsGatewayChatCommands(channel.channel_type)) return false;
     const command = parseGatewayChatCommand(data.text);
     if (!command) return false;
     if (command === 'help') {
-      await this.sendSystemMessage(channel, data.thread_id, GATEWAY_COMMAND_HELP);
+      const target = implicitThreadIds
+        ? await this.data.read((db) =>
+            new GatewayChatCommandRepository(db).resolveImplicitTarget(
+              channel.id,
+              implicitThreadIds
+            )
+          )
+        : null;
+      if (
+        target?.outcome === 'not_target' ||
+        (target?.outcome === 'selected' && target.sessionId !== sessionId)
+      )
+        return true;
+      await this.sendSystemMessage(
+        channel,
+        data.thread_id,
+        target?.outcome === 'ambiguous' ? GATEWAY_COMMAND_AMBIGUOUS : GATEWAY_COMMAND_HELP
+      );
       return true;
     }
     const tenantId = requireCurrentTenantId();
@@ -5644,6 +5665,7 @@ export class GatewayService {
           userId: user.user_id,
           command,
           expected,
+          implicitThreadIds,
           event,
           allowSuperadmin: this.app.get?.('config')?.execution?.allow_superadmin === true,
           listenerToken: data.listener_claim_token,
@@ -5698,11 +5720,8 @@ export class GatewayService {
         }
       }
       stage = 'reply';
-      await this.sendSystemMessage(
-        channel,
-        data.thread_id,
-        formatGatewayCommandReply(applied.receipt, stop)
-      );
+      const reply = formatGatewayCommandReply(applied.receipt, stop);
+      if (reply) await this.sendSystemMessage(channel, data.thread_id, reply);
     } catch (error) {
       // No raw exceptions or provider payloads in logs or external replies.
       console.warn(
@@ -5833,6 +5852,8 @@ export class GatewayService {
       return { success: false, sessionId: '', created: false };
     }
     const isReaction = isSlackReaction || isTeamsReaction;
+    const implicitCommand =
+      !isReaction && isImplicitGatewayChatCommand(channel.channel_type, data.text, data.metadata);
 
     // 2. Look up existing thread mapping. New Discord admissions use the raw
     // provider thread Snowflake; a legacy composite is consulted only to
@@ -5876,6 +5897,15 @@ export class GatewayService {
       );
       return { success: false, sessionId: '', created: false };
     }
+    const implicitThreadIds = implicitCommand
+      ? [
+          ...new Set(
+            [canonicalThreadId, legacyDiscordThread, existingMapping?.thread_id].filter(
+              (id): id is string => !!id
+            )
+          ),
+        ]
+      : undefined;
     let recoveringInitialDelivery = false;
     let outboundSeed: GatewayOutboundMessage | null = null;
     let outboundAdmission: GatewayOutboundReplyAdmission | null = null;
@@ -5984,7 +6014,7 @@ export class GatewayService {
         typeof data.metadata?.channel_type === 'string' ? data.metadata.channel_type : undefined;
       const isSlackDm = slackConversationType === 'im';
       const hasExplicitMention = data.metadata?.slack_has_mention === true;
-      if (!isSlackDm && !hasExplicitMention && !isSlackReaction) {
+      if (!isSlackDm && !hasExplicitMention && !isSlackReaction && !implicitCommand) {
         console.debug(
           `[gateway] IGNORED: Slack channel-like message without explicit mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
         );
@@ -6000,7 +6030,8 @@ export class GatewayService {
       channel.channel_type === 'discord' &&
       !discordDm &&
       discordMetadata?.[DISCORD_METADATA_KEY.hasMention] !== true &&
-      !discordUnaddressed
+      !discordUnaddressed &&
+      !implicitCommand
     ) {
       console.debug(
         `[gateway] IGNORED: Discord message without explicit mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
@@ -6018,7 +6049,7 @@ export class GatewayService {
       // when an older compatibility flag allowed replies in mapped threads.
       // Personal chats remain mention-free; group chats and channels require
       // an exact structured app-ID mention.
-      if (!isPersonal && !hasMention && !isTeamsReaction) {
+      if (!isPersonal && !hasMention && !isTeamsReaction && !implicitCommand) {
         console.debug(
           `[gateway] IGNORED: Teams conversation message without required mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
         );
@@ -6300,13 +6331,22 @@ export class GatewayService {
       }
       if (
         !isReaction &&
-        (await this.runChatCommand(channel, data, user, existingMapping.session_id))
+        (await this.runChatCommand(
+          channel,
+          data,
+          user,
+          existingMapping.session_id,
+          implicitThreadIds
+        ))
       ) {
         return { success: true, sessionId: existingMapping.session_id, created: false };
       }
     } else {
       await this.requireInboundSessionCreateAccess(channel, user.user_id);
-      if (!isReaction && (await this.runChatCommand(channel, data, user, null))) {
+      if (
+        !isReaction &&
+        (await this.runChatCommand(channel, data, user, null, implicitThreadIds))
+      ) {
         return { success: true, sessionId: '', created: false };
       }
     }

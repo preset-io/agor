@@ -1,4 +1,10 @@
-import { generateId, SessionRepository, TaskRepository } from '@agor/core/db';
+import {
+  GatewayChannelRepository,
+  generateId,
+  SessionRepository,
+  TaskRepository,
+  ThreadSessionMapRepository,
+} from '@agor/core/db';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, vi } from 'vitest';
 import { dbTest, setTestBranchUserRole } from '../../../../packages/core/src/db/test-helpers';
@@ -272,4 +278,181 @@ describe('unmapped command occurrences', () => {
     ).toBe('denied');
     expect((await f.commands.execute(f.input)).receipt.outcome).toBe('requested');
   });
+});
+
+describe('unmentioned thread command targeting', () => {
+  async function map(
+    db: Parameters<typeof fixture>[0],
+    f: Awaited<ReturnType<typeof fixture>>,
+    threadId = f.input.threadId,
+    metadata?: Record<string, unknown>
+  ) {
+    return new ThreadSessionMapRepository(db).create({
+      channel_id: f.channel.id,
+      thread_id: threadId,
+      session_id: f.input.sessionId,
+      branch_id: f.seed.branch.branch_id,
+      metadata,
+    });
+  }
+
+  dbTest(
+    'one connected session accepts bare controls and retains permission checks',
+    async ({ db }) => {
+      const f = await fixture(db);
+      await map(db, f);
+      const input = { ...f.input, implicitThreadIds: [f.input.threadId] };
+      expect(
+        (await f.commands.execute({ ...input, userId: f.seed.stranger.user_id })).receipt.outcome
+      ).toBe('denied');
+      expect((await f.commands.execute(input)).receipt.outcome).toBe('requested');
+      expect(await f.tasks.findQueued(f.input.sessionId)).toHaveLength(0);
+    }
+  );
+
+  dbTest(
+    'multiple sessions request clarification once, and disconnection does not make replay act',
+    async ({ db }) => {
+      const f = await fixture(db);
+      await map(db, f);
+      const other = await fixture(db);
+      const otherMapping = await map(db, other);
+      const input = { ...f.input, implicitThreadIds: [f.input.threadId] };
+      const first = await f.commands.execute(input);
+      expect(first.receipt.outcome).toBe('ambiguous');
+      expect(
+        (
+          await other.commands.execute({
+            ...other.input,
+            implicitThreadIds: [other.input.threadId],
+          })
+        ).receipt.outcome
+      ).toBe('not_target');
+      expect(await f.commands.snapshot(f.input.sessionId)).toEqual(f.input.expected);
+      expect(await other.commands.snapshot(other.input.sessionId)).toEqual(other.input.expected);
+      await new ThreadSessionMapRepository(db).update(otherMapping.id, { status: 'archived' });
+      expect((await f.commands.execute(input)).receipt).toEqual(first.receipt);
+      expect(await f.tasks.findById(f.seed.active.task_id)).toEqual(f.seed.active);
+      // A fresh, explicitly addressed occurrence still selects its own bot.
+      expect(
+        (await f.commands.execute({ ...f.input, providerEventId: generateId() })).receipt.outcome
+      ).toBe('requested');
+    }
+  );
+
+  dbTest(
+    'ambiguity is clarified without Manager, but a selected stop-clear still requires it',
+    async ({ db }) => {
+      const f = await fixture(db);
+      await map(db, f);
+      const other = await fixture(db);
+      const otherMapping = await map(db, other);
+      await setTestBranchUserRole(
+        db,
+        f.seed.branch.branch_id,
+        f.seed.stranger.user_id,
+        'collaborator'
+      );
+      await new SessionRepository(db).update(f.input.sessionId, {
+        created_by: f.seed.stranger.user_id,
+      });
+      const input = {
+        ...f.input,
+        userId: f.seed.stranger.user_id,
+        implicitThreadIds: [f.input.threadId],
+      };
+      expect((await f.commands.execute(input)).receipt.outcome).toBe('ambiguous');
+      await new ThreadSessionMapRepository(db).update(otherMapping.id, { status: 'archived' });
+      expect(
+        (await f.commands.execute({ ...input, providerEventId: generateId() })).receipt.outcome
+      ).toBe('denied');
+      expect(await f.tasks.findById(f.seed.active.task_id)).toEqual(f.seed.active);
+      expect(await f.tasks.findQueued(f.input.sessionId)).toHaveLength(3);
+    }
+  );
+
+  dbTest(
+    'unmapped bare commands remain silent and cannot acquire later work on redelivery',
+    async ({ db }) => {
+      const f = await fixture(db);
+      const first = await f.commands.execute({
+        ...f.input,
+        sessionId: null,
+        expected: null,
+        implicitThreadIds: [f.input.threadId],
+      });
+      expect(first.receipt).toMatchObject({ outcome: 'not_target', session_id: null });
+      await map(db, f);
+      expect(
+        (await f.commands.execute({ ...f.input, implicitThreadIds: [f.input.threadId] })).receipt
+      ).toEqual(first.receipt);
+      expect(await f.tasks.findById(f.seed.active.task_id)).toEqual(f.seed.active);
+    }
+  );
+
+  dbTest(
+    'multiple bots for the same session elect a single responder; aliases find it',
+    async ({ db }) => {
+      const f = await fixture(db);
+      await map(db, f, 'legacy', { gateway_reply_aliases: [f.input.threadId] });
+      const other = await fixture(db);
+      await new GatewayChannelRepository(db).update(other.channel.id, {
+        target_branch_id: f.seed.branch.branch_id,
+      });
+      await new ThreadSessionMapRepository(db).create({
+        channel_id: other.channel.id,
+        thread_id: f.input.threadId,
+        session_id: f.input.sessionId,
+        branch_id: f.seed.branch.branch_id,
+      });
+      expect(await f.commands.resolveImplicitTarget(f.channel.id, [f.input.threadId])).toEqual({
+        outcome: 'selected',
+        sessionId: f.input.sessionId,
+      });
+      expect(await f.commands.resolveImplicitTarget(other.channel.id, [f.input.threadId])).toEqual({
+        outcome: 'not_target',
+        sessionId: null,
+      });
+    }
+  );
+
+  dbTest(
+    'disabled channels, closed mappings, archived sessions and other providers do not add targets',
+    async ({ db }) => {
+      const f = await fixture(db);
+      await map(db, f);
+      for (const variant of ['disabled', 'closed', 'archived', 'provider']) {
+        const other = await fixture(
+          db,
+          variant === 'provider'
+            ? {
+                channel_type: 'discord',
+                provider_installation_id: '123456789012345678',
+                config: {
+                  bot_token: 'test-token',
+                  application_id: '123456789012345678',
+                  guild_id: '223456789012345678',
+                  allowed_channel_ids: ['323456789012345678'],
+                  allowed_user_ids: ['423456789012345678'],
+                  message_content_enabled: true,
+                  thread_mode: 'public_thread_per_summon',
+                  align_discord_users: false,
+                },
+              }
+            : {}
+        );
+        const mapping = await map(db, other);
+        if (variant === 'disabled')
+          await new GatewayChannelRepository(db).update(other.channel.id, { enabled: false });
+        if (variant === 'closed')
+          await new ThreadSessionMapRepository(db).update(mapping.id, { status: 'archived' });
+        if (variant === 'archived')
+          await new SessionRepository(db).update(other.input.sessionId, { archived: true });
+      }
+      expect(await f.commands.resolveImplicitTarget(f.channel.id, [f.input.threadId])).toEqual({
+        outcome: 'selected',
+        sessionId: f.input.sessionId,
+      });
+    }
+  );
 });

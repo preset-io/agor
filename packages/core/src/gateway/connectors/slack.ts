@@ -29,7 +29,6 @@ import { SocketModeClient } from '@slack/socket-mode';
 import type { KnownBlock, RawTextElement, SectionBlock, TableBlock } from '@slack/types';
 import slackWebApi, { WebClient, type WebClientOptions } from '@slack/web-api';
 import { slackifyMarkdown } from 'slackify-markdown';
-
 import type {
   ChannelType,
   SlackAgentToolsConfig,
@@ -37,6 +36,7 @@ import type {
   SlackTestFailure,
   SlackTestResult,
 } from '../../types/gateway';
+import { parseGatewayChatCommand } from '../chat-commands';
 import type {
   GatewayConnector,
   GatewayInboundCallback,
@@ -2836,7 +2836,10 @@ export class SlackConnector implements GatewayConnector {
         const isChannelLikeMessage =
           channelType === 'channel' || channelType === 'group' || channelType === 'mpim';
 
-        if (isChannelLikeMessage && eventType !== 'app_mention') {
+        // Exact bare controls in replies reach gateway target resolution; this
+        // is not a general relaxation of Slack's hard prompt mention rule.
+        const bareThreadCommand = isThreadReply && !!parseGatewayChatCommand(event.text ?? '');
+        if (isChannelLikeMessage && eventType !== 'app_mention' && !bareThreadCommand) {
           console.debug(
             `[slack] Skipping non-app_mention event in channel-like conversation type=${eventType} channel=${event.channel} ts=${event.ts}`
           );
@@ -2900,7 +2903,7 @@ export class SlackConnector implements GatewayConnector {
         const allowedViaThreadReplyException = false;
 
         const requiresExplicitMention = channelType !== 'im';
-        if (requireMention && requiresExplicitMention) {
+        if (requireMention && requiresExplicitMention && !bareThreadCommand) {
           if (!botMentionPattern || !botMentionReplacePattern) {
             // app_mention events are inherently mentions (Slack guarantees this).
             if (eventType === 'app_mention') {

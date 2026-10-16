@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, inArray } from 'drizzle-orm';
 import { DISCORD_METADATA_KEY } from '../../gateway/discord-identifiers';
 import { generateId } from '../../lib/ids';
 import type {
@@ -23,7 +23,15 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { branches, gatewayChannels, gatewayInboundEvents, sessions, tasks } from '../schema';
+import {
+  branches,
+  gatewayChannels,
+  gatewayInboundEvents,
+  sessions,
+  type ThreadSessionMapRow,
+  tasks,
+  threadSessionMap,
+} from '../schema';
 import { RepositoryError } from './base';
 import { BranchRepository } from './branches';
 import { GatewayInboundEventRepository } from './gateway-inbound-events';
@@ -50,6 +58,8 @@ export interface GatewayChatCommandInput {
   userId: UserID;
   command: Exclude<GatewayChatCommand, 'help'>;
   expected: GatewayChatCommandSnapshot | null;
+  /** Canonical and legacy/alias coordinates for an unmentioned thread command. */
+  implicitThreadIds?: string[];
   /** Trusted listener/HTTP claim, not a caller-supplied event ID alone. */
   event?: EventAuthority;
   /** Standalone Slack/Discord still need durable command identity. */
@@ -66,6 +76,55 @@ export interface GatewayChatCommandInput {
  */
 export class GatewayChatCommandRepository {
   constructor(private db: Database) {}
+
+  /**
+   * Tenant-scoped, provider-scoped connected targets; never guess by which
+   * session is busy or by the sender's differing permissions on each bot.
+   * Elect one mapping to reply, including when several bots share one Session.
+   * Aliases use the same retained metadata as ordinary inbound routing.
+   */
+  async resolveImplicitTarget(
+    channelId: GatewayChannelID,
+    threadIds: string[]
+  ): Promise<{
+    outcome: 'selected' | 'ambiguous' | 'not_target';
+    sessionId: SessionID | null;
+  }> {
+    const channel = await select(this.db, { channel_type: gatewayChannels.channel_type })
+      .from(gatewayChannels)
+      .where(eq(gatewayChannels.id, channelId))
+      .one();
+    if (!channel) return { outcome: 'not_target', sessionId: null };
+    const rows: ThreadSessionMapRow[] = await select(this.db, getTableColumns(threadSessionMap))
+      .from(threadSessionMap)
+      .innerJoin(gatewayChannels, eq(gatewayChannels.id, threadSessionMap.channel_id))
+      .innerJoin(sessions, eq(sessions.session_id, threadSessionMap.session_id))
+      .where(
+        and(
+          eq(gatewayChannels.channel_type, channel.channel_type),
+          eq(gatewayChannels.enabled, true),
+          eq(threadSessionMap.status, 'active'),
+          eq(sessions.archived, false),
+          eq(sessions.branch_id, gatewayChannels.target_branch_id)
+        )
+      )
+      .orderBy(asc(threadSessionMap.created_at), asc(threadSessionMap.id))
+      .all();
+    const candidates = rows.filter((row) => {
+      const metadata = row.metadata ?? {};
+      const aliases = [metadata.gateway_reply_aliases, metadata.slack_thread_aliases].flatMap(
+        (value) => (Array.isArray(value) ? value : [])
+      );
+      return threadIds.some((id) => row.thread_id === id || aliases.includes(id));
+    });
+    const first = candidates[0];
+    if (!first || first.channel_id !== channelId) return { outcome: 'not_target', sessionId: null };
+    const distinctSessions = new Set(candidates.map((row) => row.session_id));
+    return {
+      outcome: distinctSessions.size === 1 ? 'selected' : 'ambiguous',
+      sessionId: first.session_id as SessionID,
+    };
+  }
 
   async snapshot(sessionId: SessionID): Promise<GatewayChatCommandSnapshot> {
     const active = await select(this.db, { task_id: tasks.task_id })
@@ -123,6 +182,7 @@ export class GatewayChatCommandRepository {
         const branchRepo = new BranchRepository(tx);
         const branch = await branchRepo.findById(initialChannel.target_branch_id);
         if (!branch) return denied;
+        let canManageQueue = true;
         if (input.sessionId) {
           await lockRowForUpdate(tx, tx, sessions, eq(sessions.session_id, input.sessionId));
           const session = await new SessionRepository(tx).findById(input.sessionId);
@@ -134,13 +194,14 @@ export class GatewayChatCommandRepository {
             session.sdk_home_scope
           );
           if (!authority.allowed) return denied;
-          // Queue management requires Manager even when the queue is empty.
+          // Resolve before admission; enforce only for the selected target.
+          // Ambiguous/non-target commands do not manage a queue.
           if (
             input.command === 'stop-clear' &&
             !(input.allowSuperadmin === true && hasMinimumRole(actor.role, ROLES.SUPERADMIN)) &&
             (await branchRepo.resolveUserAccess(branch, input.userId)).can !== 'all'
           )
-            return denied;
+            canManageQueue = false;
         } else if (
           !['session', 'prompt', 'all'].includes(
             (await branchRepo.resolveUserAccess(branch, input.userId)).can
@@ -251,16 +312,33 @@ export class GatewayChatCommandRepository {
             stored.user_id !== input.userId
           )
             throw new RepositoryError('Gateway command occurrence is already bound');
+          if (!canManageQueue && !['ambiguous', 'not_target'].includes(stored.outcome))
+            return denied;
           return { receipt: stored, removed: [], claimed: null };
         }
 
         let removed: Task[] = [];
         let claimed: Task | null = null;
-        if (!input.sessionId) {
+        const implicitTarget = input.implicitThreadIds
+          ? await new GatewayChatCommandRepository(tx).resolveImplicitTarget(
+              input.channelId,
+              input.implicitThreadIds
+            )
+          : null;
+        if (implicitTarget && implicitTarget.outcome !== 'selected') {
+          // Persist ambiguity and non-target receipts too: a later redelivery
+          // must not act merely because another bot disconnected in between.
+          receipt.outcome = implicitTarget.outcome;
+        } else if (implicitTarget && implicitTarget.sessionId !== input.sessionId) {
+          receipt.outcome = 'not_target';
+        } else if (!input.sessionId) {
           // Persist the no-session observation too. A redelivery after a new
           // mapping appears must not acquire that mapping's task or queue.
           receipt.outcome = 'idle';
         } else {
+          // Queue management requires Manager even when the queue is empty,
+          // including replay of a previously authorized selected command.
+          if (!canManageQueue) return denied;
           const expected = input.expected;
           if (!expected) throw new RepositoryError('Gateway command requires a task snapshot');
           const taskRepo = new TaskRepository(tx);

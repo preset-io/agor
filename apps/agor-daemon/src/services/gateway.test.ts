@@ -17,6 +17,7 @@ import {
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
+  ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
@@ -7927,7 +7928,10 @@ describe('gateway command occurrence boundaries', () => {
     allowed_role_ids: [],
   };
 
-  async function discordInbound(): Promise<InboundMessage> {
+  async function discordInbound(
+    mentioned = true,
+    command = '!stop-clear'
+  ): Promise<InboundMessage> {
     const rest = {
       get: vi.fn(async (route: string) => {
         if (route === `/channels/${thread}`)
@@ -7968,8 +7972,8 @@ describe('gateway command occurrence boundaries', () => {
           type: 0,
           author: { id: author },
           member: { roles: [] },
-          mentions: [{ id: bot }],
-          content: `<@${bot}> !stop-clear`,
+          mentions: mentioned ? [{ id: bot }] : [],
+          content: mentioned ? `<@${bot}> ${command}` : command,
         },
       },
       async (message) => {
@@ -7998,47 +8002,109 @@ describe('gateway command occurrence boundaries', () => {
     ).handleListenerInboundMessage(channel, 'tenant-channel', inbound, lease);
   }
 
-  dbTest(
-    'Discord public-thread preparation retains occurrence authority through command admission',
-    async ({ db }) => {
-      const f = await gatewayCommandFixture(db, {
-        channel_type: 'discord',
-        config,
-        provider_installation_id: bot,
+  for (const mentioned of [true, false])
+    dbTest(
+      `Discord ${mentioned ? 'mentioned' : 'bare'} public-thread command retains occurrence authority`,
+      async ({ db }) => {
+        const f = await gatewayCommandFixture(db, {
+          channel_type: 'discord',
+          config,
+          provider_installation_id: bot,
+        });
+        const claim = await new GatewayChannelRepository(db).claimListener({
+          channelId: f.channel.id,
+          claimToken: generateId(),
+          leaseDurationMs: 60_000,
+          instanceId: 'test',
+          bootId: 'test',
+        });
+        if (claim.outcome !== 'claimed') throw new Error('Missing listener claim');
+        await new ThreadSessionMapRepository(db).create({
+          channel_id: f.channel.id,
+          thread_id: thread,
+          session_id: f.input.sessionId,
+          branch_id: f.seed.branch.branch_id,
+        });
+        const h = makeGatewayHarness({
+          db,
+          channel: f.channel,
+          user: f.seed.owner,
+          existingMapping: makeMapping({
+            channel_id: f.channel.id,
+            thread_id: thread,
+            session_id: f.input.sessionId,
+          }),
+          connector: { sendMessage: vi.fn(async () => 'reply') },
+        });
+        Object.assign(h.service, { durableListenerOwnership: true, taskRepo: f.tasks });
+        const inbound = await discordInbound(mentioned);
+        expect(inbound.threadId).toBe(`discord:thread:${parent}:${thread}`);
+        await deliver(h.service, f.channel, inbound, claim.lease);
+        expect(h.stopCreate).toHaveBeenCalledOnce();
+        expect(h.stopCreate).toHaveBeenCalledWith(
+          { expected_task_id: f.seed.active.task_id },
+          expect.anything()
+        );
+        expect(await f.tasks.findQueued(f.input.sessionId)).toHaveLength(0);
+        expect((await f.tasks.findById(f.seed.active.task_id))?.status).toBe(TaskStatus.STOPPING);
+        expect(h.promptCreate).not.toHaveBeenCalled();
+      }
+    );
+
+  for (const targets of [0, 1, 2])
+    dbTest(`bare Slack controls with ${targets} connected sessions`, async ({ db }) => {
+      const f = await gatewayCommandFixture(db);
+      const mapping = makeMapping({
+        channel_id: f.channel.id,
+        thread_id: f.input.threadId,
+        session_id: f.input.sessionId,
+        branch_id: f.seed.branch.branch_id,
       });
-      const claim = await new GatewayChannelRepository(db).claimListener({
-        channelId: f.channel.id,
-        claimToken: generateId(),
-        leaseDurationMs: 60_000,
-        instanceId: 'test',
-        bootId: 'test',
-      });
-      if (claim.outcome !== 'claimed') throw new Error('Missing listener claim');
+      if (targets > 0) await new ThreadSessionMapRepository(db).create(mapping);
+      if (targets > 1) {
+        const other = await gatewayCommandFixture(db);
+        await new ThreadSessionMapRepository(db).create({
+          channel_id: other.channel.id,
+          thread_id: f.input.threadId,
+          session_id: other.input.sessionId,
+          branch_id: other.seed.branch.branch_id,
+        });
+      }
+      const sendMessage = vi.fn(async () => 'reply');
       const h = makeGatewayHarness({
         db,
         channel: f.channel,
         user: f.seed.owner,
-        existingMapping: makeMapping({
-          channel_id: f.channel.id,
-          thread_id: thread,
-          session_id: f.input.sessionId,
-        }),
-        connector: { sendMessage: vi.fn(async () => 'reply') },
+        existingMapping: targets ? mapping : null,
+        connector: { sendMessage },
       });
-      Object.assign(h.service, { durableListenerOwnership: true, taskRepo: f.tasks });
-      const inbound = await discordInbound();
-      expect(inbound.threadId).toBe(`discord:thread:${parent}:${thread}`);
-      await deliver(h.service, f.channel, inbound, claim.lease);
-      expect(h.stopCreate).toHaveBeenCalledOnce();
-      expect(h.stopCreate).toHaveBeenCalledWith(
-        { expected_task_id: f.seed.active.task_id },
-        expect.anything()
-      );
-      expect(await f.tasks.findQueued(f.input.sessionId)).toHaveLength(0);
-      expect((await f.tasks.findById(f.seed.active.task_id))?.status).toBe(TaskStatus.STOPPING);
+      Object.assign(h.service, { taskRepo: f.tasks });
+      const message = {
+        channel_key: f.channel.channel_key,
+        thread_id: f.input.threadId,
+        text: '!help',
+        metadata: {
+          channel_type: 'channel',
+          slack_is_thread_reply: true,
+          slack_has_mention: false,
+          slack_message_ts: '103.000000',
+        },
+      };
+      await h.service.create(message);
+      expect(sendMessage).toHaveBeenCalledTimes(targets ? 1 : 0);
+      if (targets)
+        expect(JSON.stringify(sendMessage.mock.calls)).toContain(
+          targets === 1 ? 'Commands' : 'multiple sessions'
+        );
+      expect(h.stopCreate).not.toHaveBeenCalled();
+      sendMessage.mockClear();
+      await h.service.create({ ...message, text: '!stop-clear' });
+      expect(h.stopCreate).toHaveBeenCalledTimes(targets === 1 ? 1 : 0);
+      expect(sendMessage).toHaveBeenCalledTimes(targets ? 1 : 0);
       expect(h.promptCreate).not.toHaveBeenCalled();
-    }
-  );
+      expect(h.sessionsCreate).not.toHaveBeenCalled();
+      expect(await f.tasks.findQueued(f.input.sessionId)).toHaveLength(targets === 1 ? 0 : 3);
+    });
 
   for (const provider of ['slack', 'discord'] as const) {
     dbTest(

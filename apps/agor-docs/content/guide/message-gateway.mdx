@@ -176,8 +176,20 @@ to see the menu in chat, with a link to this guide. Commands are gateway system
 messages, not agent prompts, and do not create tasks or new sessions.
 
 In Slack, Discord, and Teams, send a command by itself (case-insensitive, with
-optional surrounding whitespace). Keep the normal bot mention requirements for
-the conversation.
+optional surrounding whitespace). In an existing thread connected to exactly one
+session, a bare `!stop` or `!help` targets that session, even while it is running.
+If multiple sessions are connected, Agor asks you to mention the bot you mean;
+it never broadcasts a stop to all sessions. An explicit mention works on either
+side: `@MyAgent !stop` or `!stop @MyAgent`. Direct messages need no mention.
+Unmentioned commands in unmapped threads are ignored and never start a session.
+Normal prompts still follow the conversation's mention rules.
+
+Bare commands must reach the bot through the platform's event subscriptions.
+Existing Slack apps need the appropriate `message.channels`, `message.groups`,
+or `message.mpim` subscription; the generated manifest now includes these for
+enabled surfaces. Update the app manifest to enable this on an existing app.
+Teams must be configured to deliver unmentioned messages; otherwise mention the
+bot when sending a command. Discord uses the existing Message Content intent.
 
 | Command | Behavior |
 | --- | --- |
@@ -186,8 +198,10 @@ the conversation.
 | `!stop-clear` | Cancel queued tasks and request stopping the current task. Requires Branch Manager access as well as permission to prompt the session. If either permission is missing, neither action is performed. |
 | `!help` | Show this menu and a link to this guide. |
 
-Ordinary text such as `stop`, `stop using tabs`, or `!stop do this instead` remains
-an agent prompt. There is no replacement-prompt parsing, `!clear`, or `!queue` command.
+Messages such as `stop`, `stop using tabs`, or `!stop do this instead` remain
+ordinary text, subject to the usual mention rule. Embedded text such as
+`@MyAgent, you are great!help me with that` does not invoke a command.
+There is no replacement-prompt parsing, `!clear`, or `!queue` command.
 
 An idle session reports that there is no current task to stop; it does not start
 queued work. `!stop-clear` can still cancel pending tasks. Stopping does not erase
@@ -255,7 +269,7 @@ The one step neither path can cover is the **app-level token**: `connections:wri
 
 ### 4. Message your bot
 
-DM the bot from the **Apps** section of Slack, or `@mention` it in any channel or group the bot has been added to. You'll see session creation confirmed, followed by the agent's response in the same thread. In channels and group DMs the bot responds **only** to explicit `@`-mentions; direct messages don't need one.
+DM the bot from the **Apps** section of Slack, or `@mention` it in any channel or group the bot has been added to. You'll see session creation confirmed, followed by the agent's response in the same thread. In channels and group DMs, prompts require explicit `@`-mentions; bare [chat commands](#chat-commands) also work in a thread with one connected session. Direct messages do not need a mention.
 
 Gateway conversations appear under **Gateway Sessions** on the target branch. Sessions they spawn are nested beneath the gateway parent, including remote-created sessions that live on another branch; selecting a remote child opens its canonical session. Gateway roots are ordered by most recent activity. Section and parent collapse choices persist on board cards.
 
@@ -278,16 +292,16 @@ The wizard and manifest bake these in automatically. This table is for understan
 | Capability                                | Bot scopes added                                                                    | Events added                         |
 | ----------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------ |
 | **Direct messages** (baseline, always on) | `chat:write`, `im:history`, `im:read`, `users:read`                                 | `message.im`                         |
-| **Public channels**                       | `app_mentions:read`, `channels:history`, `channels:read`                            | `app_mention`                        |
-| **Private channels**                      | `groups:history`, `groups:read`                                                     | —                                    |
-| **Group DMs**                             | `mpim:history`, `mpim:read`                                                         | —                                    |
+| **Public channels**                       | `app_mentions:read`, `channels:history`, `channels:read`                            | `app_mention`, `message.channels`    |
+| **Private channels**                      | `groups:history`, `groups:read`                                                     | `message.groups`                     |
+| **Group DMs**                             | `mpim:history`, `mpim:read`                                                         | `message.mpim`                       |
 | **Align Slack users**                     | `users:read.email`                                                                  | —                                    |
 | **Outbound sends**                        | `chat:write.public`, `channels:read`, `groups:read`, `im:write`, `users:read.email` | —                                    |
 | **Deliver reactions to sessions**         | `reactions:read`                                                                    | `reaction_added`, `reaction_removed` |
 
 Notes:
 
-- `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled. Those surfaces all trigger on `@`-mention, so no `message.channels` / `message.groups` / `message.mpim` events are requested.
+- `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled. Prompts on those surfaces require `@`-mentions. Surface-specific message events deliver bare thread commands; other unmentioned messages are ignored.
 - `connections:write` never appears in the manifest. It lives on the app-level token you generate under **Basic Information → App-Level Tokens**.
 
 ### Emoji reactions as input

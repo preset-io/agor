@@ -163,6 +163,75 @@ describe('SlackConnector inbound reactions', () => {
     return { connector, callback, emit, replies, web };
   }
 
+  it.each(['!stop', '!skip', '!stop-clear', ' !HELP '])(
+    'admits bare thread control %s without admitting channel chatter',
+    async (text) => {
+      const { callback, emit } = await startReactionListener({
+        config: { enable_channels: true },
+        channelInfo: { is_channel: true },
+      });
+      await emit({
+        type: 'message',
+        channel: 'C123',
+        channel_type: 'channel',
+        user: 'UADA',
+        ts: '201.000001',
+        thread_ts: '200.000000',
+        text,
+      });
+      expect(callback).toHaveBeenCalledOnce();
+      expect(callback.mock.calls[0][0]).toMatchObject({
+        text,
+        metadata: { slack_has_mention: false, slack_is_thread_reply: true },
+      });
+    }
+  );
+
+  it.each(['please !stop', '!stop <@OTHER>', 'great!help me', '`!stop`'])(
+    'does not treat %s as a bare command',
+    async (text) => {
+      const { callback, emit } = await startReactionListener({
+        config: { enable_channels: true },
+        channelInfo: { is_channel: true },
+      });
+      await emit({
+        type: 'message',
+        channel: 'C123',
+        channel_type: 'channel',
+        user: 'UADA',
+        ts: '201.000001',
+        thread_ts: '200.000000',
+        text,
+      });
+      expect(callback).not.toHaveBeenCalled();
+    }
+  );
+
+  it('ignores bare top-level controls and still accepts mentions on either side exactly once', async () => {
+    const { callback, emit } = await startReactionListener({
+      config: { enable_channels: true },
+      channelInfo: { is_channel: true },
+    });
+    const event = {
+      type: 'message',
+      channel: 'C123',
+      channel_type: 'channel',
+      user: 'UADA',
+      ts: '201.000001',
+      text: '!stop',
+    };
+    await emit(event);
+    expect(callback).not.toHaveBeenCalled();
+    for (const [i, text] of ['<@UBOT> !stop', '!stop <@UBOT>'].entries()) {
+      const mentioned = { ...event, ts: `202.00000${i}`, thread_ts: '200.000000', text };
+      await emit(mentioned);
+      await emit({ ...mentioned, type: 'app_mention' });
+    }
+    expect(callback).toHaveBeenCalledTimes(2);
+    for (const call of callback.mock.calls)
+      expect(call[0]).toMatchObject({ text: '!stop', metadata: { slack_has_mention: true } });
+  });
+
   it('routes a reaction on a bot reply to its thread root with reaction metadata', async () => {
     const { callback, emit, replies } = await startReactionListener();
 

@@ -1,11 +1,15 @@
 import type { GatewayChatCommand, GatewayChatCommandReceipt } from '../types/gateway';
 import type { SessionStopResult } from '../types/session';
+import { DISCORD_METADATA_KEY } from './discord-identifiers';
 
 export const GATEWAY_COMMAND_CHANNEL_TYPES = ['slack', 'discord', 'teams'] as const;
 
 export function supportsGatewayChatCommands(channelType: string): boolean {
   return (GATEWAY_COMMAND_CHANNEL_TYPES as readonly string[]).includes(channelType);
 }
+
+export const GATEWAY_COMMAND_AMBIGUOUS =
+  'This thread is connected to multiple sessions. Mention the bot you want to control and send the command again. No changes made.';
 
 export const GATEWAY_COMMAND_HINT = 'Type `!help` for commands.';
 export const GATEWAY_COMMAND_DOCS_URL = 'https://agor.live/guide/message-gateway#chat-commands';
@@ -15,7 +19,8 @@ export const GATEWAY_COMMAND_HELP = [
   '`!skip`: Stop the current task; continue queued tasks after termination is confirmed.',
   '`!stop-clear`: Cancel queued tasks and stop the current task. Requires Branch Manager access.',
   '`!help`: Show this menu.',
-  'Send a command by itself, mentioning the bot where required.',
+  'In a thread with one connected session, no bot mention is needed. Mention the bot to choose when there are multiple sessions.',
+  'Send the command by itself, with only an optional bot mention.',
   `[Command guide](${GATEWAY_COMMAND_DOCS_URL})`,
 ].join('\n');
 
@@ -34,12 +39,45 @@ export function parseGatewayChatCommand(text: string): GatewayChatCommand | unde
   }
 }
 
+/** Only exact, unaddressed controls may bypass the ordinary mention gate. */
+export function isImplicitGatewayChatCommand(
+  channelType: string,
+  text: string,
+  metadata: Record<string, unknown> | undefined
+): boolean {
+  if (!parseGatewayChatCommand(text) || !metadata) return false;
+  switch (channelType) {
+    case 'slack':
+      return (
+        metadata.channel_type !== 'im' &&
+        metadata.slack_is_thread_reply === true &&
+        metadata.slack_has_mention !== true
+      );
+    case 'discord':
+      return (
+        metadata[DISCORD_METADATA_KEY.isThread] === true &&
+        metadata[DISCORD_METADATA_KEY.hasMention] !== true
+      );
+    case 'teams':
+      return (
+        ['channel', 'groupchat'].includes(String(metadata.teams_conversation_type).toLowerCase()) &&
+        metadata.teams_has_mention !== true
+      );
+    default:
+      return false;
+  }
+}
+
 /** Only bounded system copy crosses the provider boundary, never raw exceptions. */
 export function formatGatewayCommandReply(
   receipt: GatewayChatCommandReceipt,
   stop?: SessionStopResult
 ): string {
   switch (receipt.outcome) {
+    case 'ambiguous':
+      return GATEWAY_COMMAND_AMBIGUOUS;
+    case 'not_target':
+      return '';
     case 'denied':
       return 'No changes made. You need permission to prompt this session; !stop-clear also requires Branch Manager access.';
     case 'queue_not_empty':

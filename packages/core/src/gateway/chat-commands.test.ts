@@ -5,6 +5,7 @@ import { SessionStatus } from '../types/session';
 import {
   formatGatewayCommandReply,
   GATEWAY_COMMAND_HELP,
+  isImplicitGatewayChatCommand,
   parseGatewayChatCommand,
 } from './chat-commands';
 
@@ -70,5 +71,44 @@ describe('gateway chat command contract', () => {
     expect(formatGatewayCommandReply({ ...receipt, outcome: 'idle' })).toBe(
       'There is no current task to stop. Cancelled 3 queued tasks.'
     );
+  });
+});
+
+describe('implicit command boundaries', () => {
+  it.each([
+    ['slack', { channel_type: 'channel', slack_is_thread_reply: true }],
+    ['discord', { discord_is_thread: true }],
+    ['teams', { teams_conversation_type: 'groupChat' }],
+    ['teams', { teams_conversation_type: 'channel' }],
+  ])('allows exact unmentioned commands on %s threads only', (provider, metadata) => {
+    expect(
+      isImplicitGatewayChatCommand(provider as string, '!stop', metadata as Record<string, unknown>)
+    ).toBe(true);
+    expect(
+      isImplicitGatewayChatCommand(
+        provider as string,
+        'great!help me',
+        metadata as Record<string, unknown>
+      )
+    ).toBe(false);
+  });
+  it.each([
+    ['slack', { channel_type: 'im', slack_is_thread_reply: true }],
+    ['slack', { channel_type: 'channel', slack_is_thread_reply: false }],
+    ['slack', { slack_is_thread_reply: true, slack_has_mention: true }],
+    ['discord', { discord_is_thread: false }],
+    ['discord', { discord_is_thread: true, discord_has_mention: true }],
+    ['teams', { teams_conversation_type: 'personal' }],
+    ['teams', { teams_conversation_type: 'channel', teams_has_mention: true }],
+  ])('does not implicitly route addressed or top-level messages on %s', (provider, metadata) => {
+    expect(
+      isImplicitGatewayChatCommand(provider as string, '!stop', metadata as Record<string, unknown>)
+    ).toBe(false);
+  });
+  it('formats ambiguity as clarification, and non-targets as silence', () => {
+    expect(formatGatewayCommandReply({ ...receipt, outcome: 'ambiguous' })).toContain(
+      'Mention the bot'
+    );
+    expect(formatGatewayCommandReply({ ...receipt, outcome: 'not_target' })).toBe('');
   });
 });

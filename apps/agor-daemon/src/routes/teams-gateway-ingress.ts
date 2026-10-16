@@ -20,6 +20,7 @@ import {
   type NormalizedTeamsActivity,
   normalizeTeamsActivity,
   normalizeTeamsReaction,
+  parseGatewayChatCommand,
   safeTeamsMetadata,
   teamsAddressRevocationFromActivity,
 } from '@agor/core/gateway';
@@ -439,12 +440,15 @@ export function registerTeamsGatewayIngressRoute(input: {
           .json({ error: 'Teams bot self-message rejected', code: 'bot_self_message' });
         return;
       }
-      // Unmentioned group/channel traffic (RSC receive-all) and empty chat summons are never stored.
+      // Unmentioned prose (RSC receive-all) and empty chat summons are never stored.
+      // Exact controls still need gateway thread-target resolution.
       // A channel activity omits its SharePoint files, so an empty channel mention may still carry one.
       const conversationType = normalized.conversationType.toLowerCase();
       if (
         !reaction &&
-        ((conversationType !== 'personal' && !normalized.hasMention) ||
+        ((conversationType !== 'personal' &&
+          !normalized.hasMention &&
+          !parseGatewayChatCommand(normalized.text)) ||
           (conversationType !== 'channel' &&
             !normalized.text.trim() &&
             !normalized.files?.length &&
