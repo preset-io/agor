@@ -61,6 +61,31 @@ describe('ReposTable search', () => {
 });
 
 describe('ReposTable authority fencing', () => {
+  it('keeps the clone form and input after a rejected request', async () => {
+    const onCreate = vi.fn(async () => {
+      throw new Error('Request rejected');
+    });
+    renderWithSettingsShell(
+      <ReposTable
+        repoById={new Map()}
+        identityKey="admin-a:admin"
+        operationScope={['admin-a:admin', 1]}
+        onCreate={onCreate}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /new repository/i }));
+    fireEvent.change(screen.getByPlaceholderText('https://github.com/apache/superset.git'), {
+      target: { value: 'https://github.com/preset-io/agor.git' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('apache/superset'), {
+      target: { value: 'preset-io/agor' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^clone$/i }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+    expect(screen.getByText('Clone Repository')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('apache/superset')).toHaveValue('preset-io/agor');
+  });
+
   it('preserves a same-user reconnect draft but does not close from the obsolete create', async () => {
     let resolve!: () => void;
     const pending = new Promise<void>((done) => {
@@ -193,6 +218,23 @@ describe('ReposTable cleanup configuration authority', { timeout: 30_000 }, () =
 });
 
 describe('repository setup status', () => {
+  it.each([
+    ['cloning', 'Cloning'],
+    ['ready', 'Ready'],
+    ['failed', 'Failed'],
+    [undefined, 'Ready'],
+  ] as const)('renders persisted %s status explicitly', (clone_status, label) => {
+    const repo = makeRepo({ clone_status });
+    renderWithSettingsShell(
+      <ReposTable
+        repoById={new Map([[repo.repo_id, repo]])}
+        identityKey="member:member"
+        operationScope={['member:member', 1]}
+      />
+    );
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
   it('shows failed diagnostics on demand and retries the same source without deletion', async () => {
     const repo = makeRepo({
       clone_status: 'failed',
@@ -215,7 +257,7 @@ describe('repository setup status', () => {
       />
     );
     // The list flags the row; the edit drill-in carries the detail and retry.
-    expect(screen.getByText('Setup failed')).toBeInTheDocument();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /edit/i }));
     expect(screen.getByText('Repository setup failed')).toBeVisible();
     expect(screen.queryByText('credential-redacted synthetic diagnostic')).not.toBeInTheDocument();

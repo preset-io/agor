@@ -655,14 +655,8 @@ function AppContent() {
 
   const handleCreateRepo = useCallback(
     (data: CreateRepoRequest, options: CreateRepoOptions = {}) =>
-      createRepository(
-        client,
-        data,
-        options,
-        { showError, showLoading, showSuccess, showWarning },
-        repoPatched
-      ),
-    [client, showError, showLoading, showSuccess, showWarning]
+      createRepository(client, data, options, { showError, showInfo, showWarning }, repoPatched),
+    [client, showError, showInfo, showWarning]
   );
 
   // Auto-clone the AI-teammate framework repo in the background while the user

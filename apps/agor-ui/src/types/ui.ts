@@ -20,7 +20,7 @@ export interface AgenticToolOption {
 export interface CreateRepoOptions {
   /** Suppress shared toast side effects when the caller owns progress/error UI. */
   silent?: boolean;
-  /** Still surface failures while suppressing loading/success toasts. */
+  /** Still show request errors and status-refresh warnings when silent; not clone outcomes. */
   showErrors?: boolean;
   /** Suppress continuations once the initiating authenticated authority changes. */
   shouldApply?: () => boolean;

@@ -1,5 +1,6 @@
-import type { Repo } from '@agor-live/client';
-import { beforeEach, describe, expect, it } from 'vitest';
+import type { AgorClient, Repo } from '@agor-live/client';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createRepository } from '../utils/createRepository';
 import { repoCreated, repoPatched } from './agorRealtimeActions';
 import { agorStore } from './agorStore';
 
@@ -14,6 +15,43 @@ beforeEach(() => {
 });
 
 describe('repo realtime events', () => {
+  it.each(['ready', 'failed'] as const)(
+    'preserves a realtime %s outcome received before clone hydration returns',
+    async (clone_status) => {
+      const cloning = { ...placeholder, clone_generation: 2 };
+      const terminal = { ...cloning, clone_status };
+      const client = {
+        service: (name: string) =>
+          name === 'repos/clone'
+            ? { create: async () => ({ status: 'pending', repo_id: cloning.repo_id }) }
+            : {
+                get: async () => {
+                  // The global subscription receives the terminal event while GET
+                  // is still returning the earlier snapshot from the same attempt.
+                  repoPatched(terminal);
+                  return cloning;
+                },
+              },
+      } as unknown as AgorClient;
+      const notify = { showInfo: vi.fn(), showError: vi.fn(), showWarning: vi.fn() };
+      await createRepository(
+        client,
+        {
+          slug: cloning.slug,
+          url: 'https://example.invalid/framework.git',
+          default_branch: 'main',
+        },
+        {},
+        notify,
+        repoPatched
+      );
+      expect(agorStore.getState().repoById.get(cloning.repo_id)).toEqual(terminal);
+      expect(notify.showInfo).toHaveBeenCalledTimes(1);
+      expect(notify.showError).not.toHaveBeenCalled();
+      expect(notify.showWarning).not.toHaveBeenCalled();
+    }
+  );
+
   // Older executors patch metadata (still `cloning`) then `ready`; delivery order is not guaranteed (#2941).
   it('keeps a ready clone when the earlier cloning patch arrives last', () => {
     repoCreated(placeholder);

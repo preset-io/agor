@@ -37,7 +37,12 @@ See [execution modes](/guide/multiplayer-unix-isolation) for isolation requireme
 
 ### Diagnosing repository clone failures
 
-Remote repository creation is asynchronous. Poll `agor_repos_get` with the returned
+Remote repository creation is asynchronous. In the UI, the initial toast confirms
+that cloning started, not that it finished. **Settings → Repos** shows **Cloning**,
+**Ready**, or **Failed**. Open a failed repository for diagnostics and **Retry setup**.
+There are no completion toasts; refresh Repository settings if its status appears stale.
+
+For MCP callers, poll `agor_repos_get` with the returned
 `repo_id` until `clone_status` is `ready` or `failed`. On failure, `clone_error.message`
 includes credential-redacted multiline Git diagnostics (up to 4,000 characters;
 oversized output retains the tail and marks the truncation), not just the
