@@ -206,10 +206,10 @@ importers:
         version: 2.0.0
       '@modelcontextprotocol/node':
         specifier: 2.0.0
-        version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.1)
+        version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.13)
       '@modelcontextprotocol/sdk':
         specifier: '>=1.30.0 <2'
-        version: 1.30.0(supports-color@8.1.1)(zod@4.6.5)
+        version: 1.31.0(supports-color@8.1.1)(zod@4.6.5)
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
@@ -261,7 +261,7 @@ importers:
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.293
-        version: 0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
+        version: 0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.31.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
       '@anthropic-ai/sdk':
         specifier: ^0.125.0
         version: 0.125.0(zod@4.6.5)
@@ -700,7 +700,7 @@ importers:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.293
-        version: 0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
+        version: 0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.31.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
     devDependencies:
       '@types/node':
         specifier: ^24.6.0
@@ -849,10 +849,10 @@ importers:
         version: 2.0.0
       '@modelcontextprotocol/node':
         specifier: 2.0.0
-        version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.1)
+        version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.13)
       '@modelcontextprotocol/sdk':
         specifier: '>=1.30.0 <2'
-        version: 1.30.0(supports-color@8.1.1)(zod@4.6.5)
+        version: 1.31.0(supports-color@8.1.1)(zod@4.6.5)
       '@modelcontextprotocol/server':
         specifier: 2.0.0
         version: 2.0.0
@@ -1147,13 +1147,13 @@ importers:
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.293
-        version: 0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
+        version: 0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.31.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
       '@google/gemini-cli-core':
         specifier: 0.61.0
-        version: 0.61.0(encoding@0.1.13)(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1)
+        version: 0.61.0(encoding@0.1.13)(express@5.3.0(supports-color@8.1.1))(supports-color@8.1.1)
       '@google/genai':
         specifier: ^1.52.0
-        version: 1.52.0(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.5))(supports-color@8.1.1)
+        version: 1.52.0(@modelcontextprotocol/sdk@1.31.0(supports-color@8.1.1)(zod@4.6.5))(supports-color@8.1.1)
       '@octokit/auth-app':
         specifier: ^8.3.1
         version: 8.3.1
@@ -1226,7 +1226,7 @@ importers:
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.293
-        version: 0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
+        version: 0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.31.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
       '@cursor/sdk':
         specifier: 1.0.31
         version: 1.0.31
@@ -1235,13 +1235,13 @@ importers:
         version: 0.2.2
       '@google/gemini-cli-core':
         specifier: 0.61.0
-        version: 0.61.0(encoding@0.1.13)(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1)
+        version: 0.61.0(encoding@0.1.13)(express@5.3.0(supports-color@8.1.1))(supports-color@8.1.1)
       '@google/genai':
         specifier: ^1.52.0
-        version: 1.52.0(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.5))(supports-color@8.1.1)
+        version: 1.52.0(@modelcontextprotocol/sdk@1.31.0(supports-color@8.1.1)(zod@4.6.5))(supports-color@8.1.1)
       '@modelcontextprotocol/sdk':
         specifier: '>=1.30.0 <2'
-        version: 1.30.0(supports-color@8.1.1)(zod@4.6.5)
+        version: 1.31.0(supports-color@8.1.1)(zod@4.6.5)
       '@openai/codex-sdk':
         specifier: 0.160.0
         version: 0.160.0
@@ -2462,6 +2462,12 @@ packages:
     peerDependencies:
       hono: '>=4.12.34 <5'
 
+  '@hono/node-server@1.19.17':
+    resolution: {integrity: sha512-dSneS5qhiauZWGDCeK4o695Xd9nUNjviSZCMQrj10eetr8Uln1ucn6bbphOM6UynAMMtNIzZNSpL9vnASJwrPQ==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: '>=4.12.34 <5'
+
   '@iarna/toml@2.2.5':
     resolution: {integrity: sha512-trnsAYxU3xnS1gPHPyU961coFyLkh4gAD/0zQ5mymY4yOZ+CYvsPqUbOFSw0aDM4y0tV7tiFxL/1XfXPNC6IPg==}
 
@@ -3051,6 +3057,16 @@ packages:
 
   '@modelcontextprotocol/sdk@1.30.0':
     resolution: {integrity: sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@cfworker/json-schema': ^4.1.1
+      zod: ^4.6.5
+    peerDependenciesMeta:
+      '@cfworker/json-schema':
+        optional: true
+
+  '@modelcontextprotocol/sdk@1.31.0':
+    resolution: {integrity: sha512-UvTMgnNlnIBO/22ob2RcVGDlcvOslQs8T59+FTGdA0L27a39fdGF/EDETNtDVK4DZGpwomlsYpRdA8UXcVL/pw==}
     engines: {node: '>=18'}
     peerDependencies:
       '@cfworker/json-schema': ^4.1.1
@@ -6081,6 +6097,10 @@ packages:
     resolution: {integrity: sha512-oIXISMynqSqm241k6kcQ5UwttDILMK4BiurCfGEREw6+X9jkkpEe5T9FZaApyLGGOnFuyMWZpdolTXMtvEJ08Q==}
     engines: {node: '>=18'}
 
+  content-disposition@2.0.1:
+    resolution: {integrity: sha512-e+H0ZXHSWYrENhQzw1LPuP4oF5MzVKmDU6d3hxlvaPEYLLg62MxtQNPRx4SYSuYJSBUgnQIG4HIN2tEtNv7Dog==}
+    engines: {node: '>=18'}
+
   content-type@1.0.5:
     resolution: {integrity: sha512-nTjqfcBFEipKdXCv4YDQWCfmcLZKm81ldF0pAopTvyrFGVbcR6P/VAAd5G7N+0tTr8QqiU0tFadD6FK4NtJwOA==}
     engines: {node: '>= 0.6'}
@@ -6901,6 +6921,12 @@ packages:
     peerDependencies:
       express: '>= 4.11'
 
+  express-rate-limit@8.7.1:
+    resolution: {integrity: sha512-2FXbqkygil3mZiXzEtM0IjE/UBmBNot0J1GEVrJT4JbrvwOSoEtqtO+wHbiMQELWe1eNvHoYRg2dkjOid+6JkA==}
+    engines: {node: '>= 16'}
+    peerDependencies:
+      express: '>= 4.11'
+
   express-static-gzip@3.0.2:
     resolution: {integrity: sha512-BCKm+rzHrIaSa0CoDs6kZqyd7zfyDPrZdY7bhTgE8YAXUp+BSrvIm1XiFGJOpSP7rApl0yyVZWn2gLZeyeAOog==}
 
@@ -6910,6 +6936,10 @@ packages:
 
   express@5.2.1:
     resolution: {integrity: sha512-hIS4idWWai69NezIdRt2xFVofaF4j+6INOpJlVOLDO8zXGpUVEVzIYk12UUi2JzjEzWL3IOAxcTubgz9Po0yXw==}
+    engines: {node: '>= 18'}
+
+  express@5.3.0:
+    resolution: {integrity: sha512-qCqy1xSoaugxOD4IVHb1ZWdkvCF2W3aE2okKouWj8VwJ+ztskSiXoBnCSJqfKT+cVPJhuJqe9YLbY425+Zh00g==}
     engines: {node: '>= 18'}
 
   ext@1.7.0:
@@ -6945,8 +6975,8 @@ packages:
   fast-sha256@1.3.0:
     resolution: {integrity: sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==}
 
-  fast-uri@3.1.5:
-    resolution: {integrity: sha512-gHwA1O9LDIcKunMKhObS/HimwtehO1nPUECKAu5TpKgaO19fcWEl4bliWe1jWxVFvIXztJjjQ4L8XQ1EU9f7Jw==}
+  fast-uri@3.1.8:
+    resolution: {integrity: sha512-GZMtZUTNRpOVIECoXwLNZS5xUGE+mVNbTB8h/7Rwh2TFWcBQiPzTgyZi05BF9UMZKkLJv8XBRJTlU7zg8+ZfMg==}
 
   fastest-levenshtein@1.0.16:
     resolution: {integrity: sha512-eRnCtTTtGZFpQCwhJiUOuxPQWRXVKYDn0b2PeHfXL6/Zi53SLAzAHfVhVWK2AryC/WH05kGfxhFIPvTF0SXQzg==}
@@ -7383,6 +7413,10 @@ packages:
     resolution: {integrity: sha512-kdJoFVv2xmayw6cY09H7AbMJMt8Jn5jdlEdXsP7AGBdF2DIptVlKlOLKXP41yPip4/a3yQPv9gVcJYI8YY04dw==}
     engines: {node: '>=16.9.0'}
 
+  hono@4.13.13:
+    resolution: {integrity: sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA==}
+    engines: {node: '>=16.9.0'}
+
   hookable@6.1.1:
     resolution: {integrity: sha512-U9LYDy1CwhMCnprUfeAZWZGByVbhd54hwepegYTK7Pi5NvqEj63ifz5z+xukznehT7i6NIZRu89Ay1AZmRsLEQ==}
 
@@ -7484,6 +7518,10 @@ packages:
     resolution: {integrity: sha512-im9DjEDQ55s9fL4EYzOAv0yMqmMBSZp6G0VvFyTMPKWxiSBHUj9NW/qqLmXUwXrrM7AvqSlTCfvqRb0cM8yYqw==}
     engines: {node: '>=0.10.0'}
 
+  iconv-lite@0.7.3:
+    resolution: {integrity: sha512-IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ==}
+    engines: {node: '>=0.10.0'}
+
   identifier-regex@1.1.0:
     resolution: {integrity: sha512-SLX4H/vtcYlYnL7XqnuJKHU7Z8517TgsW9nmQiGOgMCjQ8V/deLYu6bEmbGoXe7WMMhc9+EUGyFFneHja8KabA==}
     engines: {node: '>=18'}
@@ -7555,6 +7593,10 @@ packages:
 
   ip-address@10.7.1:
     resolution: {integrity: sha512-4OUAqU9Z1i3vCnS05hzGiFnEMDpQ+62pAD/MVQOp83fYyNC8GleCqaS0QikQBmcWCrKFiUs/B8ztRRiYOAXuCA==}
+    engines: {node: '>= 12'}
+
+  ip-address@10.7.4:
+    resolution: {integrity: sha512-DWBMKyeM25D70nrIiTkgQth59/G+naKOTep6huF9j+GmeK3DMD60Zvxg5d5qQnz+38AHgou6ean2LECX+lrKDg==}
     engines: {node: '>= 12'}
 
   ipaddr.js@1.9.1:
@@ -7711,9 +7753,6 @@ packages:
 
   jose@6.2.12:
     resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
-
-  jose@6.2.3:
-    resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
 
   joycon@3.1.1:
     resolution: {integrity: sha512-34wB/Y7MW7bzjKRjUKTa46I2Z7eV62Rkhva+KkopW7Qvv/OSWBqvkSY7vusOPrNuZcUG3tApvdVgNB8POj3SPw==}
@@ -10912,6 +10951,14 @@ snapshots:
       '@grpc/grpc-js': 1.14.4
       express: 5.2.1(supports-color@8.1.1)
 
+  '@a2a-js/sdk@0.3.11(@bufbuild/protobuf@2.11.0)(@grpc/grpc-js@1.14.4)(express@5.3.0(supports-color@8.1.1))':
+    dependencies:
+      uuid: 11.1.1
+    optionalDependencies:
+      '@bufbuild/protobuf': 2.11.0
+      '@grpc/grpc-js': 1.14.4
+      express: 5.3.0(supports-color@8.1.1)
+
   '@acemir/cssom@0.9.20': {}
 
   '@adobe/css-tools@4.4.4': {}
@@ -11071,10 +11118,10 @@ snapshots:
   '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.293':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk@0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)':
+  '@anthropic-ai/claude-agent-sdk@0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.31.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.125.0(zod@4.6.5)
-      '@modelcontextprotocol/sdk': 1.30.0(supports-color@8.1.1)(zod@4.6.5)
+      '@modelcontextprotocol/sdk': 1.31.0(supports-color@8.1.1)(zod@4.6.5)
       zod: 4.6.5
     optionalDependencies:
       '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.293
@@ -12288,6 +12335,99 @@ snapshots:
       - tree-sitter
       - utf-8-validate
 
+  '@google/gemini-cli-core@0.61.0(encoding@0.1.13)(express@5.3.0(supports-color@8.1.1))(supports-color@8.1.1)':
+    dependencies:
+      '@a2a-js/sdk': 0.3.11(@bufbuild/protobuf@2.11.0)(@grpc/grpc-js@1.14.4)(express@5.3.0(supports-color@8.1.1))
+      '@bufbuild/protobuf': 2.11.0
+      '@google-cloud/logging': 11.2.1(encoding@0.1.13)(supports-color@8.1.1)
+      '@google-cloud/opentelemetry-cloud-monitoring-exporter': 0.21.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.7.1(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.7.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.7.1(@opentelemetry/api@1.9.0))(encoding@0.1.13)(supports-color@8.1.1)
+      '@google-cloud/opentelemetry-cloud-trace-exporter': 3.0.0(@opentelemetry/api@1.9.0)(@opentelemetry/core@2.7.1(@opentelemetry/api@1.9.0))(@opentelemetry/resources@2.7.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.7.1(@opentelemetry/api@1.9.0))(encoding@0.1.13)(supports-color@8.1.1)
+      '@google/genai': 1.52.0(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@3.25.76))(supports-color@8.1.1)
+      '@grpc/grpc-js': 1.14.4
+      '@iarna/toml': 2.2.5
+      '@modelcontextprotocol/sdk': 1.30.0(supports-color@8.1.1)(zod@3.25.76)
+      '@opentelemetry/api': 1.9.0
+      '@opentelemetry/api-logs': 0.218.0
+      '@opentelemetry/core': 2.7.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-logs-otlp-grpc': 0.218.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-logs-otlp-http': 0.218.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-metrics-otlp-grpc': 0.218.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-metrics-otlp-http': 0.218.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-trace-otlp-grpc': 0.218.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/exporter-trace-otlp-http': 0.218.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/instrumentation-http': 0.218.0(@opentelemetry/api@1.9.0)(supports-color@8.1.1)
+      '@opentelemetry/otlp-exporter-base': 0.218.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/resources': 2.7.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/sdk-logs': 0.218.0(@opentelemetry/api@1.9.0)
+      '@opentelemetry/sdk-metrics': 2.7.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/sdk-node': 0.218.0(@opentelemetry/api@1.9.0)(supports-color@8.1.1)
+      '@opentelemetry/sdk-trace-base': 2.7.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/sdk-trace-node': 2.7.1(@opentelemetry/api@1.9.0)
+      '@opentelemetry/semantic-conventions': 1.39.0
+      '@types/html-to-text': 9.0.4
+      '@xterm/headless': 5.5.0
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
+      chokidar: 5.0.0
+      command-exists: 1.2.9
+      diff: 8.0.3
+      dotenv: 17.2.4
+      dotenv-expand: 12.0.3
+      execa: 9.6.1
+      fast-levenshtein: 2.0.6
+      fdir: 6.4.6(picomatch@4.0.5)
+      fzf: 0.5.2
+      glob: 11.1.0
+      google-auth-library: 10.9.0(supports-color@8.1.1)
+      html-to-text: 9.0.5
+      http-proxy-agent: 7.0.2(supports-color@8.1.1)
+      https-proxy-agent: 7.0.6(supports-color@8.1.1)
+      ignore: 7.0.0
+      ipaddr.js: 1.9.1
+      isbinaryfile: 5.0.7
+      js-yaml: 4.3.2
+      json-stable-stringify: 1.3.0
+      marked: 15.0.12
+      mime: 4.0.7
+      mnemonist: 0.40.3
+      open: 10.1.2
+      picomatch: 4.0.5
+      proper-lockfile: 4.1.2
+      puppeteer-core: 24.0.0(supports-color@8.1.1)
+      read-package-up: 11.0.0
+      shell-quote: 1.12.0
+      simple-git: 4.0.2(supports-color@8.1.1)
+      strip-ansi: 7.1.0
+      strip-json-comments: 3.1.1
+      systeminformation: 5.33.1
+      tree-sitter-bash: 0.25.0
+      undici: 7.29.1
+      uuid: 13.0.0
+      web-tree-sitter: 0.25.10
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
+    optionalDependencies:
+      '@github/keytar': 7.10.6
+      '@lydell/node-pty': 1.1.0
+      '@lydell/node-pty-darwin-arm64': 1.1.0
+      '@lydell/node-pty-darwin-x64': 1.1.0
+      '@lydell/node-pty-linux-x64': 1.1.0
+      '@lydell/node-pty-win32-arm64': 1.1.0
+      '@lydell/node-pty-win32-x64': 1.1.0
+      node-pty: 1.0.0
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - '@types/emscripten'
+      - bare-abort-controller
+      - bare-buffer
+      - bufferutil
+      - encoding
+      - express
+      - react-native-b4a
+      - supports-color
+      - tree-sitter
+      - utf-8-validate
+
   '@google/genai@1.52.0(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@3.25.76))(supports-color@8.1.1)':
     dependencies:
       google-auth-library: 10.9.0(supports-color@8.1.1)
@@ -12301,14 +12441,14 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@google/genai@1.52.0(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.5))(supports-color@8.1.1)':
+  '@google/genai@1.52.0(@modelcontextprotocol/sdk@1.31.0(supports-color@8.1.1)(zod@4.6.5))(supports-color@8.1.1)':
     dependencies:
       google-auth-library: 10.9.0(supports-color@8.1.1)
       p-retry: 4.6.2
       protobufjs: 7.6.5
       ws: 8.21.0
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.30.0(supports-color@8.1.1)(zod@4.6.5)
+      '@modelcontextprotocol/sdk': 1.31.0(supports-color@8.1.1)(zod@4.6.5)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -12355,6 +12495,14 @@ snapshots:
   '@hono/node-server@1.19.14(hono@4.13.1)':
     dependencies:
       hono: 4.13.1
+
+  '@hono/node-server@1.19.14(hono@4.13.13)':
+    dependencies:
+      hono: 4.13.13
+
+  '@hono/node-server@1.19.17(hono@4.13.13)':
+    dependencies:
+      hono: 4.13.13
 
   '@iarna/toml@2.2.5': {}
 
@@ -13073,12 +13221,12 @@ snapshots:
     dependencies:
       zod: 4.6.5
 
-  '@modelcontextprotocol/node@2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.1)':
+  '@modelcontextprotocol/node@2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.13)':
     dependencies:
-      '@hono/node-server': 1.19.14(hono@4.13.1)
+      '@hono/node-server': 1.19.14(hono@4.13.13)
       '@modelcontextprotocol/server': 2.0.0
     optionalDependencies:
-      hono: 4.13.1
+      hono: 4.13.13
 
   '@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@3.25.76)':
     dependencies:
@@ -13093,7 +13241,7 @@ snapshots:
       express: 5.2.1(supports-color@8.1.1)
       express-rate-limit: 8.7.0(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1)
       hono: 4.13.1
-      jose: 6.2.3
+      jose: 6.2.12
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
@@ -13102,9 +13250,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.5)':
+  '@modelcontextprotocol/sdk@1.31.0(supports-color@8.1.1)(zod@4.6.5)':
     dependencies:
-      '@hono/node-server': 1.19.14(hono@4.13.1)
+      '@hono/node-server': 1.19.17(hono@4.13.13)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -13112,10 +13260,10 @@ snapshots:
       cross-spawn: 7.0.6
       eventsource: 3.0.7
       eventsource-parser: 3.1.1
-      express: 5.2.1(supports-color@8.1.1)
-      express-rate-limit: 8.7.0(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1)
-      hono: 4.13.1
-      jose: 6.2.3
+      express: 5.3.0(supports-color@8.1.1)
+      express-rate-limit: 8.7.1(express@5.3.0(supports-color@8.1.1))(supports-color@8.1.1)
+      hono: 4.13.13
+      jose: 6.2.12
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
@@ -16008,7 +16156,7 @@ snapshots:
   ajv@8.20.0:
     dependencies:
       fast-deep-equal: 3.1.3
-      fast-uri: 3.1.5
+      fast-uri: 3.1.8
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -16647,6 +16795,8 @@ snapshots:
       safe-buffer: 5.2.1
 
   content-disposition@1.0.1: {}
+
+  content-disposition@2.0.1: {}
 
   content-type@1.0.5: {}
 
@@ -17452,6 +17602,14 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  express-rate-limit@8.7.1(express@5.3.0(supports-color@8.1.1))(supports-color@8.1.1):
+    dependencies:
+      debug: 4.4.3(supports-color@8.1.1)
+      express: 5.3.0(supports-color@8.1.1)
+      ip-address: 10.7.4
+    transitivePeerDependencies:
+      - supports-color
+
   express-static-gzip@3.0.2(supports-color@8.1.1):
     dependencies:
       mime-types: 3.0.2
@@ -17529,6 +17687,39 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  express@5.3.0(supports-color@8.1.1):
+    dependencies:
+      accepts: 2.0.0
+      body-parser: 2.3.0(supports-color@8.1.1)
+      content-disposition: 2.0.1
+      content-type: 2.0.0
+      cookie: 0.7.2
+      cookie-signature: 1.2.2
+      debug: 4.4.3(supports-color@8.1.1)
+      depd: 2.0.0
+      encodeurl: 2.0.0
+      escape-html: 1.0.3
+      etag: 1.8.1
+      finalhandler: 2.1.1(supports-color@8.1.1)
+      fresh: 2.0.0
+      http-errors: 2.0.1
+      merge-descriptors: 2.0.0
+      mime-types: 3.0.2
+      on-finished: 2.4.1
+      once: 1.4.0
+      parseurl: 1.3.3
+      proxy-addr: 2.0.8
+      qs: 6.15.3
+      range-parser: 1.2.1
+      router: 2.2.0(supports-color@8.1.1)
+      send: 1.2.1(supports-color@8.1.1)
+      serve-static: 2.2.1(supports-color@8.1.1)
+      statuses: 2.0.2
+      type-is: 2.1.0
+      vary: 1.1.2
+    transitivePeerDependencies:
+      - supports-color
+
   ext@1.7.0:
     dependencies:
       type: 2.7.3
@@ -17567,7 +17758,7 @@ snapshots:
 
   fast-sha256@1.3.0: {}
 
-  fast-uri@3.1.5: {}
+  fast-uri@3.1.8: {}
 
   fastest-levenshtein@1.0.16: {}
 
@@ -18225,6 +18416,8 @@ snapshots:
 
   hono@4.13.1: {}
 
+  hono@4.13.13: {}
+
   hookable@6.1.1: {}
 
   hosted-git-info@7.0.2:
@@ -18351,6 +18544,10 @@ snapshots:
     dependencies:
       safer-buffer: 2.1.2
 
+  iconv-lite@0.7.3:
+    dependencies:
+      safer-buffer: 2.1.2
+
   identifier-regex@1.1.0:
     dependencies:
       reserved-identifiers: 1.2.0
@@ -18428,6 +18625,8 @@ snapshots:
       - supports-color
 
   ip-address@10.7.1: {}
+
+  ip-address@10.7.4: {}
 
   ipaddr.js@1.9.1: {}
 
@@ -18533,8 +18732,6 @@ snapshots:
   jiti@2.7.0: {}
 
   jose@6.2.12: {}
-
-  jose@6.2.3: {}
 
   joycon@3.1.1: {}
 
@@ -20429,7 +20626,7 @@ snapshots:
     dependencies:
       bytes: 3.1.2
       http-errors: 2.0.1
-      iconv-lite: 0.7.2
+      iconv-lite: 0.7.3
       unpipe: 1.0.0
 
   rc@1.2.8:

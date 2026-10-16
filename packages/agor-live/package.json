@@ -69,7 +69,7 @@
     "@microsoft/agents-hosting": "1.8.1",
     "@modelcontextprotocol/core": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@oclif/core": "^4.13.3",
     "@oclif/plugin-help": "^6.2.56",
