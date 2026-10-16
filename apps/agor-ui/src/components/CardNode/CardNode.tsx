@@ -31,6 +31,8 @@ export interface CardNodeData {
   zoneColor?: string;
   onClick?: (cardId: string) => void;
   onUnpin?: (cardId: string) => void;
+  /** Width of the arranged-zone slot to fill instead of the standard width. */
+  slotWidth?: number;
 }
 
 const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
@@ -51,7 +53,7 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
     <div
       onClick={() => onClick?.(card.card_id)}
       style={{
-        width: CARD_WIDTH,
+        width: data.slotWidth ?? CARD_WIDTH,
         background: token.colorBgContainer,
         border:
           isPinned && zoneColor

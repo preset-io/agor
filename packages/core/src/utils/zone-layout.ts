@@ -18,8 +18,11 @@ export const ZONE_LAYOUTS: readonly ZoneLayout[] = ['free', 'row', 'column', 'gr
 
 /** Board grid step; every computed top and pitch snaps to it. */
 export const ZONE_GRID_STEP = 20;
-/** Column width: the branch card width, so narrower cards also fit. */
+/** Preferred column width: the branch card's own width. */
 export const ZONE_GRID_COLUMN_WIDTH = BRANCH_CARD_WIDTH;
+/** Columns stretch or shrink within these bounds so cards fill the zone's width. */
+export const ZONE_GRID_MIN_COLUMN_WIDTH = 320;
+export const ZONE_GRID_MAX_COLUMN_WIDTH = 560;
 export const ZONE_GRID_GAP = 20;
 export const ZONE_GRID_PADDING = 20;
 /** Space kept clear for the zone label and status above the first row. */
@@ -42,19 +45,41 @@ const snapUp = (value: number) => Math.ceil(value / ZONE_GRID_STEP) * ZONE_GRID_
 /** Fewest columns a grid shows; a narrower zone widens on screen to fit them. */
 export const ZONE_GRID_MIN_COLUMNS = 2;
 
-/** Columns an arranged zone shows: one per card in a row, one in a column, as many as fit (at least two) in a grid. */
-export function zoneGridColumnCount(
+/** Fewest grid columns that fill this width without any exceeding the maximum. */
+function gridColumnsToFill(zoneWidth: number): number {
+  const usable = Math.max(0, zoneWidth - 2 * ZONE_GRID_PADDING);
+  return Math.ceil((usable + ZONE_GRID_GAP) / (ZONE_GRID_MAX_COLUMN_WIDTH + ZONE_GRID_GAP));
+}
+
+export interface ZoneGridColumns {
+  count: number;
+  /** Width every card in the zone is shown at. */
+  width: number;
+}
+
+/**
+ * The columns an arranged zone shows, sized to fill its width. A row has one
+ * per card and a column one; a grid has the fewest that keep each within the
+ * maximum width, no more than it has cards, and at least two. Widths stay within the bounds, so a zone
+ * too narrow or too wide for them shows wider or narrower than set.
+ */
+export function zoneGridColumns(
   layout: AutoZoneLayout,
   zoneWidth: number,
   itemCount = 1
-): number {
-  if (layout === 'row') return Math.max(1, itemCount);
-  if (layout === 'column') return 1;
-  const usable = zoneWidth - 2 * ZONE_GRID_PADDING + ZONE_GRID_GAP;
-  return Math.max(
-    ZONE_GRID_MIN_COLUMNS,
-    Math.floor(usable / (ZONE_GRID_COLUMN_WIDTH + ZONE_GRID_GAP))
-  );
+): ZoneGridColumns {
+  const usable = Math.max(0, zoneWidth - 2 * ZONE_GRID_PADDING);
+  const count =
+    layout === 'row'
+      ? Math.max(1, itemCount)
+      : layout === 'column'
+        ? 1
+        : Math.max(ZONE_GRID_MIN_COLUMNS, Math.min(gridColumnsToFill(zoneWidth), itemCount));
+  const fill = Math.floor((usable - (count - 1) * ZONE_GRID_GAP) / count);
+  return {
+    count,
+    width: Math.min(ZONE_GRID_MAX_COLUMN_WIDTH, Math.max(ZONE_GRID_MIN_COLUMN_WIDTH, fill)),
+  };
 }
 
 /**
@@ -63,15 +88,13 @@ export function zoneGridColumnCount(
  * gets roughly square columns instead, so the grid looks like a grid.
  */
 export function zoneGridWidthOnSwitch(zoneWidth: number, itemCount: number): number | undefined {
-  if (itemCount < 3 || zoneGridColumnCount('grid', zoneWidth) < itemCount) return undefined;
+  if (itemCount < 3 || gridColumnsToFill(zoneWidth) < itemCount) return undefined;
   return zoneWidthFor(Math.max(ZONE_GRID_MIN_COLUMNS, Math.ceil(Math.sqrt(itemCount))));
 }
 
-/** Zone width that fits this many columns, padding included. */
-function zoneWidthFor(columnCount: number): number {
-  return (
-    2 * ZONE_GRID_PADDING + columnCount * ZONE_GRID_COLUMN_WIDTH + (columnCount - 1) * ZONE_GRID_GAP
-  );
+/** Zone width that fits these columns, padding included. */
+function zoneWidthFor(count: number, width = ZONE_GRID_COLUMN_WIDTH): number {
+  return 2 * ZONE_GRID_PADDING + count * width + (count - 1) * ZONE_GRID_GAP;
 }
 
 export interface ZoneGridOrderItem {
@@ -95,6 +118,8 @@ export interface ZoneGridPlan {
   contentHeight: number;
   /** Zone width that fits every column, padding included. */
   contentWidth: number;
+  /** Width every card is shown at. */
+  columnWidth: number;
 }
 
 /**
@@ -107,7 +132,11 @@ export function planZoneGrid(
   zoneWidth: number,
   items: readonly ZoneGridPlanItem[]
 ): ZoneGridPlan {
-  const columnCount = zoneGridColumnCount(layout, zoneWidth, items.length);
+  const { count: columnCount, width: columnWidth } = zoneGridColumns(
+    layout,
+    zoneWidth,
+    items.length
+  );
   const columnTops = new Array<number>(columnCount).fill(ZONE_GRID_HEADER);
   const positions = new Map<string, BoardPosition>();
   const columns = new Map<string, number>();
@@ -117,7 +146,7 @@ export function planZoneGrid(
     const column = index % columnCount;
     const y = columnTops[column];
     positions.set(item.id, {
-      x: ZONE_GRID_PADDING + column * (ZONE_GRID_COLUMN_WIDTH + ZONE_GRID_GAP),
+      x: ZONE_GRID_PADDING + column * (columnWidth + ZONE_GRID_GAP),
       y,
     });
     columns.set(item.id, column);
@@ -130,7 +159,8 @@ export function planZoneGrid(
     positions,
     columns,
     contentHeight: snapUp(bottom + ZONE_GRID_PADDING),
-    contentWidth: zoneWidthFor(columnCount),
+    contentWidth: zoneWidthFor(columnCount, columnWidth),
+    columnWidth,
   };
 }
 
@@ -159,16 +189,16 @@ const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id 
 
 /**
  * Reading order of a zone's entities: row by row across the grid columns that
- * fit the zone, each entity in the column nearest its stored x. Grid and list
- * read the same way, so switching between them keeps the order. It inverts
+ * fit the zone, each entity in the column nearest its stored x. Every
+ * arranged layout reads the same way, so switching keeps the order. It inverts
  * planZoneGrid, and order keys in one column read top to bottom.
  */
 export function readZoneGridOrder<T extends ZoneGridOrderItem>(
   zoneWidth: number,
   items: readonly T[]
 ): T[] {
-  const columnCount = zoneGridColumnCount('grid', zoneWidth);
-  const pitch = ZONE_GRID_COLUMN_WIDTH + ZONE_GRID_GAP;
+  const { count: columnCount, width } = zoneGridColumns('grid', zoneWidth, items.length);
+  const pitch = width + ZONE_GRID_GAP;
   const columns = new Map<number, T[]>();
   for (const item of items) {
     const raw = Math.round((item.position.x - ZONE_GRID_PADDING) / pitch);
@@ -199,8 +229,8 @@ export function zoneGridOrderKeys(orderedIds: readonly string[]): Map<string, Bo
 }
 
 /**
- * Stored position for an entity entering a zone: appended last in a grid or
- * list zone, a random spot otherwise. Siblings load only for auto zones.
+ * Stored position for an entity entering a zone: appended last in an
+ * arranged zone, a random spot otherwise. Siblings load only for those.
  */
 export async function computeZoneEntryPosition(
   zone: Pick<ZoneBoardObject, 'width' | 'height' | 'layout'>,

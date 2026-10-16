@@ -3,7 +3,6 @@ import {
   isAutoZoneLayout,
   planZoneGrid,
   readZoneGridOrder,
-  ZONE_GRID_COLUMN_WIDTH,
   zoneLayoutOf,
 } from '@agor/core/utils/zone-layout';
 import type { BoardPosition } from '@agor-live/client';
@@ -76,8 +75,8 @@ function sameNumber(a: unknown, b: number) {
 
 /**
  * Place every branch and card pinned to an arranged zone (row, column or
- * grid). Those zones fit their height to their cards; rows and columns fit
- * their width too, and a grid widens if its columns need it. Display-only: nothing here is persisted. Returns the same
+ * grid), stretched to columns that fill the zone's width. Those zones fit
+ * their height to their cards, and their width to the columns. Display-only: nothing here is persisted. Returns the same
  * array when nothing moved, so callers can feed it straight into setNodes
  * without a render loop.
  */
@@ -98,7 +97,10 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
     childrenByZone.set(node.parentId, siblings);
   }
 
-  const childUpdates = new Map<string, { position: BoardPosition; zIndex: number }>();
+  const childUpdates = new Map<
+    string,
+    { position: BoardPosition; zIndex: number; slotWidth: number }
+  >();
   const zoneSizes = new Map<string, { width: number; height: number }>();
   for (const [zoneId, { node: zone, layout }] of autoZones) {
     const ordered = zoneGridOrder(zone, childrenByZone.get(zoneId) ?? [], inputs);
@@ -115,35 +117,34 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
       const position = plan.positions.get(item.id);
       if (!position) continue;
       // A card widened for a session peek floats over its right-hand neighbor.
-      const wide = (inputs.measuredSizes.get(item.id)?.width ?? 0) > ZONE_GRID_COLUMN_WIDTH + 1;
+      const wide = (inputs.measuredSizes.get(item.id)?.width ?? 0) > plan.columnWidth + 1;
       childUpdates.set(item.id, {
         position,
         zIndex: wide ? BASE_ENTITY_Z_INDEX + 1 : BASE_ENTITY_Z_INDEX,
+        slotWidth: plan.columnWidth,
       });
     }
-    zoneSizes.set(zoneId, {
-      // A grid keeps the width people set (its column count); rows and columns fit their cards.
-      width: layout === 'grid' ? Math.max(zoneWidthOf(zone), plan.contentWidth) : plan.contentWidth,
-      height: plan.contentHeight,
-    });
+    zoneSizes.set(zoneId, { width: plan.contentWidth, height: plan.contentHeight });
   }
 
   let changed = false;
   const next = nodes.map((node) => {
     const childUpdate = childUpdates.get(node.id);
     if (childUpdate) {
-      const { position, zIndex } = childUpdate;
+      const { position, zIndex, slotWidth } = childUpdate;
       const className = withChildClass(node.className);
       if (
         sameNumber(node.position.x, position.x) &&
         sameNumber(node.position.y, position.y) &&
         node.zIndex === zIndex &&
-        node.className === className
+        node.className === className &&
+        node.data?.slotWidth === slotWidth
       ) {
         return node;
       }
       changed = true;
-      return { ...node, position, zIndex, className };
+      // Cards stretch to their slot, so a zone's columns fill its width.
+      return { ...node, position, zIndex, className, data: { ...node.data, slotWidth } };
     }
     const size = zoneSizes.get(node.id);
     if (size) {

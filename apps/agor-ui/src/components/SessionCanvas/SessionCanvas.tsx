@@ -272,6 +272,8 @@ const SessionNode = React.memo(({ data }: { data: SessionNodeData }) => {
 
 interface BranchNodeData {
   branch: Branch;
+  /** Width of the arranged-zone slot the card fills; unset outside one. */
+  slotWidth?: number;
   repo?: Repo;
   boardId?: string | null;
   currentUserId?: string;
@@ -375,6 +377,7 @@ const BranchNode = React.memo(
           client={data.client}
           zoneColor={data.zoneColor}
           showDragHandle={data.showDragHandle}
+          slotWidth={data.slotWidth}
         />
       </div>
     );
@@ -397,6 +400,7 @@ const BranchNode = React.memo(
       p.zoneName === n.zoneName &&
       p.zoneColor === n.zoneColor &&
       p.showDragHandle === n.showDragHandle &&
+      p.slotWidth === n.slotWidth &&
       p.client === n.client &&
       p.onTaskClick === n.onTaskClick &&
       p.onSessionClick === n.onSessionClick &&
