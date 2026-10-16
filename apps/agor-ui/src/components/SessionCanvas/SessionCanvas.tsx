@@ -68,6 +68,17 @@ import {
 } from './canvas/utils/entityPlacementWrites';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
+import type { ZoneLayout } from '@agor/core/types';
+import {
+  isAutoZoneLayout,
+  ZONE_GRID_GAP,
+  ZONE_GRID_PADDING,
+  zoneGridDropIndex,
+  zoneGridEntryPosition,
+  zoneGridOrderKeyBetween,
+  zoneGridOrderKeys,
+  zoneLayoutOf,
+} from '@agor/core/utils/zone-layout';
 import { boardCommentZoneParentObjectKey, hasMinimumRole, ROLES, shortId } from '@agor-live/client';
 import { mapToArray } from '@/utils/mapHelpers';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
@@ -145,6 +156,12 @@ import {
 import { getValidZoneParentId, sanitizeOrphanedNodeParents } from './canvas/utils/nodeParentUtils';
 import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
 import { DEFAULT_BOARD_OBJECT_Z_INDEX, selectedZIndex } from './canvas/zOrder';
+import {
+  applyZoneGridLayouts,
+  autoLayoutOfZoneNode,
+  type MeasuredNodeSize,
+  zoneGridOrder,
+} from './canvas/zoneGridLayout';
 import { createZoneTriggerSession } from './canvas/zoneTriggerSessionCreation';
 
 interface SessionCanvasProps {
@@ -632,6 +649,26 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return map;
     }, [boardObjectsForBoard]);
 
+    // Grid and list zones place pinned nodes from React Flow's measured sizes; those positions are never saved.
+    const measuredNodeSizesRef = useRef(new Map<string, MeasuredNodeSize>());
+    const [zoneGridMeasureVersion, setZoneGridMeasureVersion] = useState(0);
+    const placementOfNode = useCallback(
+      (nodeId: string) =>
+        nodeId.startsWith('card-')
+          ? boardObjectByCard.get(nodeId.slice('card-'.length))
+          : boardObjectByBranch.get(nodeId),
+      [boardObjectByBranch, boardObjectByCard]
+    );
+    const layoutZoneGrids = useCallback(
+      (nodes: Node[]) =>
+        applyZoneGridLayouts(nodes, {
+          measuredSizes: measuredNodeSizesRef.current,
+          storedPositionOf: (nodeId) => placementOfNode(nodeId)?.position,
+          heldOrderOf: (zoneId) => heldZoneOrdersRef.current.get(zoneId),
+        }),
+      [placementOfNode]
+    );
+
     // Card modal state
     const [selectedCard, setSelectedCard] = useState<CardWithType | null>(null);
     const [cardModalOpen, setCardModalOpen] = useState(false);
@@ -863,6 +900,58 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     >({});
     const isDraggingRef = useRef(false);
 
+    // Grid and list zones render larger than their saved size, so drops hit-test against the shown size.
+    const boardObjectsAsShown = useStableCallback((objects: Board['objects']) => {
+      if (!objects) return objects;
+      let shown = objects;
+      for (const [id, object] of Object.entries(objects)) {
+        if (object.type !== 'zone' || !isAutoZoneLayout(zoneLayoutOf(object))) continue;
+        const style = shownNodesRef.current.find((node) => node.id === id)?.style;
+        const width = Math.max(object.width, Number(style?.width) || 0);
+        const height = Math.max(object.height, Number(style?.height) || 0);
+        if (width === object.width && height === object.height) continue;
+        if (shown === objects) shown = { ...objects };
+        shown[id] = { ...object, width, height };
+      }
+      return shown;
+    });
+
+    // A node unpinned from a grid or list zone lands just right of it, level with where it was shown.
+    const besideAutoZone = (nodeId: string) => {
+      const node = shownNodesRef.current.find((candidate) => candidate.id === nodeId);
+      const zone = node?.parentId
+        ? shownNodesRef.current.find((candidate) => candidate.id === node.parentId)
+        : undefined;
+      if (!node || !zone) return undefined;
+      const zoneWidth = Number(zone.data?.width) || Number(zone.style?.width) || 0;
+      return {
+        x: zone.position.x + zoneWidth + 2 * ZONE_GRID_GAP,
+        y: zone.position.y + node.position.y,
+      };
+    };
+
+    // Stored position of a branch or card dropped into a grid or list zone. It is only an order key there, so a newcomer joins last.
+    const autoZoneEntryPosition = useStableCallback(
+      (
+        nodeId: string,
+        zoneId: string | undefined,
+        placement: BoardEntityObject | undefined
+      ): BoardEntityObject['position'] | undefined => {
+        const liveBoard = placementBoardRef.current;
+        const zone = zoneId ? liveBoard?.objects?.[zoneId] : undefined;
+        if (!liveBoard || zone?.type !== 'zone' || !isAutoZoneLayout(zoneLayoutOf(zone))) {
+          return undefined;
+        }
+        if (placement && placement.zone_id === zoneId) return placement.position;
+        const siblings = (agorStore.getState().boardObjectsByBoardId.get(liveBoard.board_id) ?? [])
+          .filter(
+            (row) => row.zone_id === zoneId && (row.branch_id ?? `card-${row.card_id}`) !== nodeId
+          )
+          .map((row) => row.position);
+        return zoneGridEntryPosition(siblings);
+      }
+    );
+
     // Helper: Check if a node intersects with a zone
     const _findIntersectingZone = useCallback(
       (nodePosition: { x: number; y: number }, nodeWidth = 400, nodeHeight = 200) => {
@@ -938,6 +1027,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
     // Initialize nodes and edges state BEFORE using them
     const [nodes, setNodesUnsafe, onNodesChangeInternal] = useNodesState([]);
+    // The nodes as last rendered, with grid positions and grown zones (React Flow's own copy can lag).
+    const shownNodesRef = useRef(nodes);
+    shownNodesRef.current = nodes;
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
     // React Flow throws if any child node has a parentId that is absent from
@@ -992,6 +1084,201 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       [canMutateBoard, boardGuard]
     );
 
+    // Layout switches and reorders save one card at a time; the zone holds its order until every save lands.
+    const heldZoneOrdersRef = useRef(new Map<string, string[]>());
+    type PlacementTarget = readonly [
+      nodeId: string,
+      position: BoardEntityObject['position'] | undefined,
+    ];
+    const livePlacementOf = (nodeId: string) =>
+      agorStore
+        .getState()
+        .boardObjectsByBoardId.get(placementBoardRef.current?.board_id ?? '')
+        ?.find((row) => (row.branch_id ?? `card-${row.card_id}`) === nodeId);
+    const pinnedNodesOf = (zoneId: string) =>
+      shownNodesRef.current.filter(
+        (node) =>
+          node.parentId === zoneId && (node.type === 'branchNode' || node.type === 'cardNode')
+      );
+    // Saves each changed position; false when the board reloaded and the rest were dropped.
+    const savePlacements = useStableCallback(
+      async (zoneId: string, ticket: BoardWriteTicket, targets: readonly PlacementTarget[]) => {
+        if (!client) return false;
+        for (const [nodeId, position] of targets) {
+          const placement = livePlacementOf(nodeId);
+          if (!placement || !position) continue;
+          if (placement.position.x === position.x && placement.position.y === position.y) continue;
+          const sent = await boardGuard.write(ticket, () =>
+            client
+              .service('board-objects')
+              .patch(placement.object_id, { position, zone_id: zoneId })
+          );
+          if (!sent) return false;
+        }
+        return true;
+      }
+    );
+    // Resolves once the store holds every saved position, or after 3 seconds.
+    const placementsStored = (targets: readonly PlacementTarget[]) =>
+      new Promise<void>((resolve) => {
+        const stored = () =>
+          targets.every(([nodeId, position]) => {
+            const current = livePlacementOf(nodeId)?.position;
+            return !position || (current?.x === position.x && current?.y === position.y);
+          });
+        const timer = setTimeout(() => finish(), 3000);
+        const unsubscribe = agorStore.subscribe(() => {
+          if (stored()) finish();
+        });
+        function finish() {
+          clearTimeout(timer);
+          unsubscribe();
+          resolve();
+        }
+        if (stored()) finish();
+      });
+    // Holds the zone in `order` while `save` runs and its positions reach the store.
+    const saveHoldingOrder = useStableCallback(
+      async (
+        zoneId: string,
+        order: string[],
+        targets: readonly PlacementTarget[],
+        action: string,
+        save: () => Promise<boolean>
+      ) => {
+        heldZoneOrdersRef.current.set(zoneId, order);
+        setZoneGridMeasureVersion((version) => version + 1);
+        try {
+          if (!(await save())) {
+            boardGuard.warnDropped();
+            return;
+          }
+          await placementsStored(targets);
+        } catch (error) {
+          showError(formatActionError(action, error, { idempotent: true }));
+          resyncBoardNodes();
+        } finally {
+          heldZoneOrdersRef.current.delete(zoneId);
+          setZoneGridMeasureVersion((version) => version + 1);
+        }
+      }
+    );
+
+    const handleZoneLayoutChange = useStableCallback(
+      async (objectId: string, layout: ZoneLayout, ticket: BoardWriteTicket | null) => {
+        const zone = board?.objects?.[objectId];
+        const zoneNode = shownNodesRef.current.find((node) => node.id === objectId);
+        if (!board || !client || zone?.type !== 'zone' || !zoneNode) return;
+        if (zoneLayoutOf(zone) === layout) return;
+        if (!boardGuard.isCurrent(ticket)) {
+          boardGuard.warnDropped();
+          return;
+        }
+        const order = zoneGridOrder(zoneNode, pinnedNodesOf(objectId), {
+          storedPositionOf: (nodeId) => livePlacementOf(nodeId)?.position,
+        });
+        // Free keeps every card where it is shown; grid and list store one-column order keys.
+        const orderKeys = zoneGridOrderKeys(order.map((node) => node.id));
+        const targets = order.map(
+          (node) => [node.id, layout === 'free' ? node.position : orderKeys.get(node.id)] as const
+        );
+        const shownWidth = Number(zoneNode.style?.width) || 0;
+        const shownHeight = Number(zoneNode.style?.height) || 0;
+
+        const saveLayout = () => {
+          const latestZone = placementBoardRef.current?.objects?.[objectId];
+          // A zone grown to fit its cards keeps that size once its cards are placed freely.
+          const grown =
+            layout === 'free' &&
+            latestZone?.type === 'zone' &&
+            (shownWidth > latestZone.width || shownHeight > latestZone.height);
+          return boardGuard.write(ticket, () =>
+            grown && latestZone?.type === 'zone'
+              ? client.service('boards').patch(board.board_id, {
+                  _action: 'upsertObject',
+                  objectId,
+                  objectData: {
+                    ...latestZone,
+                    layout,
+                    width: Math.max(latestZone.width, shownWidth),
+                    height: Math.max(latestZone.height, shownHeight),
+                  },
+                } as unknown as Partial<Board>)
+              : client.service('boards').patch(board.board_id, {
+                  _action: 'mergeObjectFields',
+                  objects: { [objectId]: { layout } },
+                } as unknown as Partial<Board>)
+          );
+        };
+        await saveHoldingOrder(
+          objectId,
+          order.map((node) => node.id),
+          targets,
+          'change the zone layout',
+          // Positions save while the zone still shows the layout they belong to.
+          async () =>
+            layout === 'free'
+              ? (await savePlacements(objectId, ticket, targets)) && (await saveLayout())
+              : (await saveLayout()) && (await savePlacements(objectId, ticket, targets))
+        );
+      }
+    );
+
+    // A card dropped inside its grid or list zone takes the slot nearest the drop; only its order key is saved.
+    const reorderInZone = useStableCallback(
+      (
+        nodeId: string,
+        nodeType: string | undefined,
+        zoneId: string,
+        drop: { x: number; y: number }
+      ) => {
+        delete localPositionsRef.current[nodeId];
+        const zoneNode = shownNodesRef.current.find((node) => node.id === zoneId);
+        const layout = autoLayoutOfZoneNode(zoneNode);
+        const ticket = boardGuard.capture();
+        if (!zoneNode || !layout || !ticket || heldZoneOrdersRef.current.has(zoneId)) {
+          setZoneGridMeasureVersion((version) => version + 1);
+          return;
+        }
+        const order = zoneGridOrder(zoneNode, pinnedNodesOf(zoneId), {
+          storedPositionOf: (id) => livePlacementOf(id)?.position,
+        }).map((node) => ({ id: node.id, type: node.type }));
+        const heightOf = (id: string, type: string | undefined) =>
+          measuredNodeSizesRef.current.get(id)?.height ?? (type === 'cardNode' ? 120 : 200);
+        const others = order.filter((item) => item.id !== nodeId);
+        const index = zoneGridDropIndex(
+          layout,
+          Number(zoneNode.data?.width) || 0,
+          others.map((item) => ({ id: item.id, height: heightOf(item.id, item.type) })),
+          { id: nodeId, height: heightOf(nodeId, nodeType) },
+          drop
+        );
+        const next = [...others.slice(0, index), { id: nodeId }, ...others.slice(index)].map(
+          (item) => item.id
+        );
+        if (next.every((id, i) => id === order[i]?.id)) {
+          setZoneGridMeasureVersion((version) => version + 1);
+          return;
+        }
+        // One write between the new neighbours' keys; any zone not already on one-column keys gets all keys rewritten.
+        const keyed = order.every(
+          (item) => livePlacementOf(item.id)?.position.x === ZONE_GRID_PADDING
+        );
+        const between = keyed
+          ? zoneGridOrderKeyBetween(
+              livePlacementOf(next[index - 1] ?? '')?.position,
+              livePlacementOf(next[index + 1] ?? '')?.position
+            )
+          : undefined;
+        const targets: PlacementTarget[] = between
+          ? [[nodeId, between]]
+          : [...zoneGridOrderKeys(next)];
+        void saveHoldingOrder(zoneId, next, targets, 'reorder the cards', () =>
+          savePlacements(zoneId, ticket, targets)
+        );
+      }
+    );
+
     // Board objects hook
     const { getBoardObjectNodes, buildObjectNode, batchUpdateObjectPositions, deleteObject } =
       useBoardObjects({
@@ -1007,6 +1294,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // Every board-object/zone/text/markdown write goes through this guard.
         guard: boardGuard,
         onWriteFailed: resyncBoardNodes,
+        onZoneLayoutChange: handleZoneLayoutChange,
       });
 
     // Extract zone labels - memoized to only change when labels actually change
@@ -1068,8 +1356,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
       // Calculate absolute position from relative position
       // Branch's position is relative to zone when pinned, so add zone's position
-      const absoluteX = boardObject.position.x + zone.x;
-      const absoluteY = boardObject.position.y + zone.y;
+      const shown =
+        zone.type === 'zone' && isAutoZoneLayout(zoneLayoutOf(zone))
+          ? besideAutoZone(branchId)
+          : undefined;
+      const absoluteX = shown?.x ?? boardObject.position.x + zone.x;
+      const absoluteY = shown?.y ?? boardObject.position.y + zone.y;
 
       // Optimistically store absolute position in localPositionsRef
       // This will be used by the node sync effect until WebSocket confirms
@@ -1242,8 +1534,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       const zone = board.objects?.[boardObject.zone_id];
       if (!zone) return;
 
-      const absoluteX = boardObject.position.x + zone.x;
-      const absoluteY = boardObject.position.y + zone.y;
+      const shown =
+        zone.type === 'zone' && isAutoZoneLayout(zoneLayoutOf(zone))
+          ? besideAutoZone(`card-${cardId}`)
+          : undefined;
+      const absoluteX = shown?.x ?? boardObject.position.x + zone.x;
+      const absoluteY = shown?.y ?? boardObject.position.y + zone.y;
 
       localPositionsRef.current[`card-${cardId}`] = { x: absoluteX, y: absoluteY };
 
@@ -1880,7 +2176,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         const updatedBranches = applyLocalPositions(initialNodes, currentNodesById, zones);
         const updatedCards = applyLocalPositions(cardNodes, currentNodesById, zones);
 
-        return applyZOrder(zones, markdown, updatedBranches, updatedCards, comments, apps);
+        return layoutZoneGrids(
+          applyZOrder(zones, markdown, updatedBranches, updatedCards, comments, apps)
+        );
       });
     }, [
       initialNodes,
@@ -1890,8 +2188,16 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       applyZOrder,
       applyLocalPositions,
       partitionNodesByType,
+      layoutZoneGrids,
       boardResyncNonce,
     ]);
+
+    // Re-place grid and list zones when a pinned card's measured size changes.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: zoneGridMeasureVersion signals a new measurement in measuredNodeSizesRef
+    useEffect(() => {
+      if (isDraggingRef.current) return;
+      setNodes(layoutZoneGrids);
+    }, [zoneGridMeasureVersion, layoutZoneGrids, setNodes]);
 
     // Sync COMMENT nodes separately
     useEffect(() => {
@@ -2068,6 +2374,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         }
 
         // Detect resize by checking for dimensions changes
+        let gridMeasurementChanged = false;
         // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
         changes.forEach((change: any) => {
           if (change.type === 'dimensions' && change.dimensions) {
@@ -2076,6 +2383,25 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // `getNode` is a stable reference and only runs inside this dimensions
             // branch, so the hot drag/position path does zero O(n) work.
             const node = reactFlowInstanceRef.current?.getNode(change.id);
+            if (node?.type === 'branchNode' || node?.type === 'cardNode') {
+              const { width, height } = change.dimensions;
+              const previous = measuredNodeSizesRef.current.get(change.id);
+              if (
+                !previous ||
+                Math.abs(previous.width - width) >= 1 ||
+                Math.abs(previous.height - height) >= 1
+              ) {
+                measuredNodeSizesRef.current.set(change.id, { width, height });
+                const parent = node.parentId
+                  ? reactFlowInstanceRef.current?.getNode(node.parentId)
+                  : undefined;
+                if (autoLayoutOfZoneNode(parent)) gridMeasurementChanged = true;
+              }
+            }
+            // A grid or list zone grows on screen to fit its cards; only a person resizing it saves a size.
+            if (node?.type === 'zone' && autoLayoutOfZoneNode(node) && change.resizing !== true) {
+              return;
+            }
             if (node?.type === 'zone') {
               // Check if dimensions actually changed (to avoid infinite loop from React Flow emitting unchanged dimensions)
               const currentWidth = node.style?.width;
@@ -2162,6 +2488,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
         // Call the original handler
         onNodesChangeInternal(changes);
+        if (gridMeasurementChanged) setZoneGridMeasureVersion((version) => version + 1);
       },
       [client, onNodesChangeInternal, setNodes, boardGuard, showError, resyncBoardNodes]
     );
@@ -2201,6 +2528,25 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         isDraggingRef.current = false;
         // A failed write during the drag skipped its redraw.
         if (boardResyncPendingRef.current) setBoardResyncNonce((nonce) => nonce + 1);
+
+        // A drop inside its own grid or list zone reorders the zone instead of placing the card.
+        if (
+          (node.type === 'branchNode' || node.type === 'cardNode') &&
+          node.parentId &&
+          autoLayoutOfZoneNode(reactFlowInstanceRef.current.getNode(node.parentId))
+        ) {
+          const dropped = node.positionAbsolute || node.position;
+          const width = node.width || (node.type === 'cardNode' ? 380 : 500);
+          const height = node.height || (node.type === 'cardNode' ? 120 : 200);
+          const target = findZoneAtPosition(
+            { x: dropped.x + width / 2, y: dropped.y + height / 2 },
+            boardObjectsAsShown(board.objects)
+          );
+          if (target?.zoneId === node.parentId) {
+            reorderInZone(node.id, node.type, node.parentId, node.position);
+            return;
+          }
+        }
         // Never derive a zone from a board that isn't loaded: the move's
         // ticket is captured now and checked before each of its dispatches.
         const guard = node.type === 'comment' ? commentGuard : boardGuard;
@@ -2392,7 +2738,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   y: absolutePosition.y + nodeHeight / 2,
                 };
 
-                const zoneCollision = findZoneAtPosition(center, board.objects);
+                const zoneCollision = findZoneAtPosition(
+                  center,
+                  boardObjectsAsShown(board.objects)
+                );
                 const droppedZoneId = zoneCollision?.zoneId;
 
                 let zonePosition = zoneCollision
@@ -2411,10 +2760,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     ? { id: droppedZoneId, position: zonePosition }
                     : null;
 
-                const positionToStore = calculateStoragePosition(absolutePosition, newParent);
-
                 // Find existing board_object for this card
                 const existingBoardObject = getLivePlacement(nodeId);
+                const positionToStore =
+                  autoZoneEntryPosition(nodeId, droppedZoneId, existingBoardObject) ??
+                  calculateStoragePosition(absolutePosition, newParent);
                 if (existingBoardObject) {
                   if (!placementIsCurrent(existingBoardObject)) continue;
                   if (!mayDispatch(nodeId)) continue;
@@ -2437,7 +2787,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 };
 
                 // Find zone at center point
-                const zoneCollision = findZoneAtPosition(center, board.objects);
+                const zoneCollision = findZoneAtPosition(
+                  center,
+                  boardObjectsAsShown(board.objects)
+                );
                 const droppedZoneId = zoneCollision?.zoneId;
 
                 // Get the zone's ACTUAL position from React Flow nodes, not board.objects
@@ -2472,7 +2825,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       }
                     : null;
 
-                const positionToStore = calculateStoragePosition(absolutePosition, newParent);
+                const positionToStore =
+                  autoZoneEntryPosition(nodeId, droppedZoneId, existingBoardObject) ??
+                  calculateStoragePosition(absolutePosition, newParent);
 
                 // Branch moved - update board_object position (null clears zone, string sets it)
                 branchUpdates.push({
@@ -2637,6 +2992,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         boardGuard,
         commentGuard,
         showError,
+        autoZoneEntryPosition,
+        boardObjectsAsShown,
+        reorderInZone,
       ]
     );
 

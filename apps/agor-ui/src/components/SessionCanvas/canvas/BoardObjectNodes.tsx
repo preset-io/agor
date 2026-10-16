@@ -2,9 +2,13 @@
  * Custom React Flow node components for board objects (text labels, zones, etc.)
  */
 
+import type { ZoneLayout } from '@agor/core/types';
+import { zoneLayoutOf } from '@agor/core/utils/zone-layout';
 import type { BoardComment, BoardObject, User } from '@agor-live/client';
 import {
+  AppstoreOutlined,
   BgColorsOutlined,
+  BorderOutlined,
   CaretDownOutlined,
   CaretUpOutlined,
   CommentOutlined,
@@ -14,6 +18,7 @@ import {
   MoreOutlined,
   SettingOutlined,
   UnlockOutlined,
+  UnorderedListOutlined,
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
@@ -98,6 +103,12 @@ interface ZoneNodeData extends Omit<ZoneBoardObject, 'type'> {
   canEdit?: boolean;
   /** Number of other zones whose rectangles intersect this zone. */
   overlappingZoneCount?: number;
+  /** Switch between free, grid and list under the ticket captured when chosen. */
+  onLayoutChange?: (
+    objectId: string,
+    layout: ZoneLayout,
+    ticket: BoardWriteTicket | null
+  ) => Promise<void>;
   /** Whether each relative layer operation would change persisted order. */
   layerAvailability?: Record<LayerOp, boolean>;
 }
@@ -128,6 +139,27 @@ const saveRecentColor = (color: string) => {
     console.warn('Failed to save recent color:', error);
   }
 };
+
+const ZONE_LAYOUT_OPTIONS: Array<{
+  layout: ZoneLayout;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+}> = [
+  { layout: 'free', label: 'Free', description: 'Place cards anywhere', icon: <BorderOutlined /> },
+  {
+    layout: 'grid',
+    label: 'Grid',
+    description: 'Arrange cards in columns',
+    icon: <AppstoreOutlined />,
+  },
+  {
+    layout: 'list',
+    label: 'List',
+    description: 'Arrange cards in one column',
+    icon: <UnorderedListOutlined />,
+  },
+];
 
 const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: boolean }) => {
   const { token } = theme.useToken();
@@ -218,6 +250,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       fontSize: data.fontSize,
       zIndex: data.zIndex,
       trigger: data.trigger,
+      layout: data.layout,
     }),
     [
       data.x,
@@ -233,6 +266,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       data.fontSize,
       data.zIndex,
       data.trigger,
+      data.layout,
     ]
   );
 
@@ -330,6 +364,9 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   // Sanitizing on read defends the DOM against bad fontSize data (negative,
   // non-finite, absurdly large) written via MCP/import.
   const labelFontSize = effectiveLabelFontSize(data.fontSize, token.fontSize);
+  const layout = zoneLayoutOf(data);
+  const layoutOption =
+    ZONE_LAYOUT_OPTIONS.find((option) => option.layout === layout) ?? ZONE_LAYOUT_OPTIONS[0];
   // Status keeps its smaller relative size, scaled from the label size when set.
   const statusFontSize = statusFontSizeFor(data.fontSize, token.fontSize, token.fontSizeSM);
   const handleReorder = (op: LayerOp) => {
@@ -568,6 +605,44 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                   : {}),
               }}
             />
+
+            {data.onLayoutChange && (
+              <Dropdown
+                trigger={['click']}
+                placement="bottom"
+                menu={{
+                  selectable: true,
+                  selectedKeys: [layout],
+                  items: ZONE_LAYOUT_OPTIONS.map((option) => ({
+                    key: option.layout,
+                    icon: option.icon,
+                    label: (
+                      <Flex vertical>
+                        <span>{option.label}</span>
+                        <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                          {option.description}
+                        </Typography.Text>
+                      </Flex>
+                    ),
+                  })),
+                  onClick: ({ key, domEvent }) => {
+                    domEvent.stopPropagation();
+                    if (mutationDisabled || key === layout) return;
+                    void data.onLayoutChange?.(data.objectId, key as ZoneLayout, captureTicket());
+                  },
+                }}
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  aria-label={`Zone layout: ${layoutOption.label}`}
+                  title={`Zone layout: ${layoutOption.label}`}
+                  icon={layoutOption.icon}
+                  disabled={mutationDisabled}
+                  style={{ width: 32, height: 32 }}
+                />
+              </Dropdown>
+            )}
 
             <Button
               type="text"

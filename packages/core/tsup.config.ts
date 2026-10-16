@@ -49,6 +49,7 @@ export default defineConfig({
     'utils/cron': 'src/utils/cron.ts', // Cron validation and parsing utilities
     'utils/context-window': 'src/utils/context-window.ts', // Context window calculation utilities
     'utils/board-placement': 'src/utils/board-placement.ts', // Zone-relative positioning for branch cards
+    'utils/zone-layout': 'src/utils/zone-layout.ts', // Grid/list zone placement shared by UI and daemon
     'utils/host-ip': 'src/utils/host-ip.ts', // Host IP detection for {{host.ip_address}} template var
     'utils/path': 'src/utils/path.ts', // Path expansion utilities (tilde to home directory)
     'utils/logger': 'src/utils/logger.ts', // Console monkey-patch for log level filtering

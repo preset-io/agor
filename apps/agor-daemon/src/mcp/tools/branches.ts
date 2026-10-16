@@ -7,6 +7,7 @@ import {
 } from '@agor/core/db';
 import type {
   Board,
+  BoardEntityObject,
   BoardID,
   Branch,
   BranchFilesystemAction,
@@ -24,8 +25,8 @@ import {
   OWNERSHIP_TRANSFER_SERVICES,
   resolveRepoCleanupPolicy,
 } from '@agor/core/types';
-import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
+import { computeZoneEntryPosition } from '@agor/core/utils/zone-layout';
 import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type {
@@ -1496,7 +1497,16 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
 
       // Calculate position RELATIVE to zone (not absolute canvas coordinates)
       // The UI expects relative positions and adds zone.x/zone.y when rendering
-      const { x: relativeX, y: relativeY } = computeZoneRelativePosition(zone as ZoneBoardObject);
+      const { x: relativeX, y: relativeY } = await computeZoneEntryPosition(
+        zone as ZoneBoardObject,
+        async () => {
+          const { data } = (await ctx.app.service('board-objects').find({
+            query: { board_id: branch.board_id, zone_id: zoneId },
+            ...ctx.baseServiceParams,
+          })) as { data: BoardEntityObject[] };
+          return data.filter((row) => row.branch_id !== branchId).map((row) => row.position);
+        }
+      );
 
       let boardObject: import('@agor/core/types').BoardEntityObject | null =
         await runWithMcpTenantDatabaseScope(ctx, () =>
