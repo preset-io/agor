@@ -413,6 +413,9 @@ const BranchNode = React.memo(
   }
 );
 
+/** How long a card dragged out of an arranged zone stays out of its layout while its move saves. */
+const LEAVING_ZONE_GRACE_MS = 5000;
+
 /** View-only (phone) canvases open at a zoom where card titles stay readable. */
 const READ_ONLY_MIN_ZOOM = 0.6;
 const READ_ONLY_FIT_PADDING = 0.1;
@@ -648,6 +651,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
     // Arranged zones place pinned nodes from their measured sizes; those positions are never saved.
     const [zoneGridMeasureVersion, setZoneGridMeasureVersion] = useState(0);
+    // Cards dragged out of an arranged zone, by when; their move is still being saved.
+    const leavingZoneRef = useRef(new Map<string, number>());
     // Right after a board loads, cards hide until measured so they never show in a guessed slot.
     const [boardSettled, setBoardSettled] = useState(false);
     const placementOfNode = useCallback(
@@ -665,8 +670,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           storedPositionOf: (nodeId) => placementOfNode(nodeId)?.position,
           heldOrderOf: (zoneId) => heldZoneOrdersRef.current.get(zoneId),
           hideUnmeasured: !boardSettled,
-          // A card dropped elsewhere keeps its drop point until its move is saved.
-          isMoving: (nodeId) => nodeId in localPositionsRef.current,
+          // A card dragged out keeps its drop point while its move saves, for 5s at most.
+          isMoving: (nodeId) => {
+            const since = leavingZoneRef.current.get(nodeId);
+            if (since === undefined) return false;
+            if (Date.now() - since < LEAVING_ZONE_GRACE_MS) return true;
+            leavingZoneRef.current.delete(nodeId);
+            return false;
+          },
         }),
       [placementOfNode, boardSettled]
     );
@@ -2557,6 +2568,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             reorderInZone(node.id, node.type, node.parentId, node.position);
             return;
           }
+          // Leaving the zone: if the move never saves, the card returns to its slot after the grace period.
+          leavingZoneRef.current.set(node.id, Date.now());
+          setTimeout(
+            () => setZoneGridMeasureVersion((version) => version + 1),
+            LEAVING_ZONE_GRACE_MS + 50
+          );
         }
         // Never derive a zone from a board that isn't loaded: the move's
         // ticket is captured now and checked before each of its dispatches.
@@ -2776,7 +2793,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 if (existingBoardObject) {
                   if (!placementIsCurrent(existingBoardObject)) continue;
                   if (!mayDispatch(nodeId)) continue;
-                  await patchPlacement(nodeId, existingBoardObject, positionToStore, droppedZoneId);
                   enterArrangedZone(
                     nodeId,
                     draggedNode.type,
@@ -2785,6 +2801,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     absolutePosition,
                     update.ticket
                   );
+                  await patchPlacement(nodeId, existingBoardObject, positionToStore, droppedZoneId);
                 }
                 // Cards don't fire zone triggers (V1: cards are inert in zones)
               } else if (draggedNode?.type === 'branchNode') {
