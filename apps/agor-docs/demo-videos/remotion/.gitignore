@@ -1,0 +1,14 @@
+node_modules
+dist
+.DS_Store
+.env
+
+# Ignore the output video from Git but not videos you import into src/.
+out
+
+# Remotion's official agent skills, installed locally (no license to vendor them):
+#   npx skills add remotion-dev/skills  (or copy from github.com/remotion-dev/skills)
+.claude/skills/
+# Clips copied in by scripts/sync-clips.ts
+public/clips/
+out/

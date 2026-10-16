@@ -1,0 +1,14 @@
+name: saasy
+version: '1.0.0'
+config-version: 2
+profile: saasy
+
+model-paths: ['models']
+analysis-paths: ['analyses']
+
+models:
+  saasy:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

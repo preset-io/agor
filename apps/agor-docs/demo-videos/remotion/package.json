@@ -1,0 +1,39 @@
+{
+  "name": "agor-reel",
+  "version": "1.0.0",
+  "description": "Agor's video edits (sizzle reel segments) in Remotion, composed from the real-app clips recorded by ../e2e.",
+  "repository": {},
+  "license": "UNLICENSED",
+  "private": true,
+  "dependencies": {
+    "@iconify-json/logos": "^1.2.16",
+    "@remotion/cli": "4.0.535",
+    "@remotion/google-fonts": "4.0.535",
+    "@remotion/media": "4.0.535",
+    "@remotion/transitions": "4.0.535",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.535"
+  },
+  "devDependencies": {
+    "@remotion/eslint-config-flat": "4.0.535",
+    "@types/react": "19.2.7",
+    "@types/web": "0.0.166",
+    "eslint": "9.39.5",
+    "prettier": "3.8.1",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "dev": "remotion studio",
+    "build": "remotion bundle",
+    "upgrade": "remotion upgrade",
+    "lint": "eslint src && tsc",
+    "sync": "node scripts/sync-clips.mjs",
+    "render:teammates": "remotion render AiTeammatesBebop out/ai-teammates-bebop.mp4",
+    "render:teammates-grid": "remotion render AiTeammatesGrid out/ai-teammates-grid.mp4",
+    "render:interfaces": "remotion render Interfaces out/interfaces.mp4",
+    "render:raise": "remotion render RaiseTogether out/raise-together.mp4",
+    "render:reel": "remotion render TeammatesReel out/teammates-reel.mp4",
+    "render:reel-4k": "remotion render TeammatesReel out/teammates-reel-4k.mp4 --scale=2"
+  }
+}
