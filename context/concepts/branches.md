@@ -55,7 +55,11 @@ lives in that group, so its verified absence is storage containment.
 (same DB-request barrier as `failSettled`). Both the spawning daemon's exit
 callback and the periodic `BranchDeletionReconciler` (any replica) attempt it;
 a daemon in a different boot or PID namespace never treats a missing PGID as
-absence. A late daemon-side upload RPC is harmless: upload deletes are keyed by
+absence. Cross-tenant maintenance discovery includes `deletion_failed` rows
+only while they retain a deletion invocation with a recorded process identity.
+This lets the executor host reconcile an exit even if another replica marked
+the heartbeat stale first; settlement removes that discovery visibility.
+A late daemon-side upload RPC is harmless: upload deletes are keyed by
 immutable ref and idempotent. Templated/remote executors and legacy claims with
 no recorded identity stay fenced until an administrator calls
 `branches/:id/release-deletion` (MCP `agor_branches_release_deletion`), which only

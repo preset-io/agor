@@ -666,6 +666,11 @@ test('process discovery returns only deletions with a recorded executor identity
   expect(await discovery.findExecutionProcessRefs({ tenantId: 'default', after: refs[0] })).toEqual(
     []
   );
+  await maintenance.claimExecution(claim, invocation);
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(Date.now() + 10 * 60_000);
+  expect(await maintenance.markStaleDeletion(claim, 120_000)).toBe(true);
+  expect(await discovery.findExecutionProcessRefs({ tenantId: 'default' })).toEqual(refs);
   await maintenance.releaseVerifiedExitedDeletion(branch.branch_id, invocation, 'Exited');
   expect(await discovery.findExecutionProcessRefs({ tenantId: 'default' })).toEqual([]);
   await expect(discovery.findExecutionProcessRefs({})).rejects.toThrow('PostgreSQL');

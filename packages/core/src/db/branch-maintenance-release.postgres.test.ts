@@ -1,6 +1,9 @@
+import { eq } from 'drizzle-orm';
 import { expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
+import type { BranchMaintenanceClaim } from '../types';
 import { createDatabase } from './client';
+import { select, update } from './database-wrapper';
 import { runMigrations } from './migrate';
 import {
   BranchMaintenanceDiscoveryRepository,
@@ -8,6 +11,7 @@ import {
 } from './repositories/branch-maintenance';
 import { BranchRepository } from './repositories/branches';
 import { seedEnvironmentCommandBranch } from './repositories/environment-commands.test-support';
+import { branches } from './schema';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
 
 const url = process.env.AGOR_TEST_POSTGRES_URL;
@@ -42,6 +46,79 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       );
       expect(systemRefs).toContainEqual({ tenant_id: tenantA, branch_id: seeded.branch.branch_id });
 
+      // A different replica can mark the heartbeat stale before the executor
+      // host is available. Keep the invocation discoverable after that write.
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        const maintenance = new BranchMaintenanceRepository(scoped);
+        await maintenance.withExecution(seeded.claim, seeded.invocation, async (tx, row) => {
+          await update(tx, branches)
+            .set({
+              data: {
+                ...row.data,
+                maintenance: {
+                  ...row.data.maintenance!,
+                  execution_heartbeat_at: '2000-01-01T00:00:00.000Z',
+                },
+              },
+            })
+            .where(eq(branches.branch_id, seeded.branch.branch_id))
+            .run();
+        });
+        expect(await maintenance.markStaleDeletion(seeded.claim, 120_000)).toBe(true);
+      });
+      const discover = () =>
+        runWithSystemDatabaseScope(
+          db,
+          'fixture recorded deletion discovery',
+          (scoped) => new BranchMaintenanceDiscoveryRepository(scoped).findExecutionProcessRefs({}),
+          { capability: 'branch_maintenance_discovery' }
+        );
+      expect(await discover()).toEqual(systemRefs);
+      const readGlobalRows = () =>
+        runWithSystemDatabaseScope(
+          db,
+          'fixture failed deletion policy boundary',
+          (scoped) => select(scoped).from(branches).all(),
+          { capability: 'branch_maintenance_discovery' }
+        );
+      const data = await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        const row = await select(scoped)
+          .from(branches)
+          .where(eq(branches.branch_id, seeded.branch.branch_id))
+          .one();
+        return row!.data;
+      });
+      // A failed branch alone is not a routing capability. In particular,
+      // legacy/remote invocations and other maintenance must remain hidden.
+      const excluded: Array<BranchMaintenanceClaim | undefined> = [
+        { ...data.maintenance!, execution_process: undefined },
+        { ...data.maintenance!, execution_id: undefined },
+        { ...data.maintenance!, kind: 'cleanup' },
+        undefined,
+      ];
+      for (const maintenance of excluded) {
+        await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+          update(scoped, branches)
+            .set({ data: { ...data, maintenance } })
+            .where(eq(branches.branch_id, seeded.branch.branch_id))
+            .run()
+        );
+        expect(await readGlobalRows()).toEqual([]);
+      }
+      await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+        update(scoped, branches)
+          .set({ data })
+          .where(eq(branches.branch_id, seeded.branch.branch_id))
+          .run()
+      );
+      expect(await discover()).toEqual(systemRefs);
+      // Without the named capability, the failed row is not visible at all.
+      expect(
+        await runWithSystemDatabaseScope(db, 'fixture without discovery capability', (scoped) =>
+          select(scoped).from(branches).all()
+        )
+      ).toEqual([]);
+
       await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
         const maintenance = new BranchMaintenanceRepository(scoped);
         expect(
@@ -66,7 +143,7 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
 
       await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
         expect(await new BranchRepository(scoped).findById(seeded.branch.branch_id)).toMatchObject({
-          deletion_status: 'deleting',
+          deletion_status: 'deletion_failed',
         });
         const maintenance = new BranchMaintenanceRepository(scoped);
         expect(
@@ -80,7 +157,15 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           deletion_status: 'deletion_failed',
           deletion_error: 'Exited',
         });
-        const retry = await maintenance.claim(seeded.branch.branch_id, 'delete');
+      });
+      // Check the policy itself, not just the repository's additional filters:
+      // settled failures no longer expose any branch row to global discovery.
+      expect(await readGlobalRows()).toEqual([]);
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        const retry = await new BranchMaintenanceRepository(scoped).claim(
+          seeded.branch.branch_id,
+          'delete'
+        );
         expect(retry).toMatchObject({ acquired: true });
         expect(retry.claim.generation).toBe(seeded.claim.generation + 1);
       });

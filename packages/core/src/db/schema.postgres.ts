@@ -944,6 +944,12 @@ export const branches = pgTable(
     deletionDiscoveryIdx: index('branches_deletion_discovery_idx')
       .on(table.tenant_id, table.branch_id)
       .where(sql`${table.deletion_status} = 'deleting'`),
+    deletionProcessDiscoveryIdx: index('branches_deletion_process_discovery_idx')
+      .on(table.tenant_id, table.branch_id)
+      .where(sql`${table.deletion_status} IN ('deleting', 'deletion_failed')
+        AND ${table.data} -> 'maintenance' ->> 'kind' = 'delete'
+        AND ${table.data} -> 'maintenance' ->> 'execution_id' IS NOT NULL
+        AND ${table.data} -> 'maintenance' ->> 'execution_process' IS NOT NULL`),
     repoIdx: index('branches_repo_idx').on(table.repo_id),
     nameIdx: index('branches_name_idx').on(table.name),
     refIdx: index('branches_ref_idx').on(table.ref),

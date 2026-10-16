@@ -101,8 +101,9 @@ export class BranchDeletionReconciler {
   }
 
   async checkOnce(): Promise<void> {
-    // First, so a verified-dead executor is released while still `deleting`:
-    // cross-tenant discovery cannot see rows once they are marked failed.
+    // Prefer the verified-exit diagnosis, but correctness does not depend on
+    // this ordering: recorded invocations remain discoverable after any
+    // replica marks them failed, until the executor host can verify absence.
     await this.releaseExitedOnce();
     const candidates = await this.discover(
       (repository, after) => repository.findDeletingRefs({ tenantId: this.tenantId, after }),

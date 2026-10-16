@@ -638,10 +638,10 @@ export class BranchMaintenanceDiscoveryRepository {
   }
 
   /**
-   * Deletion invocations with a recorded local executor identity. A tenant scan
-   * also covers stale-fenced `deletion_failed` rows; cross-tenant discovery is
-   * limited by its RLS policy to `deleting` rows, which is why the reconciler
-   * releases before it marks heartbeats stale.
+   * Deletion invocations with a recorded local executor identity, including
+   * stale-fenced failures. Another replica may mark a row failed before a
+   * daemon in the executor's namespace can verify absence. The discovery RLS
+   * policy keeps these recorded invocations visible until they are released.
    */
   async findExecutionProcessRefs(options: {
     tenantId?: string;
@@ -651,12 +651,10 @@ export class BranchMaintenanceDiscoveryRepository {
       throw new RepositoryError('Cross-tenant maintenance discovery requires PostgreSQL');
     }
     const after = options.after;
-    const status = options.tenantId
-      ? sql`${branches.deletion_status} IS NOT NULL`
-      : sql`${branches.deletion_status} = 'deleting'`;
-    const recorded = sql`${status}
+    const recorded = sql`${branches.deletion_status} IN ('deleting', 'deletion_failed')
       AND ${branches.data} -> 'maintenance' ->> 'kind' = 'delete'
-      AND ${branches.data} -> 'maintenance' -> 'execution_process' IS NOT NULL`;
+      AND ${branches.data} -> 'maintenance' ->> 'execution_id' IS NOT NULL
+      AND ${branches.data} -> 'maintenance' ->> 'execution_process' IS NOT NULL`;
     const rows = rawRows(
       await executeRaw(
         this.db,
