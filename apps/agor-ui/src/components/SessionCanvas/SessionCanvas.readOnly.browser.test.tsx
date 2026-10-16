@@ -101,7 +101,8 @@ describe('SessionCanvas view-only comment pins', () => {
     created_by: owner.user_id,
     content: 'Mine',
     resolved: false,
-    position: { absolute: { x: 40, y: 40 } },
+    // Keep the fitted pin clear of the editable canvas's top-left toolbar.
+    position: { absolute: { x: 240, y: 240 } },
     created_at: '2026-09-01T00:00:00.000Z',
   } as unknown as BoardComment;
   // Any write: a pin drop saves through `board-comments/:id/reposition`.create.
@@ -170,36 +171,47 @@ describe('SessionCanvas view-only comment pins', () => {
       expect(el).not.toBeNull();
       return el!;
     });
-    // Let the first-view fit settle before pointer input.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 350));
-    });
+    const pane = container.querySelector<HTMLElement>('.react-flow__pane')!;
+    const pinSurface = node.firstElementChild as HTMLElement;
+    // A sleep inside act batches React Flow's readiness updates until it ends,
+    // so the delayed fit can START after the sleep. Wait for an actual fitted
+    // viewport and settled geometry (including the pin's inverse-scale CSS
+    // transition) before calculating pointer coordinates.
+    const targetPosition = await waitFor(
+      async () => {
+        const fitted = viewport(container);
+        expect(fitted.zoom).toBeLessThan(0.7);
+        const bounds = pinSurface.getBoundingClientRect();
+        const paneBounds = pane.getBoundingClientRect();
+        const center = { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+        expect(pinSurface.contains(document.elementFromPoint(center.x, center.y))).toBe(true);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        expect(viewport(container)).toEqual(fitted);
+        expect(pinSurface.getBoundingClientRect().toJSON()).toEqual(bounds.toJSON());
+        return { x: center.x - paneBounds.left + 80, y: center.y - paneBounds.top + 80 };
+      },
+      { timeout: 3000 }
+    );
     const before = node.style.transform;
     // React Flow marks a draggable node `nopan`.
     const draggable = node.classList.contains('nopan');
-    const pane = container.querySelector<HTMLElement>('.react-flow__pane')!;
-    // Drop 80px right and down of the pin, clear of the minimap and controls.
-    const pinRect = node.getBoundingClientRect();
-    const paneRect = pane.getBoundingClientRect();
-    const targetPosition = {
-      x: pinRect.left - paneRect.left + pinRect.width / 2 + 80,
-      y: pinRect.top - paneRect.top + pinRect.height / 2 + 80,
-    };
-    await act(async () => userEvent.dragAndDrop(node, pane, { targetPosition }));
-    return { before, draggable, after: () => node.style.transform };
+    await act(async () => userEvent.dragAndDrop(pinSurface, pane, { targetPosition }));
+    return { before, draggable, positionAfter: () => node.style.transform };
   }
 
   it('drags and saves an owned pin on an editable canvas (control)', async () => {
-    const { draggable } = await dragPin(false);
+    const { before, draggable, positionAfter } = await dragPin(false);
     expect(draggable).toBe(true);
+    expect(positionAfter()).not.toBe(before);
     await waitFor(() => expect(save).toHaveBeenCalled(), { timeout: 3000 });
   });
 
   it('does not move an owned pin on a view-only canvas', async () => {
-    const { before, draggable, after } = await dragPin(true);
+    const { before, draggable, positionAfter } = await dragPin(true);
     expect(draggable).toBe(false);
-    expect(after()).toBe(before);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(positionAfter()).toBe(before);
+    // Observe beyond the 500ms production persistence debounce.
+    await new Promise((resolve) => setTimeout(resolve, 600));
     expect(save).not.toHaveBeenCalled();
   });
 });
