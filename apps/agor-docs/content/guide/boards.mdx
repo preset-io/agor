@@ -57,6 +57,18 @@ Select a zone to show its compact board toolbar:
 
 Locking a zone prevents moving and resizing it; it does not prevent renaming it or changing its settings. Viewers do not see editing controls. Editors, managers, and the board owner can edit zones.
 
+### Zone layout
+
+The **layout** button in the zone toolbar chooses how the zone places its branches and cards:
+
+- **Free** (default): cards stay wherever they are dropped.
+- **Grid**: cards line up in columns. The zone's width sets how many columns fit.
+- **List**: cards stack in one column.
+
+In Grid and List, cards keep their natural height, keep their order, and stay in their column. When an agent adds a session and a card grows, only the cards below it in the same column move. A card dropped into the zone joins at the end. To reorder, drag a card onto the slot where you want it; the other cards shift to make room. Drag a card out of the zone to take it out of the layout.
+
+A Grid or List zone grows taller to fit its cards and may overlap a zone below it. Switching back to **Free** keeps every card where it was shown. Agents can set a zone's layout with `agor_boards_update` (`layout: "free" | "grid" | "list"`).
+
 ### How zone triggers work
 
 When you drop a branch into a zone:

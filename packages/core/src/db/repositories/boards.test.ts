@@ -1493,6 +1493,29 @@ describe('BoardRepository.mergeBoardObjectFields', () => {
     }
   );
 
+  dbTest('merges a known zone layout and ignores unknown layouts', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+          'zone-2': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'B' },
+          'note-1': { type: 'markdown', x: 0, y: 0, width: 1, content: 'Note' },
+        },
+      })
+    );
+
+    const updated = await repo.mergeBoardObjectFields(board.board_id, {
+      'zone-1': { layout: 'grid' },
+      'zone-2': { layout: 'masonry' } as never,
+      'note-1': { layout: 'grid' } as never,
+    });
+
+    expect(updated.objects?.['zone-1']).toMatchObject({ label: 'A', zIndex: 100, layout: 'grid' });
+    expect(updated.objects?.['zone-2']).not.toHaveProperty('layout');
+    expect(updated.objects?.['note-1']).not.toHaveProperty('layout');
+  });
+
   dbTest('skips a patch whose zIndex is missing or non-finite', async ({ db }) => {
     const repo = new BoardRepository(db);
     const board = await repo.create(

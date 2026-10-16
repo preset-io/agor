@@ -20,6 +20,7 @@ import type {
   EffectiveCapabilityPolicyAccess,
   UserID,
   UUID,
+  ZoneLayout,
 } from '@agor/core/types';
 import { isTeammate } from '@agor/core/types';
 import {
@@ -41,6 +42,7 @@ import { generateId, isValidUUID } from '../../lib/ids';
 import { generateSlug } from '../../lib/slugs';
 import { normalizeExactEmojiShortcode } from '../../utils/emoji-shortcodes';
 import { getBoardUrl } from '../../utils/url';
+import { ZONE_LAYOUTS } from '../../utils/zone-layout';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -1225,9 +1227,10 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * Objects that no longer exist are SKIPPED, never re-created — so a swap can't
    * resurrect a neighbor deleted between the client's read and this write.
    *
-   * Only an explicit allowlist of fields can be merged (currently just `zIndex`,
-   * which is also clamped into the board-object band [1, 499] so it can never be
-   * pushed onto the card (500) / comment (1000) layers). Any other key in a
+   * Only an explicit allowlist of fields can be merged: `zIndex`, clamped into
+   * the board-object band [1, 499] so it can never be pushed onto the card
+   * (500) / comment (1000) layers, and a zone's `layout`, limited to the known
+   * layouts. Any other key in a
    * patch is ignored, so this narrow action cannot reshape an object (e.g. flip
    * its `type`) the way a full upsert could.
    *
@@ -1257,13 +1260,18 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         const existing = updatedObjects[objectId];
         if (!existing) continue; // never resurrect a concurrently-deleted object
 
-        // Allowlist: only `zIndex` is mergeable, and it is clamped server-side.
-        // Everything else in the patch is ignored so this action can't reshape
-        // an object's persisted fields.
-        const { zIndex } = fields as { zIndex?: unknown };
-        if (typeof zIndex !== 'number' || !Number.isFinite(zIndex)) continue;
-        const safeZIndex = Math.min(Z_MAX, Math.max(Z_MIN, zIndex));
-        updatedObjects[objectId] = { ...existing, zIndex: safeZIndex } as BoardObject;
+        // Allowlist: everything else in the patch is ignored so this action
+        // can't reshape an object's persisted fields.
+        const { zIndex, layout } = fields as { zIndex?: unknown; layout?: unknown };
+        const merged: Partial<BoardObject> & { layout?: ZoneLayout } = {};
+        if (typeof zIndex === 'number' && Number.isFinite(zIndex)) {
+          merged.zIndex = Math.min(Z_MAX, Math.max(Z_MIN, zIndex));
+        }
+        if (existing.type === 'zone' && ZONE_LAYOUTS.includes(layout as ZoneLayout)) {
+          merged.layout = layout as ZoneLayout;
+        }
+        if (Object.keys(merged).length === 0) continue;
+        updatedObjects[objectId] = { ...existing, ...merged } as BoardObject;
       }
 
       return this.update(fullId, { objects: updatedObjects });

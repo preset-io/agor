@@ -102,6 +102,12 @@ export interface ZoneTrigger {
 }
 
 /**
+ * How a zone places its pinned branches and cards. `free` keeps stored
+ * positions; `grid` and `list` compute display-only column positions.
+ */
+export type ZoneLayout = 'free' | 'grid' | 'list';
+
+/**
  * Zone rectangle object (for organizing sessions visually)
  */
 export interface ZoneBoardObject {
@@ -126,6 +132,8 @@ export interface ZoneBoardObject {
   fontSize?: number;
   /** Explicit stacking order. Falls back to the per-type default when unset. */
   zIndex?: number;
+  /** Placement of pinned entities. Missing means `free`. */
+  layout?: ZoneLayout;
 }
 
 /**

@@ -2,6 +2,7 @@
  * Hook for managing board objects (text labels, zones, etc.)
  */
 
+import type { ZoneLayout } from '@agor/core/types';
 import type { AgorClient, Board, BoardEntityObject, BoardObject } from '@agor-live/client';
 import { useCallback, useRef } from 'react';
 import type { Node } from 'reactflow';
@@ -46,6 +47,12 @@ interface UseBoardObjectsProps {
    * store's board (and again after the reconnect, when the reply was lost).
    */
   onWriteFailed?: (error: unknown) => void;
+  /** Switch a zone between free, grid and list (see `ZoneNodeData.onLayoutChange`). */
+  onZoneLayoutChange?: (
+    objectId: string,
+    layout: ZoneLayout,
+    ticket: BoardWriteTicket | null
+  ) => Promise<void>;
 }
 
 type ZoneEntry = [string, Extract<BoardObject, { type: 'zone' }>];
@@ -73,6 +80,7 @@ export const useBoardObjects = ({
   onZoneDraftLost,
   guard,
   onWriteFailed,
+  onZoneLayoutChange,
 }: UseBoardObjectsProps) => {
   // Use ref to avoid recreating callbacks when board changes
   const boardRef = useRef(board);
@@ -467,6 +475,8 @@ export const useBoardObjects = ({
           x: objectData.x, // Include position in data for updates
           y: objectData.y,
           trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
+          layout: objectData.type === 'zone' ? objectData.layout : undefined,
+          onLayoutChange: onZoneLayoutChange,
           pinnedItemCount,
           canEdit,
           overlappingZoneCount:
@@ -505,6 +515,7 @@ export const useBoardObjects = ({
       activeUrlTargetArtifactId,
       onEditMarkdown,
       onZoneDraftLost,
+      onZoneLayoutChange,
       canEdit,
       guard.capture,
       artifactGuard.capture,
