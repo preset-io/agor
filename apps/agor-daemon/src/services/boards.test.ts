@@ -65,6 +65,64 @@ function createBranchData(overrides?: { branch_id?: BranchID; repo_id?: UUID; na
 }
 
 describe('BoardsService - Custom Methods', () => {
+  dbTest(
+    'placeZoneEntities saves every position and the zone in one call, then announces the moves',
+    async ({ db }) => {
+      await ensureTestUser(db);
+      const emitBoardObjectPatched = vi.fn();
+      const service = new BoardsService(db, { emitBoardObjectPatched });
+      const repo = await new RepoRepository(db).create(createRepoData());
+      const branchRepo = new BranchRepository(db);
+      const boardObjectRepo = new BoardObjectRepository(db);
+      const zone = {
+        type: 'zone' as const,
+        x: 0,
+        y: 0,
+        width: 1060,
+        height: 400,
+        label: 'Review',
+        layout: 'grid' as const,
+        order: ['b', 'a'],
+      };
+      const board = (await service.create({
+        name: 'Zone Free Switch',
+        slug: `zone-free-${generateId()}`,
+        created_by: TEST_USER,
+        objects: { 'zone-review': zone },
+      })) as Board;
+      const objects = [];
+      for (const name of ['a', 'b']) {
+        const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+        objects.push(
+          await boardObjectRepo.create({
+            board_id: board.board_id,
+            branch_id: branch.branch_id,
+            position: { x: 20, y: 80 + name.length },
+            zone_id: 'zone-review',
+          })
+        );
+      }
+
+      const { board: saved, moved } = await service.placeZoneEntities(
+        board.board_id,
+        'zone-review',
+        { ...zone, layout: 'free', order: [], height: 520 },
+        {
+          [objects[0].object_id]: { x: 540, y: 80 },
+          [objects[1].object_id]: { x: 20, y: 80 },
+        },
+        TEST_PARAMS
+      );
+
+      expect(saved.objects?.['zone-review']).toMatchObject({ layout: 'free', height: 520 });
+      expect(moved.map((row) => [row.position, row.zone_id])).toEqual([
+        [{ x: 540, y: 80 }, 'zone-review'],
+        [{ x: 20, y: 80 }, 'zone-review'],
+      ]);
+      expect(emitBoardObjectPatched).toHaveBeenCalledTimes(2);
+    }
+  );
+
   dbTest('rejects a client-supplied board id that is not UUIDv7', async ({ db }) => {
     const service = new BoardsService(db);
 

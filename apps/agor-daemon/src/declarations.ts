@@ -330,6 +330,13 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
     patches: Record<string, unknown>,
     params?: FeathersParams
   ): Promise<Board>;
+  placeZoneEntities(
+    boardId: string,
+    zoneId: string,
+    zoneData: import('@agor/core/types').BoardObject,
+    positions: Record<string, { x: number; y: number }>,
+    params?: FeathersParams
+  ): Promise<{ board: Board; moved: import('@agor/core/types').BoardEntityObject[] }>;
   deleteZone(
     boardId: string,
     zoneId: string,

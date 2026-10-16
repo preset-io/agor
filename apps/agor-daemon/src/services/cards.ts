@@ -57,25 +57,6 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
     this.boardObjectRepo = new BoardObjectRepository(db);
   }
 
-  /** Where a card entering a zone is stored: appended last in arranged zones. */
-  private async zoneEntryPosition(
-    boardId: BoardID,
-    zoneId: string,
-    zone: ZoneBoardObject,
-    cardId?: CardID
-  ) {
-    const { computeZoneEntryPosition } = await import('@agor/core/utils/zone-layout');
-    const { CARD_WIDTH, CARD_HEIGHT } = await import('@agor/core/utils/board-placement');
-    return computeZoneEntryPosition(
-      zone,
-      async () =>
-        (await this.boardObjectRepo.findByBoardId(boardId))
-          .filter((row) => row.zone_id === zoneId && row.card_id !== cardId)
-          .map((row) => row.position),
-      { entityWidth: CARD_WIDTH, entityHeight: CARD_HEIGHT, desiredPadding: 60 }
-    );
-  }
-
   /**
    * Push the list read's high-selectivity predicates into SQL.
    *
@@ -169,7 +150,14 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
     const zoneId = data.zoneId;
 
     if (zoneId && data.zoneData) {
-      position = await this.zoneEntryPosition(card.board_id as BoardID, zoneId, data.zoneData);
+      const { computeZoneRelativePosition, CARD_WIDTH, CARD_HEIGHT } = await import(
+        '@agor/core/utils/board-placement'
+      );
+      position = computeZoneRelativePosition(data.zoneData, {
+        entityWidth: CARD_WIDTH,
+        entityHeight: CARD_HEIGHT,
+        desiredPadding: 60,
+      });
     }
 
     // Create board object placement — compensate on failure to avoid orphan cards
@@ -263,7 +251,15 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
 
     // If moving to a zone with zone data, calculate position
     if (zoneId && zoneData) {
-      const position = await this.zoneEntryPosition(boardObj.board_id, zoneId, zoneData, cardId);
+      const { computeZoneRelativePosition, CARD_WIDTH, CARD_HEIGHT } = await import(
+        '@agor/core/utils/board-placement'
+      );
+      const position = computeZoneRelativePosition(zoneData, {
+        entityWidth: CARD_WIDTH,
+        entityHeight: CARD_HEIGHT,
+        desiredPadding: 60,
+      });
+
       await this.boardObjectRepo.updatePosition(boardObj.object_id, position);
     }
 

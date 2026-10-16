@@ -268,6 +268,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       zIndex: data.zIndex,
       trigger: data.trigger,
       layout: data.layout,
+      order: data.order,
     }),
     [
       data.x,
@@ -284,6 +285,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       data.zIndex,
       data.trigger,
       data.layout,
+      data.order,
     ]
   );
 
