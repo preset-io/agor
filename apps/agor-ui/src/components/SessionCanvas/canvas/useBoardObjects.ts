@@ -476,6 +476,7 @@ export const useBoardObjects = ({
           y: objectData.y,
           trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
           layout: objectData.type === 'zone' ? objectData.layout : undefined,
+          order: objectData.type === 'zone' ? objectData.order : undefined,
           onLayoutChange: onZoneLayoutChange,
           pinnedItemCount,
           canEdit,

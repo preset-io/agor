@@ -134,6 +134,8 @@ export interface ZoneBoardObject {
   zIndex?: number;
   /** Placement of pinned entities. Missing means `free`. */
   layout?: ZoneLayout;
+  /** Pinned branch and card node ids in the order an arranged layout shows them. */
+  order?: string[];
 }
 
 /**

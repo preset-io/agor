@@ -2,17 +2,13 @@
  * Zone layouts: how a zone places the branches and cards pinned to it.
  *
  * `free` zones keep each entity's stored position. `row`, `column` and `grid`
- * zones arrange entities in slots computed on every screen from measured heights;
- * those positions are display-only and are never written back. While a zone
- * is auto-laid-out, an entity's stored zone-relative position only serves as
- * its order key, so the planner here is pure and shared by the UI and daemon.
+ * zones arrange entities in slots computed on every screen from measured
+ * heights; those positions are display-only and are never written back. The
+ * zone keeps its card order as one list of ids, so reordering or switching
+ * layouts is a single write of the zone.
  */
 import type { BoardPosition, ZoneBoardObject, ZoneLayout } from '../types/board.js';
-import {
-  BRANCH_CARD_HEIGHT,
-  BRANCH_CARD_WIDTH,
-  computeZoneRelativePosition,
-} from './board-placement.js';
+import { BRANCH_CARD_WIDTH } from './board-placement.js';
 
 export const ZONE_LAYOUTS: readonly ZoneLayout[] = ['free', 'row', 'column', 'grid'];
 
@@ -99,7 +95,7 @@ function zoneWidthFor(count: number, width = ZONE_GRID_COLUMN_WIDTH): number {
 
 export interface ZoneGridOrderItem {
   id: string;
-  /** Stored zone-relative position, used only as the order key. */
+  /** Stored zone-relative position: orders cards the zone hasn't listed yet. */
   position: BoardPosition;
 }
 
@@ -164,27 +160,6 @@ export function planZoneGrid(
   };
 }
 
-/** Spacing of stored order keys: readable as a single column if a zone turns free unsaved. */
-const ORDER_KEY_STEP = BRANCH_CARD_HEIGHT + ZONE_GRID_GAP;
-
-/**
- * Stored position for an entity entering an auto-laid-out zone: below every
- * sibling's order key, so it appears last.
- */
-export function zoneGridEntryPosition(siblingPositions: readonly BoardPosition[]): BoardPosition {
-  const lowest = siblingPositions.reduce<number | null>(
-    (max, position) => (max === null || position.y > max ? position.y : max),
-    null
-  );
-  return {
-    x: ZONE_GRID_PADDING,
-    y:
-      lowest === null
-        ? ZONE_GRID_HEADER
-        : snapUp(Math.max(lowest, ZONE_GRID_HEADER) + ORDER_KEY_STEP),
-  };
-}
-
 const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /**
@@ -218,29 +193,6 @@ export function readZoneGridOrder<T extends ZoneGridOrderItem>(
     .map(({ item }) => item);
 }
 
-/** Stored order keys for entities in this order: one column, top to bottom. */
-export function zoneGridOrderKeys(orderedIds: readonly string[]): Map<string, BoardPosition> {
-  return new Map(
-    orderedIds.map((id, index) => [
-      id,
-      { x: ZONE_GRID_PADDING, y: ZONE_GRID_HEADER + index * ORDER_KEY_STEP },
-    ])
-  );
-}
-
-/**
- * Stored position for an entity entering a zone: appended last in an
- * arranged zone, a random spot otherwise. Siblings load only for those.
- */
-export async function computeZoneEntryPosition(
-  zone: Pick<ZoneBoardObject, 'width' | 'height' | 'layout'>,
-  loadSiblingPositions: () => Promise<BoardPosition[]>,
-  options?: Parameters<typeof computeZoneRelativePosition>[1]
-): Promise<BoardPosition> {
-  if (!isAutoZoneLayout(zoneLayoutOf(zone))) return computeZoneRelativePosition(zone, options);
-  return zoneGridEntryPosition(await loadSiblingPositions());
-}
-
 /**
  * Where a card dropped inside an auto zone goes: the index among the other
  * cards whose planned slot for it lies nearest the drop point.
@@ -267,22 +219,35 @@ export function zoneGridDropIndex(
   return best;
 }
 
+/** Most ids a zone's order keeps; longer lists are cut, not rejected. */
+export const ZONE_ORDER_MAX = 2000;
+
+/** A zone's stored order as a clean id list, or undefined when it isn't one. */
+export function sanitizeZoneOrder(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const ids = value.filter(
+    (id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 128
+  );
+  return [...new Set(ids)].slice(0, ZONE_ORDER_MAX);
+}
+
 /**
- * An order key between two neighbours' keys, or undefined when they leave no
- * room or aren't one-column keys (the caller then rewrites every key).
+ * The order an arranged zone shows: ids in the zone's stored order first, then
+ * anything not listed yet (a card an agent or a person just added) in reading
+ * order of its stored position. Ids of cards no longer in the zone are ignored.
  */
-export function zoneGridOrderKeyBetween(
-  before: BoardPosition | undefined,
-  after: BoardPosition | undefined
-): BoardPosition | undefined {
-  if ((before && before.x !== ZONE_GRID_PADDING) || (after && after.x !== ZONE_GRID_PADDING)) {
-    return undefined;
+export function orderZoneEntities<T extends ZoneGridOrderItem>(
+  zoneOrder: readonly string[] | undefined,
+  zoneWidth: number,
+  items: readonly T[]
+): T[] {
+  const byItemId = new Map(items.map((item) => [item.id, item]));
+  const listed: T[] = [];
+  for (const id of zoneOrder ?? []) {
+    const item = byItemId.get(id);
+    if (!item) continue;
+    listed.push(item);
+    byItemId.delete(id);
   }
-  if (!before && !after) return { x: ZONE_GRID_PADDING, y: ZONE_GRID_HEADER };
-  if (!before && after) return { x: ZONE_GRID_PADDING, y: after.y - ORDER_KEY_STEP };
-  if (before && !after) return { x: ZONE_GRID_PADDING, y: before.y + ORDER_KEY_STEP };
-  if (before && after && after.y - before.y >= 2) {
-    return { x: ZONE_GRID_PADDING, y: Math.floor((before.y + after.y) / 2) };
-  }
-  return undefined;
+  return [...listed, ...readZoneGridOrder(zoneWidth, [...byItemId.values()])];
 }

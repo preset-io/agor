@@ -1,8 +1,9 @@
 import {
   type AutoZoneLayout,
   isAutoZoneLayout,
+  orderZoneEntities,
   planZoneGrid,
-  readZoneGridOrder,
+  sanitizeZoneOrder,
   zoneLayoutOf,
 } from '@agor/core/utils/zone-layout';
 import type { BoardPosition } from '@agor-live/client';
@@ -16,9 +17,9 @@ export interface MeasuredNodeSize {
 export interface ZoneGridLayoutInputs {
   /** Rendered sizes reported by React Flow's own measurement. */
   measuredSizes: ReadonlyMap<string, MeasuredNodeSize>;
-  /** Stored zone-relative position of a pinned node: its order key in an auto zone. */
+  /** Stored zone-relative position: orders pinned nodes the zone hasn't listed yet. */
   storedPositionOf: (nodeId: string) => BoardPosition | undefined;
-  /** An order held while a layout switch saves its positions one by one. */
+  /** An order shown while its save is on the way. */
   heldOrderOf?: (zoneId: string) => readonly string[] | undefined;
 }
 
@@ -28,7 +29,8 @@ export function zoneGridOrder(
   children: readonly Node[],
   inputs: Pick<ZoneGridLayoutInputs, 'storedPositionOf' | 'heldOrderOf'>
 ): Node[] {
-  const read = readZoneGridOrder(
+  const read = orderZoneEntities(
+    sanitizeZoneOrder(zone.data?.order),
     zoneWidthOf(zone),
     children.map((child) => ({
       id: child.id,

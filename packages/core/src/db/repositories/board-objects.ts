@@ -474,6 +474,39 @@ export class BoardObjectRepository {
   }
 
   /**
+   * Move many entities on one board, keeping each one's zone. Rows on another
+   * board, or missing, are skipped. Callers wrap it in their transaction.
+   */
+  async updatePositions(
+    boardId: BoardID,
+    positions: Readonly<Record<string, { x: number; y: number }>>
+  ): Promise<BoardEntityObject[]> {
+    try {
+      const moved: string[] = [];
+      for (const [objectId, position] of Object.entries(positions)) {
+        const existing = await select(this.db)
+          .from(boardObjects)
+          .where(and(eq(boardObjects.object_id, objectId), eq(boardObjects.board_id, boardId)))
+          .one();
+        if (!existing) continue;
+        const data = typeof existing.data === 'string' ? JSON.parse(existing.data) : existing.data;
+        await update(this.db, boardObjects)
+          .set({ data: { position, zone_id: data.zone_id } })
+          .where(eq(boardObjects.object_id, objectId))
+          .run();
+        moved.push(objectId);
+      }
+      const rows = await Promise.all(moved.map((objectId) => this.findByObjectId(objectId)));
+      return rows.filter((row): row is BoardEntityObject => row !== null);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to update board object positions: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
    * Update zone pinning for board object
    */
   async updateZone(

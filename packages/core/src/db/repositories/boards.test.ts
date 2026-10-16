@@ -1493,7 +1493,7 @@ describe('BoardRepository.mergeBoardObjectFields', () => {
     }
   );
 
-  dbTest('merges a known zone layout and ignores unknown layouts', async ({ db }) => {
+  dbTest('merges a known zone layout and card order, ignoring unknown layouts', async ({ db }) => {
     const repo = new BoardRepository(db);
     const board = await repo.create(
       createBoardData({
@@ -1506,12 +1506,17 @@ describe('BoardRepository.mergeBoardObjectFields', () => {
     );
 
     const updated = await repo.mergeBoardObjectFields(board.board_id, {
-      'zone-1': { layout: 'grid' },
+      'zone-1': { layout: 'grid', order: ['b', 'a', 'b', 3] as never },
       'zone-2': { layout: 'masonry' } as never,
       'note-1': { layout: 'grid' } as never,
     });
 
-    expect(updated.objects?.['zone-1']).toMatchObject({ label: 'A', zIndex: 100, layout: 'grid' });
+    expect(updated.objects?.['zone-1']).toMatchObject({
+      label: 'A',
+      zIndex: 100,
+      layout: 'grid',
+      order: ['b', 'a'],
+    });
     expect(updated.objects?.['zone-2']).not.toHaveProperty('layout');
     expect(updated.objects?.['note-1']).not.toHaveProperty('layout');
   });

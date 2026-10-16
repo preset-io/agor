@@ -824,6 +824,62 @@ describe('BoardObjectRepository.updatePosition', () => {
 // UpdateZone
 // ============================================================================
 
+describe('BoardObjectRepository.updatePositions', () => {
+  dbTest('moves several entities in one call, keeping their zones', async ({ db }) => {
+    const repo = await new RepoRepository(db).create(createRepoData());
+    const wtRepo = new BranchRepository(db);
+    const boRepo = new BoardObjectRepository(db);
+    const boardId = await createBoard(db);
+    const a = await wtRepo.create(createBranchData({ repo_id: repo.repo_id, name: 'branch-a' }));
+    const b = await wtRepo.create(createBranchData({ repo_id: repo.repo_id, name: 'branch-b' }));
+    const first = await boRepo.create({
+      board_id: boardId,
+      branch_id: a.branch_id,
+      position: { x: 0, y: 0 },
+      zone_id: 'zone-1',
+    });
+    const second = await boRepo.create({
+      board_id: boardId,
+      branch_id: b.branch_id,
+      position: { x: 0, y: 0 },
+      zone_id: 'zone-1',
+    });
+
+    const moved = await boRepo.updatePositions(boardId, {
+      [first.object_id]: { x: 20, y: 80 },
+      [second.object_id]: { x: 540, y: 80 },
+    });
+
+    expect(moved.map((row) => [row.position, row.zone_id])).toEqual([
+      [{ x: 20, y: 80 }, 'zone-1'],
+      [{ x: 540, y: 80 }, 'zone-1'],
+    ]);
+  });
+
+  dbTest('skips entities on another board and missing ids', async ({ db }) => {
+    const repo = await new RepoRepository(db).create(createRepoData());
+    const boRepo = new BoardObjectRepository(db);
+    const branch = await new BranchRepository(db).create(
+      createBranchData({ repo_id: repo.repo_id })
+    );
+    const boardId = await createBoard(db);
+    const otherBoardId = await createBoard(db);
+    const elsewhere = await boRepo.create({
+      board_id: otherBoardId,
+      branch_id: branch.branch_id,
+      position: { x: 1, y: 2 },
+    });
+
+    const moved = await boRepo.updatePositions(boardId, {
+      [elsewhere.object_id]: { x: 300, y: 300 },
+      missing: { x: 0, y: 0 },
+    });
+
+    expect(moved).toEqual([]);
+    expect((await boRepo.findByObjectId(elsewhere.object_id))?.position).toEqual({ x: 1, y: 2 });
+  });
+});
+
 describe('BoardObjectRepository.updateZone', () => {
   dbTest('should set zone_id', async ({ db }) => {
     const repoRepo = new RepoRepository(db);

@@ -100,6 +100,19 @@ describe('applyZoneGridLayouts', () => {
     expect(narrow.get('zone-1')?.style?.width).toBe(700);
   });
 
+  it("follows the zone's saved order, with cards it hasn't listed last", () => {
+    const listed = zone('zone-1', 'column', 600);
+    listed.data.order = ['c', 'a'];
+    const result = byId(
+      layout([listed, branch('a', 'zone-1'), branch('b', 'zone-1'), branch('c', 'zone-1')], {
+        a: { width: 560, height: 100 },
+        b: { width: 560, height: 100 },
+        c: { width: 560, height: 100 },
+      })
+    );
+    expect(['c', 'a', 'b'].map((id) => result.get(id)?.position.y)).toEqual([80, 200, 320]);
+  });
+
   it('returns the same array once laid out, so setNodes cannot loop', () => {
     const sizes = { a: { width: 500, height: 150 } };
     const once = layout([zone('zone-1', 'grid'), branch('a', 'zone-1')], sizes);

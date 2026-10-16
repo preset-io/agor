@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  orderZoneEntities,
   planZoneGrid,
   readZoneGridOrder,
+  sanitizeZoneOrder,
   ZONE_GRID_HEADER,
   ZONE_GRID_PADDING,
   zoneGridColumns,
   zoneGridDropIndex,
-  zoneGridEntryPosition,
-  zoneGridOrderKeyBetween,
-  zoneGridOrderKeys,
   zoneGridWidthOnSwitch,
   zoneLayoutOf,
 } from './zone-layout';
@@ -123,12 +122,6 @@ describe('readZoneGridOrder', () => {
     expect(ids(readZoneGridOrder(1060, saved))).toEqual(order);
   });
 
-  it('reads order keys in one column top to bottom', () => {
-    const keys = zoneGridOrderKeys(['x', 'y', 'z']);
-    const items = ['z', 'x', 'y'].map((id) => ({ id, position: keys.get(id) ?? { x: 0, y: 0 } }));
-    expect(ids(readZoneGridOrder(1580, items))).toEqual(['x', 'y', 'z']);
-  });
-
   it('reads free positions row by row across their nearest columns', () => {
     const ordered = readZoneGridOrder(1060, [
       { id: 'right-top', position: { x: 600, y: 40 } },
@@ -158,23 +151,6 @@ describe('readZoneGridOrder', () => {
   });
 });
 
-describe('zoneGridEntryPosition', () => {
-  it('starts below the header in an empty zone', () => {
-    expect(zoneGridEntryPosition([])).toEqual({ x: ZONE_GRID_PADDING, y: ZONE_GRID_HEADER });
-  });
-
-  it('orders after every order key', () => {
-    const keys = [...zoneGridOrderKeys(['s0', 's1', 's2']).entries()].map(([id, position]) => ({
-      id,
-      position,
-    }));
-    const entry = zoneGridEntryPosition(keys.map((key) => key.position));
-    const ordered = readZoneGridOrder(1060, [...keys, { id: 'new', position: entry }]);
-    expect(ordered.at(-1)?.id).toBe('new');
-    expect(entry.y % 20).toBe(0);
-  });
-});
-
 describe('zoneGridDropIndex', () => {
   const others = items([150, 150, 150, 150]);
   const dragged = { id: 'moved', height: 150 };
@@ -192,21 +168,6 @@ describe('zoneGridDropIndex', () => {
   });
 });
 
-describe('zoneGridOrderKeyBetween', () => {
-  const key = (y: number) => ({ x: ZONE_GRID_PADDING, y });
-
-  it('lands between, before or after one-column keys', () => {
-    expect(zoneGridOrderKeyBetween(key(80), key(300))).toEqual(key(190));
-    expect(zoneGridOrderKeyBetween(undefined, key(80))?.y).toBeLessThan(80);
-    expect(zoneGridOrderKeyBetween(key(300), undefined)?.y).toBeGreaterThan(300);
-  });
-
-  it('asks for a full rewrite when there is no room or the keys are free positions', () => {
-    expect(zoneGridOrderKeyBetween(key(80), key(81))).toBeUndefined();
-    expect(zoneGridOrderKeyBetween({ x: 540, y: 80 }, key(300))).toBeUndefined();
-  });
-});
-
 describe('zoneGridWidthOnSwitch', () => {
   it('gives a grid square-ish columns when its width would make a single row', () => {
     // Six cards in a 3140px zone (a row's width) would all fit side by side.
@@ -217,5 +178,36 @@ describe('zoneGridWidthOnSwitch', () => {
   it('keeps a width that already wraps the cards, or a small zone', () => {
     expect(zoneGridWidthOnSwitch(1060, 6)).toBeUndefined();
     expect(zoneGridWidthOnSwitch(3140, 2)).toBeUndefined();
+  });
+});
+
+describe('orderZoneEntities', () => {
+  const at = (id: string, x: number, y: number) => ({ id, position: { x, y } });
+  const ids = (list: Array<{ id: string }>) => list.map((item) => item.id);
+
+  it('shows listed cards in the zone order, then unlisted ones in reading order', () => {
+    const items = [
+      at('new-low', 20, 900),
+      at('b', 20, 80),
+      at('a', 540, 80),
+      at('new-high', 20, 600),
+    ];
+    expect(ids(orderZoneEntities(['a', 'b'], 1060, items))).toEqual([
+      'a',
+      'b',
+      'new-high',
+      'new-low',
+    ]);
+  });
+
+  it('ignores listed ids that are no longer in the zone', () => {
+    expect(ids(orderZoneEntities(['gone', 'a'], 1060, [at('a', 0, 0)]))).toEqual(['a']);
+  });
+});
+
+describe('sanitizeZoneOrder', () => {
+  it('keeps unique, reasonable string ids and rejects non-lists', () => {
+    expect(sanitizeZoneOrder(['a', 'b', 'a', 7, '', 'x'.repeat(200)])).toEqual(['a', 'b']);
+    expect(sanitizeZoneOrder('a,b')).toBeUndefined();
   });
 });

@@ -925,16 +925,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         if (!position && resolvedZoneId && board) {
           const zone = board.objects?.[resolvedZoneId];
           if (zone?.type === 'zone') {
-            const { computeZoneEntryPosition } = await import('@agor/core/utils/zone-layout');
-            position = await computeZoneEntryPosition(
-              zone as import('@agor/core/types').ZoneBoardObject,
-              async () => {
-                const result = (await boardObjectsService.find({
-                  query: { board_id: data.boardId, zone_id: resolvedZoneId },
-                  ...params,
-                })) as { data: import('@agor/core/types').BoardEntityObject[] };
-                return result.data.map((row) => row.position);
-              }
+            const { computeZoneRelativePosition } = await import(
+              '@agor/core/utils/board-placement'
+            );
+            position = computeZoneRelativePosition(
+              zone as import('@agor/core/types').ZoneBoardObject
             );
           }
         }

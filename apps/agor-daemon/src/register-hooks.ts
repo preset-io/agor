@@ -3882,6 +3882,59 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             return context;
           }
 
+          if (_action === 'placeZoneEntities') {
+            // One request for a zone's switch to free: every card's shown position plus the zone.
+            const { positions } = contextData as UnknownJson;
+            if (!context.id || typeof objectId !== 'string' || !objectData) {
+              throw new BadRequest('placeZoneEntities requires objectId and objectData');
+            }
+            if (!positions || typeof positions !== 'object' || Array.isArray(positions)) {
+              throw new BadRequest('placeZoneEntities requires positions');
+            }
+            const entries = Object.entries(positions as Record<string, unknown>);
+            if (entries.length > 2000) throw new BadRequest('Too many positions');
+            const valid = entries.every(([, position]) => {
+              const { x, y } = (position ?? {}) as { x?: unknown; y?: unknown };
+              return Number.isFinite(x) && Number.isFinite(y);
+            });
+            if (!valid) throw new BadRequest('Each position needs finite x and y');
+            // Board edit is checked above; each moved entity must also be one this caller can see on this board.
+            const user = context.params.user;
+            if (
+              context.params.provider &&
+              user &&
+              !user._isServiceAccount &&
+              !hasMinimumRole(user.role, ROLES.ADMIN)
+            ) {
+              for (const [entityId] of entries) {
+                const visible = await boardObjectsRepository.findVisibleByObjectId(
+                  user.user_id as UUID,
+                  entityId
+                );
+                if (!visible || visible.board_id !== context.id) {
+                  throw new Forbidden('Board resource is unavailable to move board objects');
+                }
+              }
+            }
+            const { board } = await boardsService!.placeZoneEntities(
+              context.id as string,
+              objectId,
+              objectData as import('@agor/core/types').BoardObject,
+              positions as Record<string, { x: number; y: number }>,
+              context.params
+            );
+            context.result = board;
+            emitServiceEvent(app, {
+              path: 'boards',
+              event: 'patched',
+              data: board,
+              params: context.params,
+              id: context.id,
+            });
+            context.dispatch = board;
+            return context;
+          }
+
           if (_action === 'mergeObjectFields' && objects) {
             if (!context.id) throw new Error('Board ID required');
             const result = await boardsService!.mergeBoardObjectFields(
