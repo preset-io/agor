@@ -3,7 +3,12 @@
  */
 
 import type { ZoneLayout } from '@agor/core/types';
-import { isAutoZoneLayout, zoneLayoutOf } from '@agor/core/utils/zone-layout';
+import {
+  isAutoZoneLayout,
+  ZONE_GRID_MIN_COLUMN_WIDTH,
+  ZONE_GRID_PADDING,
+  zoneLayoutOf,
+} from '@agor/core/utils/zone-layout';
 import type { BoardComment, BoardObject, User } from '@agor-live/client';
 import {
   AppstoreOutlined,
@@ -142,6 +147,9 @@ const saveRecentColor = (color: string) => {
     console.warn('Failed to save recent color:', error);
   }
 };
+
+/** Narrowest an arranged zone resizes to: one minimum-width column plus padding. */
+const ARRANGED_ZONE_MIN_WIDTH = ZONE_GRID_MIN_COLUMN_WIDTH + 2 * ZONE_GRID_PADDING;
 
 const ZONE_LAYOUT_OPTIONS: Array<{
   layout: ZoneLayout;
@@ -397,12 +405,21 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       void data.onLayoutChange?.(data.objectId, key as ZoneLayout, captureTicket());
     },
   };
+  // A zone narrow on screen shows the badge as icon and count, so the title keeps its room.
+  const compactBadge = data.width * zoom < 360;
   const layoutBadgeText = (
     <>
-      <span>{layoutOption.label}</span>
-      {data.pinnedItemCount !== undefined && <span> · {data.pinnedItemCount}</span>}
+      {!compactBadge && <span>{layoutOption.label}</span>}
+      {data.pinnedItemCount !== undefined && (
+        <span>
+          {compactBadge ? '' : ' · '}
+          {data.pinnedItemCount}
+        </span>
+      )}
     </>
   );
+  // Badge width (in the label's unscaled pixels) the title leaves free.
+  const badgeRoom = isAutoZoneLayout(layout) ? (compactBadge ? 70 : 150) : 0;
   const resizable = selected && !data.locked && !mutationDisabled;
   // Status keeps its smaller relative size, scaled from the label size when set.
   const statusFontSize = statusFontSizeFor(data.fontSize, token.fontSize, token.fontSizeSM);
@@ -430,19 +447,18 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   return (
     <>
       {isAutoZoneLayout(layout) ? (
-        // Arranged zones fit their cards; only a grid's width resizes, since it sets the column count.
-        resizable &&
-        layout === 'grid' && (
+        // Arranged zones fit their height to their cards; only the width resizes, and the columns follow it.
+        resizable && (
           <>
             <NodeResizeControl
               variant={ResizeControlVariant.Line}
               position="right"
-              minWidth={200}
+              minWidth={ARRANGED_ZONE_MIN_WIDTH}
               style={{ borderColor }}
             />
             <NodeResizeControl
               position="right"
-              minWidth={200}
+              minWidth={ARRANGED_ZONE_MIN_WIDTH}
               style={{
                 width: 10,
                 height: 10,
@@ -823,7 +839,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                 transform: `scale(${scale})`,
                 transformOrigin: 'top left',
                 // Constrain to zone width accounting for padding and scale
-                maxWidth: `${(data.width - token.padding * 2) / scale}px`,
+                maxWidth: `${(data.width - token.padding * 2) / scale - badgeRoom}px`,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',

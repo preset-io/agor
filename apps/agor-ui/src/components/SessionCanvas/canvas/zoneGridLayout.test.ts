@@ -74,26 +74,30 @@ describe('applyZoneGridLayouts', () => {
     expect(byId(roomy).get('zone-1')?.style?.height).toBe(200);
   });
 
-  it('fits a row zone to its cards side by side', () => {
+  it('fits a row zone to its cards side by side, stretched up to the maximum width', () => {
     const result = byId(
       layout([zone('zone-1', 'row', 2000), branch('a', 'zone-1'), branch('b', 'zone-1')], {
-        a: { width: 500, height: 150 },
-        b: { width: 500, height: 300 },
+        a: { width: 560, height: 150 },
+        b: { width: 560, height: 300 },
       })
     );
-    expect(result.get('zone-1')?.style).toMatchObject({ width: 1060, height: 400 });
-    expect(result.get('b')?.position).toEqual({ x: 540, y: 80 });
+    expect(result.get('zone-1')?.style).toMatchObject({ width: 1180, height: 400 });
+    expect(result.get('b')?.position).toEqual({ x: 600, y: 80 });
   });
 
-  it('widens a narrow grid zone on screen to fit two columns', () => {
-    const result = byId(
-      layout([zone('zone-1', 'grid', 960), branch('a', 'zone-1'), branch('b', 'zone-1')], {
-        a: { width: 500, height: 150 },
-        b: { width: 500, height: 150 },
-      })
+  it('narrows cards to fit two grid columns, and widens the zone only below the minimum', () => {
+    const sizes = { a: { width: 450, height: 150 }, b: { width: 450, height: 150 } };
+    const fitted = byId(
+      layout([zone('zone-1', 'grid', 960), branch('a', 'zone-1'), branch('b', 'zone-1')], sizes)
     );
-    expect(result.get('zone-1')?.style?.width).toBe(1060);
-    expect(result.get('b')?.position.x).toBe(540);
+    expect(fitted.get('zone-1')?.style?.width).toBe(960);
+    expect(fitted.get('b')?.position.x).toBe(490);
+    expect(fitted.get('b')?.data.slotWidth).toBe(450);
+
+    const narrow = byId(
+      layout([zone('zone-1', 'grid', 500), branch('a', 'zone-1'), branch('b', 'zone-1')], sizes)
+    );
+    expect(narrow.get('zone-1')?.style?.width).toBe(700);
   });
 
   it('returns the same array once laid out, so setNodes cannot loop', () => {
