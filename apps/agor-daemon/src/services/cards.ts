@@ -57,7 +57,7 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
     this.boardObjectRepo = new BoardObjectRepository(db);
   }
 
-  /** Where a card entering a zone is stored: appended last in grid and list zones. */
+  /** Where a card entering a zone is stored: appended last in arranged zones. */
   private async zoneEntryPosition(
     boardId: BoardID,
     zoneId: string,

@@ -9,6 +9,7 @@ import {
   zoneGridEntryPosition,
   zoneGridOrderKeyBetween,
   zoneGridOrderKeys,
+  zoneGridWidthOnSwitch,
   zoneLayoutOf,
 } from './zone-layout';
 
@@ -20,7 +21,8 @@ describe('zoneLayoutOf', () => {
     expect(zoneLayoutOf({})).toBe('free');
     expect(zoneLayoutOf({ layout: 'masonry' as never })).toBe('free');
     expect(zoneLayoutOf({ layout: 'grid' })).toBe('grid');
-    expect(zoneLayoutOf({ layout: 'list' })).toBe('list');
+    expect(zoneLayoutOf({ layout: 'row' })).toBe('row');
+    expect(zoneLayoutOf({ layout: 'column' })).toBe('column');
   });
 });
 
@@ -34,11 +36,12 @@ describe('zoneGridColumnCount', () => {
   it('keeps at least two grid columns, so a narrow grid still differs from a list', () => {
     expect(zoneGridColumnCount('grid', 400)).toBe(2);
     expect(planZoneGrid('grid', 400, items([100])).contentWidth).toBe(1060);
-    expect(planZoneGrid('list', 400, items([100])).contentWidth).toBe(540);
+    expect(planZoneGrid('column', 400, items([100])).contentWidth).toBe(540);
   });
 
-  it('always uses one column for a list', () => {
-    expect(zoneGridColumnCount('list', 1580)).toBe(1);
+  it('always uses one column for a column, and one per card for a row', () => {
+    expect(zoneGridColumnCount('column', 1580)).toBe(1);
+    expect(zoneGridColumnCount('row', 400, 3)).toBe(3);
   });
 });
 
@@ -71,9 +74,16 @@ describe('planZoneGrid', () => {
     expect(planZoneGrid('grid', 1600, input)).toEqual(planZoneGrid('grid', 1600, input));
   });
 
-  it('stacks a list in one column', () => {
-    const plan = planZoneGrid('list', 1600, items([100, 100]));
+  it('stacks a column', () => {
+    const plan = planZoneGrid('column', 1600, items([100, 100]));
     expect(plan.positions.get('b1')).toEqual({ x: ZONE_GRID_PADDING, y: 200 });
+  });
+
+  it('lines a row up side by side, as wide as its cards', () => {
+    const plan = planZoneGrid('row', 600, items([150, 300]));
+    expect(plan.positions.get('b1')).toEqual({ x: ZONE_GRID_PADDING + 520, y: ZONE_GRID_HEADER });
+    expect(plan.contentWidth).toBe(1060);
+    expect(plan.contentHeight).toBe(400);
   });
 
   it('keeps the header and padding for an empty zone', () => {
@@ -81,7 +91,7 @@ describe('planZoneGrid', () => {
   });
 
   it('treats unusable heights as zero', () => {
-    const plan = planZoneGrid('list', 600, items([Number.NaN, -5, 100]));
+    const plan = planZoneGrid('column', 600, items([Number.NaN, -5, 100]));
     expect(plan.positions.get('b1')?.y).toBe(100);
     expect(plan.positions.get('b2')?.y).toBe(120);
   });
@@ -166,8 +176,9 @@ describe('zoneGridDropIndex', () => {
     expect(zoneGridDropIndex('grid', 1060, others, dragged, { x: 0, y: 2000 })).toBe(4);
   });
 
-  it('reads a list top to bottom', () => {
-    expect(zoneGridDropIndex('list', 600, others, dragged, { x: 20, y: 270 })).toBe(1);
+  it('reads a column top to bottom, and a row left to right', () => {
+    expect(zoneGridDropIndex('column', 600, others, dragged, { x: 20, y: 270 })).toBe(1);
+    expect(zoneGridDropIndex('row', 600, others, dragged, { x: 1050, y: 80 })).toBe(2);
   });
 });
 
@@ -183,5 +194,18 @@ describe('zoneGridOrderKeyBetween', () => {
   it('asks for a full rewrite when there is no room or the keys are free positions', () => {
     expect(zoneGridOrderKeyBetween(key(80), key(81))).toBeUndefined();
     expect(zoneGridOrderKeyBetween({ x: 540, y: 80 }, key(300))).toBeUndefined();
+  });
+});
+
+describe('zoneGridWidthOnSwitch', () => {
+  it('gives a grid square-ish columns when its width would make a single row', () => {
+    // Six cards in a 3140px zone (a row's width) would all fit side by side.
+    expect(zoneGridWidthOnSwitch(3140, 6)).toBe(1580);
+    expect(zoneGridWidthOnSwitch(5000, 9)).toBe(1580);
+  });
+
+  it('keeps a width that already wraps the cards, or a small zone', () => {
+    expect(zoneGridWidthOnSwitch(1060, 6)).toBeUndefined();
+    expect(zoneGridWidthOnSwitch(3140, 2)).toBeUndefined();
   });
 });

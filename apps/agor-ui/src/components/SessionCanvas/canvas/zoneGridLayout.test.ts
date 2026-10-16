@@ -63,15 +63,26 @@ describe('applyZoneGridLayouts', () => {
   });
 
   it('fits the zone height to its cards, growing and shrinking', () => {
-    const tall = layout([zone('zone-1', 'list', 600, 200), branch('a', 'zone-1')], {
+    const tall = layout([zone('zone-1', 'column', 600, 200), branch('a', 'zone-1')], {
       a: { width: 500, height: 400 },
     });
     expect(byId(tall).get('zone-1')?.style?.height).toBe(500);
 
-    const roomy = layout([zone('zone-1', 'list', 600, 900), branch('a', 'zone-1')], {
+    const roomy = layout([zone('zone-1', 'column', 600, 900), branch('a', 'zone-1')], {
       a: { width: 500, height: 100 },
     });
     expect(byId(roomy).get('zone-1')?.style?.height).toBe(200);
+  });
+
+  it('fits a row zone to its cards side by side', () => {
+    const result = byId(
+      layout([zone('zone-1', 'row', 2000), branch('a', 'zone-1'), branch('b', 'zone-1')], {
+        a: { width: 500, height: 150 },
+        b: { width: 500, height: 300 },
+      })
+    );
+    expect(result.get('zone-1')?.style).toMatchObject({ width: 1060, height: 400 });
+    expect(result.get('b')?.position).toEqual({ x: 540, y: 80 });
   });
 
   it('widens a narrow grid zone on screen to fit two columns', () => {

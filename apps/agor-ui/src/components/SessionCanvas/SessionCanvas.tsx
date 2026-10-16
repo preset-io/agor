@@ -77,6 +77,7 @@ import {
   zoneGridEntryPosition,
   zoneGridOrderKeyBetween,
   zoneGridOrderKeys,
+  zoneGridWidthOnSwitch,
   zoneLayoutOf,
 } from '@agor/core/utils/zone-layout';
 import { boardCommentZoneParentObjectKey, hasMinimumRole, ROLES, shortId } from '@agor-live/client';
@@ -649,7 +650,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return map;
     }, [boardObjectsForBoard]);
 
-    // Grid and list zones place pinned nodes from React Flow's measured sizes; those positions are never saved.
+    // Arranged zones place pinned nodes from React Flow's measured sizes; those positions are never saved.
     const measuredNodeSizesRef = useRef(new Map<string, MeasuredNodeSize>());
     const [zoneGridMeasureVersion, setZoneGridMeasureVersion] = useState(0);
     const placementOfNode = useCallback(
@@ -900,7 +901,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     >({});
     const isDraggingRef = useRef(false);
 
-    // Grid and list zones render at their fitted size, so drops hit-test against what is shown.
+    // Arranged zones render at their fitted size, so drops hit-test against what is shown.
     const boardObjectsAsShown = useStableCallback((objects: Board['objects']) => {
       if (!objects) return objects;
       let shown = objects;
@@ -916,7 +917,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return shown;
     });
 
-    // A node unpinned from a grid or list zone lands just right of it, level with where it was shown.
+    // A node unpinned from an arranged zone lands just right of it, level with where it was shown.
     const besideAutoZone = (nodeId: string) => {
       const node = shownNodesRef.current.find((candidate) => candidate.id === nodeId);
       const zone = node?.parentId
@@ -930,7 +931,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       };
     };
 
-    // Stored position of a branch or card dropped into a grid or list zone. It is only an order key there, so a newcomer joins last.
+    // Stored position of a branch or card dropped into an arranged zone. It is only an order key there, so a newcomer joins last.
     const autoZoneEntryPosition = useStableCallback(
       (
         nodeId: string,
@@ -1177,7 +1178,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         const order = zoneGridOrder(zoneNode, pinnedNodesOf(objectId), {
           storedPositionOf: (nodeId) => livePlacementOf(nodeId)?.position,
         });
-        // Free keeps every card where it is shown; grid and list store one-column order keys.
+        // Free keeps every card where it is shown; arranged layouts store one-column order keys.
         const orderKeys = zoneGridOrderKeys(order.map((node) => node.id));
         const targets = order.map(
           (node) => [node.id, layout === 'free' ? node.position : orderKeys.get(node.id)] as const
@@ -1187,23 +1188,27 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
         const saveLayout = () => {
           const latestZone = placementBoardRef.current?.objects?.[objectId];
-          // A zone fitted to its cards keeps that size once its cards are placed freely.
-          const fitted =
-            layout === 'free' &&
-            latestZone?.type === 'zone' &&
-            shownHeight > 0 &&
-            (shownWidth > latestZone.width || shownHeight !== latestZone.height);
+          let size: { width: number; height: number } | undefined;
+          if (latestZone?.type === 'zone') {
+            // A zone fitted to its cards keeps that size once its cards are placed freely.
+            if (
+              layout === 'free' &&
+              shownWidth > 0 &&
+              shownHeight > 0 &&
+              (shownWidth !== latestZone.width || shownHeight !== latestZone.height)
+            ) {
+              size = { width: shownWidth, height: shownHeight };
+            }
+            const gridWidth =
+              layout === 'grid' ? zoneGridWidthOnSwitch(latestZone.width, order.length) : undefined;
+            if (gridWidth) size = { width: gridWidth, height: latestZone.height };
+          }
           return boardGuard.write(ticket, () =>
-            fitted && latestZone?.type === 'zone'
+            size && latestZone?.type === 'zone'
               ? client.service('boards').patch(board.board_id, {
                   _action: 'upsertObject',
                   objectId,
-                  objectData: {
-                    ...latestZone,
-                    layout,
-                    width: Math.max(latestZone.width, shownWidth),
-                    height: shownHeight,
-                  },
+                  objectData: { ...latestZone, layout, ...size },
                 } as unknown as Partial<Board>)
               : client.service('boards').patch(board.board_id, {
                   _action: 'mergeObjectFields',
@@ -1225,7 +1230,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }
     );
 
-    // A card dropped inside its grid or list zone takes the slot nearest the drop; only its order key is saved.
+    // A card dropped inside its arranged zone takes the slot nearest the drop; only its order key is saved.
     const reorderInZone = useStableCallback(
       (
         nodeId: string,
@@ -2202,7 +2207,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return () => clearTimeout(timer);
     }, [board?.board_id]);
 
-    // Re-place grid and list zones when a pinned card's measured size changes.
+    // Re-place arranged zones when a pinned card's measured size changes.
     // biome-ignore lint/correctness/useExhaustiveDependencies: zoneGridMeasureVersion signals a new measurement in measuredNodeSizesRef
     useEffect(() => {
       if (isDraggingRef.current) return;
@@ -2408,7 +2413,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 if (autoLayoutOfZoneNode(parent)) gridMeasurementChanged = true;
               }
             }
-            // A grid or list zone grows on screen to fit its cards; only a person resizing it saves a size.
+            // An arranged zone fits its cards on screen; only a person resizing it saves a size.
             if (node?.type === 'zone' && autoLayoutOfZoneNode(node) && change.resizing !== true) {
               return;
             }
@@ -2541,7 +2546,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // A failed write during the drag skipped its redraw.
         if (boardResyncPendingRef.current) setBoardResyncNonce((nonce) => nonce + 1);
 
-        // A drop inside its own grid or list zone reorders the zone instead of placing the card.
+        // A drop inside its own arranged zone reorders the zone instead of placing the card.
         if (
           (node.type === 'branchNode' || node.type === 'cardNode') &&
           node.parentId &&

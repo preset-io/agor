@@ -47,7 +47,7 @@ interface UseBoardObjectsProps {
    * store's board (and again after the reconnect, when the reply was lost).
    */
   onWriteFailed?: (error: unknown) => void;
-  /** Switch a zone between free, grid and list (see `ZoneNodeData.onLayoutChange`). */
+  /** Switch a zone between free, row, column and grid (see `ZoneNodeData.onLayoutChange`). */
   onZoneLayoutChange?: (
     objectId: string,
     layout: ZoneLayout,

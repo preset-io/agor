@@ -103,9 +103,9 @@ export interface ZoneTrigger {
 
 /**
  * How a zone places its pinned branches and cards. `free` keeps stored
- * positions; `grid` and `list` compute display-only column positions.
+ * positions; `row`, `column` and `grid` arrange them in display-only slots.
  */
-export type ZoneLayout = 'free' | 'grid' | 'list';
+export type ZoneLayout = 'free' | 'row' | 'column' | 'grid';
 
 /**
  * Zone rectangle object (for organizing sessions visually)

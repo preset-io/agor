@@ -11,6 +11,8 @@ import {
   BorderOutlined,
   CaretDownOutlined,
   CaretUpOutlined,
+  ColumnHeightOutlined,
+  ColumnWidthOutlined,
   CommentOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -18,7 +20,6 @@ import {
   MoreOutlined,
   SettingOutlined,
   UnlockOutlined,
-  UnorderedListOutlined,
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
@@ -105,7 +106,7 @@ interface ZoneNodeData extends Omit<ZoneBoardObject, 'type'> {
   canEdit?: boolean;
   /** Number of other zones whose rectangles intersect this zone. */
   overlappingZoneCount?: number;
-  /** Switch between free, grid and list under the ticket captured when chosen. */
+  /** Switch between free, row, column and grid under the ticket captured when chosen. */
   onLayoutChange?: (
     objectId: string,
     layout: ZoneLayout,
@@ -150,16 +151,22 @@ const ZONE_LAYOUT_OPTIONS: Array<{
 }> = [
   { layout: 'free', label: 'Free', description: 'Place cards anywhere', icon: <BorderOutlined /> },
   {
-    layout: 'grid',
-    label: 'Grid',
-    description: 'Arrange cards in columns',
-    icon: <AppstoreOutlined />,
+    layout: 'row',
+    label: 'Row',
+    description: 'Arrange cards side by side',
+    icon: <ColumnWidthOutlined />,
   },
   {
-    layout: 'list',
-    label: 'List',
+    layout: 'column',
+    label: 'Column',
     description: 'Arrange cards in one column',
-    icon: <UnorderedListOutlined />,
+    icon: <ColumnHeightOutlined />,
+  },
+  {
+    layout: 'grid',
+    label: 'Grid',
+    description: 'Arrange cards in rows and columns',
+    icon: <AppstoreOutlined />,
   },
 ];
 
@@ -423,8 +430,9 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   return (
     <>
       {isAutoZoneLayout(layout) ? (
-        // Grid and list zones fit their height to their cards, so only the width (the column count) resizes.
-        resizable && (
+        // Arranged zones fit their cards; only a grid's width resizes, since it sets the column count.
+        resizable &&
+        layout === 'grid' && (
           <>
             <NodeResizeControl
               variant={ResizeControlVariant.Line}

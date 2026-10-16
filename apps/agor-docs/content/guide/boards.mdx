@@ -62,12 +62,13 @@ Locking a zone prevents moving and resizing it; it does not prevent renaming it 
 The **layout** button in the zone toolbar chooses how the zone places its branches and cards:
 
 - **Free** (default): cards stay wherever they are dropped.
-- **Grid**: cards line up in columns. The zone's width sets how many columns fit.
-- **List**: cards stack in one column.
+- **Row**: cards line up side by side.
+- **Column**: cards stack in one column.
+- **Grid**: cards fill rows and columns. The zone's width sets how many columns fit, at least two.
 
-In Grid and List, cards keep their natural height, keep their order, and stay in their column. When an agent adds a session and a card grows, only the cards below it in the same column move. A card dropped into the zone joins at the end. To reorder, drag a card onto the slot where you want it; the other cards shift to make room. Drag a card out of the zone to take it out of the layout.
+In Row, Column and Grid, cards keep their natural height and their order. When an agent adds a session and a card grows, only the cards below it in the same column move. A card dropped into the zone joins at the end. To reorder, drag a card onto the slot where you want it; the other cards shift to make room. Drag a card out of the zone to take it out of the layout.
 
-A Grid or List zone fits its height to its cards, so it may overlap a zone below it; you can still resize its width, which sets how many columns a Grid shows. A badge in the zone's corner shows the layout and card count, and editors can change the layout from it. Switching back to **Free** keeps every card where it was shown. Agents can set a zone's layout with `agor_boards_update` (`layout: "free" | "grid" | "list"`).
+These zones fit themselves to their cards, so they may overlap a nearby zone. Only a Grid's width can be resized. A badge in the zone's corner shows the layout and card count, and editors can change the layout from it. Switching back to **Free** keeps every card where it was shown. Agents can set a zone's layout with `agor_boards_update` (`layout: "free" | "row" | "column" | "grid"`).
 
 ### How zone triggers work
 
