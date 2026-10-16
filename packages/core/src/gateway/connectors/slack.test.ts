@@ -207,6 +207,85 @@ describe('SlackConnector inbound reactions', () => {
     }
   );
 
+  describe.each([false, true])('channel chatter fast path (durable=%s)', (durable) => {
+    it.each([
+      { channel: 'C123', channel_type: 'channel' },
+      { channel: 'C123', channel_type: 'group' },
+      { channel: 'G123', channel_type: 'mpim' },
+      { channel: 'C123' },
+      { channel: 'G123' },
+    ])('acknowledges $channel/$channel_type without lookups or routing', async (surface) => {
+      const { callback, emit, web } = await startReactionListener({
+        durable,
+        config: { enable_channels: true, enable_groups: true, enable_mpim: true },
+      });
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+      const event = {
+        type: 'message',
+        ...surface,
+        user: 'UADA',
+        ts: '201.000001',
+        thread_ts: '200.000000',
+      };
+      for (const text of ['ordinary chatter', 'please !stop', '!stop <@UBOT>']) {
+        expect(await emit({ ...event, text })).toHaveBeenCalledOnce();
+      }
+      expect(await emit({ ...event, text: '!help', thread_ts: undefined })).toHaveBeenCalledOnce();
+      // A parent summary must not fetch the latest reply or reinterpret the
+      // parent's text as a new command occurrence.
+      expect(
+        await emit({
+          ...event,
+          subtype: 'message_replied',
+          text: '!help',
+          message: { ts: '200.000000', latest_reply: '201.000001' },
+        })
+      ).toHaveBeenCalledOnce();
+      expect(web.conversations.info).not.toHaveBeenCalled();
+      expect(web.conversations.replies).not.toHaveBeenCalled();
+      expect(web.users.info).not.toHaveBeenCalled();
+      expect(callback).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+      expect(debug).not.toHaveBeenCalled();
+      log.mockRestore();
+      debug.mockRestore();
+    });
+  });
+
+  it('still delivers ordinary DM text without a channel-type hint', async () => {
+    const { callback, emit } = await startReactionListener();
+    await emit({
+      type: 'message',
+      channel: 'D123',
+      user: 'UADA',
+      ts: '201.000001',
+      text: 'ordinary DM prompt',
+    });
+    expect(callback).toHaveBeenCalledOnce();
+    expect(callback.mock.calls[0][0]).toMatchObject({ text: 'ordinary DM prompt' });
+  });
+
+  it('resolves C-prefixed private controls before enforcing source configuration', async () => {
+    const { callback, emit, web } = await startReactionListener({
+      config: { enable_channels: true, enable_groups: false },
+      channelInfo: { is_private: true },
+    });
+    expect(
+      await emit({
+        type: 'message',
+        channel: 'C123',
+        user: 'UADA',
+        ts: '201.000001',
+        thread_ts: '200.000000',
+        text: '!stop',
+      })
+    ).toHaveBeenCalledOnce();
+    expect(web.conversations.info).toHaveBeenCalledOnce();
+    expect(web.users.info).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+  });
+
   it('ignores bare top-level controls and still accepts mentions on either side exactly once', async () => {
     const { callback, emit } = await startReactionListener({
       config: { enable_channels: true },
