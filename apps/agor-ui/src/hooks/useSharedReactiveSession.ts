@@ -55,19 +55,37 @@ export function useSharedReactiveSession(
     if (foreground) holdBackgroundReads(sharedHandle.ready());
     setHandle(sharedHandle);
     let disposed = false;
+    let frame = 0;
+    let rendered: ReactiveSessionState | null = null;
 
     const sync = () => {
+      cancelAnimationFrame(frame);
+      frame = 0;
       if (!disposed) {
-        setState(sharedHandle.state);
+        rendered = sharedHandle.state;
+        setState(rendered);
       }
+    };
+    // Streaming chunks notify many times a frame; render them once per frame.
+    // Anything else renders now. Hidden tabs get no frames, so they sync directly.
+    const scheduleSync = () => {
+      const next = sharedHandle.state;
+      const chunksOnly =
+        !!rendered &&
+        (Object.keys(next) as (keyof ReactiveSessionState)[]).every(
+          (key) => key === 'streamingMessages' || next[key] === rendered?.[key]
+        );
+      if (!chunksOnly || document.hidden) return sync();
+      frame ||= requestAnimationFrame(sync);
     };
 
     sync();
-    const unsubscribe = sharedHandle.subscribe(sync);
+    const unsubscribe = sharedHandle.subscribe(scheduleSync);
     sharedHandle.ready().then(sync).catch(sync);
 
     return () => {
       disposed = true;
+      cancelAnimationFrame(frame);
       unsubscribe();
       releaseReactiveSession(client, sessionId, { taskHydration, cacheScope });
     };

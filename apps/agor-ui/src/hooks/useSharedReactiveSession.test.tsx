@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor-live/client';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { backgroundReadsClear } from '../store/backgroundReads';
 import { useSharedReactiveSession } from './useSharedReactiveSession';
@@ -85,4 +85,40 @@ it("never shows the previous session's context-window projection after a switch"
   expect(result.current.state?.latestContextWindow?.task_id).toBe('turn-a');
   rerender({ id: 'session-b' });
   expect(result.current.state?.latestContextWindow).toBeUndefined();
+});
+
+it('renders streamed chunks once per animation frame and anything else at once', async () => {
+  let notify!: () => void;
+  handle.subscribe.mockImplementationOnce((listener: () => void) => {
+    notify = listener;
+    return () => {};
+  });
+  const client = {} as AgorClient;
+  let renders = 0;
+  const { result } = renderHook(() => {
+    renders++;
+    return useSharedReactiveSession(client, 'session-id');
+  });
+  await act(async () => {});
+  const before = renders;
+  const chunks = [1, 2, 3].map((n) => ({
+    ...handle.state,
+    streamingMessages: new Map([['m', n]]),
+  }));
+  act(() => {
+    for (const next of chunks) {
+      handle.state = next;
+      notify();
+    }
+  });
+  expect(renders).toBe(before);
+  await waitFor(() => expect(result.current.state).toBe(chunks[2]));
+  expect(renders).toBe(before + 1);
+
+  const task = { ...handle.state, tasks: [] };
+  act(() => {
+    handle.state = task;
+    notify();
+  });
+  expect(result.current.state).toBe(task);
 });

@@ -94,7 +94,13 @@ interface ThinkingContentBlock {
 interface MessageBlockProps {
   message:
     | Message
-    | (Message & { isStreaming?: boolean; thinkingContent?: string; isThinking?: boolean });
+    | (Message & {
+        isStreaming?: boolean;
+        thinkingContent?: string;
+        isThinking?: boolean;
+        thinkingStartedAt?: number;
+        thinkingEndedAt?: number;
+      });
   userById?: Map<string, User>;
   currentUserId?: string;
   isTaskRunning?: boolean; // Whether the task is running (for loading state)
@@ -513,15 +519,12 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   // Check if message is currently streaming
   const isStreaming = 'isStreaming' in message && message.isStreaming === true;
 
-  // Determine loading vs typing state:
-  // - loading: task is running but no streaming chunks yet (waiting for first token)
-  // - typing: streaming has started (we have content)
+  // Loading: the task is running but no streaming chunks have arrived yet.
   const hasContent =
     typeof message.content === 'string'
       ? message.content.trim().length > 0
       : Array.isArray(message.content) && message.content.length > 0;
   const isLoading = isTaskRunning && !hasContent && isAgent;
-  const shouldUseTyping = isStreaming && hasContent;
 
   // Get current user's emoji
   const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
@@ -555,8 +558,14 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
     );
   }
 
-  // Skip rendering if message has no content
-  if (!message.content || (typeof message.content === 'string' && message.content.trim() === '')) {
+  // Skip rendering if message has no content; a thinking-only stream renders its ThinkingBlock.
+  const streamingThinking = 'thinkingContent' in message ? message.thinkingContent : undefined;
+  const isThinking = 'isThinking' in message ? !!message.isThinking : false;
+  if (
+    !streamingThinking &&
+    !isThinking &&
+    (!message.content || (typeof message.content === 'string' && message.content.trim() === ''))
+  ) {
     return null;
   }
 
@@ -763,13 +772,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
         .map((block) => block.transcript_truncation)
     : [];
 
-  // Also check for streaming thinking content
-  const streamingThinking = 'thinkingContent' in message ? message.thinkingContent : undefined;
-  const isThinking = 'isThinking' in message ? message.isThinking : false;
-
   // Skip rendering if message has no meaningful content
-  const hasThinking =
-    thinkingBlocks.length > 0 || (streamingThinking && streamingThinking.length > 0);
+  const hasThinking = thinkingBlocks.length > 0 || !!streamingThinking || isThinking;
   const hasTextBefore = textBeforeTools.some((text) => text.trim().length > 0);
   const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
   const hasTools = toolBlocks.length > 0;
@@ -851,6 +855,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
         <ThinkingBlock
           content={streamingThinking || thinkingBlocks.join('\n\n')}
           isStreaming={isThinking}
+          startedAt={'thinkingStartedAt' in message ? message.thinkingStartedAt : undefined}
+          endedAt={'thinkingEndedAt' in message ? message.thinkingEndedAt : undefined}
           defaultExpanded={false}
           revealRequested={revealReasoning}
         />
@@ -871,7 +877,6 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 placement={isUser ? 'end' : 'start'}
                 avatar={renderAvatarSlot(avatar)}
                 loading={isLoading}
-                typing={shouldUseTyping ? { effect: 'typing', step: 5, interval: 20 } : false}
                 content={
                   <CopyableContent
                     textContent={textBeforeTools.join('\n\n')}
@@ -1021,7 +1026,6 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                 placement="start"
                 avatar={renderAvatarSlot(avatar, !hasTextBefore)}
                 loading={isLoading}
-                typing={shouldUseTyping ? { effect: 'typing', step: 5, interval: 20 } : false}
                 content={
                   <CopyableContent
                     textContent={textAfterTools.join('\n\n')}

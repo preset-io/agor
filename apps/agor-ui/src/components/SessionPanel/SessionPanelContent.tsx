@@ -1,12 +1,7 @@
 import type { AgorClient, Branch, Session, SpawnConfig, Task } from '@agor-live/client';
 import { getTeammateConfig, isTeammate, sessionPath } from '@agor-live/client';
-import {
-  CopyOutlined,
-  DeleteOutlined,
-  VerticalAlignBottomOutlined,
-  VerticalAlignTopOutlined,
-} from '@ant-design/icons';
-import { Alert, Button, Divider, Space, Tooltip, Typography, theme } from 'antd';
+import { CopyOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Alert, Button, Divider, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
@@ -28,10 +23,7 @@ export interface SessionPanelContentProps {
   branch?: Branch | null;
   currentUserId?: string;
   sessionMcpServerIds?: string[];
-  scrollToBottom: (() => void) | null;
-  scrollToTop: (() => void) | null;
   setScrollToBottom: (fn: (() => void) | null) => void;
-  setScrollToTop: (fn: (() => void) | null) => void;
   queuedTasks: Task[];
   spawnModalOpen: boolean;
   setSpawnModalOpen: (open: boolean) => void;
@@ -47,10 +39,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     session,
     branch = null,
     currentUserId,
-    scrollToBottom,
-    scrollToTop,
     setScrollToBottom,
-    setScrollToTop,
     queuedTasks,
     spawnModalOpen,
     setSpawnModalOpen,
@@ -103,25 +92,18 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
 
     // Stable callback for ConversationView's onScrollRef to prevent breaking React.memo
     const handleScrollRef = React.useCallback(
-      (scrollBottom: () => void, scrollTop: () => void) => {
-        setScrollToBottom(() => scrollBottom);
-        setScrollToTop(() => scrollTop);
-      },
-      [setScrollToBottom, setScrollToTop]
+      (scrollBottom: () => void) => setScrollToBottom(() => scrollBottom),
+      [setScrollToBottom]
     );
 
     return (
       <>
-        {/* Header row with pills and scroll navigation */}
+        {/* Header row with pills */}
         <div
           style={{
             flexShrink: 0,
             marginBottom: token.sizeUnit,
             display: 'flex',
-            // Keep navigation aligned with the branch pill's first row when metadata wraps below it.
-            alignItems: 'flex-start',
-            justifyContent: 'space-between',
-            gap: token.sizeUnit * 2,
           }}
         >
           {/* Pills section (only shown if there's content) */}
@@ -143,31 +125,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
               )}
             </BranchMetadataRow>
           )}
-          {/* Spacer if no pills */}
-          {!branch && <div style={{ flex: 1 }} />}
-          {/* Scroll Navigation Buttons - always visible */}
-          <Space size={4} style={{ flexShrink: 0 }}>
-            <Tooltip title="Scroll to top of conversation">
-              <Button
-                type="text"
-                size="small"
-                aria-label="Scroll to top of conversation"
-                icon={<VerticalAlignTopOutlined />}
-                onClick={() => scrollToTop?.()}
-                disabled={!scrollToTop}
-              />
-            </Tooltip>
-            <Tooltip title="Scroll to bottom of conversation">
-              <Button
-                type="text"
-                size="small"
-                aria-label="Scroll to bottom of conversation"
-                icon={<VerticalAlignBottomOutlined />}
-                onClick={() => scrollToBottom?.()}
-                disabled={!scrollToBottom}
-              />
-            </Tooltip>
-          </Space>
         </div>
 
         <Divider style={{ margin: `${token.sizeUnit * 2}px 0` }} />

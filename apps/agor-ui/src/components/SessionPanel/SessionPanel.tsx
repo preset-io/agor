@@ -552,7 +552,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     session?.model_config?.effort ?? toolCaps?.defaultReasoningEffort
   );
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
-  const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
   const [forkModalOpen, setForkModalOpen] = React.useState(false);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
@@ -1909,10 +1908,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             branch={branch}
             currentUserId={currentUserId}
             sessionMcpServerIds={sessionMcpServerIds}
-            scrollToBottom={scrollToBottom}
-            scrollToTop={scrollToTop}
             setScrollToBottom={setScrollToBottom}
-            setScrollToTop={setScrollToTop}
             queuedTasks={queuedTasks}
             spawnModalOpen={spawnModalOpen}
             setSpawnModalOpen={setSpawnModalOpen}
