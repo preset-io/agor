@@ -900,15 +900,15 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     >({});
     const isDraggingRef = useRef(false);
 
-    // Grid and list zones render larger than their saved size, so drops hit-test against the shown size.
+    // Grid and list zones render at their fitted size, so drops hit-test against what is shown.
     const boardObjectsAsShown = useStableCallback((objects: Board['objects']) => {
       if (!objects) return objects;
       let shown = objects;
       for (const [id, object] of Object.entries(objects)) {
         if (object.type !== 'zone' || !isAutoZoneLayout(zoneLayoutOf(object))) continue;
         const style = shownNodesRef.current.find((node) => node.id === id)?.style;
-        const width = Math.max(object.width, Number(style?.width) || 0);
-        const height = Math.max(object.height, Number(style?.height) || 0);
+        const width = Number(style?.width) || object.width;
+        const height = Number(style?.height) || object.height;
         if (width === object.width && height === object.height) continue;
         if (shown === objects) shown = { ...objects };
         shown[id] = { ...object, width, height };
@@ -1187,13 +1187,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
         const saveLayout = () => {
           const latestZone = placementBoardRef.current?.objects?.[objectId];
-          // A zone grown to fit its cards keeps that size once its cards are placed freely.
-          const grown =
+          // A zone fitted to its cards keeps that size once its cards are placed freely.
+          const fitted =
             layout === 'free' &&
             latestZone?.type === 'zone' &&
-            (shownWidth > latestZone.width || shownHeight > latestZone.height);
+            shownHeight > 0 &&
+            (shownWidth > latestZone.width || shownHeight !== latestZone.height);
           return boardGuard.write(ticket, () =>
-            grown && latestZone?.type === 'zone'
+            fitted && latestZone?.type === 'zone'
               ? client.service('boards').patch(board.board_id, {
                   _action: 'upsertObject',
                   objectId,
@@ -1201,7 +1202,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     ...latestZone,
                     layout,
                     width: Math.max(latestZone.width, shownWidth),
-                    height: Math.max(latestZone.height, shownHeight),
+                    height: shownHeight,
                   },
                 } as unknown as Partial<Board>)
               : client.service('boards').patch(board.board_id, {
@@ -2192,6 +2193,15 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       boardResyncNonce,
     ]);
 
+    // Cards glide between grid slots only once a board has settled, so loading a board doesn't animate.
+    const [zoneGridAnimate, setZoneGridAnimate] = useState(false);
+    // biome-ignore lint/correctness/useExhaustiveDependencies: restart the settle delay whenever the board changes
+    useEffect(() => {
+      setZoneGridAnimate(false);
+      const timer = setTimeout(() => setZoneGridAnimate(true), 1500);
+      return () => clearTimeout(timer);
+    }, [board?.board_id]);
+
     // Re-place grid and list zones when a pinned card's measured size changes.
     // biome-ignore lint/correctness/useExhaustiveDependencies: zoneGridMeasureVersion signals a new measurement in measuredNodeSizesRef
     useEffect(() => {
@@ -2496,6 +2506,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Handle node drag start
     const handleNodeDragStart: NodeDragHandler = useCallback(() => {
       isDraggingRef.current = true;
+      reactFlowWrapperRef.current?.classList.add('canvas-dragging');
     }, []);
 
     // Handle node drag - track local position changes
@@ -2526,6 +2537,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
         // Reset dragging flag immediately to allow node sync effects to run
         isDraggingRef.current = false;
+        reactFlowWrapperRef.current?.classList.remove('canvas-dragging');
         // A failed write during the drag skipped its redraw.
         if (boardResyncPendingRef.current) setBoardResyncNonce((nonce) => nonce + 1);
 
@@ -3528,7 +3540,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             panOnScroll={activeTool === 'select' && !drawingZone}
             panOnDrag={!drawingZone} // Always allow drag to pan (left mouse in select, any in other modes)
             selectionOnDrag={false} // Disable selection box - not useful for branch cards
-            className={`tool-mode-${activeTool}`}
+            className={`tool-mode-${activeTool}${zoneGridAnimate ? ' zone-grid-animate' : ''}`}
             // Disable React Flow's keyboard shortcuts that conflict with typing/spatial messages.
             // Keep modifier-scroll zoom enabled so Command/Control + scroll behaves like Figma.
             deleteKeyCode={null}

@@ -3,7 +3,7 @@
  */
 
 import type { ZoneLayout } from '@agor/core/types';
-import { zoneLayoutOf } from '@agor/core/utils/zone-layout';
+import { isAutoZoneLayout, zoneLayoutOf } from '@agor/core/utils/zone-layout';
 import type { BoardComment, BoardObject, User } from '@agor-live/client';
 import {
   AppstoreOutlined,
@@ -28,14 +28,16 @@ import {
   ColorPicker,
   Dropdown,
   Flex,
+  type MenuProps,
   Popover,
   Space,
+  Tag,
   Typography,
   theme,
 } from 'antd';
 import type { Color } from 'antd/es/color-picker';
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { NodeResizer, useViewport } from 'reactflow';
+import { NodeResizeControl, NodeResizer, ResizeControlVariant, useViewport } from 'reactflow';
 import { useConnectionState, useMutationGate } from '../../../contexts/ConnectionContext';
 import type { BoardWriteResult } from '../../../hooks/useBoardMutationGuard';
 import { type BoardWriteTicket, hasBoardWriteTicketEnded } from '../../../store/boardMutationGuard';
@@ -367,6 +369,34 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   const layout = zoneLayoutOf(data);
   const layoutOption =
     ZONE_LAYOUT_OPTIONS.find((option) => option.layout === layout) ?? ZONE_LAYOUT_OPTIONS[0];
+  const layoutMenu: MenuProps = {
+    selectable: true,
+    selectedKeys: [layout],
+    items: ZONE_LAYOUT_OPTIONS.map((option) => ({
+      key: option.layout,
+      icon: option.icon,
+      label: (
+        <Flex vertical>
+          <span>{option.label}</span>
+          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            {option.description}
+          </Typography.Text>
+        </Flex>
+      ),
+    })),
+    onClick: ({ key, domEvent }) => {
+      domEvent.stopPropagation();
+      if (mutationDisabled || key === layout) return;
+      void data.onLayoutChange?.(data.objectId, key as ZoneLayout, captureTicket());
+    },
+  };
+  const layoutBadgeText = (
+    <>
+      <span>{layoutOption.label}</span>
+      {data.pinnedItemCount !== undefined && <span> · {data.pinnedItemCount}</span>}
+    </>
+  );
+  const resizable = selected && !data.locked && !mutationDisabled;
   // Status keeps its smaller relative size, scaled from the label size when set.
   const statusFontSize = statusFontSizeFor(data.fontSize, token.fontSize, token.fontSizeSM);
   const handleReorder = (op: LayerOp) => {
@@ -392,20 +422,45 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
 
   return (
     <>
-      <NodeResizer
-        isVisible={selected && !data.locked && !mutationDisabled}
-        minWidth={200}
-        minHeight={200}
-        handleStyle={{
-          width: '10px',
-          height: '10px',
-          borderRadius: '50%',
-          backgroundColor: borderColor,
-        }}
-        lineStyle={{
-          borderColor: borderColor,
-        }}
-      />
+      {isAutoZoneLayout(layout) ? (
+        // Grid and list zones fit their height to their cards, so only the width (the column count) resizes.
+        resizable && (
+          <>
+            <NodeResizeControl
+              variant={ResizeControlVariant.Line}
+              position="right"
+              minWidth={200}
+              style={{ borderColor }}
+            />
+            <NodeResizeControl
+              position="right"
+              minWidth={200}
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                border: 'none',
+                backgroundColor: borderColor,
+              }}
+            />
+          </>
+        )
+      ) : (
+        <NodeResizer
+          isVisible={resizable}
+          minWidth={200}
+          minHeight={200}
+          handleStyle={{
+            width: '10px',
+            height: '10px',
+            borderRadius: '50%',
+            backgroundColor: borderColor,
+          }}
+          lineStyle={{
+            borderColor: borderColor,
+          }}
+        />
+      )}
       <div
         style={{
           width: '100%',
@@ -607,31 +662,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             />
 
             {data.onLayoutChange && (
-              <Dropdown
-                trigger={['click']}
-                placement="bottom"
-                menu={{
-                  selectable: true,
-                  selectedKeys: [layout],
-                  items: ZONE_LAYOUT_OPTIONS.map((option) => ({
-                    key: option.layout,
-                    icon: option.icon,
-                    label: (
-                      <Flex vertical>
-                        <span>{option.label}</span>
-                        <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                          {option.description}
-                        </Typography.Text>
-                      </Flex>
-                    ),
-                  })),
-                  onClick: ({ key, domEvent }) => {
-                    domEvent.stopPropagation();
-                    if (mutationDisabled || key === layout) return;
-                    void data.onLayoutChange?.(data.objectId, key as ZoneLayout, captureTicket());
-                  },
-                }}
-              >
+              <Dropdown trigger={['click']} placement="bottom" menu={layoutMenu}>
                 <Button
                   type="text"
                   size="small"
@@ -850,6 +881,37 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             }}
           >
             {data.status}
+          </div>
+        )}
+        {isAutoZoneLayout(layout) && (
+          <div
+            className="nodrag nopan"
+            onPointerDown={(event) => event.stopPropagation()}
+            style={{
+              position: 'absolute',
+              top: token.padding,
+              right: token.padding,
+              pointerEvents: 'auto',
+              // Inverse scale keeps the badge readable at any zoom, like the label.
+              transform: `scale(${scale})`,
+              transformOrigin: 'top right',
+            }}
+          >
+            {data.onLayoutChange && !mutationDisabled ? (
+              <Dropdown trigger={['click']} placement="bottomRight" menu={layoutMenu}>
+                <Button
+                  size="small"
+                  icon={layoutOption.icon}
+                  aria-label={`${layoutOption.label} layout. Change layout`}
+                >
+                  {layoutBadgeText}
+                </Button>
+              </Dropdown>
+            ) : (
+              <Tag icon={layoutOption.icon} bordered={false} style={{ marginInlineEnd: 0 }}>
+                {layoutBadgeText}
+              </Tag>
+            )}
           </div>
         )}
       </div>

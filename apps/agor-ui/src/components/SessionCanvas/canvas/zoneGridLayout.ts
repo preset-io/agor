@@ -55,6 +55,13 @@ const PINNED_ENTITY_TYPES = new Set(['branchNode', 'cardNode']);
 /** Fallback heights until React Flow reports a measurement. */
 const FALLBACK_HEIGHT: Record<string, number> = { branchNode: 200, cardNode: 120 };
 const BASE_ENTITY_Z_INDEX = 500;
+/** Marks nodes the grid places, so the canvas stylesheet can glide them between slots. */
+export const ZONE_GRID_CHILD_CLASS = 'zone-grid-child';
+
+function withChildClass(className: string | undefined) {
+  if (className?.split(' ').includes(ZONE_GRID_CHILD_CLASS)) return className;
+  return className ? `${className} ${ZONE_GRID_CHILD_CLASS}` : ZONE_GRID_CHILD_CLASS;
+}
 
 /** The auto layout of a zone node, or undefined when the zone is free. */
 export function autoLayoutOfZoneNode(node: Node | undefined): AutoZoneLayout | undefined {
@@ -68,8 +75,8 @@ function sameNumber(a: unknown, b: number) {
 }
 
 /**
- * Place every branch and card pinned to a grid or list zone, and grow those
- * zones (taller, or wider for a grid's columns) to fit. Display-only: nothing here is persisted. Returns the same
+ * Place every branch and card pinned to a grid or list zone. Those zones fit
+ * their height to their cards and widen if a grid's columns need it. Display-only: nothing here is persisted. Returns the same
  * array when nothing moved, so callers can feed it straight into setNodes
  * without a render loop.
  */
@@ -115,7 +122,7 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
     }
     zoneSizes.set(zoneId, {
       width: Math.max(zoneWidthOf(zone), plan.contentWidth),
-      height: Math.max(Number(zone.data?.height) || 0, plan.contentHeight),
+      height: plan.contentHeight,
     });
   }
 
@@ -124,15 +131,17 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
     const childUpdate = childUpdates.get(node.id);
     if (childUpdate) {
       const { position, zIndex } = childUpdate;
+      const className = withChildClass(node.className);
       if (
         sameNumber(node.position.x, position.x) &&
         sameNumber(node.position.y, position.y) &&
-        node.zIndex === zIndex
+        node.zIndex === zIndex &&
+        node.className === className
       ) {
         return node;
       }
       changed = true;
-      return { ...node, position, zIndex };
+      return { ...node, position, zIndex, className };
     }
     const size = zoneSizes.get(node.id);
     if (size) {
