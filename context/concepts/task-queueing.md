@@ -106,7 +106,11 @@ An expected task/ordered-queue snapshot must still match. Queue cancellation,
 `claimTermination`, and a content-free receipt in the provider occurrence's
 `delivery_metadata` commit together. Duplicate delivery reuses that receipt and
 never selects new work. Standalone Slack/Discord commands use durable provider
-message identities too. Containment and provider replies happen after commit;
+message identities too. A no-session observation also records a receipt, so
+redelivery after a mapping appears cannot target the new session. Discord
+occurrence keys retain the original listener thread identity; prepared routing
+coordinates must match the verified reply metadata on that occurrence.
+Containment and provider replies happen after commit;
 no executor wait holds the command transaction. `!help` is read-only system copy.
 
 ## Fleet-wide draining and recovery

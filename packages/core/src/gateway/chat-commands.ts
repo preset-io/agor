@@ -49,7 +49,8 @@ export function formatGatewayCommandReply(
   }
   const cancelled =
     receipt.cancelled_count > 0 ? ` Cancelled ${receipt.cancelled_count} queued tasks.` : '';
-  if (receipt.outcome === 'idle') return `There is no current task to stop.${cancelled}`;
+  if (receipt.outcome === 'idle')
+    return `There is no current task to stop.${cancelled}${receipt.session_id === null ? ` ${GATEWAY_COMMAND_HINT}` : ''}`;
   switch (stop?.outcome) {
     case 'stopped':
       return `Stopped.${cancelled}`;

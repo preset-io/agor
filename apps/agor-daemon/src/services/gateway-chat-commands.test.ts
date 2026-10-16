@@ -240,3 +240,36 @@ describe('gateway command race fences', () => {
     }
   );
 });
+
+describe('unmapped command occurrences', () => {
+  dbTest(
+    'a no-session receipt prevents replay against a subsequently mapped session',
+    async ({ db }) => {
+      const f = await fixture(db);
+      const first = await f.commands.execute({ ...f.input, sessionId: null, expected: null });
+      expect(first.receipt).toMatchObject({ outcome: 'idle', session_id: null, task_id: null });
+      expect(first.removed).toEqual([]);
+      const replay = await f.commands.execute(f.input);
+      expect(replay.receipt).toEqual(first.receipt);
+      expect(replay.claimed).toBeNull();
+      expect(replay.removed).toEqual([]);
+      expect(await f.tasks.findById(f.seed.active.task_id)).toEqual(f.seed.active);
+      expect(await f.tasks.findQueued(f.input.sessionId)).toHaveLength(3);
+    }
+  );
+
+  dbTest('an unauthorized actor cannot record a no-session occurrence', async ({ db }) => {
+    const f = await fixture(db);
+    expect(
+      (
+        await f.commands.execute({
+          ...f.input,
+          sessionId: null,
+          expected: null,
+          userId: f.seed.stranger.user_id,
+        })
+      ).receipt.outcome
+    ).toBe('denied');
+    expect((await f.commands.execute(f.input)).receipt.outcome).toBe('requested');
+  });
+});

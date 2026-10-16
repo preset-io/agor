@@ -1712,7 +1712,7 @@ export interface GatewayChatCommandSnapshot {
 /** Durable, content-free receipt stored on the owning provider occurrence. */
 export interface GatewayChatCommandReceipt {
   command: Exclude<GatewayChatCommand, 'help'>;
-  session_id: SessionID;
+  session_id: SessionID | null;
   user_id: UserID;
   task_id: TaskID | null;
   queued_count: number;

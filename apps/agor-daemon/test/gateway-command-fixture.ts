@@ -6,9 +6,15 @@ import {
   generateId,
   TaskRepository,
 } from '@agor/core/db';
+import type { GatewayChannel } from '@agor/core/types';
 import { seedQueue } from './task-queue-fixture.js';
 
-export async function gatewayCommandFixture(db: Database) {
+export async function gatewayCommandFixture(
+  db: Database,
+  channelOptions: Partial<
+    Pick<GatewayChannel, 'channel_type' | 'config' | 'provider_installation_id'>
+  > = {}
+) {
   const seed = await seedQueue(db);
   const channel = await new GatewayChannelRepository(db).create({
     name: 'Commands',
@@ -18,9 +24,10 @@ export async function gatewayCommandFixture(db: Database) {
     agor_user_id: seed.owner.user_id,
     config: { bot_token: 'test-command-token', app_token: 'test-command-app-token' },
     created_by: seed.owner.user_id,
+    ...channelOptions,
   });
   const commands = new GatewayChatCommandRepository(db);
-  const input: GatewayChatCommandInput = {
+  const input = {
     channelId: channel.id,
     threadId: 'thread',
     sessionId: seed.session.session_id,
@@ -28,6 +35,6 @@ export async function gatewayCommandFixture(db: Database) {
     command: 'stop-clear',
     providerEventId: generateId(),
     expected: await commands.snapshot(seed.session.session_id),
-  };
+  } satisfies GatewayChatCommandInput;
   return { seed, channel, commands, input, tasks: new TaskRepository(db) };
 }

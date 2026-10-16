@@ -4,9 +4,11 @@ import {
   attachHiddenTenant,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
+  GatewayChannelRepository,
   GatewayChatCommandRepository,
   GatewayListenerDiscoveryRepository,
   type GatewayListenerLease,
+  generateId,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   MCPServerRepository,
@@ -21,6 +23,7 @@ import {
 import { Forbidden } from '@agor/core/feathers';
 import type { GatewayInboundResult, InboundMessage } from '@agor/core/gateway';
 import {
+  DiscordConnector,
   DiscordDirectMessageError,
   DiscordThreadUnavailableError,
   GatewayListenerError,
@@ -43,8 +46,10 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { gatewayCommandFixture } from '../../test/gateway-command-fixture.js';
 import {
   ingestDiscordInboundImages,
   ingestInboundAttachments,
@@ -303,6 +308,7 @@ function makeGatewayHarness(args: {
       }
       if (name === '/sessions/:id/prompt') return { create: promptCreate };
       if (name === '/sessions/:id/stop') return { create: stopCreate };
+      if (name === 'tasks') return { emit: vi.fn() };
       throw new Error(`Unexpected service: ${name}`);
     },
   };
@@ -7899,5 +7905,218 @@ describe('GatewayService chat commands', () => {
     expect(h.promptCreate).not.toHaveBeenCalled();
     expect(JSON.stringify(sendMessage.mock.calls)).toContain('Stop requested; waiting');
     expect(JSON.stringify(sendMessage.mock.calls)).not.toContain('private');
+  });
+});
+
+describe('gateway command occurrence boundaries', () => {
+  const guild = '223456789012345678';
+  const parent = '323456789012345678';
+  const thread = '723456789012345678';
+  const author = '423456789012345678';
+  const bot = '123456789012345678';
+  const messageId = '823456789012345678';
+  const config = {
+    message_content_enabled: true,
+    thread_mode: 'public_thread_per_summon',
+    align_discord_users: false,
+    bot_token: 'test-token',
+    application_id: bot,
+    guild_id: guild,
+    allowed_channel_ids: [parent],
+    allowed_user_ids: [author],
+    allowed_role_ids: [],
+  };
+
+  async function discordInbound(): Promise<InboundMessage> {
+    const rest = {
+      get: vi.fn(async (route: string) => {
+        if (route === `/channels/${thread}`)
+          return { id: thread, guild_id: guild, parent_id: parent, type: 11 };
+        if (route === `/channels/${parent}`) return { id: parent, guild_id: guild, type: 0 };
+        if (route === `/channels/${parent}/messages/${thread}`)
+          return { id: thread, channel_id: parent };
+        throw new Error('Unexpected Discord route');
+      }),
+      post: vi.fn(async () => {
+        throw new Error('Unexpected Discord write');
+      }),
+    };
+    const connector = new DiscordConnector(config, {
+      rest,
+      historyRest: rest,
+      createGateway: () => {
+        throw new Error('Not used');
+      },
+    });
+    // Exercise real normalization and prepareDelivery, replacing only provider I/O.
+    Object.assign(connector, { botUserId: bot });
+    let inbound: InboundMessage | undefined;
+    await (
+      connector as unknown as {
+        dispatchMessage(
+          payload: unknown,
+          callback: (message: InboundMessage) => Promise<void>
+        ): Promise<unknown>;
+      }
+    ).dispatchMessage(
+      {
+        t: 'MESSAGE_CREATE',
+        d: {
+          id: messageId,
+          channel_id: thread,
+          guild_id: guild,
+          type: 0,
+          author: { id: author },
+          member: { roles: [] },
+          mentions: [{ id: bot }],
+          content: `<@${bot}> !stop-clear`,
+        },
+      },
+      async (message) => {
+        inbound = message;
+      }
+    );
+    if (!inbound) throw new Error('Discord did not accept the command');
+    return inbound;
+  }
+
+  async function deliver(
+    service: GatewayService,
+    channel: GatewayChannel,
+    inbound: InboundMessage,
+    lease?: GatewayListenerLease
+  ) {
+    return (
+      service as unknown as {
+        handleListenerInboundMessage(
+          channel: GatewayChannel,
+          tenantId: string,
+          inbound: InboundMessage,
+          lease?: GatewayListenerLease
+        ): Promise<unknown>;
+      }
+    ).handleListenerInboundMessage(channel, 'tenant-channel', inbound, lease);
+  }
+
+  dbTest(
+    'Discord public-thread preparation retains occurrence authority through command admission',
+    async ({ db }) => {
+      const f = await gatewayCommandFixture(db, {
+        channel_type: 'discord',
+        config,
+        provider_installation_id: bot,
+      });
+      const claim = await new GatewayChannelRepository(db).claimListener({
+        channelId: f.channel.id,
+        claimToken: generateId(),
+        leaseDurationMs: 60_000,
+        instanceId: 'test',
+        bootId: 'test',
+      });
+      if (claim.outcome !== 'claimed') throw new Error('Missing listener claim');
+      const h = makeGatewayHarness({
+        db,
+        channel: f.channel,
+        user: f.seed.owner,
+        existingMapping: makeMapping({
+          channel_id: f.channel.id,
+          thread_id: thread,
+          session_id: f.input.sessionId,
+        }),
+        connector: { sendMessage: vi.fn(async () => 'reply') },
+      });
+      Object.assign(h.service, { durableListenerOwnership: true, taskRepo: f.tasks });
+      const inbound = await discordInbound();
+      expect(inbound.threadId).toBe(`discord:thread:${parent}:${thread}`);
+      await deliver(h.service, f.channel, inbound, claim.lease);
+      expect(h.stopCreate).toHaveBeenCalledOnce();
+      expect(h.stopCreate).toHaveBeenCalledWith(
+        { expected_task_id: f.seed.active.task_id },
+        expect.anything()
+      );
+      expect(await f.tasks.findQueued(f.input.sessionId)).toHaveLength(0);
+      expect((await f.tasks.findById(f.seed.active.task_id))?.status).toBe(TaskStatus.STOPPING);
+      expect(h.promptCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  for (const provider of ['slack', 'discord'] as const) {
+    dbTest(
+      `${provider} unmapped command cannot stop new work after listener restart`,
+      async ({ db }) => {
+        const f = await gatewayCommandFixture(
+          db,
+          provider === 'discord'
+            ? { channel_type: provider, config, provider_installation_id: bot }
+            : {}
+        );
+        const inbound =
+          provider === 'discord'
+            ? await discordInbound()
+            : {
+                threadId: 'C123-100.000000',
+                text: '!stop-clear',
+                userId: 'U123',
+                metadata: { channel: 'C123', channel_type: 'im', slack_message_ts: '103.000000' },
+              };
+        const sendMessage = vi.fn(async () => 'reply');
+        const first = makeGatewayHarness({
+          db,
+          channel: f.channel,
+          user: f.seed.owner,
+          existingMapping: null,
+          connector: { sendMessage },
+        });
+        await deliver(first.service, f.channel, inbound);
+        expect(first.sessionsCreate).not.toHaveBeenCalled();
+        expect(first.stopCreate).not.toHaveBeenCalled();
+        expect(JSON.stringify(sendMessage.mock.calls)).toContain('no current task');
+        const restarted = makeGatewayHarness({
+          db,
+          channel: f.channel,
+          user: f.seed.owner,
+          existingMapping: makeMapping({
+            channel_id: f.channel.id,
+            thread_id: provider === 'discord' ? thread : inbound.threadId,
+            session_id: f.input.sessionId,
+          }),
+          connector: { sendMessage },
+        });
+        await deliver(
+          restarted.service,
+          f.channel,
+          provider === 'discord' ? await discordInbound() : inbound
+        );
+        expect(restarted.stopCreate).not.toHaveBeenCalled();
+        expect(restarted.promptCreate).not.toHaveBeenCalled();
+        expect(await f.tasks.findById(f.seed.active.task_id)).toEqual(f.seed.active);
+        expect(await f.tasks.findQueued(f.input.sessionId)).toHaveLength(3);
+        expect(sendMessage).toHaveBeenCalledTimes(2);
+        expect(JSON.stringify(sendMessage.mock.calls[1])).toContain('no current task');
+      }
+    );
+  }
+
+  it('logs only bounded command failure diagnostics, never raw error content', async () => {
+    vi.spyOn(GatewayChatCommandRepository.prototype, 'snapshot').mockResolvedValue({
+      task_id: null,
+      queued_task_ids: [],
+    });
+    vi.spyOn(GatewayChatCommandRepository.prototype, 'execute').mockRejectedValue(
+      new Error('private SQL token prompt')
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const sendMessage = vi.fn(async () => 'reply');
+    const h = makeGatewayHarness({ existingMapping: makeMapping(), connector: { sendMessage } });
+    await h.service.create({
+      channel_key: 'slack-key',
+      thread_id: 'C123-100.000000',
+      text: '!skip',
+      metadata: { channel: 'C123', channel_type: 'im', slack_message_ts: '103.000000' },
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('event=chat_command_failed'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('stage=admission reason=unexpected'));
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('private SQL');
+    expect(JSON.stringify(sendMessage.mock.calls)).not.toContain('private SQL');
   });
 });

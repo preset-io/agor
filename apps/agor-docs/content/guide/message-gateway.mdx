@@ -198,7 +198,8 @@ or admin may need to intervene. These commands never force-fail an executor.
 Commands target the task and queue observed for that request. If either changes
 before the command can be applied, no changes are made and the reply asks you to
 check the session and retry. Provider redelivery reuses the original command's
-target, never a successor task or newly queued work.
+target, never a successor task or newly queued work. A command sent before a
+session exists remains a no-op if the platform redelivers it after a session starts.
 
 ## Slack thread behavior
 

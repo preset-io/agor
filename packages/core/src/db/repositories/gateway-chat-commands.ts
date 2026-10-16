@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { DISCORD_METADATA_KEY } from '../../gateway/discord-identifiers';
 import { generateId } from '../../lib/ids';
 import type {
   GatewayChannelID,
@@ -45,10 +46,10 @@ type EventAuthority = Pick<
 export interface GatewayChatCommandInput {
   channelId: GatewayChannelID;
   threadId: string;
-  sessionId: SessionID;
+  sessionId: SessionID | null;
   userId: UserID;
   command: Exclude<GatewayChatCommand, 'help'>;
-  expected: GatewayChatCommandSnapshot;
+  expected: GatewayChatCommandSnapshot | null;
   /** Trusted listener/HTTP claim, not a caller-supplied event ID alone. */
   event?: EventAuthority;
   /** Standalone Slack/Discord still need durable command identity. */
@@ -108,27 +109,42 @@ export class GatewayChatCommandRepository {
         };
         const denied = { receipt, removed: [], claimed: null };
         if (!actor || !hasMinimumRole(actor.role, ROLES.MEMBER)) return denied;
-        const initial = await new SessionRepository(tx).findById(input.sessionId);
-        if (!initial) return denied;
-        await lockRowForUpdate(tx, tx, branches, eq(branches.branch_id, initial.branch_id));
-        await lockRowForUpdate(tx, tx, sessions, eq(sessions.session_id, input.sessionId));
-        const session = await new SessionRepository(tx).findById(input.sessionId);
-        const branchRepo = new BranchRepository(tx);
-        const branch = await branchRepo.findById(initial.branch_id);
-        if (!session || !branch || session.branch_id !== initial.branch_id) return denied;
-        const authority = await branchRepo.resolveSessionPromptAuthority(
-          branch.branch_id,
-          input.userId,
-          session.created_by as UserID,
-          session.sdk_home_scope
+        const initialChannel = await select(tx)
+          .from(gatewayChannels)
+          .where(eq(gatewayChannels.id, input.channelId))
+          .one();
+        if (!initialChannel) return denied;
+        await lockRowForUpdate(
+          tx,
+          tx,
+          branches,
+          eq(branches.branch_id, initialChannel.target_branch_id)
         );
-        if (!authority.allowed) return denied;
-        // Same Member + Branch Manager gate as public tasks.cancelQueued, even
-        // when the queue is empty. Never stop partially on cancellation denial.
-        if (
-          input.command === 'stop-clear' &&
-          !(input.allowSuperadmin === true && hasMinimumRole(actor.role, ROLES.SUPERADMIN)) &&
-          (await branchRepo.resolveUserAccess(branch, input.userId)).can !== 'all'
+        const branchRepo = new BranchRepository(tx);
+        const branch = await branchRepo.findById(initialChannel.target_branch_id);
+        if (!branch) return denied;
+        if (input.sessionId) {
+          await lockRowForUpdate(tx, tx, sessions, eq(sessions.session_id, input.sessionId));
+          const session = await new SessionRepository(tx).findById(input.sessionId);
+          if (!session || session.branch_id !== branch.branch_id) return denied;
+          const authority = await branchRepo.resolveSessionPromptAuthority(
+            branch.branch_id,
+            input.userId,
+            session.created_by as UserID,
+            session.sdk_home_scope
+          );
+          if (!authority.allowed) return denied;
+          // Queue management requires Manager even when the queue is empty.
+          if (
+            input.command === 'stop-clear' &&
+            !(input.allowSuperadmin === true && hasMinimumRole(actor.role, ROLES.SUPERADMIN)) &&
+            (await branchRepo.resolveUserAccess(branch, input.userId)).can !== 'all'
+          )
+            return denied;
+        } else if (
+          !['session', 'prompt', 'all'].includes(
+            (await branchRepo.resolveUserAccess(branch, input.userId)).can
+          )
         )
           return denied;
 
@@ -137,7 +153,7 @@ export class GatewayChatCommandRepository {
           .from(gatewayChannels)
           .where(eq(gatewayChannels.id, input.channelId))
           .one();
-        if (!channel?.enabled || channel.target_branch_id !== session.branch_id) return denied;
+        if (!channel?.enabled || channel.target_branch_id !== branch.branch_id) return denied;
         const now = await getDatabaseWallClock(
           tx,
           gatewayChannels,
@@ -211,7 +227,14 @@ export class GatewayChatCommandRepository {
         if (
           !event ||
           !admittedAt ||
-          event.thread_id !== input.threadId ||
+          // Occurrence identity precedes Discord preparation; routing uses the
+          // verified public-thread reply coordinate recorded by preparation.
+          (input.event && event.thread_id !== input.event.thread_id) ||
+          (event.thread_id !== input.threadId &&
+            !(
+              channel.channel_type === 'discord' &&
+              event.delivery_metadata?.[DISCORD_METADATA_KEY.threadId] === input.threadId
+            )) ||
           (input.event &&
             (event.status !== 'processing' ||
               event.processing_token !== input.event.processing_token ||
@@ -224,48 +247,56 @@ export class GatewayChatCommandRepository {
         if (stored) {
           if (
             stored.command !== input.command ||
-            stored.session_id !== input.sessionId ||
+            (stored.session_id !== null && stored.session_id !== input.sessionId) ||
             stored.user_id !== input.userId
           )
             throw new RepositoryError('Gateway command occurrence is already bound');
           return { receipt: stored, removed: [], claimed: null };
         }
 
-        const taskRepo = new TaskRepository(tx);
-        const current = await new GatewayChatCommandRepository(tx).snapshot(input.sessionId);
-        const sameQueue =
-          current.queued_task_ids.length === input.expected.queued_task_ids.length &&
-          current.queued_task_ids.every((id, i) => id === input.expected.queued_task_ids[i]);
-        receipt.queued_count = current.queued_task_ids.length;
         let removed: Task[] = [];
         let claimed: Task | null = null;
-        if (input.command === 'stop' && current.queued_task_ids.length > 0) {
-          receipt.outcome = 'queue_not_empty';
-        } else if (current.task_id !== input.expected.task_id || !sameQueue) {
-          receipt.outcome = 'condition_changed';
+        if (!input.sessionId) {
+          // Persist the no-session observation too. A redelivery after a new
+          // mapping appears must not acquire that mapping's task or queue.
+          receipt.outcome = 'idle';
         } else {
-          // The Session lock excludes both admission and dispatch until commit.
-          if (input.command === 'stop-clear' && current.queued_task_ids.length > 0) {
-            const cancelled = await taskRepo.mutateQueued(input.sessionId, {
-              cancel: current.queued_task_ids,
-            });
-            if (cancelled.outcome !== 'changed')
-              throw new RepositoryError('Gateway command queue changed');
-            removed = cancelled.removed;
-            receipt.cancelled_count = removed.length;
-          }
-          receipt.task_id = current.task_id;
-          receipt.outcome = current.task_id ? 'requested' : 'idle';
-          if (current.task_id) {
-            const result = await taskRepo.claimTermination({
-              taskId: current.task_id,
-              cause: 'user_stop',
-              errorMessage: 'Stopped by user.',
-              requestedBy: { requested_by_user_id: input.userId, requested_via: 'api' },
-            });
-            if (result.outcome !== 'claimed' && result.outcome !== 'unchanged')
-              throw new RepositoryError('Gateway command task changed');
-            claimed = result.task;
+          const expected = input.expected;
+          if (!expected) throw new RepositoryError('Gateway command requires a task snapshot');
+          const taskRepo = new TaskRepository(tx);
+          const current = await new GatewayChatCommandRepository(tx).snapshot(input.sessionId);
+          const sameQueue =
+            current.queued_task_ids.length === expected.queued_task_ids.length &&
+            current.queued_task_ids.every((id, i) => id === expected.queued_task_ids[i]);
+          receipt.queued_count = current.queued_task_ids.length;
+          if (input.command === 'stop' && current.queued_task_ids.length > 0) {
+            receipt.outcome = 'queue_not_empty';
+          } else if (current.task_id !== expected.task_id || !sameQueue) {
+            receipt.outcome = 'condition_changed';
+          } else {
+            // The Session lock excludes both admission and dispatch until commit.
+            if (input.command === 'stop-clear' && current.queued_task_ids.length > 0) {
+              const cancelled = await taskRepo.mutateQueued(input.sessionId, {
+                cancel: current.queued_task_ids,
+              });
+              if (cancelled.outcome !== 'changed')
+                throw new RepositoryError('Gateway command queue changed');
+              removed = cancelled.removed;
+              receipt.cancelled_count = removed.length;
+            }
+            receipt.task_id = current.task_id;
+            receipt.outcome = current.task_id ? 'requested' : 'idle';
+            if (current.task_id) {
+              const result = await taskRepo.claimTermination({
+                taskId: current.task_id,
+                cause: 'user_stop',
+                errorMessage: 'Stopped by user.',
+                requestedBy: { requested_by_user_id: input.userId, requested_via: 'api' },
+              });
+              if (result.outcome !== 'claimed' && result.outcome !== 'unchanged')
+                throw new RepositoryError('Gateway command task changed');
+              claimed = result.task;
+            }
           }
         }
         await update(tx, gatewayInboundEvents)

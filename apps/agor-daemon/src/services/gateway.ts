@@ -84,7 +84,6 @@ import {
   formatGatewaySystemMessage,
   formatGatewaySystemPayload,
   GATEWAY_COMMAND_HELP,
-  GATEWAY_COMMAND_HINT,
   gatewayFailureCode,
   gatewayListenerFailure,
   getConnector,
@@ -281,6 +280,8 @@ interface PostMessageData {
   idempotency_task_id?: TaskID;
   idempotency_session_id?: SessionID;
   gateway_inbound_event_id?: import('@agor/core/types').GatewayInboundEventID;
+  /** Original occurrence coordinate, before provider preparation rewrites routing. */
+  listener_thread_id?: string;
   listener_claim_token?: string;
   listener_channel_id?: import('@agor/core/types').GatewayChannelID;
   /** Decrypted only for the alignment lookup; never persisted as metadata. */
@@ -5594,7 +5595,7 @@ export class GatewayService {
     channel: GatewayChannel,
     data: PostMessageData,
     user: User,
-    sessionId: SessionID
+    sessionId: SessionID | null
   ): Promise<boolean> {
     if (!supportsGatewayChatCommands(channel.channel_type)) return false;
     const command = parseGatewayChatCommand(data.text);
@@ -5610,10 +5611,11 @@ export class GatewayService {
       provider: 'gateway',
       tenant: { tenant_id: tenantId as TenantID, source: 'explicit' },
     };
+    let stage = 'snapshot';
     try {
-      const expected = await this.data.read((db) =>
-        new GatewayChatCommandRepository(db).snapshot(sessionId)
-      );
+      const expected = sessionId
+        ? await this.data.read((db) => new GatewayChatCommandRepository(db).snapshot(sessionId))
+        : null;
       const httpAuthority = verifiedHttpGatewayAuthority(data);
       const event =
         httpAuthority ??
@@ -5622,7 +5624,7 @@ export class GatewayService {
               id: data.gateway_inbound_event_id,
               processing_token: data.listener_claim_token,
               gateway_channel_id: channel.id,
-              thread_id: data.thread_id,
+              thread_id: data.listener_thread_id ?? data.thread_id,
               provider_config_generation: 0,
               verified_app_id: null,
               verified_tenant_id: null,
@@ -5632,6 +5634,7 @@ export class GatewayService {
         channel.channel_type === 'slack'
           ? getSlackMessageTs(data.metadata)
           : discordInboundCursor(data.metadata);
+      stage = 'admission';
       const applied = await this.data.write(async (db) => {
         await lockTenantAuthorizationFence(db, asUser);
         return new GatewayChatCommandRepository(db).execute({
@@ -5649,6 +5652,7 @@ export class GatewayService {
       });
       // Publish only committed changes. The usual Stop endpoint republishes
       // executor control and performs containment outside this transaction.
+      stage = 'notification';
       for (const task of applied.removed) {
         emitServiceEvent(this.app, {
           path: 'tasks',
@@ -5658,7 +5662,7 @@ export class GatewayService {
           params: asUser,
         });
       }
-      if (applied.claimed) {
+      if (applied.claimed && sessionId) {
         emitServiceEvent(this.app, {
           path: 'tasks',
           event: 'patched',
@@ -5677,6 +5681,7 @@ export class GatewayService {
           });
       }
       let stop: SessionStopResult | undefined;
+      stage = 'stop';
       if (applied.receipt.outcome === 'requested' && applied.receipt.task_id) {
         // A redelivery keeps the original target. In particular, never invoke
         // an idle Session Stop merely to wake a different, failure-held queue.
@@ -5692,12 +5697,17 @@ export class GatewayService {
             )) as SessionStopResult;
         }
       }
+      stage = 'reply';
       await this.sendSystemMessage(
         channel,
         data.thread_id,
         formatGatewayCommandReply(applied.receipt, stop)
       );
-    } catch {
+    } catch (error) {
+      // No raw exceptions or provider payloads in logs or external replies.
+      console.warn(
+        `[gateway] event=chat_command_failed tenant_id=${tenantId} channel_id=${channel.id} session_id=${sessionId ?? 'none'} stage=${stage} reason=${classifyGatewayReadFailure(error)}`
+      );
       // Errors may contain SQL, prompts or provider credentials. Do not echo them.
       await this.sendSystemMessage(
         channel,
@@ -6296,18 +6306,8 @@ export class GatewayService {
       }
     } else {
       await this.requireInboundSessionCreateAccess(channel, user.user_id);
-      if (!isReaction && supportsGatewayChatCommands(channel.channel_type)) {
-        const command = parseGatewayChatCommand(data.text);
-        if (command) {
-          await this.sendSystemMessage(
-            channel,
-            data.thread_id,
-            command === 'help'
-              ? GATEWAY_COMMAND_HELP
-              : `There is no current task to stop. ${GATEWAY_COMMAND_HINT}`
-          );
-          return { success: true, sessionId: '', created: false };
-        }
+      if (!isReaction && (await this.runChatCommand(channel, data, user, null))) {
+        return { success: true, sessionId: '', created: false };
       }
     }
 
@@ -8746,6 +8746,7 @@ export class GatewayService {
                 ...(eventId && lease
                   ? {
                       gateway_inbound_event_id: eventId,
+                      listener_thread_id: msg.threadId,
                       idempotency_task_id: gatewayInboundTaskId(eventId),
                       idempotency_session_id: gatewayInboundSessionId(eventId),
                       listener_claim_token: lease.claim_token,

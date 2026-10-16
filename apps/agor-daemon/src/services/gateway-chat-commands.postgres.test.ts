@@ -101,6 +101,31 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       });
     });
 
+    it('a no-session receipt survives replay on another daemon after a mapping appears', async () => {
+      const tenant = `command-unmapped-${generateId()}`;
+      const f = await fixture(tenant);
+      const first = await scoped(a, tenant, async (tx) => {
+        await lockTenantAuthorizationFence(tx);
+        return new GatewayChatCommandRepository(tx).execute({
+          ...f.input,
+          sessionId: null,
+          expected: null,
+        });
+      });
+      expect(first.receipt).toMatchObject({ outcome: 'idle', session_id: null });
+      await scoped(b, tenant, async (tx) => {
+        await lockTenantAuthorizationFence(tx);
+        const replay = await new GatewayChatCommandRepository(tx).execute(f.input);
+        expect(replay.receipt).toEqual(first.receipt);
+        expect(replay.removed).toEqual([]);
+        expect(replay.claimed).toBeNull();
+        expect(await new TaskRepository(tx).findQueued(f.input.sessionId)).toHaveLength(3);
+        expect((await new TaskRepository(tx).findById(f.seed.active.task_id))?.status).toBe(
+          TaskStatus.RUNNING
+        );
+      });
+    });
+
     it('rejects another tenant targeting the same session or provider occurrence', async () => {
       const tenantA = `command-a-${generateId()}`;
       const tenantB = `command-b-${generateId()}`;
