@@ -204,7 +204,7 @@ describe('board patch custom actions', () => {
       source.indexOf('return context;', source.indexOf("if (_action === 'deleteZone'"))
     );
 
-    expect(patchHook.match(/params: context\.params/g)).toHaveLength(5);
-    expect(patchHook.match(/emitServiceEvent\(app/g)).toHaveLength(5);
+    expect(patchHook.match(/params: context\.params/g)).toHaveLength(6);
+    expect(patchHook.match(/emitServiceEvent\(app/g)).toHaveLength(6);
   });
 });
