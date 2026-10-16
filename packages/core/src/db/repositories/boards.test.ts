@@ -1385,6 +1385,42 @@ describe('BoardRepository.batchUpsertBoardObjects', () => {
   });
 });
 
+describe('BoardRepository.batchUpsertBoardObjects zone arrangement', () => {
+  dbTest('keeps a zone layout and order the write leaves out', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': {
+            type: 'zone',
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            label: 'A',
+            layout: 'grid',
+            order: ['b', 'a'],
+          },
+        },
+      })
+    );
+
+    const renamed = await repo.batchUpsertBoardObjects(board.board_id, {
+      'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'Renamed' },
+    });
+    expect(renamed.objects?.['zone-1']).toMatchObject({
+      label: 'Renamed',
+      layout: 'grid',
+      order: ['b', 'a'],
+    });
+
+    const freed = await repo.batchUpsertBoardObjects(board.board_id, {
+      'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'Renamed', layout: 'free' },
+    });
+    expect(freed.objects?.['zone-1']).toMatchObject({ layout: 'free' });
+  });
+});
+
 describe('BoardRepository.mergeBoardObjectFields', () => {
   dbTest('merges only the given fields, preserving the rest of the object', async ({ db }) => {
     const repo = new BoardRepository(db);

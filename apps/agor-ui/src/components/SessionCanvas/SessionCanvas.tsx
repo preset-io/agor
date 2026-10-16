@@ -131,6 +131,7 @@ import { MarkdownNode } from './canvas/MarkdownNode';
 import { RemoteCursorLayer, type StaticRemoteCursor } from './canvas/RemoteCursorLayer';
 import { STALE_DRAFT_TITLE, useCopyDraft } from './canvas/staleDraft';
 import { useBoardObjects } from './canvas/useBoardObjects';
+import { useMeasuredNodeSizes } from './canvas/useMeasuredNodeSizes';
 import { findIntersectingObjects, findZoneAtPosition } from './canvas/utils/collisionDetection';
 import {
   canRepositionBoardComment,
@@ -153,12 +154,7 @@ import {
 import { getValidZoneParentId, sanitizeOrphanedNodeParents } from './canvas/utils/nodeParentUtils';
 import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
 import { DEFAULT_BOARD_OBJECT_Z_INDEX, selectedZIndex } from './canvas/zOrder';
-import {
-  applyZoneGridLayouts,
-  autoLayoutOfZoneNode,
-  type MeasuredNodeSize,
-  zoneGridOrder,
-} from './canvas/zoneGridLayout';
+import { applyZoneGridLayouts, autoLayoutOfZoneNode, zoneGridOrder } from './canvas/zoneGridLayout';
 import { createZoneTriggerSession } from './canvas/zoneTriggerSessionCreation';
 
 interface SessionCanvasProps {
@@ -650,9 +646,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       return map;
     }, [boardObjectsForBoard]);
 
-    // Arranged zones place pinned nodes from React Flow's measured sizes; those positions are never saved.
-    const measuredNodeSizesRef = useRef(new Map<string, MeasuredNodeSize>());
+    // Arranged zones place pinned nodes from their measured sizes; those positions are never saved.
     const [zoneGridMeasureVersion, setZoneGridMeasureVersion] = useState(0);
+    // Right after a board loads, cards hide until measured so they never show in a guessed slot.
+    const [boardSettled, setBoardSettled] = useState(false);
     const placementOfNode = useCallback(
       (nodeId: string) =>
         nodeId.startsWith('card-')
@@ -660,14 +657,18 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           : boardObjectByBranch.get(nodeId),
       [boardObjectByBranch, boardObjectByCard]
     );
+    // biome-ignore lint/correctness/useExhaustiveDependencies: measuredNodeSizesRef is a stable ref read at call time
     const layoutZoneGrids = useCallback(
       (nodes: Node[]) =>
         applyZoneGridLayouts(nodes, {
           measuredSizes: measuredNodeSizesRef.current,
           storedPositionOf: (nodeId) => placementOfNode(nodeId)?.position,
           heldOrderOf: (zoneId) => heldZoneOrdersRef.current.get(zoneId),
+          hideUnmeasured: !boardSettled,
+          // A card dropped elsewhere keeps its drop point until its move is saved.
+          isMoving: (nodeId) => nodeId in localPositionsRef.current,
         }),
-      [placementOfNode]
+      [placementOfNode, boardSettled]
     );
 
     // Card modal state
@@ -901,6 +902,15 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     >({});
     const isDraggingRef = useRef(false);
 
+    // A node's size as shown: measured when known, since React Flow keeps placeholder sizes on synced nodes.
+    const shownSizeOf = useStableCallback((node: Node) => {
+      const measured = measuredNodeSizesRef.current.get(node.id);
+      return {
+        width: measured?.width || node.width || (node.type === 'cardNode' ? 380 : 500),
+        height: measured?.height || node.height || (node.type === 'cardNode' ? 120 : 200),
+      };
+    });
+
     // Arranged zones render at their fitted size, so drops hit-test against what is shown.
     const boardObjectsAsShown = useStableCallback((objects: Board['objects']) => {
       if (!objects) return objects;
@@ -924,7 +934,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         ? shownNodesRef.current.find((candidate) => candidate.id === node.parentId)
         : undefined;
       if (!node || !zone) return undefined;
-      const zoneWidth = Number(zone.data?.width) || Number(zone.style?.width) || 0;
+      const zoneWidth = Number(zone.style?.width) || Number(zone.data?.width) || 0;
       return {
         x: zone.position.x + zoneWidth + 2 * ZONE_GRID_GAP,
         y: zone.position.y + node.position.y,
@@ -1068,11 +1078,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const holdZoneOrder = (zoneId: string, order: string[]) => {
       heldZoneOrdersRef.current.set(zoneId, order);
       setZoneGridMeasureVersion((version) => version + 1);
-      setTimeout(() => {
-        if (heldZoneOrdersRef.current.get(zoneId) !== order) return;
-        heldZoneOrdersRef.current.delete(zoneId);
-        setZoneGridMeasureVersion((version) => version + 1);
-      }, 3000);
+      // A fallback only: a hold normally ends when the saved order arrives, or when its save fails.
+      setTimeout(() => releaseZoneOrder(zoneId, order), 15000);
+    };
+    const releaseZoneOrder = (zoneId: string, order?: string[]) => {
+      if (order && heldZoneOrdersRef.current.get(zoneId) !== order) return;
+      heldZoneOrdersRef.current.delete(zoneId);
+      setZoneGridMeasureVersion((version) => version + 1);
     };
     useEffect(() => {
       let released = false;
@@ -1140,7 +1152,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             client.service('boards').patch(board.board_id, {
               _action: 'placeZoneEntities',
               objectId,
-              objectData: { ...zone, layout, order: [], width, height },
+              size: { width, height },
               positions,
             } as unknown as Partial<Board>)
           );
@@ -1162,7 +1174,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 objects: { [objectId]: { layout, order } },
               } as unknown as Partial<Board>)
         );
-        if (!saved) heldZoneOrdersRef.current.delete(objectId);
+        if (!saved) releaseZoneOrder(objectId, order);
       }
     );
 
@@ -1210,7 +1222,52 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             objects: { [zoneId]: { order: next } },
           } as unknown as Partial<Board>)
         ).then((saved) => {
-          if (!saved) heldZoneOrdersRef.current.delete(zoneId);
+          if (!saved) releaseZoneOrder(zoneId, next);
+        });
+      }
+    );
+
+    // A card dropped into another arranged zone takes the slot nearest the drop: one write of that zone's order.
+    const enterArrangedZone = useStableCallback(
+      (
+        nodeId: string,
+        nodeType: string | undefined,
+        zoneId: string | undefined,
+        previousZoneId: string | null | undefined,
+        absoluteDrop: { x: number; y: number },
+        ticket: BoardWriteTicket
+      ) => {
+        if (!board || !client || !zoneId || zoneId === previousZoneId) return;
+        const zoneNode = shownNodesRef.current.find((node) => node.id === zoneId);
+        const layout = autoLayoutOfZoneNode(zoneNode);
+        if (!zoneNode || !layout) return;
+        const others = zoneGridOrder(
+          zoneNode,
+          pinnedNodesOf(zoneId).filter((node) => node.id !== nodeId),
+          {
+            storedPositionOf: (id) => livePlacementOf(id)?.position,
+            heldOrderOf: (id) => heldZoneOrdersRef.current.get(id),
+          }
+        );
+        const heightOf = (id: string, type: string | undefined) =>
+          measuredNodeSizesRef.current.get(id)?.height ?? (type === 'cardNode' ? 120 : 200);
+        const index = zoneGridDropIndex(
+          layout,
+          Number(zoneNode.data?.width) || 0,
+          others.map((node) => ({ id: node.id, height: heightOf(node.id, node.type) })),
+          { id: nodeId, height: heightOf(nodeId, nodeType) },
+          { x: absoluteDrop.x - zoneNode.position.x, y: absoluteDrop.y - zoneNode.position.y }
+        );
+        const ids = others.map((node) => node.id);
+        const next = [...ids.slice(0, index), nodeId, ...ids.slice(index)];
+        holdZoneOrder(zoneId, next);
+        void writeZone(ticket, 'place the card', () =>
+          client.service('boards').patch(board.board_id, {
+            _action: 'mergeObjectFields',
+            objects: { [zoneId]: { order: next } },
+          } as unknown as Partial<Board>)
+        ).then((saved) => {
+          if (!saved) releaseZoneOrder(zoneId, next);
         });
       }
     );
@@ -1314,6 +1371,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               ...node,
               position: { x: absoluteX, y: absoluteY },
               parentId: undefined, // Remove parent relationship
+              className: undefined,
+              style: undefined,
+              data: { ...node.data, slotWidth: undefined },
             };
           }
           return node;
@@ -1482,7 +1542,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       setNodes((currentNodes) =>
         currentNodes.map((node) => {
           if (node.id === `card-${cardId}`) {
-            return { ...node, position: { x: absoluteX, y: absoluteY }, parentId: undefined };
+            return {
+              ...node,
+              position: { x: absoluteX, y: absoluteY },
+              parentId: undefined,
+              className: undefined,
+              style: undefined,
+              data: { ...node.data, slotWidth: undefined },
+            };
           }
           return node;
         })
@@ -1557,6 +1624,15 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Store ReactFlow instance ref
     const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
     const reactFlowWrapperRef = useRef<HTMLDivElement | null>(null);
+    // Re-place arranged zones when one of their cards changes size.
+    const measuredNodeSizesRef = useMeasuredNodeSizes(reactFlowWrapperRef, (nodeIds) => {
+      const shown = shownNodesRef.current;
+      const inArrangedZone = nodeIds.some((nodeId) => {
+        const parentId = shown.find((node) => node.id === nodeId)?.parentId;
+        return !!parentId && !!autoLayoutOfZoneNode(shown.find((node) => node.id === parentId));
+      });
+      if (inArrangedZone) setZoneGridMeasureVersion((version) => version + 1);
+    });
     // Track when ReactFlow instance is ready (state to trigger re-renders)
     const [isReactFlowReady, setIsReactFlowReady] = useState(false);
 
@@ -2128,12 +2204,16 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       boardResyncNonce,
     ]);
 
-    // Cards glide between grid slots only once a board has settled, so loading a board doesn't animate.
-    const [zoneGridAnimate, setZoneGridAnimate] = useState(false);
+    // Cards glide between slots once the board has settled (the class lives on our wrapper, not React Flow's).
+    useEffect(() => {
+      reactFlowWrapperRef.current?.classList.toggle('zone-grid-animate', boardSettled);
+    }, [boardSettled]);
+
+    // A board settles 1.5s after it loads: cards glide between slots only after that, and none stay hidden.
     // biome-ignore lint/correctness/useExhaustiveDependencies: restart the settle delay whenever the board changes
     useEffect(() => {
-      setZoneGridAnimate(false);
-      const timer = setTimeout(() => setZoneGridAnimate(true), 1500);
+      setBoardSettled(false);
+      const timer = setTimeout(() => setBoardSettled(true), 1500);
       return () => clearTimeout(timer);
     }, [board?.board_id]);
 
@@ -2319,7 +2399,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         }
 
         // Detect resize by checking for dimensions changes
-        let gridMeasurementChanged = false;
         // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported
         changes.forEach((change: any) => {
           if (change.type === 'dimensions' && change.dimensions) {
@@ -2328,21 +2407,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // `getNode` is a stable reference and only runs inside this dimensions
             // branch, so the hot drag/position path does zero O(n) work.
             const node = reactFlowInstanceRef.current?.getNode(change.id);
-            if (node?.type === 'branchNode' || node?.type === 'cardNode') {
-              const { width, height } = change.dimensions;
-              const previous = measuredNodeSizesRef.current.get(change.id);
-              if (
-                !previous ||
-                Math.abs(previous.width - width) >= 1 ||
-                Math.abs(previous.height - height) >= 1
-              ) {
-                measuredNodeSizesRef.current.set(change.id, { width, height });
-                const parent = node.parentId
-                  ? reactFlowInstanceRef.current?.getNode(node.parentId)
-                  : undefined;
-                if (autoLayoutOfZoneNode(parent)) gridMeasurementChanged = true;
-              }
-            }
             // An arranged zone fits its cards on screen; only a person resizing it saves a size.
             if (node?.type === 'zone' && autoLayoutOfZoneNode(node) && change.resizing !== true) {
               return;
@@ -2433,7 +2497,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
         // Call the original handler
         onNodesChangeInternal(changes);
-        if (gridMeasurementChanged) setZoneGridMeasureVersion((version) => version + 1);
       },
       [client, onNodesChangeInternal, setNodes, boardGuard, showError, resyncBoardNodes]
     );
@@ -2473,6 +2536,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         // Reset dragging flag immediately to allow node sync effects to run
         isDraggingRef.current = false;
         reactFlowWrapperRef.current?.classList.remove('canvas-dragging');
+        // Sizes that changed during the drag were not laid out yet.
+        setZoneGridMeasureVersion((version) => version + 1);
         // A failed write during the drag skipped its redraw.
         if (boardResyncPendingRef.current) setBoardResyncNonce((nonce) => nonce + 1);
 
@@ -2483,8 +2548,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           autoLayoutOfZoneNode(reactFlowInstanceRef.current.getNode(node.parentId))
         ) {
           const dropped = node.positionAbsolute || node.position;
-          const width = node.width || (node.type === 'cardNode' ? 380 : 500);
-          const height = node.height || (node.type === 'cardNode' ? 120 : 200);
+          const { width, height } = shownSizeOf(node);
           const target = findZoneAtPosition(
             { x: dropped.x + width / 2, y: dropped.y + height / 2 },
             boardObjectsAsShown(board.objects)
@@ -2678,8 +2742,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 const absolutePosition = position;
 
                 // Check zone collision (same logic as branches)
-                const nodeWidth = draggedNode.width || 380;
-                const nodeHeight = draggedNode.height || 120;
+                const { width: nodeWidth, height: nodeHeight } = shownSizeOf(draggedNode);
                 const center = {
                   x: absolutePosition.x + nodeWidth / 2,
                   y: absolutePosition.y + nodeHeight / 2,
@@ -2714,6 +2777,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                   if (!placementIsCurrent(existingBoardObject)) continue;
                   if (!mayDispatch(nodeId)) continue;
                   await patchPlacement(nodeId, existingBoardObject, positionToStore, droppedZoneId);
+                  enterArrangedZone(
+                    nodeId,
+                    draggedNode.type,
+                    droppedZoneId,
+                    existingBoardObject.zone_id,
+                    absolutePosition,
+                    update.ticket
+                  );
                 }
                 // Cards don't fire zone triggers (V1: cards are inert in zones)
               } else if (draggedNode?.type === 'branchNode') {
@@ -2724,8 +2795,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
                 // Check if branch was dropped on a zone
                 // Calculate center point for collision (use actual node dimensions if available)
-                const nodeWidth = draggedNode.width || 500;
-                const nodeHeight = draggedNode.height || 200;
+                const { width: nodeWidth, height: nodeHeight } = shownSizeOf(draggedNode);
                 const center = {
                   x: absolutePosition.x + nodeWidth / 2,
                   y: absolutePosition.y + nodeHeight / 2,
@@ -2771,6 +2841,15 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                     : null;
 
                 const positionToStore = calculateStoragePosition(absolutePosition, newParent);
+
+                enterArrangedZone(
+                  nodeId,
+                  draggedNode.type,
+                  droppedZoneId,
+                  oldZoneId,
+                  absolutePosition,
+                  update.ticket
+                );
 
                 // Branch moved - update board_object position (null clears zone, string sets it)
                 branchUpdates.push({
@@ -2937,6 +3016,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         showError,
         boardObjectsAsShown,
         reorderInZone,
+        enterArrangedZone,
+        shownSizeOf,
       ]
     );
 
@@ -3470,7 +3551,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             panOnScroll={activeTool === 'select' && !drawingZone}
             panOnDrag={!drawingZone} // Always allow drag to pan (left mouse in select, any in other modes)
             selectionOnDrag={false} // Disable selection box - not useful for branch cards
-            className={`tool-mode-${activeTool}${zoneGridAnimate ? ' zone-grid-animate' : ''}`}
+            className={`tool-mode-${activeTool}`}
             // Disable React Flow's keyboard shortcuts that conflict with typing/spatial messages.
             // Keep modifier-scroll zoom enabled so Command/Control + scroll behaves like Figma.
             deleteKeyCode={null}

@@ -113,6 +113,45 @@ describe('applyZoneGridLayouts', () => {
     expect(['c', 'a', 'b'].map((id) => result.get(id)?.position.y)).toEqual([80, 200, 320]);
   });
 
+  it('leaves a card being moved out at its drop point until the move is saved', () => {
+    const nodes = [
+      zone('zone-1', 'grid'),
+      branch('a', 'zone-1'),
+      branch('b', 'zone-1', { x: 9, y: 9 }),
+    ];
+    const result = byId(
+      applyZoneGridLayouts(nodes, {
+        measuredSizes: new Map(),
+        storedPositionOf: () => undefined,
+        isMoving: (id) => id === 'b',
+      })
+    );
+    expect(result.get('b')?.position).toEqual({ x: 9, y: 9 });
+    expect(result.get('a')?.position).toEqual({ x: 20, y: 80 });
+  });
+
+  it('hides unmeasured cards only while asked to, leaving React Flow its own visibility', () => {
+    const nodes = [zone('zone-1', 'column', 600), branch('a', 'zone-1'), branch('b', 'zone-1')];
+    const sizes = new Map([['a', { width: 560, height: 100 }]]);
+    const settling = byId(
+      applyZoneGridLayouts(nodes, {
+        measuredSizes: sizes,
+        storedPositionOf: () => undefined,
+        hideUnmeasured: true,
+      })
+    );
+    expect(settling.get('a')?.style).not.toHaveProperty('visibility');
+    expect(settling.get('b')?.style?.visibility).toBe('hidden');
+
+    const settled = byId(
+      applyZoneGridLayouts([...settling.values()], {
+        measuredSizes: sizes,
+        storedPositionOf: () => undefined,
+      })
+    );
+    expect(settled.get('b')?.style).not.toHaveProperty('visibility');
+  });
+
   it('returns the same array once laid out, so setNodes cannot loop', () => {
     const sizes = { a: { width: 500, height: 150 } };
     const once = layout([zone('zone-1', 'grid'), branch('a', 'zone-1')], sizes);
@@ -123,7 +162,7 @@ describe('applyZoneGridLayouts', () => {
     const result = layout([zone('zone-1', 'grid'), branch('a', 'zone-1')], {
       a: { width: 880, height: 300 },
     });
-    expect(byId(result).get('a')?.zIndex).toBe(501);
+    expect(byId(result).get('a')?.style?.zIndex).toBe(501);
   });
 
   it('ignores nodes whose parent is not an auto zone', () => {
