@@ -1,4 +1,5 @@
 import { generateId, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
+import type { SDKSystemMessage } from '@agor/core/sdk';
 import type { Message, MessageID, SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessagesService } from '../base/index.js';
@@ -132,7 +133,10 @@ describe('SDKMessageProcessor command discovery', () => {
         slash_commands: ['compact', 'doctor', 'exit', 'future-terminal', 'plugin:review'],
         terminal_slash_commands: ['doctor', 'exit', 'future-terminal'],
         skills: ['doctor', 'plugin:review'],
-      })
+      } satisfies Pick<
+        SDKSystemMessage,
+        'subtype' | 'slash_commands' | 'terminal_slash_commands' | 'skills'
+      >)
     );
     expect(events).toEqual([
       {
@@ -152,7 +156,10 @@ describe('SDKMessageProcessor command discovery', () => {
         subtype: 'init',
         slash_commands: ['compact', 'clear', 'context', 'usage', 'config', 'custom-command'],
         skills: ['custom-command'],
-      })
+      } satisfies Pick<
+        SDKSystemMessage,
+        'subtype' | 'slash_commands' | 'terminal_slash_commands' | 'skills'
+      >)
     );
     expect(events).toEqual([
       {
