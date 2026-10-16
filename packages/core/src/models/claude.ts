@@ -191,7 +191,7 @@ export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
     id: 'claude-haiku-4-5',
     displayName: 'Claude Haiku 4.5',
     family: 'claude-4',
-    description: 'Previous Haiku model; fast with near-frontier intelligence',
+    description: 'Fastest with near-frontier intelligence',
     contextWindow: CLAUDE_STANDARD_CONTEXT_WINDOW,
   },
   {

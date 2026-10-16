@@ -35,7 +35,7 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ### Features
 
-- **Claude Haiku 5.5** — adds `claude-haiku-5-5` (native 1M context) to the Claude model picker and the OpenCode Anthropic catalog, and bundles Claude Agent SDK 0.3.293, the first release whose runtime knows the model. Haiku 4.5 stays selectable as the previous Haiku. ([#3130](https://github.com/preset-io/agor/pull/3130))
+- **Claude Haiku 5.5** — adds `claude-haiku-5-5` (native 1M context) to the Claude model picker and the OpenCode Anthropic catalog, and bundles Claude Agent SDK 0.3.293, the first release whose runtime knows the model. Haiku 4.5 is unchanged and stays selectable. ([#3130](https://github.com/preset-io/agor/pull/3130))
 
 ### Security
 
