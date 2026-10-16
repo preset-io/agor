@@ -202,6 +202,10 @@ async function createTestProvider(
     callbackIssuerSupported?: boolean;
     holdMcpChallenge?: boolean;
     clientCredentialsOnly?: boolean;
+    /** Serve no RFC 9728 metadata, so legacy discovery goes AS-direct. */
+    asDirect?: boolean;
+    /** Append `?api_key=<canary>` to every provider-advertised URL. */
+    queryCanary?: string;
   } = {}
 ): Promise<TestProvider> {
   const requests: TestProvider['requests'] = [];
@@ -235,6 +239,8 @@ async function createTestProvider(
   const authorizeVerdicts: TestProvider['authorizeVerdicts'] = [];
   let issuedClients = 0;
   const servesRegistration = (): boolean => options.serveDynamicRegistration === true;
+  const withCanary = (target: string): string =>
+    options.queryCanary ? `${target}?api_key=${options.queryCanary}` : target;
   const advertisesRegistration = (): boolean =>
     options.rejectDynamicRegistration === true ||
     options.holdDynamicRegistration === true ||
@@ -257,12 +263,19 @@ async function createTestProvider(
       response.end();
       return;
     }
+    if (options.asDirect && url.pathname === '/.well-known/oauth-protected-resource') {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
     if (url.pathname === '/.well-known/oauth-protected-resource') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify({
           resource: `${baseUrl}${options.resourcePath ?? '/saved/mcp'}`,
-          authorization_servers: [baseUrl],
+          authorization_servers: options.queryCanary
+            ? [baseUrl, withCanary(`${baseUrl}/secondary`)]
+            : [baseUrl],
           ...(options.resourceScopes ? { scopes_supported: options.resourceScopes } : {}),
         })
       );
@@ -273,9 +286,11 @@ async function createTestProvider(
       response.end(
         JSON.stringify({
           issuer: options.metadataIssuer ?? baseUrl,
-          authorization_endpoint: `${baseUrl}/authorize`,
-          token_endpoint: `${baseUrl}/token`,
-          ...(advertisesRegistration() ? { registration_endpoint: `${baseUrl}/register` } : {}),
+          authorization_endpoint: withCanary(`${baseUrl}/authorize`),
+          token_endpoint: withCanary(`${baseUrl}/token`),
+          ...(advertisesRegistration()
+            ? { registration_endpoint: withCanary(`${baseUrl}/register`) }
+            : {}),
           response_types_supported: ['code'],
           code_challenge_methods_supported: options.pkceMethods ?? ['S256'],
           // The DCR fixture deliberately omits RFC 9207 response-issuer
@@ -444,9 +459,10 @@ async function createTestProvider(
       if (options.holdMcpChallenge) await releaseMcp.promise;
       if (request.headers.authorization !== 'Bearer sqlite-access-token') {
         response.writeHead(401, {
-          'www-authenticate': options.clientCredentialsOnly
-            ? 'Bearer'
-            : `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`,
+          'www-authenticate':
+            options.clientCredentialsOnly || options.asDirect
+              ? 'Bearer'
+              : `Bearer resource_metadata="${withCanary(`${baseUrl}/.well-known/oauth-protected-resource`)}"`,
         });
         response.end();
         return;
@@ -3447,6 +3463,50 @@ describe('SQLite saved-row OAuth authority', () => {
       )
     ).toBe(false);
   });
+
+  it.each([
+    ['RFC 9728', false],
+    ['AS-direct', true],
+  ] as const)(
+    'test-oauth %s discovery never echoes provider-advertised URLs',
+    async (_branch, asDirect) => {
+      const canary = 'TOKEN_CANARY_2500';
+      const provider = await createTestProvider({
+        asDirect,
+        queryCanary: canary,
+        rejectDynamicRegistration: true,
+      });
+      providers.push(provider);
+      const harness = await createHarness(provider);
+      databases.push(harness.rawDb);
+
+      const result = (await harness.app
+        .service('mcp-servers/test-oauth')
+        .create(
+          { mcp_url: provider.savedMcpUrl, compatibility_mode: 'legacy' },
+          paramsFor(harness)
+        )) as Record<string, unknown>;
+
+      expect(result).toMatchObject({
+        success: true,
+        oauthType: 'oauth2.1',
+        supportsDynamicClientRegistration: true,
+        requiresBrowserFlow: true,
+      });
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain(canary);
+      expect(serialized).not.toContain(provider.baseUrl);
+      expect(
+        provider.requests.some((entry) =>
+          entry.path.startsWith(
+            asDirect
+              ? '/.well-known/oauth-authorization-server'
+              : '/.well-known/oauth-protected-resource'
+          )
+        )
+      ).toBe(true);
+    }
+  );
 
   it('tests JWT credentials normally while keeping provider tokens out of the response', async () => {
     const provider = await createTestProvider();
