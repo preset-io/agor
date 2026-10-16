@@ -130,6 +130,36 @@ describe('ZoneNode compact toolbar', () => {
     expect(onLayoutChange).not.toHaveBeenCalled();
   });
 
+  it('labels a grid zone on the zone itself and changes its layout from there', async () => {
+    const ticket = { boardId: 'board-1' };
+    const onLayoutChange = vi.fn(async () => {});
+    renderZone(vi.fn(), CONNECTED, {
+      selected: false,
+      layout: 'grid',
+      beginBoardWrite: vi.fn(() => ticket),
+      onLayoutChange,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Grid layout. Change layout' }));
+    fireEvent.click(await screen.findByText('Arrange cards in one column'));
+
+    await waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith('zone-1', 'list', ticket));
+  });
+
+  it('shows viewers the layout without a control, and free zones without a label', () => {
+    const { unmount } = renderZone(vi.fn(), CONNECTED, {
+      canEdit: false,
+      layout: 'list',
+      onLayoutChange: vi.fn(async () => {}),
+    });
+    expect(screen.getByText('List')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Change layout/ })).not.toBeInTheDocument();
+    unmount();
+
+    renderZone(vi.fn(), CONNECTED, { selected: false, onLayoutChange: vi.fn(async () => {}) });
+    expect(screen.queryByRole('button', { name: /Change layout/ })).not.toBeInTheDocument();
+  });
+
   it('uses native keyboard-focusable buttons for common actions', () => {
     const onUpdate = vi.fn();
     renderZone(vi.fn(), CONNECTED, { onUpdate });

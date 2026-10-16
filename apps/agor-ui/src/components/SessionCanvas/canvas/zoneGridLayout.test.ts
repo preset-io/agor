@@ -62,7 +62,7 @@ describe('applyZoneGridLayouts', () => {
     expect(result.get('c')?.position).toEqual({ x: 20, y: 260 });
   });
 
-  it('grows the zone to fit but never below the height people set', () => {
+  it('fits the zone height to its cards, growing and shrinking', () => {
     const tall = layout([zone('zone-1', 'list', 600, 200), branch('a', 'zone-1')], {
       a: { width: 500, height: 400 },
     });
@@ -71,7 +71,7 @@ describe('applyZoneGridLayouts', () => {
     const roomy = layout([zone('zone-1', 'list', 600, 900), branch('a', 'zone-1')], {
       a: { width: 500, height: 100 },
     });
-    expect(byId(roomy).get('zone-1')?.style?.height).toBe(900);
+    expect(byId(roomy).get('zone-1')?.style?.height).toBe(200);
   });
 
   it('widens a narrow grid zone on screen to fit two columns', () => {

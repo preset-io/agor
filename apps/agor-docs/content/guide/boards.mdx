@@ -67,7 +67,7 @@ The **layout** button in the zone toolbar chooses how the zone places its branch
 
 In Grid and List, cards keep their natural height, keep their order, and stay in their column. When an agent adds a session and a card grows, only the cards below it in the same column move. A card dropped into the zone joins at the end. To reorder, drag a card onto the slot where you want it; the other cards shift to make room. Drag a card out of the zone to take it out of the layout.
 
-A Grid or List zone grows taller to fit its cards and may overlap a zone below it. Switching back to **Free** keeps every card where it was shown. Agents can set a zone's layout with `agor_boards_update` (`layout: "free" | "grid" | "list"`).
+A Grid or List zone fits its height to its cards, so it may overlap a zone below it; you can still resize its width, which sets how many columns a Grid shows. A badge in the zone's corner shows the layout and card count, and editors can change the layout from it. Switching back to **Free** keeps every card where it was shown. Agents can set a zone's layout with `agor_boards_update` (`layout: "free" | "grid" | "list"`).
 
 ### How zone triggers work
 
