@@ -26,6 +26,7 @@ import { pressableProps } from '../../utils/pressableProps';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
 import { getBoardEmoji } from '../BoardTile';
+import { FadeText } from '../FadeText';
 import { BoardPill, BranchPill, getChannelIcon, TeammatePill } from '../Pill';
 import { SessionRowLogo, SessionStatusMark } from '../SessionRow';
 import { APPROVAL_TIMEOUT_MESSAGE } from '../TaskBlock/describeTurnOutcome';
@@ -184,12 +185,7 @@ const HomeRow: React.FC<HomeRowProps> = ({
       )}
       <Flex vertical gap={HOME_ROW_LINE_GAP} style={{ flex: 1, minWidth: 0 }}>
         <Flex align="center" gap={token.marginXS} style={{ minWidth: 0, overflow: 'hidden' }}>
-          <Typography.Text
-            ellipsis={{ tooltip: title }}
-            style={{ flex: 1, minWidth: 0, fontWeight: HOME_ROW_TITLE_WEIGHT }}
-          >
-            {title}
-          </Typography.Text>
+          <FadeText style={{ flex: 1, fontWeight: HOME_ROW_TITLE_WEIGHT }}>{title}</FadeText>
         </Flex>
         {meta && (
           <Flex
@@ -462,13 +458,9 @@ export const HomeSessionRow = memo(function HomeSessionRow({
         (reasonLabel || showContext || origin) && (
           <>
             {reasonLabel && (
-              <Typography.Text
-                type="secondary"
-                ellipsis={{ tooltip: detail }}
-                style={{ fontSize: token.fontSizeSM, minWidth: 0 }}
-              >
+              <FadeText type="secondary" dense style={{ fontSize: token.fontSizeSM }}>
                 {detail ? `${reasonLabel} · ${detail}` : reasonLabel}
-              </Typography.Text>
+              </FadeText>
             )}
             {showContext && (
               <HomeContext branchId={session.branch_id} boardId={session.branch_board_id} />
