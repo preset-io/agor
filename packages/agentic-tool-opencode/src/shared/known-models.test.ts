@@ -91,6 +91,7 @@ describe('OpenCode known model catalog', () => {
         expect.objectContaining({ id: 'claude-opus-5' }),
         expect.objectContaining({ id: 'claude-sonnet-5-5' }),
         expect.objectContaining({ id: 'claude-sonnet-5' }),
+        expect.objectContaining({ id: 'claude-haiku-5-5' }),
         expect.objectContaining({ id: 'claude-haiku-4-5' }),
       ]),
     });
