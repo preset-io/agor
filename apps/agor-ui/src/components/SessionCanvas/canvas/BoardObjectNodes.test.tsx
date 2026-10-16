@@ -40,7 +40,7 @@ function renderZone(
     onUpdate?: ReturnType<typeof vi.fn>;
     beginBoardWrite?: ReturnType<typeof vi.fn>;
     onDraftLost?: ReturnType<typeof vi.fn>;
-    layout?: 'free' | 'grid' | 'list';
+    layout?: 'free' | 'row' | 'column' | 'grid';
     onLayoutChange?: ReturnType<typeof vi.fn>;
   }
 ) {
@@ -111,9 +111,9 @@ describe('ZoneNode compact toolbar', () => {
     const ticket = { boardId: 'board-1' };
     const beginBoardWrite = vi.fn(() => ticket);
     const onLayoutChange = vi.fn(async () => {});
-    renderZone(vi.fn(), CONNECTED, { layout: 'list', beginBoardWrite, onLayoutChange });
+    renderZone(vi.fn(), CONNECTED, { layout: 'column', beginBoardWrite, onLayoutChange });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Zone layout: List' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Zone layout: Column' }));
     fireEvent.click(await screen.findByText('Grid'));
 
     await waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith('zone-1', 'grid', ticket));
@@ -143,16 +143,16 @@ describe('ZoneNode compact toolbar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Grid layout. Change layout' }));
     fireEvent.click(await screen.findByText('Arrange cards in one column'));
 
-    await waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith('zone-1', 'list', ticket));
+    await waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith('zone-1', 'column', ticket));
   });
 
   it('shows viewers the layout without a control, and free zones without a label', () => {
     const { unmount } = renderZone(vi.fn(), CONNECTED, {
       canEdit: false,
-      layout: 'list',
+      layout: 'row',
       onLayoutChange: vi.fn(async () => {}),
     });
-    expect(screen.getByText('List')).toBeInTheDocument();
+    expect(screen.getByText('Row')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Change layout/ })).not.toBeInTheDocument();
     unmount();
 

@@ -75,8 +75,9 @@ function sameNumber(a: unknown, b: number) {
 }
 
 /**
- * Place every branch and card pinned to a grid or list zone. Those zones fit
- * their height to their cards and widen if a grid's columns need it. Display-only: nothing here is persisted. Returns the same
+ * Place every branch and card pinned to an arranged zone (row, column or
+ * grid). Those zones fit their height to their cards; rows and columns fit
+ * their width too, and a grid widens if its columns need it. Display-only: nothing here is persisted. Returns the same
  * array when nothing moved, so callers can feed it straight into setNodes
  * without a render loop.
  */
@@ -121,7 +122,8 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
       });
     }
     zoneSizes.set(zoneId, {
-      width: Math.max(zoneWidthOf(zone), plan.contentWidth),
+      // A grid keeps the width people set (its column count); rows and columns fit their cards.
+      width: layout === 'grid' ? Math.max(zoneWidthOf(zone), plan.contentWidth) : plan.contentWidth,
       height: plan.contentHeight,
     });
   }

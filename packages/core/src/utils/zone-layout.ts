@@ -1,8 +1,8 @@
 /**
  * Zone layouts: how a zone places the branches and cards pinned to it.
  *
- * `free` zones keep each entity's stored position. `grid` and `list` zones
- * place entities in columns computed on every screen from measured heights;
+ * `free` zones keep each entity's stored position. `row`, `column` and `grid`
+ * zones arrange entities in slots computed on every screen from measured heights;
  * those positions are display-only and are never written back. While a zone
  * is auto-laid-out, an entity's stored zone-relative position only serves as
  * its order key, so the planner here is pure and shared by the UI and daemon.
@@ -14,7 +14,7 @@ import {
   computeZoneRelativePosition,
 } from './board-placement.js';
 
-export const ZONE_LAYOUTS: readonly ZoneLayout[] = ['free', 'grid', 'list'];
+export const ZONE_LAYOUTS: readonly ZoneLayout[] = ['free', 'row', 'column', 'grid'];
 
 /** Board grid step; every computed top and pitch snaps to it. */
 export const ZONE_GRID_STEP = 20;
@@ -30,7 +30,7 @@ export type AutoZoneLayout = Exclude<ZoneLayout, 'free'>;
 /** The zone's layout, treating missing or unknown values as `free`. */
 export function zoneLayoutOf(zone: Pick<ZoneBoardObject, 'layout'> | undefined): ZoneLayout {
   const layout = zone?.layout;
-  return layout === 'grid' || layout === 'list' ? layout : 'free';
+  return layout === 'row' || layout === 'column' || layout === 'grid' ? layout : 'free';
 }
 
 export function isAutoZoneLayout(layout: ZoneLayout): layout is AutoZoneLayout {
@@ -42,14 +42,29 @@ const snapUp = (value: number) => Math.ceil(value / ZONE_GRID_STEP) * ZONE_GRID_
 /** Fewest columns a grid shows; a narrower zone widens on screen to fit them. */
 export const ZONE_GRID_MIN_COLUMNS = 2;
 
-/** Columns a zone of this width fits (at least two for a grid); a list always has one. */
-export function zoneGridColumnCount(layout: AutoZoneLayout, zoneWidth: number): number {
-  if (layout === 'list') return 1;
+/** Columns an arranged zone shows: one per card in a row, one in a column, as many as fit (at least two) in a grid. */
+export function zoneGridColumnCount(
+  layout: AutoZoneLayout,
+  zoneWidth: number,
+  itemCount = 1
+): number {
+  if (layout === 'row') return Math.max(1, itemCount);
+  if (layout === 'column') return 1;
   const usable = zoneWidth - 2 * ZONE_GRID_PADDING + ZONE_GRID_GAP;
   return Math.max(
     ZONE_GRID_MIN_COLUMNS,
     Math.floor(usable / (ZONE_GRID_COLUMN_WIDTH + ZONE_GRID_GAP))
   );
+}
+
+/**
+ * Width a zone takes when it switches to grid, or undefined to keep its own.
+ * A width that would put every card in one row (say, left over from a row)
+ * gets roughly square columns instead, so the grid looks like a grid.
+ */
+export function zoneGridWidthOnSwitch(zoneWidth: number, itemCount: number): number | undefined {
+  if (itemCount < 3 || zoneGridColumnCount('grid', zoneWidth) < itemCount) return undefined;
+  return zoneWidthFor(Math.max(ZONE_GRID_MIN_COLUMNS, Math.ceil(Math.sqrt(itemCount))));
 }
 
 /** Zone width that fits this many columns, padding included. */
@@ -92,7 +107,7 @@ export function planZoneGrid(
   zoneWidth: number,
   items: readonly ZoneGridPlanItem[]
 ): ZoneGridPlan {
-  const columnCount = zoneGridColumnCount(layout, zoneWidth);
+  const columnCount = zoneGridColumnCount(layout, zoneWidth, items.length);
   const columnTops = new Array<number>(columnCount).fill(ZONE_GRID_HEADER);
   const positions = new Map<string, BoardPosition>();
   const columns = new Map<string, number>();

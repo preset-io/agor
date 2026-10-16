@@ -118,7 +118,7 @@
   height: 12px;
 }
 
-/* Cards in grid and list zones glide to a new slot; never while something is being dragged. */
+/* Cards in arranged zones glide to a new slot; never while something is being dragged. */
 .react-flow.zone-grid-animate .react-flow__node.zone-grid-child {
   transition: transform 200ms ease;
 }
