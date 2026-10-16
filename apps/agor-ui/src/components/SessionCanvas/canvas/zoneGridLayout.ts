@@ -57,12 +57,12 @@ function zoneWidthOf(zone: Node) {
 }
 
 const PINNED_ENTITY_TYPES = new Set(['branchNode', 'cardNode']);
+/** The stacking order cards get by default. */
+const BASE_ENTITY_Z_INDEX = 500;
 /** Fallback heights until React Flow reports a measurement. */
 const FALLBACK_HEIGHT: Record<string, number> = { branchNode: 200, cardNode: 120 };
 /** Marks nodes the grid places, so the canvas stylesheet can glide them between slots. */
 export const ZONE_GRID_CHILD_CLASS = 'zone-grid-child';
-/** Stacking order for a card wider than its slot, just above the other cards (500). */
-const WIDE_Z_INDEX = 501;
 
 function withChildClasses(className: string | undefined) {
   if (className?.split(' ').includes(ZONE_GRID_CHILD_CLASS)) return className;
@@ -106,7 +106,7 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
 
   const childUpdates = new Map<
     string,
-    { position: BoardPosition; wide: boolean; slotWidth: number; hidden: boolean }
+    { position: BoardPosition; wideZIndex?: number; slotWidth: number; hidden: boolean }
   >();
   const zoneSizes = new Map<string, { width: number; height: number }>();
   for (const [zoneId, { node: zone, layout }] of autoZones) {
@@ -120,14 +120,15 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
           inputs.measuredSizes.get(child.id)?.height ?? FALLBACK_HEIGHT[child.type ?? ''] ?? 200,
       }))
     );
+    // A card widened for a session peek floats above every other card in its zone.
+    const topZIndex = Math.max(BASE_ENTITY_Z_INDEX, ...ordered.map((child) => child.zIndex ?? 0));
     for (const item of ordered) {
       const position = plan.positions.get(item.id);
       if (!position) continue;
-      // A card widened for a session peek floats over its right-hand neighbor.
       const wide = (inputs.measuredSizes.get(item.id)?.width ?? 0) > plan.columnWidth + 1;
       childUpdates.set(item.id, {
         position,
-        wide,
+        wideZIndex: wide ? topZIndex + 1 : undefined,
         slotWidth: plan.columnWidth,
         hidden: !!inputs.hideUnmeasured && !inputs.measuredSizes.has(item.id),
       });
@@ -139,7 +140,7 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
   const next = nodes.map((node) => {
     const childUpdate = childUpdates.get(node.id);
     if (childUpdate) {
-      const { position, wide, slotWidth, hidden } = childUpdate;
+      const { position, wideZIndex, slotWidth, hidden } = childUpdate;
       const className = withChildClasses(node.className);
       if (
         sameNumber(node.position.x, position.x) &&
@@ -147,7 +148,7 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
         node.className === className &&
         node.data?.slotWidth === slotWidth &&
         (node.style?.visibility === 'hidden') === hidden &&
-        (node.style?.zIndex === WIDE_Z_INDEX) === wide
+        node.style?.zIndex === wideZIndex
       ) {
         return node;
       }
@@ -162,8 +163,7 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
         style: {
           ...style,
           ...(hidden ? { visibility: 'hidden' as const } : {}),
-          // A card widened for a session peek floats over its neighbour in the next column.
-          ...(wide ? { zIndex: WIDE_Z_INDEX } : {}),
+          ...(wideZIndex !== undefined ? { zIndex: wideZIndex } : {}),
         },
         data: { ...node.data, slotWidth },
       };

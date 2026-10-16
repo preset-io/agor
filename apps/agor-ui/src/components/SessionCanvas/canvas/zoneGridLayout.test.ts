@@ -163,6 +163,13 @@ describe('applyZoneGridLayouts', () => {
       a: { width: 880, height: 300 },
     });
     expect(byId(result).get('a')?.style?.zIndex).toBe(501);
+
+    const raised = { ...branch('b', 'zone-1'), zIndex: 503 };
+    const withRaised = layout([zone('zone-1', 'grid'), branch('a', 'zone-1'), raised], {
+      a: { width: 880, height: 300 },
+      b: { width: 500, height: 300 },
+    });
+    expect(byId(withRaised).get('a')?.style?.zIndex).toBe(504);
   });
 
   it('ignores nodes whose parent is not an auto zone', () => {
