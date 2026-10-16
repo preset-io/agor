@@ -377,6 +377,7 @@ export interface MessagesServiceImpl
  * Branches service with custom methods (server-side implementation)
  */
 export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, FeathersParams> {
+  forceReleaseDeletion(id: BranchID, params?: FeathersParams): Promise<Branch>;
   retireTeammate(
     id: BranchID,
     params?: FeathersParams

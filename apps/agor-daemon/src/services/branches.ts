@@ -1,3 +1,7 @@
+import {
+  exitedDeletionSummary,
+  releaseDeletionIfExecutorAbsent,
+} from './branch-deletion-reconciler.js';
 import type { ReposService } from './repos.js';
 /**
  * Branches Service
@@ -126,6 +130,7 @@ import {
   EXECUTOR_COMMAND_TOKEN_PURPOSE,
   isExecutorSessionTokenPayload,
 } from '../auth/executor-session-token.js';
+import { captureLocalProcessGroupIdentity } from '../executor-tracking.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import {
@@ -2235,6 +2240,35 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               user_id: user.user_id,
               branch_fs_access: context.branchFsAccess,
             },
+            // Local executors only: record the process group BEFORE the payload
+            // is delivered, so this or a replacement daemon on the same host can
+            // later prove it is gone. Templated launches keep the fenced contract.
+            onSpawn: async (child, spawnContext) => {
+              if (spawnContext.mode !== 'local' || !child.pid) return;
+              const identity = captureLocalProcessGroupIdentity(child.pid);
+              if (!identity) return;
+              const recorded = await runWithTenantDatabaseScope(this.db, tenantId, () =>
+                new BranchMaintenanceRepository(this.db).recordExecutionProcess(
+                  admission.claim,
+                  executionId,
+                  identity
+                )
+              );
+              if (!recorded) throw new Error('Deletion invocation changed before delivery');
+            },
+            onExit: async (code, spawnContext) => {
+              if (spawnContext.mode !== 'local') return;
+              // A settled or finalized invocation is already gone from the row;
+              // only an executor that died without settling is released here.
+              await releaseDeletionIfExecutorAbsent(
+                this.db,
+                this.app,
+                String(tenantId),
+                branch.branch_id,
+                exitedDeletionSummary(code, spawnContext.signal),
+                5_000
+              );
+            },
           }
         );
       };
@@ -2248,9 +2282,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
     if (!admission.acquired && current.deletion_status === 'deletion_failed') {
       throw new Conflict(
-        'Deletion recovery is blocked: the prior invocation has no verified settlement. ' +
-          'No replacement was started. Process exit, elapsed time, and confirmation are not containment proof. ' +
-          'See the branch deletion recovery guide; legacy claimed invocations cannot be automatically recovered.'
+        'Deletion recovery is blocked: the prior invocation has no verified settlement, so no replacement was started. ' +
+          'Agor unlocks retry automatically once a daemon on the executor host verifies the executor exited. ' +
+          'Otherwise an administrator can release it; see the branch deletion recovery guide.'
       );
     }
     emitServiceEvent(this.app, {
@@ -2260,6 +2294,30 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       params,
       id: branch.branch_id,
     });
+    return current;
+  }
+
+  /**
+   * Administrator release of a fenced deletion that has no containment evidence
+   * (claims from before process identity was recorded, or templated/remote
+   * executors). Only clears the stale invocation; retrying deletion is a normal,
+   * separately authorized request. The administrator accepts the containment risk.
+   */
+  async forceReleaseDeletion(id: BranchID, params?: BranchParams): Promise<Branch> {
+    const user = (params as AuthenticatedParams | undefined)?.user;
+    if (!user || !hasMinimumRole(user.role, ROLES.ADMIN))
+      throw new Forbidden('Administrator authority is required to release a fenced deletion');
+    const released = await this.withTenantDatabase(params, () =>
+      new BranchMaintenanceRepository(this.db).forceReleaseFailedDeletion(
+        id,
+        `Fenced deletion released by administrator ${user.user_id} at ${new Date().toISOString()}. Retry permanent deletion to continue.`
+      )
+    );
+    console.warn(
+      `[branch.delete] event=admin_force_release branch_id=${id} operation_id=${released.operation_id} generation=${released.generation} invocation_id=${released.execution_id} released_by=${user.user_id}`
+    );
+    const current = await this.readCommittedBranch(id, params);
+    emitServiceEvent(this.app, { path: 'branches', event: 'patched', data: current, params, id });
     return current;
   }
 

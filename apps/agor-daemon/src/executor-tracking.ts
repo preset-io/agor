@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readlinkSync } from 'node:fs';
 import { mkdir, open, readdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { getAgorHome } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
+import type { BranchMaintenanceExecutionProcess } from '@agor/core/types';
 import { getDaemonMetrics } from './metrics/index.js';
 
 export interface ExecutorContainmentIdentity {
@@ -227,6 +228,54 @@ async function waitForAbsence(
     await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
   }
   return inspect(pgid, 0) === 'absent';
+}
+
+/** Linux only: PGIDs are comparable only inside one kernel boot and PID namespace. */
+function readPidNamespace(): string | undefined {
+  if (process.platform !== 'linux') return undefined;
+  try {
+    return readlinkSync('/proc/self/ns/pid');
+  } catch {
+    return undefined;
+  }
+}
+
+/** Identity a same-host daemon can later probe; undefined when it would prove nothing. */
+export function captureLocalProcessGroupIdentity(
+  pid: number
+): BranchMaintenanceExecutionProcess | undefined {
+  const bootId = readBootIdentity();
+  const pidNamespace = readPidNamespace();
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !bootId || !pidNamespace) return undefined;
+  return { pid, boot_id: bootId, pid_namespace: pidNamespace };
+}
+
+/**
+ * Absence of a recorded local process group, observed from this daemon. Only a
+ * daemon in the same boot and PID namespace may answer; a different boot is
+ * NOT absence proof because container hosts can share image-baked identities.
+ */
+export async function verifyRecordedProcessGroupAbsent(
+  identity: BranchMaintenanceExecutionProcess,
+  options: { waitMs?: number; pollMs?: number; inspectGroupForTest?: GroupInspector } = {}
+): Promise<ContainmentResult> {
+  const local = captureLocalProcessGroupIdentity(process.pid);
+  if (
+    !local ||
+    local.boot_id !== identity.boot_id ||
+    local.pid_namespace !== identity.pid_namespace
+  )
+    return { status: 'unverified', reason: 'Executor ran outside this daemon host namespace.' };
+  if (
+    await waitForAbsence(
+      identity.pid,
+      options.waitMs ?? 0,
+      options.pollMs ?? 50,
+      options.inspectGroupForTest
+    )
+  )
+    return { status: 'verified_absent' };
+  return { status: 'unverified', reason: 'Executor process group is still present.' };
 }
 
 export function trackExecutorProcess(

@@ -137,7 +137,8 @@ export class BranchDeletionRepository {
     // either commits/rolls back before this lock or fails exact ownership
     // validation afterwards. The worker MUST attest that direct storage work
     // stopped and that no upload RPC has an unknown outcome before calling.
-    // Never infer that attestation from process exit, HTTP status, or age.
+    // Never infer that attestation from process exit, HTTP status, or age; a
+    // daemon-verified absent process group uses releaseVerifiedExitedDeletion.
     await this.step(claim, invocation, async (tx, row) => {
       await update(tx, branches)
         .set({

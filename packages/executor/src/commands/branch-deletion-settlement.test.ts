@@ -7,6 +7,9 @@ const storage = vi.hoisted(() => ({
   resolveManagedBranchDeletionPath: vi.fn().mockResolvedValue(undefined),
   removeBranchWorkspace: vi.fn().mockResolvedValue(undefined),
   deleteBranchDirectory: vi.fn().mockResolvedValue(undefined),
+  prepareBranchDirectoryForRemoval: vi
+    .fn()
+    .mockResolvedValue({ blockedDirectories: 0, blockedOwnerUids: [] }),
 }));
 vi.mock('@agor/git', () => storage);
 
@@ -81,6 +84,46 @@ describe('exact branch settlement delivery', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('settles a retryable, reasoned failure before removal when storage is not writable', async () => {
+    storage.prepareBranchDirectoryForRemoval.mockResolvedValueOnce({
+      blockedDirectories: 3,
+      blockedOwnerUids: [0],
+    });
+    const settled: unknown[] = [];
+    const actions = fixture(async (request) => {
+      settled.push(JSON.parse(String(request.body)));
+      return Response.json({ ok: true });
+    });
+    const result = handleBranchDelete(payload, {});
+    await vi.runAllTimersAsync();
+    expect((await result).success).toBe(false);
+    expect(actions).toEqual(['claim', 'quiesce', 'settled']);
+    expect(settled).toEqual([
+      expect.objectContaining({ stage: 'storage', reason: 'storage_not_writable' }),
+    ]);
+    expect(storage.removeBranchWorkspace).not.toHaveBeenCalled();
+    expect(storage.deleteBranchDirectory).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('event=storage_not_writable')
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('blocked_directories=3 owner_uids=0')
+    );
+  });
+
+  it('sends no failure reason for an ordinary settled failure', async () => {
+    const settled: Record<string, unknown>[] = [];
+    fixture(async (request) => {
+      settled.push(JSON.parse(String(request.body)));
+      return Response.json({ ok: true });
+    });
+    const result = handleBranchDelete(payload, {});
+    await vi.runAllTimersAsync();
+    expect((await result).success).toBe(false);
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).not.toHaveProperty('reason');
   });
 
   it('survives a brief outage rather than exhausting immediate attempts', async () => {

@@ -2822,6 +2822,63 @@ export async function deleteBranchDirectory(
   throw new Error('Branch directory still exists after removal');
 }
 
+/**
+ * Pre-removal check, before any destructive call: unlinking a directory's
+ * entries needs write and search permission on that directory. Restores u+rwx
+ * on directories the current user owns (read-only caches), and counts non-empty
+ * directories it cannot unlink from, e.g. created by a container running as
+ * root. Never follows symlinks. A missing target needs no preparation.
+ */
+export async function prepareBranchDirectoryForRemoval(
+  branchPath: string,
+  allowedBranchesDir: string
+): Promise<{ blockedDirectories: number; blockedOwnerUids: number[] }> {
+  const { access, chmod, constants, lstat, readdir } = await import('node:fs/promises');
+  const result = { blockedDirectories: 0, blockedOwnerUids: [] as number[] };
+  const uid = process.getuid?.();
+  if (uid === undefined) return result;
+  const target = await resolveManagedBranchDeletionPath(branchPath, allowedBranchesDir);
+  const pending = [target];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    let info: Awaited<ReturnType<typeof lstat>>;
+    try {
+      info = await lstat(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    if (!info.isDirectory()) continue;
+    if (info.uid === uid && (info.mode & 0o700) !== 0o700) {
+      await chmod(directory, (info.mode & 0o7777) | 0o700);
+    }
+    let entries: import('node:fs').Dirent[] | undefined;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') continue;
+      if (code !== 'EACCES' && code !== 'EPERM') throw error;
+    }
+    if (info.uid !== uid && (entries === undefined || entries.length > 0)) {
+      const writable = await access(directory, constants.W_OK | constants.X_OK).then(
+        () => true,
+        () => false
+      );
+      if (!writable || entries === undefined) {
+        result.blockedDirectories++;
+        if (!result.blockedOwnerUids.includes(info.uid) && result.blockedOwnerUids.length < 5)
+          result.blockedOwnerUids.push(info.uid);
+        continue;
+      }
+    }
+    for (const entry of entries ?? []) {
+      if (entry.isDirectory()) pending.push(join(directory, entry.name));
+    }
+  }
+  return result;
+}
+
 /** Validate before invoking Git, as well as before recursively removing residual files. */
 export async function resolveManagedBranchDeletionPath(
   branchPath: string,

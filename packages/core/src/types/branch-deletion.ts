@@ -22,11 +22,24 @@ export interface BranchMaintenanceClaim {
   execution_requested_at?: string;
   execution_claimed_at?: string;
   execution_heartbeat_at?: string;
+  /** Recorded before a local executor receives its payload; absent for templated launches. */
+  execution_process?: BranchMaintenanceExecutionProcess;
   requested_by?: UserID;
   storage_verified?: boolean;
   reference_cursor?: BranchDeletionReferenceCursor;
   references_done?: boolean;
   data_done?: boolean;
+}
+
+/**
+ * Host-local identity of a daemon-spawned executor. Local executors are spawned
+ * as process-group leaders, so `pid` is also the PGID. Only a daemon in the same
+ * kernel boot and PID namespace can probe it; anywhere else it proves nothing.
+ */
+export interface BranchMaintenanceExecutionProcess {
+  pid: number;
+  boot_id: string;
+  pid_namespace: string;
 }
 
 /** Sticky branch lifecycle; failure never reopens normal work. */
@@ -36,6 +49,10 @@ export type BranchDeletionStatus = (typeof BRANCH_DELETION_STATUSES)[number];
 /** Bounded diagnostics, never resource contents or raw provider exceptions. */
 export const BRANCH_DELETION_STAGES = ['claim', 'storage', 'data', 'finalize'] as const;
 export type BranchDeletionStage = (typeof BRANCH_DELETION_STAGES)[number];
+
+/** Controlled reason a settled failure may carry; the daemon owns the user-facing text. */
+export const BRANCH_DELETION_FAILURE_REASONS = ['storage_not_writable'] as const;
+export type BranchDeletionFailureReason = (typeof BRANCH_DELETION_FAILURE_REASONS)[number];
 
 /** Shared executor/daemon wire vocabulary; authorization remains daemon-owned. */
 export const BRANCH_DELETION_ACTIONS = [

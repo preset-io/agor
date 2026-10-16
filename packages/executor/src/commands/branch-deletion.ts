@@ -3,11 +3,13 @@ import { resolve } from 'node:path';
 import type {
   BranchDeletionAction,
   BranchDeletionExecutionResult,
+  BranchDeletionFailureReason,
   BranchDeletionStage,
 } from '@agor/core/types';
 import { BRANCH_DELETION_ACTION_EFFECTS, BRANCH_DELETION_REPORT_SERVICE } from '@agor/core/types';
 import {
   deleteBranchDirectory,
+  prepareBranchDirectoryForRemoval,
   removeBranchWorkspace,
   resolveManagedBranchDeletionPath,
 } from '@agor/git';
@@ -168,6 +170,7 @@ export async function handleBranchDelete(
     execution_id: p.executionId,
   };
   let storageRequestUnknown = false;
+  let settledReason: BranchDeletionFailureReason | undefined;
   let filesystemRemovalUnsettled: 'workspace' | 'sdk_home' | undefined;
   let sessionToken = payload.sessionToken;
   const correlation = `branch_id=${p.branchId} operation_id=${p.operationId} generation=${p.generation} invocation_id=${p.executionId}`;
@@ -193,7 +196,12 @@ export async function handleBranchDelete(
             Authorization: `Bearer ${sessionToken}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ ...scope, action, ...(stage ? { stage } : {}) }),
+          body: JSON.stringify({
+            ...scope,
+            action,
+            ...(stage ? { stage } : {}),
+            ...(action === 'settled' && settledReason ? { reason: settledReason } : {}),
+          }),
         }
       );
       status = response.status;
@@ -292,11 +300,29 @@ export async function handleBranchDelete(
         // tenant root must still exist; symlinked descendants remain forbidden.
         await resolveManagedBranchDeletionPath(p.branchHome, p.tenantDataRoot);
       });
+      // Still pre-removal, so a refusal here settles and stays retryable. A
+      // directory the executor cannot unlink from (typically container-written
+      // root files) would otherwise make recursive removal fail part-way.
+      await storageStep('validate_writable', async () => {
+        const workspace = await prepareBranchDirectoryForRemoval(p.branchPath, p.branchesRoot);
+        const sdkHome = await prepareBranchDirectoryForRemoval(p.branchHome, p.tenantDataRoot);
+        const blocked = workspace.blockedDirectories + sdkHome.blockedDirectories;
+        if (blocked === 0) return;
+        const owners = [...new Set([...workspace.blockedOwnerUids, ...sdkHome.blockedOwnerUids])];
+        console.error(
+          `[branch.delete] event=storage_not_writable ${correlation} blocked_directories=${blocked} owner_uids=${owners.join(',')}`
+        );
+        settledReason = 'storage_not_writable';
+        throw Object.assign(new Error('Branch storage is not writable by the executor'), {
+          code: 'EACCES',
+        });
+      });
       // These owners may start Git subprocesses or concurrent recursive fs.rm
       // children. Rejection does not prove drainage (Node can reject rm on the
       // first child error while siblings still mutate). Mark BEFORE entry and
       // clear only on success, never in finally or based on an errno/exit code.
-      // Validation failures inside these calls conservatively stay fenced too.
+      // Validation failures inside these calls conservatively stay fenced too,
+      // until the launching daemon verifies this process group has exited.
       filesystemRemovalUnsettled = 'workspace';
       await storageStep('remove_workspace', () => removeBranchWorkspace(p));
       filesystemRemovalUnsettled = 'sdk_home';

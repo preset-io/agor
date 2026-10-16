@@ -193,3 +193,58 @@ test('quiesce runs several committed pages per request within its budget and res
     ).rejects.toThrow();
   });
 });
+
+test('a settled storage_not_writable failure stores an actionable, retryable error', async ({
+  db,
+}) => {
+  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const maintenance = new BranchMaintenanceRepository(db);
+  const { claim } = await maintenance.claim(branch.branch_id, 'delete', user.user_id);
+  const invocation = await maintenance.beginExecution(claim);
+  const app = {
+    get: () => ({ execution: {} }),
+    service: () => ({ emit: vi.fn() }),
+  } as unknown as Application;
+  const service = new BranchDeletionStepsService(
+    createTenantScopedDatabaseProxy(db, { requireScope: true }),
+    app
+  );
+  const tenant = 'default' as TenantID;
+  const params = {
+    provider: 'rest',
+    user,
+    tenant: { tenant_id: tenant, source: 'explicit' },
+    authentication: {
+      strategy: 'jwt',
+      payload: {
+        type: EXECUTOR_SESSION_TOKEN_TYPE,
+        purpose: EXECUTOR_COMMAND_TOKEN_PURPOSE,
+        tenant_id: tenant,
+        sub: user.user_id,
+        session_id: branchDeletionCommandId(invocation),
+        branch_id: branch.branch_id,
+      },
+    },
+  } as unknown as AuthenticatedParams;
+  const input = {
+    branch_id: branch.branch_id,
+    operation_id: claim.operation_id,
+    generation: claim.generation,
+    execution_id: invocation,
+  };
+  await runWithTenantContext(tenant, async () => {
+    await service.create({ ...input, action: 'claim' }, params);
+    await expect(
+      service.create({ ...input, action: 'settled', stage: 'storage', reason: 'unknown' }, params)
+    ).rejects.toThrow('Invalid deletion step');
+    await service.create(
+      { ...input, action: 'settled', stage: 'storage', reason: 'storage_not_writable' },
+      params
+    );
+  });
+  expect(await new BranchRepository(db).findById(branch.branch_id)).toMatchObject({
+    deletion_status: 'deletion_failed',
+    deletion_error: expect.stringMatching(/not writable by the Agor daemon user.*retry deletion/),
+  });
+  expect((await maintenance.claim(branch.branch_id, 'delete')).acquired).toBe(true);
+});
