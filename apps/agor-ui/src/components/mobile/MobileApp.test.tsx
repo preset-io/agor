@@ -14,17 +14,33 @@ let boardSettingsHydrated: boolean | undefined;
 vi.mock('./MobileBoardPage', () => ({
   MobileBoardPage: ({
     onOpenBranch,
+    onNewSession,
     settingsHydrated,
   }: {
     settingsHydrated: boolean;
     onOpenBranch: (branchId: string, tab: string) => void;
+    onNewSession: (branchId: string) => void;
   }) => {
     boardSettingsHydrated = settingsHydrated;
     return (
-      <button type="button" onClick={() => onOpenBranch('branch-1', 'schedule')}>
-        Open schedule
-      </button>
+      <>
+        <button type="button" onClick={() => onOpenBranch('branch-1', 'schedule')}>
+          Open schedule
+        </button>
+        <button type="button" onClick={() => onNewSession('branch-1')}>
+          New session
+        </button>
+      </>
     );
+  },
+}));
+
+// The desktop dialog has its own suites; this captures what mobile hands it.
+const newSessionModal = vi.hoisted(() => ({ props: {} as Record<string, unknown> }));
+vi.mock('../NewSessionModal', () => ({
+  NewSessionModal: (props: Record<string, unknown>) => {
+    newSessionModal.props = props;
+    return <div data-testid="new-session-modal" />;
   },
 }));
 
@@ -206,6 +222,34 @@ describe('MobileApp branch actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open schedule' }));
     expect(screen.getByTestId('branch-sheet')).toHaveTextContent('schedule');
+  });
+
+  it('opens the desktop new-session dialog for a board branch, so the provider and model can be chosen', async () => {
+    const branch = { branch_id: 'branch-1', board_id: 'board-2', name: 'Fix it' };
+    agorStore.setState({ branchById: new Map([['branch-1', branch as never]]) });
+    const onCreateSession = vi.fn(async () => ({ sessionId: 'session-new' }));
+    const user = { user_id: 'user-1' };
+    renderMobileApp('/m/board/board-1', { user, onCreateSession });
+
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    expect(screen.getByTestId('new-session-modal')).toBeInTheDocument();
+    expect(newSessionModal.props).toMatchObject({
+      fullScreen: true,
+      branchId: 'branch-1',
+      branch,
+      currentUser: user,
+    });
+    // Nothing is created until the dialog submits its chosen configuration.
+    expect(onCreateSession).not.toHaveBeenCalled();
+
+    const config = { branch_id: 'branch-1', agent: 'codex', agenticToolPresetId: 'preset-1' };
+    const onCreate = newSessionModal.props.onCreate as (c: typeof config) => Promise<unknown>;
+    await act(async () => {
+      await expect(onCreate(config)).resolves.toEqual({ sessionId: 'session-new' });
+    });
+    expect(onCreateSession).toHaveBeenCalledWith(config, 'board-2');
+    expect(screen.queryByTestId('new-session-modal')).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-page')).toBeInTheDocument();
   });
 
   it("reads the opened branch's active sessions for the sheet, as desktop does", async () => {
