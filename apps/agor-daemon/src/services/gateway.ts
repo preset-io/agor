@@ -21,6 +21,7 @@ import {
   DiscordMessageDeliveryRepository,
   type FencedTeamsAddress,
   GatewayChannelRepository,
+  GatewayChatCommandRepository,
   GatewayInboundEventRepository,
   type GatewayListenerDiscoveryCursor,
   GatewayListenerDiscoveryRepository,
@@ -76,11 +77,14 @@ import {
   DiscordThreadUnavailableError,
   extractDiscordStarterMessageId,
   fetchTeamsMemberIdentity,
+  formatGatewayCommandReply,
   formatGatewayContext,
   formatGatewayFollowUpRoutingMessage,
   formatGatewaySessionCreatedMessage,
   formatGatewaySystemMessage,
   formatGatewaySystemPayload,
+  GATEWAY_COMMAND_HELP,
+  GATEWAY_COMMAND_HINT,
   gatewayFailureCode,
   gatewayListenerFailure,
   getConnector,
@@ -97,10 +101,12 @@ import {
   normalizeTeamsReactionName,
   parseDiscordAuthorityMetadata,
   parseDiscordThreadKey,
+  parseGatewayChatCommand,
   parseGitHubThreadId,
   parseSlackThreadId,
   type SlackAgorMessageMetadataEventType,
   sanitizeGatewayProviderError,
+  supportsGatewayChatCommands,
   TEAMS_MESSAGE_ID,
   TEAMS_MESSAGE_TEXT_BUDGET,
   type TeamsChannelThreadResult,
@@ -133,6 +139,7 @@ import type {
   MessageSource,
   Session,
   SessionID,
+  SessionStopResult,
   Task,
   TaskID,
   TeamsCatchUpConfig,
@@ -175,6 +182,7 @@ import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission, sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
 import { isBrowserReachableUrl } from '../utils/browser-reachable-url.js';
 import { gatewayInboundSessionId, gatewayInboundTaskId } from '../utils/durable-task-id.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import {
   buildPromptWithAttachments,
   ingestDiscordInboundImages,
@@ -255,6 +263,7 @@ import {
 import type { SessionParams } from './sessions.js';
 import { sendTeamsNotice, sendTeamsTyping } from './teams-notices.js';
 import { TeamsTypingIndicators } from './teams-typing.js';
+import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
 
 /**
  * Inbound message data (platform → session)
@@ -5580,6 +5589,125 @@ export class GatewayService {
     return `${text}\n\n${sessionReference}`;
   }
 
+  /** Commands are gateway control, never a prompt or a queued Task. */
+  private async runChatCommand(
+    channel: GatewayChannel,
+    data: PostMessageData,
+    user: User,
+    sessionId: SessionID
+  ): Promise<boolean> {
+    if (!supportsGatewayChatCommands(channel.channel_type)) return false;
+    const command = parseGatewayChatCommand(data.text);
+    if (!command) return false;
+    if (command === 'help') {
+      await this.sendSystemMessage(channel, data.thread_id, GATEWAY_COMMAND_HELP);
+      return true;
+    }
+    const tenantId = requireCurrentTenantId();
+    const asUser: AuthenticatedParams = {
+      user,
+      authenticated: true,
+      provider: 'gateway',
+      tenant: { tenant_id: tenantId as TenantID, source: 'explicit' },
+    };
+    try {
+      const expected = await this.data.read((db) =>
+        new GatewayChatCommandRepository(db).snapshot(sessionId)
+      );
+      const httpAuthority = verifiedHttpGatewayAuthority(data);
+      const event =
+        httpAuthority ??
+        (data.gateway_inbound_event_id && data.listener_claim_token
+          ? {
+              id: data.gateway_inbound_event_id,
+              processing_token: data.listener_claim_token,
+              gateway_channel_id: channel.id,
+              thread_id: data.thread_id,
+              provider_config_generation: 0,
+              verified_app_id: null,
+              verified_tenant_id: null,
+            }
+          : undefined);
+      const providerCursor =
+        channel.channel_type === 'slack'
+          ? getSlackMessageTs(data.metadata)
+          : discordInboundCursor(data.metadata);
+      const applied = await this.data.write(async (db) => {
+        await lockTenantAuthorizationFence(db, asUser);
+        return new GatewayChatCommandRepository(db).execute({
+          channelId: channel.id,
+          threadId: data.thread_id,
+          sessionId,
+          userId: user.user_id,
+          command,
+          expected,
+          event,
+          allowSuperadmin: this.app.get?.('config')?.execution?.allow_superadmin === true,
+          listenerToken: data.listener_claim_token,
+          providerEventId: providerCursor ? `${data.thread_id}:${providerCursor}` : undefined,
+        });
+      });
+      // Publish only committed changes. The usual Stop endpoint republishes
+      // executor control and performs containment outside this transaction.
+      for (const task of applied.removed) {
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'removed',
+          data: task,
+          id: task.task_id,
+          params: asUser,
+        });
+      }
+      if (applied.claimed) {
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'patched',
+          data: applied.claimed,
+          id: applied.claimed.task_id,
+          params: asUser,
+        });
+        const session = await this.sessionRepo.findById(sessionId);
+        if (session)
+          emitServiceEvent(this.app, {
+            path: 'sessions',
+            event: 'patched',
+            data: session,
+            id: sessionId,
+            params: asUser,
+          });
+      }
+      let stop: SessionStopResult | undefined;
+      if (applied.receipt.outcome === 'requested' && applied.receipt.task_id) {
+        // A redelivery keeps the original target. In particular, never invoke
+        // an idle Session Stop merely to wake a different, failure-held queue.
+        const original = await this.taskRepo.findById(applied.receipt.task_id);
+        if (!original || isTerminalTaskStatus(original.status)) {
+          stop = { success: true, outcome: 'already_idle', status: SessionStatus.IDLE };
+        } else {
+          stop = (await this.app
+            .service('/sessions/:id/stop')
+            .create(
+              { expected_task_id: applied.receipt.task_id },
+              { ...asUser, route: { id: sessionId } }
+            )) as SessionStopResult;
+        }
+      }
+      await this.sendSystemMessage(
+        channel,
+        data.thread_id,
+        formatGatewayCommandReply(applied.receipt, stop)
+      );
+    } catch {
+      // Errors may contain SQL, prompts or provider credentials. Do not echo them.
+      await this.sendSystemMessage(
+        channel,
+        data.thread_id,
+        'Could not confirm the command result. Check the session in Agor before retrying.'
+      );
+    }
+    return true;
+  }
+
   /**
    * Inbound routing: platform → session
    *
@@ -6160,8 +6288,27 @@ export class GatewayService {
         }
         return { success: false, sessionId: '', created: false };
       }
+      if (
+        !isReaction &&
+        (await this.runChatCommand(channel, data, user, existingMapping.session_id))
+      ) {
+        return { success: true, sessionId: existingMapping.session_id, created: false };
+      }
     } else {
       await this.requireInboundSessionCreateAccess(channel, user.user_id);
+      if (!isReaction && supportsGatewayChatCommands(channel.channel_type)) {
+        const command = parseGatewayChatCommand(data.text);
+        if (command) {
+          await this.sendSystemMessage(
+            channel,
+            data.thread_id,
+            command === 'help'
+              ? GATEWAY_COMMAND_HELP
+              : `There is no current task to stop. ${GATEWAY_COMMAND_HINT}`
+          );
+          return { success: true, sessionId: '', created: false };
+        }
+      }
     }
 
     // Resolve agentic config: channel config > user defaults > system defaults.

@@ -169,6 +169,37 @@ seed is recorded durably; the first eligible human reply to any seed chunk
 consumes that seed and starts the mapped session. Replies to later response
 chunks continue the same session.
 
+## Chat commands
+
+The session-created notice includes **Type `!help` for commands.** Send `!help`
+to see the menu in chat, with a link to this guide. Commands are gateway system
+messages, not agent prompts, and do not create tasks or new sessions.
+
+In Slack, Discord, and Teams, send a command by itself (case-insensitive, with
+optional surrounding whitespace). Keep the normal bot mention requirements for
+the conversation.
+
+| Command | Behavior |
+| --- | --- |
+| `!stop` | Request stopping the current task if nothing is queued. If tasks are queued, make no changes and explain the choices below. |
+| `!skip` | Request stopping the current task and preserve queued tasks. They can continue after termination is verified. |
+| `!stop-clear` | Cancel queued tasks and request stopping the current task. Requires Branch Manager access as well as permission to prompt the session. If either permission is missing, neither action is performed. |
+| `!help` | Show this menu and a link to this guide. |
+
+Ordinary text such as `stop`, `stop using tabs`, or `!stop do this instead` remains
+an agent prompt. There is no replacement-prompt parsing, `!clear`, or `!queue` command.
+
+An idle session reports that there is no current task to stop; it does not start
+queued work. `!stop-clear` can still cancel pending tasks. Stopping does not erase
+history or undo edits. A pending response means termination was requested, not
+confirmed. If termination cannot be verified, check the session in Agor; an owner
+or admin may need to intervene. These commands never force-fail an executor.
+
+Commands target the task and queue observed for that request. If either changes
+before the command can be applied, no changes are made and the reply asks you to
+check the session and retry. Provider redelivery reuses the original command's
+target, never a successor task or newly queued work.
+
 ## Slack thread behavior
 
 In Slack channels, Agor uses a hard mention rule:

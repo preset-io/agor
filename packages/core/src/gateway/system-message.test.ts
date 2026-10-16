@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GATEWAY_COMMAND_HINT } from './chat-commands';
 import {
   formatGatewayFollowUpRoutingMessage,
   formatGatewayMarkdownSessionReference,
@@ -17,18 +18,19 @@ describe('formatGatewaySystemMessage', () => {
 
     expect(formatted).toContain(`Agor: Session created: <${sessionUrl}|View session>.`);
     expect(formatted).toContain('Mention me again to follow up.');
-    expect(formatted).toContain('Mention me again to follow up.');
+    expect(formatted).toContain(GATEWAY_COMMAND_HINT);
+    expect(formatted).not.toContain('\n');
   });
 
   it('formats Discord session-created messages as a masked link without a preview', () => {
     expect(formatGatewaySystemMessage('discord', `Session created: ${sessionUrl}`)).toBe(
-      `Agor: Session created: [View session](<${sessionUrl}>). Mention me again to follow up.`
+      `Agor: Session created: [View session](<${sessionUrl}>). Mention me again to follow up. ${GATEWAY_COMMAND_HINT}`
     );
     expect(
       formatGatewaySystemMessage('discord', `Session created: ${sessionUrl}`, {
         followUpHint: false,
       })
-    ).toBe(`Agor: Session created: [View session](<${sessionUrl}>).`);
+    ).toBe(`Agor: Session created: [View session](<${sessionUrl}>). ${GATEWAY_COMMAND_HINT}`);
     expect(formatGatewaySystemPayload('discord', 'Error sending prompt: x')).toEqual({
       text: 'Agor: Error sending prompt: x',
     });
@@ -36,13 +38,13 @@ describe('formatGatewaySystemMessage', () => {
 
   it('formats Teams session-created messages as a markdown link', () => {
     expect(formatGatewaySystemMessage('teams', `Session created: ${sessionUrl}`)).toBe(
-      `Agor: Session created: [View session](${sessionUrl}). Mention me again to follow up.`
+      `Agor: Session created: [View session](${sessionUrl}). Mention me again to follow up. ${GATEWAY_COMMAND_HINT}`
     );
     expect(
       formatGatewaySystemMessage('teams', `Session created: ${sessionUrl}`, {
         followUpHint: false,
       })
-    ).toBe(`Agor: Session created: [View session](${sessionUrl}).`);
+    ).toBe(`Agor: Session created: [View session](${sessionUrl}). ${GATEWAY_COMMAND_HINT}`);
     expect(formatGatewaySystemPayload('teams', 'Not linked')).toEqual({ text: 'Agor: Not linked' });
   });
 
@@ -58,6 +60,7 @@ describe('formatGatewaySystemMessage', () => {
 
   it('formats Slack follow-up routing messages with a clickable session link', () => {
     const text = formatGatewayFollowUpRoutingMessage(sessionId, sessionUrl);
+    expect(formatGatewaySystemMessage('slack', text)).not.toContain('!help');
 
     expect(text).toBe(`Mention received — routing to [session](${sessionUrl}).`);
     const formatted = formatGatewaySystemMessage('slack', text);

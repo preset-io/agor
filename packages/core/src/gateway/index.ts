@@ -5,6 +5,14 @@
  * through messaging platforms (Slack, Discord, etc.)
  */
 
+export {
+  formatGatewayCommandReply,
+  GATEWAY_COMMAND_DOCS_URL,
+  GATEWAY_COMMAND_HELP,
+  GATEWAY_COMMAND_HINT,
+  parseGatewayChatCommand,
+  supportsGatewayChatCommands,
+} from './chat-commands';
 export type {
   GatewayConnector,
   GatewayInboundResult,

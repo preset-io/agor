@@ -4,6 +4,7 @@ import {
   attachHiddenTenant,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
+  GatewayChatCommandRepository,
   GatewayListenerDiscoveryRepository,
   type GatewayListenerLease,
   getCurrentTenantDatabaseScope,
@@ -29,12 +30,15 @@ import {
 } from '@agor/core/gateway';
 import type {
   GatewayChannel,
+  GatewayChatCommandReceipt,
   GatewayInboundEventID,
   GatewayOutboundMessage,
   Session,
   SessionID,
   SessionPromptAuthority,
   SessionSdkHomeScope,
+  SessionStopResult,
+  TaskID,
   ThreadSessionMap,
   User,
   UserID,
@@ -271,6 +275,13 @@ function makeGatewayHarness(args: {
     session_id: mapping?.session_id ?? 'sess-new',
     status: 'running',
   }));
+  const stopCreate = vi.fn(
+    async (_data: unknown, _params: unknown): Promise<SessionStopResult> => ({
+      success: true,
+      outcome: 'stopped',
+      status: SessionStatus.IDLE,
+    })
+  );
   const sessionsCreate = vi.fn(async () => ({
     session_id: 'sess-new',
     branch_id: channel.target_branch_id,
@@ -291,6 +302,7 @@ function makeGatewayHarness(args: {
         return { create: sessionsCreate, get: sessionsGet, setMCPServers };
       }
       if (name === '/sessions/:id/prompt') return { create: promptCreate };
+      if (name === '/sessions/:id/stop') return { create: stopCreate };
       throw new Error(`Unexpected service: ${name}`);
     },
   };
@@ -474,6 +486,8 @@ function makeGatewayHarness(args: {
     service,
     createUnscoped: create,
     promptCreate,
+    stopCreate,
+    taskRepo,
     sessionsCreate,
     sessionsGet,
     setMCPServers,
@@ -4392,7 +4406,7 @@ describe('GatewayService Discord beta routing', () => {
       expect(prompt.startsWith('This Discord message did not mention you')).toBe(true);
       expect(prompt).toContain('[no-reply]');
       expect(texts).toEqual([
-        'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Mention me again to follow up.',
+        'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Mention me again to follow up. Type `!help` for commands.',
       ]);
     });
 
@@ -4506,7 +4520,7 @@ describe('GatewayService Discord beta routing', () => {
         } as never)
       ).resolves.toMatchObject({ success: true, created: true });
       expect(sessionTexts(connector)).toEqual([
-        'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Mention me again to follow up.',
+        'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Mention me again to follow up. Type `!help` for commands.',
       ]);
     });
 
@@ -4531,14 +4545,16 @@ describe('GatewayService Discord beta routing', () => {
         connector.sendMessage.mock.calls.map(([request]) =>
           String((request as { text?: unknown }).text)
         )
-      ).toEqual(['Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>).']);
+      ).toEqual([
+        'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Type `!help` for commands.',
+      ]);
     });
 
     it('omits the follow-up guidance where follow-ups need no mention (forums in all mode)', async () => {
       for (const mentioned of [false, true]) {
         const { texts } = await postSessionNotice('all', mentioned);
         expect(texts).toEqual([
-          'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>).',
+          'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Type `!help` for commands.',
         ]);
       }
     });
@@ -7072,14 +7088,16 @@ describe('GatewayService Teams notices', () => {
       });
       expect(promptCreate).toHaveBeenCalledOnce();
       expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([
-        `${linkNotice} Mention me again to follow up.`,
+        `${linkNotice} Mention me again to follow up. Type \`!help\` for commands.`,
       ]);
     });
 
     it('omits the follow-up hint in a personal chat', async () => {
       const { service, notices } = harness(null);
       await admit(service, 'a:personal-1', 'personal');
-      expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([linkNotice]);
+      expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([
+        `${linkNotice} Type \`!help\` for commands.`,
+      ]);
     });
 
     it('posts nothing on a follow-up mention', async () => {
@@ -7120,7 +7138,7 @@ describe('GatewayService Teams notices', () => {
         admit(service, '19:c|root-1', 'channel', { session: 'sess-1' })
       ).resolves.toMatchObject({ success: true, created: true });
       expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([
-        `${linkNotice} Mention me again to follow up.`,
+        `${linkNotice} Mention me again to follow up. Type \`!help\` for commands.`,
       ]);
     });
   });
@@ -7773,5 +7791,113 @@ describe('GatewayService Teams proactive DMs', () => {
     expect(promptCreate.mock.calls[0][0].metadata).toMatchObject({
       gateway_teams_cursor: '1791924500000',
     });
+  });
+});
+
+describe('GatewayService chat commands', () => {
+  const message = (text: string) => ({
+    channel_key: 'slack-key',
+    thread_id: 'C123-100.000000',
+    text,
+    user_name: 'U123',
+    metadata: { channel: 'C123', channel_type: 'im', slack_message_ts: '103.000000' },
+  });
+  it.each([true, false])(
+    'help is a single system reply, with existing mapping=%s',
+    async (mapped) => {
+      const sendMessage = vi.fn(async () => '104.000000');
+      const h = makeGatewayHarness({
+        existingMapping: mapped ? makeMapping() : null,
+        connector: { sendMessage },
+      });
+      await h.service.create(message('  !HELP  '));
+      expect(h.promptCreate).not.toHaveBeenCalled();
+      expect(h.sessionsCreate).not.toHaveBeenCalled();
+      expect(h.stopCreate).not.toHaveBeenCalled();
+      expect(sendMessage).toHaveBeenCalledOnce();
+      expect(JSON.stringify(sendMessage.mock.calls)).toContain('Commands');
+      expect(JSON.stringify(sendMessage.mock.calls)).toContain('message-gateway#chat-commands');
+    }
+  );
+
+  it.each(['stop', 'Stop using tabs', 'STOP! Do this instead.', '!stop next prompt'])(
+    'preserves ordinary prose: %s',
+    async (text) => {
+      const h = makeGatewayHarness({
+        existingMapping: makeMapping(),
+        connector: { sendMessage: vi.fn(async () => '104') },
+      });
+      await h.service.create(message(text));
+      expect(h.promptCreate).toHaveBeenCalledOnce();
+      expect(h.stopCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('checks prompt authority before executing a command', async () => {
+    const execute = vi.spyOn(GatewayChatCommandRepository.prototype, 'execute');
+    const h = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { sendMessage: vi.fn(async () => '104') },
+      promptAuthority: {
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      },
+    });
+    await h.service.create(message('!stop-clear'));
+    expect(execute).not.toHaveBeenCalled();
+    expect(h.stopCreate).not.toHaveBeenCalled();
+    expect(h.promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('hands the original fenced task to Stop as the actual user, never prompting', async () => {
+    const receipt: GatewayChatCommandReceipt = {
+      command: 'skip',
+      session_id: 'sess-1' as SessionID,
+      user_id: user.user_id,
+      task_id: 'original-task' as TaskID,
+      queued_count: 1,
+      cancelled_count: 0,
+      outcome: 'requested',
+    };
+    vi.spyOn(GatewayChatCommandRepository.prototype, 'snapshot').mockResolvedValue({
+      task_id: receipt.task_id,
+      queued_task_ids: [],
+    });
+    const execute = vi
+      .spyOn(GatewayChatCommandRepository.prototype, 'execute')
+      .mockResolvedValue({ receipt, removed: [], claimed: null });
+    const sendMessage = vi.fn(async () => '104');
+    const h = makeGatewayHarness({ existingMapping: makeMapping(), connector: { sendMessage } });
+    // The harness normally has no Tasks; provide the original nonterminal task.
+    h.taskRepo.findById.mockImplementation(
+      async () => ({ task_id: receipt.task_id, status: 'stopping' }) as never
+    );
+    h.stopCreate.mockResolvedValue({
+      success: false,
+      outcome: 'pending',
+      status: SessionStatus.STOPPING,
+      reason: 'private',
+      stoppedTaskId: receipt.task_id!,
+      pendingCode: 'awaiting_remote_executor',
+    });
+    await h.service.create(message('!skip'));
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: user.user_id,
+        providerEventId: 'C123-100.000000:103.000000',
+      })
+    );
+    expect(h.stopCreate).toHaveBeenCalledWith(
+      { expected_task_id: receipt.task_id },
+      expect.objectContaining({
+        user,
+        provider: 'gateway',
+        tenant: { tenant_id: 'tenant-channel', source: 'explicit' },
+      })
+    );
+    expect(h.promptCreate).not.toHaveBeenCalled();
+    expect(JSON.stringify(sendMessage.mock.calls)).toContain('Stop requested; waiting');
+    expect(JSON.stringify(sendMessage.mock.calls)).not.toContain('private');
   });
 });
