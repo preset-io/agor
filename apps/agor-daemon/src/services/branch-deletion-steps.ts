@@ -18,7 +18,9 @@ import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/fe
 import {
   type AuthenticatedParams,
   BRANCH_DELETION_ACTIONS,
+  BRANCH_DELETION_FAILURE_REASONS,
   BRANCH_DELETION_STAGES,
+  type BranchDeletionFailureReason,
   type BranchID,
   type BranchMaintenanceClaim,
   branchDeletionCommandId,
@@ -46,8 +48,14 @@ const reportSchema = z
     action: z.enum(BRANCH_DELETION_ACTIONS),
     // This is a controlled stage summary, never a raw exception, path or token.
     stage: z.enum(BRANCH_DELETION_STAGES).optional(),
+    reason: z.enum(BRANCH_DELETION_FAILURE_REASONS).optional(),
   })
   .strict();
+
+const FAILURE_REASON_SUMMARIES: Record<BranchDeletionFailureReason, string> = {
+  storage_not_writable:
+    'Permanent deletion stopped before removing files: some branch directories belong to another user and are not writable by the Agor daemon user (often files a container wrote as root). Change their owner to the daemon user, then retry deletion.',
+};
 
 /**
  * Wall-clock budget for one quiesce request, far below the executor's 30s
@@ -273,7 +281,9 @@ export class BranchDeletionStepsService {
         await deletion.failSettled(
           claim,
           execution,
-          `Permanent deletion failed during ${data.stage ?? 'storage'}. Inspect executor logs and retry deletion.`
+          data.reason
+            ? FAILURE_REASON_SUMMARIES[data.reason]
+            : `Permanent deletion failed during ${data.stage ?? 'storage'}. Inspect executor logs and retry deletion.`
         );
       }
       const branch = await new BranchRepository(db).findById(claim.branch_id);

@@ -223,6 +223,10 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   // predate this mechanism and sit in the baseline; this one is new, so it
   // answers.
   // --------------------------------------------------------------------------
+  'branches/:id/release-deletion': {
+    scopeClass: 'identity-only',
+    why: 'Administrator-only metadata release: one short tenant unit takes the Branch lock, clears the fenced deletion claim and records the actor; the final read opens its own unit. No executor, filesystem or cross-tenant authority is used.',
+  },
   'branches/:id/retire-teammate': {
     scopeClass: 'identity-only',
     why: 'Metadata-only retirement carries authenticated tenant identity and the write gate at registration. Branch/repo reads, the authority-fenced preference-and-archive admission, session archival and final read each open short tenant units in requestWorkspaceOperation; terminal closure and realtime delivery happen outside those units. No global or creator authority is used.',

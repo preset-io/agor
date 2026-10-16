@@ -4540,6 +4540,30 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     before: { create: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'clean branches')] },
   });
 
+  // Administrator recovery for a fenced deletion with no containment evidence.
+  app.use('/branches/:id/release-deletion', {
+    async create(data: unknown, params: RouteParams) {
+      if (
+        !params.route?.id ||
+        !data ||
+        typeof data !== 'object' ||
+        Array.isArray(data) ||
+        Object.keys(data).length
+      )
+        throw new BadRequest('Deletion release accepts an empty body and branch route ID only');
+      return branchesService.forceReleaseDeletion(
+        params.route.id as import('@agor/core/types').BranchID,
+        params
+      );
+    },
+  });
+  app.service('/branches/:id/release-deletion').hooks({
+    around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] },
+    before: {
+      create: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'release fenced branch deletions')],
+    },
+  });
+
   // Explicit, metadata-only retirement: same tenant/write boundary as cleanup.
   app.use('/branches/:id/retire-teammate', {
     async create(data: unknown, params: RouteParams) {
