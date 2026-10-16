@@ -8106,6 +8106,78 @@ describe('gateway command occurrence boundaries', () => {
       expect(await f.tasks.findQueued(f.input.sessionId)).toHaveLength(targets === 1 ? 0 : 3);
     });
 
+  for (const sharedAlias of [false, true]) {
+    for (const command of ['!help', '!stop-clear']) {
+      dbTest(
+        `two-bot reply alias elects one responder for ${command}, shared=${sharedAlias}`,
+        async ({ db }) => {
+          const a = await gatewayCommandFixture(db);
+          const b = await gatewayCommandFixture(db);
+          const alias = 'C123-200.000000';
+          const maps = new ThreadSessionMapRepository(db);
+          for (const [index, f] of [a, b].entries()) {
+            await maps.create({
+              channel_id: f.channel.id,
+              thread_id: a.input.threadId,
+              session_id: f.input.sessionId,
+              branch_id: f.seed.branch.branch_id,
+              created_at: `2026-01-01T00:00:0${index}.000Z`,
+              metadata: sharedAlias || index === 1 ? { gateway_reply_aliases: [alias] } : {},
+            });
+          }
+          const handlers = [a, b].map((f) => {
+            const sendMessage = vi.fn(async () => 'reply');
+            const h = makeGatewayHarness({
+              db,
+              channel: f.channel,
+              user: f.seed.owner,
+              connector: { sendMessage },
+            });
+            // Real per-channel lookup and retained-alias resolution, not a preselected mapping.
+            Object.assign(h.service, { threadMapRepo: maps, taskRepo: f.tasks });
+            return { ...h, sendMessage };
+          });
+          for (const [index, f] of [a, b].entries()) {
+            await handlers[index].service.create({
+              channel_key: f.channel.channel_key,
+              thread_id: alias,
+              text: command,
+              metadata: {
+                channel_type: 'channel',
+                slack_is_thread_reply: true,
+                slack_has_mention: false,
+                slack_message_ts: '201.000000',
+              },
+            });
+          }
+          // Only B knows X when not shared. If both know X, A is the elected
+          // responder and asks for clarification; neither stops anything.
+          expect(handlers[sharedAlias ? 0 : 1].sendMessage).toHaveBeenCalledOnce();
+          expect(handlers[sharedAlias ? 1 : 0].sendMessage).not.toHaveBeenCalled();
+          if (sharedAlias)
+            expect(JSON.stringify(handlers[0].sendMessage.mock.calls)).toContain(
+              'multiple sessions'
+            );
+          else if (command === '!help')
+            expect(JSON.stringify(handlers[1].sendMessage.mock.calls)).toContain('Commands');
+          expect(handlers[0].stopCreate).not.toHaveBeenCalled();
+          expect(handlers[1].stopCreate).toHaveBeenCalledTimes(
+            !sharedAlias && command === '!stop-clear' ? 1 : 0
+          );
+          for (const h of handlers) {
+            expect(h.promptCreate).not.toHaveBeenCalled();
+            expect(h.sessionsCreate).not.toHaveBeenCalled();
+          }
+          expect(await a.tasks.findById(a.seed.active.task_id)).toEqual(a.seed.active);
+          expect(await a.tasks.findQueued(a.input.sessionId)).toHaveLength(3);
+          expect(await b.tasks.findQueued(b.input.sessionId)).toHaveLength(
+            !sharedAlias && command === '!stop-clear' ? 0 : 3
+          );
+        }
+      );
+    }
+  }
+
   for (const provider of ['slack', 'discord'] as const) {
     dbTest(
       `${provider} unmapped command cannot stop new work after listener restart`,

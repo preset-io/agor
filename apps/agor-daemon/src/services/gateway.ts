@@ -5897,14 +5897,10 @@ export class GatewayService {
       );
       return { success: false, sessionId: '', created: false };
     }
+    // Election coordinates must come only from the occurrence, not this bot's
+    // mapping root: bots may retain different aliases for the same root.
     const implicitThreadIds = implicitCommand
-      ? [
-          ...new Set(
-            [canonicalThreadId, legacyDiscordThread, existingMapping?.thread_id].filter(
-              (id): id is string => !!id
-            )
-          ),
-        ]
+      ? [...new Set([canonicalThreadId, legacyDiscordThread].filter((id): id is string => !!id))]
       : undefined;
     let recoveringInitialDelivery = false;
     let outboundSeed: GatewayOutboundMessage | null = null;
