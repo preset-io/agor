@@ -1,9 +1,10 @@
 import { BoardObjectRepository } from '@agor/core/db';
-import type { Card, ZoneBoardObject } from '@agor/core/types';
+import type { Card, CardID, ZoneBoardObject } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { CardsService } from '../../services/cards.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
+import { mcpPlacement } from '../placement-schema.js';
 import { resolveBoardId, resolveCardId } from '../resolve-ids.js';
 import {
   mcpLimit,
@@ -25,12 +26,13 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     'agor_cards_create',
     {
       description:
-        'Create a new card on a board. Creates both the card entity and its board placement in one operation. If zoneId is provided, the card is placed directly in that zone with automatic positioning.',
+        'Create a new card on a board. Creates both the card entity and its board placement in one operation. If zoneId is provided, the card is placed directly in that zone with random positioning unless position is supplied.',
       inputSchema: z.object({
         boardId: mcpRequiredId('boardId', 'Board', 'Board ID where the card will be created'),
         title: mcpRequiredString('title', 'Card title'),
         cardTypeId: mcpOptionalId('cardTypeId', 'Card type', 'Card type ID (optional)'),
         zoneId: mcpOptionalId('zoneId', 'Zone', 'Zone ID to place the card in (optional)'),
+        position: mcpPlacement.optional(),
         url: mcpOptionalString('url', 'URL associated with the card (optional)'),
         description: mcpOptionalString('description', 'Card description (optional)'),
         note: mcpOptionalString('note', 'Card note (optional)'),
@@ -74,6 +76,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
             emoji_override: coerceString(args.emojiOverride),
             zoneId,
             zoneData,
+            position: args.position,
           } as never,
           ctx.baseServiceParams
         )
@@ -277,6 +280,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
         'Move a card to a different zone (or unpin from zone). Updates board_objects placement.',
       inputSchema: z.object({
         cardId: mcpRequiredId('cardId', 'Card', 'Card ID to move'),
+        position: mcpPlacement.optional(),
         zoneId: mcpOptionalId(
           'zoneId',
           'Zone',
@@ -298,7 +302,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
       const boardObject = await runWithMcpTenantDatabaseScope(ctx, () =>
-        cardsService.moveToZone(cardId as never, zoneId, zoneData)
+        cardsService.moveToZone(cardId as CardID, zoneId, zoneData, args.position)
       );
       emitServiceEvent(ctx.app, {
         path: 'board-objects',
@@ -520,7 +524,7 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
           if (zone?.type === 'zone') zoneData = zone;
         }
         const boardObject = await runWithMcpTenantDatabaseScope(ctx, () =>
-          cardsService.moveToZone(cardId as never, zoneId, zoneData)
+          cardsService.moveToZone(cardId as CardID, zoneId, zoneData)
         );
         emitServiceEvent(ctx.app, {
           path: 'board-objects',
