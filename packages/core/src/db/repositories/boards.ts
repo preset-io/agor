@@ -198,6 +198,26 @@ export function mapBoardExportBlobToCreateData(
 /**
  * Board repository implementation
  */
+/**
+ * A zone written without a layout or order keeps the ones it has, so an agent
+ * editing a zone's label or colour doesn't reset how its cards are arranged.
+ */
+function keepZoneArrangement(
+  existing: BoardObject | undefined,
+  incoming: BoardObject
+): BoardObject {
+  if (existing?.type !== 'zone' || incoming?.type !== 'zone') return incoming;
+  return {
+    ...incoming,
+    ...(incoming.layout === undefined && existing.layout !== undefined
+      ? { layout: existing.layout }
+      : {}),
+    ...(incoming.order === undefined && existing.order !== undefined
+      ? { order: existing.order }
+      : {}),
+  };
+}
+
 export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   constructor(private db: Database) {}
 
@@ -1192,11 +1212,16 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     objects: Record<string, BoardObject>
   ): Promise<Board> {
     try {
+      const fullId = await this.resolveId(boardId);
+      const current = await this.findById(fullId);
       for (const [objectId, objectData] of Object.entries(objects)) {
-        await this.upsertBoardObject(boardId, objectId, objectData);
+        await this.upsertBoardObject(
+          boardId,
+          objectId,
+          keepZoneArrangement(current?.objects?.[objectId], objectData)
+        );
       }
 
-      const fullId = await this.resolveId(boardId);
       const updated = await this.findById(fullId);
       if (!updated) {
         throw new RepositoryError('Failed to retrieve updated board');

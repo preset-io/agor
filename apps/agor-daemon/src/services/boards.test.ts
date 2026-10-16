@@ -106,7 +106,7 @@ describe('BoardsService - Custom Methods', () => {
       const { board: saved, moved } = await service.placeZoneEntities(
         board.board_id,
         'zone-review',
-        { ...zone, layout: 'free', order: [], height: 520 },
+        { width: 1060, height: 520 },
         {
           [objects[0].object_id]: { x: 540, y: 80 },
           [objects[1].object_id]: { x: 20, y: 80 },
@@ -114,7 +114,12 @@ describe('BoardsService - Custom Methods', () => {
         TEST_PARAMS
       );
 
-      expect(saved.objects?.['zone-review']).toMatchObject({ layout: 'free', height: 520 });
+      expect(saved.objects?.['zone-review']).toMatchObject({
+        label: 'Review',
+        layout: 'free',
+        order: [],
+        height: 520,
+      });
       expect(moved.map((row) => [row.position, row.zone_id])).toEqual([
         [{ x: 540, y: 80 }, 'zone-review'],
         [{ x: 20, y: 80 }, 'zone-review'],

@@ -845,18 +845,24 @@ describe('BoardObjectRepository.updatePositions', () => {
       zone_id: 'zone-1',
     });
 
-    const moved = await boRepo.updatePositions(boardId, {
+    const moved = await boRepo.updatePositions(boardId, 'zone-1', {
       [first.object_id]: { x: 20, y: 80 },
       [second.object_id]: { x: 540, y: 80 },
     });
 
-    expect(moved.map((row) => [row.position, row.zone_id])).toEqual([
-      [{ x: 20, y: 80 }, 'zone-1'],
-      [{ x: 540, y: 80 }, 'zone-1'],
-    ]);
+    expect(
+      moved
+        .map((row) => [row.object_id, row.position, row.zone_id])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    ).toEqual(
+      [
+        [first.object_id, { x: 20, y: 80 }, 'zone-1'],
+        [second.object_id, { x: 540, y: 80 }, 'zone-1'],
+      ].sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    );
   });
 
-  dbTest('skips entities on another board and missing ids', async ({ db }) => {
+  dbTest('skips entities on another board, outside the zone, and missing ids', async ({ db }) => {
     const repo = await new RepoRepository(db).create(createRepoData());
     const boRepo = new BoardObjectRepository(db);
     const branch = await new BranchRepository(db).create(
@@ -868,15 +874,26 @@ describe('BoardObjectRepository.updatePositions', () => {
       board_id: otherBoardId,
       branch_id: branch.branch_id,
       position: { x: 1, y: 2 },
+      zone_id: 'zone-1',
+    });
+    const otherBranch = await new BranchRepository(db).create(
+      createBranchData({ repo_id: repo.repo_id, name: 'left-the-zone' })
+    );
+    const leftZone = await boRepo.create({
+      board_id: boardId,
+      branch_id: otherBranch.branch_id,
+      position: { x: 5, y: 6 },
     });
 
-    const moved = await boRepo.updatePositions(boardId, {
+    const moved = await boRepo.updatePositions(boardId, 'zone-1', {
       [elsewhere.object_id]: { x: 300, y: 300 },
+      [leftZone.object_id]: { x: 300, y: 300 },
       missing: { x: 0, y: 0 },
     });
 
     expect(moved).toEqual([]);
     expect((await boRepo.findByObjectId(elsewhere.object_id))?.position).toEqual({ x: 1, y: 2 });
+    expect((await boRepo.findByObjectId(leftZone.object_id))?.position).toEqual({ x: 5, y: 6 });
   });
 });
 

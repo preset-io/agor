@@ -21,6 +21,10 @@ export interface ZoneGridLayoutInputs {
   storedPositionOf: (nodeId: string) => BoardPosition | undefined;
   /** An order shown while its save is on the way. */
   heldOrderOf?: (zoneId: string) => readonly string[] | undefined;
+  /** Hide cards not measured yet, so they never show in a guessed slot. */
+  hideUnmeasured?: boolean;
+  /** A card moving out (its drop not yet saved) is left where it was dropped. */
+  isMoving?: (nodeId: string) => boolean;
 }
 
 /** The order a zone shows its pinned nodes in. */
@@ -55,11 +59,12 @@ function zoneWidthOf(zone: Node) {
 const PINNED_ENTITY_TYPES = new Set(['branchNode', 'cardNode']);
 /** Fallback heights until React Flow reports a measurement. */
 const FALLBACK_HEIGHT: Record<string, number> = { branchNode: 200, cardNode: 120 };
-const BASE_ENTITY_Z_INDEX = 500;
 /** Marks nodes the grid places, so the canvas stylesheet can glide them between slots. */
 export const ZONE_GRID_CHILD_CLASS = 'zone-grid-child';
+/** Stacking order for a card wider than its slot, just above the other cards (500). */
+const WIDE_Z_INDEX = 501;
 
-function withChildClass(className: string | undefined) {
+function withChildClasses(className: string | undefined) {
   if (className?.split(' ').includes(ZONE_GRID_CHILD_CLASS)) return className;
   return className ? `${className} ${ZONE_GRID_CHILD_CLASS}` : ZONE_GRID_CHILD_CLASS;
 }
@@ -93,7 +98,7 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
   const childrenByZone = new Map<string, Node[]>();
   for (const node of nodes) {
     if (!node.parentId || !PINNED_ENTITY_TYPES.has(node.type ?? '')) continue;
-    if (!autoZones.has(node.parentId)) continue;
+    if (!autoZones.has(node.parentId) || inputs.isMoving?.(node.id)) continue;
     const siblings = childrenByZone.get(node.parentId) ?? [];
     siblings.push(node);
     childrenByZone.set(node.parentId, siblings);
@@ -101,7 +106,7 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
 
   const childUpdates = new Map<
     string,
-    { position: BoardPosition; zIndex: number; slotWidth: number }
+    { position: BoardPosition; wide: boolean; slotWidth: number; hidden: boolean }
   >();
   const zoneSizes = new Map<string, { width: number; height: number }>();
   for (const [zoneId, { node: zone, layout }] of autoZones) {
@@ -122,8 +127,9 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
       const wide = (inputs.measuredSizes.get(item.id)?.width ?? 0) > plan.columnWidth + 1;
       childUpdates.set(item.id, {
         position,
-        zIndex: wide ? BASE_ENTITY_Z_INDEX + 1 : BASE_ENTITY_Z_INDEX,
+        wide,
         slotWidth: plan.columnWidth,
+        hidden: !!inputs.hideUnmeasured && !inputs.measuredSizes.has(item.id),
       });
     }
     zoneSizes.set(zoneId, { width: plan.contentWidth, height: plan.contentHeight });
@@ -133,20 +139,34 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
   const next = nodes.map((node) => {
     const childUpdate = childUpdates.get(node.id);
     if (childUpdate) {
-      const { position, zIndex, slotWidth } = childUpdate;
-      const className = withChildClass(node.className);
+      const { position, wide, slotWidth, hidden } = childUpdate;
+      const className = withChildClasses(node.className);
       if (
         sameNumber(node.position.x, position.x) &&
         sameNumber(node.position.y, position.y) &&
-        node.zIndex === zIndex &&
         node.className === className &&
-        node.data?.slotWidth === slotWidth
+        node.data?.slotWidth === slotWidth &&
+        (node.style?.visibility === 'hidden') === hidden &&
+        (node.style?.zIndex === WIDE_Z_INDEX) === wide
       ) {
         return node;
       }
       changed = true;
+      // Only set visibility to hide: React Flow keeps its own hidden-until-measured otherwise.
+      const { visibility: _visibility, zIndex: _zIndex, ...style } = node.style ?? {};
       // Cards stretch to their slot, so a zone's columns fill its width.
-      return { ...node, position, zIndex, className, data: { ...node.data, slotWidth } };
+      return {
+        ...node,
+        position,
+        className,
+        style: {
+          ...style,
+          ...(hidden ? { visibility: 'hidden' as const } : {}),
+          // A card widened for a session peek floats over its neighbour in the next column.
+          ...(wide ? { zIndex: WIDE_Z_INDEX } : {}),
+        },
+        data: { ...node.data, slotWidth },
+      };
     }
     const size = zoneSizes.get(node.id);
     if (size) {

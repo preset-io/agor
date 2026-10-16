@@ -333,7 +333,7 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
   placeZoneEntities(
     boardId: string,
     zoneId: string,
-    zoneData: import('@agor/core/types').BoardObject,
+    size: { width: number; height: number },
     positions: Record<string, { x: number; y: number }>,
     params?: FeathersParams
   ): Promise<{ board: Board; moved: import('@agor/core/types').BoardEntityObject[] }>;

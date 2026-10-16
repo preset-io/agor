@@ -477,14 +477,15 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   }
 
   /**
-   * Custom method: save many pinned entities' positions and a zone object in
-   * one transaction (a zone switching to free keeps every card where it was
-   * shown). Returns the board and the moved entity rows.
+   * Custom method: switch a zone to free in one transaction, saving where each
+   * of its cards was shown and the zone's shown size. Only the zone's layout,
+   * order and size change, read from the current zone, so concurrent edits to
+   * it survive; cards no longer in the zone are left alone.
    */
   async placeZoneEntities(
     boardId: string,
     zoneId: string,
-    zoneData: BoardObject,
+    size: { width: number; height: number },
     positions: Record<string, { x: number; y: number }>,
     params?: BoardParams
   ): Promise<{ board: Board; moved: BoardEntityObject[] }> {
@@ -496,11 +497,20 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
         const boardRepo = new BoardRepository(operationDb);
         const current = await boardRepo.findBySlugOrId(boardId);
         if (!current) throw new NotFoundError('Board', boardId);
+        const zone = current.objects?.[zoneId];
+        if (zone?.type !== 'zone') throw new NotFoundError('Zone', zoneId);
         const moved = await new BoardObjectRepository(operationDb).updatePositions(
           current.board_id,
+          zoneId,
           positions
         );
-        const board = await boardRepo.upsertBoardObject(current.board_id, zoneId, zoneData);
+        const board = await boardRepo.upsertBoardObject(current.board_id, zoneId, {
+          ...zone,
+          layout: 'free',
+          order: [],
+          width: size.width,
+          height: size.height,
+        });
         return { board, moved };
       }
     );

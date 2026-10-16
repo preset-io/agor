@@ -243,6 +243,7 @@ import {
   deferWithTenantContext,
   enforceTenantWriteGateForHook,
 } from './utils/tenant-db-scope.js';
+import { visibleBoardEntityPositions } from './utils/visible-board-entity-positions.js';
 import { enforcePublicWriteFields, markWriteDataPrepared } from './utils/write-data-boundary.js';
 import { protectExternalWidgetMessageWrites } from './widgets/message-boundary.js';
 
@@ -3883,10 +3884,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           }
 
           if (_action === 'placeZoneEntities') {
-            // One request for a zone's switch to free: every card's shown position plus the zone.
-            const { positions } = contextData as UnknownJson;
-            if (!context.id || typeof objectId !== 'string' || !objectData) {
-              throw new BadRequest('placeZoneEntities requires objectId and objectData');
+            // One request for a zone's switch to free: every card's shown position plus the zone's size.
+            const { positions, size } = contextData as UnknownJson;
+            const { width, height } = (size ?? {}) as { width?: unknown; height?: unknown };
+            if (!context.id || typeof objectId !== 'string') {
+              throw new BadRequest('placeZoneEntities requires objectId');
+            }
+            if (!Number.isFinite(width) || !Number.isFinite(height)) {
+              throw new BadRequest('placeZoneEntities requires a finite size');
             }
             if (!positions || typeof positions !== 'object' || Array.isArray(positions)) {
               throw new BadRequest('placeZoneEntities requires positions');
@@ -3898,40 +3903,37 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               return Number.isFinite(x) && Number.isFinite(y);
             });
             if (!valid) throw new BadRequest('Each position needs finite x and y');
-            // Board edit is checked above; each moved entity must also be one this caller can see on this board.
+            const board = await boardRepository.findBySlugOrId(context.id as string);
+            if (!board) throw new NotFound('Board not found');
+            // Board edit is checked above; a non-admin moves only entities they can see on this board, others are skipped.
             const user = context.params.user;
+            let allowed = Object.fromEntries(entries) as Record<string, { x: number; y: number }>;
             if (
               context.params.provider &&
               user &&
               !user._isServiceAccount &&
               !hasMinimumRole(user.role, ROLES.ADMIN)
             ) {
-              for (const [entityId] of entries) {
-                const visible = await boardObjectsRepository.findVisibleByObjectId(
-                  user.user_id as UUID,
-                  entityId
-                );
-                if (!visible || visible.board_id !== context.id) {
-                  throw new Forbidden('Board resource is unavailable to move board objects');
-                }
-              }
+              allowed = await visibleBoardEntityPositions(board.board_id, allowed, (entityId) =>
+                boardObjectsRepository.findVisibleByObjectId(user.user_id as UUID, entityId)
+              );
             }
-            const { board } = await boardsService!.placeZoneEntities(
-              context.id as string,
+            const result = await boardsService!.placeZoneEntities(
+              board.board_id,
               objectId,
-              objectData as import('@agor/core/types').BoardObject,
-              positions as Record<string, { x: number; y: number }>,
+              { width: Math.max(1, width as number), height: Math.max(1, height as number) },
+              allowed,
               context.params
             );
-            context.result = board;
+            context.result = result.board;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
-              data: board,
+              data: result.board,
               params: context.params,
-              id: context.id,
+              id: board.board_id,
             });
-            context.dispatch = board;
+            context.dispatch = result.board;
             return context;
           }
 
