@@ -11,9 +11,12 @@ import {
   BoardObjectRepository,
   BoardRepository,
   BranchRepository,
+  boards,
   CapabilityPolicyRepository,
+  eq,
   getCurrentTenantId,
   lockBranchReferenceMutation,
+  lockRowForUpdate,
   mapBoardExportBlobToCreateData,
   runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
@@ -495,7 +498,16 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       tenantId,
       async (operationDb) => {
         const boardRepo = new BoardRepository(operationDb);
-        const current = await boardRepo.findBySlugOrId(boardId);
+        const found = await boardRepo.findBySlugOrId(boardId);
+        if (!found) throw new NotFoundError('Board', boardId);
+        // Lock, then re-read, so the zone saved below isn't an older copy of a concurrent edit or delete.
+        await lockRowForUpdate(
+          operationDb,
+          operationDb,
+          boards,
+          eq(boards.board_id, found.board_id)
+        );
+        const current = await boardRepo.findById(found.board_id);
         if (!current) throw new NotFoundError('Board', boardId);
         const zone = current.objects?.[zoneId];
         if (zone?.type !== 'zone') throw new NotFoundError('Zone', zoneId);
