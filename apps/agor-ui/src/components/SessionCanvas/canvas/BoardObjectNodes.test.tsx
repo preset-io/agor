@@ -40,6 +40,8 @@ function renderZone(
     onUpdate?: ReturnType<typeof vi.fn>;
     beginBoardWrite?: ReturnType<typeof vi.fn>;
     onDraftLost?: ReturnType<typeof vi.fn>;
+    layout?: 'free' | 'row' | 'column' | 'grid';
+    onLayoutChange?: ReturnType<typeof vi.fn>;
   }
 ) {
   const wrapper = ({ children }: { children: ReactNode }) => (
@@ -66,6 +68,8 @@ function renderZone(
         onReorder,
         beginBoardWrite: extra?.beginBoardWrite,
         onDraftLost: extra?.onDraftLost,
+        layout: extra?.layout,
+        onLayoutChange: extra?.onLayoutChange,
       }}
     />,
     { wrapper }
@@ -101,6 +105,59 @@ describe('ZoneNode compact toolbar', () => {
 
     await waitFor(() => expect(onReorder).toHaveBeenCalledWith('zone-1', 'front'));
     expect(onReorder).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches the layout under a ticket captured when it is chosen', async () => {
+    const ticket = { boardId: 'board-1' };
+    const beginBoardWrite = vi.fn(() => ticket);
+    const onLayoutChange = vi.fn(async () => {});
+    renderZone(vi.fn(), CONNECTED, { layout: 'column', beginBoardWrite, onLayoutChange });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zone layout: Column' }));
+    fireEvent.click(await screen.findByText('Grid'));
+
+    await waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith('zone-1', 'grid', ticket));
+    expect(onLayoutChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores choosing the layout the zone already has', async () => {
+    const onLayoutChange = vi.fn(async () => {});
+    renderZone(vi.fn(), CONNECTED, { onLayoutChange });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zone layout: Free' }));
+    fireEvent.click(await screen.findByText('Place cards anywhere'));
+
+    expect(onLayoutChange).not.toHaveBeenCalled();
+  });
+
+  it('labels a grid zone on the zone itself and changes its layout from there', async () => {
+    const ticket = { boardId: 'board-1' };
+    const onLayoutChange = vi.fn(async () => {});
+    renderZone(vi.fn(), CONNECTED, {
+      selected: false,
+      layout: 'grid',
+      beginBoardWrite: vi.fn(() => ticket),
+      onLayoutChange,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Grid layout. Change layout' }));
+    fireEvent.click(await screen.findByText('Arrange cards in one column'));
+
+    await waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith('zone-1', 'column', ticket));
+  });
+
+  it('shows viewers the layout without a control, and free zones without a label', () => {
+    const { unmount } = renderZone(vi.fn(), CONNECTED, {
+      canEdit: false,
+      layout: 'row',
+      onLayoutChange: vi.fn(async () => {}),
+    });
+    expect(screen.getByText('Row')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Change layout/ })).not.toBeInTheDocument();
+    unmount();
+
+    renderZone(vi.fn(), CONNECTED, { selected: false, onLayoutChange: vi.fn(async () => {}) });
+    expect(screen.queryByRole('button', { name: /Change layout/ })).not.toBeInTheDocument();
   });
 
   it('uses native keyboard-focusable buttons for common actions', () => {

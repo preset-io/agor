@@ -117,3 +117,18 @@
 .react-flow__node-appNode .react-flow__resize-control.line.bottom {
   height: 12px;
 }
+
+/* Cards in arranged zones glide to a new slot; never while something is being dragged. */
+.zone-grid-animate .react-flow__node.zone-grid-child {
+  transition: transform 200ms ease;
+}
+
+.canvas-dragging.zone-grid-animate .react-flow__node.zone-grid-child {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zone-grid-animate .react-flow__node.zone-grid-child {
+    transition: none;
+  }
+}

@@ -250,6 +250,12 @@
       "import": "./dist/utils/board-placement.js",
       "default": "./dist/utils/board-placement.js"
     },
+    "./utils/zone-layout": {
+      "source": "./src/utils/zone-layout.ts",
+      "types": "./dist/utils/zone-layout.d.ts",
+      "import": "./dist/utils/zone-layout.js",
+      "default": "./dist/utils/zone-layout.js"
+    },
     "./utils/path": {
       "source": "./src/utils/path.ts",
       "types": "./dist/utils/path.d.ts",

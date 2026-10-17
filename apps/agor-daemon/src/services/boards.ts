@@ -11,9 +11,12 @@ import {
   BoardObjectRepository,
   BoardRepository,
   BranchRepository,
+  boards,
   CapabilityPolicyRepository,
+  eq,
   getCurrentTenantId,
   lockBranchReferenceMutation,
+  lockRowForUpdate,
   mapBoardExportBlobToCreateData,
   runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
@@ -28,6 +31,7 @@ import {
   type AuthenticatedParams,
   type Board,
   type BoardComment,
+  type BoardEntityObject,
   type BoardExportBlob,
   type BoardID,
   type BoardImportResult,
@@ -473,6 +477,62 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     _params?: BoardParams
   ): Promise<Board> {
     return this.boardRepo.mergeBoardObjectFields(boardId, patches);
+  }
+
+  /**
+   * Custom method: switch a zone to free in one transaction, saving where each
+   * of its cards was shown and the zone's shown size. Only the zone's layout,
+   * order and size change, read from the current zone, so concurrent edits to
+   * it survive; cards no longer in the zone are left alone.
+   */
+  async placeZoneEntities(
+    boardId: string,
+    zoneId: string,
+    size: { width: number; height: number },
+    positions: Record<string, { x: number; y: number }>,
+    params?: BoardParams
+  ): Promise<{ board: Board; moved: BoardEntityObject[] }> {
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    const result = await runWithTenantDatabaseTransaction(
+      this.db,
+      tenantId,
+      async (operationDb) => {
+        const boardRepo = new BoardRepository(operationDb);
+        const found = await boardRepo.findBySlugOrId(boardId);
+        if (!found) throw new NotFoundError('Board', boardId);
+        // Lock, then re-read, so the zone saved below isn't an older copy of a concurrent edit or delete.
+        await lockRowForUpdate(
+          operationDb,
+          operationDb,
+          boards,
+          eq(boards.board_id, found.board_id)
+        );
+        const current = await boardRepo.findById(found.board_id);
+        if (!current) throw new NotFoundError('Board', boardId);
+        const zone = current.objects?.[zoneId];
+        if (zone?.type !== 'zone') throw new NotFoundError('Zone', zoneId);
+        const moved = await new BoardObjectRepository(operationDb).updatePositions(
+          current.board_id,
+          zoneId,
+          positions
+        );
+        const board = await boardRepo.upsertBoardObject(current.board_id, zoneId, {
+          ...zone,
+          layout: 'free',
+          order: [],
+          width: size.width,
+          height: size.height,
+        });
+        return { board, moved };
+      }
+    );
+    // Announce the moves only once they are committed.
+    for (const boardObject of result.moved) {
+      const payload = toBoardObjectPatchedEventPayload(boardObject);
+      if (params) this.emitBoardObjectPatched?.(payload, params);
+      else this.emitBoardObjectPatched?.(payload);
+    }
+    return result;
   }
 
   /**

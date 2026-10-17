@@ -13,7 +13,18 @@ import type {
   CardID,
   UUID,
 } from '@agor/core/types';
-import { and, asc, eq, getTableColumns, isNotNull, isNull, or, type SQL, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  eq,
+  getTableColumns,
+  inArray,
+  isNotNull,
+  isNull,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { toAbsolutePosition } from '../../utils/board-placement.js';
 import type { Database } from '../client';
@@ -22,6 +33,7 @@ import {
   insert,
   isSQLiteDatabase,
   jsonExtract,
+  lockRowForUpdate,
   select,
   update,
 } from '../database-wrapper';
@@ -468,6 +480,47 @@ export class BoardObjectRepository {
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to update board object position: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Move many entities pinned to one zone, keeping their zone. Rows missing,
+   * on another board, or no longer in the zone are skipped. Callers wrap it in
+   * their transaction.
+   */
+  async updatePositions(
+    boardId: BoardID,
+    zoneId: string,
+    positions: Readonly<Record<string, { x: number; y: number }>>
+  ): Promise<BoardEntityObject[]> {
+    try {
+      const objectIds = Object.keys(positions);
+      if (objectIds.length === 0) return [];
+      const onBoard = and(
+        inArray(boardObjects.object_id, objectIds),
+        eq(boardObjects.board_id, boardId)
+      ) as SQL;
+      // Lock first so a concurrent move to another zone can't be overwritten with a stale zone.
+      await lockRowForUpdate(this.db, this.db, boardObjects, onBoard);
+      const rows = await select(this.db).from(boardObjects).where(onBoard).all();
+      const moved: BoardEntityObject[] = [];
+      for (const row of rows) {
+        const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+        if (data.zone_id !== zoneId) continue;
+        const position = positions[row.object_id];
+        const next = { position, zone_id: data.zone_id };
+        await update(this.db, boardObjects)
+          .set({ data: next })
+          .where(eq(boardObjects.object_id, row.object_id))
+          .run();
+        moved.push(this.rowToEntity({ ...row, data: next }));
+      }
+      return moved;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to update board object positions: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

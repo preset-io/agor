@@ -2,11 +2,22 @@
  * Custom React Flow node components for board objects (text labels, zones, etc.)
  */
 
+import type { ZoneLayout } from '@agor/core/types';
+import {
+  isAutoZoneLayout,
+  ZONE_GRID_MIN_COLUMN_WIDTH,
+  ZONE_GRID_PADDING,
+  zoneLayoutOf,
+} from '@agor/core/utils/zone-layout';
 import type { BoardComment, BoardObject, User } from '@agor-live/client';
 import {
+  AppstoreOutlined,
   BgColorsOutlined,
+  BorderOutlined,
   CaretDownOutlined,
   CaretUpOutlined,
+  ColumnHeightOutlined,
+  ColumnWidthOutlined,
   CommentOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -23,14 +34,16 @@ import {
   ColorPicker,
   Dropdown,
   Flex,
+  type MenuProps,
   Popover,
   Space,
+  Tag,
   Typography,
   theme,
 } from 'antd';
 import type { Color } from 'antd/es/color-picker';
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { NodeResizer, useViewport } from 'reactflow';
+import { NodeResizeControl, NodeResizer, ResizeControlVariant, useViewport } from 'reactflow';
 import { useConnectionState, useMutationGate } from '../../../contexts/ConnectionContext';
 import type { BoardWriteResult } from '../../../hooks/useBoardMutationGuard';
 import { type BoardWriteTicket, hasBoardWriteTicketEnded } from '../../../store/boardMutationGuard';
@@ -98,6 +111,12 @@ interface ZoneNodeData extends Omit<ZoneBoardObject, 'type'> {
   canEdit?: boolean;
   /** Number of other zones whose rectangles intersect this zone. */
   overlappingZoneCount?: number;
+  /** Switch between free, row, column and grid under the ticket captured when chosen. */
+  onLayoutChange?: (
+    objectId: string,
+    layout: ZoneLayout,
+    ticket: BoardWriteTicket | null
+  ) => Promise<boolean>;
   /** Whether each relative layer operation would change persisted order. */
   layerAvailability?: Record<LayerOp, boolean>;
 }
@@ -128,6 +147,36 @@ const saveRecentColor = (color: string) => {
     console.warn('Failed to save recent color:', error);
   }
 };
+
+/** Narrowest an arranged zone resizes to: one minimum-width column plus padding. */
+const ARRANGED_ZONE_MIN_WIDTH = ZONE_GRID_MIN_COLUMN_WIDTH + 2 * ZONE_GRID_PADDING;
+
+const ZONE_LAYOUT_OPTIONS: Array<{
+  layout: ZoneLayout;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+}> = [
+  { layout: 'free', label: 'Free', description: 'Place cards anywhere', icon: <BorderOutlined /> },
+  {
+    layout: 'row',
+    label: 'Row',
+    description: 'Arrange cards side by side',
+    icon: <ColumnWidthOutlined />,
+  },
+  {
+    layout: 'column',
+    label: 'Column',
+    description: 'Arrange cards in one column',
+    icon: <ColumnHeightOutlined />,
+  },
+  {
+    layout: 'grid',
+    label: 'Grid',
+    description: 'Arrange cards in rows and columns',
+    icon: <AppstoreOutlined />,
+  },
+];
 
 const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: boolean }) => {
   const { token } = theme.useToken();
@@ -218,6 +267,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       fontSize: data.fontSize,
       zIndex: data.zIndex,
       trigger: data.trigger,
+      layout: data.layout,
+      order: data.order,
     }),
     [
       data.x,
@@ -233,6 +284,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       data.fontSize,
       data.zIndex,
       data.trigger,
+      data.layout,
+      data.order,
     ]
   );
 
@@ -330,6 +383,46 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   // Sanitizing on read defends the DOM against bad fontSize data (negative,
   // non-finite, absurdly large) written via MCP/import.
   const labelFontSize = effectiveLabelFontSize(data.fontSize, token.fontSize);
+  const layout = zoneLayoutOf(data);
+  const layoutOption =
+    ZONE_LAYOUT_OPTIONS.find((option) => option.layout === layout) ?? ZONE_LAYOUT_OPTIONS[0];
+  const layoutMenu: MenuProps = {
+    selectable: true,
+    selectedKeys: [layout],
+    items: ZONE_LAYOUT_OPTIONS.map((option) => ({
+      key: option.layout,
+      icon: option.icon,
+      label: (
+        <Flex vertical>
+          <span>{option.label}</span>
+          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            {option.description}
+          </Typography.Text>
+        </Flex>
+      ),
+    })),
+    onClick: ({ key, domEvent }) => {
+      domEvent.stopPropagation();
+      if (mutationDisabled || key === layout) return;
+      void data.onLayoutChange?.(data.objectId, key as ZoneLayout, captureTicket());
+    },
+  };
+  // A zone narrow on screen shows the badge as icon and count, so the title keeps its room.
+  const compactBadge = data.width * zoom < 360;
+  const layoutBadgeText = (
+    <>
+      {!compactBadge && <span>{layoutOption.label}</span>}
+      {data.pinnedItemCount !== undefined && (
+        <span>
+          {compactBadge ? '' : ' · '}
+          {data.pinnedItemCount}
+        </span>
+      )}
+    </>
+  );
+  // Badge width (in the label's unscaled pixels) the title leaves free.
+  const badgeRoom = isAutoZoneLayout(layout) ? (compactBadge ? 70 : 150) : 0;
+  const resizable = selected && !data.locked && !mutationDisabled;
   // Status keeps its smaller relative size, scaled from the label size when set.
   const statusFontSize = statusFontSizeFor(data.fontSize, token.fontSize, token.fontSizeSM);
   const handleReorder = (op: LayerOp) => {
@@ -355,20 +448,45 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
 
   return (
     <>
-      <NodeResizer
-        isVisible={selected && !data.locked && !mutationDisabled}
-        minWidth={200}
-        minHeight={200}
-        handleStyle={{
-          width: '10px',
-          height: '10px',
-          borderRadius: '50%',
-          backgroundColor: borderColor,
-        }}
-        lineStyle={{
-          borderColor: borderColor,
-        }}
-      />
+      {isAutoZoneLayout(layout) ? (
+        // Arranged zones fit their height to their cards; only the width resizes, and the columns follow it.
+        resizable && (
+          <>
+            <NodeResizeControl
+              variant={ResizeControlVariant.Line}
+              position="right"
+              minWidth={ARRANGED_ZONE_MIN_WIDTH}
+              style={{ borderColor }}
+            />
+            <NodeResizeControl
+              position="right"
+              minWidth={ARRANGED_ZONE_MIN_WIDTH}
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: '50%',
+                border: 'none',
+                backgroundColor: borderColor,
+              }}
+            />
+          </>
+        )
+      ) : (
+        <NodeResizer
+          isVisible={resizable}
+          minWidth={200}
+          minHeight={200}
+          handleStyle={{
+            width: '10px',
+            height: '10px',
+            borderRadius: '50%',
+            backgroundColor: borderColor,
+          }}
+          lineStyle={{
+            borderColor: borderColor,
+          }}
+        />
+      )}
       <div
         style={{
           width: '100%',
@@ -569,6 +687,20 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               }}
             />
 
+            {data.onLayoutChange && (
+              <Dropdown trigger={['click']} placement="bottom" menu={layoutMenu}>
+                <Button
+                  type="text"
+                  size="small"
+                  aria-label={`Zone layout: ${layoutOption.label}`}
+                  title={`Zone layout: ${layoutOption.label}`}
+                  icon={layoutOption.icon}
+                  disabled={mutationDisabled}
+                  style={{ width: 32, height: 32 }}
+                />
+              </Dropdown>
+            )}
+
             <Button
               type="text"
               size="small"
@@ -709,7 +841,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                 transform: `scale(${scale})`,
                 transformOrigin: 'top left',
                 // Constrain to zone width accounting for padding and scale
-                maxWidth: `${(data.width - token.padding * 2) / scale}px`,
+                maxWidth: `${(data.width - token.padding * 2) / scale - badgeRoom}px`,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -775,6 +907,37 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             }}
           >
             {data.status}
+          </div>
+        )}
+        {isAutoZoneLayout(layout) && (
+          <div
+            className="nodrag nopan"
+            onPointerDown={(event) => event.stopPropagation()}
+            style={{
+              position: 'absolute',
+              top: token.padding,
+              right: token.padding,
+              pointerEvents: 'auto',
+              // Inverse scale keeps the badge readable at any zoom, like the label.
+              transform: `scale(${scale})`,
+              transformOrigin: 'top right',
+            }}
+          >
+            {data.onLayoutChange && !mutationDisabled ? (
+              <Dropdown trigger={['click']} placement="bottomRight" menu={layoutMenu}>
+                <Button
+                  size="small"
+                  icon={layoutOption.icon}
+                  aria-label={`${layoutOption.label} layout. Change layout`}
+                >
+                  {layoutBadgeText}
+                </Button>
+              </Dropdown>
+            ) : (
+              <Tag icon={layoutOption.icon} bordered={false} style={{ marginInlineEnd: 0 }}>
+                {layoutBadgeText}
+              </Tag>
+            )}
           </div>
         )}
       </div>

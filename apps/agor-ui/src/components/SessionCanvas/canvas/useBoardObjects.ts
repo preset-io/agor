@@ -2,6 +2,7 @@
  * Hook for managing board objects (text labels, zones, etc.)
  */
 
+import type { ZoneLayout } from '@agor/core/types';
 import type { AgorClient, Board, BoardEntityObject, BoardObject } from '@agor-live/client';
 import { useCallback, useRef } from 'react';
 import type { Node } from 'reactflow';
@@ -46,6 +47,12 @@ interface UseBoardObjectsProps {
    * store's board (and again after the reconnect, when the reply was lost).
    */
   onWriteFailed?: (error: unknown) => void;
+  /** Switch a zone between free, row, column and grid (see `ZoneNodeData.onLayoutChange`). */
+  onZoneLayoutChange?: (
+    objectId: string,
+    layout: ZoneLayout,
+    ticket: BoardWriteTicket | null
+  ) => Promise<boolean>;
 }
 
 type ZoneEntry = [string, Extract<BoardObject, { type: 'zone' }>];
@@ -73,12 +80,15 @@ export const useBoardObjects = ({
   onZoneDraftLost,
   guard,
   onWriteFailed,
+  onZoneLayoutChange,
 }: UseBoardObjectsProps) => {
   // Use ref to avoid recreating callbacks when board changes
   const boardRef = useRef(board);
   boardRef.current = board;
   const guardRef = useRef(guard);
   guardRef.current = guard;
+  const onZoneLayoutChangeRef = useRef(onZoneLayoutChange);
+  onZoneLayoutChangeRef.current = onZoneLayoutChange;
   const canEdit = guard.canMutate;
   // Artifact lifecycle authorization is creator/admin based rather than
   // board.edit based, but its board object is still board data: it needs the
@@ -200,6 +210,17 @@ export const useBoardObjects = ({
     [client, showError]
   );
 
+  // An arranged zone first saves its cards where they are shown, so they stay put once it is gone.
+  const keepZoneCardsInPlace = useCallback(
+    async (objectId: string, ticket: BoardWriteTicket | null) => {
+      const saved = (await onZoneLayoutChangeRef.current?.(objectId, 'free', ticket)) ?? true;
+      if (saved && guardRef.current.isCurrent(ticket)) return true;
+      if (saved) guardRef.current.warnDropped();
+      return false;
+    },
+    []
+  );
+
   /**
    * Delete a zone (branch-centric: zones can pin branches)
    */
@@ -214,6 +235,8 @@ export const useBoardObjects = ({
         guardRef.current.warnDropped();
         return;
       }
+
+      if (!(await keepZoneCardsInPlace(objectId, ticket))) return;
 
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
@@ -239,7 +262,7 @@ export const useBoardObjects = ({
         onWriteFailedRef.current?.(error);
       }
     },
-    [client, setNodes, deletedObjectsRef, showError]
+    [client, setNodes, deletedObjectsRef, showError, keepZoneCardsInPlace]
   );
 
   /**
@@ -261,6 +284,7 @@ export const useBoardObjects = ({
           : type === 'markdown'
             ? 'delete the note'
             : 'delete the artifact';
+      if (type === 'zone' && !(await keepZoneCardsInPlace(objectId, ticket))) return;
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
 
@@ -284,7 +308,7 @@ export const useBoardObjects = ({
         onWriteFailedRef.current?.(error);
       }
     },
-    [client, setNodes, deletedObjectsRef, showError]
+    [client, setNodes, deletedObjectsRef, showError, keepZoneCardsInPlace]
   );
 
   /**
@@ -467,6 +491,9 @@ export const useBoardObjects = ({
           x: objectData.x, // Include position in data for updates
           y: objectData.y,
           trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
+          layout: objectData.type === 'zone' ? objectData.layout : undefined,
+          order: objectData.type === 'zone' ? objectData.order : undefined,
+          onLayoutChange: onZoneLayoutChange,
           pinnedItemCount,
           canEdit,
           overlappingZoneCount:
@@ -505,6 +532,7 @@ export const useBoardObjects = ({
       activeUrlTargetArtifactId,
       onEditMarkdown,
       onZoneDraftLost,
+      onZoneLayoutChange,
       canEdit,
       guard.capture,
       artifactGuard.capture,

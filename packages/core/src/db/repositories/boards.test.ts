@@ -1385,6 +1385,42 @@ describe('BoardRepository.batchUpsertBoardObjects', () => {
   });
 });
 
+describe('BoardRepository.batchUpsertBoardObjects zone arrangement', () => {
+  dbTest('keeps a zone layout and order the write leaves out', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': {
+            type: 'zone',
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            label: 'A',
+            layout: 'grid',
+            order: ['b', 'a'],
+          },
+        },
+      })
+    );
+
+    const renamed = await repo.batchUpsertBoardObjects(board.board_id, {
+      'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'Renamed' },
+    });
+    expect(renamed.objects?.['zone-1']).toMatchObject({
+      label: 'Renamed',
+      layout: 'grid',
+      order: ['b', 'a'],
+    });
+
+    const freed = await repo.batchUpsertBoardObjects(board.board_id, {
+      'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'Renamed', layout: 'free' },
+    });
+    expect(freed.objects?.['zone-1']).toMatchObject({ layout: 'free' });
+  });
+});
+
 describe('BoardRepository.mergeBoardObjectFields', () => {
   dbTest('merges only the given fields, preserving the rest of the object', async ({ db }) => {
     const repo = new BoardRepository(db);
@@ -1492,6 +1528,37 @@ describe('BoardRepository.mergeBoardObjectFields', () => {
       expect(obj?.zIndex).toBe(499); // clamped below the card layer
     }
   );
+
+  dbTest('merges a known zone layout and card order, ignoring unknown layouts', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'A', zIndex: 100 },
+          'zone-2': { type: 'zone', x: 0, y: 0, width: 1, height: 1, label: 'B' },
+          'note-1': { type: 'markdown', x: 0, y: 0, width: 1, content: 'Note' },
+        },
+      })
+    );
+
+    const updated = await repo.mergeBoardObjectFields(board.board_id, {
+      'zone-1': { layout: 'grid', order: ['b', 'a', 'b', 3] as never, width: 1040 },
+      'zone-2': { layout: 'masonry', width: Number.NaN } as never,
+      'note-1': { layout: 'grid', width: 900 } as never,
+    });
+
+    expect(updated.objects?.['zone-1']).toMatchObject({
+      label: 'A',
+      zIndex: 100,
+      layout: 'grid',
+      order: ['b', 'a'],
+      width: 1040,
+    });
+    expect(updated.objects?.['zone-2']).not.toHaveProperty('layout');
+    expect(updated.objects?.['zone-2']).toMatchObject({ width: 1 });
+    expect(updated.objects?.['note-1']).not.toHaveProperty('layout');
+    expect(updated.objects?.['note-1']).toMatchObject({ width: 1 });
+  });
 
   dbTest('skips a patch whose zIndex is missing or non-finite', async ({ db }) => {
     const repo = new BoardRepository(db);

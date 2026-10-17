@@ -85,6 +85,8 @@ interface BranchCardProps {
   zoneColor?: string;
   /** Off on the view-only canvas, where cards cannot be dragged. */
   showDragHandle?: boolean;
+  /** Width of the arranged-zone slot to fill instead of the standard width. */
+  slotWidth?: number;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
   panelMode?: boolean; // Render inside side panel instead of as a draggable canvas card
   progressiveMountKey?: string | number | null;
@@ -121,6 +123,7 @@ const BranchCardComponent = ({
   zoneName,
   zoneColor,
   showDragHandle = true,
+  slotWidth,
   inPopover = false,
   panelMode = false,
   progressiveMountKey,
@@ -412,7 +415,11 @@ const BranchCardComponent = ({
     <Card
       ref={cardRef}
       style={{
-        width: panelMode ? '100%' : peekedSessions.length > 0 ? 880 : 500,
+        width: panelMode
+          ? '100%'
+          : peekedSessions.length > 0
+            ? Math.max(880, slotWidth ?? 0)
+            : (slotWidth ?? 500),
         cursor: 'default', // Override React Flow's drag cursor - only drag handles should show grab cursor
         transition:
           'background-color 0.2s ease-in-out, box-shadow 0.6s ease-in-out, outline 0.2s ease-in-out, border 0.6s ease-in-out, opacity 0.2s ease-in-out',
