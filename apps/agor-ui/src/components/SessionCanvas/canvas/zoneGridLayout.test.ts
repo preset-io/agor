@@ -123,7 +123,7 @@ describe('applyZoneGridLayouts', () => {
       applyZoneGridLayouts(nodes, {
         measuredSizes: new Map(),
         storedPositionOf: () => undefined,
-        isMoving: (id) => id === 'b',
+        isMoving: (node) => node.id === 'b',
       })
     );
     expect(result.get('b')?.position).toEqual({ x: 9, y: 9 });

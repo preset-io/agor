@@ -651,8 +651,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
     // Arranged zones place pinned nodes from their measured sizes; those positions are never saved.
     const [zoneGridMeasureVersion, setZoneGridMeasureVersion] = useState(0);
-    // Cards dragged out of an arranged zone, by when; their move is still being saved.
-    const leavingZoneRef = useRef(new Map<string, number>());
+    // Cards dragged out of an arranged zone: the zone they left, and when; their move is still being saved.
+    const leavingZoneRef = useRef(new Map<string, { zoneId: string; since: number }>());
     // Right after a board loads, cards hide until measured so they never show in a guessed slot.
     const [boardSettled, setBoardSettled] = useState(false);
     const placementOfNode = useCallback(
@@ -670,12 +670,17 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           storedPositionOf: (nodeId) => placementOfNode(nodeId)?.position,
           heldOrderOf: (zoneId) => heldZoneOrdersRef.current.get(zoneId),
           hideUnmeasured: !boardSettled,
-          // A card dragged out keeps its drop point while its move saves, for 5s at most.
-          isMoving: (nodeId) => {
-            const since = leavingZoneRef.current.get(nodeId);
-            if (since === undefined) return false;
-            if (Date.now() - since < LEAVING_ZONE_GRACE_MS) return true;
-            leavingZoneRef.current.delete(nodeId);
+          // A card dragged out keeps its drop point until its move saves (it leaves that zone), for 5s at most.
+          isMoving: (node) => {
+            const leaving = leavingZoneRef.current.get(node.id);
+            if (!leaving) return false;
+            if (
+              node.parentId === leaving.zoneId &&
+              Date.now() - leaving.since < LEAVING_ZONE_GRACE_MS
+            ) {
+              return true;
+            }
+            leavingZoneRef.current.delete(node.id);
             return false;
           },
         }),
@@ -2569,7 +2574,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             return;
           }
           // Leaving the zone: if the move never saves, the card returns to its slot after the grace period.
-          leavingZoneRef.current.set(node.id, Date.now());
+          leavingZoneRef.current.set(node.id, { zoneId: node.parentId, since: Date.now() });
           setTimeout(
             () => setZoneGridMeasureVersion((version) => version + 1),
             LEAVING_ZONE_GRACE_MS + 50
@@ -3451,7 +3456,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             );
             if (isAlreadyOnTop) return nds;
             const maxZ = Math.max(0, ...raisable.map((n) => n.zIndex ?? 0));
-            return nds.map((n) => (n.id === node.id ? { ...n, zIndex: maxZ + 1 } : n));
+            // Relayout so a widened card in an arranged zone stays above the raised card.
+            return layoutZoneGrids(
+              nds.map((n) => (n.id === node.id ? { ...n, zIndex: maxZ + 1 } : n))
+            );
           });
         }
       },
@@ -3462,6 +3470,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         canMutateComments,
         openMarkdownPlacementModal,
         setNodes,
+        layoutZoneGrids,
         commentGuard,
         boardGuard,
       ]

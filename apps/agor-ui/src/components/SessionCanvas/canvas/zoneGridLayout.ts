@@ -24,7 +24,7 @@ export interface ZoneGridLayoutInputs {
   /** Hide cards not measured yet, so they never show in a guessed slot. */
   hideUnmeasured?: boolean;
   /** A card moving out (its drop not yet saved) is left where it was dropped. */
-  isMoving?: (nodeId: string) => boolean;
+  isMoving?: (node: Node) => boolean;
 }
 
 /** The order a zone shows its pinned nodes in. */
@@ -98,7 +98,7 @@ export function applyZoneGridLayouts(nodes: Node[], inputs: ZoneGridLayoutInputs
   const childrenByZone = new Map<string, Node[]>();
   for (const node of nodes) {
     if (!node.parentId || !PINNED_ENTITY_TYPES.has(node.type ?? '')) continue;
-    if (!autoZones.has(node.parentId) || inputs.isMoving?.(node.id)) continue;
+    if (!autoZones.has(node.parentId) || inputs.isMoving?.(node)) continue;
     const siblings = childrenByZone.get(node.parentId) ?? [];
     siblings.push(node);
     childrenByZone.set(node.parentId, siblings);
