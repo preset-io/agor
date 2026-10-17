@@ -116,7 +116,7 @@ interface ZoneNodeData extends Omit<ZoneBoardObject, 'type'> {
     objectId: string,
     layout: ZoneLayout,
     ticket: BoardWriteTicket | null
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   /** Whether each relative layer operation would change persisted order. */
   layerAvailability?: Record<LayerOp, boolean>;
 }

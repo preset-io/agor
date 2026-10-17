@@ -518,6 +518,7 @@ describe('deleting a zone', () => {
     const calls: string[] = [];
     const onZoneLayoutChange = vi.fn(async () => {
       calls.push('free');
+      return true;
     });
     patch.mockImplementation(async (_id: string, data: { _action: string }) => {
       calls.push(data._action);
@@ -546,5 +547,36 @@ describe('deleting a zone', () => {
 
     expect(onZoneLayoutChange).toHaveBeenCalledWith('target', 'free', ticket);
     expect(calls).toEqual(['free', 'removeObject', 'free', 'deleteZone']);
+  });
+
+  it('keeps the zone when its cards could not be saved in place', async () => {
+    const { client, patch } = makeClient();
+    const board = makeBoard({
+      target: { type: 'zone', x: 0, y: 0, width: 200, height: 200, label: 'Z', layout: 'grid' },
+    });
+    const setNodes = vi.fn();
+    const { result } = renderHook(
+      () => {
+        const guard = useBoardMutationGuard(board.board_id, true);
+        const objects = useBoardObjects({
+          board,
+          client,
+          boardObjectsForBoard: [],
+          setNodes,
+          deletedObjectsRef: { current: new Set<string>() },
+          guard,
+          onZoneLayoutChange: vi.fn(async () => false),
+        });
+        return { guard, objects };
+      },
+      { wrapper }
+    );
+
+    const ticket = result.current.guard.capture();
+    await result.current.objects.deleteObject('target', ticket);
+    await result.current.objects.deleteZone('target', false, ticket);
+
+    expect(patch).not.toHaveBeenCalled();
+    expect(setNodes).not.toHaveBeenCalled();
   });
 });

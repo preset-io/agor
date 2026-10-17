@@ -52,7 +52,7 @@ interface UseBoardObjectsProps {
     objectId: string,
     layout: ZoneLayout,
     ticket: BoardWriteTicket | null
-  ) => Promise<void>;
+  ) => Promise<boolean>;
 }
 
 type ZoneEntry = [string, Extract<BoardObject, { type: 'zone' }>];
@@ -210,6 +210,17 @@ export const useBoardObjects = ({
     [client, showError]
   );
 
+  // An arranged zone first saves its cards where they are shown, so they stay put once it is gone.
+  const keepZoneCardsInPlace = useCallback(
+    async (objectId: string, ticket: BoardWriteTicket | null) => {
+      const saved = (await onZoneLayoutChangeRef.current?.(objectId, 'free', ticket)) ?? true;
+      if (saved && guardRef.current.isCurrent(ticket)) return true;
+      if (saved) guardRef.current.warnDropped();
+      return false;
+    },
+    []
+  );
+
   /**
    * Delete a zone (branch-centric: zones can pin branches)
    */
@@ -225,8 +236,7 @@ export const useBoardObjects = ({
         return;
       }
 
-      // An arranged zone first saves its cards where they are shown, so they stay put once it is gone.
-      await onZoneLayoutChangeRef.current?.(objectId, 'free', ticket);
+      if (!(await keepZoneCardsInPlace(objectId, ticket))) return;
 
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
@@ -252,7 +262,7 @@ export const useBoardObjects = ({
         onWriteFailedRef.current?.(error);
       }
     },
-    [client, setNodes, deletedObjectsRef, showError]
+    [client, setNodes, deletedObjectsRef, showError, keepZoneCardsInPlace]
   );
 
   /**
@@ -274,7 +284,7 @@ export const useBoardObjects = ({
           : type === 'markdown'
             ? 'delete the note'
             : 'delete the artifact';
-      if (type === 'zone') await onZoneLayoutChangeRef.current?.(objectId, 'free', ticket);
+      if (type === 'zone' && !(await keepZoneCardsInPlace(objectId, ticket))) return;
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
 
@@ -298,7 +308,7 @@ export const useBoardObjects = ({
         onWriteFailedRef.current?.(error);
       }
     },
-    [client, setNodes, deletedObjectsRef, showError]
+    [client, setNodes, deletedObjectsRef, showError, keepZoneCardsInPlace]
   );
 
   /**

@@ -918,11 +918,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     >({});
     const isDraggingRef = useRef(false);
 
-    // A node's size as shown: measured when known, since React Flow keeps placeholder sizes on synced nodes.
+    // A node's size for drop hit tests: measured when known, since React Flow keeps placeholder sizes on synced nodes.
     const shownSizeOf = useStableCallback((node: Node) => {
       const measured = measuredNodeSizesRef.current.get(node.id);
+      // A card widened past its arranged slot (a session peek) still drops by its slot.
+      const slotWidth = Number(node.data?.slotWidth) || undefined;
       return {
-        width: measured?.width || node.width || (node.type === 'cardNode' ? 380 : 500),
+        width: slotWidth || measured?.width || node.width || (node.type === 'cardNode' ? 380 : 500),
         height: measured?.height || node.height || (node.type === 'cardNode' ? 120 : 200),
       };
     });
@@ -1141,11 +1143,15 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
     // Every switch is one request: arranged layouts save the zone with its card order; free also saves each card's shown position.
     const handleZoneLayoutChange = useStableCallback(
-      async (objectId: string, layout: ZoneLayout, ticket: BoardWriteTicket | null) => {
+      async (
+        objectId: string,
+        layout: ZoneLayout,
+        ticket: BoardWriteTicket | null
+      ): Promise<boolean> => {
+        if (!board || !client) return false;
         const zone = placementBoardRef.current?.objects?.[objectId];
         const zoneNode = shownNodesRef.current.find((node) => node.id === objectId);
-        if (!board || !client || zone?.type !== 'zone' || !zoneNode) return;
-        if (zoneLayoutOf(zone) === layout) return;
+        if (zone?.type !== 'zone' || !zoneNode || zoneLayoutOf(zone) === layout) return true;
         // A free zone's saved order is stale: its cards read in the order they sit.
         const shownZone = isAutoZoneLayout(zoneLayoutOf(zone))
           ? zoneNode
@@ -1164,7 +1170,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           }
           const width = Number(zoneNode.style?.width) || zone.width;
           const height = Number(zoneNode.style?.height) || zone.height;
-          await writeZone(ticket, 'change the zone layout', () =>
+          return writeZone(ticket, 'change the zone layout', () =>
             client.service('boards').patch(board.board_id, {
               _action: 'placeZoneEntities',
               objectId,
@@ -1172,7 +1178,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               positions,
             } as unknown as Partial<Board>)
           );
-          return;
         }
 
         holdZoneOrder(objectId, order);
@@ -1185,6 +1190,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           } as unknown as Partial<Board>)
         );
         if (!saved) releaseZoneOrder(objectId, order);
+        return saved;
       }
     );
 
