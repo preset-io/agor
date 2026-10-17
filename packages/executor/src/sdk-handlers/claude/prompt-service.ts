@@ -7,7 +7,7 @@
 
 import { projectClaudeResultResponse, projectContextUsageSnapshot } from '@agor/core';
 import { shortId } from '@agor/core/db';
-import { isMCPAbortError, sanitizeMCPExternalError } from '@agor/core/mcp';
+import { isMCPAbortError } from '@agor/core/mcp';
 import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
 import type { PromptOrigin, Task } from '@agor/core/types';
 import type {
@@ -34,6 +34,11 @@ import {
   ClaudeBackgroundTaskLifecycle,
 } from './background-task-lifecycle.js';
 import { AWAIT_TIMEOUT, awaitWithTimeout } from './bounded-await.js';
+import {
+  isClaudeAbortError,
+  logClaudeFailure,
+  sanitizeClaudeExecutionError,
+} from './claude-error.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 import { setupQuery } from './query-builder.js';
 import { aggregateClaudeResults } from './result-aggregation.js';
@@ -242,38 +247,43 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     }
 
-    const {
-      query: result,
-      getStderrMetadata,
-      refreshMcp,
-    } = await setupQuery(
-      sessionId,
-      prompt,
-      {
-        sessionsRepo: this.sessionsRepo,
-        reposRepo: this.reposRepo,
-        messagesRepo: this.messagesRepo,
-        apiKey: this.apiKey,
-        sessionMCPRepo: this.sessionMCPRepo,
-        mcpServerRepo: this.mcpServerRepo,
-        permissionService: this.permissionService,
-        tasksService: this.tasksService,
-        mcpEnabled: this.mcpEnabled,
-        sessionsService: this.sessionsService,
-        messagesService: this.messagesService,
-        branchesRepo: this.branchesRepo,
-        usersRepo: this.usersRepo,
-        mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
-        permissionLocks: this.permissionLocks,
-      },
-      {
-        taskId,
-        permissionMode,
-        resume: true,
-        abortController,
-        promptOrigin,
-      }
-    );
+    let setupResult: Awaited<ReturnType<typeof setupQuery>>;
+    try {
+      setupResult = await setupQuery(
+        sessionId,
+        prompt,
+        {
+          sessionsRepo: this.sessionsRepo,
+          reposRepo: this.reposRepo,
+          messagesRepo: this.messagesRepo,
+          apiKey: this.apiKey,
+          sessionMCPRepo: this.sessionMCPRepo,
+          mcpServerRepo: this.mcpServerRepo,
+          permissionService: this.permissionService,
+          tasksService: this.tasksService,
+          mcpEnabled: this.mcpEnabled,
+          sessionsService: this.sessionsService,
+          messagesService: this.messagesService,
+          branchesRepo: this.branchesRepo,
+          usersRepo: this.usersRepo,
+          mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+          permissionLocks: this.permissionLocks,
+        },
+        {
+          taskId,
+          permissionMode,
+          resume: true,
+          abortController,
+          promptOrigin,
+        }
+      );
+    } catch (error) {
+      const safe = sanitizeClaudeExecutionError(error);
+      logClaudeFailure('❌ Query setup failed:', safe, { sessionId: shortId(sessionId) });
+      throw safe;
+    }
+
+    const { query: result, getStderrMetadata, refreshMcp } = setupResult;
 
     // Get session for reference (needed to check existing sdk_session_id)
     const session = await this.sessionsRepo?.findById(sessionId);
@@ -529,10 +539,9 @@ If you continue to see authentication errors, please contact your Agor administr
                   }
                 }
               } catch (error) {
-                const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
-                console.warn(
-                  `⚠️  getContextUsage() unavailable category=${safe.category} type=${safe.diagnostic.type}`
-                );
+                const safe = sanitizeClaudeExecutionError(error);
+                const category = 'category' in safe ? safe.category : 'unknown';
+                console.warn(`⚠️  getContextUsage() unavailable category=${category}`);
               } finally {
                 // Release the held input iterable so the SDK can close stdin
                 result.releaseInput();
@@ -568,7 +577,7 @@ If you continue to see authentication errors, please contact your Agor administr
 
       // Check if this is an AbortError from AbortController.abort()
       // This is EXPECTED during stop - the SDK throws AbortError when cancelled
-      if (isMCPAbortError(error)) {
+      if (isMCPAbortError(error) || isClaudeAbortError(error)) {
         console.log(`🛑 [Stop] Query aborted for session ${shortId(sessionId)} - this is expected`);
         // Yield stopped event to signal execution was halted
         yield { type: 'stopped' } as ProcessedEvent;
@@ -579,15 +588,14 @@ If you continue to see authentication errors, please contact your Agor administr
       // stderr and SDK exceptions can contain MCP URLs, headers, or reflected
       // provider payloads. Retain only presence + closed failure metadata.
       const stderr = getStderrMetadata();
-      const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
-      console.error(`❌ SDK iteration failed:`, {
+      const safe = sanitizeClaudeExecutionError(error);
+      logClaudeFailure('❌ SDK iteration failed:', safe, {
         sessionId: shortId(sessionId),
+        taskId: taskId ? shortId(taskId) : undefined,
         messageCount: state.messageCount,
-        category: safe.category,
-        type: safe.diagnostic.type,
         hasStderr: stderr.hasStderr,
       });
-      throw new Error(safe.message);
+      throw safe;
     } finally {
       unregisterMcpRefresh?.();
       // Manual iteration means we own the finalization `for await` did on break:
@@ -628,32 +636,41 @@ If you continue to see authentication errors, please contact your Agor administr
    * @returns Complete assistant response with metadata
    */
   async promptSession(sessionId: SessionID, prompt: string): Promise<PromptResult> {
-    const { query: result } = await setupQuery(
-      sessionId,
-      prompt,
-      {
-        sessionsRepo: this.sessionsRepo,
-        reposRepo: this.reposRepo,
-        messagesRepo: this.messagesRepo,
-        apiKey: this.apiKey,
-        sessionMCPRepo: this.sessionMCPRepo,
-        mcpServerRepo: this.mcpServerRepo,
-        permissionService: this.permissionService,
-        tasksService: this.tasksService,
-        mcpEnabled: this.mcpEnabled,
-        sessionsService: this.sessionsService,
-        messagesService: this.messagesService,
-        branchesRepo: this.branchesRepo,
-        usersRepo: this.usersRepo,
-        mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
-        permissionLocks: this.permissionLocks,
-      },
-      {
-        taskId: undefined,
-        permissionMode: undefined,
-        resume: false,
-      }
-    );
+    let setupResult: Awaited<ReturnType<typeof setupQuery>>;
+    try {
+      setupResult = await setupQuery(
+        sessionId,
+        prompt,
+        {
+          sessionsRepo: this.sessionsRepo,
+          reposRepo: this.reposRepo,
+          messagesRepo: this.messagesRepo,
+          apiKey: this.apiKey,
+          sessionMCPRepo: this.sessionMCPRepo,
+          mcpServerRepo: this.mcpServerRepo,
+          permissionService: this.permissionService,
+          tasksService: this.tasksService,
+          mcpEnabled: this.mcpEnabled,
+          sessionsService: this.sessionsService,
+          messagesService: this.messagesService,
+          branchesRepo: this.branchesRepo,
+          usersRepo: this.usersRepo,
+          mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
+          permissionLocks: this.permissionLocks,
+        },
+        {
+          taskId: undefined,
+          permissionMode: undefined,
+          resume: false,
+        }
+      );
+    } catch (error) {
+      const safe = sanitizeClaudeExecutionError(error);
+      logClaudeFailure('❌ Query setup failed:', safe, { sessionId: shortId(sessionId) });
+      throw safe;
+    }
+
+    const { query: result } = setupResult;
 
     // Get session for reference
     const session = await this.sessionsRepo?.findById(sessionId);
@@ -720,7 +737,7 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     } catch (error) {
       // Check if this is an AbortError from interrupt() - this is EXPECTED during stop
-      if (isMCPAbortError(error)) {
+      if (isMCPAbortError(error) || isClaudeAbortError(error)) {
         console.log(
           `🛑 [Stop] Query aborted via interrupt() for session ${shortId(sessionId)} (non-streaming) - this is expected`
         );
@@ -732,7 +749,7 @@ If you continue to see authentication errors, please contact your Agor administr
           outputTokens: tokenUsage?.output_tokens || 0,
         };
       }
-      throw new Error(sanitizeMCPExternalError(error, { stage: 'runtime' }).message);
+      throw sanitizeClaudeExecutionError(error);
     }
 
     // Extract token counts from SDK result metadata
