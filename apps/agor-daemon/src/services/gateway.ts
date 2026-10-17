@@ -5817,7 +5817,8 @@ export class GatewayService {
     const teamsPersonalChat =
       channel.channel_type === 'teams' &&
       String(data.metadata?.teams_conversation_type ?? '').toLowerCase() === 'personal';
-    const followUpHint = !discordFollowUpsNeedNoMention && !teamsPersonalChat;
+    const slackDm = channel.channel_type === 'slack' && data.metadata?.channel_type === 'im';
+    const followUpHint = !slackDm && !discordFollowUpsNeedNoMention && !teamsPersonalChat;
 
     // Slack emoji reactions are a mapped-thread-only signal gated by the
     // channel's inbound_reactions flag. The connector filters them already;
@@ -6010,7 +6011,7 @@ export class GatewayService {
         typeof data.metadata?.channel_type === 'string' ? data.metadata.channel_type : undefined;
       const isSlackDm = slackConversationType === 'im';
       const hasExplicitMention = data.metadata?.slack_has_mention === true;
-      if (!isSlackDm && !hasExplicitMention && !isSlackReaction && !implicitCommand) {
+      if (!isSlackDm && !hasExplicitMention && !isSlackReaction) {
         console.debug(
           `[gateway] IGNORED: Slack channel-like message without explicit mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
         );

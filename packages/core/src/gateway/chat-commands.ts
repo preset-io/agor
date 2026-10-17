@@ -19,8 +19,8 @@ export const GATEWAY_COMMAND_HELP = [
   '`!skip`: Stop the current task; continue queued tasks after termination is confirmed.',
   '`!stop-clear`: Cancel queued tasks and stop the current task. Requires Branch Manager access.',
   '`!help`: Show this menu.',
-  'In a thread with one connected session, no bot mention is needed. Mention the bot to choose when there are multiple sessions.',
-  'Send the command by itself, with only an optional bot mention.',
+  'In channels and threads, mention me with the command, e.g. `@MyAgent !stop`. In DMs, just send `!stop`.',
+  'Send only the command and any bot mention, without extra text.',
   `[Command guide](${GATEWAY_COMMAND_DOCS_URL})`,
 ].join('\n');
 
@@ -47,12 +47,6 @@ export function isImplicitGatewayChatCommand(
 ): boolean {
   if (!parseGatewayChatCommand(text) || !metadata) return false;
   switch (channelType) {
-    case 'slack':
-      return (
-        metadata.channel_type !== 'im' &&
-        metadata.slack_is_thread_reply === true &&
-        metadata.slack_has_mention !== true
-      );
     case 'discord':
       return (
         metadata[DISCORD_METADATA_KEY.isThread] === true &&
@@ -87,8 +81,7 @@ export function formatGatewayCommandReply(
   }
   const cancelled =
     receipt.cancelled_count > 0 ? ` Cancelled ${receipt.cancelled_count} queued tasks.` : '';
-  if (receipt.outcome === 'idle')
-    return `There is no current task to stop.${cancelled}${receipt.session_id === null ? ` ${GATEWAY_COMMAND_HINT}` : ''}`;
+  if (receipt.outcome === 'idle') return `There is no current task to stop.${cancelled}`;
   switch (stop?.outcome) {
     case 'stopped':
       return `Stopped.${cancelled}`;

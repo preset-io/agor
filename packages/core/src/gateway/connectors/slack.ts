@@ -36,7 +36,6 @@ import type {
   SlackTestFailure,
   SlackTestResult,
 } from '../../types/gateway';
-import { parseGatewayChatCommand } from '../chat-commands';
 import type {
   GatewayConnector,
   GatewayInboundCallback,
@@ -2755,8 +2754,8 @@ export class SlackConnector implements GatewayConnector {
       let routed = false;
       try {
         let event = body.event;
-        // Message subscriptions deliver all channel chatter, not just controls.
-        // Reject it before logging, cache scans, or Slack API calls. This is a
+        // Existing apps may still subscribe to all channel messages.
+        // Reject them before logging, cache scans, or Slack API calls. This is a
         // negative-only fast path: C/G distinguish channel-like surfaces from
         // DMs, never public from private. Accepted events still resolve their
         // actual type and pass the source/allowlist checks below.
@@ -2765,15 +2764,9 @@ export class SlackConnector implements GatewayConnector {
           event.channel_type === 'group' ||
           event.channel_type === 'mpim' ||
           (!event.channel_type && /^[CG]/.test(event.channel ?? ''));
-        if (
-          eventType === 'message' &&
-          knownChannelLike &&
-          (event.subtype === 'message_replied' ||
-            !event.thread_ts ||
-            !parseGatewayChatCommand(event.text ?? ''))
-        ) {
+        if (eventType === 'message' && knownChannelLike) {
           // message_replied is parent bookkeeping, not a command occurrence.
-          // Actual replies arrive separately with their own text and timestamp.
+          // Addressed channel replies arrive separately as app_mention events.
           return;
         }
         const slackTeamId =
@@ -2857,10 +2850,7 @@ export class SlackConnector implements GatewayConnector {
         const isChannelLikeMessage =
           channelType === 'channel' || channelType === 'group' || channelType === 'mpim';
 
-        // Exact bare controls in replies reach gateway target resolution; this
-        // is not a general relaxation of Slack's hard prompt mention rule.
-        const bareThreadCommand = isThreadReply && !!parseGatewayChatCommand(event.text ?? '');
-        if (isChannelLikeMessage && eventType !== 'app_mention' && !bareThreadCommand) {
+        if (isChannelLikeMessage && eventType !== 'app_mention') {
           console.debug(
             `[slack] Skipping non-app_mention event in channel-like conversation type=${eventType} channel=${event.channel} ts=${event.ts}`
           );
@@ -2924,7 +2914,7 @@ export class SlackConnector implements GatewayConnector {
         const allowedViaThreadReplyException = false;
 
         const requiresExplicitMention = channelType !== 'im';
-        if (requireMention && requiresExplicitMention && !bareThreadCommand) {
+        if (requireMention && requiresExplicitMention) {
           if (!botMentionPattern || !botMentionReplacePattern) {
             // app_mention events are inherently mentions (Slack guarantees this).
             if (eventType === 'app_mention') {

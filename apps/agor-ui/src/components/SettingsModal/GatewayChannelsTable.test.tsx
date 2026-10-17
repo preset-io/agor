@@ -744,8 +744,8 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     );
     const manifest = document.querySelector('pre')?.textContent ?? '';
     expect(manifest).toContain('"app_mention"');
-    // Prompts use app_mention; bare thread controls also need message events.
-    expect(manifest).toContain('message.channels');
+    // Slack filters both prompts and commands by bot mention.
+    expect(manifest).not.toContain('message.channels');
 
     clickButton(/Copy app manifest/);
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
@@ -839,7 +839,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(screen.getByPlaceholderText('xapp-...')).toHaveValue('xapp-kept');
   });
 
-  it('derives the Message Sources scope/event list including bare thread controls', async () => {
+  it('derives the Message Sources scope/event list without broad message subscriptions', async () => {
     renderEditTable(null, makeSlackChannel());
     expandPanel('Message Sources');
 
@@ -850,8 +850,8 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     );
     expect(screen.queryAllByText('app_mentions:read').length).toBeGreaterThan(0);
     expect(screen.queryAllByText('app_mention').length).toBeGreaterThan(0);
-    // Bare commands use the enabled surface message subscription.
-    expect(screen.queryAllByText('message.channels').length).toBeGreaterThan(0);
+    // Do not subscribe every bot to all channel chatter.
+    expect(screen.queryAllByText('message.channels')).toHaveLength(0);
   });
 
   it('shows stored vs not-set status for the token fields', () => {

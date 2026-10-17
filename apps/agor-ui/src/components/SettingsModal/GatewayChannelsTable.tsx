@@ -3870,9 +3870,9 @@ const ChannelFormFields: React.FC<{
                     {sourcesEnabled && (
                       <CompactAlert
                         type="info"
-                        heading="Slack prompts require mentions"
+                        heading="Slack prompts and commands require mentions"
                         expandable
-                        description="Prompts require an explicit @mention. Bare commands such as !stop also work in threads with one connected session. Missed thread replies are included as catch-up context on the next mention."
+                        description="In channels, threads, and group DMs, mention the bot for prompts and commands such as !help. Direct messages need no mention. Missed thread replies are included as catch-up context on the next mention."
                         style={{ marginBottom: 12 }}
                       />
                     )}
@@ -3886,8 +3886,8 @@ const ChannelFormFields: React.FC<{
                         <div>
                           <Typography.Text type="secondary" style={{ fontSize: 'inherit' }}>
                             Derived from the selected surfaces; channel-like surfaces trigger on{' '}
-                            <code>app_mention</code> for prompts and <code>message.*</code> events
-                            for bare thread commands. Copy the full manifest from the App Manifest
+                            <code>app_mention</code> for prompts and commands, without subscribing
+                            to all channel messages. Copy the full manifest from the App Manifest
                             section.
                           </Typography.Text>
                           <div style={{ marginTop: 8 }}>

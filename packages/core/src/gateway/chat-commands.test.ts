@@ -42,6 +42,8 @@ describe('gateway chat command contract', () => {
     }
   );
   it('help explains permission and queue semantics with one direct docs link', () => {
+    expect(GATEWAY_COMMAND_HELP).toContain('In channels and threads, mention me with the command');
+    expect(GATEWAY_COMMAND_HELP).toContain('In DMs, just send `!stop`');
     expect(GATEWAY_COMMAND_HELP).toContain('only if nothing is queued');
     expect(GATEWAY_COMMAND_HELP).toContain('after termination is confirmed');
     expect(GATEWAY_COMMAND_HELP).toContain('Requires Branch Manager');
@@ -76,7 +78,6 @@ describe('gateway chat command contract', () => {
 
 describe('implicit command boundaries', () => {
   it.each([
-    ['slack', { channel_type: 'channel', slack_is_thread_reply: true }],
     ['discord', { discord_is_thread: true }],
     ['teams', { teams_conversation_type: 'groupChat' }],
     ['teams', { teams_conversation_type: 'channel' }],
@@ -93,6 +94,7 @@ describe('implicit command boundaries', () => {
     ).toBe(false);
   });
   it.each([
+    ['slack', { channel_type: 'channel', slack_is_thread_reply: true }],
     ['slack', { channel_type: 'im', slack_is_thread_reply: true }],
     ['slack', { channel_type: 'channel', slack_is_thread_reply: false }],
     ['slack', { slack_is_thread_reply: true, slack_has_mention: true }],

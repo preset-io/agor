@@ -164,7 +164,7 @@ describe('SlackConnector inbound reactions', () => {
   }
 
   it.each(['!stop', '!skip', '!stop-clear', ' !HELP '])(
-    'admits bare thread control %s without admitting channel chatter',
+    'rejects bare thread control %s even with broad message subscriptions',
     async (text) => {
       const { callback, emit } = await startReactionListener({
         config: { enable_channels: true },
@@ -179,11 +179,7 @@ describe('SlackConnector inbound reactions', () => {
         thread_ts: '200.000000',
         text,
       });
-      expect(callback).toHaveBeenCalledOnce();
-      expect(callback.mock.calls[0][0]).toMatchObject({
-        text,
-        metadata: { slack_has_mention: false, slack_is_thread_reply: true },
-      });
+      expect(callback).not.toHaveBeenCalled();
     }
   );
 
@@ -228,7 +224,13 @@ describe('SlackConnector inbound reactions', () => {
         ts: '201.000001',
         thread_ts: '200.000000',
       };
-      for (const text of ['ordinary chatter', 'please !stop', '!stop <@UBOT>']) {
+      for (const text of [
+        'ordinary chatter',
+        'please !stop',
+        '!stop <@UBOT>',
+        '!help',
+        '!stop-clear',
+      ]) {
         expect(await emit({ ...event, text })).toHaveBeenCalledOnce();
       }
       expect(await emit({ ...event, text: '!help', thread_ts: undefined })).toHaveBeenCalledOnce();
@@ -266,19 +268,19 @@ describe('SlackConnector inbound reactions', () => {
     expect(callback.mock.calls[0][0]).toMatchObject({ text: 'ordinary DM prompt' });
   });
 
-  it('resolves C-prefixed private controls before enforcing source configuration', async () => {
+  it('resolves C-prefixed private mentions before enforcing source configuration', async () => {
     const { callback, emit, web } = await startReactionListener({
       config: { enable_channels: true, enable_groups: false },
       channelInfo: { is_private: true },
     });
     expect(
       await emit({
-        type: 'message',
+        type: 'app_mention',
         channel: 'C123',
         user: 'UADA',
         ts: '201.000001',
         thread_ts: '200.000000',
-        text: '!stop',
+        text: '<@UBOT> !stop',
       })
     ).toHaveBeenCalledOnce();
     expect(web.conversations.info).toHaveBeenCalledOnce();

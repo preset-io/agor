@@ -531,6 +531,28 @@ afterEach(() => {
 });
 
 describe('GatewayService session links', () => {
+  it.each(['im', 'channel', 'group', 'mpim'])(
+    'passes Slack %s addressing context into the creation notice',
+    async (channelType) => {
+      const sendMessage = vi.fn(async () => '104');
+      const { service } = makeGatewayHarness({ connector: { sendMessage } });
+      const result = await service.create({
+        channel_key: 'slack-key',
+        thread_id: `${channelType === 'im' ? 'D123' : 'C123'}-100.000000`,
+        text: 'hello',
+        metadata: { channel_type: channelType, slack_has_mention: channelType !== 'im' },
+      });
+      expect(result.created).toBe(true);
+      const notices = JSON.stringify(sendMessage.mock.calls);
+      expect(notices).toContain(
+        channelType === 'im'
+          ? 'Reply to follow up. Type `!help` for commands.'
+          : 'Mention me again to follow up, or mention me with `!help` for commands.'
+      );
+      if (channelType === 'im') expect(notices).not.toContain('Mention me');
+    }
+  );
+
   const sessionLink = (service: unknown) =>
     (
       service as {
@@ -1920,7 +1942,9 @@ describe('GatewayService Slack thread catch-up', () => {
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId: 'C123-100.000000',
-        text: expect.stringContaining('Mention me again to follow up.'),
+        text: expect.stringContaining(
+          'Mention me again to follow up, or mention me with `!help` for commands.'
+        ),
         blocks: expect.any(Array),
       })
     );
@@ -4413,7 +4437,7 @@ describe('GatewayService Discord beta routing', () => {
       expect(prompt.startsWith('This Discord message did not mention you')).toBe(true);
       expect(prompt).toContain('[no-reply]');
       expect(texts).toEqual([
-        'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Mention me again to follow up. Type `!help` for commands.',
+        'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Mention me again to follow up, or mention me with `!help` for commands.',
       ]);
     });
 
@@ -4527,7 +4551,7 @@ describe('GatewayService Discord beta routing', () => {
         } as never)
       ).resolves.toMatchObject({ success: true, created: true });
       expect(sessionTexts(connector)).toEqual([
-        'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Mention me again to follow up. Type `!help` for commands.',
+        'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Mention me again to follow up, or mention me with `!help` for commands.',
       ]);
     });
 
@@ -4553,7 +4577,7 @@ describe('GatewayService Discord beta routing', () => {
           String((request as { text?: unknown }).text)
         )
       ).toEqual([
-        'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Type `!help` for commands.',
+        'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Reply to follow up. Type `!help` for commands.',
       ]);
     });
 
@@ -4561,7 +4585,7 @@ describe('GatewayService Discord beta routing', () => {
       for (const mentioned of [false, true]) {
         const { texts } = await postSessionNotice('all', mentioned);
         expect(texts).toEqual([
-          'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Type `!help` for commands.',
+          'Agor: Session created: [View session](<https://agor.example/ui/s/sess-1/>). Reply to follow up. Type `!help` for commands.',
         ]);
       }
     });
@@ -7095,7 +7119,7 @@ describe('GatewayService Teams notices', () => {
       });
       expect(promptCreate).toHaveBeenCalledOnce();
       expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([
-        `${linkNotice} Mention me again to follow up. Type \`!help\` for commands.`,
+        `${linkNotice} Mention me again to follow up, or mention me with \`!help\` for commands.`,
       ]);
     });
 
@@ -7103,7 +7127,7 @@ describe('GatewayService Teams notices', () => {
       const { service, notices } = harness(null);
       await admit(service, 'a:personal-1', 'personal');
       expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([
-        `${linkNotice} Type \`!help\` for commands.`,
+        `${linkNotice} Reply to follow up. Type \`!help\` for commands.`,
       ]);
     });
 
@@ -7145,7 +7169,7 @@ describe('GatewayService Teams notices', () => {
         admit(service, '19:c|root-1', 'channel', { session: 'sess-1' })
       ).resolves.toMatchObject({ success: true, created: true });
       expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([
-        `${linkNotice} Mention me again to follow up. Type \`!help\` for commands.`,
+        `${linkNotice} Mention me again to follow up, or mention me with \`!help\` for commands.`,
       ]);
     });
   });
@@ -7930,7 +7954,8 @@ describe('gateway command occurrence boundaries', () => {
 
   async function discordInbound(
     mentioned = true,
-    command = '!stop-clear'
+    command = '!stop-clear',
+    botId = bot
   ): Promise<InboundMessage> {
     const rest = {
       get: vi.fn(async (route: string) => {
@@ -7945,15 +7970,18 @@ describe('gateway command occurrence boundaries', () => {
         throw new Error('Unexpected Discord write');
       }),
     };
-    const connector = new DiscordConnector(config, {
-      rest,
-      historyRest: rest,
-      createGateway: () => {
-        throw new Error('Not used');
-      },
-    });
+    const connector = new DiscordConnector(
+      { ...config, application_id: botId },
+      {
+        rest,
+        historyRest: rest,
+        createGateway: () => {
+          throw new Error('Not used');
+        },
+      }
+    );
     // Exercise real normalization and prepareDelivery, replacing only provider I/O.
-    Object.assign(connector, { botUserId: bot });
+    Object.assign(connector, { botUserId: botId });
     let inbound: InboundMessage | undefined;
     await (
       connector as unknown as {
@@ -7972,8 +8000,8 @@ describe('gateway command occurrence boundaries', () => {
           type: 0,
           author: { id: author },
           member: { roles: [] },
-          mentions: mentioned ? [{ id: bot }] : [],
-          content: mentioned ? `<@${bot}> ${command}` : command,
+          mentions: mentioned ? [{ id: botId }] : [],
+          content: mentioned ? `<@${botId}> ${command}` : command,
         },
       },
       async (message) => {
@@ -8052,7 +8080,7 @@ describe('gateway command occurrence boundaries', () => {
     );
 
   for (const targets of [0, 1, 2])
-    dbTest(`bare Slack controls with ${targets} connected sessions`, async ({ db }) => {
+    dbTest(`rejects bare Slack controls with ${targets} connected sessions`, async ({ db }) => {
       const f = await gatewayCommandFixture(db);
       const mapping = makeMapping({
         channel_id: f.channel.id,
@@ -8091,34 +8119,39 @@ describe('gateway command occurrence boundaries', () => {
         },
       };
       await h.service.create(message);
-      expect(sendMessage).toHaveBeenCalledTimes(targets ? 1 : 0);
-      if (targets)
-        expect(JSON.stringify(sendMessage.mock.calls)).toContain(
-          targets === 1 ? 'Commands' : 'multiple sessions'
-        );
+      expect(sendMessage).not.toHaveBeenCalled();
       expect(h.stopCreate).not.toHaveBeenCalled();
       sendMessage.mockClear();
       await h.service.create({ ...message, text: '!stop-clear' });
-      expect(h.stopCreate).toHaveBeenCalledTimes(targets === 1 ? 1 : 0);
-      expect(sendMessage).toHaveBeenCalledTimes(targets ? 1 : 0);
+      expect(h.stopCreate).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
       expect(h.promptCreate).not.toHaveBeenCalled();
       expect(h.sessionsCreate).not.toHaveBeenCalled();
-      expect(await f.tasks.findQueued(f.input.sessionId)).toHaveLength(targets === 1 ? 0 : 3);
+      expect(await f.tasks.findQueued(f.input.sessionId)).toHaveLength(3);
     });
 
   for (const sharedAlias of [false, true]) {
     for (const command of ['!help', '!stop-clear']) {
       dbTest(
-        `two-bot reply alias elects one responder for ${command}, shared=${sharedAlias}`,
+        `two-bot Discord reply alias elects one responder for ${command}, shared=${sharedAlias}`,
         async ({ db }) => {
-          const a = await gatewayCommandFixture(db);
-          const b = await gatewayCommandFixture(db);
-          const alias = 'C123-200.000000';
+          const a = await gatewayCommandFixture(db, {
+            channel_type: 'discord',
+            config,
+            provider_installation_id: bot,
+          });
+          const otherBot = '123456789012345679';
+          const b = await gatewayCommandFixture(db, {
+            channel_type: 'discord',
+            config: { ...config, application_id: otherBot },
+            provider_installation_id: otherBot,
+          });
+          const alias = thread;
           const maps = new ThreadSessionMapRepository(db);
           for (const [index, f] of [a, b].entries()) {
             await maps.create({
               channel_id: f.channel.id,
-              thread_id: a.input.threadId,
+              thread_id: '923456789012345678',
               session_id: f.input.sessionId,
               branch_id: f.seed.branch.branch_id,
               created_at: `2026-01-01T00:00:0${index}.000Z`,
@@ -8138,17 +8171,8 @@ describe('gateway command occurrence boundaries', () => {
             return { ...h, sendMessage };
           });
           for (const [index, f] of [a, b].entries()) {
-            await handlers[index].service.create({
-              channel_key: f.channel.channel_key,
-              thread_id: alias,
-              text: command,
-              metadata: {
-                channel_type: 'channel',
-                slack_is_thread_reply: true,
-                slack_has_mention: false,
-                slack_message_ts: '201.000000',
-              },
-            });
+            const inbound = await discordInbound(false, command, index === 0 ? bot : otherBot);
+            await deliver(handlers[index].service, f.channel, inbound);
           }
           // Only B knows X when not shared. If both know X, A is the elected
           // responder and asks for clarification; neither stops anything.
