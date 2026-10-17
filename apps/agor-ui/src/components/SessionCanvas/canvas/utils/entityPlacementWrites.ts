@@ -43,6 +43,15 @@ export class EntityPlacementWrites {
     return intent;
   }
 
+  /** A newer local action replaces the node's queued move: drop it before it is sent. */
+  cancel(nodeId: string) {
+    const intent = this.intents.get(nodeId);
+    if (!intent) return;
+    intent.valid = false;
+    this.intents.delete(nodeId);
+    this.invalidate(nodeId);
+  }
+
   owns(nodeId: string, placement: BoardEntityObject | undefined, board: Board | null | undefined) {
     const request = placement?.placement_write_id
       ? this.requests.get(placement.placement_write_id)

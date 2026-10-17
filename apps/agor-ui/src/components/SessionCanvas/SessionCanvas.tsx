@@ -1179,16 +1179,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         const gridWidth =
           layout === 'grid' ? zoneGridWidthOnSwitch(zone.width, order.length) : undefined;
         const saved = await writeZone(ticket, 'change the zone layout', () =>
-          gridWidth
-            ? client.service('boards').patch(board.board_id, {
-                _action: 'upsertObject',
-                objectId,
-                objectData: { ...zone, layout, order, width: gridWidth },
-              } as unknown as Partial<Board>)
-            : client.service('boards').patch(board.board_id, {
-                _action: 'mergeObjectFields',
-                objects: { [objectId]: { layout, order } },
-              } as unknown as Partial<Board>)
+          client.service('boards').patch(board.board_id, {
+            _action: 'mergeObjectFields',
+            objects: { [objectId]: { layout, order, ...(gridWidth ? { width: gridWidth } : {}) } },
+          } as unknown as Partial<Board>)
         );
         if (!saved) releaseZoneOrder(objectId, order);
       }
@@ -2570,6 +2564,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             boardObjectsAsShown(board.objects)
           );
           if (target?.zoneId === node.parentId) {
+            // This drop replaces an earlier drag-out still waiting to save.
+            placementWrites.cancel(node.id);
+            leavingZoneRef.current.delete(node.id);
             reorderInZone(node.id, node.type, node.parentId, node.position);
             return;
           }

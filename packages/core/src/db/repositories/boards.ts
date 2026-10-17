@@ -1287,10 +1287,11 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
 
         // Allowlist: everything else in the patch is ignored so this action
         // can't reshape an object's persisted fields.
-        const { zIndex, layout, order } = fields as {
+        const { zIndex, layout, order, width } = fields as {
           zIndex?: unknown;
           layout?: unknown;
           order?: unknown;
+          width?: unknown;
         };
         const merged: Partial<BoardObject> & { layout?: ZoneLayout; order?: string[] } = {};
         if (typeof zIndex === 'number' && Number.isFinite(zIndex)) {
@@ -1301,6 +1302,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         }
         const zoneOrder = existing.type === 'zone' ? sanitizeZoneOrder(order) : undefined;
         if (zoneOrder) merged.order = zoneOrder;
+        if (existing.type === 'zone' && typeof width === 'number' && Number.isFinite(width)) {
+          (merged as { width?: number }).width = Math.max(1, width);
+        }
         if (Object.keys(merged).length === 0) continue;
         updatedObjects[objectId] = { ...existing, ...merged } as BoardObject;
       }

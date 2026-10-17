@@ -33,6 +33,7 @@ import {
   insert,
   isSQLiteDatabase,
   jsonExtract,
+  lockRowForUpdate,
   select,
   update,
 } from '../database-wrapper';
@@ -497,10 +498,13 @@ export class BoardObjectRepository {
     try {
       const objectIds = Object.keys(positions);
       if (objectIds.length === 0) return [];
-      const rows = await select(this.db)
-        .from(boardObjects)
-        .where(and(inArray(boardObjects.object_id, objectIds), eq(boardObjects.board_id, boardId)))
-        .all();
+      const onBoard = and(
+        inArray(boardObjects.object_id, objectIds),
+        eq(boardObjects.board_id, boardId)
+      ) as SQL;
+      // Lock first so a concurrent move to another zone can't be overwritten with a stale zone.
+      await lockRowForUpdate(this.db, this.db, boardObjects, onBoard);
+      const rows = await select(this.db).from(boardObjects).where(onBoard).all();
       const moved: BoardEntityObject[] = [];
       for (const row of rows) {
         const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
