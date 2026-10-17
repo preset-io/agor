@@ -21,6 +21,7 @@ import {
   DiscordMessageDeliveryRepository,
   type FencedTeamsAddress,
   GatewayChannelRepository,
+  GatewayChatCommandRepository,
   GatewayInboundEventRepository,
   type GatewayListenerDiscoveryCursor,
   GatewayListenerDiscoveryRepository,
@@ -76,15 +77,19 @@ import {
   DiscordThreadUnavailableError,
   extractDiscordStarterMessageId,
   fetchTeamsMemberIdentity,
+  formatGatewayCommandReply,
   formatGatewayContext,
   formatGatewayFollowUpRoutingMessage,
   formatGatewaySessionCreatedMessage,
   formatGatewaySystemMessage,
   formatGatewaySystemPayload,
+  GATEWAY_COMMAND_AMBIGUOUS,
+  GATEWAY_COMMAND_HELP,
   gatewayFailureCode,
   gatewayListenerFailure,
   getConnector,
   hasConnector,
+  isImplicitGatewayChatCommand,
   isPermanentProviderRefusal,
   isSlackInboundReactionEventType,
   isSlackWriteTargetAllowed,
@@ -97,10 +102,12 @@ import {
   normalizeTeamsReactionName,
   parseDiscordAuthorityMetadata,
   parseDiscordThreadKey,
+  parseGatewayChatCommand,
   parseGitHubThreadId,
   parseSlackThreadId,
   type SlackAgorMessageMetadataEventType,
   sanitizeGatewayProviderError,
+  supportsGatewayChatCommands,
   TEAMS_MESSAGE_ID,
   TEAMS_MESSAGE_TEXT_BUDGET,
   type TeamsChannelThreadResult,
@@ -133,6 +140,7 @@ import type {
   MessageSource,
   Session,
   SessionID,
+  SessionStopResult,
   Task,
   TaskID,
   TeamsCatchUpConfig,
@@ -175,6 +183,7 @@ import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import { hasBranchPermission, sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
 import { isBrowserReachableUrl } from '../utils/browser-reachable-url.js';
 import { gatewayInboundSessionId, gatewayInboundTaskId } from '../utils/durable-task-id.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import {
   buildPromptWithAttachments,
   ingestDiscordInboundImages,
@@ -255,6 +264,7 @@ import {
 import type { SessionParams } from './sessions.js';
 import { sendTeamsNotice, sendTeamsTyping } from './teams-notices.js';
 import { TeamsTypingIndicators } from './teams-typing.js';
+import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
 
 /**
  * Inbound message data (platform → session)
@@ -272,6 +282,8 @@ interface PostMessageData {
   idempotency_task_id?: TaskID;
   idempotency_session_id?: SessionID;
   gateway_inbound_event_id?: import('@agor/core/types').GatewayInboundEventID;
+  /** Original occurrence coordinate, before provider preparation rewrites routing. */
+  listener_thread_id?: string;
   listener_claim_token?: string;
   listener_channel_id?: import('@agor/core/types').GatewayChannelID;
   /** Decrypted only for the alignment lookup; never persisted as metadata. */
@@ -702,7 +714,8 @@ function discordInboundMetadataIsAuthoritative(
     deniedChannels.some((id) => !snowflake(id)) ||
     metadata[DISCORD_METADATA_KEY.guildId] !== guildId ||
     (metadata[DISCORD_METADATA_KEY.hasMention] !== true &&
-      !discordResponseModeAdmitsMetadata(config, metadata))
+      !discordResponseModeAdmitsMetadata(config, metadata) &&
+      !isImplicitGatewayChatCommand(channel.channel_type, data.text, data.metadata))
   )
     return false;
   if (isThread) {
@@ -5580,6 +5593,150 @@ export class GatewayService {
     return `${text}\n\n${sessionReference}`;
   }
 
+  /** Commands are gateway control, never a prompt or a queued Task. */
+  private async runChatCommand(
+    channel: GatewayChannel,
+    data: PostMessageData,
+    user: User,
+    sessionId: SessionID | null,
+    implicitThreadIds?: string[]
+  ): Promise<boolean> {
+    if (!supportsGatewayChatCommands(channel.channel_type)) return false;
+    const command = parseGatewayChatCommand(data.text);
+    if (!command) return false;
+    if (command === 'help') {
+      const target = implicitThreadIds
+        ? await this.data.read((db) =>
+            new GatewayChatCommandRepository(db).resolveImplicitTarget(
+              channel.id,
+              implicitThreadIds
+            )
+          )
+        : null;
+      if (
+        target?.outcome === 'not_target' ||
+        (target?.outcome === 'selected' && target.sessionId !== sessionId)
+      )
+        return true;
+      await this.sendSystemMessage(
+        channel,
+        data.thread_id,
+        target?.outcome === 'ambiguous' ? GATEWAY_COMMAND_AMBIGUOUS : GATEWAY_COMMAND_HELP
+      );
+      return true;
+    }
+    const tenantId = requireCurrentTenantId();
+    const asUser: AuthenticatedParams = {
+      user,
+      authenticated: true,
+      provider: 'gateway',
+      tenant: { tenant_id: tenantId as TenantID, source: 'explicit' },
+    };
+    let stage = 'snapshot';
+    try {
+      const expected = sessionId
+        ? await this.data.read((db) => new GatewayChatCommandRepository(db).snapshot(sessionId))
+        : null;
+      const httpAuthority = verifiedHttpGatewayAuthority(data);
+      const event =
+        httpAuthority ??
+        (data.gateway_inbound_event_id && data.listener_claim_token
+          ? {
+              id: data.gateway_inbound_event_id,
+              processing_token: data.listener_claim_token,
+              gateway_channel_id: channel.id,
+              thread_id: data.listener_thread_id ?? data.thread_id,
+              provider_config_generation: 0,
+              verified_app_id: null,
+              verified_tenant_id: null,
+            }
+          : undefined);
+      const providerCursor =
+        channel.channel_type === 'slack'
+          ? getSlackMessageTs(data.metadata)
+          : discordInboundCursor(data.metadata);
+      stage = 'admission';
+      const applied = await this.data.write(async (db) => {
+        await lockTenantAuthorizationFence(db, asUser);
+        return new GatewayChatCommandRepository(db).execute({
+          channelId: channel.id,
+          threadId: data.thread_id,
+          sessionId,
+          userId: user.user_id,
+          command,
+          expected,
+          implicitThreadIds,
+          event,
+          allowSuperadmin: this.app.get?.('config')?.execution?.allow_superadmin === true,
+          listenerToken: data.listener_claim_token,
+          providerEventId: providerCursor ? `${data.thread_id}:${providerCursor}` : undefined,
+        });
+      });
+      // Publish only committed changes. The usual Stop endpoint republishes
+      // executor control and performs containment outside this transaction.
+      stage = 'notification';
+      for (const task of applied.removed) {
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'removed',
+          data: task,
+          id: task.task_id,
+          params: asUser,
+        });
+      }
+      if (applied.claimed && sessionId) {
+        emitServiceEvent(this.app, {
+          path: 'tasks',
+          event: 'patched',
+          data: applied.claimed,
+          id: applied.claimed.task_id,
+          params: asUser,
+        });
+        const session = await this.sessionRepo.findById(sessionId);
+        if (session)
+          emitServiceEvent(this.app, {
+            path: 'sessions',
+            event: 'patched',
+            data: session,
+            id: sessionId,
+            params: asUser,
+          });
+      }
+      let stop: SessionStopResult | undefined;
+      stage = 'stop';
+      if (applied.receipt.outcome === 'requested' && applied.receipt.task_id) {
+        // A redelivery keeps the original target. In particular, never invoke
+        // an idle Session Stop merely to wake a different, failure-held queue.
+        const original = await this.taskRepo.findById(applied.receipt.task_id);
+        if (!original || isTerminalTaskStatus(original.status)) {
+          stop = { success: true, outcome: 'already_idle', status: SessionStatus.IDLE };
+        } else {
+          stop = (await this.app
+            .service('/sessions/:id/stop')
+            .create(
+              { expected_task_id: applied.receipt.task_id },
+              { ...asUser, route: { id: sessionId } }
+            )) as SessionStopResult;
+        }
+      }
+      stage = 'reply';
+      const reply = formatGatewayCommandReply(applied.receipt, stop);
+      if (reply) await this.sendSystemMessage(channel, data.thread_id, reply);
+    } catch (error) {
+      // No raw exceptions or provider payloads in logs or external replies.
+      console.warn(
+        `[gateway] event=chat_command_failed tenant_id=${tenantId} channel_id=${channel.id} session_id=${sessionId ?? 'none'} stage=${stage} reason=${classifyGatewayReadFailure(error)}`
+      );
+      // Errors may contain SQL, prompts or provider credentials. Do not echo them.
+      await this.sendSystemMessage(
+        channel,
+        data.thread_id,
+        'Could not confirm the command result. Check the session in Agor before retrying.'
+      );
+    }
+    return true;
+  }
+
   /**
    * Inbound routing: platform → session
    *
@@ -5660,7 +5817,8 @@ export class GatewayService {
     const teamsPersonalChat =
       channel.channel_type === 'teams' &&
       String(data.metadata?.teams_conversation_type ?? '').toLowerCase() === 'personal';
-    const followUpHint = !discordFollowUpsNeedNoMention && !teamsPersonalChat;
+    const slackDm = channel.channel_type === 'slack' && data.metadata?.channel_type === 'im';
+    const followUpHint = !slackDm && !discordFollowUpsNeedNoMention && !teamsPersonalChat;
 
     // Slack emoji reactions are a mapped-thread-only signal gated by the
     // channel's inbound_reactions flag. The connector filters them already;
@@ -5695,6 +5853,8 @@ export class GatewayService {
       return { success: false, sessionId: '', created: false };
     }
     const isReaction = isSlackReaction || isTeamsReaction;
+    const implicitCommand =
+      !isReaction && isImplicitGatewayChatCommand(channel.channel_type, data.text, data.metadata);
 
     // 2. Look up existing thread mapping. New Discord admissions use the raw
     // provider thread Snowflake; a legacy composite is consulted only to
@@ -5738,6 +5898,11 @@ export class GatewayService {
       );
       return { success: false, sessionId: '', created: false };
     }
+    // Election coordinates must come only from the occurrence, not this bot's
+    // mapping root: bots may retain different aliases for the same root.
+    const implicitThreadIds = implicitCommand
+      ? [...new Set([canonicalThreadId, legacyDiscordThread].filter((id): id is string => !!id))]
+      : undefined;
     let recoveringInitialDelivery = false;
     let outboundSeed: GatewayOutboundMessage | null = null;
     let outboundAdmission: GatewayOutboundReplyAdmission | null = null;
@@ -5862,7 +6027,8 @@ export class GatewayService {
       channel.channel_type === 'discord' &&
       !discordDm &&
       discordMetadata?.[DISCORD_METADATA_KEY.hasMention] !== true &&
-      !discordUnaddressed
+      !discordUnaddressed &&
+      !implicitCommand
     ) {
       console.debug(
         `[gateway] IGNORED: Discord message without explicit mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
@@ -5880,7 +6046,7 @@ export class GatewayService {
       // when an older compatibility flag allowed replies in mapped threads.
       // Personal chats remain mention-free; group chats and channels require
       // an exact structured app-ID mention.
-      if (!isPersonal && !hasMention && !isTeamsReaction) {
+      if (!isPersonal && !hasMention && !isTeamsReaction && !implicitCommand) {
         console.debug(
           `[gateway] IGNORED: Teams conversation message without required mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
         );
@@ -6160,8 +6326,26 @@ export class GatewayService {
         }
         return { success: false, sessionId: '', created: false };
       }
+      if (
+        !isReaction &&
+        (await this.runChatCommand(
+          channel,
+          data,
+          user,
+          existingMapping.session_id,
+          implicitThreadIds
+        ))
+      ) {
+        return { success: true, sessionId: existingMapping.session_id, created: false };
+      }
     } else {
       await this.requireInboundSessionCreateAccess(channel, user.user_id);
+      if (
+        !isReaction &&
+        (await this.runChatCommand(channel, data, user, null, implicitThreadIds))
+      ) {
+        return { success: true, sessionId: '', created: false };
+      }
     }
 
     // Resolve agentic config: channel config > user defaults > system defaults.
@@ -8599,6 +8783,7 @@ export class GatewayService {
                 ...(eventId && lease
                   ? {
                       gateway_inbound_event_id: eventId,
+                      listener_thread_id: msg.threadId,
                       idempotency_task_id: gatewayInboundTaskId(eventId),
                       idempotency_session_id: gatewayInboundSessionId(eventId),
                       listener_claim_token: lease.claim_token,

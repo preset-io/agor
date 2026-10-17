@@ -25,6 +25,7 @@ export * from './environment-commands';
 export * from './environment-health';
 export * from './executor-session-token-authorities';
 export * from './gateway-channels';
+export * from './gateway-chat-commands';
 export { deliveryMessageText } from './gateway-delivery-outbox';
 export * from './gateway-inbound-events';
 export * from './gateway-outbound-messages';

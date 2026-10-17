@@ -169,6 +169,54 @@ seed is recorded durably; the first eligible human reply to any seed chunk
 consumes that seed and starts the mapped session. Replies to later response
 chunks continue the same session.
 
+## Chat commands
+
+The session-created notice explains how to follow up and ask for commands. In
+channels and threads, mention the bot with `!help`; in direct messages, send
+`!help` without a mention. The menu includes a link to this guide. Commands are
+gateway system messages, not agent prompts, and do not create tasks or new sessions.
+
+In Slack, Discord, and Teams, send only the command and any bot mention
+(case-insensitive, with optional surrounding whitespace). A mention works on
+either side: `@MyAgent !stop` or `!stop @MyAgent`. Commands work even while the
+session is running.
+
+Slack channel, group, and thread commands require a mention, just like prompts.
+The recommended Slack app subscribes to `app_mention` and `message.im`, not all
+channel messages. No additional message subscriptions are needed for commands.
+
+Discord and Teams also support bare commands in existing threads connected to
+exactly one session when the platform delivers unmentioned messages. If multiple
+sessions are connected, Agor asks you to mention the bot you mean; it never
+broadcasts a stop to all sessions. Unmentioned commands in unmapped threads are
+ignored and never start a session. Teams must be configured to deliver unmentioned
+messages; Discord uses the existing Message Content intent. Mentioning the bot is
+the unambiguous way to address a command on either platform.
+
+| Command | Behavior |
+| --- | --- |
+| `!stop` | Request stopping the current task if nothing is queued. If tasks are queued, make no changes and explain the choices below. |
+| `!skip` | Request stopping the current task and preserve queued tasks. They can continue after termination is verified. |
+| `!stop-clear` | Cancel queued tasks and request stopping the current task. Requires Branch Manager access as well as permission to prompt the session. If either permission is missing, neither action is performed. |
+| `!help` | Show this menu and a link to this guide. |
+
+Messages such as `stop`, `stop using tabs`, or `!stop do this instead` remain
+ordinary text, subject to the usual mention rule. Embedded text such as
+`@MyAgent, you are great!help me with that` does not invoke a command.
+There is no replacement-prompt parsing, `!clear`, or `!queue` command.
+
+An idle session reports that there is no current task to stop; it does not start
+queued work. `!stop-clear` can still cancel pending tasks. Stopping does not erase
+history or undo edits. A pending response means termination was requested, not
+confirmed. If termination cannot be verified, check the session in Agor; an owner
+or admin may need to intervene. These commands never force-fail an executor.
+
+Commands target the task and queue observed for that request. If either changes
+before the command can be applied, no changes are made and the reply asks you to
+check the session and retry. Provider redelivery reuses the original command's
+target, never a successor task or newly queued work. A command sent before a
+session exists remains a no-op if the platform redelivers it after a session starts.
+
 ## Slack thread behavior
 
 In Slack channels, Agor uses a hard mention rule:
@@ -223,7 +271,7 @@ The one step neither path can cover is the **app-level token**: `connections:wri
 
 ### 4. Message your bot
 
-DM the bot from the **Apps** section of Slack, or `@mention` it in any channel or group the bot has been added to. You'll see session creation confirmed, followed by the agent's response in the same thread. In channels and group DMs the bot responds **only** to explicit `@`-mentions; direct messages don't need one.
+DM the bot from the **Apps** section of Slack, or `@mention` it in any channel or group the bot has been added to. You'll see session creation confirmed, followed by the agent's response in the same thread. In channels, threads, and group DMs, prompts and [chat commands](#chat-commands) require explicit `@`-mentions. Direct messages do not need a mention.
 
 Gateway conversations appear under **Gateway Sessions** on the target branch. Sessions they spawn are nested beneath the gateway parent, including remote-created sessions that live on another branch; selecting a remote child opens its canonical session. Gateway roots are ordered by most recent activity. Section and parent collapse choices persist on board cards.
 
@@ -246,16 +294,16 @@ The wizard and manifest bake these in automatically. This table is for understan
 | Capability                                | Bot scopes added                                                                    | Events added                         |
 | ----------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------ |
 | **Direct messages** (baseline, always on) | `chat:write`, `im:history`, `im:read`, `users:read`                                 | `message.im`                         |
-| **Public channels**                       | `app_mentions:read`, `channels:history`, `channels:read`                            | `app_mention`                        |
-| **Private channels**                      | `groups:history`, `groups:read`                                                     | —                                    |
-| **Group DMs**                             | `mpim:history`, `mpim:read`                                                         | —                                    |
+| **Public channels**                       | `app_mentions:read`, `channels:history`, `channels:read`                            | `app_mention`    |
+| **Private channels**                      | `groups:history`, `groups:read`                                                     | `app_mention`                     |
+| **Group DMs**                             | `mpim:history`, `mpim:read`                                                         | `app_mention`                       |
 | **Align Slack users**                     | `users:read.email`                                                                  | —                                    |
 | **Outbound sends**                        | `chat:write.public`, `channels:read`, `groups:read`, `im:write`, `users:read.email` | —                                    |
 | **Deliver reactions to sessions**         | `reactions:read`                                                                    | `reaction_added`, `reaction_removed` |
 
 Notes:
 
-- `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled. Those surfaces all trigger on `@`-mention, so no `message.channels` / `message.groups` / `message.mpim` events are requested.
+- `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled. Prompts and commands on those surfaces require `@`-mentions. Broad `message.channels`, `message.groups`, and `message.mpim` subscriptions are not needed or recommended; Slack filters delivery to the addressed bot.
 - `connections:write` never appears in the manifest. It lives on the app-level token you generate under **Basic Information → App-Level Tokens**.
 
 ### Emoji reactions as input

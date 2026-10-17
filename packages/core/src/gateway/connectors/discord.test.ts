@@ -2377,6 +2377,22 @@ describe('Discord response modes', () => {
     expect(cache.channelInfoCache.has('c0')).toBe(false);
   });
 
+  it.each(['!stop', '!skip', '!stop-clear', '!help'])(
+    'admits bare %s only in an existing public thread',
+    async (content) => {
+      const inThread = await deliver(undefined, { channel_id: threadId, content });
+      expect(inThread.received).toHaveLength(1);
+      expect(inThread.received[0].metadata).toMatchObject({
+        discord_is_thread: true,
+        discord_has_mention: false,
+      });
+      expect((await deliver(undefined, { content })).received).toEqual([]);
+      expect(
+        (await deliver(undefined, { channel_id: threadId, content: `${content} please` })).received
+      ).toEqual([]);
+    }
+  );
+
   it('ignores unmentioned chatter without any lookup when no channel has a response mode', async () => {
     const { received, rest } = await deliver(undefined, { channel_id: threadId });
     expect(received).toEqual([]);

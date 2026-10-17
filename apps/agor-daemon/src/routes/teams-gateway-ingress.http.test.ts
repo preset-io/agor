@@ -353,6 +353,22 @@ describe('registered Teams HTTP ingress with real SDK JWT verification', {
     });
   });
 
+  ownedDbTest(
+    'queues exact unmentioned controls for thread target resolution, not embedded prose',
+    async ({ db }) => {
+      await withRoute(db, async ({ sign, post, wakeWorker }) => {
+        const message = channelMessage('1616990000001', false);
+        expect((await post(sign(), { ...message, text: 'great!help me' })).status).toBe(200);
+        await expectNoPersistence(db);
+        expect(
+          (await post(sign(), { ...message, id: '1616990000002', text: '!help' })).status
+        ).toBe(200);
+        expect(wakeWorker).toHaveBeenCalledOnce();
+        expect(await select(db).from(gatewayInboundEvents).all()).toHaveLength(1);
+      });
+    }
+  );
+
   ownedDbTest('queues an attachment-only message with file names but no URLs', async ({ db }) => {
     await withRoute(db, async ({ sign, post }) => {
       expect((await post(sign(), activity({ text: '' }))).status).toBe(200);

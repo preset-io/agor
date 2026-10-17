@@ -11,6 +11,7 @@ import type { NormalizedTeamsActivity } from '@agor/core/gateway';
 import {
   gatewayFailureCode,
   isTeamsReactionEventType,
+  parseGatewayChatCommand,
   safeTeamsMetadata,
 } from '@agor/core/gateway';
 import {
@@ -215,7 +216,9 @@ export class TeamsGatewayWorker {
           !!activity.files?.length ||
           !!activity.skippedFiles?.length ||
           conversationType === 'channel') &&
-        (conversationType === 'personal' || activity.hasMention));
+        (conversationType === 'personal' ||
+          activity.hasMention ||
+          parseGatewayChatCommand(activity.text)));
     let result: { sessionId?: string; taskId?: TaskID } = {};
     if (admissible) {
       if (!this.gatewayService) {

@@ -1,6 +1,7 @@
 import type { ChannelType } from '../types/gateway';
 import type { SessionID } from '../types/id';
 import { shortId } from '../types/id';
+import { GATEWAY_COMMAND_HINT, supportsGatewayChatCommands } from './chat-commands';
 import type { OutboundPayload } from './connector';
 import { markdownToMrkdwn } from './connectors/slack';
 
@@ -39,9 +40,8 @@ export function formatGatewayFollowUpRoutingMessage(
 
 export interface GatewaySystemMessageOptions {
   /**
-   * Discord and Teams: append the follow-up guidance to a session-created
-   * notice. Defaults to true; false where follow-ups need no mention (DMs,
-   * Discord forums in `all` response mode, Teams personal chats).
+   * Whether follow-ups need mentions. Defaults to true; false for DMs,
+   * Discord forums in `all` response mode, and Teams personal chats.
    */
   followUpHint?: boolean;
 }
@@ -61,27 +61,29 @@ export function formatGatewaySystemMessage(
 ): string {
   const sessionCreatedMatch = text.match(/^Session created: (https?:\/\/\S+)$/);
   const mentionGuidance = 'Mention me again to follow up.';
-
-  if (channelType === 'slack') {
-    const markdown = sessionCreatedMatch
-      ? `${GATEWAY_SYSTEM_PREFIX} Session created: [View session](${sessionCreatedMatch[1]}). ${mentionGuidance}`
-      : text.startsWith('Session ') && text.includes(' created, sending prompt to agent.')
-        ? `${GATEWAY_SYSTEM_PREFIX} ${text} ${mentionGuidance}`
-        : text.startsWith('Mention received')
-          ? `${GATEWAY_SYSTEM_PREFIX} ${text} ${mentionGuidance}`
-          : `${GATEWAY_SYSTEM_PREFIX} ${text}`;
-
-    return markdownToMrkdwn(markdown);
+  const isCreation =
+    !!sessionCreatedMatch ||
+    (text.startsWith('Session ') && text.includes(' created, sending prompt to agent.'));
+  if (isCreation && supportsGatewayChatCommands(channelType)) {
+    const guidance =
+      options.followUpHint === false
+        ? `Reply to follow up. ${GATEWAY_COMMAND_HINT}`
+        : 'Mention me again to follow up, or mention me with `!help` for commands.';
+    // On Discord, angle brackets suppress the session link preview.
+    const url = sessionCreatedMatch?.[1];
+    const creation = url
+      ? `Session created: [View session](${channelType === 'discord' ? `<${url}>` : url}).`
+      : text;
+    const formatted = `${GATEWAY_SYSTEM_PREFIX} ${creation} ${guidance}`;
+    return channelType === 'slack' ? markdownToMrkdwn(formatted) : formatted;
   }
 
-  if ((channelType === 'discord' || channelType === 'teams') && sessionCreatedMatch) {
-    // A masked link like Slack's; on Discord the angle brackets stop a link preview.
-    const url = channelType === 'discord' ? `<${sessionCreatedMatch[1]}>` : sessionCreatedMatch[1];
-    const guidance = options.followUpHint === false ? '' : ` ${mentionGuidance}`;
-    return `${GATEWAY_SYSTEM_PREFIX} Session created: [View session](${url}).${guidance}`;
-  }
-
-  return `${GATEWAY_SYSTEM_PREFIX} ${text}`;
+  const formatted = `${GATEWAY_SYSTEM_PREFIX} ${text}${
+    channelType === 'slack' && text.startsWith('Mention received') && options.followUpHint !== false
+      ? ` ${mentionGuidance}`
+      : ''
+  }`;
+  return channelType === 'slack' ? markdownToMrkdwn(formatted) : formatted;
 }
 
 /**

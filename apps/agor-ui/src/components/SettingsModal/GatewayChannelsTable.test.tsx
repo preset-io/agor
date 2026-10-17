@@ -744,7 +744,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     );
     const manifest = document.querySelector('pre')?.textContent ?? '';
     expect(manifest).toContain('"app_mention"');
-    // Channel surfaces trigger on app_mention, never message.* channel events.
+    // Slack filters both prompts and commands by bot mention.
     expect(manifest).not.toContain('message.channels');
 
     clickButton(/Copy app manifest/);
@@ -839,7 +839,7 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(screen.getByPlaceholderText('xapp-...')).toHaveValue('xapp-kept');
   });
 
-  it('derives the Message Sources scope/event list (no stale message.* events)', async () => {
+  it('derives the Message Sources scope/event list without broad message subscriptions', async () => {
     renderEditTable(null, makeSlackChannel());
     expandPanel('Message Sources');
 
@@ -850,8 +850,8 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     );
     expect(screen.queryAllByText('app_mentions:read').length).toBeGreaterThan(0);
     expect(screen.queryAllByText('app_mention').length).toBeGreaterThan(0);
-    // Channel surfaces subscribe to app_mention, never message.* channel events.
-    expect(screen.queryByText('message.channels')).toBeNull();
+    // Do not subscribe every bot to all channel chatter.
+    expect(screen.queryAllByText('message.channels')).toHaveLength(0);
   });
 
   it('shows stored vs not-set status for the token fields', () => {

@@ -1683,7 +1683,7 @@ export interface GatewayInboundEvent {
   gateway_channel_id: GatewayChannelID;
   provider_event_id: string;
   thread_id: string;
-  /** Provider acknowledgement/reply coordinates recorded after preparation. */
+  /** Provider reply coordinates and daemon-owned command receipts, retained across redelivery. */
   delivery_metadata: Record<string, unknown> | null;
   status: GatewayInboundEventStatus;
   processing_token: string;
@@ -1701,4 +1701,28 @@ export interface GatewayInboundEvent {
   task_id: TaskID | null;
   received_at: string;
   completed_at: string | null;
+}
+
+/** Whole-message gateway controls. Never interpreted as model prompts. */
+export type GatewayChatCommand = 'stop' | 'skip' | 'stop-clear' | 'help';
+export interface GatewayChatCommandSnapshot {
+  task_id: TaskID | null;
+  queued_task_ids: TaskID[];
+}
+/** Durable, content-free receipt stored on the owning provider occurrence. */
+export interface GatewayChatCommandReceipt {
+  command: Exclude<GatewayChatCommand, 'help'>;
+  session_id: SessionID | null;
+  user_id: UserID;
+  task_id: TaskID | null;
+  queued_count: number;
+  cancelled_count: number;
+  outcome:
+    | 'requested'
+    | 'idle'
+    | 'queue_not_empty'
+    | 'condition_changed'
+    | 'denied'
+    | 'ambiguous'
+    | 'not_target';
 }

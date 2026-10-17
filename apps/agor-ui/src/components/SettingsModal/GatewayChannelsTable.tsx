@@ -1531,8 +1531,8 @@ const SlackSetupWizard: React.FC<{
         </Typography.Text>
         <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 12px' }}>
           Derived from the selected surfaces; channel-like surfaces trigger on{' '}
-          <code>app_mention</code>, not <code>message.*</code> channel events. You copy the full
-          manifest on the next step.
+          <code>app_mention</code> for prompts and <code>message.*</code> events for bare thread
+          commands. You copy the full manifest on the next step.
         </Typography.Paragraph>
         {scopeList}
       </div>
@@ -3870,9 +3870,9 @@ const ChannelFormFields: React.FC<{
                     {sourcesEnabled && (
                       <CompactAlert
                         type="info"
-                        heading="Slack mentions are always required"
+                        heading="Slack prompts and commands require mentions"
                         expandable
-                        description="Agor only starts or continues Slack channel threads when this bot is explicitly @mentioned. Missed thread replies are included as catch-up context on the next mention."
+                        description="In channels, threads, and group DMs, mention the bot for prompts and commands such as !help. Direct messages need no mention. Missed thread replies are included as catch-up context on the next mention."
                         style={{ marginBottom: 12 }}
                       />
                     )}
@@ -3886,8 +3886,9 @@ const ChannelFormFields: React.FC<{
                         <div>
                           <Typography.Text type="secondary" style={{ fontSize: 'inherit' }}>
                             Derived from the selected surfaces; channel-like surfaces trigger on{' '}
-                            <code>app_mention</code>, not <code>message.*</code> channel events.
-                            Copy the full manifest from the App Manifest section.
+                            <code>app_mention</code> for prompts and commands, without subscribing
+                            to all channel messages. Copy the full manifest from the App Manifest
+                            section.
                           </Typography.Text>
                           <div style={{ marginTop: 8 }}>
                             <Typography.Text strong style={{ fontSize: 'inherit' }}>

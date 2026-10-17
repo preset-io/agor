@@ -41,6 +41,7 @@ import {
   isDiscordThreadCoordinates,
   validateDiscordConfig,
 } from '../../types/gateway';
+import { parseGatewayChatCommand } from '../chat-commands';
 import type {
   GatewayConnector,
   GatewayInboundCallback,
@@ -1438,6 +1439,7 @@ export class DiscordConnector implements GatewayConnector {
     if (
       !directMessage &&
       !mentioned &&
+      !parseGatewayChatCommand(rawContent) &&
       !discordResponseModeMayAdmit(this.config, { channelId, messageId })
     ) {
       return { accepted: false };
@@ -1539,6 +1541,7 @@ export class DiscordConnector implements GatewayConnector {
     }
     if (
       !mentioned &&
+      !(isThread && parseGatewayChatCommand(rawContent)) &&
       !discordResponseModeAdmits(this.config, {
         channelId,
         ...(parentId ? { parentChannelId: parentId } : {}),

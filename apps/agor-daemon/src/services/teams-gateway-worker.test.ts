@@ -278,6 +278,26 @@ describe('TeamsGatewayWorker inbound admission', () => {
     await scan;
   });
 
+  it.each(['channel', 'groupChat'])(
+    'passes bare controls in %s to gateway target resolution',
+    async (conversationType) => {
+      const setup = makeWorker({
+        activity: activity({
+          text: '!stop',
+          conversationType,
+          hasMention: false,
+          metadata: { teams_conversation_type: conversationType, teams_has_mention: false },
+        }),
+      });
+      await setup.worker.checkOnce();
+      expect(setup.create).toHaveBeenCalledOnce();
+      expect(setup.create.mock.calls[0][0]).toMatchObject({
+        text: '!stop',
+        metadata: { teams_has_mention: false },
+      });
+    }
+  );
+
   it('drains rows queued before ingress filtering without creating a Task', async () => {
     for (const overrides of [
       { activityType: 'conversationUpdate', text: '' },

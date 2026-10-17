@@ -253,6 +253,14 @@ watchdog can still make and report a direct health decision.
 
 ## Termination and safe release
 
+Gateway chat controls use the same termination coordinator. `!stop` requires an
+empty queue, `!skip` preserves it, and `!stop-clear` requires queue-management
+authority before either action. Gateway command admission atomically fences the
+original Task/queue snapshot, cancellation, termination claim and provider-event
+receipt; containment happens after commit through the normal Stop endpoint.
+Redelivery cannot target a successor. System replies distinguish pending and
+unverified containment from a verified Stop. See [task-queueing.md](task-queueing.md).
+
 The termination coordinator is the single owner for executor-backed:
 
 - user Stop;
