@@ -1008,6 +1008,20 @@
     "reviewDate": null
   },
   {
+    "id": "DAEMON-FS-CAP-DELETION-PID-NAMESPACE",
+    "class": "A",
+    "file": "apps/agor-daemon/src/executor-tracking.ts",
+    "import": "node:fs",
+    "symbol": "readlinkSync",
+    "local": "readlinkSync",
+    "operation": "call:readlinkSync@readPidNamespace#1",
+    "owner": "daemon local executor containment",
+    "boundary": "local process identity verification",
+    "rationale": "Reads only the fixed /proc/self/ns/pid identity to reject deletion executor probes from a different PID namespace; no tenant-controlled path is accepted.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
     "id": "DAEMON-FS-CAP-OPENCODE-006",
     "class": "A",
     "file": "apps/agor-daemon/src/executor-tracking.ts",

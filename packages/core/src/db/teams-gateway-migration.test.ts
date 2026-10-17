@@ -20,7 +20,8 @@ it('upgrades current-main SQLite online, disables Teams only and preserves old i
   try {
     await migrate(db, { migrationsFolder: folder });
     const fixture = await seedLegacyGateway(db);
-    expect((await checkMigrationStatus(db)).pending).toEqual([teamsMigration('sqlite')]);
+    // Teams must be next, but later migrations may also be pending.
+    expect((await checkMigrationStatus(db)).pending[0]).toBe(teamsMigration('sqlite'));
     await stageFailingTeamsMigration(folder, 'sqlite');
     await expect(migrate(db, { migrationsFolder: folder })).rejects.toThrow();
     expect(
@@ -29,6 +30,7 @@ it('upgrades current-main SQLite online, disables Teams only and preserves old i
       )
     ).toEqual([{ enabled: 1 }, { enabled: 1 }]);
     await runMigrations(db);
+    expect((await checkMigrationStatus(db)).pending).toEqual([]);
     expect(
       rawRows(
         await executeRaw(db, sql`SELECT enabled FROM gateway_channels WHERE channel_type='teams'`)

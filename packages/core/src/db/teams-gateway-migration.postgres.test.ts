@@ -35,7 +35,8 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await migrate(db, { migrationsFolder: folder });
       const a = await runWithTenantDatabaseScope(db, 'teams-a', seedLegacyGateway);
       const b = await runWithTenantDatabaseScope(db, 'teams-b', seedLegacyGateway);
-      expect((await checkMigrationStatus(db)).pending).toEqual([teamsMigration('postgres')]);
+      // Teams must be next, but later migrations may also be pending.
+      expect((await checkMigrationStatus(db)).pending[0]).toBe(teamsMigration('postgres'));
       await stageFailingTeamsMigration(folder, 'postgres');
       await expect(migrate(db, { migrationsFolder: folder })).rejects.toThrow();
       await runWithTenantDatabaseScope(db, 'teams-a', async (scoped) => {
@@ -58,6 +59,7 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       ).toEqual([]);
       // No offline cutover: the default runner applies it while other daemons keep serving.
       await runMigrations(db);
+      expect((await checkMigrationStatus(db)).pending).toEqual([]);
       for (const [tenant, fixture] of [
         ['teams-a', a],
         ['teams-b', b],
