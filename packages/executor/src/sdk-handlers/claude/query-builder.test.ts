@@ -66,6 +66,7 @@ import {
   shippedAsanaInstall,
   userEnvBearerInstall,
 } from '../../../test/helpers/real-mcp-scoping.js';
+import { AgorSetupError, ClaudeExecutionError } from './claude-error.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS, CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
@@ -1606,5 +1607,163 @@ describe('setupQuery - tool names the CLI has to rewrite', () => {
     expect(disallowed).toContain('mcp__My.Server__repo.create');
     // An "allow" tool is not swept in by the rewrite.
     expect(disallowed).not.toContain('mcp__My_Server__repo_read');
+  });
+});
+
+describe('setupQuery - synchronous Claude.query failures', () => {
+  function createDeps(): QuerySetupDeps {
+    return {
+      sessionsRepo: {
+        findById: vi.fn().mockResolvedValue({
+          session_id: 'test-session' as SessionID,
+          branch_id: 'test-branch' as BranchID,
+          mcp_token: 'token',
+        }),
+      } as any,
+      branchesRepo: { findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }) } as any,
+      messagesRepo: {} as any,
+      sessionMCPRepo: {} as any,
+      mcpServerRepo: {} as any,
+      permissionService: {} as any,
+      tasksService: {} as any,
+      messagesService: {} as any,
+      sessionsService: {} as any,
+      permissionLocks: new Map(),
+    };
+  }
+
+  it('sanitizes synchronous Claude.query failures without generic MCP error masking', async () => {
+    claudeQuery.mockImplementationOnce(() => {
+      throw new Error(
+        'Claude Code returned an error result: Invalid API key · Fix external API key'
+      );
+    });
+
+    const pending = setupQuery('test-session' as SessionID, 'test prompt', createDeps());
+    await expect(pending).rejects.toMatchObject({ category: 'authentication' });
+    const error = await pending.catch((err: unknown) => err as Error);
+    expect(error.message).not.toContain('The MCP operation failed');
+  });
+});
+
+describe('setupQuery - setup error handling', () => {
+  function createDeps(): QuerySetupDeps {
+    return {
+      sessionsRepo: {
+        findById: vi.fn().mockResolvedValue({
+          session_id: 'test-session' as SessionID,
+          branch_id: 'test-branch' as BranchID,
+          mcp_token: 'token',
+        }),
+      } as any,
+      branchesRepo: { findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }) } as any,
+      messagesRepo: {} as any,
+      sessionMCPRepo: {} as any,
+      mcpServerRepo: {} as any,
+      permissionService: {} as any,
+      tasksService: {} as any,
+      messagesService: {} as any,
+      sessionsService: {} as any,
+      permissionLocks: new Map(),
+    };
+  }
+
+  it('throws AgorSetupError when session is not found', async () => {
+    const d = createDeps();
+    (d.sessionsRepo.findById as any).mockResolvedValue(null);
+
+    await expect(setupQuery('missing-session' as SessionID, 'prompt', d)).rejects.toSatisfy(
+      (err: unknown) => {
+        expect(err).toBeInstanceOf(AgorSetupError);
+        expect((err as Error).message).toBe('Session not found: missing-session');
+        return true;
+      }
+    );
+  });
+
+  it('throws AgorSetupError when working directory validation fails', async () => {
+    const d = createDeps();
+    const { validateDirectory } = await import('@agor/core/lib/validation');
+    vi.mocked(validateDirectory).mockRejectedValueOnce(
+      new Error('Working directory does not exist: /missing/path')
+    );
+
+    await expect(setupQuery('test-session' as SessionID, 'prompt', d)).rejects.toSatisfy(
+      (err: unknown) => {
+        expect(err).toBeInstanceOf(AgorSetupError);
+        expect((err as Error).message).toBe(
+          'Working directory for this session is unavailable. Session references branch test-branch which may not be initialized.'
+        );
+        expect((err as Error).message).not.toContain('/');
+        return true;
+      }
+    );
+
+    // Also verify fallback when session has no branch_id
+    (d.sessionsRepo.findById as any).mockResolvedValueOnce({
+      session_id: 'test-session' as SessionID,
+      branch_id: undefined,
+      mcp_token: 'token',
+    });
+    vi.mocked(validateDirectory).mockRejectedValueOnce(
+      new Error('Working directory does not exist: /missing/path')
+    );
+    await expect(setupQuery('test-session' as SessionID, 'prompt', d)).rejects.toSatisfy(
+      (err: unknown) => {
+        expect(err).toBeInstanceOf(AgorSetupError);
+        expect((err as Error).message).toBe(
+          'Working directory for this session is unavailable. The branch may not be initialized.'
+        );
+        expect((err as Error).message).not.toContain('/');
+        return true;
+      }
+    );
+  });
+
+  it('classifies a failure inside loadManagedAgenticToolSdk as a Claude execution error', async () => {
+    const { loadManagedAgenticToolSdk } = await import('@agor/core/agentic-integrations');
+    const exitError = Object.assign(
+      new Error('Claude Code process exited with code 127. stderr: command not found'),
+      { exitCode: 127, errorClass: 'process_exited_nonzero' }
+    );
+    vi.mocked(loadManagedAgenticToolSdk).mockRejectedValueOnce(exitError);
+
+    const d = createDeps();
+    await expect(setupQuery('test-session' as SessionID, 'test prompt', d)).rejects.toSatisfy(
+      (err: unknown) => {
+        expect(err).toBeInstanceOf(ClaudeExecutionError);
+        const claudeErr = err as ClaudeExecutionError;
+        expect(claudeErr.category).toBe('process_failure');
+        expect(claudeErr.exitCode).toBe(127);
+        expect(claudeErr.message).toBe(
+          'Claude Code process exited unexpectedly (code 127). Retry your request, or check the logs if the issue persists.'
+        );
+        return true;
+      }
+    );
+  });
+
+  // Non-process SDK-load failures (e.g. package resolution failure, corrupted module)
+  // are caught in the query setup block and sanitized. Without specific process exit
+  // or provider error text, they classify safely as 'unknown' execution failures rather
+  // than setup failures, preserving the underlying error as .cause for server logs.
+  it('classifies a non-process error from loadManagedAgenticToolSdk as an unknown Claude execution error', async () => {
+    const { loadManagedAgenticToolSdk } = await import('@agor/core/agentic-integrations');
+    const plainError = new Error('Failed to resolve dynamic SDK bundle');
+    vi.mocked(loadManagedAgenticToolSdk).mockRejectedValueOnce(plainError);
+
+    const d = createDeps();
+    await expect(setupQuery('test-session' as SessionID, 'test prompt', d)).rejects.toSatisfy(
+      (err: unknown) => {
+        expect(err).toBeInstanceOf(ClaudeExecutionError);
+        const claudeErr = err as ClaudeExecutionError;
+        expect(claudeErr.category).toBe('unknown');
+        expect(claudeErr.message).toBe(
+          'Claude Code execution failed. Retry your request, or check the operational logs if the issue persists.'
+        );
+        expect(claudeErr.cause).toBe(plainError);
+        return true;
+      }
+    );
   });
 });
