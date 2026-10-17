@@ -87,6 +87,8 @@ export const useBoardObjects = ({
   boardRef.current = board;
   const guardRef = useRef(guard);
   guardRef.current = guard;
+  const onZoneLayoutChangeRef = useRef(onZoneLayoutChange);
+  onZoneLayoutChangeRef.current = onZoneLayoutChange;
   const canEdit = guard.canMutate;
   // Artifact lifecycle authorization is creator/admin based rather than
   // board.edit based, but its board object is still board data: it needs the
@@ -223,6 +225,9 @@ export const useBoardObjects = ({
         return;
       }
 
+      // An arranged zone first saves its cards where they are shown, so they stay put once it is gone.
+      await onZoneLayoutChangeRef.current?.(objectId, 'free', ticket);
+
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
 
@@ -269,6 +274,7 @@ export const useBoardObjects = ({
           : type === 'markdown'
             ? 'delete the note'
             : 'delete the artifact';
+      if (type === 'zone') await onZoneLayoutChangeRef.current?.(objectId, 'free', ticket);
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
 

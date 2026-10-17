@@ -1542,9 +1542,9 @@ describe('BoardRepository.mergeBoardObjectFields', () => {
     );
 
     const updated = await repo.mergeBoardObjectFields(board.board_id, {
-      'zone-1': { layout: 'grid', order: ['b', 'a', 'b', 3] as never },
-      'zone-2': { layout: 'masonry' } as never,
-      'note-1': { layout: 'grid' } as never,
+      'zone-1': { layout: 'grid', order: ['b', 'a', 'b', 3] as never, width: 1040 },
+      'zone-2': { layout: 'masonry', width: Number.NaN } as never,
+      'note-1': { layout: 'grid', width: 900 } as never,
     });
 
     expect(updated.objects?.['zone-1']).toMatchObject({
@@ -1552,9 +1552,12 @@ describe('BoardRepository.mergeBoardObjectFields', () => {
       zIndex: 100,
       layout: 'grid',
       order: ['b', 'a'],
+      width: 1040,
     });
     expect(updated.objects?.['zone-2']).not.toHaveProperty('layout');
+    expect(updated.objects?.['zone-2']).toMatchObject({ width: 1 });
     expect(updated.objects?.['note-1']).not.toHaveProperty('layout');
+    expect(updated.objects?.['note-1']).toMatchObject({ width: 1 });
   });
 
   dbTest('skips a patch whose zIndex is missing or non-finite', async ({ db }) => {

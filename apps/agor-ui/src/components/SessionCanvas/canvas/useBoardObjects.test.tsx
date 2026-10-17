@@ -508,3 +508,43 @@ describe('deleteObject', () => {
     expect(deletedObjectsRef.current.has('target')).toBe(false);
   });
 });
+
+describe('deleting a zone', () => {
+  it('saves its cards where they are shown before the zone goes', async () => {
+    const { client, patch } = makeClient();
+    const board = makeBoard({
+      target: { type: 'zone', x: 0, y: 0, width: 200, height: 200, label: 'Z', layout: 'grid' },
+    });
+    const calls: string[] = [];
+    const onZoneLayoutChange = vi.fn(async () => {
+      calls.push('free');
+    });
+    patch.mockImplementation(async (_id: string, data: { _action: string }) => {
+      calls.push(data._action);
+      return {};
+    });
+    const { result } = renderHook(
+      () => {
+        const guard = useBoardMutationGuard(board.board_id, true);
+        const objects = useBoardObjects({
+          board,
+          client,
+          boardObjectsForBoard: [],
+          setNodes: vi.fn(),
+          deletedObjectsRef: { current: new Set<string>() },
+          guard,
+          onZoneLayoutChange,
+        });
+        return { guard, objects };
+      },
+      { wrapper }
+    );
+
+    const ticket = result.current.guard.capture();
+    await result.current.objects.deleteObject('target', ticket);
+    await result.current.objects.deleteZone('target', false, ticket);
+
+    expect(onZoneLayoutChange).toHaveBeenCalledWith('target', 'free', ticket);
+    expect(calls).toEqual(['free', 'removeObject', 'free', 'deleteZone']);
+  });
+});
