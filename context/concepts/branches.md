@@ -64,7 +64,11 @@ immutable ref and idempotent. Templated/remote executors and legacy claims with
 no recorded identity stay fenced until an administrator calls
 `branches/:id/release-deletion` (MCP `agor_branches_release_deletion`), which only
 clears a `deletion_failed` claim and records the actor; it never releases a live
-`deleting` row. See the guide's **Deletion recovery** section. Failed,
+`deleting` row. A recorded same-host/PID-namespace process must also be verified
+absent, even on a stale-fenced row. The probe runs outside the transaction; release
+compares both the invocation ID and the complete process identity under the Branch
+lock so a replacement invocation or newly recorded identity cannot bypass it.
+See the guide's **Deletion recovery** section. Failed,
 never-claimed dispatches can instead be replaced atomically, fencing any late old
 claim by generation.
 `db/branch-admission.ts` supplies the Branch-first lock for producer admission.

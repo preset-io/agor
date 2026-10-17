@@ -700,8 +700,10 @@ Files and committed database batches removed by earlier attempts are not restore
   namespace, and an upload deletion request whose outcome is unknown. An
   administrator can release such a branch with `agor_branches_release_deletion`
   (MCP) or `POST /branches/:id/release-deletion`. The release only applies to
-  `deletion_failed` branches, never one still deleting. It discards the old
-  invocation and records who released it in the deletion error. Before releasing,
+  `deletion_failed` branches, never one still deleting. If the recorded executor
+  belongs to the daemon's host and PID namespace, release is refused until its
+  process group is verified absent, even when its heartbeat is stale. It discards
+  the old invocation and records who released it in the deletion error. Before releasing,
   confirm that no deletion executor for the branch is still running. Then retry
   deletion normally.
 

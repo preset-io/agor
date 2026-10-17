@@ -38,11 +38,13 @@ import {
   BranchRepository,
   type BranchWithZoneAndSessions,
   BranchWorkspaceOperationRepository,
+  branches,
   CapabilityPolicyRepository,
   EnvironmentCommandRepository,
   type EnvironmentHealthObservation,
   EnvironmentHealthRepository,
   enqueueAfterTenantDatabaseCommit,
+  eq,
   generateId,
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
@@ -50,6 +52,7 @@ import {
   RepoRepository,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
+  select,
   shortId,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -130,7 +133,10 @@ import {
   EXECUTOR_COMMAND_TOKEN_PURPOSE,
   isExecutorSessionTokenPayload,
 } from '../auth/executor-session-token.js';
-import { captureLocalProcessGroupIdentity } from '../executor-tracking.js';
+import {
+  captureLocalProcessGroupIdentity,
+  verifyRecordedProcessGroupAbsent,
+} from '../executor-tracking.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import {
@@ -2307,10 +2313,30 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const user = (params as AuthenticatedParams | undefined)?.user;
     if (!user || !hasMinimumRole(user.role, ROLES.ADMIN))
       throw new Forbidden('Administrator authority is required to release a fenced deletion');
+    const row = await this.withTenantDatabase<typeof branches.$inferSelect | null>(params, () =>
+      select(this.db).from(branches).where(eq(branches.branch_id, id)).one()
+    );
+    if (!row) throw new NotFound('Branch not found');
+    const expected = row.data.maintenance;
+    if (row.deletion_status !== 'deletion_failed' || expected?.kind !== 'delete')
+      throw new Conflict('Only a fenced failed deletion can be force-released');
+    const identity = expected.execution_process;
+    if (identity) {
+      const local = captureLocalProcessGroupIdentity(process.pid);
+      if (local?.boot_id === identity.boot_id && local?.pid_namespace === identity.pid_namespace) {
+        // A stale heartbeat is not containment. Never override a local group
+        // that is present (or whose absence the same-host probe cannot verify).
+        // Probe outside the DB unit; release below compares the exact snapshot.
+        const absence = await verifyRecordedProcessGroupAbsent(identity);
+        if (absence.status !== 'verified_absent')
+          throw new Conflict('Deletion executor process group is still present; release refused');
+      }
+    }
     const released = await this.withTenantDatabase(params, () =>
       new BranchMaintenanceRepository(this.db).forceReleaseFailedDeletion(
         id,
-        `Fenced deletion released by administrator ${user.user_id} at ${new Date().toISOString()}. Retry permanent deletion to continue.`
+        `Fenced deletion released by administrator ${user.user_id} at ${new Date().toISOString()}. Retry permanent deletion to continue.`,
+        expected
       )
     );
     console.warn(

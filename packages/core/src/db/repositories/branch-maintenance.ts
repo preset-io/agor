@@ -475,11 +475,14 @@ export class BranchMaintenanceRepository {
    * Administrator override for a fenced failure that has no containment
    * evidence (legacy claims, templated/remote executors). It discards the old
    * invocation; the caller authorizes, audits and owns the containment risk.
-   * A still-running deletion is never released: it must first go stale.
+   * The caller probes any same-host process outside the transaction and refuses
+   * release unless it is absent. Recheck that exact invocation and process
+   * identity under the lock, including an identity recorded after the read.
    */
   async forceReleaseFailedDeletion(
     branchId: BranchID,
-    safeSummary: string
+    safeSummary: string,
+    expected: Pick<BranchMaintenanceClaim, 'execution_id' | 'execution_process'>
   ): Promise<BranchMaintenanceClaim> {
     return this.locked(branchId, async (tx, row) => {
       const current = row.data.maintenance;
@@ -489,6 +492,13 @@ export class BranchMaintenanceRepository {
         !current.execution_id
       )
         throw new RepositoryError('Only a fenced failed deletion can be force-released');
+      if (
+        current.execution_id !== expected.execution_id ||
+        current.execution_process?.pid !== expected.execution_process?.pid ||
+        current.execution_process?.boot_id !== expected.execution_process?.boot_id ||
+        current.execution_process?.pid_namespace !== expected.execution_process?.pid_namespace
+      )
+        throw new RepositoryError('Deletion invocation changed before administrator release');
       await update(tx, branches)
         .set({
           data: { ...row.data, maintenance: undefined },

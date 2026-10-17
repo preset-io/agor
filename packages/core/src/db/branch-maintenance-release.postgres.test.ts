@@ -137,7 +137,10 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           )
         ).toBe(false);
         await expect(
-          maintenance.forceReleaseFailedDeletion(seeded.branch.branch_id, 'forged release')
+          maintenance.forceReleaseFailedDeletion(seeded.branch.branch_id, 'forged release', {
+            execution_id: seeded.invocation,
+            execution_process: executionProcess,
+          })
         ).rejects.toThrow('not found');
       });
 
@@ -162,12 +165,50 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       // settled failures no longer expose any branch row to global discovery.
       expect(await readGlobalRows()).toEqual([]);
       await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
-        const retry = await new BranchMaintenanceRepository(scoped).claim(
-          seeded.branch.branch_id,
-          'delete'
-        );
+        const maintenance = new BranchMaintenanceRepository(scoped);
+        const retry = await maintenance.claim(seeded.branch.branch_id, 'delete');
         expect(retry).toMatchObject({ acquired: true });
         expect(retry.claim.generation).toBe(seeded.claim.generation + 1);
+        const invocation = await maintenance.beginExecution(retry.claim);
+        await maintenance.recordExecutionProcess(retry.claim, invocation, executionProcess);
+        await maintenance.claimExecution(retry.claim, invocation);
+        await maintenance.withExecution(retry.claim, invocation, async (tx, row) => {
+          await update(tx, branches)
+            .set({
+              data: {
+                ...row.data,
+                maintenance: {
+                  ...row.data.maintenance!,
+                  execution_heartbeat_at: '2000-01-01T00:00:00.000Z',
+                },
+              },
+            })
+            .where(eq(branches.branch_id, seeded.branch.branch_id))
+            .run();
+        });
+        expect(await maintenance.markStaleDeletion(retry.claim, 120_000)).toBe(true);
+        for (const expected of [
+          { execution_id: seeded.invocation, execution_process: executionProcess },
+          { execution_id: invocation },
+        ]) {
+          await expect(
+            maintenance.forceReleaseFailedDeletion(
+              seeded.branch.branch_id,
+              'Stale administrator snapshot',
+              expected
+            )
+          ).rejects.toThrow('invocation changed');
+        }
+        expect((await maintenance.claim(seeded.branch.branch_id, 'delete')).acquired).toBe(false);
+        await maintenance.forceReleaseFailedDeletion(
+          seeded.branch.branch_id,
+          'Administrator release',
+          {
+            execution_id: invocation,
+            execution_process: executionProcess,
+          }
+        );
+        expect((await maintenance.claim(seeded.branch.branch_id, 'delete')).acquired).toBe(true);
       });
     } finally {
       await (db as typeof db & { $client: { end(): Promise<void> } }).$client.end();
