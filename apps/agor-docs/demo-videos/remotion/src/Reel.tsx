@@ -4,14 +4,17 @@ import { INTERFACES_SECONDS, Interfaces } from './interfaces/Interfaces';
 import { RAISE_SECONDS, RaiseTogether } from './raise/Raise';
 import { AiTeammatesBebop, BEBOP_BODY_SECONDS } from './teammates/Bebop';
 import { EndCard } from './teammates/Cards';
+import { MultiplyThroughput, THROUGHPUT_SECONDS } from './throughput/Throughput';
 
 const END = 1.8;
-export const REEL_SECONDS = BEBOP_BODY_SECONDS + INTERFACES_SECONDS + RAISE_SECONDS + END;
+export const REEL_SECONDS =
+  BEBOP_BODY_SECONDS + INTERFACES_SECONDS + RAISE_SECONDS + THROUGHPUT_SECONDS + END;
 
 /**
  * The sections back to back: the AI teammates segment (logo, slices,
  * answers), "Access Agor from where you work", "Raise AI teammates
- * together", then one end card.
+ * together", "Multiply engineering
+ * throughput", then one end card.
  */
 export const TeammatesReel: React.FC = () => {
   const { fps } = useVideoConfig();
@@ -38,8 +41,16 @@ export const TeammatesReel: React.FC = () => {
         <RaiseTogether />
       </Sequence>
       <Sequence
-        name="End"
+        name="Multiply engineering throughput"
         from={f(BEBOP_BODY_SECONDS + INTERFACES_SECONDS + RAISE_SECONDS)}
+        durationInFrames={f(THROUGHPUT_SECONDS)}
+        premountFor={fps}
+      >
+        <MultiplyThroughput />
+      </Sequence>
+      <Sequence
+        name="End"
+        from={f(BEBOP_BODY_SECONDS + INTERFACES_SECONDS + RAISE_SECONDS + THROUGHPUT_SECONDS)}
         premountFor={fps}
       >
         <EndCard />

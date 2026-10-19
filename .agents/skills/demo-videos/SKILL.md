@@ -157,6 +157,71 @@ cursor: false })` skips the in-page cursor but logs every mouse sample
 - **Boot screens between pages** stay in raw cuts (`actor.open()` mid-clip).
   The edit picks its beats by marks, so they never show.
 
+### Board workflow clips (staging a team at work)
+
+The "Multiply engineering throughput" clips (`eng-build`, `eng-fanout`,
+`eng-flow`; seeds in `support/seeds/eng-team.ts`, `eng-flow.ts`,
+`eng-backlog.ts`) show a team and its agents moving work across a kanban
+board. Only the first is a real agent turn; the rest is the real board,
+staged. The tools they added, all reusable:
+
+- **Pinned seeds** (`SeedDef.pin`). A recorded turn names boards and branches
+  by ID, and every seed rebuild (including the daily date rebuild) mints new
+  IDs, so replay against a rebuilt seed fails. `pin: '1'` keeps one
+  checkpoint, `seed-<name>-pin-<pin>`, across days and edits. Record the turn
+  on the seed, then copy that run's checkpoint to the pin name. Bump the pin
+  only when you re-record. Seeds that stack on a recorded turn's results
+  (`eng-board`, `eng-flow`) go in their own file so editing them doesn't
+  touch the pinned one.
+- **Hold mode** (`agent: 'hold'` in `clips.ts`, env `AGOR_E2E_HOLD_AGENTS=1`,
+  or `POST /__cassette_hold?on=1|0` on the proxy mid-take). The cassette
+  proxy parks every `POST /v1/messages`, so sessions started on camera spin
+  forever without a cassette or a key. `count_tokens` gets a stock answer and
+  other unrecorded paths a bland 200. Use it whenever the story needs agents
+  "working" and the content of their turns never shows.
+- **Puppet** (`support/puppet.ts`): the moves agents would make, made over
+  REST during the take, so they reach the filmed board over the realtime
+  channel exactly as real ones do. `place(branch, zone, n)` (to slot `n`,
+  no trigger), `session(branch, {agent, title, running, parent})` (any
+  `agentic_tool`, Codex/Gemini/Copilot included, no keys needed; `parent`
+  nests it as a child), `running(id, on)` (the spinner is just
+  `status: 'running'`), `retitle`, `pr(branch, url)`. Be honest about it: the
+  UI is real, what's staged is which agent did what, and when.
+- **Simultaneous drags** (`tests/clips/eng-fanout.spec.ts`). Watchers don't
+  see a card while someone else drags it, only the drop, so several people
+  dragging at once is puppeted: each card glides along an eased, lifted arc
+  through `PATCH /board-objects/:id` (`zone_id: null` in flight), then drops
+  into its zone slot and calls `POST /branches/:id/fire-zone-trigger`,
+  as the UI does on drag-stop. A sampler logs each card's grip as a `pointer`
+  for actor `troupe-<n>`, so the edit draws one cursor per card.
+- **Per-actor cursor tracks.** The cursor export now also writes
+  `tracks: {<actor>: {pointer, clicks}}` next to the combined `pointer`/
+  `clicks`, so an edit can give each person their own cursor.
+- **Framing the board** (`support/canvas.ts` `frameNodes(page, nodes)`): zooms
+  and pans React Flow until the given nodes fill the view, leaving room for
+  the header and the left rail. Ctrl+wheel zoom is capped near 5% per event
+  and a plain wheel pans at 0.5 px per unit, so it steps.
+- **Backlogs to pull from**: `fakeGithub(..., issues)` gives the `gh` stand-in
+  `issue list|view`; `fakeJira({key, name, lead, statuses, people, tickets})`
+  seeds the `jira` stand-in (below). Keep tickets small and real against the
+  fixture repo, so an agent can actually fix them.
+
+Product facts these hit (each cost a take):
+
+- A Compose box with no primary teammate says so and won't send. PATCHing
+  `primary_teammate_id` does nothing; call the custom method
+  `users.setPrimaryTeammate {branchId, expectedUserId}`.
+- Agor drops a card at a random spot inside its zone, so cards a turn
+  creates overlap. Tidy them during the take (stack board objects at
+  `slot(n)` as they appear).
+- A zone's settings gear only shows once the zone is selected: click the
+  zone's empty lower half first.
+- `typeStills` called twice in one take numbers on from the existing stills
+  (it used to overwrite the first run's).
+- Stills captures make the screencast emit a few off-size frames;
+  `framesConcatList` keeps only the dominant frame size, or the encode
+  truncates.
+
 ### Choosing source times for the edit
 
 `ffmpeg -ss <t> -i clip` (seek before input) can land seconds off on these
@@ -213,7 +278,13 @@ clips. Pick `trimBefore` times from decode-accurate frames (`-i clip -ss
 - `bin/gh` is a GitHub CLI stand-in. The harness copies it into the scratch
   workspace and puts it first on the daemon's PATH, so agents can open and
   list PRs without touching real GitHub. Its data is
-  `<scratch>/fake-github/<owner>__<repo>.json`, seeded by `fakeGithub()`.
+  `<scratch>/fake-github/<owner>__<repo>.json`, seeded by `fakeGithub()`
+  (PRs, and issues for `gh issue list|view`).
+- `bin/jira` stands in for jira-cli (`me`, `project list`, `issue
+list|view|move|assign`) the same way. Its data is
+  `<scratch>/fake-jira/<KEY>.json`, seeded by `fakeJira()`; `move` and
+  `assign` write back. Neither stand-in needs a reset between takes: the
+  scratch workspace is rebuilt from the seed.
 - `data/saasy/build.sql` generates the SaaS warehouse deterministically
   (hash-based "randomness") ending today. `data/donut-shop/` is a Parquet
   export of the DonutShop MotherDuck database; `buildDonutShopWarehouse()`

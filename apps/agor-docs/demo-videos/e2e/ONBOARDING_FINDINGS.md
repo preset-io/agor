@@ -208,3 +208,36 @@ Worth deciding: either allow the move when RBAC is off, or filter the
 select to same-board/movable teammates and phrase the error for humans.
 (The demo lesson now follows the product's own model instead — each
 teammate presides over its own board.)
+
+## 13. 🐛 Setting a primary teammate over REST is silently ignored
+
+`PATCH /users/:id` with `primary_teammate_id` returns success but changes
+nothing, so Compose keeps saying there's no primary assistant and won't
+send. The working path is the custom method `users.setPrimaryTeammate
+{branchId, expectedUserId}` (what the UI calls). Either honor the field on
+PATCH or reject it, rather than accepting and dropping it. Hit seeding
+`eng-team` (`support/seeds/eng-team.ts`).
+
+## 14. 💡 Cards land at random spots inside a zone
+
+A branch an agent creates in a zone gets a random position inside it, so
+several new cards overlap and a kanban column looks messy. The demo tidies
+them by hand during the take (stacks board objects at fixed slots). A
+simple stacking/flow placement for new cards in a zone would fix it for
+real users too. Hit in `eng-build`.
+
+## 15. 💡 Other people don't see a card while it's dragged
+
+Watchers see a dragged card jump on drop, not travel. Multiplayer drags
+read as teleports; streaming the in-flight position (as cursors already
+are) would make shared boards feel live. The demo puppets the motion
+(`eng-fanout`).
+
+## 16. 💡 Zone settings gear hides until the zone is selected, and no Jira icon
+
+- A zone's "Zone settings" gear only appears once the zone is selected
+  (click its empty area first). Easy to miss when looking for where a
+  zone's prompt lives.
+- A branch's issue pill has no Jira icon when the issue is a Jira ticket.
+
+Both hit in `eng-flow` / `eng-build`.

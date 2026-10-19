@@ -26,8 +26,10 @@ license before anyone else uses this project or it merges to `main`.
    frame numbers. Each section exports its length (`*_SECONDS`) so the
    reel's sequences chain.
 4. **Render** the section on its own (`npx remotion render <Id>
-out/<file>.mp4`), then the reel. Copy finished renders to
-   `~/Desktop/agor_video/reel/`.
+out/<file>.mp4`), then the reel at 1080p and 4K (`npm run render:reel-4k`,
+   `--scale=2`). Add a new section to `src/Reel.tsx` (its `*_SECONDS`
+   joins the chain) and a `render:<section>` script. Copy finished renders
+   to `~/Desktop/agor_video/reel/`.
 5. **Review** (below), then commit and push each finished round of notes.
 
 ## Reviewing renders (you can't watch video)
@@ -106,6 +108,15 @@ reel too: `src/brand/Cursors.tsx` has the same arrow, colors (`CURSOR.maya`,
 - UI motion in takes must be slow enough to read after the edit's speed-up:
   one graceful diagonal drift and a click, not a fast zigzag (snappy pace
   halves it, then the beat's `rate` speeds it again).
+- **Several people at once** (`onActorTrack(shot, 'troupe-2', t)`): a clip
+  with per-actor tracks (puppeted drags, demo-videos skill) gives each person
+  their own path. Multiplayer must read as simultaneous: a wide board with
+  everyone acting at the same time, never one after another.
+- **Purpose or emotion, every time.** A cursor carries something in, causes
+  a click, reacts (a hop at a pass, a delighted loop when the zones land) or
+  cheers someone else's merge. Fast decorative passes across the frame were
+  rejected. One cursor per single click: only one person presses Send, not a
+  pile-on.
 - They have a story: they swoop in and circle "together" under the logo,
   (and do the wave under "together" in section 3's title), then each clicks
   open its teammate's slice and taps along at the input;
@@ -138,6 +149,33 @@ cameras with `Easing.bezier(0.45, 0, 0.55, 1)` for pans and
 - Takeaways or captions that belong together land together (stagger them a
   little), not each on its own clip's schedule.
 
+## Full-screen product shots (section 4 on)
+
+Evan rejected product footage in tilted, floating boxes ("it's still just
+cards, but now they're swimming around"). From `MultiplyThroughput` on, the
+recording plays **full screen** with a subtle camera (pan, zoom, at most
+about a degree of tilt) and labels overlaid on it; keep the off-square
+energy for titles, graphics and transitions. `src/throughput/shots.tsx` is
+the toolkit (generic apart from its `Clip` union; move it to `src/brand/`
+when a second section uses it):
+
+- `ShotSpec`: `clip`, source `from`/`to`, `rate`, composition `start`,
+  camera `keys` (`{at, cx, cy, z}` in source seconds; eased between), and
+  `box`, usually `full(rot)` (full frame plus bleed so a tilt never shows an
+  edge). `<Shot spec>` fades in and freezes its last frame past `to`.
+- `toScreen(shot, t, appPoint)` maps an app-space point through the shot's
+  camera to screen, for labels, tags and cursors that stick to the UI.
+  `onTrack` / `onActorTrack` / `clickTimes` do the same for the take's
+  logged mouse.
+- Typing: `typing: {stills, at, until, keep}` lays the take's sharp stills
+  over the input inside the video layer, so they move with the camera.
+  `until` is the source second of Send (Compose closes, the stills must go;
+  a stale still over the closing panel reads as a bad crop). `keep` crops
+  each still to just under the input (0.77 on Compose): a still that covers
+  half a button shows it half sharp, half video.
+- Time every shot from marks (`src/throughput/marks.json`), and key the
+  camera to the action (follow the hero card through the review loop).
+
 ## Motion lessons (Evan's director notes)
 
 - **One element per idea.** No duplicate labels (a name in the slice and a
@@ -156,19 +194,29 @@ cameras with `Easing.bezier(0.45, 0, 0.55, 1)` for pans and
 - **Highlight the insight, not the question.** Under a result, show a
   one-line takeaway of what the agent did, written from the real answer.
 - **Vary the compositing style per section** (accordion slices, comic-panel
-  quadrants, word-plus-window) so the reel doesn't repeat itself.
+  quadrants, word-plus-window, full-screen product) so the reel doesn't
+  repeat itself. Not a slide deck of cards, headers and inset videos; keep
+  the Bebop energy in the angles, cuts and transitions.
+- **Don't show an empty stage.** A zone or panel with nothing happening in
+  it (an empty Review column) reads as a mistake; cut or reframe.
 - Keep a `BACKLOG.md` of ideas Evan parks (sound, texture) instead of doing
   them unasked.
 
 ## Sections so far
 
-| Composition        | Look                                                                         |
-| ------------------ | ---------------------------------------------------------------------------- |
-| `AiTeammatesBebop` | Wordmark crash, then four slanted slices as an accordion over real Q&A clips |
-| `Interfaces`       | Comic-panel quadrants spin in; each crops to its label over a chat stage     |
-| `RaiseTogether`    | Rolling pillar word on the left, the real UI in a window with camera beats   |
+| Composition          | Look                                                                                      |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| `AiTeammatesBebop`   | Wordmark crash, then four slanted slices as an accordion over real Q&A clips              |
+| `Interfaces`         | Comic-panel quadrants spin in; each crops to its label over a chat stage                  |
+| `RaiseTogether`      | Rolling pillar word on the left, the real UI in a window with camera beats                |
+| `MultiplyThroughput` | Full-screen board footage, overlaid labels, a cursor per person, harness tiles carried in |
 
 ## Gotchas
+
+- Takes with `typeStills` used to give the screencast off-size frames that
+  cut the raw encode short (raw video shorter than its marks). Fixed in
+  `framesConcatList`; if a raw cut is ever shorter than its last mark,
+  check frame sizes first.
 
 - `@remotion/media` `<Video>`: `trimBefore` is in composition frames of
   source time; `playbackRate` scales after it. Freeze a frame with

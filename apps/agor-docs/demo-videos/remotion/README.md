@@ -16,7 +16,9 @@ sizzle reel and website, as [Remotion](https://www.remotion.dev) compositions.
 2. Pull them in: `npm run sync`. This copies the 4K tight raw cuts into
    `public/clips/` (git-ignored) and their marks into `src/teammates/marks.json`.
 3. Preview and edit: `npm run dev` (Remotion Studio).
-4. Render: `npm run render:teammates` writes `out/ai-teammates-bebop.mp4`.
+4. Render a section (`npm run render:teammates`, `render:interfaces`,
+   `render:raise`, `render:throughput`) or the whole reel (`render:reel`,
+   `render:reel-4k`) into `out/`.
 
 ## Compositions
 
@@ -68,8 +70,25 @@ lockup; the mark itself is a frame-driven port of
     pulled in by `npm run sync`. Each beat is source seconds, a rate and a
     camera move in `PILLARS`.
   - Ends on black.
+- **MultiplyThroughput** (`src/throughput/`): "Multiply engineering
+  throughput" (multi-model, multi-backlog, multiplayer).
+  - From black, the title and its three "Multi" words, each caught by a
+    cursor. Then the real board, full screen with a subtle camera
+    (`shots.tsx`): Maya asks EngBot for a kanban board and five issues (sharp
+    typing stills), the zones and cards land from GitHub Issues and Jira,
+    five people drag a card each into In Progress at once, and every drop
+    starts a session.
+  - "Put work on _autopilot_ with **Zones**": the zone prompt, then the hero
+    card's loop through Review (Codex), back, QA and Ready while the cursors
+    let go. "Parallelize sessions across models": a deep review with Claude
+    Code, Codex, Gemini and Copilot children; the cursors carry those four
+    harnesses in as tiles. Then the merge, everyone cheering, and Maya asks
+    for 50 more tickets. Ends on black.
+  - Clips are e2e `eng-build` (a real EngBot turn, replayed on a pinned
+    seed), `eng-fanout` and `eng-flow` (the real board, staged over REST, with
+    agents held "running"). See the `demo-videos` skill.
 - **TeammatesReel** (`src/Reel.tsx`): the AI teammates segment, then
-  Interfaces, then RaiseTogether, then one end card.
+  Interfaces, RaiseTogether and MultiplyThroughput, then one end card.
 - **AiTeammatesGrid** (`src/teammates/AiTeammates.tsx`): the first try, a
   2x2 Brady Bunch grid. Kept for comparison.
 
