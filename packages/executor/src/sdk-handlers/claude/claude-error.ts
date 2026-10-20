@@ -186,13 +186,14 @@ export function formatClaudeFailureLine(
 export function logClaudeFailure(
   label: string,
   error: unknown,
-  extra?: { messageCount?: number; hasStderr?: boolean },
+  extra?: { messageCount?: number; hasStderr?: boolean; sessionId?: string; taskId?: string },
   logger: { error: (...args: unknown[]) => void } = console
 ): void {
   // Do not log arbitrary exception messages, even for local persistence/setup failures.
   // Category and closed diagnostic fields are sufficient; cause is never serialized.
   // One string argument: an object would render as a multi-line dump that a
-  // key=value parser cannot read. Session and task come from the log context.
+  // key=value parser cannot read. Session and task are fields on the line
+  // because text mode does not render the log context.
   let fields: Record<string, LogFieldValue>;
   if (instanceOf(error, ClaudeExecutionError)) {
     fields = {
@@ -215,6 +216,8 @@ export function logClaudeFailure(
       ...fields,
       messageCount: extra?.messageCount,
       hasStderr: extra?.hasStderr,
+      sessionId: extra?.sessionId,
+      taskId: extra?.taskId,
     })
   );
 }

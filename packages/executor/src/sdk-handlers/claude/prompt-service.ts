@@ -299,7 +299,7 @@ If you continue to see authentication errors, please contact your Agor administr
       }
       // setupQuery normalizes only its SDK call; local setup/RPC errors retain
       // their identity and are never reinterpreted as provider authentication.
-      logClaudeFailure('[claude.query] setup_failed', error, undefined, this.logger);
+      logClaudeFailure('[claude.query] setup_failed', error, { sessionId, taskId }, this.logger);
       throw error;
     }
 
@@ -514,7 +514,12 @@ If you continue to see authentication errors, please contact your Agor administr
                   `stderr_bytes=${stderr.byteLength} assistants=${state.assistantMessageCount} text_deltas=${state.hasTextDeltas}`,
                 event.failure ??
                   new ClaudeExecutionError('unknown', SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE),
-                { messageCount: state.messageCount, hasStderr: stderr.hasStderr },
+                {
+                  messageCount: state.messageCount,
+                  hasStderr: stderr.hasStderr,
+                  sessionId,
+                  taskId,
+                },
                 this.logger
               );
             }
@@ -554,7 +559,7 @@ If you continue to see authentication errors, please contact your Agor administr
                 logClaudeFailure(
                   '[claude.query] context_usage_unavailable',
                   sanitizeClaudeExecutionError(error),
-                  undefined,
+                  { sessionId, taskId },
                   { error: (...args) => console.warn(...args) }
                 );
               } finally {
@@ -608,7 +613,12 @@ If you continue to see authentication errors, please contact your Agor administr
       logClaudeFailure(
         '[executor:error] SDK iteration failed:',
         error,
-        { messageCount: state?.messageCount, hasStderr: stderr.hasStderr },
+        {
+          messageCount: state?.messageCount,
+          hasStderr: stderr.hasStderr,
+          sessionId,
+          taskId,
+        },
         this.logger
       );
       throw error;

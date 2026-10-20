@@ -330,8 +330,8 @@ export class SDKMessageProcessor {
     this.state.lastAssistantMessageTime = Date.now();
     this.state.assistantMessageCount++;
     // Unknown strings are ignored: only the SDK's closed classes are kept.
-    const assistantError = claudeProviderError(msg.error);
-    if (assistantError) this.state.assistantError = assistantError;
+    // Latest assistant wins: a clean message clears an earlier error class.
+    this.state.assistantError = claudeProviderError(msg.error);
 
     const contentBlocks = this.processContentBlocks(msg.message?.content as ContentBlock[]);
     const toolUses = this.extractToolUses(contentBlocks);

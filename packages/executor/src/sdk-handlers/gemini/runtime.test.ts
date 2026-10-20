@@ -212,6 +212,44 @@ describe('Gemini failure fields', () => {
     expect(geminiFailureLine('stream', error)).not.toContain('SecretLeakingError');
   });
 
+  it('logs the same line for the same status and class whatever the provider text', () => {
+    const shapes: Array<[Record<string, unknown>, string]> = [
+      [{ status: 400 }, 'category=unknown http_status=400'],
+      [{ status: 403 }, 'category=authentication http_status=403'],
+      [{ status: 404 }, 'category=model_unavailable http_status=404'],
+      [{ status: 429 }, 'category=busy http_status=429'],
+      [
+        { status: 429, name: 'TerminalQuotaError' },
+        'category=quota http_status=429 error_class=TerminalQuotaError',
+      ],
+      [{ status: 500 }, 'category=provider_error http_status=500'],
+      [{ code: 'ECONNREFUSED' }, 'category=network'],
+      [{}, 'category=unknown'],
+    ];
+    const bodies = [
+      'API key not valid. API_KEY_INVALID terms of service model not found retryDelay fetch failed',
+      'SECRET unrelated provider detail',
+    ];
+    for (const [shape, fields] of shapes) {
+      const lines = bodies.map((message) =>
+        geminiFailureLine('generation', geminiError({ ...shape, message }, 'test'))
+      );
+      expect(lines[0]).toBe(`[gemini.failure] stage=generation ${fields}`);
+      expect(lines[1]).toBe(lines[0]);
+    }
+  });
+
+  it('reads a network code from a fetch failure cause', () => {
+    const error = geminiError(
+      new TypeError('fetch failed', {
+        cause: Object.assign(new Error('x'), { code: 'ENOTFOUND' }),
+      }),
+      'test'
+    );
+    expect(error.message).toBe('Could not reach the Gemini API.');
+    expect(error.category).toBe('network');
+  });
+
   it('labels fixed integration and local failures without provider fields', () => {
     expect(geminiFailureLine('preflight', new GeminiIntegrationError('fixed'))).toBe(
       '[gemini.failure] stage=preflight category=integration'

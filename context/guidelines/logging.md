@@ -56,7 +56,8 @@ CLI output is UI, not logging. Don't add permanent `console.*` logging in `agor-
   rethrowing.
 - Use a stable `[area.operation]` prefix with bounded `key=value` fields in one string
   argument. An object argument renders as a multi-line dump that a key=value parser can't read.
-  Don't repeat IDs the log context already carries in JSON mode.
+  Failure lines name their run (for example `session_id=` and `task_id=` with full IDs), because
+  text mode does not render the log context.
 - No per-token, per-chunk, per-heartbeat, per-row, or per-loop logs. Leave them out, emit a
   summary, or use an existing rate limiter.
 - Debug logs are exceptional, so `LOG_LEVEL=debug` stays usable. Remove one-off diagnostics

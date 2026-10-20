@@ -373,7 +373,14 @@ describe('structured Claude provider failure fields', () => {
       { assistantError: 'authentication_failed' }
     );
     const label = '[claude.query] result_failed subtype=success';
-    logClaudeFailure(label, failure, { messageCount: 3, hasStderr: false }, logger);
+    const sessionId = '01a159c9-49e5-770b-bc18-187b39237d68';
+    const taskId = '01a159ca-0000-7000-8000-000000000001';
+    logClaudeFailure(
+      label,
+      failure,
+      { messageCount: 3, hasStderr: false, sessionId, taskId },
+      logger
+    );
     expect(logger.error).toHaveBeenCalledTimes(1);
     const args = logger.error.mock.calls[0];
     expect(args).toHaveLength(1);
@@ -384,8 +391,15 @@ describe('structured Claude provider failure fields', () => {
     expect(line).toContain(
       'category=authentication http_status=401 provider_error=authentication_failed'
     );
-    expect(line).toContain('message_count=3 has_stderr=false');
+    expect(line).toContain(
+      `message_count=3 has_stderr=false session_id=${sessionId} task_id=${taskId}`
+    );
     expect(line).not.toContain('SENTINEL');
+
+    logClaudeFailure(label, failure, { sessionId }, logger);
+    const withoutTask = logger.error.mock.calls[1][0] as string;
+    expect(withoutTask).toContain(`session_id=${sessionId}`);
+    expect(withoutTask).not.toContain('task_id=');
   });
 
   it('renders every failure shape as one key=value string', () => {

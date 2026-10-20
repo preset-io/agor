@@ -40,6 +40,54 @@ const GEMINI_ERROR_CLASSES: ReadonlySet<string> = new Set([
   'ValidationRequiredError',
 ]);
 
+const GEMINI_AUTH_CLASSES: ReadonlySet<string> = new Set([
+  'UnauthorizedError',
+  'ForbiddenError',
+  'AccountSuspendedError',
+  'FatalAuthenticationError',
+  'ValidationRequiredError',
+]);
+
+const NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ECONNABORTED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENETDOWN',
+  'EPIPE',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+/**
+ * Logged category from structured signals only (status, allowlisted class,
+ * string `code`), so two failures with the same shape always log the same line
+ * whatever the provider prose says. Specific classes win over generic statuses.
+ */
+function geminiFailureCategory(
+  httpStatus: number | undefined,
+  errorClass: string | undefined,
+  codes: unknown[]
+): GeminiFailureCategory {
+  if (errorClass && GEMINI_AUTH_CLASSES.has(errorClass)) return 'authentication';
+  if (errorClass === 'ModelNotFoundError') return 'model_unavailable';
+  if (errorClass === 'TerminalQuotaError') return 'quota';
+  if (errorClass === 'RetryableQuotaError') return 'busy';
+  if (httpStatus === 401 || httpStatus === 403) return 'authentication';
+  if (httpStatus === 404) return 'model_unavailable';
+  if (httpStatus === 429 || httpStatus === 503) return 'busy';
+  if (httpStatus !== undefined && httpStatus >= 500) return 'provider_error';
+  if (codes.some((code) => typeof code === 'string' && NETWORK_ERROR_CODES.has(code))) {
+    return 'network';
+  }
+  return 'unknown';
+}
+
 export class GeminiIntegrationError extends Error {
   readonly category?: GeminiFailureCategory;
   readonly httpStatus?: number;
@@ -89,7 +137,6 @@ export function geminiError(error: unknown, model: string): GeminiIntegrationErr
       typeof candidate === 'string' && GEMINI_ERROR_CLASSES.has(candidate)
   );
   let safe = 'Gemini integration error.';
-  let category: GeminiFailureCategory = 'unknown';
   if (
     (status === 400 && /API_KEY_INVALID|API key not valid/i.test(message)) ||
     status === 401 ||
@@ -97,10 +144,8 @@ export function geminiError(error: unknown, model: string): GeminiIntegrationErr
     /Account.*Error|AuthenticationError|UnauthorizedError|ValidationRequiredError/.test(name)
   ) {
     safe = 'Gemini rejected the API key. Check it in Settings → Gemini.';
-    category = 'authentication';
   } else if (status === 404 || /model.*(?:not found|not available|not supported)/i.test(message)) {
     safe = `Model ${model} isn't available to this API key. Pick another Gemini model.`;
-    category = 'model_unavailable';
   } else if (
     name === 'TerminalQuotaError' ||
     (name !== 'RetryableQuotaError' &&
@@ -108,17 +153,20 @@ export function geminiError(error: unknown, model: string): GeminiIntegrationErr
       !/RetryInfo|retryDelay|per.minute|retry (?:in|after)/i.test(message))
   ) {
     safe = "This API key's plan or quota doesn't allow this request.";
-    category = 'quota';
   } else if (status === 429 || status === 503 || name === 'RetryableQuotaError') {
     safe = 'Gemini is busy or rate-limited. Try again shortly.';
-    category = 'busy';
   } else if (status >= 500 && status < 600) {
     safe = 'Gemini API error. Try again later.';
-    category = 'provider_error';
   } else if (/fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|network/i.test(message)) {
     safe = 'Could not reach the Gemini API.';
-    category = 'network';
   }
+  const cause =
+    value.cause && typeof value.cause === 'object' ? (value.cause as Record<string, unknown>) : {};
+  const category = geminiFailureCategory(httpStatus, errorClass, [
+    nested.code,
+    value.code,
+    cause.code,
+  ]);
   return new GeminiIntegrationError(safe, { category, httpStatus, errorClass });
 }
 

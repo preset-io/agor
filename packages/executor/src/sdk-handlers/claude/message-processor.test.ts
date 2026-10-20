@@ -623,4 +623,13 @@ describe('SDKMessageProcessor provider error', () => {
     const failure = resultFailure(await processor.process(failedResult));
     expect((failure as { providerError?: unknown }).providerError).toBeUndefined();
   });
+
+  it('clears an earlier error class when a later assistant message is clean', async () => {
+    const processor = createProcessor();
+    await processor.process(assistant('rate_limit'));
+    await processor.process(assistant());
+    const failure = resultFailure(await processor.process(failedResult));
+    expect(failure).toMatchObject({ category: 'unknown' });
+    expect((failure as { providerError?: unknown }).providerError).toBeUndefined();
+  });
 });

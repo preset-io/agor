@@ -1,7 +1,7 @@
 import { generateId } from '@agor/core';
 import { asMCPExternalError } from '@agor/core/mcp';
 import type { SDKMessage, SDKResultMessage } from '@agor/core/sdk';
-import type { SessionID } from '@agor/core/types';
+import type { SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MissingCredentialError } from '../../handlers/sdk/base-executor.js';
 import { AgorSetupError, ClaudeExecutionError, MESSAGES } from './claude-error.js';
@@ -100,8 +100,29 @@ describe('Claude provider failure boundaries', () => {
       });
       expect(query.releaseInput).toHaveBeenCalled();
       expect(query.return).toHaveBeenCalledTimes(1);
+      const [line] = vi.mocked(promptService.logger.error).mock.calls.at(-1) ?? [];
+      expect(line).toMatch(/^\[executor:error\] SDK iteration failed: category=authentication /);
+      expect(line).toContain(` session_id=${sessionId}`);
+      expect(line).not.toContain('task_id=');
     }
   );
+
+  it('names the session and task on the iteration failure line', async () => {
+    const taskId = generateId() as TaskID;
+    queryWith([], new Error('Invalid API key SECRET'));
+    const { promptService } = service();
+    const stream = promptService.promptSessionStreaming(sessionId, 'test', taskId);
+    await expect(
+      (async () => {
+        for await (const _event of stream) {
+          // drain
+        }
+      })()
+    ).rejects.toMatchObject({ category: 'authentication' });
+    const [line] = vi.mocked(promptService.logger.error).mock.calls.at(-1) ?? [];
+    expect(line).toContain(`session_id=${sessionId} task_id=${taskId}`);
+    expect(line).not.toContain('SECRET');
+  });
 
   it.each([
     'success',
