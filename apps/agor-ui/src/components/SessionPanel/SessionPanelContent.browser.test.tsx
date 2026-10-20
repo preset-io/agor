@@ -326,6 +326,12 @@ it.each([390, 220])(
               const rect = composer.getBoundingClientRect();
               expect(rect.top).toBeGreaterThan(0);
               expect(rect.bottom).toBeLessThanOrEqual(height);
+              // The whole card, and the status row above it, fit in the panel too.
+              const card = screen.getByTestId('composer-card').getBoundingClientRect();
+              const row = screen.getByTestId('composer-status-row').getBoundingClientRect();
+              expect(row.top).toBeGreaterThanOrEqual(0);
+              expect(row.bottom).toBeLessThanOrEqual(card.top);
+              expect(card.bottom).toBeLessThanOrEqual(height);
             },
             { timeout: 200 }
           );
