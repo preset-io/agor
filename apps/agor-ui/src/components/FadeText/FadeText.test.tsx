@@ -42,7 +42,7 @@ describe('FadeText', () => {
     expect(clipped).toHaveAttribute('data-overflowing');
     expect(clipped.style.textOverflow).toBe('clip');
     expect(clipped.style.maskImage).toContain('to right');
-    expect(clipped.style.maskImage).toContain('var(--agor-fade-row-start, 24px)');
+    expect(clipped.style.maskImage).toContain('calc(100% - 24px)');
   });
 
   it('leaves fitting text unmasked', () => {
@@ -56,9 +56,7 @@ describe('FadeText', () => {
 
   it('uses the shorter fade for dense meta lines', () => {
     setWidths({ client: 120, scroll: 480 });
-    expect(renderTitle({ dense: true }).style.maskImage).toContain(
-      'var(--agor-fade-row-start, 12px)'
-    );
+    expect(renderTitle({ dense: true }).style.maskImage).toContain('calc(100% - 12px)');
   });
 
   it('mirrors the fade for right-to-left text', () => {

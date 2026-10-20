@@ -237,6 +237,7 @@ const SessionItemWithActions: React.FC<{
       {children}
       {actionsRevealed && (
         <div
+          data-fade-row-actions
           style={{
             position: 'absolute',
             right: 4,

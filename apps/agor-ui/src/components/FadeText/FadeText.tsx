@@ -51,8 +51,8 @@ export type FadeTextProps = Omit<React.ComponentProps<typeof Typography.Text>, '
 /**
  * Label that fades out at its end instead of showing "…", only while clipped and only on
  * hover-capable screens; touch keeps the ellipsis. While clipped, the full text shows in a
- * tooltip on hover and on keyboard focus of the enclosing control. Rows marked
- * `data-fade-row` widen the fade on hover and focus to clear their actions (index.css).
+ * tooltip on hover and on keyboard focus of the enclosing control. In a `data-fade-row`, the fade
+ * moves in on hover and focus to end where the row's `data-fade-row-actions` begin.
  */
 export function FadeText({
   fullText,
@@ -72,6 +72,7 @@ export function FadeText({
   const [rtl, setRtl] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [actionsInset, setActionsInset] = useState(0);
   const text = fullText ?? (typeof children === 'string' ? children : undefined);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: new text can clip without a resize
@@ -100,11 +101,44 @@ export function FadeText({
     };
   }, [node, touch]);
 
+  useEffect(() => {
+    const row = node?.closest<HTMLElement>('[data-fade-row]');
+    if (!node || !row || touch) return;
+    let hover = false;
+    let focus = false;
+    let frame = 0;
+    const measure = () => {
+      const actions = (hover || focus) && row.querySelector('[data-fade-row-actions]');
+      if (!actions) return setActionsInset(0);
+      const label = node.getBoundingClientRect();
+      const bar = actions.getBoundingClientRect();
+      // Rects are in screen pixels; the mask is in the label's own (unzoomed) pixels.
+      const scale = label.width / node.offsetWidth || 1;
+      setActionsInset(Math.max(0, (rtl ? bar.right - label.left : label.right - bar.left) / scale));
+    };
+    const update = (event: Event) => {
+      if (event.type === 'pointerenter' || event.type === 'pointerleave') {
+        hover = event.type === 'pointerenter';
+      } else {
+        const next = (event as FocusEvent).relatedTarget as Node | null;
+        focus = event.type === 'focusin' || row.contains(next);
+      }
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    };
+    const events = ['pointerenter', 'pointerleave', 'focusin', 'focusout'];
+    for (const type of events) row.addEventListener(type, update);
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const type of events) row.removeEventListener(type, update);
+    };
+  }, [node, touch, rtl]);
+
   const fading = overflowing && !touch;
   const fade = dense ? token.sizeSM : token.sizeLG;
   // Mask alpha stop, never painted.
   const opaque = '#000';
-  const edge = `linear-gradient(to ${rtl ? 'left' : 'right'}, ${opaque} calc(100% - var(--agor-fade-row-start, ${fade}px)), transparent calc(100% - var(--agor-fade-row-end, 0px)))`;
+  const edge = `linear-gradient(to ${rtl ? 'left' : 'right'}, ${opaque} calc(100% - ${actionsInset + fade}px), transparent calc(100% - ${actionsInset}px))`;
   const mask =
     lines > 1
       ? `linear-gradient(${opaque} calc(100% - ${LINE_HEIGHT}em), transparent 0), ${edge}`
