@@ -234,6 +234,17 @@ it.each([
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
 
     const modelLabel = within(modelChip).getByText(LONG_MODEL);
+    // The row reads as secondary to the prompt: 12px in the secondary text colour.
+    const rowTokens = theme.getDesignToken({
+      algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
+    });
+    const probe = document.createElement('span');
+    probe.style.color = rowTokens.colorTextSecondary;
+    document.body.append(probe);
+    const secondary = getComputedStyle(probe).color;
+    probe.remove();
+    expect(getComputedStyle(modelLabel).fontSize).toBe(`${rowTokens.fontSizeSM}px`);
+    expect(getComputedStyle(modelChip).color).toBe(secondary);
     if (isMobile) {
       // Phones clip the long name inside the chip rather than pushing the circle off.
       expect(modelLabel.scrollWidth).toBeGreaterThan(modelLabel.clientWidth);

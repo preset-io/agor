@@ -227,6 +227,20 @@ describe('composer circle', () => {
   });
 });
 
+describe('composer row type', () => {
+  it('sets the model and permission chips at 12px; open chips switch to the full text colour', async () => {
+    renderFooter({ permissionMode: 'plan' });
+    const model = screen.getByTestId('model-chip');
+    const permission = screen.getByTestId('permission-chip');
+    expect(model.style.fontSize).toBe('12px');
+    expect(permission.style.fontSize).toBe('12px');
+    expect(model.style.color).toBe('');
+    fireEvent.click(model);
+    await screen.findByRole('dialog', { name: 'Model' });
+    expect(model.style.color).not.toBe('');
+  });
+});
+
 describe('permission chip', () => {
   it('stays hidden for the tool default', () => {
     renderFooter({ permissionMode: 'auto' });

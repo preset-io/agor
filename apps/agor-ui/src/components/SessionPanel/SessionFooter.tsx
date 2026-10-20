@@ -490,7 +490,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     minWidth: 0,
     flexShrink: 1,
     paddingInline: token.paddingXS,
-    fontSize: token.fontSize,
+    fontSize: token.fontSizeSM,
   };
 
   const [openMenu, setOpenMenu] = React.useState<ComposerMenuId | null>(null);
@@ -1225,10 +1225,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           aria-haspopup="dialog"
           aria-expanded={openMenu === 'model'}
           onClick={isMobile ? () => openModelMenu('model')(true) : undefined}
-          style={chipStyle}
+          style={{ ...chipStyle, ...(openMenu === 'model' && { color: token.colorText }) }}
           data-testid="model-chip"
         >
-          <Typography.Text ellipsis style={{ minWidth: 0, fontSize: token.fontSize }}>
+          <Typography.Text ellipsis style={{ minWidth: 0, fontSize: 'inherit', color: 'inherit' }}>
             {modelChipLabel}
           </Typography.Text>
         </Button>
@@ -1252,10 +1252,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           aria-haspopup="dialog"
           aria-expanded={openMenu === 'permissions'}
           onClick={isMobile ? () => openModelMenu('permissions')(true) : undefined}
-          style={{ ...chipStyle, color: token.colorWarningText }}
+          style={{ ...chipStyle, ...(openMenu === 'permissions' && { color: token.colorText }) }}
           data-testid="permission-chip"
         >
-          <Typography.Text ellipsis style={{ minWidth: 0, color: 'inherit' }}>
+          <Typography.Text ellipsis style={{ minWidth: 0, fontSize: 'inherit', color: 'inherit' }}>
             {permissionChipLabel}
           </Typography.Text>
         </Button>
@@ -1401,61 +1401,74 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           <Flex vertical gap={token.sizeXS} style={{ minWidth: 0 }}>
             {promptInputSlot}
           </Flex>
-          <Flex align="center" gap={token.sizeXXS} style={{ minWidth: 0 }}>
-            {plusButton}
-            {pinnedRow}
-            {modelChip}
-            {permissionChip}
-            <span style={{ flex: 1 }} />
-            <Tooltip title={circleTooltip}>
-              <Button
-                {...circleVariant}
-                shape="circle"
-                aria-label={circleLabel}
-                aria-disabled={circleDisabled || undefined}
-                aria-busy={circleState === 'stop' ? stopBusy : undefined}
-                loading={circleState === 'stop' && stopBusy}
-                icon={
-                  circleState === 'stop' ? (
-                    <span
-                      aria-hidden
-                      style={{
-                        display: 'inline-block',
-                        width: token.sizeXS + 2,
-                        height: token.sizeXS + 2,
-                        borderRadius: token.borderRadiusXS,
-                        background: 'currentColor',
-                      }}
-                    />
-                  ) : (
-                    // Queue reads as Send: same arrow and colour, only the label differs.
-                    <ArrowUpOutlined />
-                  )
-                }
-                // Keep the keyboard up on phones and focus in the text after a tap.
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={
-                  circleDisabled ? undefined : circleState === 'stop' ? onStop : onSendPrompt
-                }
-                style={{
-                  width: controlSize,
-                  height: controlSize,
-                  minWidth: controlSize,
-                  flexShrink: 0,
-                  boxShadow: 'none',
-                  // Phones: a 36px fill inside the 44px target keeps the circle clear of the card edge.
-                  ...(isMobile && {
-                    border: 'none',
-                    padding: (MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2,
-                    backgroundClip: 'content-box',
-                  }),
-                  transition: reducedMotion ? 'none' : undefined,
-                  cursor: circleDisabled ? 'not-allowed' : undefined,
-                }}
-                data-testid="composer-circle"
-              />
-            </Tooltip>
-          </Flex>
+          {/* The row reads as secondary to the prompt: 12px, secondary text, full text on hover. */}
+          <ConfigProvider
+            theme={{
+              components: {
+                Button: {
+                  textTextColor: token.colorTextSecondary,
+                  textTextHoverColor: token.colorText,
+                  textTextActiveColor: token.colorText,
+                },
+              },
+            }}
+          >
+            <Flex align="center" gap={token.sizeXXS} style={{ minWidth: 0 }}>
+              {plusButton}
+              {pinnedRow}
+              {modelChip}
+              {permissionChip}
+              <span style={{ flex: 1 }} />
+              <Tooltip title={circleTooltip}>
+                <Button
+                  {...circleVariant}
+                  shape="circle"
+                  aria-label={circleLabel}
+                  aria-disabled={circleDisabled || undefined}
+                  aria-busy={circleState === 'stop' ? stopBusy : undefined}
+                  loading={circleState === 'stop' && stopBusy}
+                  icon={
+                    circleState === 'stop' ? (
+                      <span
+                        aria-hidden
+                        style={{
+                          display: 'inline-block',
+                          width: token.sizeXS + 2,
+                          height: token.sizeXS + 2,
+                          borderRadius: token.borderRadiusXS,
+                          background: 'currentColor',
+                        }}
+                      />
+                    ) : (
+                      // Queue reads as Send: same arrow and colour, only the label differs.
+                      <ArrowUpOutlined />
+                    )
+                  }
+                  // Keep the keyboard up on phones and focus in the text after a tap.
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={
+                    circleDisabled ? undefined : circleState === 'stop' ? onStop : onSendPrompt
+                  }
+                  style={{
+                    width: controlSize,
+                    height: controlSize,
+                    minWidth: controlSize,
+                    flexShrink: 0,
+                    boxShadow: 'none',
+                    // Phones: a 36px fill inside the 44px target keeps the circle clear of the card edge.
+                    ...(isMobile && {
+                      border: 'none',
+                      padding: (MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2,
+                      backgroundClip: 'content-box',
+                    }),
+                    transition: reducedMotion ? 'none' : undefined,
+                    cursor: circleDisabled ? 'not-allowed' : undefined,
+                  }}
+                  data-testid="composer-circle"
+                />
+              </Tooltip>
+            </Flex>
+          </ConfigProvider>
         </div>
       </SessionComposerDropZone>
 
