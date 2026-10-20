@@ -1,3 +1,4 @@
+import { trackProductEvent } from '../../utils/productAnalytics';
 /**
  * Tests for the 4-step OnboardingWizard (workspace [name + template gallery]
  * → llm → tools → done). The tools step is a browsable Catalog wall that only
@@ -31,6 +32,8 @@ import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { catalogEntry } from '../Marketplace/MCPCatalogModal.test-fixtures';
 import { OnboardingWizard } from './OnboardingWizard';
+
+vi.mock('../../utils/productAnalytics', () => ({ trackProductEvent: vi.fn() }));
 
 const { TEST_BOARD_ID } = vi.hoisted(() => ({
   TEST_BOARD_ID: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
@@ -1989,5 +1992,70 @@ describe('Codex ChatGPT device sign-in', () => {
     // The adopted attempt's expiry drives the countdown just like a fresh one.
     expect(await screen.findByText(/code expires in/i)).toBeInTheDocument();
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('onboarding analytics boundaries', () => {
+  beforeEach(() => vi.mocked(trackProductEvent).mockClear());
+
+  it('records skips and settled steps, not rerenders or selection content', async () => {
+    const { props, rerender } = renderWizard();
+    await waitFor(() =>
+      expect(trackProductEvent).toHaveBeenCalledWith('user-1', {
+        event: 'onboarding.step',
+        step: 'workspace',
+        action: 'started',
+      })
+    );
+    rerender(<OnboardingWizard {...props} />);
+    for (const step of ['workspace', 'llm', 'tools']) {
+      await findAndClickButton(/skip for now/i);
+      expect(trackProductEvent).toHaveBeenCalledWith('user-1', {
+        event: 'onboarding.step',
+        step,
+        action: 'skipped',
+      });
+    }
+    await waitFor(() =>
+      expect(trackProductEvent).toHaveBeenCalledWith('user-1', {
+        event: 'onboarding.step',
+        step: 'done',
+        action: 'viewed',
+      })
+    );
+    const events = vi.mocked(trackProductEvent).mock.calls.map(([, event]) => event);
+    expect(events.filter((event) => 'action' in event && event.action === 'started')).toHaveLength(
+      1
+    );
+    expect(events.some((event) => 'action' in event && event.action === 'completed')).toBe(false);
+    for (const event of events)
+      expect(Object.keys(event).sort()).toEqual(['action', 'event', 'step']);
+  });
+
+  it('records final failure and retry without false completion or raw error text', async () => {
+    const onComplete = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('private provider details'))
+      .mockResolvedValueOnce(undefined);
+    renderWizard({ initialStep: 'done', onComplete });
+    await findAndClickButton(/open my board/i);
+    await waitFor(() =>
+      expect(trackProductEvent).toHaveBeenCalledWith('user-1', {
+        event: 'onboarding.step',
+        step: 'done',
+        action: 'completion_failed',
+      })
+    );
+    await findAndClickButton(/try again/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
+    const events = vi.mocked(trackProductEvent).mock.calls.map(([, event]) => event);
+    expect(
+      events.filter((event) => 'action' in event && event.action === 'completion_started')
+    ).toHaveLength(2);
+    expect(
+      events.filter((event) => 'action' in event && event.action === 'completion_failed')
+    ).toHaveLength(1);
+    expect(events.some((event) => 'action' in event && event.action === 'completed')).toBe(false);
+    expect(JSON.stringify(events)).not.toContain('private provider details');
   });
 });

@@ -1,7 +1,11 @@
 import type { UUID } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { trackProductEvent } from '../utils/productAnalytics';
 import { type OnboardingOperationOwner, useOnboardingLifecycle } from './useOnboardingLifecycle';
+
+vi.mock('../utils/productAnalytics', () => ({ trackProductEvent: vi.fn() }));
+beforeEach(() => vi.clearAllMocks());
 
 const USER_ID = 'user-1' as UUID;
 
@@ -193,4 +197,45 @@ describe('useOnboardingLifecycle', () => {
     expect(result.current.activeOwner?.activationGeneration).toBe(2);
     expect(result.current.isOwnerCurrent(oldOwner)).toBe(false);
   });
+});
+
+it('records completion once only after the current activation acknowledges a successful write', async () => {
+  const input = defaults();
+  const { result, rerender } = renderHook((props) => useOnboardingLifecycle(props), {
+    initialProps: input,
+  });
+  await waitFor(() => expect(result.current.open).toBe(true));
+  const owner = result.current.activeOwner!;
+  // A realtime completion bit may arrive before the originating PATCH resolves.
+  rerender({ ...input, completed: true });
+  expect(result.current.open).toBe(false);
+  expect(trackProductEvent).not.toHaveBeenCalled();
+  act(() => {
+    expect(result.current.complete(owner)).toBe(true);
+    expect(result.current.complete(owner)).toBe(true);
+  });
+  expect(trackProductEvent).toHaveBeenCalledExactlyOnceWith(USER_ID, {
+    event: 'onboarding.step',
+    step: 'done',
+    action: 'completed',
+  });
+  act(() => {
+    result.current.activate(USER_ID, input.authenticationGeneration, true);
+  });
+  act(() => {
+    expect(result.current.complete(owner)).toBe(false);
+  });
+  expect(trackProductEvent).toHaveBeenCalledTimes(1);
+});
+
+it('does not record completion for dismissed or stale-account continuations', async () => {
+  const input = defaults();
+  const { result } = renderHook(() => useOnboardingLifecycle(input));
+  await waitFor(() => expect(result.current.open).toBe(true));
+  const owner = result.current.activeOwner!;
+  act(() => {
+    result.current.defer(owner);
+    expect(result.current.complete(owner)).toBe(false);
+  });
+  expect(trackProductEvent).not.toHaveBeenCalled();
 });

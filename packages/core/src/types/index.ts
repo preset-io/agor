@@ -31,6 +31,7 @@ export * from './opencode-auth';
 export * from './opencode-models';
 export * from './opencode-native-state';
 export * from './presence';
+export * from './product-analytics.js';
 export * from './provider-oauth';
 export * from './realtime';
 export * from './repo';

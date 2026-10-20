@@ -1,4 +1,11 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: intentional dark-glass first-run surface — bespoke gradient/particle/glass values with no semantic-token equivalent; semantic text/primary/border already use theme tokens
+import {
+  ONBOARDING_ANALYTICS_STEPS,
+  type OnboardingAnalyticsStep,
+  PRODUCT_ANALYTICS_EVENTS,
+} from '@agor-live/client';
+import { useOnboardingViewAnalytics } from '../../hooks/useProductAnalytics';
+import { trackProductEvent } from '../../utils/productAnalytics';
 import { ToolBetaBadge } from '../ToolIcon/ToolBetaBadge';
 /**
  * OnboardingWizard — 4-step first-run flow.
@@ -65,7 +72,7 @@ const openCodeOnboarding = getAgenticToolUIIntegration('opencode').onboardingOpt
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type WizardStep = 'workspace' | 'llm' | 'tools' | 'done';
+export type WizardStep = OnboardingAnalyticsStep;
 type AuthMethod =
   | 'api-key'
   | 'claude-oauth'
@@ -107,7 +114,7 @@ const AUTH_METHOD_OPTIONS: Partial<
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STEPS: WizardStep[] = ['workspace', 'llm', 'tools', 'done'];
+const STEPS = ONBOARDING_ANALYTICS_STEPS;
 
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
   workspace: { number: 1, label: 'Teammate', skippable: true },
@@ -645,6 +652,8 @@ export function OnboardingWizard({
 
   // ─── Derived values ──────────────────────────────────────────────────────
 
+  useOnboardingViewAnalytics(user?.user_id, open && isCurrent(), currentStep);
+
   const stepIndex = STEPS.indexOf(currentStep);
   const meta = STEP_META[currentStep];
   const staleTemplateError = invalidSavedTemplateId
@@ -1010,7 +1019,12 @@ export function OnboardingWizard({
   }, [stepIndex, goToStep]);
 
   const handleSkip = useCallback(() => {
-    if (currentStep === 'done') return;
+    if (currentStep === 'done' || !isCurrent()) return;
+    trackProductEvent(user?.user_id, {
+      event: PRODUCT_ANALYTICS_EVENTS.ONBOARDING_STEP,
+      step: currentStep,
+      action: 'skipped',
+    });
     // Skip means "decide later", even if the user experimented with a card
     // first. Do not silently submit a selection they explicitly skipped.
     // The teammate step is optional. Skip is authoritative: do not carry a
@@ -1034,10 +1048,23 @@ export function OnboardingWizard({
       setLlmError(null);
     }
     goToStep(STEPS[stepIndex + 1]);
-  }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasUsableStoredKey]);
+  }, [
+    currentStep,
+    stepIndex,
+    goToStep,
+    selectedAgent,
+    agentHasUsableStoredKey,
+    isCurrent,
+    user?.user_id,
+  ]);
 
   const handleDismiss = useCallback(() => {
-    if (!onDismiss) return;
+    if (!onDismiss || !isCurrent()) return;
+    trackProductEvent(user?.user_id, {
+      event: PRODUCT_ANALYTICS_EVENTS.ONBOARDING_STEP,
+      step: currentStep,
+      action: 'deferred',
+    });
     // Invalidate a provisioning continuation synchronously before the parent
     // closes the surface. App combines this fence with its authenticated owner.
     completionAttemptGenerationRef.current += 1;
@@ -1048,7 +1075,16 @@ export function OnboardingWizard({
       teammateEmoji: name ? teammateEmoji : undefined,
       teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
     });
-  }, [createdBoardId, onDismiss, selectedTemplateId, teammateEmoji, teammateName]);
+  }, [
+    createdBoardId,
+    onDismiss,
+    selectedTemplateId,
+    teammateEmoji,
+    teammateName,
+    isCurrent,
+    user?.user_id,
+    currentStep,
+  ]);
 
   const handlePrimary = useCallback(async () => {
     if (!isCurrent()) return;
@@ -1149,6 +1185,11 @@ export function OnboardingWizard({
         // single-flight gate for board creation and completion.
         if (completionInFlightRef.current) return;
         completionInFlightRef.current = true;
+        trackProductEvent(user?.user_id, {
+          event: PRODUCT_ANALYTICS_EVENTS.ONBOARDING_STEP,
+          step: 'done',
+          action: 'completion_started',
+        });
         completionAttemptGenerationRef.current += 1;
         const attemptGeneration = completionAttemptGenerationRef.current;
         const completionAttempt: OnboardingCompletionAttempt = {
@@ -1204,6 +1245,11 @@ export function OnboardingWizard({
             completionAttemptGenerationRef.current += 1;
           }
           if (isCurrent()) {
+            trackProductEvent(user?.user_id, {
+              event: PRODUCT_ANALYTICS_EVENTS.ONBOARDING_STEP,
+              step: 'done',
+              action: 'completion_failed',
+            });
             setCompletionSlow(false);
             setBoardError(err instanceof Error ? err.message : 'Failed to finish setup');
           }

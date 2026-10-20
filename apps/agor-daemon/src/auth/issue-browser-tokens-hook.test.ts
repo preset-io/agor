@@ -1,5 +1,7 @@
+import { analyticsLogger } from '@agor/core/analytics';
+import { getCurrentTenantId } from '@agor/core/db';
 import jwt from 'jsonwebtoken';
-import { expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 import { createIssueBrowserTokensHook } from './issue-browser-tokens-hook';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from './runtime-tokens';
 
@@ -14,6 +16,7 @@ function makeHook() {
     accessTokenTtl: ACCESS_TOKEN_TTL,
     refreshTokenTtl: REFRESH_TOKEN_TTL,
     tenantClaim: 'tenant_id',
+    staticTenantId: 'default',
   });
 }
 
@@ -167,4 +170,52 @@ test('result without a user is left untouched', async () => {
   expect(result.accessToken).toBe(ORIGINAL_TOKEN);
   expect(result).not.toHaveProperty('refreshToken');
   expect(result).not.toHaveProperty('user');
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+test('records exactly one local success after token issuance, with trusted tenant identity', async () => {
+  const seen = vi.fn();
+  vi.spyOn(analyticsLogger, 'track').mockImplementation((...args) =>
+    seen(getCurrentTenantId(), ...args)
+  );
+  const context = makeContext(undefined, 'local');
+  context.params = { tenant: { tenant_id: 'tenant-a' } };
+  await makeHook()(context);
+  expect(seen.mock.calls).toEqual([
+    ['tenant-a', 'auth.login_succeeded', { method: 'local' }, { userId: 'user-1' }],
+  ]);
+});
+
+test('records configured static-tenant local sign-ins without inventing a Cloud tenant', async () => {
+  const seen = vi.fn();
+  vi.spyOn(analyticsLogger, 'track').mockImplementation(() => seen(getCurrentTenantId()));
+  await makeHook()(makeContext(undefined, 'local'));
+  expect(seen).toHaveBeenCalledExactlyOnceWith('default');
+  seen.mockClear();
+  const noFallback = createIssueBrowserTokensHook({
+    jwtSecret: JWT_SECRET,
+    accessTokenTtl: ACCESS_TOKEN_TTL,
+    refreshTokenTtl: REFRESH_TOKEN_TTL,
+    tenantClaim: 'tenant_id',
+  });
+  await noFallback(makeContext(undefined, 'local'));
+  expect(seen).not.toHaveBeenCalled();
+});
+
+test('does not record JWT revalidation/reconnect, API keys, machine tokens, or failed issuance', async () => {
+  const track = vi.spyOn(analyticsLogger, 'track');
+  for (const context of [
+    makeContext('access'),
+    makeContext('executor-session'),
+    makeContext('service'),
+    makeContext(undefined, 'api-key'),
+    { ...makeContext(undefined, 'local'), params: { provider: 'socketio' } },
+  ]) {
+    await makeHook()(context);
+  }
+  const failed = makeContext(undefined, 'local');
+  delete (failed.result.user as { credential_generation?: number }).credential_generation;
+  await expect(makeHook()(failed)).rejects.toThrow();
+  expect(track).not.toHaveBeenCalled();
 });

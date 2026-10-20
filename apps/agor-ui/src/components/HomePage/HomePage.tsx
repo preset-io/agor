@@ -11,6 +11,7 @@ import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIdleReady } from '../../hooks/useIdleReady';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useHomeViewAnalytics } from '../../hooks/useProductAnalytics';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
 import {
@@ -230,6 +231,7 @@ export const HomePage = memo(function HomePage({
   const railReady = useIdleReady();
   const confirmArchive = useStableCallback(useConfirmArchiveSession(client));
   const userId = currentUser?.user_id;
+  useHomeViewAnalytics(userId);
 
   const [needsFilter, setNeedsFilter] = useState<NeedsFilter>('all');
   const [needsExpanded, setNeedsExpanded] = useState(false);

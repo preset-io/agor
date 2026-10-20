@@ -1,4 +1,7 @@
-import { BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE } from '@agor/core/types';
+import {
+  BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
+  PRODUCT_ANALYTICS_SERVICE,
+} from '@agor/core/types';
 import {
   TENANT_IDENTITY_ONLY_SERVICE_PATHS,
   TENANT_OWNED_SERVICE_PATHS,
@@ -121,6 +124,10 @@ export interface TenantServiceClassification {
  * place to be wrong. This table is for services registered outside both.
  */
 export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassification> = {
+  [PRODUCT_ANALYTICS_SERVICE]: {
+    scopeClass: 'scoped',
+    why: 'Tenant-scoped authenticated route; analytics identity comes only from the authenticated caller and ambient tenant.',
+  },
   [BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE]: {
     scopeClass: 'scoped',
     why: 'Registered through the tenant-scoped authenticated route registrar; metadata-only acknowledgement.',

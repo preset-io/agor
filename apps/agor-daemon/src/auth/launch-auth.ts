@@ -1,5 +1,6 @@
 import type { JsonWebKey, KeyObject } from 'node:crypto';
 import { createHash, createPublicKey, randomBytes } from 'node:crypto';
+import { analyticsLogger } from '@agor/core/analytics';
 import {
   AgorAvatarAuthority,
   type AgorConfig,
@@ -18,6 +19,7 @@ import {
   insert,
   isExecutionHomeKeyAvailable,
   reattributeLegacyAnonymousRows,
+  runWithTenantContext,
   runWithTenantDatabaseTransaction,
   seedInitialDataInTransaction,
   select,
@@ -40,7 +42,13 @@ import type {
   UserID,
   UserRole,
 } from '@agor/core/types';
-import { isValidExecutionHomeKey, MCP_OAUTH_RELAY, normalizeRole, ROLES } from '@agor/core/types';
+import {
+  isValidExecutionHomeKey,
+  MCP_OAUTH_RELAY,
+  normalizeRole,
+  PRODUCT_ANALYTICS_EVENTS,
+  ROLES,
+} from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { lockTenantAuthorizationFence } from '../services/tenant-authorization-fence.js';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
@@ -851,7 +859,7 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           tenant,
         };
         const user = await options.usersService.get(projection.userId, userLookupParams);
-        return issueRuntimeTokens(
+        const result = issueRuntimeTokens(
           user,
           options.jwtSecret,
           options.accessTokenTtl,
@@ -859,6 +867,18 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           tenantClaim,
           tenant.tenant_id
         );
+        // The external provider has succeeded, projection committed, and Agor
+        // issued its browser tokens. No provider claims enter analytics.
+        runWithTenantContext(tenant.tenant_id, () =>
+          analyticsLogger.track(
+            PRODUCT_ANALYTICS_EVENTS.LOGIN_SUCCEEDED,
+            { method: 'external_launch' },
+            {
+              userId: user.user_id,
+            }
+          )
+        );
+        return result;
       } catch (error) {
         // Every launch failure — expected or unexpected — emits exactly one
         // coarse operator diagnostic before rethrowing. Only a static reason

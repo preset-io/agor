@@ -6,6 +6,7 @@ import {
   KNOWLEDGE_TRANSFER,
   MCP_OAUTH_RELAY,
   OWNERSHIP_TRANSFER_SERVICES,
+  PRODUCT_ANALYTICS_SERVICE,
   type UserRole,
 } from '@agor/core/types';
 
@@ -100,6 +101,10 @@ const NO_CONSUMER = 'RPC-shaped route: the caller reads the response, nobody sub
  * reports them in `context.path`.
  */
 export const REALTIME_PUBLISH_POLICY = {
+  [PRODUCT_ANALYTICS_SERVICE]: {
+    audience: 'none',
+    why: 'Private analytics acknowledgement; no realtime consumers.',
+  },
   // ---------------------------------------------------------------------------
   // Session-scoped resources. `useAgorData` / `useMessages` / `SessionPanel`
   // drive the whole live transcript off these, and the executor's private

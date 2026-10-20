@@ -1,5 +1,6 @@
-import type { UUID } from '@agor-live/client';
+import { PRODUCT_ANALYTICS_EVENTS, type UUID } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { trackProductEvent } from '../utils/productAnalytics';
 
 /**
  * One activation of the onboarding wizard, owned by an exact authenticated
@@ -77,6 +78,7 @@ export function useOnboardingLifecycle({
   const [state, setState] = useState<OnboardingLifecycleState>({ phase: 'idle' });
   const stateRef = useRef<OnboardingLifecycleState>(state);
   const activationSequenceRef = useRef(0);
+  const completionTrackedRef = useRef<OnboardingOperationOwner | null>(null);
 
   const commitState = useCallback((next: OnboardingLifecycleState) => {
     stateRef.current = next;
@@ -164,7 +166,20 @@ export function useOnboardingLifecycle({
     [transitionTo]
   );
   const complete = useCallback(
-    (owner: OnboardingOperationOwner) => transitionTo(owner, 'completed'),
+    (owner: OnboardingOperationOwner) => {
+      // App calls this only after the completion preference write succeeds.
+      // Realtime may close the wizard first, but must never itself emit success.
+      if (!transitionTo(owner, 'completed')) return false;
+      if (!sameOperationOwner(completionTrackedRef.current, owner)) {
+        completionTrackedRef.current = owner;
+        trackProductEvent(owner.userId, {
+          event: PRODUCT_ANALYTICS_EVENTS.ONBOARDING_STEP,
+          step: 'done',
+          action: 'completed',
+        });
+      }
+      return true;
+    },
     [transitionTo]
   );
 

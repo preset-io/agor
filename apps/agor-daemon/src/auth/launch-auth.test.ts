@@ -2,6 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os, { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { analyticsLogger } from '@agor/core/analytics';
 import {
   __resetConfigCacheForTests,
   type AgorConfig,
@@ -13,6 +14,7 @@ import {
   BoardRepository,
   createDatabase,
   eq,
+  getCurrentTenantId,
   hash,
   initializeDatabase,
   insert,
@@ -140,6 +142,7 @@ describe('one-time launch auth service', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     cleanup?.();
   });
 
@@ -160,6 +163,40 @@ describe('one-time launch auth service', () => {
       onAuthorizationInvalidated,
     });
   }
+
+  it('records a Cloud login only after successful exchange and issuance, scoped to signed identity', async () => {
+    const seen = vi.fn();
+    vi.spyOn(analyticsLogger, 'track').mockImplementation((...args) =>
+      seen(getCurrentTenantId(), ...args)
+    );
+    mockExchange(signClaims({ tenant_id: 'tenant-a' }));
+    const cloud = {
+      ...baseConfig(),
+      database: { dialect: 'postgresql' as const },
+      multi_tenancy: { mode: 'required_from_auth' as const, auth_claim: 'tenant_id' },
+    };
+    const result = await service(cloud).create(
+      { launchCode: 'opaque-secret' },
+      {
+        tenant: { tenant_id: 'tenant-b', source: 'auth_claim' },
+      }
+    );
+    expect(result.accessToken).toBeTruthy();
+    expect(seen.mock.calls).toEqual([
+      [
+        'tenant-a',
+        'auth.login_succeeded',
+        { method: 'external_launch' },
+        { userId: result.user.user_id },
+      ],
+    ]);
+    seen.mockClear();
+    mockExchange(signClaims(), 401);
+    await expect(service(cloud).create({ launchCode: 'rejected' })).rejects.toThrow();
+    mockExchange(signClaims()); // Missing required tenant must not produce success.
+    await expect(service(cloud).create({ launchCode: 'no-tenant' })).rejects.toThrow();
+    expect(seen).not.toHaveBeenCalled();
+  });
 
   it('projects a verified public URL tenant-wide and preserves it for legacy launches', async () => {
     const issuedAt = Math.floor(Date.now() / 1000) - 10;
@@ -1222,6 +1259,7 @@ execution:
 describe('public one-time launch auth settings', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('returns only the public external launch shape', () => {

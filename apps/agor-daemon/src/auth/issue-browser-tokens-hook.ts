@@ -1,3 +1,6 @@
+import { analyticsLogger } from '@agor/core/analytics';
+import { runWithTenantContext } from '@agor/core/db';
+import { PRODUCT_ANALYTICS_EVENTS } from '@agor/core/types';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
 import { authCredentialGenerationClaim, authTokenIssuedAtClaim } from './token-invalidation.js';
@@ -14,6 +17,8 @@ export interface IssueBrowserTokensHookOptions {
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: SignOptions['expiresIn'];
   tenantClaim: string;
+  /** Only set for a configured static-tenant deployment. Never a Cloud fallback. */
+  staticTenantId?: string;
   now?: () => number;
   debug?: (...args: unknown[]) => void;
 }
@@ -82,6 +87,20 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
     );
     context.result.accessToken = tokens.accessToken;
     context.result.refreshToken = tokens.refreshToken;
+    // Only a fresh password login, never JWT revalidation, API keys, or sockets.
+    // This tenant is the same trusted identity used for the newly issued tokens.
+    const analyticsTenantId = tenantId ?? options.staticTenantId;
+    if (context.result.authentication?.strategy === 'local' && analyticsTenantId) {
+      runWithTenantContext(analyticsTenantId, () =>
+        analyticsLogger.track(
+          PRODUCT_ANALYTICS_EVENTS.LOGIN_SUCCEEDED,
+          { method: 'local' },
+          {
+            userId: context.result.user.user_id,
+          }
+        )
+      );
+    }
     context.result.user = redactUserAuthMetadata(context.result.user);
     return context;
   };

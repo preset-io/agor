@@ -11,6 +11,7 @@ import {
   KNOWLEDGE_TRANSFER,
   MCP_OAUTH_RELAY,
   OWNERSHIP_TRANSFER_SERVICES,
+  PRODUCT_ANALYTICS_SERVICE,
 } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
@@ -54,6 +55,7 @@ describe('realtimePublishPolicyFor', () => {
     'mcp-slack-recovery',
     KNOWLEDGE_TRANSFER.path,
     ...Object.values(OWNERSHIP_TRANSFER_SERVICES),
+    PRODUCT_ANALYTICS_SERVICE,
   ])('keeps %s replies private to the caller', (path) => {
     expect(realtimePublishPolicyFor(path)?.audience).toBe('none');
     expect(isRealtimePublishAllowed(path)).toBe(false);
@@ -158,6 +160,7 @@ describe('source scan: every registered path is declared', () => {
   function extractRegisteredPaths(source: string): Array<{ path: string; line: number }> {
     // Resolve the shared constant before the literal-only scan; do not duplicate its value.
     const lines = source
+      .replace(/\bPRODUCT_ANALYTICS_SERVICE\b/g, JSON.stringify(PRODUCT_ANALYTICS_SERVICE))
       .replace(/\bMCP_OAUTH_RELAY\.deliveryPath\b/g, JSON.stringify(MCP_OAUTH_RELAY.deliveryPath))
       .replace(
         /\bENVIRONMENT_COMMAND_REPORT_SERVICE\b/g,
