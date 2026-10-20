@@ -200,7 +200,7 @@ export function SessionQueue({
             listStyle: 'none',
             margin: 0,
             padding: 0,
-            maxHeight: '40vh',
+            maxHeight: isMobile ? '25dvh' : '40vh',
             overflowY: 'auto',
           }}
         >

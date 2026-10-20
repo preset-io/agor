@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { cdp, page, userEvent } from 'vitest/browser';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
+import { isMobileViewport } from '../../utils/deviceDetection';
 import SessionPanel from './SessionPanel';
 
 // Keep the actual SessionPanel layout: the ConversationView scroll owner above,
@@ -143,13 +144,16 @@ const expectBottom = () =>
     { timeout: 5000 }
   );
 
+// The expanded list is capped at 40vh, or 25dvh on phones so the composer stays in view.
+const queueCap = () => window.innerHeight * (isMobileViewport() ? 0.25 : 0.4);
+
 // The expanded queue scrolls inside its own bounded list, sits above the
 // composer card, and never pushes the composer out of reach or the panel wider.
 async function expectBounded() {
   await waitFor(() => {
     const list = queueList();
     expect(list.clientHeight).toBeGreaterThan(15);
-    expect(list.clientHeight).toBeLessThanOrEqual(window.innerHeight * 0.4 + 1);
+    expect(list.clientHeight).toBeLessThanOrEqual(queueCap() + 1);
     expect(queueSection().getBoundingClientRect().bottom).toBeLessThanOrEqual(
       card().getBoundingClientRect().top + 1
     );
@@ -227,11 +231,11 @@ it('grows one row to two without clipping and preserves a scrolled-up reader thr
       }
     });
     if (count === 2) {
-      // Two rows fit without an inner scrollbar unless they reach the 40vh cap,
-      // as two wrapped phone rows do on a short landscape screen.
+      // Two rows fit without an inner scrollbar unless they reach the list cap,
+      // as two wrapped phone rows do on short screens.
       await waitFor(() => {
         const list = queueList();
-        if (list.clientHeight < Math.floor(window.innerHeight * 0.4) - 1) {
+        if (list.clientHeight < Math.floor(queueCap()) - 1) {
           expect(list.scrollHeight - list.clientHeight).toBeLessThanOrEqual(1);
         }
       });

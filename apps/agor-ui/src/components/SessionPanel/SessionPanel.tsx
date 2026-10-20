@@ -1882,9 +1882,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           ref={conversationRef}
           style={{
             flex: 1,
-            // If chrome + composer cannot fit on a short viewport, scroll the
-            // body rather than crushing the transcript and queue to slivers.
-            minHeight: queuedTasks.length > 0 ? 360 : 0,
+            // Keep some transcript beside an open queue; on very short panels
+            // the body scrolls instead. Small enough that a phone keeps the composer in view.
+            minHeight: queuedTasks.length > 0 ? 160 : 0,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
