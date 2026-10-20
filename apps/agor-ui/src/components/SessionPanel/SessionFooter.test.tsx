@@ -492,6 +492,100 @@ describe('info line and Session details', () => {
   });
 });
 
+describe('info line segments', () => {
+  const contextWindow = (used: number) => ({ used, limit: 200_000, taskMetadata: {} });
+  const doneTask = {
+    task_id: 't1',
+    status: 'completed',
+    created_at: '2026-01-01T00:00:00Z',
+    duration_ms: 134_000,
+  } as unknown as Task;
+  const line = () => screen.getByTestId('composer-info-line');
+  const segments = () =>
+    within(line())
+      .getAllByRole('button')
+      .map((button) => button.getAttribute('aria-label'));
+
+  it('renders each item as its own button, with separators only between items, then "›"', () => {
+    renderFooter({
+      latestContextWindow: contextWindow(172_000),
+      footerTimerTask: doneTask,
+      sessionMcpServerIds: ['a', 'b'],
+    });
+    expect(segments()).toEqual([
+      'Context 86% used. Session details',
+      'Turn time 02:14. Session details',
+      'MCP tools, 2. Session details',
+      'Session details',
+    ]);
+    expect(within(line()).getAllByTestId('info-separator')).toHaveLength(2);
+    expect(line().firstElementChild).not.toHaveAttribute('data-testid', 'info-separator');
+    expect(line().textContent).toMatch(/^86%·02:14·MCP 2›$/);
+  });
+
+  it('shows only "›" when every item is hidden, so Session details stays reachable', async () => {
+    localStorage.setItem('agor-footer-prefs', JSON.stringify({ pinnedChips: [] }));
+    renderFooter({ latestContextWindow: contextWindow(36_000), footerTimerTask: doneTask });
+    expect(segments()).toEqual(['Session details']);
+    expect(within(line()).queryAllByTestId('info-separator')).toHaveLength(0);
+    fireEvent.click(within(line()).getByRole('button', { name: 'Session details' }));
+    expect(await screen.findByRole('dialog', { name: 'Session details' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['Context 86% used. Session details', 'context', 'Hide context'],
+    ['Turn time 02:14. Session details', 'timer', 'Hide timer'],
+    ['MCP tools, 2. Session details', 'tools', 'Hide MCP tools'],
+  ])('"%s" opens Session details on its row', async (name, row, pin) => {
+    renderFooter({
+      latestContextWindow: contextWindow(172_000),
+      footerTimerTask: doneTask,
+      sessionMcpServerIds: ['a', 'b'],
+    });
+    fireEvent.click(within(line()).getByRole('button', { name }));
+    const details = await screen.findByRole('dialog', { name: 'Session details' });
+    const target = details.querySelector(`[data-detail-row="${row}"]`) as HTMLElement;
+    expect(target.style.background).not.toBe('');
+    for (const other of details.querySelectorAll<HTMLElement>('[data-detail-row]')) {
+      if (other !== target) expect(other.style.background).toBe('');
+    }
+    expect(within(target).getByRole('button', { name: pin })).toBeInTheDocument();
+    await waitFor(() => expect(target.contains(document.activeElement)).toBe(true));
+  });
+
+  it('"›" opens Session details at the top', async () => {
+    renderFooter({ latestContextWindow: contextWindow(172_000) });
+    fireEvent.click(within(line()).getByRole('button', { name: 'Session details' }));
+    const details = await screen.findByRole('dialog', { name: 'Session details' });
+    for (const row of details.querySelectorAll<HTMLElement>('[data-detail-row]')) {
+      expect(row.style.background).toBe('');
+    }
+    expect(within(details).getByRole('button', { name: 'Hide timer' })).toBeInTheDocument();
+  });
+
+  it('names each segment in its desktop tooltip', async () => {
+    renderFooter({ footerTimerTask: doneTask });
+    fireEvent.mouseEnter(within(line()).getByRole('button', { name: /^Turn time/ }));
+    expect(await screen.findByText('Turn time')).toBeInTheDocument();
+    fireEvent.mouseEnter(within(line()).getByRole('button', { name: 'Session details' }));
+    expect(
+      await screen.findByText('Click to see details and choose what shows here')
+    ).toBeInTheDocument();
+  });
+
+  it('gives each segment a 44px target on phones and opens the details sheet', async () => {
+    setWidth(390);
+    renderFooter({ latestContextWindow: contextWindow(36_000), footerTimerTask: doneTask });
+    for (const button of within(line()).getAllByRole('button')) {
+      expect(button.style.height).toBe('44px');
+      expect(button.style.minWidth).toBe('44px');
+    }
+    fireEvent.click(within(line()).getByRole('button', { name: /^Turn time/ }));
+    const sheet = await screen.findByRole('dialog');
+    expect(sheet.closest('.ant-drawer')).not.toBeNull();
+  });
+});
+
 describe('MCP notice', () => {
   const server = (id: string, displayName: string) =>
     ({ mcp_server_id: id, name: id, display_name: displayName }) as MCPServer;

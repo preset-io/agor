@@ -32,6 +32,8 @@ interface ComposerMenuProps {
   children: React.ReactElement;
   /** The popover sits above this element (the composer card) instead of over it. */
   above?: React.RefObject<HTMLElement | null>;
+  /** Selector inside the menu to scroll to and focus on open, such as one row. */
+  focusTarget?: string;
 }
 
 /** One composer menu: a popover on desktop, a bottom sheet on phones. Never nested. */
@@ -43,11 +45,11 @@ export function ComposerMenu({
   content,
   children,
   above,
+  focusTarget,
 }: ComposerMenuProps) {
   const { token } = theme.useToken();
   const reducedMotion = usePrefersReducedMotion();
   const anchorRef = React.useRef<HTMLSpanElement>(null);
-  const panelRef = React.useRef<HTMLDivElement>(null);
   // Distance from the trigger's top up to the card's top, so the popover clears the card.
   const [lift, setLift] = React.useState(0);
   const measureLift = React.useCallback(() => {
@@ -64,16 +66,26 @@ export function ComposerMenu({
     anchorRef.current?.querySelector<HTMLElement>('button')?.focus();
   };
 
+  const contentRef = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
-    if (!open || sheet) return;
-    const frame = requestAnimationFrame(() =>
-      panelRef.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus()
-    );
+    if (!open) return;
+    const frame = requestAnimationFrame(() => {
+      const root = contentRef.current;
+      const target = focusTarget ? root?.querySelector<HTMLElement>(focusTarget) : null;
+      if (target) {
+        target.scrollIntoView?.({ block: 'nearest' });
+        target.querySelector<HTMLElement>('button:not([disabled])')?.focus({ preventScroll: true });
+      } else if (!sheet) {
+        root?.querySelector<HTMLElement>('button:not([disabled])')?.focus();
+      }
+    });
     return () => cancelAnimationFrame(frame);
-  }, [open, sheet]);
+  }, [open, sheet, focusTarget]);
 
   const body = (
-    <ComposerMenuDensity.Provider value={{ sheet }}>{content}</ComposerMenuDensity.Provider>
+    <ComposerMenuDensity.Provider value={{ sheet }}>
+      <div ref={contentRef}>{content}</div>
+    </ComposerMenuDensity.Provider>
   );
 
   if (sheet) {
@@ -121,7 +133,6 @@ export function ComposerMenu({
       }}
       content={
         <div
-          ref={panelRef}
           role="dialog"
           aria-label={title}
           onKeyDown={(event) => {
@@ -136,7 +147,17 @@ export function ComposerMenu({
         </div>
       }
     >
-      <span ref={anchorRef} style={{ display: 'inline-flex', minWidth: 0 }}>
+      {/* Esc also closes while focus is still on the trigger, before it moves into the menu. */}
+      <span
+        ref={anchorRef}
+        style={{ display: 'inline-flex', minWidth: 0 }}
+        onKeyDown={(event) => {
+          if (!open || event.key !== 'Escape') return;
+          event.preventDefault();
+          event.stopPropagation();
+          close();
+        }}
+      >
         {children}
       </span>
     </Popover>

@@ -39,7 +39,17 @@ import {
   UploadOutlined,
 } from '@ant-design/icons';
 import type { ButtonProps } from 'antd';
-import { Button, Divider, Flex, Progress, Segmented, Tooltip, Typography, theme } from 'antd';
+import {
+  Button,
+  ConfigProvider,
+  Divider,
+  Flex,
+  Progress,
+  Segmented,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import React from 'react';
 import { setComposerFocused } from '../../hooks/useComposerFocus';
 import { useElementWidth } from '../../hooks/useElementWidth';
@@ -143,7 +153,17 @@ export interface SessionFooterProps {
   onDropActiveChange?: (active: boolean) => void;
 }
 
-type ComposerMenuId = 'plus' | 'model' | 'permissions' | 'details' | 'details-context';
+type ComposerMenuId = 'plus' | 'model' | 'permissions' | 'details';
+/** Session details rows an info-line segment can open on. */
+type DetailRow = 'timer' | 'tools' | 'usage' | 'context' | 'session-ids';
+interface InfoSegment {
+  key: string;
+  row: DetailRow | null;
+  label: React.ReactNode;
+  ariaLabel: string;
+  tooltip: React.ReactNode;
+  warning?: boolean;
+}
 
 const formatTokenCount = (count: number) =>
   count >= 1000 ? `${(count / 1000).toFixed(count >= 100_000 ? 0 : 1)}k` : String(count);
@@ -482,7 +502,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     action();
   };
   const [detailsPage, setDetailsPage] = React.useState<'main' | 'mcp'>('main');
-  const detailsOpen = openMenu === 'details' || openMenu === 'details-context';
+  const detailsOpen = openMenu === 'details';
+  // Which info-line segment Session details is anchored to, and the row it opens on.
+  const [detailsAnchor, setDetailsAnchor] = React.useState<string>('more');
+  const [detailsFocus, setDetailsFocus] = React.useState<DetailRow | null>(null);
   const { usage, loading: usageLoading } = useSessionUsage(
     client,
     session.session_id,
@@ -533,20 +556,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       : unauthedMcpServers.length > 1
         ? `${unauthedMcpServers.length} MCP servers need sign-in`
         : null;
-  // MCP problems always show on the info line, even while typing.
   const mcpWarning = sessionMcpLoadFailed ? "MCP tools didn't load" : signInWarning;
   const usageValue = usage ? `${formatTokenCount(usage.total)} tokens` : usageLoading ? '…' : '';
-  const infoItems = [
-    // While a turn runs, the working line carries the live time.
-    pinnedChips.includes('timer') && elapsed.hasTiming && !showStop ? elapsed.label : null,
-    pinnedChips.includes('tools') && mcpSummary.attachedCount > 0
-      ? `MCP ${mcpSummary.attachedCount}`
-      : null,
-    pinnedChips.includes('tokens') && knownUsageTotal !== undefined
-      ? `${formatTokenCount(knownUsageTotal)} tokens`
-      : null,
-    pinnedChips.includes('session-ids') ? shortId(session.session_id) : null,
-  ].filter((item): item is string => Boolean(item));
 
   const infoPin = (id: string, name: string) => {
     const pinned = pinnedChips.includes(id);
@@ -563,25 +574,47 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     await copyToClipboard(id);
     showSuccess(`${what} copied`);
   };
+  const detailRow = (key: DetailRow, children: React.ReactNode) => (
+    <div
+      data-detail-row={key}
+      style={
+        detailsOpen && detailsFocus === key
+          ? { background: token.colorPrimaryBg, borderRadius: token.borderRadius }
+          : undefined
+      }
+    >
+      {children}
+    </div>
+  );
   const detailsMain = (
     <>
       {!isMobile && <ComposerMenuSection>Session details</ComposerMenuSection>}
-      <ComposerMenuRow
-        label="Timer"
-        icon={<ClockCircleOutlined />}
-        value={
-          !elapsed.hasTiming ? 'Not started' : showStop ? `Running ${elapsed.label}` : elapsed.label
-        }
-        trailing={infoPin('timer', 'timer')}
-      />
-      <ComposerMenuRow
-        label="MCP tools"
-        icon={<ApiOutlined />}
-        value={String(mcpSummary.attachedCount)}
-        drill
-        onClick={() => setDetailsPage('mcp')}
-        trailing={infoPin('tools', 'MCP tools')}
-      />
+      {detailRow(
+        'timer',
+        <ComposerMenuRow
+          label="Timer"
+          icon={<ClockCircleOutlined />}
+          value={
+            !elapsed.hasTiming
+              ? 'Not started'
+              : showStop
+                ? `Running ${elapsed.label}`
+                : elapsed.label
+          }
+          trailing={infoPin('timer', 'timer')}
+        />
+      )}
+      {detailRow(
+        'tools',
+        <ComposerMenuRow
+          label="MCP tools"
+          icon={<ApiOutlined />}
+          value={String(mcpSummary.attachedCount)}
+          drill
+          onClick={() => setDetailsPage('mcp')}
+          trailing={infoPin('tools', 'MCP tools')}
+        />
+      )}
       {sessionMcpLoadFailed && (
         <Flex
           align="center"
@@ -617,38 +650,49 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           </Button>
         </Flex>
       ))}
-      <ComposerMenuRow
-        label="Usage"
-        icon={<NumberOutlined />}
-        value={usageValue}
-        trailing={infoPin('tokens', 'usage')}
-      />
-      <ComposerMenuRow
-        label="Context"
-        icon={<PieChartOutlined />}
-        value={
-          contextPercent === null
-            ? 'Unknown'
-            : `${contextPercent}% of ${formatTokenCount(contextLimit)}`
-        }
-        trailing={infoPin('context', 'context')}
-      />
-      {contextPercent !== null && (
-        <div style={{ paddingInline: token.paddingSM }}>
-          <Progress
-            percent={contextPercent}
-            showInfo={false}
-            size="small"
-            strokeColor={contextColor}
-            aria-label={`Context ${contextPercent}% used`}
-          />
-        </div>
+      {detailRow(
+        'usage',
+        <ComposerMenuRow
+          label="Usage"
+          icon={<NumberOutlined />}
+          value={usageValue}
+          trailing={infoPin('tokens', 'usage')}
+        />
       )}
-      <ComposerMenuRow
-        label="Session IDs"
-        icon={<IdcardOutlined />}
-        trailing={infoPin('session-ids', 'session IDs')}
-      />
+      {detailRow(
+        'context',
+        <>
+          <ComposerMenuRow
+            label="Context"
+            icon={<PieChartOutlined />}
+            value={
+              contextPercent === null
+                ? 'Unknown'
+                : `${contextPercent}% of ${formatTokenCount(contextLimit)}`
+            }
+            trailing={infoPin('context', 'context')}
+          />
+          {contextPercent !== null && (
+            <div style={{ paddingInline: token.paddingSM }}>
+              <Progress
+                percent={contextPercent}
+                showInfo={false}
+                size="small"
+                strokeColor={contextColor}
+                aria-label={`Context ${contextPercent}% used`}
+              />
+            </div>
+          )}
+        </>
+      )}
+      {detailRow(
+        'session-ids',
+        <ComposerMenuRow
+          label="Session IDs"
+          icon={<IdcardOutlined />}
+          trailing={infoPin('session-ids', 'session IDs')}
+        />
+      )}
       <ComposerMenuRow
         label="Copy session ID"
         icon={<CopyOutlined />}
@@ -687,90 +731,171 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     ) : (
       detailsMain
     );
-  const openDetails = (menu: 'details' | 'details-context') => (open: boolean) => {
+  const openDetailsAt = (segment: InfoSegment) => {
     setDetailsPage('main');
-    setOpenMenu(open ? menu : null);
+    setDetailsAnchor(segment.key);
+    setDetailsFocus(segment.row);
+    setOpenMenu('details');
   };
-  const infoTextStyle: React.CSSProperties = {
-    height: isMobile ? MOBILE_TOUCH_TARGET : token.controlHeightSM,
-    paddingInline: token.sizeXXS / 2,
-    fontSize: token.fontSizeSM,
-    color: token.colorTextTertiary,
-    minWidth: 0,
-  };
-  const showContextInInfo = contextPercent !== null && pinnedChips.includes('context');
+  const infoSegments: InfoSegment[] = [];
+  if (contextPercent !== null && pinnedChips.includes('context')) {
+    infoSegments.push({
+      key: 'context',
+      row: 'context',
+      label: (
+        <>
+          <Progress
+            type="circle"
+            size={token.fontSizeSM}
+            percent={contextPercent}
+            showInfo={false}
+            strokeWidth={16}
+            strokeColor={contextColor}
+            aria-hidden
+          />
+          {contextPercent}%
+        </>
+      ),
+      ariaLabel: `Context ${contextPercent}% used. Session details`,
+      tooltip: `Context ${contextPercent}% used`,
+    });
+  }
+  // While a turn runs, the working line carries the live time.
+  if (pinnedChips.includes('timer') && elapsed.hasTiming && !showStop) {
+    infoSegments.push({
+      key: 'timer',
+      row: 'timer',
+      label: elapsed.label,
+      ariaLabel: `Turn time ${elapsed.label}. Session details`,
+      tooltip: 'Turn time',
+    });
+  }
+  if (pinnedChips.includes('tools') && mcpSummary.attachedCount > 0) {
+    infoSegments.push({
+      key: 'tools',
+      row: 'tools',
+      label: `MCP ${mcpSummary.attachedCount}`,
+      ariaLabel: `MCP tools, ${mcpSummary.attachedCount}. Session details`,
+      tooltip: 'MCP tools',
+    });
+  }
+  if (pinnedChips.includes('tokens') && knownUsageTotal !== undefined) {
+    const tokens = `${formatTokenCount(knownUsageTotal)} tokens`;
+    infoSegments.push({
+      key: 'tokens',
+      row: 'usage',
+      label: tokens,
+      ariaLabel: `Usage, ${tokens}. Session details`,
+      tooltip: 'Usage',
+    });
+  }
+  if (pinnedChips.includes('session-ids')) {
+    const id = shortId(session.session_id);
+    infoSegments.push({
+      key: 'session-ids',
+      row: 'session-ids',
+      label: id,
+      ariaLabel: `Session ID ${id}. Session details`,
+      tooltip: 'Session ID',
+    });
+  }
+  // MCP problems always show on the info line, even while typing.
+  if (mcpWarning) {
+    infoSegments.push({
+      key: 'mcp-warning',
+      row: 'tools',
+      label: mcpWarning,
+      ariaLabel: `${mcpWarning}. Session details`,
+      tooltip: 'MCP tools',
+      warning: true,
+    });
+  }
   // An open Session details keeps its anchor, even if the line's content changes underneath it.
-  const detailsAnchored = openMenu === 'details';
-  const infoLineVisible =
-    detailsOpen ||
-    ((showContextInInfo || infoItems.length > 0 || mcpWarning) && !(keyboardUp && !mcpWarning));
-  const infoLine = infoLineVisible && (
-    <Flex
-      align="center"
-      style={{ minWidth: 0, paddingInline: token.paddingXS }}
-      data-testid="composer-info-line"
-    >
-      {contextPercent !== null && (showContextInInfo || openMenu === 'details-context') && (
-        <ComposerMenu
-          above={cardRef}
-          sheet={isMobile}
-          title="Session details"
-          open={openMenu === 'details-context'}
-          onOpenChange={openDetails('details-context')}
-          content={detailsContent}
-        >
-          <Tooltip title="Context window" open={openMenu === 'details-context' ? false : undefined}>
-            <Button
-              type="text"
-              size="small"
-              aria-label={`Context ${contextPercent}% used. Session details`}
-              onClick={isMobile ? () => openDetails('details-context')(true) : undefined}
-              style={{ ...infoTextStyle, gap: token.sizeXXS }}
-            >
-              <Progress
-                type="circle"
-                size={token.fontSizeSM}
-                percent={contextPercent ?? 0}
-                showInfo={false}
-                strokeWidth={16}
-                strokeColor={contextColor}
-                aria-hidden
-              />
-              {contextPercent}%
-            </Button>
-          </Tooltip>
-        </ComposerMenu>
-      )}
-      {(infoItems.length > 0 || mcpWarning || detailsAnchored) && (
-        <ComposerMenu
-          above={cardRef}
-          sheet={isMobile}
-          title="Session details"
-          open={openMenu === 'details'}
-          onOpenChange={openDetails('details')}
-          content={detailsContent}
-        >
+  const lastSegmentsRef = React.useRef(new Map<string, InfoSegment>());
+  for (const segment of infoSegments) lastSegmentsRef.current.set(segment.key, segment);
+  const anchored = detailsOpen ? lastSegmentsRef.current.get(detailsAnchor) : undefined;
+  if (anchored && !infoSegments.some((segment) => segment.key === anchored.key)) {
+    infoSegments.push(anchored);
+  }
+  const moreSegment: InfoSegment = {
+    key: 'more',
+    row: null,
+    label: '›',
+    ariaLabel: 'Session details',
+    tooltip: (
+      <>
+        <div>Session details</div>
+        <div>Click to see details and choose what shows here</div>
+      </>
+    ),
+  };
+  const infoButtonStyle: React.CSSProperties = {
+    height: isMobile ? MOBILE_TOUCH_TARGET : token.controlHeightSM,
+    minWidth: isMobile ? MOBILE_TOUCH_TARGET : undefined,
+    paddingInline: token.paddingXXS,
+    gap: token.sizeXXS,
+    fontSize: token.fontSizeSM,
+    flexShrink: 0,
+  };
+  const renderSegment = (segment: InfoSegment) => {
+    const open = detailsOpen && detailsAnchor === segment.key;
+    return (
+      <ComposerMenu
+        key={segment.key}
+        above={cardRef}
+        sheet={isMobile}
+        title="Session details"
+        open={open}
+        onOpenChange={(next) => (next ? openDetailsAt(segment) : setOpenMenu(null))}
+        content={detailsContent}
+        focusTarget={segment.row ? `[data-detail-row="${segment.row}"]` : undefined}
+      >
+        <Tooltip title={segment.tooltip} open={open ? false : undefined}>
           <Button
             type="text"
             size="small"
-            aria-label={`Session details. ${[...infoItems, mcpWarning].filter(Boolean).join(', ')}`}
-            onClick={isMobile ? () => openDetails('details')(true) : undefined}
-            style={infoTextStyle}
+            aria-label={segment.ariaLabel}
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            onClick={isMobile ? () => openDetailsAt(segment) : undefined}
+            style={{
+              ...infoButtonStyle,
+              color: segment.warning ? token.colorWarningText : token.colorTextTertiary,
+            }}
+            data-testid={`info-segment-${segment.key}`}
           >
-            <Typography.Text ellipsis style={{ fontSize: token.fontSizeSM, color: 'inherit' }}>
-              {showContextInInfo && infoItems.length > 0 ? '· ' : ''}
-              {infoItems.join(' · ')}
-              {mcpWarning && (
-                <span style={{ color: token.colorWarningText }}>
-                  {infoItems.length > 0 ? ' · ' : ''}
-                  {mcpWarning}
-                </span>
-              )}
-            </Typography.Text>
+            {segment.label}
           </Button>
-        </ComposerMenu>
-      )}
-    </Flex>
+        </Tooltip>
+      </ComposerMenu>
+    );
+  };
+  const infoLineVisible = detailsOpen || !(keyboardUp && !mcpWarning);
+  const infoLine = infoLineVisible && (
+    // Segments hover with the subtle fill, so the line reads as clickable.
+    <ConfigProvider theme={{ components: { Button: { textHoverBg: token.colorFillTertiary } } }}>
+      <Flex
+        align="center"
+        style={{ minWidth: 0, paddingInline: token.paddingXS, overflow: 'hidden' }}
+        data-testid="composer-info-line"
+      >
+        {infoSegments.map((segment, index) => (
+          <React.Fragment key={segment.key}>
+            {index > 0 && (
+              <span
+                aria-hidden
+                data-testid="info-separator"
+                style={{ color: token.colorTextQuaternary, fontSize: token.fontSizeSM }}
+              >
+                ·
+              </span>
+            )}
+            {renderSegment(segment)}
+          </React.Fragment>
+        ))}
+        {renderSegment(moreSegment)}
+      </Flex>
+    </ConfigProvider>
   );
 
   const attachmentsHint = composerAttachmentsPresent ? composerAttachmentActionTooltip : undefined;

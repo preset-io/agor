@@ -157,7 +157,7 @@ describe('session footer MCP read recovery through its owning surfaces', () => {
     );
     // The composer's info line always names the failed read; it opens Session details.
     fireEvent.click(
-      await screen.findByRole('button', { name: /^Session details\..*MCP tools didn't load/ })
+      await screen.findByRole('button', { name: /^MCP tools didn't load\. Session details$/ })
     );
     const details = await screen.findByRole('dialog', { name: 'Session details' });
     fireEvent.click(within(details).getByRole('button', { name: /MCP tools \d/ }));
