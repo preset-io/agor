@@ -378,6 +378,69 @@ it.each([340, 360])(
   }
 );
 
+it.each([
+  [340, 'auto'],
+  [357, 'auto'],
+  [340, 'plan'],
+  [357, 'acceptEdits'],
+  [340, 'acceptEdits'],
+] as const)(
+  'keeps the default pins in a %ipx panel without wrapping (permissions %s)',
+  async (width, permissionMode) => {
+    localStorage.removeItem('agor-footer-prefs');
+    await page.viewport(1280, 900);
+    const state = {
+      session: { ...props.session, model_config: { model: 'claude-opus-5-5' } },
+      permissionMode,
+    };
+    const view = render(rowFooter(width, state));
+    const card = screen.getByTestId('composer-card');
+    const modelChip = screen.getByTestId('model-chip');
+    // The narrow row drops the effort: just the model.
+    expect(modelChip).toHaveTextContent(/^Opus 5\.5$/);
+    const permissionChip = screen.queryByTestId('permission-chip');
+    expect(!!permissionChip).toBe(permissionMode !== 'auto');
+    const expectRowFits = () => {
+      const box = card.getBoundingClientRect();
+      const controls = [...card.querySelectorAll('button')].filter(
+        (button) => !button.closest('textarea')
+      );
+      const top = controls[0].getBoundingClientRect().top;
+      for (const control of controls) {
+        const rect = control.getBoundingClientRect();
+        expect(rect.top).toBe(top);
+        expect(rect.left).toBeGreaterThanOrEqual(box.left);
+        expect(rect.right).toBeLessThanOrEqual(box.right);
+      }
+      // No chip text is clipped, and nothing scrolls sideways.
+      for (const chip of [modelChip, permissionChip]) {
+        const text = chip?.querySelector('.ant-typography');
+        if (text) expect(text.scrollWidth).toBeLessThanOrEqual(text.clientWidth);
+      }
+      expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
+      expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+    };
+    await waitFor(expectRowFits);
+    expect(screen.getByTestId('upload-bar-btn')).toBeVisible();
+    expect(screen.getByTestId('fork-bar-btn')).toBeVisible();
+    if (!permissionChip) {
+      // All 3 default pins stay one click away.
+      expect(screen.getByTestId('mcp-bar-btn')).toBeVisible();
+    } else if (!screen.queryByTestId('mcp-bar-btn')) {
+      // The permission chip wins: the last pin folds into "+", which says so.
+      await userEvent.click(screen.getByRole('button', { name: 'Add files and actions' }));
+      const menu = await screen.findByRole('dialog', { name: 'Add files and actions' });
+      expect(
+        within(menu).getByText('MCP tools stays in here until the panel is wider.')
+      ).toBeVisible();
+      await closeMenu('Add files and actions');
+      // With room again, the pin comes back.
+      view.rerender(rowFooter(600, state));
+      await waitFor(() => expect(screen.getByTestId('mcp-bar-btn')).toBeVisible());
+    }
+  }
+);
+
 it('keeps the advisor and exact-version picker one drill-in from the model chip', async () => {
   await page.viewport(1280, 900);
   const onModelConfigCommit = vi.fn();

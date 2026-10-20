@@ -6,8 +6,10 @@ import type {
 } from '@agor-live/client';
 import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
 
-/** Below this card width the row keeps the phone rule: 2 pins and a short model chip. */
+/** Below this card width the row shortens the model chip and keeps at most `NARROW_PIN_LIMIT` pins. */
 export const NARROW_COMPOSER_WIDTH = 480;
+/** Narrow panels keep the default desktop pins (Attach, Fork, MCP tools) in the row. */
+export const NARROW_PIN_LIMIT = 3;
 
 export type ComposerCircleState = 'send' | 'stop' | 'queue';
 

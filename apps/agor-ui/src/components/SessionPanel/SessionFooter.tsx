@@ -91,6 +91,7 @@ import {
   getComposerCircleState,
   isPermissionNonDefault,
   NARROW_COMPOSER_WIDTH,
+  NARROW_PIN_LIMIT,
   splitPinnedActions,
 } from './composerState';
 import { RecoveryActions } from './RecoveryActions';
@@ -258,10 +259,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         ? toolCaps?.supportsChildSpawn !== false
         : true
   );
+  // A narrow row that can't fit the permission chip folds its last pin instead.
+  const [permissionFold, setPermissionFold] = React.useState(false);
   const { row: rowPins, folded: foldedPins } = splitPinnedActions(
     pinnedItems,
     availableActions,
-    isMobile || narrow ? COMPACT_PIN_LIMIT : undefined
+    isMobile ? COMPACT_PIN_LIMIT : narrow ? NARROW_PIN_LIMIT - (permissionFold ? 1 : 0) : undefined
   );
   const togglePin = (id: string) => {
     if (pinnedItems.includes(id)) {
@@ -488,6 +491,34 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     session.agentic_tool === 'codex'
       ? codexApprovalPolicy
       : (permissionMeta?.shortLabel ?? permissionChipName);
+  const modelChipTextRef = React.useRef<HTMLSpanElement>(null);
+  const permissionChipTextRef = React.useRef<HTMLSpanElement>(null);
+  const unfoldWidthRef = React.useRef(0);
+  const pinSignature = pinnedItems.join('|');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure the full row when its items change
+  React.useLayoutEffect(
+    () => setPermissionFold(false),
+    [pinSignature, modelChipLabel, permissionChipLabel]
+  );
+  React.useLayoutEffect(() => {
+    if (!narrow || !showPermissionChip) {
+      if (permissionFold) setPermissionFold(false);
+      return;
+    }
+    if (permissionFold) {
+      if (cardWidth >= unfoldWidthRef.current) setPermissionFold(false);
+      return;
+    }
+    // The chips clip their text rather than overflow, so a clipped chip means the row is full.
+    const clipped = [modelChipTextRef.current, permissionChipTextRef.current].reduce(
+      (total, text) => total + (text ? Math.max(0, text.scrollWidth - text.clientWidth) : 0),
+      0
+    );
+    if (clipped > 1 && rowPins.length === NARROW_PIN_LIMIT) {
+      unfoldWidthRef.current = cardWidth + clipped;
+      setPermissionFold(true);
+    }
+  });
   const chipStyle: React.CSSProperties = {
     height: controlSize,
     minWidth: 0,
@@ -1382,7 +1413,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           style={{ ...chipStyle, ...(openMenu === 'model' && { color: token.colorText }) }}
           data-testid="model-chip"
         >
-          <Typography.Text ellipsis style={{ minWidth: 0, fontSize: 'inherit', color: 'inherit' }}>
+          <Typography.Text
+            ref={modelChipTextRef}
+            ellipsis
+            style={{ minWidth: 0, fontSize: 'inherit', color: 'inherit' }}
+          >
             {modelChipLabel}
           </Typography.Text>
         </Button>
@@ -1409,7 +1444,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           style={{ ...chipStyle, ...(openMenu === 'permissions' && { color: token.colorText }) }}
           data-testid="permission-chip"
         >
-          <Typography.Text ellipsis style={{ minWidth: 0, fontSize: 'inherit', color: 'inherit' }}>
+          <Typography.Text
+            ref={permissionChipTextRef}
+            ellipsis
+            style={{ minWidth: 0, fontSize: 'inherit', color: 'inherit' }}
+          >
             {permissionChipLabel}
           </Typography.Text>
         </Button>
