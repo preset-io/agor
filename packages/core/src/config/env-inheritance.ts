@@ -42,8 +42,12 @@ export const ALLOWED_ENV_VARS = new Set([
   // their own explicit env mapping where the execution substrate provides a
   // user-scoped agent.
 
-  // Logging controls. Keep executor log filtering aligned with the daemon.
+  // Logging controls. Keep executor log filtering and framing aligned with the
+  // daemon. NODE_NO_WARNINGS pairs with AGOR_LOG_FORMAT=json, which logs
+  // process warnings itself as one line each.
   'LOG_LEVEL',
+  'AGOR_LOG_FORMAT',
+  'NODE_NO_WARNINGS',
 
   // Explicit operator-owned Git safety policy. This is resolved from
   // security.git_config_parameters at daemon startup; it is not arbitrary
