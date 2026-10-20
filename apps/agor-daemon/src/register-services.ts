@@ -4541,8 +4541,11 @@ export async function registerMCPServices(
       redirectUri: (entry) => {
         const issuer = catalogRelayIssuer(entry);
         if (issuer && oauthRelay) return oauthRelay.redirectUri(issuer);
-        // Without the relay, only a customer app needs the direct callback shown.
-        return entry.oauth?.configured_client ? ctx.mcpOAuthCallbackUrl : undefined;
+        // The direct callback: a customer app's without the relay, or the one a
+        // provider admin allowlists (the flow itself is unchanged).
+        return entry.oauth?.configured_client || entry.oauth?.redirect_allowlist
+          ? ctx.mcpOAuthCallbackUrl
+          : undefined;
       },
       listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
       // Readiness is advisory and may not open credential material merely to

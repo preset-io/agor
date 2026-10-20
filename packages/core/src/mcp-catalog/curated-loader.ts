@@ -92,6 +92,8 @@ const catalogEntryOAuthSchema = z
       .strict()
       .optional(),
     stable_callback: z.object({ issuer: issuerUrl }).strict().optional(),
+    // Display only: readiness shows the direct callback for an admin to allowlist.
+    redirect_allowlist: z.literal(true).optional(),
     // Describes the provider, so it should almost never change. Changing or
     // removing it after grants exist makes their next refresh use the new
     // method; a provider that refuses it drops the grant and users reconnect.
@@ -135,6 +137,13 @@ const catalogEntryOAuthSchema = z
   .refine((value) => !value.configured_client || !value.stable_callback, {
     message: 'stable_callback is implied by configured_client; state only one',
   })
+  // Those two already show their own (relay) callback.
+  .refine(
+    (value) => !value.redirect_allowlist || (!value.configured_client && !value.stable_callback),
+    {
+      message: 'redirect_allowlist applies only without configured_client or stable_callback',
+    }
+  )
   // Only a client with a secret authenticates at the token endpoint, and only
   // a customer-owned app recipe brings one.
   .refine((value) => !value.token_endpoint_auth_method || value.configured_client, {
@@ -212,6 +221,8 @@ const catalogEntrySchema = z
     benefit: nonEmpty,
     starter_prompt: nonEmpty,
     permission_disclosure: nonEmpty,
+    // Provider-side setup before Connect works. Prose only, never a value.
+    setup_hint: nonEmpty.max(400).optional(),
     title: nonEmpty.optional(),
     description: nonEmpty.optional(),
     icon_url: httpUrl.optional(),

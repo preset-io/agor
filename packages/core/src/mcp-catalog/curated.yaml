@@ -814,12 +814,15 @@ unpublished:
     benefit: Give an agent the dashboards and logs it needs to explain an incident rather than speculate about one.
     starter_prompt: Show the Datadog monitors that alerted in the last day and correlate them with error logs from the same window. If none alerted, say so; don't change anything.
     permission_disclosure: Reads metrics, logs, traces, monitors, and incidents from the Datadog organisations you authorise.
+    setup_hint: A Datadog org admin must turn on MCP Access and add the callback URL below under Organization Settings → MCP → MCP OAuth Redirect URLs.
     icon_url: https://www.google.com/s2/favicons?domain=datadoghq.com&sz=64
     popularity_rank: 14
     remote_url: https://mcp.datadoghq.com/v1/mcp
     transport: streamable-http
     auth_type: oauth
     website_url: https://docs.datadoghq.com/mcp_server/setup/
+    oauth:
+      redirect_allowlist: true
 
   - name: io.incident/mcp
     title: incident.io
@@ -827,13 +830,16 @@ unpublished:
     capabilities: [incidents, alerts]
     benefit: Ask who was paged and what they did, then write the follow-up back onto the incident.
     starter_prompt: Summarise the incidents from the last week, say who was on call for each, and list the follow-ups still open. If there were none, say so; don't change anything.
-    permission_disclosure: Acts as your incident.io user to read and change incidents, alerts, escalations, on-call schedules, follow-ups, investigation and post-mortem evidence, and to declare or update incidents or acknowledge or decline pages. It can query logs, metrics, traces, and dashboards in connected observability systems. Before connecting, an incident.io admin must add this Agor deployment's callback host under Settings → MCP server → Allowed redirect domains.
+    permission_disclosure: Acts as your incident.io user to read and change incidents, alerts, escalations, on-call schedules, follow-ups, investigation and post-mortem evidence, and to declare or update incidents or acknowledge or decline pages. It can query logs, metrics, traces, and dashboards in connected observability systems.
+    setup_hint: An incident.io admin must add the host of the callback URL below under Settings → MCP server → Allowed redirect domains.
     icon_url: https://www.google.com/s2/favicons?domain=incident.io&sz=64
     popularity_rank: 54
     remote_url: https://mcp.incident.io/mcp
     transport: streamable-http
     auth_type: oauth
     website_url: https://docs.incident.io/ai/remote-mcp
+    oauth:
+      redirect_allowlist: true
 
   - name: com.firecrawl/mcp
     category: search

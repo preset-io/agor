@@ -120,6 +120,11 @@ to whatever a redirect names.
   with Basic, so a Slack/HubSpot grant issued mid-rollout can fail an old
   replica's refresh with `invalid_client` and need reconnecting. Finish the
   rollout before connecting those providers.
+- **Admin-allowlisted callbacks.** `oauth.redirect_allowlist: true` (Datadog,
+  incident.io) only makes readiness return the daemon's direct callback for the
+  drawer to show; the flow, DCR and authorize redirect are unchanged. The loader
+  refuses it with `configured_client` or `stable_callback`. An entry-level
+  `setup_hint` states the provider-side setup and is shown above Connect.
 - **GitHub** uses its documented PAT bearer route as a reviewed exception to its
   OAuth challenge; the health audit flags if its OAuth metadata becomes usable.
 - **Sign-in completion.** Connect pre-opens the provider window during user

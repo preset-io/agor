@@ -529,6 +529,23 @@ ${block}
     expect(() => parseCuratedCatalog(withOAuth(block))).toThrow(CuratedCatalogError);
   });
 
+  it('accepts redirect_allowlist alone, and refuses it with a callback-owning recipe', () => {
+    const [entry] = parseCuratedCatalog(withOAuth('      redirect_allowlist: true'));
+    expect(entry.oauth).toEqual({ redirect_allowlist: true });
+    for (const block of [
+      '      redirect_allowlist: true\n      stable_callback:\n        issuer: https://i.example',
+      `      redirect_allowlist: true
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://i.example/apps
+        issuer: https://i.example
+        secret_required: true`,
+      '      redirect_allowlist: false',
+    ]) {
+      expect(() => parseCuratedCatalog(withOAuth(block))).toThrow(CuratedCatalogError);
+    }
+  });
+
   it.each([
     'http://issuer.example.com',
     'https://user:pass@issuer.example.com',
@@ -642,10 +659,11 @@ describe('the shipped catalog', () => {
       'metrics',
       'traces',
       'dashboards',
-      'Allowed redirect domains',
     ]);
     expect(entries.find((entry) => entry.name === 'io.incident/mcp')).toMatchObject({
       website_url: 'https://docs.incident.io/ai/remote-mcp',
+      setup_hint: expect.stringContaining('Allowed redirect domains'),
+      oauth: { redirect_allowlist: true },
     });
   });
 
@@ -848,7 +866,9 @@ describe('the shipped catalog', () => {
       auth_type: 'oauth',
     });
     expect(datadog?.credentials).toBeUndefined();
-    expect(datadog?.oauth).toBeUndefined();
+    // Display only: the drawer shows the direct callback; the flow is unchanged.
+    expect(datadog?.oauth).toEqual({ redirect_allowlist: true });
+    expect(datadog?.setup_hint).toContain('MCP OAuth Redirect URLs');
   });
 
   it('does not advertise OAuth endpoints that cannot reach a safely bound client-registration boundary', async () => {

@@ -168,6 +168,8 @@ export interface MCPCatalogEntry {
   starter_prompt: string;
   /** Plain-language statement of what connecting grants access to. */
   permission_disclosure: string;
+  /** Short provider-side setup someone must do before Connect works, shown above it. */
+  setup_hint?: string;
   icon_url?: string;
   /** 1 = most popular. Absent sorts last. */
   popularity_rank?: number;
@@ -302,6 +304,12 @@ export interface MCPCatalogEntryOAuth {
    * callback is used.
    */
   stable_callback?: { issuer: string };
+  /**
+   * A provider whose admin allowlists redirect URIs, for a flow that uses the
+   * daemon's direct callback. Changes nothing in the flow; readiness returns
+   * that callback so the drawer can show what to allowlist.
+   */
+  redirect_allowlist?: true;
   /**
    * How a confidential client authenticates at the token endpoint, for both
    * the code exchange and every refresh of an install of this entry.

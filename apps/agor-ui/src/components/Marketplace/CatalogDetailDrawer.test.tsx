@@ -234,6 +234,22 @@ describe('CatalogDetailDrawer consent', () => {
   });
 });
 
+describe('CatalogDetailDrawer provider setup', () => {
+  it('shows the setup hint and the direct callback to allowlist before Connect', () => {
+    const callback = 'https://agor.example/mcp-servers/oauth-callback';
+    renderDrawer(
+      {
+        ...OAUTH_LINEAR,
+        setup_hint: 'An org admin must allowlist the callback URL below.',
+        oauth: { redirect_allowlist: true },
+      } as MCPCatalogEntry,
+      { readiness: { catalog_key: LINEAR.name, state: 'oauth_required', redirect_uri: callback } }
+    );
+    expect(screen.getByText('An org admin must allowlist the callback URL below.')).toBeVisible();
+    expect(screen.getByText(callback)).toBeVisible();
+  });
+});
+
 describe('CatalogDetailDrawer OAuth activation', () => {
   const renderOAuth = (
     onConnect = vi.fn(),

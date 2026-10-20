@@ -71,8 +71,12 @@ export class MCPCatalogReadinessService {
     const candidates = inventory.filter(({ server }) =>
       sharing === 'shared' ? !server.owner_user_id : server.owner_user_id === userId
     );
-    // A customer app's callback, or an allowlisted DCR provider's stable one.
-    const redirectUri = catalogRelayIssuer(entry) ? this.deps.redirectUri?.(entry) : undefined;
+    // A customer app's callback, an allowlisted DCR provider's stable one, or
+    // the direct callback a provider admin allowlists.
+    const redirectUri =
+      catalogRelayIssuer(entry) || entry.oauth?.redirect_allowlist
+        ? this.deps.redirectUri?.(entry)
+        : undefined;
     const setup = redirectUri ? { redirect_uri: redirectUri } : {};
     const knownOAuthInstall = candidates.some(
       ({ server }) =>

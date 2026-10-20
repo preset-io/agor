@@ -942,8 +942,11 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   </Form.Item>
                 </Form>
               )}
+              {entry.setup_hint && (
+                <Paragraph style={{ marginBottom: 0 }}>{entry.setup_hint}</Paragraph>
+              )}
               {!appForm &&
-                entry.oauth?.stable_callback &&
+                (entry.oauth?.stable_callback || entry.oauth?.redirect_allowlist) &&
                 readiness?.redirect_uri &&
                 readiness.catalog_key === entryId && (
                   <Form layout="vertical">

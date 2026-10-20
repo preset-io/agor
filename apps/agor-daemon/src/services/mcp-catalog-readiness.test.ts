@@ -124,6 +124,15 @@ describe('MCPCatalogReadinessService', () => {
     expect(redirectUri).not.toHaveBeenCalled();
   });
 
+  it('shows the direct callback for a redirect_allowlist entry', async () => {
+    const redirectUri = vi.fn(() => 'https://agor.example/mcp-servers/oauth-callback');
+    const allowlist = { ...ENTRY, oauth: { redirect_allowlist: true as const } };
+    await expect(
+      build([], allowlist, redirectUri).service.get(ENTRY.name, PARAMS)
+    ).resolves.toMatchObject({ redirect_uri: 'https://agor.example/mcp-servers/oauth-callback' });
+    expect(redirectUri).toHaveBeenCalledWith(allowlist);
+  });
+
   it('reports reusable OAuth without returning peer or grant metadata', async () => {
     const built = build([peer()]);
     const result = await built.service.get(ENTRY.name, PARAMS);
