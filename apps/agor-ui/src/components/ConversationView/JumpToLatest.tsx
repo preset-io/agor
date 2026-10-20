@@ -7,16 +7,8 @@ import { ArrowDownOutlined } from '@ant-design/icons';
 import { Button, Flex, Typography, theme } from 'antd';
 import { useRef } from 'react';
 import { useIsTouchInput } from '../../hooks/useCanHover';
+import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
-
-const SR_ONLY = {
-  position: 'absolute',
-  width: 1,
-  height: 1,
-  overflow: 'hidden',
-  clipPath: 'inset(50%)',
-  whiteSpace: 'nowrap',
-} as const;
 
 const hasText = (content: Message['content'] | string) =>
   typeof content === 'string'
@@ -93,7 +85,7 @@ export function JumpToLatest({ count, onJump }: { count: number; onJump: () => v
           </Typography.Text>
         )}
       </Button>
-      <span role="status" style={SR_ONLY}>
+      <span role="status" style={VISUALLY_HIDDEN_STYLE}>
         {count > 0 ? `${count} new ${count === 1 ? 'message' : 'messages'}` : ''}
       </span>
     </Flex>
