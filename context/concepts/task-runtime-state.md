@@ -522,6 +522,27 @@ The evidence is passed only to that settlement call, not persisted or replayed;
 existing analytics enablement, exclusions, tenant attribution, and best-effort
 delivery still apply. Task status and user-stop precedence are unchanged.
 
+All `task.completed` events also carry a closed runtime projection:
+`failure_reason`, `termination_cause`, `sdk_failure_reason`, `termination_state`,
+`watchdog_action`, `sdk_elapsed_ms`, `executor_mode`, and `executor_connected`.
+Unrecognized/missing diagnostic fields are null. Failed turns without structured
+causal evidence use `failure_reason: "unknown"`; arbitrary provider errors are
+not parsed. Timeout uses `timed_out`. An enforced SDK-health termination may use
+its bounded SDK reason; an observe-only watchdog signal is diagnostic context,
+not proof it caused a failure. Success and ordinary user Stop have null failure
+reason. Confirmed helper OOM evidence overrides the reason without changing status.
+
+A winning unverified containment settlement emits `task.termination_unverified`
+with the same closed runtime fields and `failure_reason: "termination_unverified"`,
+not `task.completed`: the task remains stopping and nonpromptable. A distinct
+explicit cleanup retry may emit another outcome. Losing/stale settlement results
+emit neither event. Both use the existing disabled-by-default operator pipeline,
+`task.*` exclusions, Task creator attribution, and trusted ambient tenant context.
+No prompts, error messages, pulse details, SDK versions, helper diagnostics,
+coordination tokens, or provider response objects are added to these properties.
+These are best-effort task-outcome signals, not an audit log of every provider
+subcall or a backfill of earlier failures. No lifecycle or containment policy changes.
+
 `TaskRepository.beginCleanupAttempt` records one attempt under the existing
 coordination token before external effects. The marker survives cause changes,
 lease expiry and daemon restart: replacement coordinators settle an uncertain

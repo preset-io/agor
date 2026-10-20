@@ -190,6 +190,33 @@ describe('TasksService analytics lifecycle events', () => {
     expect(sessionsService.emit).toHaveBeenCalledTimes(1);
     expect(sessionsService.triggerQueueProcessing).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    [TaskStatus.FAILED, 'unknown'],
+    [TaskStatus.TIMED_OUT, 'timed_out'],
+    [TaskStatus.COMPLETED, null],
+    [TaskStatus.STOPPED, null],
+  ] as const)(
+    'classifies ordinary %s terminal patches without exporting error prose',
+    async (status, reason) => {
+      const track = vi.fn();
+      setAnalyticsLoggerForTests({ isEnabled: () => true, track });
+      const running = makeTask({ status: TaskStatus.RUNNING });
+      const terminal = makeTask({ status, error_message: 'PRIVATE provider response and token' });
+      const { service } = makeService({
+        findById: vi.fn().mockResolvedValue(running),
+        update: vi.fn().mockResolvedValue(terminal),
+      });
+      Reflect.set(service, 'processTerminalTaskTransition', vi.fn());
+      await service.patch(running.task_id, { status });
+      expect(track).toHaveBeenCalledExactlyOnceWith(
+        'task.completed',
+        expect.objectContaining({ status, failure_reason: reason }),
+        { userId: terminal.created_by }
+      );
+      expect(JSON.stringify(track.mock.calls)).not.toMatch(/PRIVATE|full_prompt/);
+    }
+  );
 });
 
 describe('TasksService structured cleanup completion analytics', () => {
@@ -283,6 +310,14 @@ describe('TasksService structured cleanup completion analytics', () => {
         context_window_limit: null,
         context_window_percentage: null,
         has_error: true,
+        failure_reason: 'unknown',
+        termination_cause: null,
+        sdk_failure_reason: null,
+        termination_state: null,
+        watchdog_action: null,
+        sdk_elapsed_ms: null,
+        executor_mode: null,
+        executor_connected: false,
         ...fields,
       },
       { userId: settledTask.created_by }
@@ -294,7 +329,7 @@ describe('TasksService structured cleanup completion analytics', () => {
     // Evidence is per-call, never cached on the service or recovered from prose.
     track.mockClear();
     await service.settleTermination(input);
-    expect(track.mock.calls[0][1]).not.toHaveProperty('failure_reason');
+    expect(track.mock.calls[0][1]).toHaveProperty('failure_reason', 'unknown');
     expect(track.mock.calls[0][1]).not.toHaveProperty('memory_limit_bytes');
   });
 
@@ -310,7 +345,21 @@ describe('TasksService structured cleanup completion analytics', () => {
         coordinationToken: 'private-token',
         cleanupResult: evidence,
       });
-      expect(track).not.toHaveBeenCalled();
+      expect(track).not.toHaveBeenCalledWith(
+        'task.completed',
+        expect.anything(),
+        expect.anything()
+      );
+      if (outcome === 'unverified') {
+        expect(track).toHaveBeenCalledExactlyOnceWith(
+          'task.termination_unverified',
+          expect.objectContaining({ failure_reason: 'termination_unverified' }),
+          { userId: settledTask.created_by }
+        );
+        expect(track.mock.calls[0][1]).not.toHaveProperty('memory_limit_bytes');
+      } else {
+        expect(track).not.toHaveBeenCalled();
+      }
     }
   );
 
@@ -325,7 +374,7 @@ describe('TasksService structured cleanup completion analytics', () => {
       cleanupResult: evidence,
     });
     expect(track).toHaveBeenCalledOnce();
-    expect(track.mock.calls[0][1]).not.toHaveProperty('failure_reason');
+    expect(track.mock.calls[0][1]).toHaveProperty('failure_reason', 'unknown');
     expect(track.mock.calls[0][1]).not.toHaveProperty('memory_limit_bytes');
   });
 

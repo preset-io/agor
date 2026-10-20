@@ -15,7 +15,6 @@ import type {
   TaskTerminationCoordinationClaimResult,
   TerminationClaimInput,
   TerminationClaimResult,
-  TerminationSettlementInput,
   TerminationSettlementResult,
 } from '@agor/core/db';
 import type { ExpressApplication, Service } from '@agor/core/feathers';
@@ -245,7 +244,7 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     params?: FeathersParams
   ): Promise<Task | null>;
   settleTermination(
-    input: TerminationSettlementInput,
+    input: Parameters<import('./services/tasks.js').TasksService['settleTermination']>[0],
     params?: FeathersParams
   ): Promise<TerminationSettlementResult>;
 }

@@ -106,6 +106,7 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
+import { taskFailureAnalytics } from '../utils/task-failure-analytics.js';
 import { deferWithTenantContext, withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 import type { SessionParams, SessionsService } from './sessions';
 
@@ -589,6 +590,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         context_window_limit: normalized?.contextWindowLimit ?? null,
         context_window_percentage: normalized?.contextUsageSnapshot?.percentage ?? null,
         has_error: Boolean(task.error_message),
+        ...taskFailureAnalytics(task),
         ...(oomKilled ? { failure_reason: 'oom_killed' } : {}),
         ...(oomKilled &&
         typeof memoryLimitBytes === 'number' &&
@@ -756,7 +758,20 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         id: result.task.task_id,
         params,
       });
-      if (result.outcome === 'unverified') return;
+      if (result.outcome === 'unverified') {
+        // Failure to contain is not completion: the task is still stopping.
+        // Emit only after the winning fenced write and tenant-bound publication.
+        analyticsLogger.track(
+          'task.termination_unverified',
+          {
+            ...this.baseTaskAnalyticsProperties(result.task),
+            ...taskFailureAnalytics(result.task),
+            failure_reason: 'termination_unverified',
+          },
+          { userId: result.task.created_by }
+        );
+        return;
+      }
 
       this.trackTaskCompleted(
         result.task,

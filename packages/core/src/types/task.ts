@@ -30,7 +30,8 @@ export type TaskLaunchFields = Pick<
   'message_range' | 'git_state' | 'started_at' | 'executor_mode' | 'sdk_watchdog_mode'
 > & { status: typeof TaskStatus.DISPATCHING };
 
-export type ExecutorMode = 'local' | 'templated';
+export const EXECUTOR_MODES = ['local', 'templated'] as const;
+export type ExecutorMode = (typeof EXECUTOR_MODES)[number];
 
 export const ExecutorPulseKind = {
   SDK_STARTED: 'sdk_started',
@@ -62,13 +63,23 @@ export const SDK_WATCHDOG_FAILURE_REASONS = [
 
 export type SdkWatchdogFailureReason = (typeof SDK_WATCHDOG_FAILURE_REASONS)[number];
 
-export type SdkFailureReason =
-  | 'startup_timeout'
-  | SdkWatchdogFailureReason
-  | 'heartbeat_lost'
-  | 'executor_interrupted'
-  | 'termination_unverified'
-  | 'launch_refused';
+export const SDK_FAILURE_REASONS = [
+  'startup_timeout',
+  ...SDK_WATCHDOG_FAILURE_REASONS,
+  'heartbeat_lost',
+  'executor_interrupted',
+  'termination_unverified',
+  'launch_refused',
+] as const;
+export type SdkFailureReason = (typeof SDK_FAILURE_REASONS)[number];
+
+export const SDK_TERMINATION_STATES = [
+  'not_requested',
+  'requested',
+  'verified',
+  'unverified',
+] as const;
+export const SDK_WATCHDOG_ACTIONS = ['would_fire', 'enforced'] as const;
 
 /**
  * Reserved exit code (sysexits `EX_TEMPFAIL`) of a templated launcher that
@@ -83,10 +94,10 @@ export interface SdkFailure {
   tool: PersistedAgenticToolName;
   last_pulse?: ExecutorPulse;
   elapsed_ms?: number;
-  watchdog_action?: 'would_fire' | 'enforced';
+  watchdog_action?: (typeof SDK_WATCHDOG_ACTIONS)[number];
   unknown_event_count?: number;
   sdk_version?: string;
-  termination: 'not_requested' | 'requested' | 'verified' | 'unverified';
+  termination: (typeof SDK_TERMINATION_STATES)[number];
 }
 
 export type SdkHealthFailureInput = Pick<
