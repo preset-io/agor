@@ -342,15 +342,22 @@ it.each([390, 220])(
     await wheelToComposer();
     await userEvent.fill(composer, 'First line\nSecond line\nThird line');
     await waitFor(() => expect(composer.clientHeight).toBeGreaterThan(60));
-    // Keyboard: the composer is the next stop after the queue's last control.
+    // Keyboard: after the queue's last control come the status row's controls
+    // (Stop and the info), then the composer, in visual order.
     // (Phones fold the queue while the text field has focus, so it unfolds
     // again once focus leaves the composer.)
     act(() => composer.blur());
     const lastRemove = await screen.findByRole('button', {
       name: 'Remove from queue, message 30',
     });
+    const statusRow = screen.getByTestId('composer-status-row');
     act(() => lastRemove.focus());
-    await userEvent.keyboard('{Tab}');
+    for (let stop = 0; stop < 10 && document.activeElement !== composer; stop++) {
+      await userEvent.keyboard('{Tab}');
+      if (document.activeElement !== composer) {
+        expect(statusRow).toContainElement(document.activeElement as HTMLElement);
+      }
+    }
     expect(composer).toHaveFocus();
     expect(composer).toHaveValue('First line\nSecond line\nThird line');
     await waitFor(() => {
