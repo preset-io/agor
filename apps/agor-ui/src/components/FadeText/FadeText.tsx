@@ -79,8 +79,10 @@ export function FadeText({
   useLayoutEffect(() => {
     if (!node) return;
     const measure = () => {
-      setOverflowing(isClipped(node, lines));
-      setRtl(getComputedStyle(node).direction === 'rtl');
+      const clipped = isClipped(node, lines);
+      setOverflowing(clipped);
+      // Only a clipped label needs its direction, and fitting labels skip the style read.
+      if (clipped) setRtl(getComputedStyle(node).direction === 'rtl');
     };
     measure();
     return observeSize(node, measure);
