@@ -89,6 +89,7 @@ beforeEach(() => {
 
 afterEach(() => {
   agorStore.getState().reset();
+  vi.restoreAllMocks();
 });
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -145,6 +146,24 @@ describe('SessionPanel inline title edit', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
 
     expect(onUpdateSession).toHaveBeenCalledWith('session-1', { title: 'My renamed session' });
+  });
+
+  it('leaves out the hover pencil on touch, where tapping the title still renames', () => {
+    vi.spyOn(window, 'matchMedia').mockImplementation(
+      (query: string) =>
+        ({
+          matches: query === '(hover: none)',
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }) as unknown as MediaQueryList
+    );
+    renderPanel(makeSession());
+
+    const title = screen.getByText('Untitled session').closest('button')!;
+    expect(title.querySelector('.anticon-edit')).toBeNull();
+    fireEvent.click(title);
+    expect(screen.getByPlaceholderText('Untitled session')).toBeInTheDocument();
   });
 
   it('Escape cancels without saving', () => {

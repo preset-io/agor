@@ -393,6 +393,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 }) => {
   const { token } = theme.useToken();
   const isMobileShell = useIsMobileViewport();
+  const touchInput = useIsTouchInput();
   // 44px touch targets for the header controls on the mobile full-screen shell.
   const mobileHeaderButtonStyle: React.CSSProperties | undefined = isMobileShell
     ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
@@ -1671,15 +1672,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                         ? getSessionDisplayTitle(session, { includeAgentFallback: false })
                         : 'Untitled session'}
                     </FadeText>
-                    <EditOutlined
-                      style={{
-                        fontSize: 12,
-                        color: token.colorTextTertiary,
-                        opacity: titleHovered ? 1 : 0,
-                        transition: 'opacity 0.15s',
-                        flexShrink: 0,
-                      }}
-                    />
+                    {/* Hover-only hint; touch renames by tapping the title. */}
+                    {!touchInput && (
+                      <EditOutlined
+                        style={{
+                          fontSize: 12,
+                          color: token.colorTextTertiary,
+                          opacity: titleHovered ? 1 : 0,
+                          transition: 'opacity 0.15s',
+                          flexShrink: 0,
+                        }}
+                      />
+                    )}
                   </button>
                 </Tooltip>
               )}
