@@ -1,0 +1,176 @@
+/* Home-page quote section (SocialProofBand.tsx), per design handoff 4f:
+ * label, then up to two quotes side by side with a gradient divider. */
+.section {
+  --sp-text: #e8f3f1;
+  --sp-muted: #8fa8a4;
+  --sp-teal: #34e2c4;
+  --sp-blue: #5fd3f3;
+
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 96px;
+  color: var(--sp-text);
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0;
+  color: var(--sp-muted);
+  font:
+    500 13px / 1.4 var(--font-mono-label),
+    "JetBrains Mono",
+    ui-monospace,
+    monospace;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+
+.labelRule {
+  flex: none;
+  width: 40px;
+  height: 1px;
+  background: var(--sp-teal);
+}
+
+/* Beats the site-wide link color. */
+.label a {
+  color: var(--sp-teal);
+  text-decoration: underline;
+  text-decoration-color: rgba(52, 226, 196, 0.5);
+  text-underline-offset: 4px;
+  transition: color 0.15s;
+}
+
+.label a:hover {
+  color: var(--sp-blue);
+}
+
+/* Table layout sizes each column to its content, so the longer quote gets
+ * more width and both end up with a similar number of lines. */
+.row {
+  display: table;
+  width: 100%;
+  table-layout: auto;
+}
+
+.cell {
+  display: table-cell;
+  vertical-align: top;
+}
+
+.cell:first-child {
+  padding-right: 48px;
+}
+
+.divider + .cell {
+  padding-left: 48px;
+}
+
+.divider {
+  display: table-cell;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(52, 226, 196, 0.45) 30%,
+    rgba(95, 211, 243, 0.45) 70%,
+    transparent
+  );
+}
+
+.quote {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 0;
+}
+
+.mark {
+  flex: none;
+  /* A classic serif curly quote. */
+  font:
+    400 104px / 0.8 Georgia,
+    "Times New Roman",
+    serif;
+  opacity: 0.2;
+}
+
+.toneTeal .mark {
+  color: var(--sp-teal);
+}
+
+.toneBlue .mark {
+  color: var(--sp-blue);
+}
+
+.text {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 200;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+  text-wrap: pretty;
+}
+
+/* Emphasis: bold and larger; line-height 1 keeps lines even. */
+.em {
+  font-size: 38px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.emGradient {
+  background: linear-gradient(90deg, var(--sp-teal), var(--sp-blue));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.emBlue {
+  color: var(--sp-blue);
+}
+
+@media (max-width: 900px) {
+  .section {
+    padding: 64px 24px;
+  }
+
+  /* Stacked: no divider, just space between the quotes. */
+  .row,
+  .cell {
+    display: block;
+  }
+
+  .cell:first-child,
+  .divider + .cell {
+    padding: 0;
+  }
+
+  .divider {
+    display: none;
+  }
+
+  .divider + .cell {
+    margin-top: 40px;
+  }
+
+  .text {
+    font-size: 24px;
+  }
+
+  .em {
+    font-size: 30px;
+  }
+
+  .mark {
+    font-size: 80px;
+  }
+}

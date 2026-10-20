@@ -707,3 +707,53 @@ describe('managed Claude long-task expiry guidance', () => {
     ).toBeUndefined();
   });
 });
+
+describe('Claude failure reporting contract', () => {
+  it.each(['Not logged in. Please run /login SECRET', 'Invalid API key SECRET'])(
+    'does not promote provider text to a credential-preflight marker: %s',
+    async (text) => {
+      const { sanitizeClaudeExecutionError } = await import(
+        '../../sdk-handlers/claude/claude-error.js'
+      );
+      const failure = sanitizeClaudeExecutionError(new Error(text));
+      const create = vi.fn().mockResolvedValue(undefined);
+      const patch = vi.fn().mockResolvedValue(undefined);
+      const client = {
+        service: (name: string) =>
+          name === 'messages' ? { find: vi.fn().mockResolvedValue([]), create } : { patch },
+      } as never;
+      await settleTaskFailure(client, 'session-1' as never, 'task-1' as never, failure, {
+        status: 'failed',
+        error_message: failure.message,
+      });
+      expect(create.mock.calls[0][0].metadata).toEqual({ is_task_failure: true });
+      expect(patch.mock.calls[0][1].error_message).toBe(failure.message);
+      expect(
+        JSON.stringify({ messages: create.mock.calls, tasks: patch.mock.calls })
+      ).not.toContain('SECRET');
+      expect(isTaskFailurePersisted(failure)).toBe(true);
+    }
+  );
+
+  it('does not reinterpret SDK process codes as database errors during settlement', async () => {
+    const { sanitizeClaudeExecutionError } = await import(
+      '../../sdk-handlers/claude/claude-error.js'
+    );
+    const failure = sanitizeClaudeExecutionError(
+      Object.assign(new Error('SECRET'), { errorClass: 'spawn_failed', code: 'EPERM' })
+    );
+    const create = vi.fn().mockResolvedValue(undefined);
+    const patch = vi.fn().mockResolvedValue(undefined);
+    const client = {
+      service: (name: string) =>
+        name === 'messages' ? { find: vi.fn().mockResolvedValue([]), create } : { patch },
+    } as never;
+    await settleTaskFailure(client, 'session-1' as never, 'task-1' as never, failure, {
+      status: 'failed',
+      error_message: failure.message,
+    });
+    expect(create.mock.calls[0][0].content).toBe(failure.message);
+    expect(patch.mock.calls[0][1].error_message).toBe(failure.message);
+    expect(failure.message).not.toContain('Database');
+  });
+});

@@ -1,4 +1,5 @@
 import { generateId, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
+import type { SDKSystemMessage } from '@agor/core/sdk';
 import type { Message, MessageID, SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessagesService } from '../base/index.js';
@@ -121,6 +122,57 @@ describe('SDKMessageProcessor result logging', () => {
     expect(JSON.stringify(message)).not.toContain('Credit balance is too low');
     expect(message.metadata?.is_zero_turn_result).toBe(true);
   });
+});
+
+describe('SDKMessageProcessor command discovery', () => {
+  it('removes runtime-tagged terminal commands from both command and skill inventories', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'init',
+        slash_commands: ['compact', 'doctor', 'exit', 'future-terminal', 'plugin:doctor'],
+        terminal_slash_commands: ['doctor', 'exit', 'future-terminal'],
+        skills: ['doctor', 'plugin:doctor'],
+      } satisfies Pick<
+        SDKSystemMessage,
+        'subtype' | 'slash_commands' | 'terminal_slash_commands' | 'skills'
+      >)
+    );
+    expect(events).toEqual([
+      {
+        type: 'slash_commands_discovered',
+        slashCommands: ['compact', 'plugin:doctor'],
+        skills: ['plugin:doctor'],
+        agentSessionId: undefined,
+      },
+    ]);
+  });
+
+  it.each([undefined, []])(
+    'preserves SDK-supported commands when terminal metadata is %j',
+    async (terminalCommands) => {
+      const processor = createProcessor();
+      const events = await processor.process(
+        systemMsg({
+          subtype: 'init',
+          slash_commands: ['compact', 'clear', 'context', 'usage', 'config', 'custom-command'],
+          terminal_slash_commands: terminalCommands,
+          skills: ['custom-command'],
+        } satisfies Pick<
+          SDKSystemMessage,
+          'subtype' | 'slash_commands' | 'terminal_slash_commands' | 'skills'
+        >)
+      );
+      expect(events).toEqual([
+        {
+          type: 'slash_commands_discovered',
+          slashCommands: ['compact', 'clear', 'context', 'usage', 'config', 'custom-command'],
+          skills: ['custom-command'],
+          agentSessionId: undefined,
+        },
+      ]);
+    }
+  );
 });
 
 describe('SDKMessageProcessor system event suppression', () => {

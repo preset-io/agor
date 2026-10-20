@@ -118,8 +118,12 @@ export interface DiscordSetupDecisions {
   guildId: string;
   /** Explicit operator acknowledgement of the privileged Message Content intent. */
   messageContentAcknowledged: boolean;
-  /** The first entry is the required parent channel for the setup. */
+  /** Listed parent channels; at least one unless `allowAllPublicChannels` is set. */
   allowedChannelIds: string[];
+  /** Opt in to every public text or forum channel in the guild. */
+  allowAllPublicChannels?: boolean;
+  /** Channels excluded under `allowAllPublicChannels`. */
+  deniedChannelIds?: string[];
   allowedUserIds?: string[];
   allowedRoleIds?: string[];
   agorUserId?: string | null;
@@ -187,6 +191,9 @@ export function buildDiscordSetupArtifact(decisions: DiscordSetupDecisions): Dis
     application_id: decisions.applicationId,
     guild_id: decisions.guildId,
     allowed_channel_ids: decisions.allowedChannelIds,
+    // Always written, so turning the mode off in an edit replaces the stored values.
+    allow_all_public_channels: decisions.allowAllPublicChannels ?? false,
+    denied_channel_ids: decisions.deniedChannelIds ?? [],
     allowed_user_ids: decisions.allowedUserIds ?? [],
     allowed_role_ids: decisions.allowedRoleIds ?? [],
     message_content_enabled: decisions.messageContentAcknowledged,
@@ -211,7 +218,9 @@ export function buildDiscordSetupArtifact(decisions: DiscordSetupDecisions): Dis
       guidance: [
         'Create an application and bot, then copy the Application ID and target Guild ID.',
         `Enable Gateway Intents: ${DISCORD_REQUIRED_GATEWAY_INTENTS.join(', ')} (Message Content is privileged).`,
-        'Invite the bot only to the target guild and the configured public parent channel.',
+        decisions.allowAllPublicChannels
+          ? 'Invite the bot only to the target guild. It answers in every public channel its role can see, except denied ones; keep it out of private channels it must not read.'
+          : 'Invite the bot only to the target guild and the configured public parent channel.',
       ],
     },
     permissions: {

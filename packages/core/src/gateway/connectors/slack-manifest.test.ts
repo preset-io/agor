@@ -309,7 +309,7 @@ describe('requiredBotEvents', () => {
     expect(requiredBotEvents(baseOptions)).toEqual(['message.im']);
   });
 
-  it('any channel-like surface adds app_mention (and no message.channels/groups/mpim)', () => {
+  it('each channel-like surface adds only mentions, not broad message subscriptions', () => {
     expect(requiredBotEvents(withOptions({ publicChannels: true }))).toEqual([
       'app_mention',
       'message.im',

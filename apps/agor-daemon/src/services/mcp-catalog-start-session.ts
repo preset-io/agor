@@ -90,7 +90,9 @@ export function createMCPCatalogStartSessionService(
           title: catalogDisplayName(entry),
           mcpServerIds: [server.mcp_server_id],
         },
-        params
+        // Attach the connected server without making it the complete selection:
+        // the session keeps implicit global servers, as before.
+        { ...params, _mcpSelectionExplicit: false }
       )) as Session;
       return { session, starter_prompt: entry.starter_prompt };
     },

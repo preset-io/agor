@@ -1,6 +1,9 @@
 import type dns from 'node:dns';
+import { EventEmitter } from 'node:events';
 import http from 'node:http';
+import https from 'node:https';
 import type { AddressInfo } from 'node:net';
+import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const lookupMock = vi.hoisted(() => vi.fn());
@@ -9,7 +12,10 @@ vi.mock('node:dns/promises', () => ({ lookup: lookupMock }));
 
 import { fetchOAuthToken } from '../tools/mcp/oauth-auth';
 import {
+  assertSafeOutboundUrl,
+  configurePrivateOutboundDestinations,
   createPinnedLookup,
+  OutboundPreDispatchAuthorityError,
   safeOutboundFetch,
   UnsafeOutboundUrlError,
 } from './safe-outbound-fetch';
@@ -158,5 +164,124 @@ describe('safe outbound connection-time DNS policy', () => {
     lookupMock.mockRejectedValue(error);
 
     await expect(safeOutboundFetch('https://resolver-error.example/token')).rejects.toBe(error);
+  });
+});
+
+describe('operator-pinned private outbound destinations', () => {
+  const ALLOWED_HOST = 'internal-api.example.internal';
+  const answers: Record<string, Array<{ address: string; family: number }>> = {};
+  const resolveDns = vi.fn(async (hostname: string) => answers[hostname] ?? []);
+
+  beforeEach(() => {
+    for (const key of Object.keys(answers)) delete answers[key];
+    resolveDns.mockClear();
+    configurePrivateOutboundDestinations([{ host: ALLOWED_HOST, cidrs: ['10.200.0.0/24'] }]);
+  });
+
+  afterEach(() => {
+    configurePrivateOutboundDestinations([]);
+    vi.restoreAllMocks();
+  });
+
+  it('allows a listed HTTPS host whose every address is inside its CIDRs', async () => {
+    answers[ALLOWED_HOST] = [
+      { address: '10.200.0.5', family: 4 },
+      { address: '10.200.0.6', family: 4 },
+    ];
+
+    await expect(
+      assertSafeOutboundUrl(`https://${ALLOWED_HOST}/token`, { resolveDns })
+    ).resolves.toBeUndefined();
+
+    // The full request path passes DNS validation and reaches the pre-dispatch
+    // fence; throwing there proves no socket was needed to show admission.
+    const fence = new Error('stop before dispatch');
+    await expect(
+      safeOutboundFetch(`https://${ALLOWED_HOST.toUpperCase()}/token`, {
+        resolveDns,
+        assertCurrent: () => {
+          throw fence;
+        },
+      })
+    ).rejects.toBeInstanceOf(OutboundPreDispatchAuthorityError);
+  });
+
+  it.each([
+    ['a public address', '93.184.216.34', 4],
+    ['a different private range', '10.201.0.5', 4],
+    ['an IPv6 address', '2606:2800:220:1:248:1893:25c8:1946', 6],
+  ] as const)('rejects the listed host when one answer is %s', async (_label, address, family) => {
+    answers[ALLOWED_HOST] = [
+      { address: '10.200.0.5', family: 4 },
+      { address, family },
+    ];
+
+    await expect(
+      assertSafeOutboundUrl(`https://${ALLOWED_HOST}/token`, { resolveDns })
+    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+  });
+
+  it('rejects an unlisted host that resolves into an allowed CIDR', async () => {
+    answers['other.example.internal'] = [{ address: '10.200.0.5', family: 4 }];
+
+    await expect(
+      assertSafeOutboundUrl('https://other.example.internal/token', { resolveDns })
+    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+  });
+
+  it('rejects plain HTTP to a listed host', async () => {
+    answers[ALLOWED_HOST] = [{ address: '10.200.0.5', family: 4 }];
+
+    await expect(
+      assertSafeOutboundUrl(`http://${ALLOWED_HOST}/token`, { resolveDns })
+    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+    expect(resolveDns).not.toHaveBeenCalled();
+  });
+
+  it('refuses a redirect from a listed host to an unlisted private host', async () => {
+    answers[ALLOWED_HOST] = [{ address: '10.200.0.5', family: 4 }];
+    answers['unlisted.example.internal'] = [{ address: '10.200.0.9', family: 4 }];
+    const requestSpy = vi.spyOn(https, 'request').mockImplementation(((
+      _url: URL,
+      _options: https.RequestOptions,
+      callback: (response: http.IncomingMessage) => void
+    ) => {
+      const request = Object.assign(new EventEmitter(), {
+        write: () => true,
+        destroy: () => request,
+        end: () => {
+          const response = Object.assign(Readable.from([]), {
+            statusCode: 302,
+            statusMessage: 'Found',
+            headers: { location: 'https://unlisted.example.internal/next' },
+          });
+          callback(response as unknown as http.IncomingMessage);
+          return request;
+        },
+      });
+      return request as unknown as http.ClientRequest;
+    }) as unknown as typeof https.request);
+
+    await expect(
+      safeOutboundFetch(`https://${ALLOWED_HOST}/start`, { resolveDns, redirect: 'follow' })
+    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    expect(resolveDns).toHaveBeenCalledWith('unlisted.example.internal', {
+      all: true,
+      verbatim: true,
+    });
+  });
+
+  it('keeps blocking private answers when no destinations are configured', async () => {
+    configurePrivateOutboundDestinations([]);
+    answers[ALLOWED_HOST] = [{ address: '10.200.0.5', family: 4 }];
+    answers['public.example.com'] = [{ address: '93.184.216.34', family: 4 }];
+
+    await expect(
+      assertSafeOutboundUrl(`https://${ALLOWED_HOST}/token`, { resolveDns })
+    ).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
+    await expect(
+      assertSafeOutboundUrl('https://public.example.com/token', { resolveDns })
+    ).resolves.toBeUndefined();
   });
 });

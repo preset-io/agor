@@ -102,7 +102,7 @@ function client(policy = 'allow_private_only', canConfigure = true) {
 
 function renderTab(
   value: MCPMarketplaceOverview = overview,
-  options: { policy?: string; canConfigure?: boolean } = {}
+  options: { policy?: string; canConfigure?: boolean; role?: string } = {}
 ) {
   const mocked = client(options.policy, options.canConfigure);
   const refresh = vi.fn(async () => undefined);
@@ -112,7 +112,7 @@ function renderTab(
       connected
       connecting={false}
       authGeneration={1}
-      currentUser={{ user_id: 'alice', role: 'member' } as never}
+      currentUser={{ user_id: 'alice', role: options.role ?? 'member' } as never}
       overview={value}
       loading={false}
       error={null}
@@ -1023,6 +1023,68 @@ describe('Marketplace server inventory and settings', () => {
     expect(screen.getByRole('button', { name: 'Remove GitHub server' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Refresh tools' })).toBeEnabled();
   });
+
+  const sharedOverview: MCPMarketplaceOverview = {
+    ...overview,
+    servers: [{ ...overview.servers[0], shared: true }],
+  };
+
+  it('tags a Shared server and lets a member manage it under allow_crud', async () => {
+    renderTab(sharedOverview, { policy: 'allow_crud' });
+    expect(screen.getByText('Shared')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+    const remove = await screen.findByRole('button', { name: 'Remove GitHub server' });
+    await waitFor(() => expect(remove).toBeEnabled());
+    expect(screen.getByRole('switch', { name: 'GitHub: issues.create on' })).toBeEnabled();
+  });
+
+  it('does not treat a Shared server as the member own under allow_private_only', async () => {
+    renderTab(sharedOverview, { policy: 'allow_private_only' });
+    fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+    const tool = await screen.findByRole('switch', { name: 'GitHub: issues.create on' });
+    await waitFor(() => expect(tool).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Remove GitHub server' })).toBeDisabled();
+    // Discovery on a Shared row stays admin-only, as for any server the member does not own.
+    expect(screen.getByRole('button', { name: 'Refresh tools' })).toBeDisabled();
+  });
+
+  it.each([
+    { role: 'member', oauthMode: 'shared', allowed: false },
+    { role: 'admin', oauthMode: 'shared', allowed: true },
+    { role: 'member', oauthMode: 'per_user', allowed: true },
+  ] as const)(
+    'gates a Shared server $oauthMode OAuth grant for a $role under allow_crud',
+    async ({ role, oauthMode, allowed }) => {
+      renderTab(
+        {
+          ...sharedOverview,
+          credentials: [
+            {
+              ...overview.credentials[0],
+              oauth_mode: oauthMode,
+              status: 'attention',
+              detail_status: 'reauthentication_required',
+            },
+          ],
+        },
+        { policy: 'allow_crud', role }
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+      // Configuration authority lands first; the grant actions follow the grant mode.
+      const remove = await screen.findByRole('button', { name: 'Remove GitHub server' });
+      await waitFor(() => expect(remove).toBeEnabled());
+      const reconnect = screen.getByRole('button', { name: 'Reconnect GitHub account' });
+      const disconnect = screen.getByLabelText('Disconnect GitHub OAuth connection');
+      if (allowed) {
+        expect(reconnect).toBeEnabled();
+        expect(disconnect).toBeEnabled();
+      } else {
+        expect(reconnect).toBeDisabled();
+        expect(disconnect).toBeDisabled();
+        expect(screen.getByRole('switch', { name: 'GitHub: issues.create on' })).toBeEnabled();
+      }
+    }
+  );
 
   it('keeps transport authority narrow for member-owned stdio servers', async () => {
     renderTab({

@@ -444,6 +444,42 @@ describe('agor_branches_delete authorization boundary', () => {
   });
 });
 
+describe('agor_branches_release_deletion authorization boundary', () => {
+  it('goes through the administrator-gated route and never the service directly', async () => {
+    const branchId = '01900000-0000-7000-8000-000000000001';
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'member', role: 'member' },
+    };
+    const directRelease = vi.fn();
+    const routeCreate = vi.fn(async () => {
+      throw new Forbidden('Administrator role required to release fenced branch deletions');
+    });
+    const app = {
+      get: () => ({ execution: { allow_superadmin: false } }),
+      service(name: string) {
+        if (name === 'branches')
+          return {
+            get: vi.fn(async () => ({ branch_id: branchId })),
+            forceReleaseDeletion: directRelease,
+          };
+        if (name === '/branches/:id/release-deletion') return { create: routeCreate };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const release = registerAndCaptureHandler('agor_branches_release_deletion', {
+      app,
+      userId: 'member',
+      baseServiceParams,
+    });
+
+    await expect(release({ branchId })).rejects.toBeInstanceOf(Forbidden);
+    expect(routeCreate).toHaveBeenCalledWith({}, { ...baseServiceParams, route: { id: branchId } });
+    expect(directRelease).not.toHaveBeenCalled();
+  });
+});
+
 describe('agor_branches_update', () => {
   it('replaces an explicit normalized override package', async () => {
     const permissions = {

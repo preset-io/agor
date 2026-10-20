@@ -77,6 +77,7 @@ import {
   isMCPServerUsableBy,
   MCP_RUNTIME_PROVIDER_CAPABILITIES,
   mcpRuntimeProviderCapability,
+  resolveEffectiveSessionMcpServers,
 } from '@agor/core/mcp';
 import { escapePromptProvenanceSentinels } from '@agor/core/templates/prompt-provenance';
 import type {
@@ -201,8 +202,14 @@ import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
+import { registerTeamsGatewayIngressRoute } from './routes/teams-gateway-ingress.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
+import {
+  type GatewayAdmissionFenceParams,
+  gatewayAdmissionFenceFromParams,
+  requiresGatewayAdmissionFence,
+} from './services/gateway-authority.js';
 import { authorizeCatalogCaller } from './services/mcp-catalog-access.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import { createMCPCatalogStartSessionService } from './services/mcp-catalog-start-session.js';
@@ -396,7 +403,7 @@ export class AgorLocalStrategy extends LocalStrategy {
 /**
  * Extended Params with route ID parameter.
  */
-export interface RouteParams extends Params {
+export interface RouteParams extends Params, GatewayAdmissionFenceParams {
   route?: {
     id?: string;
     messageId?: string;
@@ -997,6 +1004,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   } = ctx;
 
   registerExecutorResponseRoutes(app);
+  registerTeamsGatewayIngressRoute({ app, db });
 
   // Health and launch auth share the exact startup-resolved provider. The
   // public DTO is immutable and contains no verification or exchange secrets.
@@ -2365,6 +2373,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               throw new Conflict(`Task identity ${data.idempotencyTaskId} is already in use`);
             }
 
+            // A fenced gateway provider never admits a Task without its event fence.
+            const admissionFence = gatewayAdmissionFenceFromParams(params);
+            if (
+              !admissionFence &&
+              requiresGatewayAdmissionFence(data.metadata?.gateway_task_source?.channel_type)
+            ) {
+              throw new Forbidden('Gateway Task admission requires its provider event fence');
+            }
             const taskMetadata = buildPromptTaskMetadata(data.metadata, messageSource, createdBy, {
               trustedInternalMetadata: !params.provider,
             });
@@ -2400,6 +2416,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 }
                 const admissionSession = (await sessionsService.get(id, params)) as Session;
                 await assertCurrentPromptAuthority(operationDb, admissionSession);
+                if (admissionFence) await admissionFence(operationDb);
                 return new TaskRepository(operationDb).createPending({
                   task_id: data.idempotencyTaskId,
                   session_id: id as SessionID,
@@ -4523,6 +4540,30 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     before: { create: [requireAuth, requireMinimumRole(ROLES.MEMBER, 'clean branches')] },
   });
 
+  // Administrator recovery for a fenced deletion with no containment evidence.
+  app.use('/branches/:id/release-deletion', {
+    async create(data: unknown, params: RouteParams) {
+      if (
+        !params.route?.id ||
+        !data ||
+        typeof data !== 'object' ||
+        Array.isArray(data) ||
+        Object.keys(data).length
+      )
+        throw new BadRequest('Deletion release accepts an empty body and branch route ID only');
+      return branchesService.forceReleaseDeletion(
+        params.route.id as import('@agor/core/types').BranchID,
+        params
+      );
+    },
+  });
+  app.service('/branches/:id/release-deletion').hooks({
+    around: { all: [tenantIdentityAround, tenantWriteAdmissionAround] },
+    before: {
+      create: [requireAuth, requireMinimumRole(ROLES.ADMIN, 'release fenced branch deletions')],
+    },
+  });
+
   // Explicit, metadata-only retirement: same tenant/write boundary as cleanup.
   app.use('/branches/:id/retire-teammate', {
     async create(data: unknown, params: RouteParams) {
@@ -5505,26 +5546,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           usableByUserId: credentialUserId,
           $limit: 1000,
         };
-        const globalResult = includeGlobal
-          ? await mcpService.find({
-              ...params,
-              provider: undefined,
-              query: globalQuery,
-            })
-          : [];
-        const globalServers = Array.isArray(globalResult) ? globalResult : globalResult.data;
-        const servers = (
-          includeGlobal
-            ? [
-                ...new Map(
-                  [...globalServers, ...sessionServers].map((server) => [
-                    server.mcp_server_id,
-                    server,
-                  ])
-                ).values(),
-              ]
-            : sessionServers
-        ).filter((server) => isMCPServerUsableBy(server, credentialUserId));
+        const servers = await resolveEffectiveSessionMcpServers(
+          session,
+          sessionServers,
+          async () => {
+            const globalResult = includeGlobal
+              ? await mcpService.find({
+                  ...params,
+                  provider: undefined,
+                  query: globalQuery,
+                })
+              : [];
+            return Array.isArray(globalResult) ? globalResult : globalResult.data;
+          },
+          credentialUserId
+        );
         return !(params as RouteParams & { _forceMcpRuntimeRedaction?: boolean })
           ._forceMcpRuntimeRedaction &&
           shouldExposeMCPServerSecrets(params, {
@@ -6733,7 +6769,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           envVarNames: configuredEnvVarNames,
           setMcpServers: async (serverIds) => {
             try {
-              await sessionMCPServersService.setServers(session.session_id, serverIds, params);
+              // Initialization completes creation: its selection is explicit intent.
+              await sessionMCPServersService.setServers(session.session_id, serverIds, params, {
+                markSelectionExplicit: true,
+              });
             } catch (error) {
               if (isMCPServerNotUsableError(error)) {
                 throw new Forbidden('An MCP server is private to another user');

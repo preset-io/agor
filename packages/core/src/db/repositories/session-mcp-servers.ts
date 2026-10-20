@@ -236,7 +236,11 @@ export class SessionMCPServerRepository {
    * Set MCP servers for a session (bulk operation)
    * Replaces existing relationships with new ones
    */
-  async setServers(sessionId: SessionID, serverIds: MCPServerID[]): Promise<void> {
+  async setServers(
+    sessionId: SessionID,
+    serverIds: MCPServerID[],
+    options: { markSelectionExplicit?: boolean } = {}
+  ): Promise<void> {
     try {
       // Treat the replacement as a set at the repository boundary as well as
       // in the MCP tool. This protects callers that use the repository/service
@@ -263,6 +267,12 @@ export class SessionMCPServerRepository {
       await runDatabaseTransaction(
         this.db,
         async (tx) => {
+          // Creation-time selections persist the distinction even when no links
+          // are inserted; the marker and links commit or roll back together.
+          // A plain link replacement leaves implicit global servers alone.
+          if (options.markSelectionExplicit) {
+            await new SessionRepository(tx).update(sessionId, { mcp_selection_explicit: true });
+          }
           await deleteFrom(tx, sessionMcpServers)
             .where(eq(sessionMcpServers.session_id, sessionId))
             .run();

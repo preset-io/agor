@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, GatewayChannel, MCPServer, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -7,11 +7,23 @@ import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { StandaloneSettingsDrillProvider } from './SettingsDrill';
 
 vi.mock('./BranchSelect', () => ({
-  BranchSelect: ({ value, onChange }: { value?: string; onChange?: (value: string) => void }) => (
+  BranchSelect: ({
+    value,
+    onChange,
+  }: {
+    value?: string;
+    onChange?: (value: string, branch?: Branch) => void;
+  }) => (
     <input
       aria-label="branch-select"
       value={value ?? ''}
-      onChange={(event) => onChange?.(event.target.value)}
+      onChange={(event) =>
+        onChange?.(event.target.value, {
+          branch_id: event.target.value,
+          name: 'main',
+          ref: 'main',
+        } as Branch)
+      }
     />
   ),
 }));
@@ -213,10 +225,9 @@ async function fillDiscordWizard({
   clickButton(/Add Channel/);
   selectDiscord();
   await waitForAvailableStep('Access');
-  fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
-    target: { value: 'My Discord' },
+  await act(async () => {
+    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
   });
-  fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
   clickButton(/^Continue$/);
   await waitForStep('Create app');
 
@@ -301,7 +312,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
     await createDraft(channelCreate);
 
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
-      name: 'My Discord',
+      name: 'main · Discord',
       channel_type: 'discord',
       target_branch_id: 'branch-1',
       agor_user_id: 'user-1',
@@ -370,9 +381,18 @@ describe('GatewayChannelsTable Discord create wizard', () => {
       )
     ).toBeInTheDocument();
     expect(getButton(/Create secure draft/)).toBeDisabled();
-    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+    for (const step of ['Access', 'Create app', 'Channel']) {
+      clickButton(/^Back$/);
+      await waitForStep(step);
+    }
+    fireEvent.click(screen.getByLabelText('Rename gateway'));
+    fireEvent.change(screen.getByLabelText('Channel name'), {
       target: { value: 'My Discord 2' },
     });
+    for (const step of ['Create app', 'Access', 'Token & test']) {
+      clickButton(/^Continue$/);
+      await waitForStep(step);
+    }
     expect(getButton(/Create secure draft/)).toBeEnabled();
     expect(channelCreate).toHaveBeenCalledTimes(1);
   }, 30_000);
@@ -381,7 +401,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
 describe('GatewayChannelsTable Discord edit', () => {
   const storedChannel = {
     id: 'channel-discord',
-    name: 'My Discord',
+    name: 'main · Discord',
     channel_type: 'discord',
     target_branch_id: 'branch-1',
     agor_user_id: 'user-1',
@@ -436,6 +456,54 @@ describe('GatewayChannelsTable Discord edit', () => {
     expect(checked).toBe(false);
     expect(updates.config.agent_tools).toEqual({ channel_history: false });
   }, 30_000);
+  it('keeps all public channels and their exclusions through an edit', async () => {
+    const allPublic = {
+      ...storedChannel,
+      config: {
+        ...storedChannel.config,
+        allowed_channel_ids: [],
+        allow_all_public_channels: true,
+        denied_channel_ids: ['723456789012345678'],
+      },
+    } as unknown as GatewayChannel;
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    renderTable(makeClient().client, { channels: [allPublic], onUpdate });
+    fireEvent.click(screen.getByTitle('Edit'));
+    const toggle = await screen.findByLabelText('All public channels');
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByLabelText('Excluded channel IDs')).toBeInTheDocument();
+    clickButton(/^Save$/);
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1), ASYNC);
+    expect(onUpdate.mock.calls[0]![1].config).toMatchObject({
+      allowed_channel_ids: [],
+      allow_all_public_channels: true,
+      denied_channel_ids: ['723456789012345678'],
+    });
+  }, 30_000);
+
+  it('requires a listed channel again once all public channels is turned off', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const allPublic = {
+      ...storedChannel,
+      config: { ...storedChannel.config, allowed_channel_ids: [], allow_all_public_channels: true },
+    } as unknown as GatewayChannel;
+    renderTable(makeClient().client, { channels: [allPublic], onUpdate });
+    fireEvent.click(screen.getByTitle('Edit'));
+    fireEvent.click(await screen.findByLabelText('All public channels'));
+    await waitFor(() => expect(screen.queryByLabelText('Excluded channel IDs')).toBeNull());
+    clickButton(/^Save$/);
+    expect(
+      (
+        await screen.findAllByText(
+          'Add at least one Discord channel ID, or allow all public channels.',
+          undefined,
+          ASYNC
+        )
+      )[0]
+    ).toBeVisible();
+    expect(onUpdate).not.toHaveBeenCalled();
+  }, 30_000);
+
   it('keeps the edit open and names a non-numeric Discord ID', async () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     const invalid = {

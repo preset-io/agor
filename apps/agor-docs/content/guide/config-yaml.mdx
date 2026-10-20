@@ -418,6 +418,38 @@ MCP security modes are **tenant-owned API settings**, not `config.yaml` keys.
 See [MCP Administration](/guide/mcp-administration#mcp-connection-security) for
 mode selection, diagnostics, supported connections, and safe rollout or rollback.
 
+## Private outbound destinations
+
+Daemon-side outbound HTTPS for OAuth (discovery, registration, token, and
+refresh), the MCP egress gateway, and MCP connection tests refuses every
+private, loopback, link-local, and reserved address. When the daemon must reach
+one specific internal HTTPS service, such as one behind an internal load
+balancer, pin that host to its private ranges:
+
+```yaml
+security:
+  private_outbound_destinations:
+    - host: internal-api.example.internal
+      cidrs: [10.200.0.0/24]
+```
+
+- `host` matches the exact hostname, case-insensitive. Wildcards and IP
+  literals are not accepted, and only `https:` URLs qualify.
+- Every address the host resolves to must be IPv4 and inside that entry's
+  `cidrs`, or the request fails.
+- Unlisted hosts keep the default behavior: another name that resolves into
+  `10.200.0.0/24` is still refused.
+- Redirects are re-checked on every hop.
+- Up to 64 entries, each with 1–8 IPv4 CIDRs written as network addresses
+  inside `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, or `100.64.0.0/10`.
+  Any invalid entry fails daemon startup.
+
+The list is read once at startup. Restart the daemon to apply any change,
+including removing an entry.
+
+The MCP Catalog auth probe uses a separate public-only check and does not
+honor this list.
+
 ## Operator-configured analytics
 
 Analytics is disabled by default. It sends curated analytics events to the configured

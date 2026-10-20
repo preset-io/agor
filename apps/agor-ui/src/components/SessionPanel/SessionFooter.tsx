@@ -75,6 +75,8 @@ export interface SessionFooterProps {
   footerGradient?: string;
   // MCP data for Tools chip
   sessionMcpServerIds: string[];
+  sessionMcpLoadFailed?: boolean;
+  onSessionMcpRetry?: () => void;
   unauthedMcpServers: MCPServer[];
   mcpServerById: Map<string, MCPServer>;
   userAuthenticatedMcpServerIds: Set<string>;
@@ -132,6 +134,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   latestContextWindow,
   footerGradient,
   sessionMcpServerIds,
+  sessionMcpLoadFailed = false,
+  onSessionMcpRetry,
   unauthedMcpServers,
   mcpServerById,
   userAuthenticatedMcpServerIds,
@@ -948,6 +952,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 currentUserId={currentUserId}
                 sessionId={session.session_id}
                 sessionMcpServerIds={sessionMcpServerIds}
+                sessionMcpLoadFailed={sessionMcpLoadFailed}
+                onSessionMcpRetry={onSessionMcpRetry}
                 mcpServerById={mcpServerById}
                 userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
               />

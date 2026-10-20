@@ -70,12 +70,20 @@ export async function resolveMCPMarketplaceOAuthGrantAuthority(options: {
   serverIds: readonly MCPServerID[];
   serverRepository: MCPServerRepository;
   tokenRepository: UserMCPOAuthTokenRepository;
+  /** Also resolve Shared (ownerless) rows the overview listed for this caller. */
+  includeShared?: boolean;
 }): Promise<ReadonlyMap<MCPServerID, boolean>> {
   const authority = new Map<MCPServerID, boolean>();
   if (options.serverIds.length === 0) return authority;
 
   const [servers, grants] = await Promise.all([
-    options.serverRepository.findOwnedByIds(options.userId, options.serverIds),
+    options.includeShared
+      ? options.serverRepository
+          .findByIds(options.serverIds)
+          .then((rows) =>
+            rows.filter((row) => !row.owner_user_id || row.owner_user_id === options.userId)
+          )
+      : options.serverRepository.findOwnedByIds(options.userId, options.serverIds),
     options.tokenRepository.listAuthorityForUserAndSharedByServerIds(
       options.userId,
       options.serverIds

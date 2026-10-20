@@ -1245,6 +1245,41 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 
+  it('deletes Codex personal configuration without rewriting the managed Claude auth method', async () => {
+    agorStore
+      .getState()
+      .setAgenticToolSettings([
+        { tool: 'codex', enabled: true, resolution_policy: 'tenant_required' },
+      ] as never);
+    const user = makeUser({
+      agentic_tools: { codex: { OPENAI_API_KEY: true } },
+      agentic_auth_methods: { 'claude-code': 'subscription', codex: 'api_key' },
+      agentic_credential_sources: { 'claude-code': 'managed_oauth' },
+    });
+    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={onUpdate}
+        initialTab="codex"
+      />
+    );
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Delete saved personal configuration' })
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'OK' }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(2), ASYNC);
+    expect(onUpdate.mock.calls.map(([, patch]) => patch)).toEqual([
+      { agentic_tools: { codex: { OPENAI_API_KEY: null } } },
+      { agentic_auth_methods: { codex: 'api_key' } },
+    ]);
+  });
+
   it('preserves an in-progress audio edit across navigation (no draft loss)', async () => {
     const user = makeUser();
     const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});

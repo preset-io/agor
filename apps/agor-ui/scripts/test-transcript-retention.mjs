@@ -454,11 +454,18 @@ test('reloaded inline detail stays open and live while protected turns exceed th
       'every reload stays while open'
     );
 
-    // Collapsing releases them to the budget, which has no room.
-    await reasoningTurn.getByRole('button', { name: /Extended Thinking/ }).click();
-    await readTurn.locator('button[aria-expanded]').filter({ hasText: 'Read' }).click();
-    await emptyTurn.locator('button[aria-expanded]').filter({ hasText: 'Read' }).click();
-    await disengage(page);
+    // Settle each release before clicking the next turn. Focus protects the
+    // previous turn until it leaves; that eviction can shift the next header
+    // between pointerdown and pointerup and swallow the next click.
+    for (const [turn, control] of [
+      [reasoningTurn, reasoningTurn.getByRole('button', { name: /Extended Thinking/ })],
+      [readTurn, readTurn.locator('button[aria-expanded]').filter({ hasText: 'Read' })],
+      [emptyTurn, emptyTurn.locator('button[aria-expanded]').filter({ hasText: 'Read' })],
+    ]) {
+      await control.click();
+      await disengage(page);
+      await turn.getByRole('button', { name: '1 tool call' }).waitFor();
+    }
     assert.deepEqual(await liveTurns(page, cdp), both([3]), 'collapsed: released');
     assert.equal(await page.getByText('Answer 0').count(), 1, 'lean history stays visible');
     assert.equal(await page.getByText('Answer 1').count(), 1);

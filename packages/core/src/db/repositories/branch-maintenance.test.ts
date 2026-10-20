@@ -546,3 +546,175 @@ for (const [guard, message] of [
     expect(after).toEqual(before);
   });
 }
+
+const executionProcess = { pid: 4242, boot_id: 'boot-fixture', pid_namespace: 'pid:[1]' };
+
+test('a recorded executor identity is set once, before claim, for the exact invocation', async ({
+  db,
+}) => {
+  const { branch } = await seedEnvironmentCommandBranch(db);
+  const maintenance = new BranchMaintenanceRepository(db);
+  const { claim } = await maintenance.claim(branch.branch_id, 'delete');
+  const invocation = await maintenance.beginExecution(claim);
+  expect(await maintenance.recordExecutionProcess(claim, generateId(), executionProcess)).toBe(
+    false
+  );
+  expect(await maintenance.recordExecutionProcess(claim, invocation, executionProcess)).toBe(true);
+  await maintenance.claimExecution(claim, invocation);
+  // A late record after the executor claimed cannot rewrite the identity.
+  expect(
+    await maintenance.recordExecutionProcess(claim, invocation, { ...executionProcess, pid: 1 })
+  ).toBe(false);
+  const row = await select(db).from(branches).where(eq(branches.branch_id, branch.branch_id)).one();
+  expect(row?.data.maintenance?.execution_process).toEqual(executionProcess);
+});
+
+for (const stale of [false, true]) {
+  test(`a verified-exited ${stale ? 'stale-fenced' : 'running'} deletion becomes retryable and fences its old invocation`, async ({
+    db,
+  }) => {
+    const { branch } = await seedEnvironmentCommandBranch(db);
+    const maintenance = new BranchMaintenanceRepository(db);
+    const { claim } = await maintenance.claim(branch.branch_id, 'delete');
+    const invocation = await maintenance.beginExecution(claim);
+    await maintenance.recordExecutionProcess(claim, invocation, executionProcess);
+    await maintenance.claimExecution(claim, invocation);
+    if (stale) {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() + 10 * 60_000);
+      expect(await maintenance.markStaleDeletion(claim, 30_000)).toBe(true);
+      expect((await new BranchRepository(db).findById(branch.branch_id))?.deletion_error).toMatch(
+        /Retry unlocks once a daemon on the executor host verifies/
+      );
+      expect((await maintenance.claim(branch.branch_id, 'delete')).acquired).toBe(false);
+    }
+    expect(
+      await maintenance.releaseVerifiedExitedDeletion(branch.branch_id, generateId(), 'wrong')
+    ).toBe(false);
+    expect(
+      await maintenance.releaseVerifiedExitedDeletion(branch.branch_id, invocation, 'Exited')
+    ).toBe(true);
+    expect(
+      await maintenance.releaseVerifiedExitedDeletion(branch.branch_id, invocation, 'Again')
+    ).toBe(false);
+    expect(await new BranchRepository(db).findById(branch.branch_id)).toMatchObject({
+      deletion_status: 'deletion_failed',
+      deletion_error: 'Exited',
+    });
+    // Late DB requests from the dead invocation are rejected; a retry is admitted.
+    await expect(maintenance.withExecution(claim, invocation, async () => true)).rejects.toThrow(
+      'ownership changed'
+    );
+    const retry = await maintenance.claim(branch.branch_id, 'delete');
+    expect(retry.acquired).toBe(true);
+    expect(retry.claim.generation).toBe(claim.generation + 1);
+  });
+}
+
+test('releasing an already-finalized deletion is a no-op', async ({ db }) => {
+  const { branch } = await seedEnvironmentCommandBranch(db);
+  const maintenance = new BranchMaintenanceRepository(db);
+  expect(
+    await maintenance.releaseVerifiedExitedDeletion(generateId() as never, generateId(), 'x')
+  ).toBe(false);
+  expect(await maintenance.releaseVerifiedExitedDeletion(branch.branch_id, generateId(), 'x')).toBe(
+    false
+  );
+});
+
+test('administrator release only applies to a fenced failed deletion', async ({ db }) => {
+  const { branch } = await seedEnvironmentCommandBranch(db);
+  const maintenance = new BranchMaintenanceRepository(db);
+  await expect(
+    maintenance.forceReleaseFailedDeletion(branch.branch_id, 'Released', {})
+  ).rejects.toThrow('fenced failed deletion');
+  const { claim } = await maintenance.claim(branch.branch_id, 'delete');
+  const invocation = await maintenance.beginExecution(claim);
+  await maintenance.claimExecution(claim, invocation);
+  // Still deleting (heartbeat fresh): never released, even by an administrator.
+  await expect(
+    maintenance.forceReleaseFailedDeletion(branch.branch_id, 'Released', {
+      execution_id: invocation,
+    })
+  ).rejects.toThrow('fenced failed deletion');
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(Date.now() + 10 * 60_000);
+  await maintenance.markStaleDeletion(claim, 30_000);
+  expect(
+    await maintenance.forceReleaseFailedDeletion(branch.branch_id, 'Released', {
+      execution_id: invocation,
+    })
+  ).toMatchObject({
+    operation_id: claim.operation_id,
+    execution_id: invocation,
+  });
+  expect((await new BranchRepository(db).findById(branch.branch_id))?.deletion_error).toBe(
+    'Released'
+  );
+  await expect(maintenance.heartbeatExecution(claim, invocation)).rejects.toThrow(
+    'ownership changed'
+  );
+  expect((await maintenance.claim(branch.branch_id, 'delete')).acquired).toBe(true);
+});
+
+test('process discovery returns only deletions with a recorded executor identity', async ({
+  db,
+}) => {
+  const { branch } = await seedEnvironmentCommandBranch(db);
+  const discovery = new BranchMaintenanceDiscoveryRepository(db);
+  const maintenance = new BranchMaintenanceRepository(db);
+  const { claim } = await maintenance.claim(branch.branch_id, 'delete');
+  const invocation = await maintenance.beginExecution(claim);
+  expect(await discovery.findExecutionProcessRefs({ tenantId: 'default' })).toEqual([]);
+  await maintenance.recordExecutionProcess(claim, invocation, executionProcess);
+  const refs = await discovery.findExecutionProcessRefs({ tenantId: 'default' });
+  expect(refs).toEqual([{ tenant_id: 'default', branch_id: branch.branch_id }]);
+  expect(await discovery.findExecutionProcessRefs({ tenantId: 'default', after: refs[0] })).toEqual(
+    []
+  );
+  await maintenance.claimExecution(claim, invocation);
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(Date.now() + 10 * 60_000);
+  expect(await maintenance.markStaleDeletion(claim, 120_000)).toBe(true);
+  expect(await discovery.findExecutionProcessRefs({ tenantId: 'default' })).toEqual(refs);
+  await maintenance.releaseVerifiedExitedDeletion(branch.branch_id, invocation, 'Exited');
+  expect(await discovery.findExecutionProcessRefs({ tenantId: 'default' })).toEqual([]);
+  await expect(discovery.findExecutionProcessRefs({})).rejects.toThrow('PostgreSQL');
+});
+
+test('administrator release rechecks both the invocation and the probed process snapshot', async ({
+  db,
+}) => {
+  const { branch } = await seedEnvironmentCommandBranch(db);
+  const maintenance = new BranchMaintenanceRepository(db);
+  const { claim } = await maintenance.claim(branch.branch_id, 'delete');
+  const invocation = await maintenance.beginExecution(claim);
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(Date.now() + 10 * 60_000);
+  await maintenance.markStaleDeletion(claim, 30_000);
+  // A delayed dispatch can record an identity after the admin's read.
+  await maintenance.recordExecutionProcess(claim, invocation, executionProcess);
+  for (const expected of [
+    { execution_id: invocation },
+    { execution_id: generateId(), execution_process: executionProcess },
+    ...(['pid', 'boot_id', 'pid_namespace'] as const).map((field) => ({
+      execution_id: invocation,
+      execution_process: { ...executionProcess, [field]: field === 'pid' ? 4243 : 'different' },
+    })),
+  ]) {
+    await expect(
+      maintenance.forceReleaseFailedDeletion(branch.branch_id, 'Released', expected)
+    ).rejects.toThrow('invocation changed');
+    const row = await select(db)
+      .from(branches)
+      .where(eq(branches.branch_id, branch.branch_id))
+      .one();
+    expect(row?.data.maintenance?.execution_id).toBe(invocation);
+    expect(row?.data.maintenance?.execution_process).toEqual(executionProcess);
+  }
+  await maintenance.forceReleaseFailedDeletion(branch.branch_id, 'Released', {
+    execution_id: invocation,
+    execution_process: executionProcess,
+  });
+  expect((await maintenance.claim(branch.branch_id, 'delete')).acquired).toBe(true);
+});

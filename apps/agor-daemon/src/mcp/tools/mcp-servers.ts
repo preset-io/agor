@@ -1273,7 +1273,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_sessions_set_mcp_servers',
     {
       description:
-        'Atomically replace the session-specific MCP links for a session. Defaults to current session when `sessionId` is omitted. The complete replacement is validated before any link changes are committed, so a rejected private server leaves the existing set unchanged. This manages session links only; enabled global MCP servers are still effective for every session even if omitted here.',
+        'Atomically replace the session-specific MCP links for a session. Defaults to current session when `sessionId` is omitted. The complete replacement is validated before any link changes are committed, so a rejected private server leaves the existing set unchanged. This manages session links only and never changes global-server inheritance: enabled global MCP servers stay effective even if omitted here, unless the session was created with an explicit MCP selection.',
       annotations: { destructiveHint: true, idempotentHint: true },
       inputSchema: z.strictObject({
         mcpServerIds: z

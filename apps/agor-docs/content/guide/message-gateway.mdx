@@ -78,7 +78,7 @@ You can create multiple channels for the same or different branches. For example
 - **"Scout"** runs Claude Code (Sonnet 4.5) on a lighter review branch, trust mode, no MCP servers
 - **"Codex Runner"** runs Codex on a `superset-frontend` branch for quick JS tasks
 
-Gateway channels keep an internal per-channel key for Agor's generic inbound endpoint, but supported integrations usually do not require you to copy it anywhere. Slack uses Socket Mode, while GitHub and Shortcut use API polling; no public webhook URL is needed for those connectors.
+Gateway channels keep an internal per-channel key for Agor's generic inbound endpoint, but supported integrations usually do not require you to copy it anywhere. Slack uses Socket Mode, GitHub and Shortcut use API polling, and Teams calls an HTTPS callback route that every daemon serves; there is no per-channel webhook port or callback server to configure.
 
 ## How It Works
 
@@ -119,11 +119,10 @@ Slack DM                    Agor Daemon                    Agent
 
 Standalone SQLite installations use process-local listeners.
 
-> **Provider limit in PostgreSQL mode:** Slack, GitHub, Shortcut, and Discord listeners
-> support distributed ownership. Microsoft Teams currently depends on a local
-> Bot Framework port and in-memory conversation references, so Agor fails its
-> listener closed on PostgreSQL. Teams remains available only in standalone
-> SQLite.
+> **Teams** has no listener: Teams calls Agor's
+> `/gateway/teams/:gatewayChannelId/activities` route on whichever daemon receives
+> the request, and every daemon processes queued activities. It behaves the same on
+> SQLite and PostgreSQL.
 
 On PostgreSQL, a renewable 30-second lease selects one listener owner per
 channel. After an owner dies, failover also takes discovery and provider
@@ -151,6 +150,8 @@ Session and Task remain deduplicated.
 
 The legacy generic channel-key inbound endpoint has no provider-event identity,
 so it is available only on standalone SQLite and fails closed on PostgreSQL.
+Teams does not use that endpoint: a stable Teams activity ID is the durable
+occurrence identity, and retries converge on one Agor Task.
 
 Migrations `0066_gateway_listener_discovery` and
 `0076_gateway_listener_ha` install the narrow discovery policy, lease columns,
@@ -167,6 +168,54 @@ for a direct message when **Direct messages** is enabled. A server-channel outbo
 seed is recorded durably; the first eligible human reply to any seed chunk
 consumes that seed and starts the mapped session. Replies to later response
 chunks continue the same session.
+
+## Chat commands
+
+The session-created notice explains how to follow up and ask for commands. In
+channels and threads, mention the bot with `!help`; in direct messages, send
+`!help` without a mention. The menu includes a link to this guide. Commands are
+gateway system messages, not agent prompts, and do not create tasks or new sessions.
+
+In Slack, Discord, and Teams, send only the command and any bot mention
+(case-insensitive, with optional surrounding whitespace). A mention works on
+either side: `@MyAgent !stop` or `!stop @MyAgent`. Commands work even while the
+session is running.
+
+Slack channel, group, and thread commands require a mention, just like prompts.
+The recommended Slack app subscribes to `app_mention` and `message.im`, not all
+channel messages. No additional message subscriptions are needed for commands.
+
+Discord and Teams also support bare commands in existing threads connected to
+exactly one session when the platform delivers unmentioned messages. If multiple
+sessions are connected, Agor asks you to mention the bot you mean; it never
+broadcasts a stop to all sessions. Unmentioned commands in unmapped threads are
+ignored and never start a session. Teams must be configured to deliver unmentioned
+messages; Discord uses the existing Message Content intent. Mentioning the bot is
+the unambiguous way to address a command on either platform.
+
+| Command | Behavior |
+| --- | --- |
+| `!stop` | Request stopping the current task if nothing is queued. If tasks are queued, make no changes and explain the choices below. |
+| `!skip` | Request stopping the current task and preserve queued tasks. They can continue after termination is verified. |
+| `!stop-clear` | Cancel queued tasks and request stopping the current task. Requires Branch Manager access as well as permission to prompt the session. If either permission is missing, neither action is performed. |
+| `!help` | Show this menu and a link to this guide. |
+
+Messages such as `stop`, `stop using tabs`, or `!stop do this instead` remain
+ordinary text, subject to the usual mention rule. Embedded text such as
+`@MyAgent, you are great!help me with that` does not invoke a command.
+There is no replacement-prompt parsing, `!clear`, or `!queue` command.
+
+An idle session reports that there is no current task to stop; it does not start
+queued work. `!stop-clear` can still cancel pending tasks. Stopping does not erase
+history or undo edits. A pending response means termination was requested, not
+confirmed. If termination cannot be verified, check the session in Agor; an owner
+or admin may need to intervene. These commands never force-fail an executor.
+
+Commands target the task and queue observed for that request. If either changes
+before the command can be applied, no changes are made and the reply asks you to
+check the session and retry. Provider redelivery reuses the original command's
+target, never a successor task or newly queued work. A command sent before a
+session exists remains a no-op if the platform redelivers it after a session starts.
 
 ## Slack thread behavior
 
@@ -196,7 +245,7 @@ The one step neither path can cover is the **app-level token**: `connections:wri
 
 1. Open **Settings** (gear icon) → **Gateway Channels** → **Add Channel**.
 2. Select **Slack** as the channel type. A four-step wizard appears: **Channel → Options → Create app → Tokens & test**. A consistent footer carries the flow, with **Back** and **Cancel** plus a primary button that reads **Continue** on each step and **Create channel** on the last.
-3. On the **Channel** step, set the basics: **Channel Type** (Slack), a **Name** for the Agor channel, the **Target Branch** where sessions run, and whether the channel is **Enabled**. Click **Continue**.
+3. On the **Channel** step, select an **AI Teammate** to route messages to, or choose **Specific branch** for a custom workflow. Below the target picker, **Channel name** shows a suggestion such as `Mira · Slack`. Keep it or click **Rename** to enter a custom display name. The suggestion follows your target and channel type until you edit it; existing channels keep their saved names, which you can change in the edit form. Set whether the channel is **Enabled**, then click **Continue**.
 4. On the **Options** step, choose what the bot can do:
    - **App Name.** The display name for the Slack app.
    - **Surfaces.** Where the bot listens. Direct messages are always on; optionally add **Public channels** (all, or a specific list of channel IDs), **Private channels**, and **Group DMs**.
@@ -222,7 +271,7 @@ The one step neither path can cover is the **app-level token**: `connections:wri
 
 ### 4. Message your bot
 
-DM the bot from the **Apps** section of Slack, or `@mention` it in any channel or group the bot has been added to. You'll see session creation confirmed, followed by the agent's response in the same thread. In channels and group DMs the bot responds **only** to explicit `@`-mentions; direct messages don't need one.
+DM the bot from the **Apps** section of Slack, or `@mention` it in any channel or group the bot has been added to. You'll see session creation confirmed, followed by the agent's response in the same thread. In channels, threads, and group DMs, prompts and [chat commands](#chat-commands) require explicit `@`-mentions. Direct messages do not need a mention.
 
 Gateway conversations appear under **Gateway Sessions** on the target branch. Sessions they spawn are nested beneath the gateway parent, including remote-created sessions that live on another branch; selecting a remote child opens its canonical session. Gateway roots are ordered by most recent activity. Section and parent collapse choices persist on board cards.
 
@@ -245,16 +294,16 @@ The wizard and manifest bake these in automatically. This table is for understan
 | Capability                                | Bot scopes added                                                                    | Events added                         |
 | ----------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------ |
 | **Direct messages** (baseline, always on) | `chat:write`, `im:history`, `im:read`, `users:read`                                 | `message.im`                         |
-| **Public channels**                       | `app_mentions:read`, `channels:history`, `channels:read`                            | `app_mention`                        |
-| **Private channels**                      | `groups:history`, `groups:read`                                                     | —                                    |
-| **Group DMs**                             | `mpim:history`, `mpim:read`                                                         | —                                    |
+| **Public channels**                       | `app_mentions:read`, `channels:history`, `channels:read`                            | `app_mention`    |
+| **Private channels**                      | `groups:history`, `groups:read`                                                     | `app_mention`                     |
+| **Group DMs**                             | `mpim:history`, `mpim:read`                                                         | `app_mention`                       |
 | **Align Slack users**                     | `users:read.email`                                                                  | —                                    |
 | **Outbound sends**                        | `chat:write.public`, `channels:read`, `groups:read`, `im:write`, `users:read.email` | —                                    |
 | **Deliver reactions to sessions**         | `reactions:read`                                                                    | `reaction_added`, `reaction_removed` |
 
 Notes:
 
-- `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled. Those surfaces all trigger on `@`-mention, so no `message.channels` / `message.groups` / `message.mpim` events are requested.
+- `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled. Prompts and commands on those surfaces require `@`-mentions. Broad `message.channels`, `message.groups`, and `message.mpim` subscriptions are not needed or recommended; Slack filters delivery to the addressed bot.
 - `connections:write` never appears in the manifest. It lives on the app-level token you generate under **Basic Information → App-Level Tokens**.
 
 ### Emoji reactions as input
@@ -273,8 +322,8 @@ Turning this on adds a scope and two events. Update the app manifest and reinsta
 Discord is intentionally narrow and explicit:
 
 - Each enabled row names one bot application, one guild, and one or more
-  allowlisted public parent channels: text channels, or forum channels, where
-  the bot answers mentions inside posts. A privileged **Message Content** intent
+  allowlisted public parent channels (or opts in to all public channels, below):
+  text channels, or forum channels, where the bot answers mentions inside posts. A privileged **Message Content** intent
   must be enabled in Discord and acknowledged in the Agor configuration. A
   structured mention outside inline or fenced code is the wake-up trigger;
   mention text is not a substitute for the intent.
@@ -289,6 +338,19 @@ Discord is intentionally narrow and explicit:
   channel, bot/self messages, webhooks, embeds, components, stickers, polls,
   and server messages without a structured mention are ignored. DMs are off by default. Attachment handling
   is controlled separately by the explicit `files` capability below.
+- To answer in every public channel without listing each one, opt in with
+  `allow_all_public_channels: true` (**All public channels** in Settings). The
+  bot then also admits mentions in any public text or forum channel of the
+  guild, and public threads or forum posts under one, including channels added
+  later. Unlike Slack, an empty channel list never means "all": a Discord bot
+  usually sees every channel its role can access, so this mode is explicit.
+  A channel is public only if @everyone can view it; in a server that gates
+  channels behind a role, list those channels instead.
+  `denied_channel_ids` (**Excluded channel IDs**) skips channels such as staff
+  or moderation rooms, with their threads. Author allowlists, mention-only
+  defaults, and the guild check still apply. Proactive sends and per-forum
+  `response_modes` still use listed channels, so list a forum to give it a
+  response mode.
 - `files:false` is the default text-only behavior. With the explicit
   `files:true` capability, a live message may include image (PNG, JPEG, GIF,
   WebP) and text (.txt, .log, .md, .csv, .json) attachments; each is downloaded
@@ -605,64 +667,175 @@ Follow-up mentions in the same Shortcut thread continue the existing session. Co
 
 ## Setting Up Microsoft Teams Integration
 
-> **PostgreSQL multi-daemon limitation:** Teams listener startup currently
-> fails closed on PostgreSQL. Its webhook server and proactive-reply
-> `ConversationReference` are process-local, so the connector cannot safely
-> support load-balanced replica ingress yet. Teams remains available in the
-> standalone SQLite deployment path. Use Slack, GitHub, or Shortcut for a
-> shared PostgreSQL daemon fleet until durable Teams ingress/routing lands.
+Microsoft Teams works in personal chats, group chats, and standard team channels
+of one Microsoft Entra tenant.
 
 ### How It Works
 
-When you message Agor's bot in a 1:1 chat (or `@mention` it in a Teams channel), Agor receives the activity through a [Bot Framework](https://dev.botframework.com) webhook and creates a session. The session runs on the target branch, and the agent's response is posted back into the same conversation under the bot's identity.
+Message the bot in a personal chat, or `@mention` it in a group chat or channel.
+Agor receives the activity on its HTTPS callback, starts or resumes the session
+mapped to that conversation on the channel's target branch, and posts the agent's
+final answer back into the same chat or channel thread.
 
-Key differences from Slack and GitHub:
+- **One callback URL per channel.** The Azure Bot messaging endpoint is
+  `https://<your-agor-host>/gateway/teams/<gateway-channel-id>/activities`. Every
+  daemon serves it, so it works behind a load balancer. The host must be reachable
+  over public HTTPS.
+- **Mentions.** Personal chats need no mention. Group chats and channels need an
+  `@mention` of the bot; other messages are ignored and not stored.
+- **Conversations.** A personal or group chat maps to one session. In a channel,
+  each reply thread maps to its own session.
+- **Delivery.** Agor acknowledges Teams only after the activity is safely queued,
+  then processes it in the background. Long answers are split into several
+  messages. If Agor cannot tell whether Teams accepted a message (for example, the
+  connection dropped mid-send), the delivery is marked `ambiguous` and is not
+  resent automatically, so you never get duplicates.
+- **Session link and typing.** When a message starts a session, the bot posts one
+  link to it, "Agor: Session created: View session", plus a reminder to mention
+  it again (not in personal chats, where no mention is needed). Follow-ups get no
+  extra notice. In personal and group chats, Teams shows the bot as typing while
+  the agent works.
+- **Proactive sends (off by default).** With **Enable proactive outbound**
+  (`outbound_enabled: true`), agents can start a new thread in a standard channel
+  with `agor_gateway_emit_message` and a `channel:<19:…@thread.tacv2>` target (or
+  the channel's **Default outbound target**). The channel must be one Agor has
+  received a message from, or a channel in the same team; `agor_gateway_outbound_targets_list`
+  lists them under `known_channels`. The post ends with a line asking people to
+  @mention Agor in their reply: as in Slack, a reply that mentions the bot starts
+  the session, and a reply without a mention is ignored. Private and shared
+  channels and group chats are not targets. Answers to people who mention the bot
+  do not depend on this setting.
+- **Proactive DMs.** With the same setting, `user:<work email>` (or
+  `user:<Entra object ID>`) sends a direct message to a member of a team the app
+  is installed in and Agor has received a message from. The person's reply needs
+  no mention: it goes to their own personal-chat session, not the session that
+  sent the DM, and includes the DMs sent since their last message as context. If
+  the channel restricts user IDs, the recipient must be on that list. DMs are
+  unavailable while the channel restricts team or channel IDs, because those
+  allowlists refuse personal-chat replies.
+- **Reactions (off by default).** With **Deliver reactions to sessions**
+  (`inbound_reactions: true`), a reaction to one of the bot's messages in a
+  conversation that already has a session reaches that session as a short
+  prompt that quotes the message, for example
+  `[Teams reaction] Ada reacted "like" to your message`. Teams reports reactions
+  only on the bot's own messages. A reaction never starts a session, is ignored
+  silently when the person cannot prompt the session, and is rate limited.
+- **Attachments (off by default).** With **Enable inbound images and files**
+  (`files: true`), images (PNG, JPEG, GIF, WebP) and text files (.txt, .log, .md,
+  .csv, .json) sent in personal chats are passed to the agent. Teams stores images
+  and files posted in a channel in the team's SharePoint site, and Agor reads them
+  only after an admin grants the app file access (see **Channel files** below).
+  Files shared in group chats are not read. Turning the setting on also sets
+  `supportsFiles` in the app manifest, so upload the app package again. A message
+  with only an attachment still reaches the agent, which tells the sender which
+  files it could not read.
 
-- **Webhook, not polling or WebSocket.** Inbound messages arrive at an HTTP endpoint (default `/api/messages` on port `3978`) that the Azure Bot's messaging endpoint points to. The daemon must be reachable from Azure (e.g., via a public host or tunnel).
-- **Bot Framework identity.** Replies are sent as the registered Azure Bot, using a `ConversationReference` captured from the inbound activity (proactive messaging).
-- **1:1 DM vs channel threads.** In a personal (1:1) chat, every message routes to that conversation's session. In a channel or group chat, Agor replies in the same thread and, by default, only responds when `@mentioned` (configurable). The bot mention is stripped before the text reaches the agent.
-- **Thread IDs.** Conversations map to `{conversationId}|{activityId}`; personal chats are normalized to the conversation so follow-up messages stay in one session.
+### 1. Register the bot in Azure
 
-### 1. Create an Azure Bot
+1. In the [Azure Portal](https://portal.azure.com), create an **Azure Bot** backed
+   by a **single-tenant** Microsoft Entra app registration.
+2. Note the **App ID** (application/client ID) and the **Tenant ID**, and create a
+   client secret. Copy the secret _value_, not its ID.
+3. Under **Channels**, add **Microsoft Teams**.
+4. You set the messaging endpoint in step 4, once the Agor channel exists.
 
-1. In the [Azure Portal](https://portal.azure.com), create an **Azure Bot** resource backed by an app registration.
-2. Note the **App ID** (Application/client ID) and create a **client secret**. Copy the secret _value_, not its ID.
-3. Note the **Tenant ID** (required so the bot can acquire tokens to send replies).
-4. Under the bot's **Configuration**, set the **Messaging endpoint** to `https://<your-daemon-host>/api/messages` (matching the webhook path and port you configure in Agor).
-5. Under **Channels**, add the **Microsoft Teams** channel.
+### 2. Create the channel in Agor
 
-### 2. Add the App to Teams
+Open **Settings → Gateway → Add Channel**, choose **Microsoft Teams**, and follow
+the three steps:
 
-1. Build a Teams app manifest referencing your bot's **App ID**. Use the [Developer Portal for Teams](https://dev.teams.microsoft.com) or a `manifest.json`.
-2. Add the `bot` capability with the scopes you need: `personal` (1:1 chats), `team` (channels), and `groupChat`.
-3. Sideload the custom app (or publish it to your org), then install it into the relevant team or chat.
+1. **Channel.** Name, target branch, and **Enabled** (on by default).
+2. **Access.** Choose the identity mode (see below) and, optionally, allowlists,
+   catch-up, and agent configuration.
+3. **Credentials & test.** Enter the App ID, client secret, and Tenant ID, then
+   select **Test connection**. Agor requests a token from Microsoft with these
+   credentials; a green result proves the App ID, secret, and tenant match.
 
-### 3. Create a Channel in Agor
+Agor runs the same check when you create the channel and whenever an enabled
+channel's settings change, including a secret rotation. If it fails, the change
+is refused; save the channel with **Enabled** off to keep a draft.
 
-1. Open **Settings** → **Gateway** tab → **Add Channel**.
-2. Fill in:
-   - **Name.** For example, "Teams: Platform Team"
-   - **Channel Type.** Select `teams`.
-   - **Target Branch.** Pick the branch where sessions will run. Ideally, this is an [teammate](/guide/teammates) branch.
-   - **App ID.** Your Azure Bot's Application (client) ID.
-   - **App Password.** The Azure Bot client secret value (encrypted at rest).
-   - **Tenant ID.** Your Azure AD tenant ID.
-3. Optionally configure:
-   - **Webhook Port.** Port for the Bot Framework endpoint (default: `3978`).
-   - **Webhook Path.** Path for inbound activities (default: `/api/messages`).
-   - **Require mention.** Require an `@mention` to trigger in channels and group chats (default: on).
-4. Save. The webhook listener starts immediately.
+The MCP tools follow the same rules: `agor_gateway_teams_setup` returns the
+manifest and callback URL, and `agor_gateway_channels_create` enables a Teams
+channel only when its credentials verify. Enter the client secret through the
+secure credential form, not in chat.
 
-### 4. Message the Bot or @mention agor
+### 3. Choose who the bot runs as
 
-In a 1:1 chat, just message the bot. In a channel, post `@agor review this thread`. Agor:
+- **Align Teams users (default).** Each sender is matched to the Agor account
+  with the same email as their Teams account. People without a matching account
+  get a short "not linked" reply and nothing runs. Use the optional **user map**
+  (Teams AAD object ID → Agor user ID) for people whose Teams email differs from
+  their Agor email; a map entry takes precedence over the email match.
+  Guest accounts may not expose a usable email.
+- **Run as selected user.** Every sender runs as one Agor user, with that user's
+  branch access, credentials, and MCP servers. With empty allowlists that means
+  anyone in your Microsoft tenant who can message the bot. Prefer aligned users.
 
-1. Receives the activity via the webhook.
-2. Creates (or resumes) the session mapped to that conversation.
-3. Runs the agent on the target branch.
-4. Posts the agent's response back into the same chat or channel thread.
+**Allowlists** for team IDs, channel IDs, and user AAD object IDs are optional
+filters on who can reach the bot. Leave them empty to accept the whole tenant.
+They do not choose an identity.
 
-Follow-up messages in the same conversation continue the same session. The agent has full conversation history.
+### 4. Point Azure at Agor and install the app
+
+1. In the Azure Bot's **Configuration**, set the **Messaging endpoint** to the
+   callback URL shown in the channel's edit panel (or returned by
+   `agor_gateway_teams_setup`).
+2. Copy the app manifest from the same panel into the
+   [Developer Portal for Teams](https://dev.teams.microsoft.com), or build one
+   there with the `personal`, `team`, and `groupChat` bot scopes.
+3. Upload the custom app (or publish it to your organization) and install it in
+   the chats and teams where you want it.
+
+**Channel catch-up (on by default).** A mention in a channel thread also gives
+the agent the replies posted since its last answer. It needs the
+`ChannelMessage.Read.Group` resource-specific permission, which the app manifest
+requests and a team owner grants when installing the app. Without it, the bot
+still answers the mention, without the earlier replies. Set **Catch-up mode** to
+**Off** to turn it off.
+
+**Channel files.** Teams does not send the bot the images and files posted in a
+channel, so for each mention Agor reads the message with
+`ChannelMessage.Read.Group`, checks with `ChannelSettings.Read.Group` that each
+file is in that channel's own folder, and downloads it. Downloading needs a
+Microsoft Graph application permission that a team owner cannot grant: an Entra
+admin grants the app registration either `Sites.Selected` plus read access to
+each team's SharePoint site (narrowest), or `Files.Read.All`. Without it, the agent
+tells the sender it cannot open the file. Apps installed before Agor requested
+`ChannelSettings.Read.Group` must be uploaded and installed in the team again.
+
+**Agent channel history (off by default).** Turn on **Let session agents read
+channel history** (`agent_tools.channel_history: true`) to let agents on the
+channel's branch use `agor_gateway_teams_thread_history_get` (one page of a thread:
+the post and its replies) and `agor_gateway_teams_channel_posts_list` (a channel's
+posts, without replies). From a channel session they default to that session's
+own thread and channel. They read only standard channels in which the bot has
+received a message, within the allowlists, and need the same
+`ChannelMessage.Read.Group` permission as catch-up; private and shared channels,
+personal chats, and group chats are refused. Nothing they read is stored outside
+the reading session's transcript.
+
+### 5. Use it
+
+In a personal chat, just message the bot. In a channel, post
+`@agor review this thread`. Follow-up messages in the same chat or thread
+continue the same session; in group chats and channels each follow-up needs a
+new mention.
+
+### Upgrading from an earlier Teams release
+
+The upgrade migration runs while daemons keep serving other providers, and it
+disables every existing Teams channel. After **every** daemon runs the new
+version:
+
+1. Open each Teams channel, choose an identity mode, and re-enter or test the
+   credentials.
+2. Change the Azure Bot messaging endpoint to the new callback URL. The old
+   per-channel port and path settings are gone.
+3. Enable the channel. Agor verifies the credentials before it accepts the change.
+
+To roll back, disable Teams channels first. Deliveries marked `ambiguous` are
+never replayed.
 
 ## Agentic Tool Configuration
 
@@ -684,8 +857,8 @@ The gateway is built as a set of loosely coupled components:
 - **Gateway Service** (`/gateway`). Orchestrates inbound routing (platform to session) and outbound routing (session to platform). Custom FeathersJS service.
 - **Gateway Channels** (`/gateway-channels`). CRUD for channel configurations with encrypted credential storage.
 - **Thread-Session Map** (`/thread-session-map`). Persists the mapping between platform thread IDs and Agor session IDs.
-- **Connector Layer.** Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `DiscordConnector` (Discord Gateway), `GitHubConnector` and `ShortcutConnector` (API polling), and `TeamsConnector` (Bot Framework webhook). Adding a new platform means implementing `sendMessage()` and optionally `sendDirectMessage()` and `startListening()`.
-- **Outbound Hook.** FeathersJS `after.create` hook on the messages service. Fire-and-forget; never blocks message creation.
+- **Connector Layer.** Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `DiscordConnector` (Discord Gateway), `GitHubConnector` and `ShortcutConnector` (API polling), and a stateless `TeamsConnector` (Agents SDK outbound). Teams HTTP authentication, encrypted ingress, claims, mapping, and catch-up are owned by the shared daemon route/worker rather than a connector-local server.
+- **Outbound Hook.** FeathersJS `after.create` hook on the messages service. Provider-specific durable delivery intents are queued in the same tenant transaction; workers perform provider effects after a claim and persist definitive or ambiguous terminal state.
 
 ### Adding a New Platform
 
@@ -763,7 +936,7 @@ authoritative mutation transaction.
 - **Use trust or auto mode for unattended agents.** If you want the agent to operate without human approval on each tool call, set the permission mode accordingly.
 - **Attach relevant MCP servers.** A Slack-connected agent that also has GitHub MCP can create PRs, check CI status, and post updates. All from a DM.
 - **One branch per concern.** Create separate channels for different projects or responsibilities rather than funneling everything through one branch.
-- **Name channels descriptively.** When you have multiple channels, names like "Frontend Review Bot (Sonnet)" are much more useful than "Channel 1."
+- **Rename channels when more context helps.** The default name combines the target and channel type. If you connect the same target more than once, use **Rename** to distinguish purposes, such as "Mira · Slack support" and "Mira · Slack engineering". This display name does not change the Slack app's name.
 - **Keep credentials rotated.** Bot tokens and app tokens are encrypted at rest, but rotate them periodically through the channel edit UI.
 
 ## Troubleshooting
@@ -783,7 +956,7 @@ authoritative mutation transaction.
 ### Discord
 
 - **Bot does not respond.** Confirm the row is enabled, has a valid bot token, and passes the shared configuration checks. The bot must be in the configured guild and public text or forum channel with permission to view, read history, and send messages (in threads, for a forum).
-- **Mentions are ignored.** Confirm the privileged Message Content intent is enabled and acknowledged. The structured bot mention is required on every prompt. The author must also match an allowed user ID or hold an allowed role ID, and the message must be in the configured public parent channel.
+- **Mentions are ignored.** Confirm the privileged Message Content intent is enabled and acknowledged. The structured bot mention is required on every prompt. The author must also match an allowed user ID or hold an allowed role ID, and the message must be in a listed public parent channel, or in any public channel that is not excluded when **All public channels** is on. A channel hidden from @everyone counts as private.
 - **Content is narrow and explicit.** DMs, private threads, embeds, components, stickers, polls, webhooks, and bot/self messages are outside the contract. `files:false` keeps the channel text-only; opt-in `files:true` passes image and text attachments to the agent, staged through the existing owner-bound upload/materialization path. Other attachments do not block the message; the agent names the files it could not read.
 - **Catch-up did not run.** REST catch-up is bounded and only runs after a live structured mention. A human reply without a mention does not create a Task; a failed history read or Task admission leaves the admitted cursor unchanged.
 - **Reconnects.** Discord Gateway sequence/session state is process-local. Agor does not expose durable Discord resume/checkpoint configuration; the next live mention uses bounded REST catch-up after the last admitted cursor.
@@ -808,10 +981,38 @@ authoritative mutation transaction.
 
 ### Teams
 
-- **Bot doesn't receive messages.** Confirm the Azure Bot's **Messaging endpoint** points at `https://<your-daemon-host>/api/messages` and that the host is reachable from Azure. Check daemon logs for `[teams] Webhook server listening on port ...`.
-- **"Authentication failed" or replies never send.** Verify the **App ID**, **App Password** (the secret _value_), and **Tenant ID** are correct. A wrong or expired client secret blocks the bot from acquiring a token to reply.
-- **Bot doesn't respond to channel mentions.** In channels and group chats the bot only responds when `@mentioned`. Make sure the app is installed with the `team`/`groupChat` scope.
-- **Port already in use.** The default webhook port is `3978`. Change **Webhook Port** in the channel config if it collides with another service.
+- **Test connection fails.** The reason names the problem: an invalid or expired
+  client secret (use the secret _value_), an App ID that is not registered in the
+  tenant, or an unknown Tenant ID. The app registration must be single-tenant.
+- **The bot never answers.** Check that the Azure Bot messaging endpoint is this
+  channel's callback URL, that the URL is reachable over public HTTPS, and that
+  the channel is enabled. In group chats and channels, make sure you `@mention`
+  the bot itself, and that any team, channel, or user allowlists include you.
+- **"Your Microsoft Teams account isn't linked to an Agor user."** With aligned
+  users, create an Agor account with the sender's work email, or add their AAD
+  object ID to the channel's user map.
+- **Channel catch-up is missing.** Check that the channel's **Catch-up mode** is
+  on and that the `ChannelMessage.Read.Group` permission was granted in that team.
+  The bot still answers the mention without it. Personal and group chats have no
+  catch-up.
+- **The agent says it cannot open a channel image or file.** Check that
+  attachments are on, that an Entra admin granted the app `Sites.Selected` with
+  access to the team's site (or `Files.Read.All`), and that the app was installed
+  in the team with `ChannelSettings.Read.Group`.
+- **A history tool says resource-specific consent is missing.** A team owner must
+  grant `ChannelMessage.Read.Group` when installing the app in that team. If it
+  says Agor has not received an activity from the channel, mention the bot there
+  once.
+- **A reply shows as `ambiguous`.** Agor could not confirm whether Teams accepted
+  it. Check the conversation in Teams before resending anything yourself; Agor
+  does not resend it automatically.
+- **Replies stopped after the app was removed.** Removing the app from a chat or
+  team invalidates Agor's stored address for it. Reinstall the app and message the
+  bot again.
+- **Replies stopped after changing the app credentials or tenant.** Stored
+  conversation addresses belong to the previous app registration, so answers to
+  earlier messages are not delivered. Message the bot again in that chat or
+  thread.
 
 ### General
 

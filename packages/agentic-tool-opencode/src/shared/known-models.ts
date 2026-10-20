@@ -79,6 +79,7 @@ const KNOWN_PROVIDERS = [
       ['claude-sonnet-4-6', 'Claude Sonnet 4.6'],
       ['claude-opus-4-5', 'Claude Opus 4.5'],
       ['claude-sonnet-4-5', 'Claude Sonnet 4.5'],
+      ['claude-haiku-5-5', 'Claude Haiku 5.5'],
       ['claude-haiku-4-5', 'Claude Haiku 4.5'],
     ]),
   },

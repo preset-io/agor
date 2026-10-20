@@ -255,3 +255,135 @@ export async function exerciseWideDeletionReferences(db: Database) {
   );
   return { branch, survivor, parent, children, task, owned };
 }
+
+/**
+ * Read-mostly paging on SQLite and tenant-scoped PostgreSQL: small pages walk
+ * every table through the serialized cursor, only rows that change are
+ * rewritten, and a writer committing between the unlocked read and the locked
+ * re-read is merged rather than clobbered.
+ */
+export async function exerciseReadMostlyDeletionReferences(db: Database) {
+  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const { branch: survivor } = await seedEnvironmentCommandBranch(db);
+  const sessions = new SessionRepository(db);
+  const owned = await sessions.create({ branch_id: branch.branch_id, created_by: user.user_id });
+  const lateOwned = await sessions.create({
+    branch_id: branch.branch_id,
+    created_by: user.user_id,
+  });
+  const unrelatedParent = await sessions.create({
+    branch_id: survivor.branch_id,
+    created_by: user.user_id,
+  });
+  const candidates: SessionID[] = [];
+  const unrelated: SessionID[] = [];
+  await runDatabaseTransaction(
+    db,
+    async (tx) => {
+      for (let i = 0; i < 40; i++) {
+        const candidate = i % 5 === 0;
+        const row = await new SessionRepository(tx).create({
+          branch_id: survivor.branch_id,
+          created_by: user.user_id,
+          genealogy: { children: [unrelatedParent.session_id] },
+          callback_config: {
+            enabled: true,
+            callback_session_id: candidate ? owned.session_id : unrelatedParent.session_id,
+          },
+        });
+        (candidate ? candidates : unrelated).push(row.session_id);
+      }
+    },
+    { sqliteImmediate: true }
+  );
+  const rowState = async (ids: string[]) => {
+    const list = sql.join(
+      ids.map((id) => sql`${id}`),
+      sql`, `
+    );
+    return rawRows(
+      await executeRaw(
+        db,
+        isPostgresDatabase(db)
+          ? sql`SELECT session_id, data::text AS data, xmin::text AS version FROM sessions WHERE session_id IN (${list}) ORDER BY session_id`
+          : sql`SELECT session_id, data FROM sessions WHERE session_id IN (${list}) ORDER BY session_id`
+      )
+    );
+  };
+  const before = await rowState([...unrelated, unrelatedParent.session_id]);
+  const expected = rawRows(
+    await executeRaw(
+      db,
+      sql`SELECT
+        (SELECT count(*) FROM sessions WHERE branch_id <> ${branch.branch_id}) +
+        (SELECT count(*) FROM tasks WHERE session_id NOT IN (SELECT session_id FROM sessions WHERE branch_id = ${branch.branch_id})) +
+        (SELECT count(*) FROM board_comments) + (SELECT count(*) FROM users) +
+        (SELECT count(*) FROM branches WHERE branch_id <> ${branch.branch_id}) AS n`
+    )
+  )[0]!;
+
+  // A writer commits between the unlocked page read and the locked re-read of
+  // the first candidate: it adds an unrelated field AND a reference to an
+  // owned session that the page has never resolved before.
+  const original = databaseWrapper.executeRaw;
+  const spy = vi.spyOn(databaseWrapper, 'executeRaw');
+  let injected = false;
+  spy.mockImplementation(async (tx, query) => {
+    const result = await original(tx, query);
+    // Only the unlocked page read that returned the target row, never its re-read.
+    if (
+      injected ||
+      /FOR UPDATE|WHERE "session_id" IN/.test(new PgDialect().sqlToQuery(query).sql) ||
+      !rawRows(result).some((row) => row.id === candidates[0])
+    )
+      return result;
+    injected = true;
+    const current = rawRows(
+      await original(tx, sql`SELECT data FROM sessions WHERE session_id = ${candidates[0]!}`)
+    )[0]!;
+    const data = typeof current.data === 'string' ? JSON.parse(current.data) : current.data;
+    data.title = 'late writer';
+    data.genealogy.children = [unrelatedParent.session_id, lateOwned.session_id];
+    const encoded = JSON.stringify(data);
+    await original(
+      tx,
+      sql`UPDATE sessions SET data = ${isPostgresDatabase(tx) ? sql`${encoded}::jsonb` : sql`${encoded}`} WHERE session_id = ${candidates[0]!}`
+    );
+    return result;
+  });
+  let cursor: BranchDeletionReferenceCursor = { table: 0 };
+  let scanned = 0;
+  let updated = 0;
+  let pages = 0;
+  try {
+    for (;;) {
+      expect(pages++).toBeLessThan(500);
+      const page = await runDatabaseTransaction(
+        db,
+        (tx) => reconcileBranchDeletionReferencesBatch(tx, branch.branch_id, cursor, 7),
+        { sqliteImmediate: true }
+      );
+      expect(page.scanned).toBeLessThanOrEqual(7);
+      scanned += page.scanned;
+      updated += page.updated;
+      cursor = JSON.parse(JSON.stringify(page.cursor));
+      if (page.done) break;
+    }
+  } finally {
+    spy.mockRestore();
+  }
+  expect(injected).toBe(true);
+  expect(scanned).toBe(Number(expected.n));
+  expect(updated).toBe(candidates.length);
+  expect(pages).toBeGreaterThan(Math.ceil(Number(expected.n) / 7));
+  const late = await sessions.findById(candidates[0]!);
+  expect(late?.title).toBe('late writer');
+  expect(late?.callback_config).toMatchObject({ enabled: false });
+  expect(late?.callback_config?.callback_session_id).toBeUndefined();
+  expect(late?.genealogy.children).toEqual([unrelatedParent.session_id]);
+  for (const id of candidates.slice(1))
+    expect((await sessions.findById(id))?.callback_config?.callback_session_id).toBeUndefined();
+  // Unrelated rows are never rewritten: byte-identical, same PG row version.
+  expect(await rowState([...unrelated, unrelatedParent.session_id])).toEqual(before);
+  return { branch, survivor, owned, candidates, unrelated };
+}

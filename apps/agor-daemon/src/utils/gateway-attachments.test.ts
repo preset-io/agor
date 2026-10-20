@@ -2,14 +2,26 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
-import { isAllowedDiscordAttachmentUrl } from '@agor/core/gateway';
-import type { SessionID, TenantID, UploadRef, UploadStagingStore } from '@agor/core/types';
+import {
+  isAllowedDiscordAttachmentUrl,
+  isTeamsFileDownloadUrl,
+  isTeamsTokenHost,
+} from '@agor/core/gateway';
+import type {
+  BranchID,
+  SessionID,
+  TenantID,
+  UploadRef,
+  UploadStagingStore,
+  UserID,
+} from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import {
   buildPromptWithAttachments,
   ingestDiscordInboundImages,
   ingestInboundAttachments,
+  ingestProviderInboundFiles,
   isAllowedSlackFileUrl,
   isIngestableFile,
 } from './gateway-attachments.js';
@@ -133,6 +145,7 @@ describe('isIngestableFile', () => {
   it('accepts allowlisted text-like types', () => {
     expect(isIngestableFile(makeFile({ mimetype: 'text/plain' }))).toBe(true);
     expect(isIngestableFile(makeFile({ mimetype: 'text/csv' }))).toBe(true);
+    expect(isIngestableFile(makeFile({ mimetype: 'text/tab-separated-values' }))).toBe(true);
     expect(isIngestableFile(makeFile({ mimetype: 'text/markdown' }))).toBe(true);
     expect(isIngestableFile(makeFile({ mimetype: 'application/json' }))).toBe(true);
     expect(isIngestableFile(makeFile({ mimetype: 'Text/Plain; charset=utf-8' }))).toBe(true);
@@ -148,6 +161,13 @@ describe('isIngestableFile', () => {
   it('rejects allowlisted types outside the image/text ingest scope', () => {
     expect(isIngestableFile(makeFile({ mimetype: 'application/pdf' }))).toBe(false);
     expect(isIngestableFile(makeFile({ mimetype: 'application/zip' }))).toBe(false);
+  });
+
+  it('ignores non-string entries without coercing them into permissions', () => {
+    const extra = [null, 42, { toString: () => 'application/pdf' }, 'APPLICATION/ZIP'];
+    expect(isIngestableFile(makeFile({ mimetype: 'application/pdf' }), extra)).toBe(false);
+    expect(isIngestableFile(makeFile({ mimetype: 'application/zip' }), extra)).toBe(true);
+    expect(isIngestableFile(makeFile({ mimetype: 'image/png' }), extra)).toBe(true);
   });
 });
 
@@ -480,6 +500,96 @@ describe('ingestInboundAttachments', () => {
 
     expect(result).toEqual({ uploads: [], failed: 1 });
     expect(await fs.readdir(uploadDir)).toEqual([]);
+  });
+
+  it.each([null, 'application/pdf', {}, false])(
+    'ignores malformed MIME configuration %j without aborting ingestion',
+    async (extraMimeTypes) => {
+      const fetchImpl = vi.fn(
+        async () =>
+          new Response('hello', {
+            headers: { 'content-type': 'text/plain' },
+          })
+      );
+      const result = await ingestInboundAttachments({
+        files: [
+          makeFile({ mimetype: 'application/pdf', name: 'report.pdf' }),
+          makeFile({ mimetype: 'text/plain', name: 'notes.txt' }),
+        ],
+        botToken: 'xoxb-test',
+        fetchImpl,
+        tenantId,
+        sessionId,
+        branchId: '00000000-0000-0000-0000-000000000003' as BranchID,
+        createdBy: '00000000-0000-0000-0000-000000000004' as UserID,
+        extraMimeTypes,
+        store,
+      });
+
+      expect(result.failed).toBe(0);
+      expect(result.uploads).toHaveLength(1);
+      expect(result.uploads[0].mimeType).toBe('text/plain');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('judges a snippet served as force-download by its declared type', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response('a\tb\n', { headers: { 'content-type': 'application/force-download' } })
+    );
+
+    const result = await ingestInboundAttachments({
+      files: [makeFile({ name: 'Untitled', mimetype: 'text/plain' })],
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
+    });
+
+    expect(result.failed).toBe(0);
+    expect(result.uploads[0].mimeType).toBe('text/plain');
+  });
+
+  it('ingests extra types only when the channel lists them', async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response('PK', { headers: { 'content-type': 'application/zip' } })
+    );
+    const zip = makeFile({ name: 'logs.zip', mimetype: 'application/zip' });
+    const args = {
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
+    };
+
+    expect(await ingestInboundAttachments({ ...args, files: [zip] })).toEqual({
+      uploads: [],
+      failed: 0,
+    });
+    const result = await ingestInboundAttachments({
+      ...args,
+      files: [zip],
+      extraMimeTypes: ['application/zip'],
+    });
+    expect(result.uploads[0].mimeType).toBe('application/zip');
+    await expect(
+      store.inspect({
+        tenantId: 'other-tenant' as TenantID,
+        sessionId,
+        branchId: args.branchId,
+        ref: result.uploads[0].ref,
+      })
+    ).rejects.toMatchObject({ status: 404 });
+    expect(isIngestableFile(makeFile({ mimetype: 'application/pdf' }), ['application/*'])).toBe(
+      true
+    );
   });
 
   it('stores same-named files with distinct Slack IDs at distinct paths', async () => {
@@ -1124,5 +1234,184 @@ describe('ingestDiscordInboundImages', () => {
     } finally {
       configureUploadLimits(MAX_UPLOAD_FILE_SIZE);
     }
+  });
+});
+
+describe('ingestProviderInboundFiles for Teams', () => {
+  let uploadDir: string;
+  let store: LocalUploadStagingStore;
+  const owner = {
+    tenantId: 'tenant-teams' as TenantID,
+    sessionId: '00000000-0000-0000-0000-000000000021' as SessionID,
+    branchId: '00000000-0000-0000-0000-000000000023' as never,
+    createdBy: '00000000-0000-0000-0000-000000000024' as never,
+  };
+  const IMAGE_URL = 'https://smba.trafficmanager.net/amer/v3/attachments/a1/views/original';
+  const FILE_URL = 'https://contoso-my.sharepoint.com/personal/download.aspx?tempauth=t';
+  const image = (overrides: Partial<InboundFile> = {}): InboundFile => ({
+    id: 'img-1',
+    name: 'image-1',
+    mimetype: 'image/png',
+    size: -1,
+    url_private_download: IMAGE_URL,
+    auth: 'provider_token',
+    ...overrides,
+  });
+  const personalFile: InboundFile = {
+    id: 'file-1',
+    name: 'notes.txt',
+    mimetype: 'text/plain',
+    size: -1,
+    url_private_download: FILE_URL,
+  };
+  // Mirrors the Teams wiring in GatewayService: token only for token-host images.
+  const requestFor = async (file: InboundFile) =>
+    file.auth === 'provider_token'
+      ? { isAllowedUrl: isTeamsTokenHost, headers: { Authorization: 'Bearer bot-token' } }
+      : { isAllowedUrl: isTeamsFileDownloadUrl, headers: {} };
+
+  beforeEach(async () => {
+    uploadDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-teams-attachments-'));
+    store = new LocalUploadStagingStore(() => uploadDir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(uploadDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('sends the bot token only to the Bot Connector image host, never to SharePoint', async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      url === IMAGE_URL
+        ? makeImageResponse(VALID_PNG)
+        : makeImageResponse(Buffer.from('hello\n'), { 'content-type': 'text/plain' })
+    );
+    const result = await ingestProviderInboundFiles({
+      files: [image(), personalFile],
+      label: 'Teams',
+      provenance: 'gateway-teams',
+      requestFor,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      store,
+      ...owner,
+    });
+    expect(result).toMatchObject({ failed: 0 });
+    expect(result.uploads.map((upload) => upload.provenance)).toEqual([
+      'gateway-teams',
+      'gateway-teams',
+    ]);
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      IMAGE_URL,
+      expect.objectContaining({ headers: { Authorization: 'Bearer bot-token' } }),
+    ]);
+    expect(fetchImpl.mock.calls[1]).toEqual([FILE_URL, expect.objectContaining({ headers: {} })]);
+  });
+
+  it('refuses a redirect off the token host before forwarding the token', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async () => new Response(null, { status: 302, headers: { location: FILE_URL } })
+    );
+    const result = await ingestProviderInboundFiles({
+      files: [image()],
+      label: 'Teams',
+      provenance: 'gateway-teams',
+      requestFor,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      store,
+      ...owner,
+    });
+    expect(result).toMatchObject({ uploads: [], failed: 1, failedNames: ['image-1'] });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(String(vi.mocked(console.warn).mock.calls)).not.toContain('sharepoint');
+  });
+
+  it('caps the actual bytes of a file whose size Teams never declared', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // 12 bytes: over the 8-byte file cap but under the 16-byte message cap.
+    configureUploadLimits(8);
+    try {
+      const fetchImpl = vi.fn(async () =>
+        makeImageResponse(Buffer.from('twelve bytes'), { 'content-type': 'text/plain' })
+      );
+      const result = await ingestProviderInboundFiles({
+        files: [personalFile],
+        label: 'Teams',
+        provenance: 'gateway-teams',
+        requestFor,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        store,
+        ...owner,
+      });
+      expect(result).toMatchObject({ uploads: [], failed: 1 });
+    } finally {
+      configureUploadLimits(MAX_UPLOAD_FILE_SIZE);
+    }
+  });
+
+  it('shares one deadline across every file of the message', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const deadline = new AbortController();
+    const fetchImpl = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+          deadline.abort();
+        })
+    );
+    const result = await ingestProviderInboundFiles({
+      files: [image(), image({ id: 'img-2', name: 'image-2' })],
+      label: 'Teams',
+      provenance: 'gateway-teams',
+      requestFor,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      store,
+      signal: deadline.signal,
+      ...owner,
+    });
+    expect(result).toMatchObject({ uploads: [], failed: 2, failedNames: ['image-1', 'image-2'] });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('bounds a stalled credential lookup by the shared deadline', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const deadline = new AbortController();
+    const fetchImpl = vi.fn();
+    const pending = ingestProviderInboundFiles({
+      files: [image()],
+      label: 'Teams',
+      provenance: 'gateway-teams',
+      requestFor: () => new Promise(() => undefined),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      store,
+      signal: deadline.signal,
+      ...owner,
+    });
+    deadline.abort();
+    await expect(pending).resolves.toMatchObject({ uploads: [], failed: 1 });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('stages a SharePoint text file served as octet-stream under its own type', async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeImageResponse(Buffer.from('# notes\n'), { 'content-type': 'application/octet-stream' })
+    );
+    const files = [{ ...personalFile, name: 'notes.md', mimetype: 'text/markdown' }];
+    const read = (textFromOctetStream: boolean) =>
+      ingestProviderInboundFiles({
+        files,
+        label: 'Teams',
+        provenance: 'gateway-teams',
+        requestFor,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        store,
+        textFromOctetStream,
+        ...owner,
+      });
+    expect((await read(true)).uploads).toEqual([
+      expect.objectContaining({ mimeType: 'text/markdown' }),
+    ]);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await read(false)).toMatchObject({ uploads: [], failed: 1 });
   });
 });

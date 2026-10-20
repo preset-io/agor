@@ -41,11 +41,41 @@ only on successful return. Recursive `fs.rm` can reject before sibling removals
 drain; a rejected removal (including Git or validation inside that call) stays
 fenced. Separate pre-removal validation/quiesce failures can still settle.
 Only DB-only requests may still be unknown. `failSettled` drains/fences them under
-the same Branch lock before clearing ownership. It does not infer rollback. An
-unknown upload or a claimed legacy invocation without this evidence stays blocked;
-see the guide's **Deletion recovery** section. Failed, never-claimed dispatches
-can instead be replaced atomically, fencing any late old claim by generation.
+the same Branch lock before clearing ownership. It does not infer rollback.
+Pre-removal validation also checks that every non-empty directory is writable
+(restoring u+rwx on owned ones), so container-written root files settle as a
+reasoned, retryable `storage_not_writable` failure instead of failing mid-removal.
+
+An executor that dies without settling is the second release path, modeled on
+Task containment. A local deletion executor is a process-group leader; the daemon
+records `execution_process` (PID, kernel boot ID, PID namespace) on the claim
+**before** delivering its payload. Every filesystem/Git effect of the worker
+lives in that group, so its verified absence is storage containment.
+`releaseVerifiedExitedDeletion` then clears ownership under the Branch lock
+(same DB-request barrier as `failSettled`). Both the spawning daemon's exit
+callback and the periodic `BranchDeletionReconciler` (any replica) attempt it;
+a daemon in a different boot or PID namespace never treats a missing PGID as
+absence. Cross-tenant maintenance discovery includes `deletion_failed` rows
+only while they retain a deletion invocation with a recorded process identity.
+This lets the executor host reconcile an exit even if another replica marked
+the heartbeat stale first; settlement removes that discovery visibility.
+A late daemon-side upload RPC is harmless: upload deletes are keyed by
+immutable ref and idempotent. Templated/remote executors and legacy claims with
+no recorded identity stay fenced until an administrator calls
+`branches/:id/release-deletion` (MCP `agor_branches_release_deletion`), which only
+clears a `deletion_failed` claim and records the actor; it never releases a live
+`deleting` row. A recorded same-host/PID-namespace process must also be verified
+absent, even on a stale-fenced row. The probe runs outside the transaction; release
+compares both the invocation ID and the complete process identity under the Branch
+lock so a replacement invocation or newly recorded identity cannot bypass it.
+See the guide's **Deletion recovery** section. Failed,
+never-claimed dispatches can instead be replaced atomically, fencing any late old
+claim by generation.
 `db/branch-admission.ts` supplies the Branch-first lock for producer admission.
+Deletion's reference scrub (`db/branch-deletion-references.ts`) reads pages
+without row locks and locks only rows it rewrites. That relies on this fence: a
+new reference to a deleting branch's sessions, tasks or namespaces must be
+admitted under that branch's row lock, never written around it.
 Do not expose maintenance methods or internal claim JSON as generic CRUD.
 
 `db/branch-deletion-manifest.ts` declares ownership-review dispositions for inbound

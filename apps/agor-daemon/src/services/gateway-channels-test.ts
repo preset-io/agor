@@ -16,7 +16,7 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { NotFound } from '@agor/core/feathers';
-import { getConnector } from '@agor/core/gateway';
+import { gatewayFailureCode, getConnector } from '@agor/core/gateway';
 import type {
   AuthenticatedParams,
   ChannelType,
@@ -95,7 +95,12 @@ export function createGatewayChannelsTestService(db: TenantScopeAwareDatabase) {
           failures: [
             {
               capability: 'config',
-              reason: error instanceof Error ? error.message : String(error),
+              reason:
+                channelType === 'teams'
+                  ? gatewayFailureCode(error)
+                  : error instanceof Error
+                    ? error.message
+                    : String(error),
             },
           ],
           notVerifiable: [],

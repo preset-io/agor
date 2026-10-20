@@ -11,10 +11,9 @@
  *
  * The scope/event matrix mirrors what the Slack connector actually calls; see
  * {@link ./slack.ts}. DMs are always handled, so there is no DM toggle, and
- * channel-like surfaces trigger exclusively on `app_mention` (verified in the
- * connector's inbound filter), so no `message.channels`/`groups`/`mpim` events
- * are requested. Inbound emoji reactions are the one non-message trigger: they
- * subscribe to `reaction_added`/`reaction_removed` only when opted in.
+ * channel-like prompts and commands trigger only on `app_mention`.
+ * Broad channel-message subscriptions are intentionally not requested.
+ * Inbound emoji reactions are the one non-message trigger: they subscribe to `reaction_added`/`reaction_removed` only when opted in.
  */
 
 import {
@@ -190,8 +189,8 @@ export function requiredBotScopes(opts: SlackWizardOptions): string[] {
 
 /**
  * Bot event subscriptions required for the selected capabilities,
- * de-duplicated and stable-sorted. Channel-like surfaces trigger only on
- * `app_mention`; DMs trigger on `message.im`; inbound reactions add
+ * de-duplicated and stable-sorted. Channel prompts and commands use `app_mention`,
+ * DMs use `message.im`, and inbound reactions add
  * `reaction_added`/`reaction_removed`.
  */
 export function requiredBotEvents(opts: SlackWizardOptions): string[] {

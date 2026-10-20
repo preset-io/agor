@@ -53,6 +53,8 @@ describe('buildTenantInsertOrder', () => {
       'github_install_states',
       'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
+      'teams_conversation_addresses',
+      'teams_message_deliveries',
       'user_mcp_oauth_tokens',
       'user_provider_oauth_grants',
     ]);

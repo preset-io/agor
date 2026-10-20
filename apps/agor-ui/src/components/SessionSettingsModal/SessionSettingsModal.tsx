@@ -289,10 +289,12 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   // Loaded on first need. Until then the ids may be partial, so the MCP chip
   // is read-only and saving never sends an MCP diff (it would detach links
   // the form never held).
-  const { ids: sessionMcpServerIds, loaded: sessionMcpLoaded } = useSessionMcpServerIds(
-    client,
-    session.session_id
-  );
+  const {
+    ids: sessionMcpServerIds,
+    loaded: sessionMcpLoaded,
+    failed: mcpLoadFailed,
+    retry: retryMcpLoad,
+  } = useSessionMcpServerIds(client, session.session_id);
   const [form] = Form.useForm();
   const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
   const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
@@ -643,6 +645,8 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           enableSaveAsDefault
           showEffort
           mcpLoading={!sessionMcpLoaded}
+          mcpLoadFailed={mcpLoadFailed}
+          onMcpRetry={retryMcpLoad}
         />
 
         {/* SECONDARY ZONE — niche settings, collapsed by default */}

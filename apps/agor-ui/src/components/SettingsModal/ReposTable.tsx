@@ -259,13 +259,29 @@ export const ReposTable: React.FC<ReposTableProps> = ({
           <Typography.Link ellipsis title={name} onClick={() => openEdit(repo)}>
             <HighlightMatch text={name} query={searchTerm} />
           </Typography.Link>
-          {(repo.clone_status === 'cloning' || repo.clone_status === 'failed') && (
-            <Tooltip title={repositorySetupMessage(repo)}>
-              <Tag color={repo.clone_status === 'failed' ? 'warning' : 'processing'}>
-                {repo.clone_status === 'failed' ? 'Setup failed' : 'Setting up'}
-              </Tag>
-            </Tooltip>
-          )}
+          <Tooltip
+            title={
+              repo.clone_status === 'cloning' || repo.clone_status === 'failed'
+                ? repositorySetupMessage(repo)
+                : undefined
+            }
+          >
+            <Tag
+              color={
+                repo.clone_status === 'failed'
+                  ? 'warning'
+                  : repo.clone_status === 'cloning'
+                    ? 'processing'
+                    : 'success'
+              }
+            >
+              {repo.clone_status === 'failed'
+                ? 'Failed'
+                : repo.clone_status === 'cloning'
+                  ? 'Cloning'
+                  : 'Ready'}
+            </Tag>
+          </Tooltip>
         </Space>
       ),
     },

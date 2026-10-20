@@ -184,16 +184,7 @@ export type OpenCodeToolDependencies = {
   spawn?: (executable: string, args: readonly string[], options: SpawnOptions) => ManagedChild;
   createClient?: typeof createOpencodeClient;
   resolveInvocationConfig?: (input: RunOpenCodeTurnInput) => Promise<OpenCodeInvocationConfig>;
-  resolveMcpServers?: (
-    sessionId: SessionID
-  ) => Promise<
-    Array<
-      { server: MCPServer; source: 'session-assigned' | 'global' } & Pick<
-        MCPServerWithSource,
-        'oauthAuthResolution' | 'configuredOAuthGrantType' | 'missingUserEnvKeys'
-      >
-    >
-  >;
+  resolveMcpServers?: (sessionId: SessionID) => Promise<MCPServerWithSource[]>;
   getDaemonUrl?: () => Promise<string>;
   createPermissionCallback?: (
     sessionId: SessionID,

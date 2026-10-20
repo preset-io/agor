@@ -98,22 +98,47 @@ describe('GatewayOutboundMessageRepository', () => {
         });
       }
       expect(
-        (await repo.listDiscordDirectMessageSends(channel.id, 'dm', null)).map(
-          (row) => row.message_text
-        )
+        (await repo.listDirectMessageSends(channel.id, 'dm', null)).map((row) => row.message_text)
       ).toEqual(['text-2', 'text-1']);
       expect(
-        (
-          await repo.listDiscordDirectMessageSends(
-            channel.id,
-            'dm',
-            new Date('2026-09-25T00:00:02Z')
-          )
-        ).map((row) => row.message_text)
+        (await repo.listDirectMessageSends(channel.id, 'dm', new Date('2026-09-25T00:00:02Z'))).map(
+          (row) => row.message_text
+        )
       ).toEqual(['text-1']);
-      expect(await repo.listDiscordDirectMessageSends(generateId(), 'dm', null)).toEqual([]);
+      expect(await repo.listDirectMessageSends(generateId(), 'dm', null)).toEqual([]);
     }
   );
+
+  dbTest('reads Teams DM sends separately and finds a send by its message ID', async ({ db }) => {
+    const { user, branch, channel } = await seedGateway(db);
+    const repo = new GatewayOutboundMessageRepository(db);
+    for (const [id, platform] of [
+      ['1791924437861', 'teams'],
+      ['1791924437862', 'discord'],
+    ] as const) {
+      await repo.create({
+        gateway_channel_id: channel.id,
+        channel_type: platform,
+        platform_channel_id: 'a:chat',
+        platform_message_id: id,
+        platform_thread_id: `a:chat|${id}`,
+        target_branch_id: branch.branch_id,
+        emitted_by_user_id: user.user_id,
+        message_text: `text-${id}`,
+      });
+    }
+    expect(
+      (await repo.listDirectMessageSends(channel.id, 'a:chat', null, 'teams')).map(
+        (row) => row.message_text
+      )
+    ).toEqual(['text-1791924437861']);
+    expect(
+      (await repo.findByPlatformMessage(channel.id, 'a:chat', '1791924437861'))?.message_text
+    ).toBe('text-1791924437861');
+    // The same message ID in another conversation is a different message.
+    expect(await repo.findByPlatformMessage(channel.id, 'a:other', '1791924437861')).toBeNull();
+    expect(await repo.findByPlatformMessage(generateId(), 'a:chat', '1791924437861')).toBeNull();
+  });
 
   dbTest('admits a seed by canonical thread or provider alias', async ({ db }) => {
     const { user, branch, channel } = await seedGateway(db);

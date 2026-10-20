@@ -461,8 +461,26 @@ describe('SessionMCPServerRepository.setServers', () => {
 
     await repo.setServers(session.session_id, []);
 
+    // A plain link replacement never changes global-server inheritance.
+    expect(
+      (await new SessionRepository(db).findById(session.session_id))?.mcp_selection_explicit
+    ).toBeUndefined();
+
     const servers = await repo.listServers(session.session_id);
     expect(servers).toHaveLength(0);
+  });
+
+  dbTest('records creation-time explicit empty selection with the replacement', async ({ db }) => {
+    const { session, server1 } = await setupTestData(db);
+    const repo = new SessionMCPServerRepository(db);
+
+    await repo.addServer(session.session_id, server1.mcp_server_id);
+    await repo.setServers(session.session_id, [], { markSelectionExplicit: true });
+
+    expect(
+      (await new SessionRepository(db).findById(session.session_id))?.mcp_selection_explicit
+    ).toBe(true);
+    expect(await repo.listServers(session.session_id)).toHaveLength(0);
   });
 
   dbTest('should set servers on session with no existing servers', async ({ db }) => {

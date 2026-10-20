@@ -1839,6 +1839,30 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     }
   );
 
+  server.registerTool(
+    'agor_branches_release_deletion',
+    {
+      description:
+        'Administrators only. Release a branch whose permanent deletion is fenced with "Deletion recovery is blocked" and has no verified executor settlement. Agor already releases local executors it can verify have exited; use this only for older or remote invocations after confirming no deletion executor for the branch is still running. A recorded same-host process group must be verified absent, even if its heartbeat is stale. It clears the stale invocation and records who released it; then retry agor_branches_delete.',
+      annotations: { destructiveHint: true },
+      inputSchema: z.object({
+        branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to release (UUIDv7 or short ID)'),
+      }),
+    },
+    async (args) => {
+      const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
+      const branch = await ctx.app
+        .service('/branches/:id/release-deletion')
+        .create({}, { ...ctx.baseServiceParams, route: { id: branchId } });
+      return textResult({
+        branch_id: branchId,
+        deletion_status: branch.deletion_status,
+        deletion_error: branch.deletion_error,
+        message: 'Deletion invocation released. Retry agor_branches_delete to continue.',
+      });
+    }
+  );
+
   const listTeammatesHandler = async (args: {
     repoId?: string;
     limit?: number;

@@ -4,6 +4,7 @@ import {
   BRANCH_MAINTENANCE_DISCOVERY_PAGE_SIZE,
   type BranchID,
   type BranchMaintenanceClaim,
+  type BranchMaintenanceExecutionProcess,
   type BranchMaintenanceRoutingRef,
   isTeammate,
   type TenantID,
@@ -388,7 +389,9 @@ export class BranchMaintenanceRepository {
           deletion_status: 'deletion_failed',
           deletion_error: current.execution_id
             ? current.execution_claimed_at
-              ? 'Deletion executor stopped reporting without a settlement acknowledgement. Retry is blocked: process exit and heartbeat age do not prove storage requests stopped. See the branch deletion recovery guide.'
+              ? current.execution_process
+                ? 'Deletion executor stopped reporting. Retry unlocks once a daemon on the executor host verifies its process group has exited.'
+                : 'Deletion executor stopped reporting without a settlement acknowledgement. Retry is blocked: process exit and heartbeat age do not prove storage requests stopped. See the branch deletion recovery guide.'
               : 'Deletion dispatch was never claimed. Retry permanent deletion to fence the old dispatch and start a new invocation.'
             : 'Deletion was interrupted before executor admission. Retry permanent deletion to continue.',
           // No invocation was ever admitted: there can be no late claimant.
@@ -398,6 +401,113 @@ export class BranchMaintenanceRepository {
         .where(eq(branches.branch_id, claim.branch_id))
         .run();
       return true;
+    });
+  }
+
+  /**
+   * Persist the local executor identity before its payload is delivered, so a
+   * replacement daemon on the same host can later verify absence. Returns
+   * false when the invocation already changed; the caller must not deliver.
+   */
+  async recordExecutionProcess(
+    claim: BranchMaintenanceClaim,
+    executionId: UUID,
+    executionProcess: BranchMaintenanceExecutionProcess
+  ): Promise<boolean> {
+    return this.locked(claim.branch_id, async (tx, row) => {
+      const current = this.assertClaim(row, claim);
+      if (current.execution_id !== executionId || current.execution_claimed_at) return false;
+      await update(tx, branches)
+        .set({
+          data: {
+            ...row.data,
+            maintenance: { ...current, execution_process: executionProcess },
+          },
+        })
+        .where(eq(branches.branch_id, claim.branch_id))
+        .run();
+      return true;
+    });
+  }
+
+  /**
+   * Settle a deletion invocation whose local executor process group the caller
+   * verified absent. Every worker-owned filesystem/Git effect lived in that
+   * group, so nothing it started can still mutate storage. This Branch lock is
+   * the same DB-request barrier as failSettled: an admitted DB step commits or
+   * rolls back first, and a delayed one fails exact-invocation validation. A
+   * daemon-side upload RPC may still finish; upload deletes are keyed by
+   * immutable ref and idempotent, so a retry re-running them is safe.
+   */
+  async releaseVerifiedExitedDeletion(
+    branchId: BranchID,
+    executionId: UUID,
+    safeSummary: string
+  ): Promise<boolean> {
+    try {
+      return await this.locked(branchId, async (tx, row) => {
+        const current = row.data.maintenance;
+        if (
+          current?.kind !== 'delete' ||
+          current.execution_id !== executionId ||
+          !row.deletion_status
+        )
+          return false;
+        await update(tx, branches)
+          .set({
+            data: { ...row.data, maintenance: undefined },
+            deletion_status: 'deletion_failed',
+            deletion_error: safeSummary.slice(0, 500),
+            deletion_updated_at: await this.now(tx, branchId),
+          })
+          .where(eq(branches.branch_id, branchId))
+          .run();
+        return true;
+      });
+    } catch (error) {
+      // Successful finalize already removed the row.
+      if (error instanceof EntityNotFoundError) return false;
+      throw error;
+    }
+  }
+
+  /**
+   * Administrator override for a fenced failure that has no containment
+   * evidence (legacy claims, templated/remote executors). It discards the old
+   * invocation; the caller authorizes, audits and owns the containment risk.
+   * The caller probes any same-host process outside the transaction and refuses
+   * release unless it is absent. Recheck that exact invocation and process
+   * identity under the lock, including an identity recorded after the read.
+   */
+  async forceReleaseFailedDeletion(
+    branchId: BranchID,
+    safeSummary: string,
+    expected: Pick<BranchMaintenanceClaim, 'execution_id' | 'execution_process'>
+  ): Promise<BranchMaintenanceClaim> {
+    return this.locked(branchId, async (tx, row) => {
+      const current = row.data.maintenance;
+      if (
+        row.deletion_status !== 'deletion_failed' ||
+        current?.kind !== 'delete' ||
+        !current.execution_id
+      )
+        throw new RepositoryError('Only a fenced failed deletion can be force-released');
+      if (
+        current.execution_id !== expected.execution_id ||
+        current.execution_process?.pid !== expected.execution_process?.pid ||
+        current.execution_process?.boot_id !== expected.execution_process?.boot_id ||
+        current.execution_process?.pid_namespace !== expected.execution_process?.pid_namespace
+      )
+        throw new RepositoryError('Deletion invocation changed before administrator release');
+      await update(tx, branches)
+        .set({
+          data: { ...row.data, maintenance: undefined },
+          deletion_error: safeSummary.slice(0, 500),
+          deletion_updated_at: await this.now(tx, branchId),
+        })
+        .where(eq(branches.branch_id, branchId))
+        .run();
+      return current;
     });
   }
 
@@ -527,6 +637,42 @@ export class BranchMaintenanceDiscoveryRepository {
           WHERE deletion_status = 'deleting' AND branch_id > ${after?.branch_id ?? ''}
           ORDER BY branch_id LIMIT ${BRANCH_MAINTENANCE_DISCOVERY_PAGE_SIZE}`
           : sql`SELECT branch_id, tenant_id FROM branches WHERE deletion_status = 'deleting'
+          AND (tenant_id, branch_id) > (${after?.tenant_id ?? ''}, ${after?.branch_id ?? ''})
+          ORDER BY tenant_id, branch_id LIMIT ${BRANCH_MAINTENANCE_DISCOVERY_PAGE_SIZE}`
+      )
+    );
+    return rows.map((row) => ({
+      tenant_id: String(row.tenant_id) as TenantID,
+      branch_id: String(row.branch_id) as BranchID,
+    }));
+  }
+
+  /**
+   * Deletion invocations with a recorded local executor identity, including
+   * stale-fenced failures. Another replica may mark a row failed before a
+   * daemon in the executor's namespace can verify absence. The discovery RLS
+   * policy keeps these recorded invocations visible until they are released.
+   */
+  async findExecutionProcessRefs(options: {
+    tenantId?: string;
+    after?: BranchMaintenanceRoutingRef;
+  }): Promise<BranchMaintenanceRoutingRef[]> {
+    if (!options.tenantId && !isPostgresDatabase(this.db)) {
+      throw new RepositoryError('Cross-tenant maintenance discovery requires PostgreSQL');
+    }
+    const after = options.after;
+    const recorded = sql`${branches.deletion_status} IN ('deleting', 'deletion_failed')
+      AND ${branches.data} -> 'maintenance' ->> 'kind' = 'delete'
+      AND ${branches.data} -> 'maintenance' ->> 'execution_id' IS NOT NULL
+      AND ${branches.data} -> 'maintenance' ->> 'execution_process' IS NOT NULL`;
+    const rows = rawRows(
+      await executeRaw(
+        this.db,
+        options.tenantId
+          ? sql`SELECT branch_id, ${options.tenantId} AS tenant_id FROM branches
+          WHERE ${recorded} AND branch_id > ${after?.branch_id ?? ''}
+          ORDER BY branch_id LIMIT ${BRANCH_MAINTENANCE_DISCOVERY_PAGE_SIZE}`
+          : sql`SELECT branch_id, tenant_id FROM branches WHERE ${recorded}
           AND (tenant_id, branch_id) > (${after?.tenant_id ?? ''}, ${after?.branch_id ?? ''})
           ORDER BY tenant_id, branch_id LIMIT ${BRANCH_MAINTENANCE_DISCOVERY_PAGE_SIZE}`
       )

@@ -19,6 +19,7 @@ import {
   setMcpMemberPolicy,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
+  UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { Conflict, Forbidden, NotFound } from '@agor/core/feathers';
@@ -36,6 +37,7 @@ import {
   MCPMarketplaceRemoveServerService,
   MCPMarketplaceToolPermissionService,
 } from './mcp-marketplace-actions';
+import { resolveMCPMarketplaceOAuthGrantAuthority } from './mcp-oauth-grant-authority';
 import { SessionMCPServersService } from './session-mcp-servers';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -141,6 +143,79 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await runWithTenantDatabaseScope(db, a.tenantId, async (scoped) => {
         expect(await new MCPServerRepository(scoped).findById(a.serverId)).not.toBeNull();
       });
+    });
+
+    it('lists only its own tenant Shared servers to an admin', async () => {
+      const seedShared = async () => {
+        const fixture = await seed();
+        return runWithTenantDatabaseScope(db, fixture.tenantId, async (scoped) => {
+          const admin = await new UsersRepository(scoped).create({
+            email: `${generateId()}@example.test`,
+            role: 'admin',
+          });
+          const shared = await new MCPServerRepository(scoped).create({
+            name: `shared-${fixture.tenantId}`,
+            transport: 'http',
+            url: 'https://example.test/shared-mcp',
+            auth: { type: 'oauth', oauth_mode: 'shared' },
+            scope: 'global',
+            source: 'user',
+          });
+          await new UserMCPOAuthTokenRepository(scoped, 'test-master-secret').saveToken(
+            null,
+            shared.mcp_server_id,
+            {
+              accessToken: `token-${fixture.tenantId}`,
+              clientId: 'shared-client',
+              expiresAt: new Date(Date.now() + 60_000),
+              // PostgreSQL grants must carry a configuration binding; listing
+              // scope is under test here, not binding verification.
+              grantBinding: {
+                generation: 1,
+                version: 1,
+                fingerprint: 'a'.repeat(64),
+                metadataUri: 'https://example.test/.well-known/oauth-protected-resource',
+                resourceUri: 'https://example.test/shared-mcp',
+                issuer: 'https://provider.example.test',
+                authorizationEndpoint: 'https://provider.example.test/authorize',
+                tokenEndpoint: 'https://provider.example.test/token',
+                redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
+              },
+            },
+            admin.user_id as UserID
+          );
+          await new SessionMCPServerRepository(scoped).addServer(
+            fixture.session.session_id,
+            shared.mcp_server_id
+          );
+          return { ...fixture, adminId: admin.user_id as UserID, sharedId: shared.mcp_server_id };
+        });
+      };
+      const a = await seedShared();
+      const b = await seedShared();
+      const overview = await runWithTenantDatabaseScope(db, a.tenantId, (scoped) =>
+        new MCPMarketplaceRepository(scoped, (userId, serverIds, options) =>
+          resolveMCPMarketplaceOAuthGrantAuthority({
+            db: scoped,
+            userId,
+            serverIds,
+            serverRepository: new MCPServerRepository(scoped),
+            tokenRepository: new UserMCPOAuthTokenRepository(scoped, 'test-master-secret'),
+            includeShared: options?.includeShared,
+          })
+        ).overviewForUser(a.adminId, undefined, { includeShared: true })
+      );
+      expect(overview.servers.map((server) => [server.mcp_server_id, server.shared])).toEqual([
+        [a.sharedId, true],
+      ]);
+      expect(overview.servers[0].session_count).toBe(1);
+      expect(overview.credentials.map((credential) => credential.mcp_server_id)).toEqual([
+        a.sharedId,
+      ]);
+      expect(overview.attachments.map((item) => item.mcp_server_id)).not.toContain(b.sharedId);
+      expect(JSON.stringify(overview)).not.toContain(b.tenantId);
+      expect(JSON.stringify(overview)).not.toContain(b.sharedId);
+      expect(JSON.stringify(overview)).not.toContain(b.session.session_id);
     });
 
     it('an attachment that wins the lock invalidates the confirmed count without detaching', async () => {

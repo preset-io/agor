@@ -91,6 +91,44 @@ security:
 load with a clear error — the CORS spec explicitly forbids this combination
 because it would allow credentialed requests from any origin.
 
+### Private outbound destinations
+
+Daemon-side outbound HTTP for OAuth, MCP egress, and MCP connection tests goes
+through `safeOutboundFetch` (`packages/core/src/utils/safe-outbound-fetch.ts`),
+which refuses every private, loopback, link-local, and reserved address. When a
+self-hosted deployment needs the daemon to reach one internal HTTPS service
+(for example through a VPC endpoint or an internal load balancer), pin it:
+
+```yaml
+security:
+  private_outbound_destinations:
+    - host: internal-api.example.internal
+      cidrs: [10.200.0.0/24]
+```
+
+- Matching is on the exact hostname, case-insensitive. No wildcards and no IP
+  literals.
+- Only `https:` URLs qualify; plain HTTP to a listed host is still refused.
+- Every resolved address for a listed host must be IPv4 and inside that
+  entry's `cidrs`, or the request fails. A listed host never falls back to the
+  public-address rule, and the connection is pinned to the checked address.
+- Hosts that are not listed keep the default behaviour. Another name resolving
+  into `10.200.0.0/24` is still refused.
+- Redirects are re-checked on every hop, so a redirect from a listed host to an
+  unlisted private host is refused.
+
+Startup fails with `Config error: security.private_outbound_destinations[<i>]…`
+unless: there are at most 64 entries; each `host` is a lowercase DNS name with
+at least two labels (not an IP, `localhost`, `*.localhost`, `*.local`, or
+`metadata.google.internal`); and each entry has 1–8 IPv4 CIDRs, written as
+network addresses, wholly inside `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`, or `100.64.0.0/10`. Loopback, link-local (`169.254.0.0/16`),
+`0.0.0.0/8`, and public ranges cannot be listed.
+
+The list is installed once at daemon startup; any change, including removing an
+entry, needs a daemon restart. Operator docs:
+`apps/agor-docs/content/guide/config-yaml.mdx` (Private outbound destinations).
+
 ### Sandpack, local/private Agor URLs, and Chrome Private Network Access
 
 Artifacts commonly render inside the hosted Sandpack iframe

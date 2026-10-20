@@ -32,6 +32,7 @@ import type {
   GatewayConnectionTestResult,
 } from '../../types/gateway';
 import {
+  discordChannelInScope,
   discordOutboundChannelTarget,
   discordResponseModeAdmits,
   discordResponseModeMayAdmit,
@@ -40,6 +41,7 @@ import {
   isDiscordThreadCoordinates,
   validateDiscordConfig,
 } from '../../types/gateway';
+import { parseGatewayChatCommand } from '../chat-commands';
 import type {
   GatewayConnector,
   GatewayInboundCallback,
@@ -64,7 +66,9 @@ import {
   parseDiscordThreadKey,
 } from '../discord-identifiers';
 import { GatewayListenerError } from '../listener-error';
+import { chunkMarkdown, codePointLength } from '../markdown-chunker';
 import { gatewayFailureCode } from '../provider-error';
+import { GATEWAY_READABLE_MIMES, readableMimeForFilename } from '../readable-files';
 import {
   createDiscordReadBudget,
   type DiscordReadBudget,
@@ -85,6 +89,20 @@ const DISCORD_PUBLIC_THREAD_TYPES = new Set<number>([
   DiscordChannelType.PublicThread,
 ]);
 const DISCORD_TEXT_MESSAGE_TYPES = new Set([0, 19]);
+/** Dispatches after which the cached guild record (roles, @everyone permissions) may be stale. */
+const DISCORD_GUILD_CHANGE_EVENTS = new Set<string>([
+  GatewayDispatchEvents.GuildUpdate,
+  GatewayDispatchEvents.GuildRoleCreate,
+  GatewayDispatchEvents.GuildRoleUpdate,
+  GatewayDispatchEvents.GuildRoleDelete,
+]);
+/** Dispatches after which a cached channel record may be stale (e.g. made private). */
+const DISCORD_CHANNEL_CHANGE_EVENTS = new Set<string>([
+  GatewayDispatchEvents.ChannelUpdate,
+  GatewayDispatchEvents.ChannelDelete,
+  GatewayDispatchEvents.ThreadUpdate,
+  GatewayDispatchEvents.ThreadDelete,
+]);
 const DISCORD_NONCE_RECOVERY_WINDOW_MS = 5 * 60_000;
 const DISCORD_ADMINISTRATOR_PERMISSION = PermissionFlagsBits.Administrator;
 const DISCORD_ALL_PERMISSIONS = (1n << 64n) - 1n;
@@ -264,27 +282,6 @@ const DISCORD_SIGNED_ATTACHMENT_QUERY = new Set(['ex', 'is', 'hm']);
  * Attachment types handed to the agent: images and text-like files. Mirrors
  * the daemon's gateway ingestion allowlist, which re-checks each download.
  */
-const DISCORD_READABLE_MIMES = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-  'text/plain',
-  'text/markdown',
-  'text/csv',
-  'application/json',
-]);
-const DISCORD_READABLE_EXTENSIONS: ReadonlyArray<[RegExp, string]> = [
-  [/\.png$/, 'image/png'],
-  [/\.jpe?g$/, 'image/jpeg'],
-  [/\.gif$/, 'image/gif'],
-  [/\.webp$/, 'image/webp'],
-  [/\.(txt|log)$/, 'text/plain'],
-  [/\.(md|markdown)$/, 'text/markdown'],
-  [/\.csv$/, 'text/csv'],
-  [/\.json$/, 'application/json'],
-];
-
 /**
  * Discord attachment URLs are signed CDN URLs, not arbitrary user-provided
  * download targets. Keep the accepted shape narrow so the daemon can fetch
@@ -325,9 +322,8 @@ function discordAttachmentMime(contentType: unknown, filename: string): string |
   }
   const normalized =
     typeof contentType === 'string' ? contentType.split(';')[0].trim().toLowerCase() : '';
-  if (normalized) return DISCORD_READABLE_MIMES.has(normalized) ? normalized : undefined;
-  const lowerName = filename.toLowerCase();
-  return DISCORD_READABLE_EXTENSIONS.find(([pattern]) => pattern.test(lowerName))?.[1];
+  if (normalized) return GATEWAY_READABLE_MIMES.has(normalized) ? normalized : undefined;
+  return readableMimeForFilename(filename);
 }
 
 /**
@@ -504,149 +500,9 @@ function parseThreadId(threadId: string): {
   throw new Error(`Invalid Discord thread ID: ${threadId}`);
 }
 
-interface DiscordFenceState {
-  /** Exact info string from the opening fence, without the newline. */
-  info: string;
-}
-
-interface DiscordChunkToken {
-  text: string;
-  stateAfter: DiscordFenceState | null;
-  kind: 'text' | 'open' | 'close';
-}
-
-function codePointLength(value: string): number {
-  return Array.from(value).length;
-}
-
-function fencePrefix(state: DiscordFenceState): string {
-  return `\`\`\`${state.info}\n`;
-}
-
-function tokenizeDiscordMessage(text: string): DiscordChunkToken[] {
-  const codePoints = Array.from(text);
-  const tokens: DiscordChunkToken[] = [];
-  let state: DiscordFenceState | null = null;
-  let offset = 0;
-  while (offset < codePoints.length) {
-    const isFence = codePoints.slice(offset, offset + 3).join('') === '```';
-    if (!isFence) {
-      tokens.push({ text: codePoints[offset], stateAfter: state, kind: 'text' });
-      offset += 1;
-      continue;
-    }
-
-    if (state) {
-      state = null;
-      tokens.push({ text: '```', stateAfter: state, kind: 'close' });
-      offset += 3;
-      continue;
-    }
-
-    const newlineOffset = codePoints.indexOf('\n', offset + 3);
-    const infoEnd = newlineOffset === -1 ? codePoints.length : newlineOffset;
-    const info = codePoints.slice(offset + 3, infoEnd).join('');
-    const tokenEnd = newlineOffset === -1 ? codePoints.length : newlineOffset + 1;
-    state = { info };
-    tokens.push({
-      text: codePoints.slice(offset, tokenEnd).join(''),
-      stateAfter: state,
-      kind: 'open',
-    });
-    offset = tokenEnd;
-  }
-  return tokens;
-}
-
-function renderedDiscordChunkLength(
-  prefix: string,
-  source: string,
-  nextState: DiscordFenceState | null
-): number {
-  return codePointLength(prefix) + codePointLength(source) + (nextState ? 4 : 0);
-}
-
 /** Split text deterministically without ever exceeding Discord's 2000-code-point cap. */
 export function chunkDiscordMessage(text: string, limit = DISCORD_MESSAGE_LIMIT): string[] {
-  if (!Number.isInteger(limit) || limit < 32) throw new Error('Discord chunk limit is too small');
-  if (text.length === 0) return [''];
-
-  const tokens = tokenizeDiscordMessage(text);
-  const chunks: string[] = [];
-  let state: DiscordFenceState | null = null;
-  let tokenOffset = 0;
-
-  while (tokenOffset < tokens.length) {
-    const prefix = state ? fencePrefix(state) : '';
-    if (codePointLength(prefix) >= limit) {
-      throw new Error('Discord chunk limit cannot accommodate a Markdown fence');
-    }
-
-    const startOffset = tokenOffset;
-    let source = '';
-    let nextState: DiscordFenceState | null = state;
-    let maxOffset = tokenOffset;
-    let maxSource = '';
-    let maxState: DiscordFenceState | null = state;
-    while (tokenOffset < tokens.length) {
-      const token = tokens[tokenOffset];
-      const candidateSource = source + token.text;
-      const candidateState = token.stateAfter;
-      if (renderedDiscordChunkLength(prefix, candidateSource, candidateState) > limit) break;
-      source = candidateSource;
-      nextState = candidateState;
-      tokenOffset += 1;
-      maxOffset = tokenOffset;
-      maxSource = source;
-      maxState = nextState;
-    }
-    if (maxOffset === startOffset) {
-      throw new Error('Discord chunk limit cannot accommodate a Markdown fence');
-    }
-
-    // Prefer a readable cut after whitespace, but only at token boundaries and
-    // only when the following token still fits with its full fence prefix.
-    let softOffset = startOffset;
-    let sourceLength = 0;
-    for (let index = startOffset; index < maxOffset; index += 1) {
-      const token = tokens[index];
-      sourceLength += codePointLength(token.text);
-      if ((token.text === '\n' || token.text === ' ') && sourceLength >= Math.floor(limit * 0.6)) {
-        softOffset = index + 1;
-      }
-    }
-    if (softOffset > startOffset && softOffset < maxOffset) {
-      const candidateNextState = tokens[softOffset - 1].stateAfter;
-      const candidatePrefix = candidateNextState ? fencePrefix(candidateNextState) : '';
-      const nextToken = tokens[softOffset];
-      const nextFits =
-        !nextToken ||
-        renderedDiscordChunkLength(candidatePrefix, nextToken.text, nextToken.stateAfter) <= limit;
-      if (nextFits) {
-        tokenOffset = softOffset;
-        source = tokens
-          .slice(startOffset, softOffset)
-          .map((token) => token.text)
-          .join('');
-        nextState = candidateNextState;
-      } else {
-        tokenOffset = maxOffset;
-        source = maxSource;
-        nextState = maxState;
-      }
-    } else {
-      tokenOffset = maxOffset;
-      source = maxSource;
-      nextState = maxState;
-    }
-
-    if (renderedDiscordChunkLength(prefix, source, nextState) > limit) {
-      throw new Error('Discord chunk limit cannot accommodate a Markdown fence');
-    }
-    chunks.push(prefix + source + (nextState ? '\n```' : ''));
-    state = nextState;
-  }
-  return chunks;
+  return chunkMarkdown(text, { limit, measure: codePointLength, label: 'Discord' });
 }
 
 /** Remove only the bot mention forms Discord emits for a message content. */
@@ -729,6 +585,19 @@ function isPublicParentChannel(channel: Record<string, unknown> | null, guildId:
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether @everyone can view a channel, from its guild-level permissions and
+ * the channel's overwrites; a role-gated channel is private even without a deny.
+ */
+function everyoneCanView(
+  guild: Record<string, unknown> | null,
+  channel: Record<string, unknown> | null,
+  guildId: string
+): boolean {
+  const permissions = effectiveChannelPermissions(guild, { roles: [] }, channel, guildId, '');
+  return (permissions & DISCORD_VIEW_CHANNEL_PERMISSION) !== 0n;
 }
 
 function permissionBits(value: unknown): bigint {
@@ -817,6 +686,7 @@ export class DiscordConnector implements GatewayConnector {
   private gateway: DiscordGatewayTransport | null = null;
   private botUserId: string | null = null;
   private readonly channelInfoCache = new Map<string, Record<string, unknown>>();
+  private guildInfo: Record<string, unknown> | null = null;
   private lastSequence = -1;
   private dispatchChain: Promise<void> = Promise.resolve();
   private stopped = false;
@@ -1028,17 +898,42 @@ export class DiscordConnector implements GatewayConnector {
     return channel;
   }
 
-  /** An allowlisted parent channel record, from the listener's cache when present. */
+  /**
+   * An allowed parent channel record, from the listener's cache when present.
+   * Listed channels are checked at startup; an unlisted one admitted by
+   * `allow_all_public_channels` must be a public parent in the guild.
+   */
   private async getAllowedParentChannel(
     parentChannelId: string
   ): Promise<Record<string, unknown> | null> {
-    if (!configuredChannelIds(this.config).includes(parentChannelId)) return null;
-    const cached = this.cachedChannelInfo(parentChannelId);
-    if (cached) return cached;
-    const parent = await this.getProviderRecord(Routes.channel(parentChannelId));
-    if (parent?.id !== parentChannelId) return null;
-    this.cacheChannelInfo(parentChannelId, parent);
-    return parent;
+    if (!discordChannelInScope(this.config, parentChannelId)) return null;
+    let parent = this.cachedChannelInfo(parentChannelId) ?? null;
+    if (!parent) {
+      parent = await this.getProviderRecord(Routes.channel(parentChannelId));
+      if (parent?.id !== parentChannelId) return null;
+      this.cacheChannelInfo(parentChannelId, parent);
+    }
+    if (configuredChannelIds(this.config).includes(parentChannelId)) return parent;
+    const guildId = configuredString(this.config, 'guild_id');
+    if (parent.guild_id !== guildId || !isPublicParentChannel(parent, guildId)) return null;
+    return everyoneCanView(await this.getGuildInfo(), parent, guildId) ? parent : null;
+  }
+
+  /** The configured guild's record, cached until a guild or role change dispatch. */
+  private async getGuildInfo(): Promise<Record<string, unknown> | null> {
+    this.guildInfo ??= await this.getProviderRecord(
+      Routes.guild(configuredString(this.config, 'guild_id'))
+    );
+    return this.guildInfo;
+  }
+
+  /** Whether a parent channel is allowed; only an unlisted one needs a lookup. */
+  private async isAllowedParentChannel(channelId: string): Promise<boolean> {
+    if (!isDiscordSnowflake(channelId) || !discordChannelInScope(this.config, channelId)) {
+      return false;
+    }
+    if (configuredChannelIds(this.config).includes(channelId)) return true;
+    return (await this.getAllowedParentChannel(channelId)) !== null;
   }
 
   private async verifyExistingPublicThread(
@@ -1196,7 +1091,7 @@ export class DiscordConnector implements GatewayConnector {
       ) {
         throw new DiscordDirectMessageError('discord_dm_channel_mismatch');
       }
-    } else if (!configuredChannelIds(this.config).includes(parentChannelId)) {
+    } else if (!(await this.isAllowedParentChannel(parentChannelId))) {
       throw new Error('Discord replies must remain in an allowed channel');
     }
     const explicitReply = metadata?.[DISCORD_METADATA_KEY.replyToMessageId];
@@ -1359,7 +1254,8 @@ export class DiscordConnector implements GatewayConnector {
       parentChannelId = snowflake(thread?.parent_id);
       threadChannelId = parsed.channelId;
     }
-    if (!parentChannelId || !configuredChannelIds(this.config).includes(parentChannelId)) {
+    // Callers pass the result through requireChannelHistoryAccess, which checks an unlisted parent.
+    if (!parentChannelId || !discordChannelInScope(this.config, parentChannelId)) {
       throw new Error(
         'Could not resolve an allowed Discord parent channel for this session; pass discordChannelId.'
       );
@@ -1383,7 +1279,6 @@ export class DiscordConnector implements GatewayConnector {
     kind: 'messages' | 'forum'
   ): Promise<Record<string, unknown>> {
     const guildId = configuredString(this.config, 'guild_id');
-    const allowedChannelIds = configuredChannelIds(this.config);
     const denied = () =>
       new Error(
         `Discord channel ${channelId} is not an allowed channel, or a public thread under one, for this gateway channel.`
@@ -1392,12 +1287,13 @@ export class DiscordConnector implements GatewayConnector {
     const target = await get(Routes.channel(channelId));
     if (!target || target.id !== channelId || target.guild_id !== guildId) throw denied();
     let parent: Record<string, unknown> | null = target;
-    if (!allowedChannelIds.includes(channelId)) {
+    // An in-scope parent that is not listed is held to the public check below.
+    if (!discordChannelInScope(this.config, channelId) || !channelKind(target)) {
       const parentChannelId = snowflake(target.parent_id);
       if (
         !DISCORD_PUBLIC_THREAD_TYPES.has(target.type as number) ||
         !parentChannelId ||
-        !allowedChannelIds.includes(parentChannelId)
+        !discordChannelInScope(this.config, parentChannelId)
       ) {
         throw denied();
       }
@@ -1405,6 +1301,12 @@ export class DiscordConnector implements GatewayConnector {
       if (parent?.id !== parentChannelId || parent.guild_id !== guildId) throw denied();
     }
     if (!isPublicParentChannel(parent, guildId)) throw denied();
+    if (
+      !configuredChannelIds(this.config).includes(String(parent?.id)) &&
+      !everyoneCanView(await get(Routes.guild(guildId)), parent, guildId)
+    ) {
+      throw denied();
+    }
     // Checked after the allowlist so a denial never reveals a channel's kind.
     if (kind === 'messages' && isForumChannel(target)) {
       throw new Error(
@@ -1537,6 +1439,7 @@ export class DiscordConnector implements GatewayConnector {
     if (
       !directMessage &&
       !mentioned &&
+      !parseGatewayChatCommand(rawContent) &&
       !discordResponseModeMayAdmit(this.config, { channelId, messageId })
     ) {
       return { accepted: false };
@@ -1612,28 +1515,33 @@ export class DiscordConnector implements GatewayConnector {
       };
     }
 
-    const configuredChannelIdsList = configuredChannelIds(this.config);
     let isThread = false;
     let parentId: string | undefined;
-    if (!configuredChannelIdsList.includes(channelId)) {
+    if (!configuredChannelIds(this.config).includes(channelId)) {
       let channel = this.cachedChannelInfo(channelId);
-      if (!channel) {
-        try {
+      try {
+        if (!channel) {
           channel = asRecord(await this.transport.rest.get(Routes.channel(channelId))) ?? undefined;
           if (channel) this.cacheChannelInfo(channelId, channel);
-        } catch {
+        }
+        if (
+          channel &&
+          channel.guild_id === guildId &&
+          DISCORD_PUBLIC_THREAD_TYPES.has(channel.type as number)
+        ) {
+          parentId = snowflake(channel.parent_id);
+          isThread = parentId !== undefined && (await this.isAllowedParentChannel(parentId));
+          if (!isThread) return { accepted: false };
+        } else if (!(await this.isAllowedParentChannel(channelId))) {
           return { accepted: false };
         }
+      } catch {
+        return { accepted: false };
       }
-      parentId = snowflake(channel?.parent_id);
-      isThread =
-        channel?.guild_id === guildId &&
-        DISCORD_PUBLIC_THREAD_TYPES.has(channel?.type as number) &&
-        configuredChannelIdsList.includes(parentId ?? '');
     }
-    if (!configuredChannelIdsList.includes(channelId) && !isThread) return { accepted: false };
     if (
       !mentioned &&
+      !(isThread && parseGatewayChatCommand(rawContent)) &&
       !discordResponseModeAdmits(this.config, {
         channelId,
         ...(parentId ? { parentChannelId: parentId } : {}),
@@ -1685,6 +1593,15 @@ export class DiscordConnector implements GatewayConnector {
     payload: GatewayDispatchPayload,
     callback: GatewayInboundCallback
   ): Promise<{ messageId?: string }> {
+    if (DISCORD_GUILD_CHANGE_EVENTS.has(payload.t)) {
+      this.guildInfo = null;
+      return {};
+    }
+    if (DISCORD_CHANNEL_CHANGE_EVENTS.has(payload.t)) {
+      const changedChannelId = snowflake(asRecord(payload.d)?.id);
+      if (changedChannelId) this.channelInfoCache.delete(changedChannelId);
+      return {};
+    }
     if (payload.t !== GatewayDispatchEvents.MessageCreate) return {};
     const message = asRecord(payload.d);
     if (!message) return {};
@@ -1715,6 +1632,7 @@ export class DiscordConnector implements GatewayConnector {
     this.validateForListener();
     this.stopped = false;
     this.dispatchChain = Promise.resolve();
+    this.guildInfo = null;
     const bot = asRecord(await this.transport.rest.get(Routes.user('@me')));
     const botUserId = snowflake(bot?.id);
     if (!botUserId) {
@@ -1833,6 +1751,12 @@ export class DiscordConnector implements GatewayConnector {
     this.gateway.on(WebSocketShardEvents.Dispatch, (payload) => {
       const processDispatch = this.dispatchChain.then(async () => {
         if (this.stopped) return;
+        // A new session restarts sequences and may follow missed changes, so drop cached records too.
+        if (payload.t === GatewayDispatchEvents.Ready) {
+          this.lastSequence = -1;
+          this.guildInfo = null;
+          this.channelInfoCache.clear();
+        }
         const sequence = typeof payload.s === 'number' ? payload.s : undefined;
         if (sequence !== undefined && sequence <= this.lastSequence) return;
         await this.dispatchMessage(payload, callback);
@@ -2037,6 +1961,11 @@ export class DiscordConnector implements GatewayConnector {
           : { verification: { status: 'verified' as const, warnings: [] } }),
         failures,
         notVerifiable: [
+          ...(this.config.allow_all_public_channels === true
+            ? [
+                'All public channels are allowed; this probe samples only the listed channels. Each unlisted channel is checked to be public when a message arrives.',
+              ]
+            : []),
           ...(isDiscordDirectMessagesEnabled(this.config)
             ? [
                 'Direct messages are enabled; end-to-end DM delivery cannot be proven by this probe.',

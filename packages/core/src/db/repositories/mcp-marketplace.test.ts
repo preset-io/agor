@@ -315,10 +315,12 @@ describe('MCPMarketplaceRepository', () => {
         expect.arrayContaining([
           expect.objectContaining({
             mcp_server_id: shared.mcp_server_id,
+            oauth_mode: 'shared',
             status: 'active',
           }),
           expect.objectContaining({
             mcp_server_id: otherUsersGrant.mcp_server_id,
+            oauth_mode: 'per_user',
             status: 'not_connected',
           }),
         ])
@@ -401,6 +403,100 @@ describe('MCPMarketplaceRepository', () => {
       expect(JSON.stringify(authority)).not.toMatch(
         /alice-access-must-not-hydrate|alice-refresh-must-not-hydrate|shared-access-must-not-hydrate|shared-refresh-must-not-hydrate|bob-access-must-not-cross-subject/
       );
+    }
+  );
+
+  dbTest(
+    'lists Shared servers only when asked, without other private rows or secrets',
+    async ({ db }) => {
+      const users = new UsersRepository(db);
+      await users.create({ user_id: ALICE, email: 'alice-shared@example.invalid', role: 'admin' });
+      await users.create({ user_id: BOB, email: 'bob-shared@example.invalid', role: 'member' });
+      const servers = new MCPServerRepository(db);
+      const own = await servers.create({
+        name: 'alice-private',
+        transport: 'http',
+        url: 'https://alice.invalid/mcp',
+        scope: 'session',
+        source: 'user',
+        owner_user_id: ALICE,
+      });
+      await servers.create({
+        name: 'bob-private',
+        transport: 'http',
+        url: 'https://bob.invalid/mcp',
+        auth: { type: 'bearer', token: 'bob-token-secret' },
+        scope: 'session',
+        source: 'user',
+        owner_user_id: BOB,
+      });
+      const shared = await servers.create({
+        name: 'workspace-shared',
+        transport: 'http',
+        url: 'https://shared-secret-endpoint.invalid/mcp',
+        headers: { Authorization: 'shared-header-secret' },
+        auth: { type: 'bearer', token: 'shared-token-secret' },
+        scope: 'global',
+        source: 'user',
+      });
+
+      const aliceSession = await sessionFor(db, ALICE);
+      const bobSession = await sessionFor(db, BOB);
+      await insert(db, sessionMcpServers)
+        .values([
+          {
+            session_id: aliceSession.session_id,
+            mcp_server_id: shared.mcp_server_id,
+            enabled: true,
+            added_at: new Date(),
+          },
+          {
+            session_id: bobSession.session_id,
+            mcp_server_id: shared.mcp_server_id,
+            enabled: true,
+            added_at: new Date(),
+          },
+        ])
+        .run();
+
+      const repository = new MCPMarketplaceRepository(db);
+      const ownOnly = await repository.overviewForUser(ALICE);
+      expect(ownOnly.servers.map((server) => server.mcp_server_id)).toEqual([own.mcp_server_id]);
+      expect(ownOnly.servers[0].shared).toBeUndefined();
+      expect(ownOnly.attachments).toEqual([]);
+      expect(ownOnly.credentials).toEqual([]);
+
+      const withShared = await repository.overviewForUser(ALICE, undefined, {
+        includeShared: true,
+      });
+      expect(
+        withShared.servers.map((server) => [server.name, server.shared === true]).sort()
+      ).toEqual([
+        ['alice-private', false],
+        ['workspace-shared', true],
+      ]);
+      // Every attachment is counted; only the caller's own Session is described.
+      expect(
+        withShared.servers.find((server) => server.mcp_server_id === shared.mcp_server_id)
+          ?.session_count
+      ).toBe(2);
+      expect(withShared.attachments.map((item) => item.session_id)).toEqual([
+        aliceSession.session_id,
+      ]);
+      expect(withShared.credentials).toMatchObject([
+        { mcp_server_id: shared.mcp_server_id, method: 'bearer', status: 'configured' },
+      ]);
+      // The OAuth grant mode is projected only for OAuth credentials.
+      expect(withShared.credentials[0]).not.toHaveProperty('oauth_mode');
+      expect(JSON.stringify(withShared)).not.toMatch(
+        /shared-token-secret|shared-header-secret|shared-secret-endpoint|bob-token-secret|bob-private|Bob session/
+      );
+
+      // Bob is not granted Shared rows unless his caller decided he may manage them.
+      const bobDefault = await repository.overviewForUser(BOB);
+      expect(bobDefault.servers.map((server) => server.name)).toEqual(['bob-private']);
+      expect(bobDefault.attachments).toEqual([]);
+      expect(JSON.stringify(bobDefault)).not.toMatch(/workspace-shared|Alice session/);
     }
   );
 });

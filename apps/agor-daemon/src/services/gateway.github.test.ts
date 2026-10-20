@@ -401,7 +401,7 @@ describe('GatewayService GitHub integration', () => {
           }),
         },
       }),
-      { _agenticConfigResolved: true }
+      { _agenticConfigResolved: true, _skipMcpDefaults: true }
     );
 
     const [promptData, promptParams] = harness.promptCreate.mock.calls[0];

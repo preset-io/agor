@@ -287,6 +287,38 @@ describe('ForkSpawnModal configuration defaults', { timeout: 10_000 }, () => {
     );
   });
 
+  it('omits MCP servers from an untouched custom spawn so the child inherits', async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+    const currentUser = {
+      user_id: 'u4',
+      default_agentic_config: {},
+      default_mcp_server_ids: ['user-default-mcp'],
+    } as unknown as User;
+    render(
+      <ForkSpawnModal
+        open
+        action="spawn"
+        session={claudeSession}
+        currentUser={currentUser}
+        initialPrompt="spawn a child"
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+        client={null}
+        userById={new Map()}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Custom config'));
+    fireEvent.click(await screen.findByTestId('pick-preset'));
+    fireEvent.click(screen.getByRole('button', { name: 'Spawn Session' }));
+
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+    expect(onConfirm.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ prompt: 'spawn a child', presetId: 'preset-1' })
+    );
+    expect(onConfirm.mock.calls[0][0]).not.toHaveProperty('mcpServerIds');
+  });
+
   it('includes MCP servers with a preset-backed custom configuration', async () => {
     const onConfirm = vi.fn().mockResolvedValue(undefined);
     const currentUser = {

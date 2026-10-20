@@ -1181,6 +1181,21 @@ export interface AgorSecuritySettings {
 
   /** Git config hardening — see {@link AgorGitConfigParametersSettings}. */
   git_config_parameters?: AgorGitConfigParametersSettings;
+
+  /**
+   * Internal HTTPS hosts the daemon may reach despite the outbound private-IP
+   * guard. Exact, case-insensitive host match; every resolved address must be
+   * IPv4 inside that entry's `cidrs` (private or CGNAT ranges only).
+   *
+   * @example
+   * ```yaml
+   * security:
+   *   private_outbound_destinations:
+   *     - host: internal-api.example.internal
+   *       cidrs: [10.200.0.0/24]
+   * ```
+   */
+  private_outbound_destinations?: Array<{ host: string; cidrs: string[] }>;
 }
 
 /**

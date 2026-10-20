@@ -37,7 +37,12 @@ See [execution modes](/guide/multiplayer-unix-isolation) for isolation requireme
 
 ### Diagnosing repository clone failures
 
-Remote repository creation is asynchronous. Poll `agor_repos_get` with the returned
+Remote repository creation is asynchronous. In the UI, the initial toast confirms
+that cloning started, not that it finished. **Settings → Repos** shows **Cloning**,
+**Ready**, or **Failed**. Open a failed repository for diagnostics and **Retry setup**.
+There are no completion toasts; refresh Repository settings if its status appears stale.
+
+For MCP callers, poll `agor_repos_get` with the returned
 `repo_id` until `clone_status` is `ready` or `failed`. On failure, `clone_error.message`
 includes credential-redacted multiline Git diagnostics (up to 4,000 characters;
 oversized output retains the tail and marks the truncation), not just the
@@ -197,14 +202,9 @@ On upgrades from a legacy configuration where the YAML key and local manifest ar
 no usable agent. Docker and Kubernetes deployments should always declare
 `agentic_tools.installed` and use `--sync`.
 
-Microsoft Teams gateway support remains optional and separate from agentic tools:
-
-```bash
-npm install -g agor-live@latest botbuilder@^4.23.3
-```
-
-Credentials are configured in **Settings → Agentic Tools** after the runtime is installed; Teams
-credentials are configured with the gateway channel.
+Microsoft Teams gateway support is bundled with the daemon and does not require a separate
+`botbuilder` installation. Configure the Azure Bot credentials in the Teams gateway channel;
+the daemon uses the Microsoft Agents SDK for callback authentication and delivery.
 
 ---
 

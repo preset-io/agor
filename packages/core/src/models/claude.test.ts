@@ -17,6 +17,7 @@ describe('AVAILABLE_CLAUDE_MODEL_ALIASES', () => {
     expect(ids).toContain('claude-sonnet-5');
     expect(ids).toContain('claude-opus-4-7');
     expect(ids).toContain('claude-sonnet-4-6');
+    expect(ids).toContain('claude-haiku-5-5');
     expect(ids).toContain('claude-haiku-4-5');
     expect(ids).toContain('claude-fable-5-1');
     expect(ids).toContain('claude-fable-5');
@@ -28,6 +29,7 @@ describe('AVAILABLE_CLAUDE_MODEL_ALIASES', () => {
     expect(ids).toContain('claude-opus-4-8[1m]');
     expect(ids).toContain('claude-opus-4-7[1m]');
     expect(ids).toContain('claude-opus-4-6[1m]');
+    expect(ids).not.toContain('claude-haiku-5-5[1m]');
     expect(ids).not.toContain('claude-sonnet-5-5[1m]');
     expect(ids).not.toContain('claude-sonnet-5[1m]');
     expect(ids).toContain('claude-sonnet-4-6[1m]');
@@ -38,12 +40,15 @@ describe('AVAILABLE_CLAUDE_MODEL_ALIASES', () => {
 });
 
 describe('hasNativeMillionContext', () => {
-  it.each(['claude-fable-5-1', 'claude-fable-5', 'claude-sonnet-5-5', 'claude-sonnet-5'])(
-    'recognizes %s as native 1M',
-    (modelId) => {
-      expect(hasNativeMillionContext(modelId)).toBe(true);
-    }
-  );
+  it.each([
+    'claude-fable-5-1',
+    'claude-fable-5',
+    'claude-sonnet-5-5',
+    'claude-sonnet-5',
+    'claude-haiku-5-5',
+  ])('recognizes %s as native 1M', (modelId) => {
+    expect(hasNativeMillionContext(modelId)).toBe(true);
+  });
 
   it.each([
     'claude-opus-5-5',
@@ -71,6 +76,7 @@ describe('Claude context-window accounting fallback', () => {
     expect(getClaudeContextWindowLimit('claude-opus-5')).toBe(200_000);
     expect(getClaudeContextWindowLimit('claude-opus-5[1m]')).toBe(1_000_000);
     expect(getClaudeContextWindowLimit('claude-sonnet-5-5')).toBe(1_000_000);
+    expect(getClaudeContextWindowLimit('claude-haiku-5-5')).toBe(1_000_000);
     expect(getClaudeContextWindowLimit('claude-sonnet-5')).toBe(1_000_000);
     expect(getClaudeContextWindowLimit('claude-fable-5-1')).toBe(1_000_000);
   });

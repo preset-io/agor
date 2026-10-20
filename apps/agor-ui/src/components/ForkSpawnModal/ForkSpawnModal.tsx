@@ -16,6 +16,7 @@ import type {
 import { getDefaultPermissionMode, isAgenticToolName } from '@agor-live/client';
 import { Alert, Checkbox, Form, Modal, Radio, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import {
   buildModelConfigFromFormValues,
@@ -74,6 +75,14 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
   const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
 
   const [envVarNames, setEnvVarNames] = useState<string[]>([]);
+  // An unedited spawn copies the parent's links (and keeps global servers);
+  // preview them without turning the preview into an explicit selection.
+  const {
+    ids: parentMcpServerIds,
+    loaded: parentMcpLoaded,
+    failed: mcpLoadFailed,
+    retry: retryMcpLoad,
+  } = useSessionMcpServerIds(client, open && action === 'spawn' ? session?.session_id : undefined);
 
   const getCustomConfigDefaults = useCallback(
     (agentTool: AgenticToolName) => {
@@ -146,17 +155,11 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
     const agentTool = session.agentic_tool;
     form.setFieldsValue({
       ...getCustomConfigDefaults(agentTool),
-      mcpServerIds: currentUser?.default_mcp_server_ids || [],
+      // Undefined inherits on the server; only an edit becomes a selection.
+      mcpServerIds: undefined,
     });
     setSelectedAgent(agentTool);
-  }, [
-    open,
-    session,
-    configPreset,
-    form,
-    getCustomConfigDefaults,
-    currentUser?.default_mcp_server_ids,
-  ]);
+  }, [open, session, configPreset, form, getCustomConfigDefaults]);
 
   const handleOk = async () => {
     if (!hasActiveParentTool) return;
@@ -208,7 +211,11 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
           }
           // MCP attachments are session-scoped and remain editable regardless
           // of whether the agent configuration comes from a preset or inline.
-          spawnConfig.mcpServerIds = values.mcpServerIds;
+          // Send them only when edited: a sent list (even []) is a complete
+          // selection that excludes global servers.
+          if (values.mcpServerIds !== undefined) {
+            spawnConfig.mcpServerIds = values.mcpServerIds;
+          }
           spawnConfig.extraInstructions = values.extraInstructions;
           // Always send envVarNames in custom preset so the user can
           // explicitly clear inherited selections (empty array = explicit
@@ -371,6 +378,10 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
                   currentUser={currentUser}
                   client={client}
                   branchId={session?.branch_id}
+                  inheritedMcpServerIds={parentMcpServerIds}
+                  mcpLoading={!parentMcpLoaded}
+                  mcpLoadFailed={mcpLoadFailed}
+                  onMcpRetry={retryMcpLoad}
                 />
 
                 {selectedAgent === 'codex' && isInlineConfig && (

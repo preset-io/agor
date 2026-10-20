@@ -28,6 +28,7 @@ import type {
 } from '@agor/core/sdk';
 import type { ContextUsageSnapshot, SessionID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
+import { type ClaudeExecutionError, classifyClaudeResultFailure } from './claude-error.js';
 import { CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 
 const CLAUDE_CODE_TODO_TOOL_NAMES = new Set<string>(CLAUDE_CODE_TODO_TOOLS);
@@ -116,6 +117,8 @@ export type ProcessedEvent =
     }
   | {
       type: 'result';
+      /** Internal-only safe diagnosis; never a credential-recovery instruction. */
+      failure?: ClaudeExecutionError;
       /** Internal-only SDK value used for accounting before the executor applies
        * the closed persistence projection. Never persist or publish directly. */
       raw_sdk_message: SDKResultMessage;
@@ -601,6 +604,7 @@ export class SDKMessageProcessor {
       {
         type: 'result',
         raw_sdk_message: msg,
+        failure: classifyClaudeResultFailure(msg),
         agentSessionId: this.state.capturedAgentSessionId,
       },
       {
@@ -682,8 +686,14 @@ export class SDKMessageProcessor {
 
       // Capture available slash commands and skills for autocomplete
       if (initMsg.slash_commands || initMsg.skills) {
-        this.state.slashCommands = initMsg.slash_commands || [];
-        this.state.skills = initMsg.skills || [];
+        // The SDK supplies headless-supported commands, including custom ones.
+        // Hide entries it tags as terminal-oriented from both autocomplete lists;
+        // a bundled skill (e.g. doctor) can appear in both inventories.
+        const terminalCommands = new Set(initMsg.terminal_slash_commands ?? []);
+        this.state.slashCommands = (initMsg.slash_commands ?? []).filter(
+          (command) => !terminalCommands.has(command)
+        );
+        this.state.skills = (initMsg.skills ?? []).filter((skill) => !terminalCommands.has(skill));
 
         // Emit event so claude-tool can persist to session for UI autocomplete
         events.push({

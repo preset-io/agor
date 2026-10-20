@@ -655,8 +655,9 @@ current branch authority, so a healthy deletion can outlast its initial credenti
 
 The daemon's existing runtime reconciliation loop observes stale deletion heartbeats;
 it does not orchestrate the long-running workflow or automatically retry it. A daemon
-replacement can interrupt individual API requests, and a deployment that also kills
-executor processes can leave an unknown outcome requiring reconciliation.
+replacement can interrupt individual API requests. When a deployment also kills a
+local deletion executor, the loop makes the deletion retryable once it verifies that
+executor has exited (see below); it never restarts the deletion by itself.
 
 ### Deletion recovery
 
@@ -679,31 +680,37 @@ Files and committed database batches removed by earlier attempts are not restore
   cannot release a replacement invocation. There is no claim receipt readback.
 - **Dispatch never claimed:** after it is marked failed, retry atomically replaces
   the dispatch. A late old executor cannot claim it or begin removal.
-- **Workspace or SDK-home removal rejected:** retry remains blocked. Recursive
-  filesystem removal can reject on one child while sibling removals remain in
-  flight. The executor therefore retains ownership after any rejection from a
-  started removal call, including Git errors and validation inside that call.
-  Successful removal still permits recovery from a later database-only failure;
-  failures during the separate pre-removal validation/quiesce phase can also settle.
-- **No settlement acknowledgement:** retry is blocked and starts no replacement.
-  This includes legacy claimed invocations, a worker killed before acknowledging,
-  lost claim responses, and exhausted settlement delivery. Process exit, a stale
-  heartbeat, or user confirmation cannot supply the missing evidence.
-- **Upload deletion request has an unknown outcome:** retry remains blocked.
-  That request can continue outside the database transaction, including on another
-  daemon. Neither a worker exit nor a database lock proves the storage request
-  stopped. This release does not provide a remote-storage containment/reconciliation
-  mechanism for that condition.
+- **Branch files not writable:** before removing anything, deletion checks that the
+  daemon user can remove every directory. Directories it owns but cannot write
+  (read-only caches) are fixed automatically. If any belong to another user (most
+  often files a dev-environment container wrote as root), deletion stops with a
+  retryable "not writable by the Agor daemon user" failure. Change their owner to
+  the daemon user, then retry. To stop this happening, run environment containers
+  as the host user (for example compose `user: "${UID}:${GID}"`).
+- **Executor exited without settling** (a daemon restart, deploy, crash, or a
+  removal rejected part-way): for executors the daemon launched locally, Agor
+  records the executor's process group before it starts. Once a daemon on the
+  same host verifies that whole process group has exited, nothing from that
+  attempt can still touch storage, so the deletion becomes a settled, retryable
+  failure. This normally happens within seconds of the exit, or on the next
+  reconciliation pass after a restart. Retry it as above.
+- **No containment evidence:** retry stays blocked when no daemon can verify the
+  executor stopped. This covers templated/remote executors, invocations from releases
+  that did not record the process group, executors on another host or PID
+  namespace, and an upload deletion request whose outcome is unknown. An
+  administrator can release such a branch with `agor_branches_release_deletion`
+  (MCP) or `POST /branches/:id/release-deletion`. The release only applies to
+  `deletion_failed` branches, never one still deleting. If the recorded executor
+  belongs to the daemon's host and PID namespace, release is refused until its
+  process group is verified absent, even when its heartbeat is stale. It discards
+  the old invocation and records who released it in the deletion error. Before releasing,
+  confirm that no deletion executor for the branch is still running. Then retry
+  deletion normally.
 
-There is **no supported online force-unlock** for these unsettled conditions without
-new settlement evidence from the original worker. Do not clear maintenance JSON,
-change the generation manually, or invoke internal settlement methods. Restarting
-the daemon does not produce evidence. A legacy incident that already lost its
-worker is not repaired by upgrading: leave it fenced and escalate for a separately
-reviewed, topology-specific offline recovery procedure that contains every old
-executor **and** daemon/provider storage request. Journal exit records alone are
-insufficient. Mixed daemon/executor releases are not supported; the new settlement
-action is deliberately rejected by older daemons rather than silently unlocking.
+Do not clear maintenance JSON, change the generation manually, or invoke internal
+settlement methods. Restarting the daemon does not itself produce evidence.
+Mixed daemon/executor releases are not supported; the settlement action is
+deliberately rejected by older daemons rather than silently unlocking.
 
 For diagnostics, correlate `[branch.delete]` events by `branch_id`, `operation_id`,
 `generation`, and `invocation_id`. Request failures include the action, safe category,

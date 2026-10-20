@@ -69,6 +69,7 @@ import {
   sessions,
   shortId,
   TaskRepository,
+  TeamsMessageDeliveryRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   ThreadSessionMapRepository,
@@ -412,6 +413,7 @@ import {
   isMcpGrantOwnerEntitled,
   isSessionMcpServerLinkVisibleToCaller,
   loadMcpServerForCaller,
+  mayCallerManageSharedMcpServers,
   registerMcpCapabilityRoleFloor,
   resolveMcpCaller,
 } from './utils/mcp-server-authorization.js';
@@ -637,9 +639,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     },
   });
   const deliveryRepository = new DiscordMessageDeliveryRepository(db);
-  const messagesService = createMessagesService(db, (tx, message) =>
-    deliveryRepository.enqueueForMessageInTransaction(tx, message).then(() => undefined)
-  ) as unknown as MessagesServiceImpl;
+  const teamsDeliveryRepository = new TeamsMessageDeliveryRepository(db);
+  const messagesService = createMessagesService(db, async (tx, message) => {
+    await deliveryRepository.enqueueForMessageInTransaction(tx, message);
+    await teamsDeliveryRepository.enqueueForMessageInTransaction(tx, message);
+  }) as unknown as MessagesServiceImpl;
   const messageOpenApiProperties = {
     message_id: { type: 'string', format: 'uuid' },
     session_id: { type: 'string', format: 'uuid' },
@@ -4554,7 +4558,7 @@ export async function registerMCPServices(
   app.use(
     '/mcp-marketplace',
     new MCPMarketplaceService(
-      new MCPMarketplaceRepository(db, async (userId, serverIds) => {
+      new MCPMarketplaceRepository(db, async (userId, serverIds, options) => {
         // Marketplace receives only this closed boolean map. The daemon reuses the same
         // mode/binding authority as execution and refresh; no token, client,
         // issuer, resource, or binding material crosses the service boundary.
@@ -4564,8 +4568,10 @@ export async function registerMCPServices(
           serverIds,
           serverRepository: marketplaceServerRepository,
           tokenRepository: marketplaceTokenRepository,
+          includeShared: options?.includeShared,
         });
-      })
+      }),
+      (params) => mayCallerManageSharedMcpServers(db, params)
     ),
     { methods: ['find'] }
   );
@@ -7003,14 +7009,16 @@ export async function registerMCPServices(
                 executorSessionId as SessionID,
                 true
               ),
-              globalServers: await new MCPServerRepository(db).findAll({
-                scope: 'global',
-                enabled: true,
-                // The task token is issued to the actual prompter. Connector
-                // credentials and private server visibility stay with that
-                // caller rather than silently borrowing the Session owner.
-                usableByUserId: userId,
-              }),
+              globalServers: executorSession.mcp_selection_explicit
+                ? []
+                : await new MCPServerRepository(db).findAll({
+                    scope: 'global',
+                    enabled: true,
+                    // The task token is issued to the actual prompter. Connector
+                    // credentials and private server visibility stay with that
+                    // caller rather than silently borrowing the Session owner.
+                    usableByUserId: userId,
+                  }),
             };
           }
         );

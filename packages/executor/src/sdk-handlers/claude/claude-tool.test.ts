@@ -1,4 +1,5 @@
 import { generateId, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
+import type { SDKMessage, SDKResultMessage, SDKSystemMessage } from '@agor/core/sdk';
 import type { Message, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole, withProviderDetail } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +26,7 @@ type Harness = {
   tool: ClaudeTool;
   outgoing: Partial<Message>[];
   persisted: Message[];
+  sessionsRepo: { update: ReturnType<typeof vi.fn> };
 };
 
 function createHarness(classifiedKind?: 'missing_credential'): Harness {
@@ -85,10 +87,12 @@ function createHarness(classifiedKind?: 'missing_credential'): Harness {
     ),
     outgoing,
     persisted,
+    sessionsRepo,
   };
 }
 
-function rawResult(subtype: 'success' | 'error_during_execution') {
+// Deliberately partial usage: exercise the same closed accounting projection as older SDKs.
+function rawResult(subtype: 'success' | 'error_during_execution'): SDKResultMessage {
   return {
     type: 'result' as const,
     subtype,
@@ -119,11 +123,11 @@ function rawResult(subtype: 'success' | 'error_during_execution') {
     ...(subtype === 'success'
       ? { result: RAW_PROVIDER_BODY }
       : { errors: [RAW_PROVIDER_BODY, 'Credit balance is too low'] }),
-  };
+  } as unknown as SDKResultMessage;
 }
 
 function resultEvent(raw: ReturnType<typeof rawResult>): ProcessedEvent {
-  return { type: 'result', raw_sdk_message: raw } as ProcessedEvent;
+  return { type: 'result', raw_sdk_message: raw };
 }
 
 function synthesizedAssistantEvent(): ProcessedEvent {
@@ -142,6 +146,31 @@ async function execute(tool: ClaudeTool, mode: 'streaming' | 'non-streaming', ta
   }
   return tool.executePrompt(sessionId, 'prompt', taskId);
 }
+
+describe('ClaudeTool command discovery persistence', () => {
+  it('persists filtered commands and skills through the existing session context fields', async () => {
+    const processor = new SDKMessageProcessor({ sessionId: generateId() as SessionID });
+    const initMessage = {
+      type: 'system',
+      subtype: 'init',
+      slash_commands: ['compact', 'usage', 'doctor'],
+      terminal_slash_commands: ['doctor'],
+      skills: ['doctor', 'project-review'],
+    } satisfies Pick<
+      SDKSystemMessage,
+      'type' | 'subtype' | 'slash_commands' | 'terminal_slash_commands' | 'skills'
+    >;
+    promptState.events = await processor.process(initMessage as SDKSystemMessage);
+    const harness = createHarness();
+    await execute(harness.tool, 'streaming', generateId() as TaskID);
+    expect(harness.sessionsRepo.update).toHaveBeenCalledWith(expect.any(String), {
+      custom_context: {
+        slash_commands: ['compact', 'usage'],
+        skills: ['project-review'],
+      },
+    });
+  });
+});
 
 describe('ClaudeTool provider-failure settlement', () => {
   beforeEach(() => {
@@ -346,6 +375,38 @@ describe('ClaudeTool provider-failure settlement', () => {
       } finally {
         errorSpy.mockRestore();
       }
+    }
+  );
+});
+
+describe('Claude diagnosis propagation', () => {
+  it.each(['streaming', 'non-streaming'] as const)(
+    'retains one result diagnosis and accounting without granting credential recovery in %s',
+    async (mode) => {
+      const harness = createHarness();
+      const processor = new SDKMessageProcessor({ sessionId: generateId() as SessionID });
+      const raw = {
+        ...rawResult('error_during_execution'),
+        errors: ['Not logged in. Please run /login SECRET'],
+      };
+      promptState.events = await processor.process(raw as SDKMessage);
+      const diagnosed = promptState.events.find(
+        (event) => (event as ProcessedEvent).type === 'result'
+      ) as Extract<ProcessedEvent, { type: 'result' }>;
+      const result = await execute(harness.tool, mode, generateId() as TaskID);
+      expect(result.hadError).toBe(true);
+      expect(result.errorDetails).toEqual([
+        withProviderDetail(diagnosed.failure!.message, 'error_during_execution'),
+      ]);
+      expect(result.rawSdkResponse).toMatchObject({
+        usage: raw.usage,
+        total_cost_usd: raw.total_cost_usd,
+      });
+      expect(harness.outgoing.at(-1)?.metadata?.is_provider_failure_result).toBe(true);
+      expect(
+        harness.outgoing.some((message) => message.metadata?.is_missing_credential_failure)
+      ).toBe(false);
+      expect(JSON.stringify({ result, outgoing: harness.outgoing })).not.toContain('SECRET');
     }
   );
 });

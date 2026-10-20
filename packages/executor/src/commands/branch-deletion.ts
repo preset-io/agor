@@ -3,11 +3,13 @@ import { resolve } from 'node:path';
 import type {
   BranchDeletionAction,
   BranchDeletionExecutionResult,
+  BranchDeletionFailureReason,
   BranchDeletionStage,
 } from '@agor/core/types';
 import { BRANCH_DELETION_ACTION_EFFECTS, BRANCH_DELETION_REPORT_SERVICE } from '@agor/core/types';
 import {
   deleteBranchDirectory,
+  prepareBranchDirectoryForRemoval,
   removeBranchWorkspace,
   resolveManagedBranchDeletionPath,
 } from '@agor/git';
@@ -168,10 +170,13 @@ export async function handleBranchDelete(
     execution_id: p.executionId,
   };
   let storageRequestUnknown = false;
+  let settledReason: BranchDeletionFailureReason | undefined;
   let filesystemRemovalUnsettled: 'workspace' | 'sdk_home' | undefined;
   let sessionToken = payload.sessionToken;
   const correlation = `branch_id=${p.branchId} operation_id=${p.operationId} generation=${p.generation} invocation_id=${p.executionId}`;
   const pages: Partial<Record<BranchDeletionAction, number>> = {};
+  // Optional daemon-reported quiesce progress (older daemons omit it).
+  const quiesce = { db_pages: 0, rows_scanned: 0, rows_updated: 0 };
   const report = async (
     action: BranchDeletionAction,
     stage?: BranchDeletionStage,
@@ -191,14 +196,25 @@ export async function handleBranchDelete(
             Authorization: `Bearer ${sessionToken}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ ...scope, action, ...(stage ? { stage } : {}) }),
+          body: JSON.stringify({
+            ...scope,
+            action,
+            ...(stage ? { stage } : {}),
+            ...(action === 'settled' && settledReason ? { reason: settledReason } : {}),
+          }),
         }
       );
       status = response.status;
       category = 'http_rejected';
       if (!response.ok) throw new DeletionRequestRejected(response.status);
       category = 'malformed_response';
-      const result = (await response.json()) as { remaining?: boolean; sessionToken?: string };
+      const result = (await response.json()) as {
+        remaining?: boolean;
+        sessionToken?: string;
+        pages?: unknown;
+        scanned?: unknown;
+        updated?: unknown;
+      };
       if (!result || typeof result !== 'object') throw new Error('Invalid deletion response');
       if (
         action === 'heartbeat' &&
@@ -214,9 +230,16 @@ export async function handleBranchDelete(
       if (action === 'settled' && !('ok' in result && result.ok === true))
         throw new Error('Invalid settlement response');
       if (page) pages[action] = (pages[action] ?? 0) + 1;
+      if (action === 'quiesce') {
+        const count = (value: unknown) =>
+          typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+        quiesce.db_pages += count(result.pages);
+        quiesce.rows_scanned += count(result.scanned);
+        quiesce.rows_updated += count(result.updated);
+      }
       if ((page && !result.remaining) || action === 'settled' || action === 'finalize')
         console.info(
-          `[branch.delete] event=step_complete ${correlation} action=${action} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}`
+          `[branch.delete] event=step_complete ${correlation} action=${action} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}${action === 'quiesce' ? ` db_pages=${quiesce.db_pages} rows_scanned=${quiesce.rows_scanned} rows_updated=${quiesce.rows_updated}` : ''}`
         );
       return { remaining: result.remaining ?? false };
     } catch (error) {
@@ -227,7 +250,7 @@ export async function handleBranchDelete(
       if (category === 'transport' && error instanceof Error && error.name === 'TimeoutError')
         category = 'timeout';
       console.error(
-        `[branch.delete] event=request_failed ${correlation} action=${action} category=${category} http_status=${status ?? 'unknown'} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}`
+        `[branch.delete] event=request_failed ${correlation} action=${action} category=${category} http_status=${status ?? 'unknown'} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}${action === 'quiesce' ? ` db_pages=${quiesce.db_pages} rows_scanned=${quiesce.rows_scanned}` : ''}`
       );
       throw error;
     }
@@ -277,11 +300,29 @@ export async function handleBranchDelete(
         // tenant root must still exist; symlinked descendants remain forbidden.
         await resolveManagedBranchDeletionPath(p.branchHome, p.tenantDataRoot);
       });
+      // Still pre-removal, so a refusal here settles and stays retryable. A
+      // directory the executor cannot unlink from (typically container-written
+      // root files) would otherwise make recursive removal fail part-way.
+      await storageStep('validate_writable', async () => {
+        const workspace = await prepareBranchDirectoryForRemoval(p.branchPath, p.branchesRoot);
+        const sdkHome = await prepareBranchDirectoryForRemoval(p.branchHome, p.tenantDataRoot);
+        const blocked = workspace.blockedDirectories + sdkHome.blockedDirectories;
+        if (blocked === 0) return;
+        const owners = [...new Set([...workspace.blockedOwnerUids, ...sdkHome.blockedOwnerUids])];
+        console.error(
+          `[branch.delete] event=storage_not_writable ${correlation} blocked_directories=${blocked} owner_uids=${owners.join(',')}`
+        );
+        settledReason = 'storage_not_writable';
+        throw Object.assign(new Error('Branch storage is not writable by the executor'), {
+          code: 'EACCES',
+        });
+      });
       // These owners may start Git subprocesses or concurrent recursive fs.rm
       // children. Rejection does not prove drainage (Node can reject rm on the
       // first child error while siblings still mutate). Mark BEFORE entry and
       // clear only on success, never in finally or based on an errno/exit code.
-      // Validation failures inside these calls conservatively stay fenced too.
+      // Validation failures inside these calls conservatively stay fenced too,
+      // until the launching daemon verifies this process group has exited.
       filesystemRemovalUnsettled = 'workspace';
       await storageStep('remove_workspace', () => removeBranchWorkspace(p));
       filesystemRemovalUnsettled = 'sdk_home';

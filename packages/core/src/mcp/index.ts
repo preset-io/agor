@@ -68,6 +68,7 @@ export {
   type MCPScopingServerRepository,
   type MCPScopingSessionRepository,
   type MCPServerWithSource,
+  resolveEffectiveSessionMcpServers,
   resolveScopedMCPAuthHeaders,
 } from './scoping';
 export {

@@ -36,7 +36,7 @@ it('backfills SQLite recency atomically without losing children, indexes or fiel
     await expect(migrate(db, { migrationsFolder: folder })).rejects.toThrow();
     expect(await rows()).toEqual(fixture.rows);
     expect(await indexes()).toEqual(beforeIndexes);
-    await runMigrations(db);
+    await runMigrations(db, { allowOfflineCutover: true });
     expect(await rows()).toEqual(
       fixture.rows.map((row) => ({ ...row, updated_at: row.updated_at ?? row.created_at }))
     );

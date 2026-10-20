@@ -268,6 +268,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: 'Invocation-scoped workspace reports; branch state publishes through branches.',
   },
+  'branches/:id/release-deletion': {
+    audience: 'none',
+    why: 'Administrator release response; branch state publishes through branches.',
+  },
   'branches/:id/retire-teammate': {
     audience: 'none',
     why: 'Retirement admission response; archived branch state publishes through branches.',

@@ -95,6 +95,24 @@ methods, not to a repository bypass. Standard removed/patched events and a
 promptable-only queue wakeup occur after commit. See [the MCP guide](../../apps/agor-docs/content/guide/internal-mcp.mdx#managing-a-sessions-pending-queue)
 for conflicts, result shape and examples.
 
+## Gateway command admission
+
+`GatewayChatCommandRepository` admits exact `!stop`, `!skip`, and `!stop-clear`
+controls, after gateway prompt authorization. The daemon takes the tenant
+allow/revocation fence; the repository rechecks the actor and session authority,
+and requires Branch Manager access for the combined stop-clear operation.
+The branch/session locks serialize with admission, dispatch, and queue mutations.
+An expected task/ordered-queue snapshot must still match. Queue cancellation,
+`claimTermination`, and a content-free receipt in the provider occurrence's
+`delivery_metadata` commit together. Duplicate delivery reuses that receipt and
+never selects new work. Standalone Slack/Discord commands use durable provider
+message identities too. A no-session observation also records a receipt, so
+redelivery after a mapping appears cannot target the new session. Discord
+occurrence keys retain the original listener thread identity; prepared routing
+coordinates must match the verified reply metadata on that occurrence.
+Containment and provider replies happen after commit;
+no executor wait holds the command transaction. `!help` is read-only system copy.
+
 ## Fleet-wide draining and recovery
 
 Every daemon runs a bounded `SessionQueueWorker`. It discovers routing-only

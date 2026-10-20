@@ -1,4 +1,5 @@
 import { sanitizeDbError } from '@agor/core/db';
+import { ClaudeExecutionError } from './sdk-handlers/claude/claude-error.js';
 
 const MAX_FAILURE_MESSAGE_LENGTH = 1_024;
 
@@ -28,6 +29,10 @@ function isDatabaseFailure(error: unknown): boolean {
 
 /** Safe text for durable task/message diagnostics; never includes DB query parameters. */
 export function formatExecutorFailure(error: unknown): string {
+  // Claude has already diagnosed this at its SDK boundary. Do not reinterpret
+  // Node codes such as EPERM (or provider fields in cause) as SQLSTATE codes.
+  // Local database/persistence errors never go through that provider boundary.
+  if (error instanceof ClaudeExecutionError) return error.message;
   if (isDatabaseFailure(error)) {
     const diagnostic = sanitizeDbError(error);
     return diagnostic.code ? `${diagnostic.message} (${diagnostic.code})` : diagnostic.message;

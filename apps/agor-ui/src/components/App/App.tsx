@@ -7,7 +7,6 @@ import type {
   Branch,
   BranchArchiveOrDeleteOptions,
   CreateLocalRepoRequest,
-  CreateMCPServerInput,
   CreateRepoRequest,
   CreateUserInput,
   GatewayChannelCreateData,
@@ -243,10 +242,6 @@ export interface AppProps {
    */
   onRefreshCurrentUser?: (shouldApply: () => boolean) => Promise<unknown>;
   onDeleteUser?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
-  onCreateMCPServer?: (
-    data: CreateMCPServerInput,
-    shouldApply?: () => boolean
-  ) => void | Promise<void>;
   onDeleteMCPServer?: (mcpServerId: string, shouldApply?: () => boolean) => void | Promise<void>;
   onCreateGatewayChannel?: (data: GatewayChannelCreateData) => void;
   onUpdateGatewayChannel?: (
@@ -370,7 +365,6 @@ export const App: React.FC<AppProps> = ({
   onUpdateUser,
   onRefreshCurrentUser,
   onDeleteUser,
-  onCreateMCPServer,
   onDeleteMCPServer,
   onCreateGatewayChannel,
   onUpdateGatewayChannel,
@@ -1009,10 +1003,11 @@ export const App: React.FC<AppProps> = ({
       useMemo(() => makeBranchSelector(selectedSessionBranchId), [selectedSessionBranchId])
     ) ?? null;
   // Loaded on first need; the footer's edit control waits for it.
-  const { ids: selectedSessionMcpServerIds } = useSessionMcpServerIds(
-    client,
-    effectiveSelectedSessionId
-  );
+  const {
+    ids: selectedSessionMcpServerIds,
+    failed: sessionMcpLoadFailed,
+    retry: retrySessionMcpLoad,
+  } = useSessionMcpServerIds(client, effectiveSelectedSessionId);
 
   // Narrow per-id subscription for the quick-start picker's branch — only
   // patches to that specific branch (or a socket-in-flight arrival) wake the
@@ -1541,6 +1536,8 @@ export const App: React.FC<AppProps> = ({
                               branch={selectedSessionBranch}
                               currentUserId={user?.user_id}
                               sessionMcpServerIds={selectedSessionMcpServerIds}
+                              sessionMcpLoadFailed={sessionMcpLoadFailed}
+                              onSessionMcpRetry={retrySessionMcpLoad}
                               open={!!effectiveSelectedSessionId}
                               onClose={handleCloseSessionPanel}
                               uploadPolicy={uploadPolicy}
@@ -1634,7 +1631,6 @@ export const App: React.FC<AppProps> = ({
           onCreateUser={onCreateUser}
           onUpdateUser={onUpdateUser}
           onDeleteUser={onDeleteUser}
-          onCreateMCPServer={onCreateMCPServer}
           onDeleteMCPServer={onDeleteMCPServer}
           onCreateGatewayChannel={onCreateGatewayChannel}
           onUpdateGatewayChannel={onUpdateGatewayChannel}

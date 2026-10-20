@@ -4,6 +4,7 @@ import type { SessionRepository, TaskRepository } from '@agor/core/db';
 import type { HookContext, Message, Session, Task } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { classifyClaudeResultFailure } from '../../../../packages/executor/src/sdk-handlers/claude/claude-error.js';
 import {
   assertExternalProviderFailureMetadataAllowed,
   classifyMissingCredentialFailure,
@@ -315,6 +316,53 @@ describe('classifyMissingCredentialFailure', () => {
     };
     await expect(runHook()(wrongSession)).rejects.toThrow('this task executor');
     expect(taskRepository.findById).not.toHaveBeenCalled();
+  });
+
+  it('keeps credential resolution authoritative after a Claude authentication diagnosis', async () => {
+    const failure = classifyClaudeResultFailure({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result: 'Not logged in. Please run /login',
+    });
+    expect(failure?.category).toBe('authentication');
+    vi.mocked(resolveApiKey).mockResolvedValue({
+      apiKey: undefined,
+      source: 'user',
+      useNativeAuth: false,
+      connection: { CLAUDE_CODE_OAUTH_TOKEN: 'configured-test-token' },
+    });
+    const ctx = await runHook()(
+      makeContext({
+        ...sdkErrorBillingResult,
+        content: failure!.message,
+      })
+    );
+    expect(resolveApiKey).toHaveBeenCalledWith(
+      'ANTHROPIC_API_KEY',
+      expect.objectContaining({ userId: 'user-1', tool: 'claude-code' })
+    );
+    expect((ctx.data as Message).metadata?.error_kind).toBeUndefined();
+    expect((ctx.data as Message).content).toBe(SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE);
+  });
+
+  it('does not let a normalized Claude failure cross its executor task/session boundary', async () => {
+    const failure = classifyClaudeResultFailure({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      errors: ['Not logged in'],
+    });
+    const foreignResource = makeContext({
+      ...sdkErrorBillingResult,
+      task_id: 'other-tenant-task' as Message['task_id'],
+      session_id: 'other-tenant-session' as Message['session_id'],
+      content: failure!.message,
+    });
+    await expect(runHook()(foreignResource)).rejects.toThrow('this task executor');
+    expect(taskRepository.findById).not.toHaveBeenCalled();
+    expect(sessionsRepository.findById).not.toHaveBeenCalled();
+    expect(resolveApiKey).not.toHaveBeenCalled();
   });
 
   it('sanitizes zero-turn output with a Claude subscription token', async () => {

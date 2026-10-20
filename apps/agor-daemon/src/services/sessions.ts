@@ -241,6 +241,14 @@ export type SessionParams = QueryParams<{
      * Root-level service params are server-controlled; transport query/data cannot set this marker.
      */
     _agenticConfigResolved?: boolean;
+    /** Internal fork/spawn/gateway create: skip branch/user MCP defaults without recording an explicit selection. */
+    _skipMcpDefaults?: boolean;
+    /**
+     * Internal override for whether this create records an explicit MCP selection.
+     * Children pass inherited/explicit intent so it commits with the session row;
+     * attach-only callers (MCP Catalog) pass false. Defaults to "mcpServerIds supplied".
+     */
+    _mcpSelectionExplicit?: boolean;
     /**
      * Trusted session-admission override. Genealogical children inherit their
      * parent's SDK lineage; independent creates resolve branch intent + config.
@@ -537,6 +545,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const explicitMcpServerIds = normalizeCreateMcpServerIds(
       (data as { mcpServerIds?: unknown }).mcpServerIds
     );
+    if (Object.hasOwn(data, 'mcp_selection_explicit')) {
+      throw new BadRequest('mcp_selection_explicit is server-managed');
+    }
     const agenticTool = requireActiveAgenticTool(data.agentic_tool ?? 'claude-code');
     this.assertDeploymentToolConfigured(agenticTool);
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
@@ -673,19 +684,26 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
       const createdSession = await new SessionRepository(scoped).create({
         ...createData,
+        ...((params?._mcpSelectionExplicit ?? explicitMcpServerIds !== undefined) && {
+          mcp_selection_explicit: true,
+        }),
         sdk_home_scope: admission.scope,
       });
 
       // Omission preserves provenance: only defaults read here may be skipped.
       // Never accept a client-supplied "inherited" list or fall through to user
       // defaults after a configured branch list turns out to be entirely stale.
+      // Internal children copy their parent's links later; skipping defaults
+      // is not a caller selection and must keep implicit global servers.
+      const selectedMcpServerIds =
+        explicitMcpServerIds ?? (params?._skipMcpDefaults === true ? [] : undefined);
       const user =
-        explicitMcpServerIds === undefined && createdSession.created_by
+        selectedMcpServerIds === undefined && createdSession.created_by
           ? await new UsersRepository(scoped).findById(createdSession.created_by)
           : undefined;
       const serverIds = normalizeCreateMcpServerIds(
         resolveSessionMcpServerIds({
-          explicit: explicitMcpServerIds,
+          explicit: selectedMcpServerIds,
           branch,
           user,
         })
@@ -927,7 +945,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   }
 
   /**
-   * Attach explicit MCP server IDs to a session.
+   * Attach MCP server IDs to a session (links only).
+   * Selection intent is recorded atomically by create(), never here.
    * Emits WebSocket events so the UI updates in real-time.
    */
   async setMCPServers(sessionId: SessionID, serverIds: string[], label: string): Promise<void> {
@@ -1126,7 +1145,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
     const forkedSession = await this.create(
       {
-        mcpServerIds: [], // Fork copies its parent below, not fresh-session defaults.
         agentic_tool: parentTool,
         agentic_tool_preset_id: inherited.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
@@ -1148,7 +1166,14 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         model_config: inherited.model_config,
         // Don't copy sdk_session_id - fork will get its own via forkSession:true
       },
-      { ...params, _agenticConfigResolved: true, _sdkHomeScope: parent.sdk_home_scope }
+      {
+        ...params,
+        _agenticConfigResolved: true,
+        // MCP links are copied from the parent below; its intent commits with this row.
+        _skipMcpDefaults: true,
+        _mcpSelectionExplicit: parent.mcp_selection_explicit === true,
+        _sdkHomeScope: parent.sdk_home_scope,
+      }
     );
 
     // Cast forkedSession to Session to handle return type
@@ -1310,7 +1335,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
     const spawnedSession = await this.create(
       {
-        mcpServerIds: [], // Spawn applies its separate explicit/parent policy below.
         agentic_tool: targetTool,
         agentic_tool_preset_id: resolved.agentic_tool_preset_id,
         status: SessionStatus.IDLE,
@@ -1333,7 +1357,16 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         callback_config: callbackConfig,
         // Don't copy sdk_session_id - spawn will get its own via forkSession:true
       },
-      { ...params, _agenticConfigResolved: true, _sdkHomeScope: parent.sdk_home_scope }
+      {
+        ...params,
+        _agenticConfigResolved: true,
+        // MCP links come from the parent or an explicit spawn selection below;
+        // the resulting intent commits with this row, before any attachment.
+        _skipMcpDefaults: true,
+        _mcpSelectionExplicit:
+          data.mcpServerIds !== undefined || parent.mcp_selection_explicit === true,
+        _sdkHomeScope: parent.sdk_home_scope,
+      }
     );
 
     // Cast spawnedSession to Session to handle return type (create returns Session | Session[])
@@ -1859,6 +1892,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     params?: SessionParams
   ): Promise<Session | Session[]> {
     assertSessionArchiveStateUsesDedicatedOperation(data);
+    if (Object.hasOwn(data, 'mcp_selection_explicit')) {
+      throw new BadRequest('mcp_selection_explicit is server-managed');
+    }
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is immutable and server-managed');
     }

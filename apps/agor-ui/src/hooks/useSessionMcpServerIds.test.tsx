@@ -24,10 +24,10 @@ describe('useSessionMcpServerIds', () => {
     const { client, find } = makeClient([{ session_id: 's-1', mcp_server_id: 'a' }]);
     const { result, rerender } = renderHook(() => useSessionMcpServerIds(client, 's-1'));
     expect(find).not.toHaveBeenCalled();
-    expect(result.current).toEqual({ ids: [], loaded: false });
+    expect(result.current).toMatchObject({ ids: [], loaded: false });
 
     act(() => agorStore.getState().setLoading(false));
-    await waitFor(() => expect(result.current).toEqual({ ids: ['a'], loaded: true }));
+    await waitFor(() => expect(result.current).toMatchObject({ ids: ['a'], loaded: true }));
     rerender();
     expect(find).toHaveBeenCalledTimes(1);
     expect(find).toHaveBeenCalledWith({ query: { session_id: 's-1' } });
@@ -47,7 +47,7 @@ describe('useSessionMcpServerIds', () => {
   it('loads nothing without a session', () => {
     const { client, find } = makeClient([]);
     const { result } = renderHook(() => useSessionMcpServerIds(client, null));
-    expect(result.current).toEqual({ ids: [], loaded: false });
+    expect(result.current).toMatchObject({ ids: [], loaded: false });
     expect(find).not.toHaveBeenCalled();
   });
 
@@ -88,5 +88,24 @@ describe('useSessionMcpServerIds', () => {
     await act(async () => gate.resolve());
     await waitFor(() => expect(result.current.loaded).toBe(true));
     expect(find).toHaveBeenCalledTimes(2);
+  });
+  it('does not expose a prior authority read failure to the next authority', async () => {
+    const gate = deferred();
+    const find = vi
+      .fn()
+      .mockImplementationOnce(() => gate.promise)
+      .mockResolvedValue([]);
+    const client = { service: () => ({ find }) } as unknown as AgorClient;
+    const { result } = renderHook(() => useSessionMcpServerIds(client, 's-1'));
+    await waitFor(() => expect(find).toHaveBeenCalledOnce());
+    act(() => {
+      setRealtimeAuthorityScope('user-b:member:1');
+      agorStore.getState().setDataAuthority('user-b:member:1');
+      resetSessionMcpLinks();
+    });
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    await act(async () => gate.reject(new Error('old authority denied')));
+    expect(result.current.failed).toBe(false);
+    expect(result.current.ids).toEqual([]);
   });
 });

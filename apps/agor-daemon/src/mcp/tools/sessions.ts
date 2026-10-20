@@ -639,7 +639,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .array(mcpRequiredId('mcpServerIds[]', 'MCP server'))
           .optional()
           .describe(
-            'MCP server IDs to attach. Overrides parent session inheritance. Omit to inherit from parent. Pass empty array for no MCPs.'
+            'MCP server IDs to attach. A supplied list (including []) is the complete selection: it overrides parent inheritance and enabled global MCP servers are not added. Omit to inherit from parent. Pass empty array for no external MCPs.'
           ),
         modelConfig: modelConfigInputSchema,
         presetId: mcpOptionalNonEmptyString(
@@ -758,7 +758,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .array(mcpRequiredId('mcpServerIds[]', 'MCP server'))
           .optional()
           .describe(
-            'MCP server IDs for subsession mode. Overrides parent inheritance. Omit to inherit from parent. Pass empty array for no MCPs.'
+            'MCP server IDs for subsession mode. A supplied list (including []) is the complete selection: it overrides parent inheritance and enabled global MCP servers are not added. Omit to inherit from parent. Pass empty array for no external MCPs.'
           ),
         modelConfig: modelConfigInputSchema,
         callback: z
@@ -1031,7 +1031,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing branch. Prefer omitting agenticTool unless a specific tool is needed: omission uses the authenticated caller’s saved primary coding agent, not the calling session’s tool. If no primary coding agent is set, creation fails; pass agenticTool explicitly or set the preference. The selected tool uses the caller’s normal saved configuration (user default/preset/workspace default), with explicit overrides handled as usual. When called from an MCP session context in the same target branch (the default for branch-local orchestrator agents), the new session is automatically linked to the calling session as its parent — pass `parentSessionId: null` to create an unlinked root session instead. Cross-branch sessions are not genealogy-linked automatically; use callbacks for remote completion routing. Use for starting work on a new task in the same codebase (e.g., new feature branch, separate investigation). MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
+        'Create a new session in an existing branch. Prefer omitting agenticTool unless a specific tool is needed: omission uses the authenticated caller’s saved primary coding agent, not the calling session’s tool. If no primary coding agent is set, creation fails; pass agenticTool explicitly or set the preference. The selected tool uses the caller’s normal saved configuration (user default/preset/workspace default), with explicit overrides handled as usual. When called from an MCP session context in the same target branch (the default for branch-local orchestrator agents), the new session is automatically linked to the calling session as its parent — pass `parentSessionId: null` to create an unlinked root session instead. Cross-branch sessions are not genealogy-linked automatically; use callbacks for remote completion routing. Use for starting work on a new task in the same codebase (e.g., new feature branch, separate investigation). MCP servers are inherited from the branch (if configured) or user defaults plus enabled global servers, or can be overridden via `mcpServerIds` (a supplied list, including [], is the complete selection and excludes global servers). Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',
@@ -1094,7 +1094,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .array(mcpRequiredId('mcpServerIds[]', 'MCP server'))
           .optional()
           .describe(
-            'Explicit MCP server IDs to attach atomically; an unavailable or unauthorized selection rejects creation. [] selects none. Omit to inherit branch config > user defaults; missing inherited servers are skipped with a warning.'
+            'Explicit MCP server IDs to attach atomically; an unavailable or unauthorized selection rejects creation. A supplied list (including []) is the complete selection, so enabled global MCP servers are not added; [] selects none. Omit to inherit branch config > user defaults plus enabled global servers; missing inherited servers are skipped with a warning.'
           ),
         modelConfig: modelConfigInputSchema,
         codexIncludePlugins: z

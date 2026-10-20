@@ -17,6 +17,7 @@
  *     allowed_channel_ids?: string[],               // Channel ID whitelist
  *     ingest_files?: boolean,                       // Forward message attachments (requires files:read)
  *     inbound_reactions?: boolean,                  // Deliver human reactions in mapped threads (requires reactions:read)
+ *     ingest_mime_types?: string[],                 // Extra MIME types to ingest; `type/*` allowed
  *     agent_tools?: SlackAgentToolsConfig           // Agent-callable MCP tool toggles (gated in the daemon tool layer)
  *   }
  *
@@ -28,7 +29,6 @@ import { SocketModeClient } from '@slack/socket-mode';
 import type { KnownBlock, RawTextElement, SectionBlock, TableBlock } from '@slack/types';
 import slackWebApi, { WebClient, type WebClientOptions } from '@slack/web-api';
 import { slackifyMarkdown } from 'slackify-markdown';
-
 import type {
   ChannelType,
   SlackAgentToolsConfig,
@@ -2754,6 +2754,21 @@ export class SlackConnector implements GatewayConnector {
       let routed = false;
       try {
         let event = body.event;
+        // Existing apps may still subscribe to all channel messages.
+        // Reject them before logging, cache scans, or Slack API calls. This is a
+        // negative-only fast path: C/G distinguish channel-like surfaces from
+        // DMs, never public from private. Accepted events still resolve their
+        // actual type and pass the source/allowlist checks below.
+        const knownChannelLike =
+          event.channel_type === 'channel' ||
+          event.channel_type === 'group' ||
+          event.channel_type === 'mpim' ||
+          (!event.channel_type && /^[CG]/.test(event.channel ?? ''));
+        if (eventType === 'message' && knownChannelLike) {
+          // message_replied is parent bookkeeping, not a command occurrence.
+          // Addressed channel replies arrive separately as app_mention events.
+          return;
+        }
         const slackTeamId =
           typeof event.team === 'string'
             ? event.team

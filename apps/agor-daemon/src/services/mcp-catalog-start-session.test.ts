@@ -88,7 +88,8 @@ describe('mcp-catalog/start-session', () => {
         title: 'DeepWiki',
         mcpServerIds: ['server-1'],
       },
-      params
+      // Attach-only: the session keeps implicit global servers.
+      { ...params, _mcpSelectionExplicit: false }
     );
     expect(built.attach).not.toHaveBeenCalled();
   });

@@ -1,9 +1,11 @@
 import type {
   AgorClient,
+  CreateMCPServerInput,
   MCPScope,
   MCPServer,
   MCPTransport,
   UpdateMCPServerInput,
+  UserID,
 } from '@agor-live/client';
 import { Alert, Button, Form, Modal, Space, Tooltip } from 'antd';
 import { useEffect, useRef, useState } from 'react';
@@ -11,7 +13,11 @@ import {
   type AuthorityOperationGuard,
   useAuthorityOperationGuard,
 } from '@/hooks/useAuthorityOperationGuard';
-import { type ActionErrorCopy, describeActionError } from '@/utils/connectionErrors';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  isInFlightConnectionLossError,
+} from '@/utils/connectionErrors';
 import { useThemedMessage } from '@/utils/message';
 import { ActionErrorNotice } from '../CompactNotice';
 import { MCPOAuthPolicySummary } from './MCPOAuthPolicySummary';
@@ -27,7 +33,7 @@ import { useMCPServerDiscovery } from './useMCPServerDiscovery';
 import { useSavedMCPOAuthPolicy } from './useSavedMCPOAuthPolicy';
 
 export interface MCPServerEditModalProps {
-  /** The server being edited. Modal opens when this is non-null and `open` is true. */
+  /** The server being edited. `null` with `open` adds a new server instead. */
   server: MCPServer | null;
   open: boolean;
   client: AgorClient | null;
@@ -45,6 +51,10 @@ export interface MCPServerEditModalProps {
   offeredTransports?: MCPTransport[];
   /** The scopes this editor may switch to, on the same terms. */
   offeredScopes?: MCPScope[];
+  /** Create mode only: whether Shared (workspace) ownership may be chosen. */
+  allowSharedOwnership?: boolean;
+  /** Create mode only: runs after Save with the server that was added. */
+  onCreated?: (server: MCPServer) => void;
   /** Current server-side capability/connection decision from the owner. */
   mutationAllowed: boolean;
   mutationBlockedReason?: string;
@@ -55,12 +65,17 @@ export interface MCPServerEditModalProps {
   focusTriggerAfterClose?: boolean;
 }
 
+const SHARED_NO_LONGER_ALLOWED =
+  'You can no longer add shared servers, so choose Private or ask an administrator.';
+
 /**
- * Self-contained "Edit MCP Server" modal.
+ * Self-contained "Edit MCP Server" modal, which also adds a server when opened
+ * without one.
  *
  * Hydrates its own form from `server`, owns transport/authType/test state,
- * and persists updates via the `mcp-servers` Feathers service. Used by
- * both `MCPServersTable` (settings) and `SessionMcpFooterControl` (admin
+ * and persists via the `mcp-servers` Feathers service. A create persists once
+ * (on Save, or before an OAuth start) and later saves patch that new row.
+ * Used by `MyServersTab` (Marketplace) and `SessionMcpFooterControl` (admin
  * shortcut).
  */
 const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
@@ -72,6 +87,8 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   authorityKey,
   offeredTransports,
   offeredScopes,
+  allowSharedOwnership,
+  onCreated,
   mutationAllowed,
   mutationBlockedReason = 'You can no longer change this MCP server.',
   onClose,
@@ -82,11 +99,20 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   const [modal, modalContextHolder] = Modal.useModal();
   const [form] = Form.useForm();
   const [policySnapshot, setPolicySnapshot] = useState<MCPServer | null>(null);
+  // Create mode: the row this form added, which later saves patch.
+  const [createdServer, setCreatedServer] = useState<MCPServer | null>(null);
+  // The form revision whose create lost its reply: Create stays off until the form changes.
+  const [unconfirmedCreateRevision, setUnconfirmedCreateRevision] = useState<number | null>(null);
+  // One save at a time, from Create/Save, Save & Test, and the OAuth start alike:
+  // until a create replies there is no row to patch, so a second save would add another.
+  const saveInFlightRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const target = server ?? createdServer;
   const newestServer =
-    policySnapshot?.mcp_server_id === server?.mcp_server_id &&
-    (policySnapshot?.config_version ?? 0) > (server?.config_version ?? 1)
+    policySnapshot?.mcp_server_id === target?.mcp_server_id &&
+    (policySnapshot?.config_version ?? 0) > (target?.config_version ?? 1)
       ? policySnapshot
-      : server;
+      : target;
   const { policyServer, policyUnavailable, retryPolicy } = useSavedMCPOAuthPolicy({
     server: newestServer,
     client,
@@ -121,19 +147,26 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     currentUserId: identityKey,
     authGeneration,
     formRevision,
-    contextKey: open ? (server?.mcp_server_id ?? null) : null,
+    contextKey: open ? (server?.mcp_server_id ?? 'create') : null,
   });
+  const createUnconfirmed = !target && unconfirmedCreateRevision === formRevision;
 
   // Only ask the form once it is rendered and filled — an unmounted instance
   // warns, and a half-hydrated one would flash Save disabled.
   const missingRequiredFields =
     open && formHydrated
-      ? missingMCPFieldLabels(form.getFieldsValue(true), { mode: 'edit', transport, authType })
+      ? missingMCPFieldLabels(form.getFieldsValue(true), {
+          mode: target ? 'edit' : 'create',
+          transport,
+          authType,
+        })
       : [];
   const saveBlocked =
     !mutationAllowed ||
     !authorityKey ||
     configConflict ||
+    createUnconfirmed ||
+    saving ||
     testing ||
     reloadingLatest ||
     missingRequiredFields.length > 0;
@@ -147,7 +180,22 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   // record.
   // biome-ignore lint/correctness/useExhaustiveDependencies: see comment above
   useEffect(() => {
-    if (!open || !server) return;
+    if (!open) return;
+    if (!server) {
+      // Create: start from the field defaults every time the modal opens.
+      setPolicySnapshot(null);
+      setCreatedServer(null);
+      setUnconfirmedCreateRevision(null);
+      setConfigConflict(false);
+      setSaveError(null);
+      configVersionRef.current = 1;
+      setAuthType('none');
+      setTransport(offeredTransports?.[0] ?? 'stdio');
+      form.resetFields();
+      setFormHydrated(true);
+      bumpFormRevision();
+      return;
+    }
 
     setPolicySnapshot(null);
     setConfigConflict(false);
@@ -227,29 +275,111 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     setSaveError(null);
     setReloadScope(null);
     setManagedOAuthCompatibilityMode(undefined);
+    setCreatedServer(null);
+    setUnconfirmedCreateRevision(null);
     onClose();
   };
 
   // A saved ID is authoritative at the daemon. Save the draft first rather
   // than sending ignored inline credentials and claiming that they were tested.
+  // An unsaved non-OAuth draft is tested inline so a test never adds a server.
   const handleTestConnection = () =>
     testConnection(async (operation) => {
-      if (!server || !(await saveFormValues(operation))) return null;
-      return { mcp_server_id: server.mcp_server_id };
+      const values = form.getFieldsValue(true);
+      if (!target && values.auth_type !== 'oauth') {
+        setSaveError(null);
+        try {
+          await form.validateFields(['url', 'headers']);
+        } catch (error) {
+          if (operation.isCurrent()) setSaveError(describeFormError('test the connection', error));
+          return null;
+        }
+        if (!values.url || values.transport === 'stdio') return null;
+        return {
+          url: values.url,
+          transport: values.transport || 'http',
+          auth: buildAuthFromValues(values),
+          headers: parseHeadersJSON(values.headers),
+        };
+      }
+      const saved = await saveFormValues(operation);
+      return saved ? { mcp_server_id: server?.mcp_server_id ?? saved.mcp_server_id } : null;
     });
+
+  const describeFormError = (action: string, error: unknown): ActionErrorCopy => {
+    // Name the field: some sit in collapsed panels.
+    const fieldError = firstFormErrorMessage(error);
+    return fieldError
+      ? { message: `Couldn't ${action}. ${fieldError}`, raw: null }
+      : describeActionError(action, error, { idempotent: Boolean(target) });
+  };
+
+  const createServer = async (
+    operation: ReturnType<typeof operationGuard.begin>,
+    values: Record<string, unknown>
+  ): Promise<MCPServer | null> => {
+    if (!client || !identityKey || createUnconfirmed) return null;
+    if (values.ownership === 'shared' && !allowSharedOwnership) {
+      setSaveError({ message: SHARED_NO_LONGER_ALLOWED, raw: null });
+      return null;
+    }
+    const data: CreateMCPServerInput = {
+      owner_user_id: values.ownership === 'shared' ? null : (identityKey as UserID),
+      name: values.name as string,
+      display_name: values.display_name as string | undefined,
+      description: values.description as string | undefined,
+      transport: values.transport as MCPTransport,
+      scope: (values.scope as MCPScope | undefined) ?? offeredScopes?.[0] ?? 'session',
+      enabled: (values.enabled as boolean | undefined) ?? true,
+    };
+    if (values.transport === 'stdio') {
+      data.command = values.command as string;
+      data.args = (values.args as string)?.split(',').map((arg: string) => arg.trim()) || [];
+    } else {
+      data.url = values.url as string;
+      const headers = parseHeadersJSON(values.headers);
+      if (headers) data.headers = headers;
+    }
+    const auth = buildAuthFromValues(values);
+    if (auth) data.auth = auth;
+    const env = parseEnvJSON(values.env);
+    if (env) data.env = env;
+
+    if (!operation.isCurrent() || !mutationStateRef.current.allowed) return null;
+    const created = await client.service('mcp-servers').create(data);
+    if (!operation.isCurrent()) return null;
+    configVersionRef.current = created.config_version ?? 1;
+    setCreatedServer(created);
+    return created;
+  };
 
   const saveFormValues = async (
     operation: ReturnType<typeof operationGuard.begin>
-  ): Promise<boolean> => {
+  ): Promise<MCPServer | null> => {
+    if (saveInFlightRef.current) return null;
+    saveInFlightRef.current = true;
+    setSaving(true);
+    try {
+      return await persistFormValues(operation);
+    } finally {
+      saveInFlightRef.current = false;
+      setSaving(false);
+    }
+  };
+
+  const persistFormValues = async (
+    operation: ReturnType<typeof operationGuard.begin>
+  ): Promise<MCPServer | null> => {
     // A lost edit permission shows as the form's policy notice and a disabled Save.
-    if (!server || !client || configConflict || !operation.isCurrent()) return false;
-    if (!mutationStateRef.current.allowed) return false;
+    if (!client || configConflict || !operation.isCurrent()) return null;
+    if (!mutationStateRef.current.allowed) return null;
     setSaveError(null);
 
     try {
       await form.validateFields();
-      if (!operation.isCurrent() || !mutationStateRef.current.allowed) return false;
+      if (!operation.isCurrent() || !mutationStateRef.current.allowed) return null;
       const values = form.getFieldsValue(true);
+      if (!target) return await createServer(operation, values);
 
       const updates: UpdateMCPServerInput = {
         display_name: values.display_name,
@@ -277,28 +407,29 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
         forPatch: true,
       });
 
-      if (!operation.isCurrent() || !mutationStateRef.current.allowed) return false;
-      const updated = await client.service('mcp-servers').patch(server.mcp_server_id, updates);
-      if (!operation.isCurrent()) return false;
+      if (!operation.isCurrent() || !mutationStateRef.current.allowed) return null;
+      const updated = await client.service('mcp-servers').patch(target.mcp_server_id, updates);
+      if (!operation.isCurrent()) return null;
       setPolicySnapshot(updated);
       configVersionRef.current = updated.config_version ?? configVersionRef.current + 1;
-      return operation.isCurrent();
+      return updated;
     } catch (error) {
-      if (!operation.isCurrent()) return false;
+      if (!operation.isCurrent()) return null;
+      if (!target) {
+        // A create retried after a lost reply could add the server twice.
+        if (isInFlightConnectionLossError(error)) setUnconfirmedCreateRevision(formRevision);
+        setSaveError(describeFormError('add the MCP server', error));
+        return null;
+      }
       const conflictData = (error as { code?: number; data?: { current_config_version?: number } })
         ?.data;
       if ((error as { code?: number })?.code === 409 || conflictData?.current_config_version) {
         setConfigConflict(true);
-        return false;
+        return null;
       }
-      // Name the field: some sit in collapsed panels. The patch is version-fenced, so a retry is safe.
-      const fieldError = firstFormErrorMessage(error);
-      setSaveError(
-        fieldError
-          ? { message: `Couldn't save the MCP server. ${fieldError}`, raw: null }
-          : describeActionError('save the MCP server', error, { idempotent: true })
-      );
-      return false;
+      // The patch is version-fenced, so a retry is safe.
+      setSaveError(describeFormError('save the MCP server', error));
+      return null;
     }
   };
 
@@ -330,20 +461,22 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
       if (!confirmed) return;
     }
     const operation = operationGuard.begin();
-    if (await saveFormValues(operation)) {
+    const saved = await saveFormValues(operation);
+    if (saved) {
       if (!operation.isCurrent()) return;
-      showSuccess('MCP server saved.');
+      showSuccess(server ? 'MCP server saved.' : 'MCP server added.');
+      if (!server) onCreated?.(saved);
       closeAndReset();
     }
   };
 
   const reloadLatest = async () => {
     const operation = operationGuard.begin();
-    if (!client || !server || !operation.isCurrent()) return;
+    if (!client || !target || !operation.isCurrent()) return;
     setReloadScope(operationGuard);
     setSaveError(null);
     try {
-      const latest = await client.service('mcp-servers').get(server.mcp_server_id);
+      const latest = await client.service('mcp-servers').get(target.mcp_server_id);
       if (!operation.isCurrent()) return;
       setPolicySnapshot(latest);
       configVersionRef.current = latest.config_version ?? 1;
@@ -404,15 +537,16 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
 
   const prepareOAuthStart = async (): Promise<string | null> => {
     const operation = operationGuard.begin();
-    if (!(await saveFormValues(operation)) || !operation.isCurrent()) return null;
-    return server?.mcp_server_id ?? null;
+    const saved = await saveFormValues(operation);
+    if (!saved || !operation.isCurrent()) return null;
+    return server?.mcp_server_id ?? saved.mcp_server_id;
   };
 
   return (
     <>
       {modalContextHolder}
       <Modal
-        title="Edit MCP Server"
+        title={server ? 'Edit MCP Server' : 'Add MCP Server'}
         open={open}
         onCancel={closeAndReset}
         afterClose={afterClose}
@@ -431,16 +565,18 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
                     ? 'Load the latest version before you save again.'
                     : testing || reloadingLatest
                       ? 'Wait for the current connection operation to finish.'
-                      : !authorityKey
-                        ? 'Reconnect before saving.'
-                        : missingRequiredFields.length > 0
-                          ? describeMissingForSave(missingRequiredFields)
-                          : undefined
+                      : createUnconfirmed
+                        ? 'Refresh to see if the server was added before you create it again.'
+                        : !authorityKey
+                          ? 'Reconnect before saving.'
+                          : missingRequiredFields.length > 0
+                            ? describeMissingForSave(missingRequiredFields)
+                            : undefined
               }
             >
               <span>
-                <Button type="primary" disabled={saveBlocked} onClick={handleSave}>
-                  Save
+                <Button type="primary" loading={saving} disabled={saveBlocked} onClick={handleSave}>
+                  {target ? 'Save' : 'Create'}
                 </Button>
               </span>
             </Tooltip>
@@ -504,8 +640,9 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
           <MCPServerFormFields
             offeredTransports={offeredTransports}
             offeredScopes={offeredScopes}
-            mode="edit"
-            savedOwnership={server?.owner_user_id ? 'private' : 'shared'}
+            allowSharedOwnership={allowSharedOwnership}
+            mode={target ? 'edit' : 'create'}
+            savedOwnership={target?.owner_user_id ? 'private' : 'shared'}
             transport={transport}
             onTransportChange={setTransport}
             authType={authType}
@@ -513,10 +650,11 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
             form={form}
             client={client}
             authorityKey={authorityKey}
-            serverId={server?.mcp_server_id}
+            serverId={target?.mcp_server_id}
             onTestConnection={handleTestConnection}
             testing={testing}
             testResult={testResult}
+            saving={saving}
             onPrepareOAuthStart={prepareOAuthStart}
             mutationAllowed={mutationAllowed && !configConflict && !reloadingLatest}
             mutationBlockedReason={

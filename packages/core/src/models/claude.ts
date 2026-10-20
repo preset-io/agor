@@ -181,6 +181,13 @@ export const AVAILABLE_CLAUDE_MODEL_ALIASES: ClaudeModel[] = [
     contextWindow: CLAUDE_STANDARD_CONTEXT_WINDOW,
   },
   {
+    id: 'claude-haiku-5-5',
+    displayName: 'Claude Haiku 5.5 · 1M',
+    family: 'claude-5',
+    description: 'Fastest and most cost-efficient model; native 1M context window',
+    contextWindow: CLAUDE_EXTENDED_CONTEXT_WINDOW,
+  },
+  {
     id: 'claude-haiku-4-5',
     displayName: 'Claude Haiku 4.5',
     family: 'claude-4',

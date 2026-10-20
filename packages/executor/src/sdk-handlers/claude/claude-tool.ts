@@ -674,10 +674,13 @@ export class ClaudeTool implements ITool {
         if (sdkResult && (sdkResult.subtype !== 'success' || sdkResult.is_error === true)) {
           hadError = true;
           errorSubtype = sdkResult.subtype;
-          // Fixed sentence first (classification); only the closed failure code follows.
+          // Diagnosis is made once at the SDK event boundary. Keep result handling
+          // non-throwing so usage, partial output and the daemon's credential
+          // checks survive. The recovery notice below intentionally stays generic;
+          // the safe diagnosis is retained in the Task failure details.
           errorDetails = [
             withProviderDetail(
-              SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+              event.failure?.message ?? SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
               claudeResultFailureCode(rawSdkResponse)
             ),
           ];
@@ -1133,10 +1136,13 @@ export class ClaudeTool implements ITool {
         if (sdkResult && (sdkResult.subtype !== 'success' || sdkResult.is_error === true)) {
           hadError = true;
           errorSubtype = sdkResult.subtype;
-          // Fixed sentence first (classification); only the closed failure code follows.
+          // Diagnosis is made once at the SDK event boundary. Keep result handling
+          // non-throwing so usage, partial output and the daemon's credential
+          // checks survive. The recovery notice below intentionally stays generic;
+          // the safe diagnosis is retained in the Task failure details.
           errorDetails = [
             withProviderDetail(
-              SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+              event.failure?.message ?? SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
               claudeResultFailureCode(rawSdkResponse)
             ),
           ];
