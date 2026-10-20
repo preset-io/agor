@@ -28,12 +28,12 @@ function preferReducedMotion() {
 it('escalates the live label on the copy steps and announces only step changes', () => {
   const { container } = render(<ThinkingBlock content="" isStreaming startedAt={100_000} />);
   const header = screen.getByRole('button', { name: 'Thinking…', expanded: false });
-  expect(header).toHaveTextContent('Thinking…· 1s');
+  expect(header).toHaveTextContent('Thinking…· 00:00');
   expect(screen.getByRole('status')).toHaveTextContent(/^Thinking…$/);
   expect(container.querySelector(BLINK)).not.toBeNull();
 
   act(() => vi.advanceTimersByTime(14_000));
-  expect(header).toHaveTextContent('· 14s');
+  expect(header).toHaveTextContent('· 00:14');
   expect(screen.getByRole('status')).toHaveTextContent(/^Thinking…$/);
 
   for (const [seconds, label] of [
@@ -47,7 +47,7 @@ it('escalates the live label on the copy steps and announces only step changes',
     expect(screen.getByRole('button', { name: label })).toBe(header);
     expect(screen.getByRole('status')).toHaveTextContent(new RegExp(`^${label}$`));
   }
-  expect(header).toHaveTextContent('· 1m 13s');
+  expect(header).toHaveTextContent('· 01:13');
 });
 
 it('settles to a quiet "Thought for" line that expands the reasoning', () => {
@@ -81,7 +81,7 @@ it('keeps the timer counting but drops the shimmer under reduced motion', () => 
   try {
     const { container } = render(<ThinkingBlock content="" isStreaming startedAt={100_000} />);
     act(() => vi.advanceTimersByTime(20_000));
-    expect(screen.getByRole('button', { name: 'Still thinking…' })).toHaveTextContent('· 20s');
+    expect(screen.getByRole('button', { name: 'Still thinking…' })).toHaveTextContent('· 00:20');
     expect(container.querySelector(BLINK)).toBeNull();
   } finally {
     restore();

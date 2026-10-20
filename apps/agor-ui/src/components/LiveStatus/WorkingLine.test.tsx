@@ -19,10 +19,13 @@ it('shimmers one step with a ticking timer kept out of the status region', () =>
     <WorkingLine step="Running: Bash" startedAt="2026-10-14T12:00:00.000Z" />
   );
   expect(screen.getByRole('status')).toHaveTextContent(/^Running: Bash$/);
-  expect(container).toHaveTextContent('Running: Bash· 12s');
+  expect(container).toHaveTextContent('Running: Bash· 00:12');
   expect(container.querySelectorAll(BLINK)).toHaveLength(1);
   act(() => vi.advanceTimersByTime(60_000));
-  expect(container).toHaveTextContent('· 1m 12s');
+  expect(container).toHaveTextContent('· 01:12');
+  // The same clock as the turn's timer pill, hours included.
+  act(() => vi.advanceTimersByTime(3_600_000));
+  expect(container).toHaveTextContent('· 01:01:12');
   expect(screen.getByRole('status')).toHaveTextContent(/^Running: Bash$/);
 });
 
@@ -33,7 +36,7 @@ it('names a wait statically, with a warning dot and no timer', () => {
   expect(screen.getByRole('status')).toHaveTextContent('Waiting for approval · Bash');
   expect(container.querySelector('.ant-badge-status-warning')).not.toBeNull();
   expect(container.querySelector(BLINK)).toBeNull();
-  expect(container).not.toHaveTextContent('12s');
+  expect(container).not.toHaveTextContent('00:12');
 });
 
 it('stops the shimmer under reduced motion while the timer keeps counting', () => {
@@ -48,7 +51,7 @@ it('stops the shimmer under reduced motion while the timer keeps counting', () =
     );
     expect(container.querySelector(BLINK)).toBeNull();
     act(() => vi.advanceTimersByTime(3_000));
-    expect(container).toHaveTextContent('Working…· 15s');
+    expect(container).toHaveTextContent('Working…· 00:15');
   } finally {
     window.matchMedia = matchMedia;
   }

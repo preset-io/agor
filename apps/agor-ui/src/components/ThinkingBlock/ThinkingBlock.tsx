@@ -15,13 +15,8 @@ import { useRetainTaskDetailsWhile } from '../../hooks/useTaskDetailRetention';
 import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { CollapsibleText } from '../CollapsibleText';
-import {
-  formatElapsed,
-  LiveLabel,
-  thinkingLabel,
-  thoughtForLabel,
-  useTickingNow,
-} from '../LiveStatus';
+import { LiveLabel, thinkingLabel, thoughtForLabel, useTickingNow } from '../LiveStatus';
+import { formatDuration } from '../Pill/TimerPill';
 
 interface ThinkingBlockProps {
   /** Thinking content (markdown) */
@@ -89,7 +84,7 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
             aria-hidden="true"
             style={{ color: token.colorTextTertiary, fontVariantNumeric: 'tabular-nums' }}
           >
-            · {formatElapsed(elapsedSeconds)}
+            · {formatDuration(elapsedSeconds * 1000)}
           </span>
         )}
         <Chevron aria-hidden="true" style={{ fontSize: '0.75em' }} />

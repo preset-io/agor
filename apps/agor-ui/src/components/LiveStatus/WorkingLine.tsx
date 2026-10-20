@@ -1,6 +1,6 @@
 import { Badge, Flex, theme } from 'antd';
+import { formatDuration } from '../Pill/TimerPill';
 import { LiveLabel, useTickingNow } from './LiveLabel';
-import { formatElapsed } from './liveStatus';
 
 /**
  * The turn's one live status line: what the agent is doing now, plus elapsed time.
@@ -18,7 +18,7 @@ export function WorkingLine({
   const { token } = theme.useToken();
   const now = useTickingNow(!waiting);
   const start = startedAt === undefined ? Number.NaN : new Date(startedAt).getTime();
-  const elapsed = Number.isFinite(start) ? (now - start) / 1000 : undefined;
+  const elapsed = Number.isFinite(start) ? now - start : undefined;
   return (
     <Flex
       align="center"
@@ -44,7 +44,7 @@ export function WorkingLine({
             fontVariantNumeric: 'tabular-nums',
           }}
         >
-          · {formatElapsed(elapsed)}
+          · {formatDuration(elapsed)}
         </span>
       )}
     </Flex>
