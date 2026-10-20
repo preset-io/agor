@@ -693,6 +693,79 @@ describe('info line segments', () => {
   });
 });
 
+describe('Session details keeps what the old footer popovers showed', () => {
+  const openDetails = async () => {
+    fireEvent.click(
+      within(screen.getByTestId('composer-info-line')).getByRole('button', {
+        name: 'Session details',
+      })
+    );
+    return screen.findByRole('dialog', { name: 'Session details' });
+  };
+
+  it('shows the estimated cost and token breakdown from the usage snapshot', async () => {
+    const get = vi.fn().mockResolvedValue({
+      usage_summary: {
+        total: 24_100,
+        input: 20_000,
+        output: 4_100,
+        cacheRead: 0,
+        cacheCreation: 0,
+        cost: 0.1234,
+      },
+    });
+    const client = { service: () => ({ get }) } as unknown as SessionFooterProps['client'];
+    renderFooter({ client });
+    const details = await openDetails();
+    expect(await within(details).findByText('$0.1234')).toBeInTheDocument();
+    expect(within(details).getByText('Estimated cost')).toBeInTheDocument();
+    expect(within(details).getByText('20,000')).toBeInTheDocument();
+  });
+
+  it('shows when the turn started and how long it took, under Timer', async () => {
+    const task = {
+      task_id: 't1',
+      status: 'completed',
+      created_at: '2026-01-01T00:00:00Z',
+      completed_at: '2026-01-01T00:02:14Z',
+      duration_ms: 134_000,
+    } as unknown as Task;
+    renderFooter({ footerTimerTask: task });
+    const details = await openDetails();
+    const timer = details.querySelector('[data-detail-row="timer"]')!.parentElement!;
+    expect(within(timer).getByText('Started')).toBeInTheDocument();
+    expect(within(timer).getByText('Duration')).toBeInTheDocument();
+  });
+
+  it('drills from Context into the full breakdown', async () => {
+    renderFooter({
+      latestContextWindow: {
+        used: 36_000,
+        limit: 200_000,
+        taskMetadata: {
+          normalized_sdk_response: {
+            tokenUsage: { inputTokens: 30_000, outputTokens: 1_200, totalTokens: 31_200 },
+          },
+        },
+      },
+    });
+    const details = await openDetails();
+    fireEvent.click(within(details).getByRole('button', { name: /Context 18% of 200k/ }));
+    expect(await within(details).findByText('Context Window Usage')).toBeInTheDocument();
+    expect(within(details).getByText('Token Breakdown')).toBeInTheDocument();
+    expect(within(details).getByLabelText('Back to session details')).toBeInTheDocument();
+  });
+
+  it('shows the full IDs on the copy rows', async () => {
+    renderFooter({
+      session: { ...baseSession, sdk_session_id: 'sdk-1234' } as SessionFooterProps['session'],
+    });
+    const details = await openDetails();
+    expect(within(details).getByText('test-session-123')).toBeInTheDocument();
+    expect(within(details).getByText('sdk-1234')).toBeInTheDocument();
+  });
+});
+
 describe('MCP notice', () => {
   const server = (id: string, displayName: string) =>
     ({ mcp_server_id: id, name: id, display_name: displayName }) as MCPServer;

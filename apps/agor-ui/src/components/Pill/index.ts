@@ -5,6 +5,7 @@ export {
   ChannelPill,
   ConceptPill,
   ContextWindowPill,
+  ContextWindowPopoverContent,
   DirtyStatePill,
   ENTITY_PILL_COLORS,
   EntityPill,
@@ -32,4 +33,4 @@ export {
   UserPill,
 } from './Pill';
 export { SessionMetadataCard } from './SessionMetadataCard';
-export { TimerPill, useElapsedDuration } from './TimerPill';
+export { TimerDetails, TimerPill, useElapsedDuration } from './TimerPill';

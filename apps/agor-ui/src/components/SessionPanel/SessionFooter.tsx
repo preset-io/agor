@@ -76,7 +76,8 @@ import {
   getPermissionModes,
 } from '../PermissionModeSelector';
 import { getModelChipLabel } from '../Pill/modelDisplay';
-import { useElapsedDuration } from '../Pill/TimerPill';
+import { ContextWindowPopoverContent } from '../Pill/Pill';
+import { TimerDetails, useElapsedDuration } from '../Pill/TimerPill';
 import {
   ComposerMenu,
   ComposerMenuBack,
@@ -94,6 +95,7 @@ import {
 import { RecoveryActions } from './RecoveryActions';
 import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
+import { SessionUsageSummary } from './SessionUsagePopover';
 
 export interface SessionFooterProps {
   // Session data for chips
@@ -500,12 +502,16 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     setOpenMenu(null);
     action();
   };
-  const [detailsPage, setDetailsPage] = React.useState<'main' | 'mcp'>('main');
+  const [detailsPage, setDetailsPage] = React.useState<'main' | 'mcp' | 'context'>('main');
   const detailsOpen = openMenu === 'details';
   // Which info-line segment Session details is anchored to, and the row it opens on.
   const [detailsAnchor, setDetailsAnchor] = React.useState<string>('more');
   const [detailsFocus, setDetailsFocus] = React.useState<DetailRow | null>(null);
-  const { usage, loading: usageLoading } = useSessionUsage(
+  const {
+    usage,
+    loading: usageLoading,
+    error: usageError,
+  } = useSessionUsage(
     client,
     session.session_id,
     detailsOpen || (openMenu === 'plus' && plusPage === 'details'),
@@ -585,6 +591,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       {children}
     </div>
   );
+  const detailBlockStyle: React.CSSProperties = {
+    padding: `0 ${token.paddingSM}px ${token.paddingXS}px`,
+    fontSize: token.fontSizeSM,
+  };
   const detailsMain = (
     <>
       {!isMobile && <ComposerMenuSection>Session details</ComposerMenuSection>}
@@ -603,6 +613,18 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }
           trailing={infoPin('timer', 'timer')}
         />
+      )}
+      {footerTimerTask && elapsed.hasTiming && (
+        <div style={detailBlockStyle}>
+          <TimerDetails
+            status={footerTimerTask.status}
+            startedAt={footerTimerTask.message_range?.start_timestamp || footerTimerTask.created_at}
+            endedAt={footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at}
+            durationMs={footerTimerTask.duration_ms}
+            lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
+            latestExecutorPulse={footerTimerTask.latest_executor_pulse}
+          />
+        </div>
       )}
       {detailRow(
         'tools',
@@ -656,8 +678,14 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           label="Usage"
           icon={<NumberOutlined />}
           value={usageValue}
+          hint={usageError}
           trailing={infoPin('tokens', 'usage')}
         />
+      )}
+      {usage && (
+        <div style={detailBlockStyle}>
+          <SessionUsageSummary usage={usage} />
+        </div>
       )}
       {detailRow(
         'context',
@@ -670,6 +698,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 ? 'Unknown'
                 : `${contextPercent}% of ${formatTokenCount(contextLimit)}`
             }
+            drill={contextPercent !== null}
+            onClick={contextPercent === null ? undefined : () => setDetailsPage('context')}
             trailing={infoPin('context', 'context')}
           />
           {contextPercent !== null && (
@@ -695,12 +725,14 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       )}
       <ComposerMenuRow
         label="Copy session ID"
+        hint={session.session_id}
         icon={<CopyOutlined />}
         onClick={copyId(session.session_id, 'Session ID')}
       />
       {session.sdk_session_id && (
         <ComposerMenuRow
           label="Copy agent session ID"
+          hint={session.sdk_session_id}
           icon={<CopyOutlined />}
           onClick={copyId(session.sdk_session_id, 'Agent session ID')}
         />
@@ -731,6 +763,24 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       <>
         <ComposerMenuBack label="Session details" onBack={() => setDetailsPage('main')} />
         {mcpPanel}
+      </>
+    ) : detailsPage === 'context' && latestContextWindow && contextPercent !== null ? (
+      <>
+        <ComposerMenuBack label="Session details" onBack={() => setDetailsPage('main')} />
+        <div style={detailBlockStyle}>
+          <ContextWindowPopoverContent
+            used={contextSnapshot?.totalTokens ?? latestContextWindow.used}
+            limit={contextLimit}
+            percentage={contextPercent}
+            taskMetadata={
+              latestContextWindow.taskMetadata as React.ComponentProps<
+                typeof ContextWindowPopoverContent
+              >['taskMetadata']
+            }
+            onEscape={() => setDetailsPage('main')}
+            width="100%"
+          />
+        </div>
       </>
     ) : (
       detailsMain

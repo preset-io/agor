@@ -237,14 +237,14 @@ export function useElapsedDuration({
   };
 }
 
-export const TimerPill: React.FC<TimerPillProps> = ({
+/** Started, ended, duration, heartbeat and pulse for a task: the timer's details. */
+export const TimerDetails: React.FC<Omit<TimerPillProps, 'style'>> = ({
   status,
   startedAt,
   endedAt,
   durationMs,
   lastExecutorHeartbeatAt,
   latestExecutorPulse,
-  style,
 }) => {
   const { token } = theme.useToken();
   const { startMs, endMs, elapsedMs, hasTiming } = useElapsedDuration({
@@ -336,6 +336,26 @@ export const TimerPill: React.FC<TimerPillProps> = ({
     );
   }, [startMs, endMs, isActive, elapsedMs, heartbeatMs, pulseMs, latestExecutorPulse, token]);
 
+  return hasTiming ? popoverContent : null;
+};
+
+export const TimerPill: React.FC<TimerPillProps> = ({
+  status,
+  startedAt,
+  endedAt,
+  durationMs,
+  lastExecutorHeartbeatAt,
+  latestExecutorPulse,
+  style,
+}) => {
+  const { token } = theme.useToken();
+  const { elapsedMs, hasTiming } = useElapsedDuration({
+    status,
+    startedAt,
+    endedAt,
+    durationMs,
+  });
+
   if (!hasTiming) {
     return null;
   }
@@ -350,7 +370,19 @@ export const TimerPill: React.FC<TimerPillProps> = ({
   );
 
   return (
-    <Popover content={popoverContent} placement="bottom">
+    <Popover
+      content={
+        <TimerDetails
+          status={status}
+          startedAt={startedAt}
+          endedAt={endedAt}
+          durationMs={durationMs}
+          lastExecutorHeartbeatAt={lastExecutorHeartbeatAt}
+          latestExecutorPulse={latestExecutorPulse}
+        />
+      }
+      placement="bottom"
+    >
       {tag}
     </Popover>
   );
