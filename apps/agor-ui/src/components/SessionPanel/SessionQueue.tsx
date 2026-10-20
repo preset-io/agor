@@ -8,8 +8,7 @@ import {
   RightOutlined,
   UpOutlined,
 } from '@ant-design/icons';
-import type { MenuProps } from 'antd';
-import { Alert, Button, Dropdown, Flex, Typography, theme } from 'antd';
+import { Alert, Button, Flex, Typography, theme } from 'antd';
 import React from 'react';
 import { useCanHover } from '../../hooks/useCanHover';
 import { useComposerFocused } from '../../hooks/useComposerFocus';
@@ -19,6 +18,7 @@ import { formatActionError } from '../../utils/connectionErrors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { useThemedMessage } from '../../utils/message';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
+import { ComposerMenu, ComposerMenuRow } from './ComposerMenu';
 import { moveQueuedTask, type QueueMove } from './composerState';
 
 export interface SessionQueueProps {
@@ -50,6 +50,7 @@ export function SessionQueue({
   const [activeRow, setActiveRow] = React.useState<TaskID | null>(null);
   const [busyTaskId, setBusyTaskId] = React.useState<TaskID | null>(null);
   const [resumeInFlight, setResumeInFlight] = React.useState(false);
+  const [menuTaskId, setMenuTaskId] = React.useState<TaskID | null>(null);
   const heldByFailure = queuedTasks.length > 0 && session.status === 'failed';
   // Phones fold the queue while the keyboard is up.
   const open = expanded && !(isMobile && composerFocused);
@@ -102,47 +103,52 @@ export function SessionQueue({
       else if (heldByFailure) await resumeQueue();
     });
 
-  const rowMenu = (task: Task, index: number): MenuProps['items'] => {
+  const fromMenu = (action: () => unknown) => () => {
+    setMenuTaskId(null);
+    void action();
+  };
+  const rowMenu = (task: Task, index: number) => {
     const n = index + 1;
-    return [
-      {
-        key: 'edit',
-        icon: <EditOutlined />,
-        label: 'Edit in composer',
-        'aria-label': `Edit in composer, message ${n}`,
-        onClick: () =>
-          run(task, 'edit the queued message', async () => {
-            await remove(task);
-            onEdit(task.full_prompt);
-          }),
-      },
-      {
-        key: 'copy',
-        icon: <CopyOutlined />,
-        label: 'Copy',
-        'aria-label': `Copy, message ${n}`,
-        onClick: async () => {
-          await copyToClipboard(task.full_prompt);
-          showSuccess('Message copied to clipboard');
-        },
-      },
-      {
-        key: 'up',
-        icon: <UpOutlined />,
-        label: 'Move up',
-        'aria-label': `Move up, message ${n}`,
-        disabled: index === 0,
-        onClick: () => run(task, 'move the queued message', () => reorder(task, 'up')),
-      },
-      {
-        key: 'down',
-        icon: <DownOutlined />,
-        label: 'Move down',
-        'aria-label': `Move down, message ${n}`,
-        disabled: index === queuedTasks.length - 1,
-        onClick: () => run(task, 'move the queued message', () => reorder(task, 'down')),
-      },
-    ] as unknown as MenuProps['items']; // rc-menu forwards aria-label to each item
+    return (
+      <>
+        <ComposerMenuRow
+          label="Edit in composer"
+          ariaLabel={`Edit in composer, message ${n}`}
+          icon={<EditOutlined />}
+          onClick={fromMenu(() =>
+            run(task, 'edit the queued message', async () => {
+              await remove(task);
+              onEdit(task.full_prompt);
+            })
+          )}
+        />
+        <ComposerMenuRow
+          label="Copy"
+          ariaLabel={`Copy, message ${n}`}
+          icon={<CopyOutlined />}
+          onClick={fromMenu(async () => {
+            await copyToClipboard(task.full_prompt);
+            showSuccess('Message copied to clipboard');
+          })}
+        />
+        <ComposerMenuRow
+          label="Move up"
+          ariaLabel={`Move up, message ${n}`}
+          icon={<UpOutlined />}
+          disabled={index === 0}
+          onClick={fromMenu(() => run(task, 'move the queued message', () => reorder(task, 'up')))}
+        />
+        <ComposerMenuRow
+          label="Move down"
+          ariaLabel={`Move down, message ${n}`}
+          icon={<DownOutlined />}
+          disabled={index === queuedTasks.length - 1}
+          onClick={fromMenu(() =>
+            run(task, 'move the queued message', () => reorder(task, 'down'))
+          )}
+        />
+      </>
+    );
   };
 
   const actionSize = isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight;
@@ -271,18 +277,25 @@ export function SessionQueue({
                   >
                     Send now
                   </Button>
-                  <Dropdown
-                    trigger={['click']}
-                    menu={{ items: rowMenu(task, index) }}
-                    disabled={!client || busyTaskId !== null}
+                  {/* Phones get a bottom sheet, like every composer menu; desktop a popover. */}
+                  <ComposerMenu
+                    sheet={isMobile}
+                    title={`Message ${n}`}
+                    open={menuTaskId === task.task_id}
+                    onOpenChange={(next) => setMenuTaskId(next ? task.task_id : null)}
+                    content={rowMenu(task, index)}
                   >
                     <Button
                       type="text"
                       aria-label={`More actions, message ${n}`}
+                      aria-haspopup="dialog"
+                      aria-expanded={menuTaskId === task.task_id}
                       icon={<EllipsisOutlined />}
+                      disabled={!client || busyTaskId !== null}
+                      onClick={isMobile ? () => setMenuTaskId(task.task_id) : undefined}
                       style={iconButtonStyle}
                     />
-                  </Dropdown>
+                  </ComposerMenu>
                   <Button
                     type="text"
                     aria-label={`Remove from queue, message ${n}`}

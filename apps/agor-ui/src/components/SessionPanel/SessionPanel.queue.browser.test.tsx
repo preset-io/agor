@@ -167,11 +167,9 @@ it.each(['running', 'failed'] as const)(
     expect(f.patch).not.toHaveBeenCalled();
     expect(screen.getByText('Transcript active')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'More actions, message 1' }));
-    // Pick the open menu: a closed dropdown can linger hidden in the DOM.
-    const copy = (await screen.findAllByRole('menuitem', { name: 'Copy, message 1' })).find(
-      (item) => !item.closest('.ant-dropdown-hidden')
-    );
-    await userEvent.click(copy!);
+    const menu = await screen.findByRole('dialog', { name: 'Message 1' });
+    const copy = within(menu).getByRole('button', { name: 'Copy, message 1' });
+    await userEvent.click(copy);
     await waitFor(() => expect(copyToClipboard).toHaveBeenLastCalledWith('Queue B'));
     if (status === 'failed') {
       const runNext = screen.getByRole('button', { name: 'Run next' });

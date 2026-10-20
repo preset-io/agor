@@ -38,7 +38,7 @@ const expand = () => fireEvent.click(screen.getByRole('button', { name: /3 queue
 
 const openRowMenu = async (n: number) => {
   fireEvent.click(screen.getByLabelText(`More actions, message ${n}`));
-  await screen.findAllByRole('menuitem');
+  await screen.findByRole('dialog', { name: `Message ${n}` });
 };
 
 beforeEach(() => {

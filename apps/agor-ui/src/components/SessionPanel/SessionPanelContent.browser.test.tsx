@@ -192,7 +192,11 @@ it('bounds 30 queued tasks, independently scrolls to the last action, and keeps 
   expect(header.getBoundingClientRect().top).toBe(headerTop);
   expect(Math.abs(transcript.scrollTop - transcriptTop)).toBeLessThanOrEqual(3);
   await userEvent.click(screen.getByRole('button', { name: 'More actions, message 30' }));
-  await userEvent.click(await screen.findByRole('menuitem', { name: 'Copy, message 30' }));
+  await userEvent.click(
+    within(await screen.findByRole('dialog', { name: 'Message 30' })).getByRole('button', {
+      name: 'Copy, message 30',
+    })
+  );
   expect(copyToClipboard).toHaveBeenCalledWith(tasks(30)[29].full_prompt);
   await userEvent.click(screen.getByRole('button', { name: 'Remove from queue, message 30' }));
   expect(remove).toHaveBeenCalledWith('queued-29');
