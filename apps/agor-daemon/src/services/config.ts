@@ -26,6 +26,7 @@ import type {
   AuthenticatedParams,
   DeepReadonly,
   Params,
+  ProviderResolutionPolicy,
   TaskID,
   UserID,
 } from '@agor/core/types';
@@ -102,6 +103,7 @@ export class ConfigService {
     apiKey: string | null;
     connection?: Record<string, string>;
     source: 'user' | 'tenant' | 'none';
+    policy?: ProviderResolutionPolicy;
     useNativeAuth: boolean;
     decryptionFailed?: boolean;
     credentialExpiresAt?: string;
@@ -272,6 +274,7 @@ export class ConfigService {
       apiKey: result.apiKey ?? null,
       connection: result.connection as Record<string, string> | undefined,
       source: result.source,
+      ...(result.policy ? { policy: result.policy } : {}),
       useNativeAuth: result.useNativeAuth,
       ...(result.credentialExpiresAt ? { credentialExpiresAt: result.credentialExpiresAt } : {}),
       ...(result.decryptionFailed && { decryptionFailed: true }),

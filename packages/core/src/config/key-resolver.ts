@@ -1,5 +1,11 @@
 import type { Database } from '../db/client';
-import type { AgenticToolName, ApiKeyName, ProviderConnection, UserID } from '../types';
+import type {
+  AgenticToolName,
+  ApiKeyName,
+  ProviderConnection,
+  ProviderResolutionPolicy,
+  UserID,
+} from '../types';
 import { providerToolForField } from '../types';
 import { resolveProviderConnection } from './tenant-agentic-tool-resolver';
 
@@ -15,6 +21,8 @@ export interface KeyResolutionResult {
   apiKey: string | undefined;
   source: 'user' | 'tenant' | 'none';
   useNativeAuth: boolean;
+  /** The tenant policy that selected `source`; absent from older daemons. */
+  policy?: ProviderResolutionPolicy;
   connection?: ProviderConnection;
   decryptionFailed?: boolean;
   managedOAuth?: import('../types').ManagedOAuthSelector;
@@ -36,6 +44,7 @@ export async function resolveApiKey(
     apiKey: (resolved.connection as Record<string, string | undefined>)[keyName],
     connection: resolved.connection,
     source: resolved.source,
+    policy: resolved.policy,
     useNativeAuth: resolved.useNativeAuth,
     ...(resolved.managedOAuth ? { managedOAuth: resolved.managedOAuth } : {}),
     ...(resolved.decryptionFailed ? { decryptionFailed: true } : {}),

@@ -65,6 +65,34 @@ describe('ConfigService.resolveApiKey', () => {
     });
   });
 
+  it('includes the resolution policy in the resolve response', async () => {
+    configMocks.resolveApiKey.mockResolvedValueOnce({
+      apiKey: 'resolved-test-key',
+      source: 'tenant',
+      policy: 'tenant_required',
+      useNativeAuth: false,
+    });
+    const service = new ConfigService({} as never);
+    service.app = {
+      service: () => ({ get: vi.fn(async () => ({ created_by: 'creator-1' as UserID })) }),
+    } as never;
+
+    const result = await service.resolveApiKey(
+      { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+      {
+        provider: 'socketio',
+        user: { user_id: 'executor-service', _isServiceAccount: true },
+      } as never
+    );
+
+    expect(result).toEqual({
+      apiKey: 'resolved-test-key',
+      source: 'tenant',
+      policy: 'tenant_required',
+      useNativeAuth: false,
+    });
+  });
+
   it('rejects unauthenticated external callers before resolving secrets', async () => {
     const service = new ConfigService({} as never);
 

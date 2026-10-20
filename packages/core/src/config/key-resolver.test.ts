@@ -140,11 +140,20 @@ describe('resolveApiKey — per-tool credential scoping', () => {
     expect(result).toMatchObject({
       apiKey: 'tenant-key',
       source: 'tenant',
+      policy: 'tenant_preferred',
       connection: {
         OPENAI_API_KEY: 'tenant-key',
         OPENAI_BASE_URL: 'https://tenant.invalid/v1',
       },
     });
+  });
+
+  dbTest('passes the default resolution policy through', async ({ db }) => {
+    const userId = await createUserWithToolCreds(db, {
+      codex: { OPENAI_API_KEY: encryptApiKey('user-key') },
+    });
+    const result = await resolveApiKey('OPENAI_API_KEY', { userId, db, tool: 'codex' });
+    expect(result).toMatchObject({ source: 'user', policy: 'user_preferred' });
   });
 
   for (const policy of ['tenant_required', 'tenant_preferred'] as const) {

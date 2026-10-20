@@ -757,3 +757,136 @@ describe('Claude failure reporting contract', () => {
     expect(failure.message).not.toContain('Database');
   });
 });
+
+describe('executeToolTask credential resolution logging', () => {
+  const SENTINEL_KEY = 'sk-SENTINEL-provider-key-0123456789';
+
+  function credentialClient(resolve: () => Promise<unknown>) {
+    return {
+      service(name: string) {
+        if (name === 'config/resolve-api-key') return { create: vi.fn(resolve) };
+        if (name === 'sessions') return { get: vi.fn().mockRejectedValue(new Error('no git')) };
+        if (name === 'tasks') return { patch: vi.fn() };
+        if (name === 'messages') {
+          return { find: vi.fn().mockResolvedValue({ total: 0, data: [] }), create: vi.fn() };
+        }
+        return {};
+      },
+    } as never;
+  }
+
+  async function run(resolve: () => Promise<unknown>) {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const outcome = await executeToolTask({
+      client: credentialClient(resolve),
+      sessionId: 'session-1' as never,
+      taskId: 'task-1' as never,
+      prompt: 'hello',
+      abortController: new AbortController(),
+      apiKeyEnvVar: 'OPENAI_API_KEY',
+      toolName: 'codex',
+      createTool: () =>
+        ({
+          executePromptWithStreaming: vi.fn(async () => ({
+            userMessageId: 'user-1' as MessageID,
+            assistantMessageIds: [],
+          })),
+        }) as never,
+    }).then(
+      () => 'resolved',
+      (reason: unknown) => reason
+    );
+    const lines = (spy: typeof info) =>
+      spy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes('[executor.credential]'));
+    const all = JSON.stringify([...info.mock.calls, ...error.mock.calls]);
+    return { outcome, info: lines(info), error: lines(error), all };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  it('logs one resolved line per run with source, policy and key presence', async () => {
+    const result = await run(async () => ({
+      apiKey: SENTINEL_KEY,
+      source: 'tenant',
+      policy: 'tenant_required',
+      useNativeAuth: false,
+    }));
+    expect(result.outcome).toBe('resolved');
+    expect(result.info).toEqual([
+      '[executor.credential] event=resolved tool=codex credential_source=tenant native_auth=false key_present=true decryption_failed=false resolution_policy=tenant_required',
+    ]);
+    expect(result.all).not.toContain('SENTINEL');
+  });
+
+  it('logs the line before failing on an undecryptable key', async () => {
+    const result = await run(async () => ({
+      apiKey: SENTINEL_KEY,
+      source: 'user',
+      policy: 'user_preferred',
+      useNativeAuth: false,
+      decryptionFailed: true,
+    }));
+    expect(result.outcome).toBeInstanceOf(Error);
+    expect(result.info).toHaveLength(1);
+    expect(result.info[0]).toContain('decryption_failed=true');
+    expect(result.all).not.toContain('SENTINEL');
+  });
+
+  it('logs the line before failing on a missing credential', async () => {
+    const result = await run(async () => ({
+      apiKey: null,
+      connection: {},
+      source: 'none',
+      policy: 'user_preferred',
+      useNativeAuth: false,
+    }));
+    expect(result.outcome).toBeInstanceOf(Error);
+    expect(result.info).toHaveLength(1);
+    expect(result.info[0]).toContain('credential_source=none native_auth=false key_present=false');
+  });
+
+  it('says resolution_policy=unknown when an older daemon omits it', async () => {
+    const result = await run(async () => ({
+      apiKey: SENTINEL_KEY,
+      source: 'user',
+      useNativeAuth: false,
+    }));
+    expect(result.info).toHaveLength(1);
+    expect(result.info[0]).toMatch(/ resolution_policy=unknown$/);
+  });
+
+  it.each([
+    [Object.assign(new Error(`rejected ${SENTINEL_KEY}`), { code: 403 }), 'daemon_rejected'],
+    [Object.assign(new Error('timed out'), { name: 'Timeout', code: 408 }), 'daemon_unreachable'],
+    [new Error(`fetch failed ${SENTINEL_KEY}`), 'daemon_unreachable'],
+  ])(
+    'logs one bounded resolution_failed line when the resolve call rejects (%#)',
+    async (rejection, code) => {
+      const result = await run(async () => {
+        throw rejection;
+      });
+      expect(result.outcome).toBe(rejection);
+      expect(result.info).toEqual([]);
+      expect(result.error).toEqual([
+        `[executor.credential] event=resolution_failed tool=codex code=${code}`,
+      ]);
+      expect(result.all).not.toContain('SENTINEL');
+    }
+  );
+
+  it('logs invalid_response for a non-object resolve response', async () => {
+    const result = await run(async () => null);
+    expect(result.outcome).toBeInstanceOf(Error);
+    expect(result.error).toEqual([
+      '[executor.credential] event=resolution_failed tool=codex code=invalid_response',
+    ]);
+  });
+});

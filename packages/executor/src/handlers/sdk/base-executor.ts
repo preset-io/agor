@@ -29,6 +29,7 @@ import {
   MessageRole,
   missingScopedCredentialMessage,
   PROVIDER_CREDENTIAL_FIELDS,
+  PROVIDER_RESOLUTION_POLICIES,
 } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
@@ -47,6 +48,10 @@ function sdkDebug(...args: unknown[]): void {
   if (DEBUG_SDK_EXECUTOR) {
     console.debug(...args);
   }
+}
+
+class InvalidCredentialResolutionResponseError extends Error {
+  override readonly name = 'InvalidCredentialResolutionResponseError';
 }
 
 export class MissingCredentialError extends Error {
@@ -436,6 +441,11 @@ export async function resolveApiKeyForTask(
     keyName,
     tool,
   })) as import('@agor/core/config').KeyResolutionResult;
+  if (!result || typeof result !== 'object') {
+    throw new InvalidCredentialResolutionResponseError(
+      'The daemon returned an invalid credential resolution response.'
+    );
+  }
   sdkDebug(`[API Key Resolution] Resolved ${keyName} via daemon (source: ${result.source})`);
   return result;
 }
@@ -483,6 +493,45 @@ export function installProviderConnection(
       delete process.env[AGOR_USER_ENV_KEYS_VAR];
     }
   }
+}
+
+type KeyResolutionResult = import('@agor/core/config').KeyResolutionResult;
+
+const CREDENTIAL_SOURCES: ReadonlySet<string> = new Set(['user', 'tenant', 'none']);
+const RESOLUTION_POLICIES: ReadonlySet<string> = new Set(PROVIDER_RESOLUTION_POLICIES);
+
+/**
+ * One info line per run naming which credential was selected and under which
+ * policy. Never the key, its length, prefix, hash or fingerprint.
+ */
+function logCredentialResolution(
+  toolName: AgenticToolName,
+  resolution: KeyResolutionResult,
+  keyPresent: boolean
+): void {
+  const source = CREDENTIAL_SOURCES.has(resolution.source) ? resolution.source : 'unknown';
+  const policy =
+    typeof resolution.policy === 'string' && RESOLUTION_POLICIES.has(resolution.policy)
+      ? resolution.policy
+      : 'unknown';
+  console.info(
+    `[executor.credential] event=resolved tool=${toolName} credential_source=${source} ` +
+      `native_auth=${resolution.useNativeAuth === true} key_present=${keyPresent} ` +
+      `decryption_failed=${resolution.decryptionFailed === true} resolution_policy=${policy}`
+  );
+}
+
+/** Closed failure code from the error's own HTTP status or type, never its message. */
+function credentialResolutionFailureCode(
+  error: unknown
+): 'daemon_unreachable' | 'daemon_rejected' | 'invalid_response' {
+  if (error instanceof InvalidCredentialResolutionResponseError) return 'invalid_response';
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+  if (typeof code === 'number' && Number.isInteger(code) && code >= 400 && code <= 599) {
+    // Feathers reports a client-side request timeout as 408.
+    return code === 408 ? 'daemon_unreachable' : 'daemon_rejected';
+  }
+  return 'daemon_unreachable';
 }
 
 function hasProviderCredential(
@@ -541,12 +590,22 @@ export async function executeToolTask(params: {
     await stampGitStateAtTaskStart(client, sessionId, taskId);
 
     // Resolve one complete user-or-tenant provider connection.
-    const resolution = await resolveApiKeyForTask(apiKeyEnvVar, client, taskId, toolName);
+    let resolution: KeyResolutionResult;
+    try {
+      resolution = await resolveApiKeyForTask(apiKeyEnvVar, client, taskId, toolName);
+    } catch (error) {
+      console.error(
+        `[executor.credential] event=resolution_failed tool=${toolName} code=${credentialResolutionFailureCode(error)}`
+      );
+      throw error;
+    }
     credentialExpiresAt = resolution.credentialExpiresAt;
     const connection = {
       ...(resolution.connection ?? {}),
       ...(resolution.apiKey ? { [apiKeyEnvVar]: resolution.apiKey } : {}),
     } as Record<string, string | undefined>;
+    // Before any failure below, so decryption and missing-credential failures log it too.
+    logCredentialResolution(toolName, resolution, hasProviderCredential(toolName, connection));
     installProviderConnection(toolName, connection);
 
     // Fail fast if stored key can't be decrypted (e.g. master secret changed)
@@ -563,13 +622,6 @@ export async function executeToolTask(params: {
           ? GEMINI_API_KEY_REQUIRED_MESSAGE
           : missingScopedCredentialMessage(toolName)
       );
-    }
-
-    // Log resolution result
-    if (resolution.apiKey) {
-      sdkDebug(`[${toolName}] Using API key from ${resolution.source} level for ${apiKeyEnvVar}`);
-    } else {
-      sdkDebug(`[${toolName}] No scoped provider API key is configured`);
     }
 
     // Create execution context
