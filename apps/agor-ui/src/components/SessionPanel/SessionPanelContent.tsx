@@ -1,18 +1,15 @@
 import type { AgorClient, Branch, Session, SpawnConfig, Task } from '@agor-live/client';
-import { getTeammateConfig, isTeammate, sessionPath } from '@agor-live/client';
+import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined } from '@ant-design/icons';
-import { Alert, Button, Divider, Space, Typography, theme } from 'antd';
+import { Alert, Button, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
-import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useAgorStore } from '../../store/agorStore';
-import { selectMcpServerById, selectRepoById, selectUserById } from '../../store/selectors';
+import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { copyToClipboard } from '../../utils/clipboard';
 import { formatActionError } from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
 import { canSessionStartTurn } from '../../utils/sessionTurn';
-import { BranchHeaderPill } from '../BranchHeaderPill';
-import { BranchMetadataRow } from '../BranchMetadataRow';
 import { ConversationView } from '../ConversationView';
 import { ForkSpawnModal } from '../ForkSpawnModal';
 import { SessionConversationLayout } from './SessionConversationLayout';
@@ -48,7 +45,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     isOpen,
   }) => {
     const { token } = theme.useToken();
-    const isMobileShell = useIsMobileViewport();
     const { showSuccess, showError } = useThemedMessage();
     const [resumeQueueInFlight, setResumeQueueInFlight] = React.useState(false);
     const [removingQueuedTaskId, setRemovingQueuedTaskId] = React.useState<string | null>(null);
@@ -69,26 +65,14 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
 
     // Subscribe only to the entity families this panel needs via narrow store
     // selectors. This keeps the panel insulated from session/branch/board
-    // patches and avoids unrelated entity churn (e.g. repo edits invalidating
-    // user/MCP consumers): each whole-map selector is a stable module-level
+    // patches and avoids unrelated entity churn (e.g. MCP edits invalidating
+    // user consumers): each whole-map selector is a stable module-level
     // reference, so a slice only re-renders this content when its own reference
     // changes.
     const userById = useAgorStore(selectUserById);
-    const repoById = useAgorStore(selectRepoById);
     const mcpServerById = useAgorStore(selectMcpServerById);
     // Get actions from context
-    const {
-      onOpenBranch,
-      onStartEnvironment,
-      onStopEnvironment,
-      onNukeEnvironment,
-      onViewLogs,
-      onPermissionDecision,
-      onOpenAgenticToolSettings,
-    } = useAppActions();
-
-    // Get repo from branch
-    const repo = branch ? repoById.get(branch.repo_id) || null : null;
+    const { onPermissionDecision, onOpenAgenticToolSettings } = useAppActions();
 
     // Stable callback for ConversationView's onScrollRef to prevent breaking React.memo
     const handleScrollRef = React.useCallback(
@@ -98,37 +82,6 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
 
     return (
       <>
-        {/* Header row with pills */}
-        <div
-          style={{
-            flexShrink: 0,
-            marginBottom: token.sizeUnit,
-            display: 'flex',
-          }}
-        >
-          {/* Pills section (only shown if there's content) */}
-          {branch && (
-            <BranchMetadataRow branch={branch} repo={repo} style={{ flex: '1 1 0', minWidth: 0 }}>
-              {repo && (
-                <BranchHeaderPill
-                  repo={repo}
-                  branch={branch}
-                  onOpenBranch={onOpenBranch}
-                  onStartEnvironment={onStartEnvironment}
-                  onStopEnvironment={onStopEnvironment}
-                  onNukeEnvironment={onNukeEnvironment}
-                  onViewLogs={onViewLogs}
-                  identityLink={sessionPath(session.session_id)}
-                  // Full labels on mobile (wrap) instead of cramped truncation.
-                  truncateToFit={!isMobileShell}
-                />
-              )}
-            </BranchMetadataRow>
-          )}
-        </div>
-
-        <Divider style={{ margin: `${token.sizeUnit * 2}px 0` }} />
-
         <SessionConversationLayout
           queueHeader={
             <Typography.Text
