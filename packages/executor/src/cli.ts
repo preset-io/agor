@@ -15,6 +15,7 @@
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
 import type { ExecutorCommandResult } from '@agor/core/executor-protocol';
+import { setProcessLogContext } from '@agor/core/utils/log-context';
 import { checkAdmittedClass, EXECUTOR_ADMISSION_CLASS_ENV } from './admission-check.js';
 import {
   executeCommand,
@@ -24,6 +25,7 @@ import {
 import { ExecutorResponsePublisher } from './executor-response.js';
 import { initializeToolRegistry, ToolRegistry } from './handlers/sdk/tool-registry.js';
 import { AgorExecutor } from './index.js';
+import { executorLogContext } from './log-context.js';
 import {
   type ExecutorPayload,
   ExecutorPayloadSchema,
@@ -99,6 +101,9 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
     }
     process.exit(1);
   }
+
+  // One executor process is one run: every log line carries its IDs.
+  setProcessLogContext(executorLogContext(payload));
 
   executorCliDebug(`[executor] Received command: ${payload.command}`);
   const publisher =
