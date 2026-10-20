@@ -1,11 +1,17 @@
 import { cleanup, render, screen } from '@testing-library/react';
-import { afterEach, expect, it } from 'vitest';
-import { userEvent } from 'vitest/browser';
+import type {} from '@vitest/browser-playwright';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+import { cdp, userEvent } from 'vitest/browser';
 import { FadeText } from './FadeText';
 
 const LONG = 'Refactor session permissions approval flow for teams and gateways';
 
 afterEach(cleanup);
+// A file earlier in this worker may leave touch emulation on; pin a hover-capable pointer.
+beforeEach(() =>
+  cdp().send('Emulation.setEmulatedMedia', { features: [{ name: 'hover', value: 'hover' }] })
+);
+afterEach(() => cdp().send('Emulation.setEmulatedMedia', { features: [] }));
 
 function mount(title: string, dir?: 'rtl') {
   render(
