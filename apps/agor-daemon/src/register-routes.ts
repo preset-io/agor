@@ -132,6 +132,7 @@ import {
   UPLOAD_REQUEST_ID_HEADER,
 } from '@agor/core/types';
 import { isNotFoundError } from '@agor/core/utils/errors';
+import { type LogContext, runWithLogContext } from '@agor/core/utils/log-context';
 import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
@@ -1066,6 +1067,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   /** Schedule orchestration after commit with tenant identity but no open transaction. */
   function deferInFreshTenantScope(params: RouteParams, fn: () => Promise<void>): void {
     deferWithTenantContext(params, fn);
+  }
+
+  /**
+   * deferInFreshTenantScope with the deferred work's own log context, so its
+   * lines never carry the scheduling caller's identity.
+   */
+  function deferInFreshTenantLogScope(
+    params: RouteParams,
+    logContext: LogContext,
+    fn: () => Promise<void>
+  ): void {
+    deferWithTenantContext(params, () => runWithLogContext(logContext, fn));
   }
 
   const registerAuthenticatedRoute = createTenantScopedAuthenticatedRouteRegistrar({
@@ -2031,8 +2044,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // caller before this resolves matches the previous behavior — the HTTP
     // response should not block on the executor process being live.
     // deferInFreshTenantScope uses a fresh DB connection and tenant RLS scope
-    // instead of inheriting a stale committed transaction.
-    deferInFreshTenantScope(params, async () => {
+    // instead of inheriting a stale committed transaction. The log context
+    // names the Task's own prompter: a drained Task may run inside another
+    // caller's request, whose user must not be inherited.
+    const dispatchLogContext = { session_id: sessionId, task_id: taskId, user_id: task.created_by };
+    deferInFreshTenantLogScope(params, dispatchLogContext, async () => {
       try {
         console.log(
           `🚀 [Daemon] Routing ${session.agentic_tool} to Feathers/WebSocket executor (task ${shortId(taskId)})`

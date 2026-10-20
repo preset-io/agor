@@ -13,9 +13,31 @@ import {
 } from '@agor/core/config';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
+import { setLogContextField } from '@agor/core/utils/log-context';
+import { authenticatedTaskExecutorRuntimeScope } from './executor-runtime-scope.js';
 import { rejectTerminalExecutorIdentity } from './terminal-executor-guard.js';
 
 export type AuthHook = (context: HookContext) => Promise<HookContext>;
+
+/**
+ * Log context only, never authority. JWT, personal API keys and Socket.IO all
+ * resolve to `params.user`; an executor session token also carries its
+ * verified session/task/branch. No-op outside the around hook's log scope.
+ */
+function stampAuthenticatedLogContext(authed: HookContext): void {
+  setLogContextField('user_id', authed.params.user?.user_id);
+  let executor: ReturnType<typeof authenticatedTaskExecutorRuntimeScope> = null;
+  try {
+    executor = authenticatedTaskExecutorRuntimeScope(authed.params);
+  } catch {
+    // An invalid executor token is rejected by the boundaries that need it.
+    return;
+  }
+  if (!executor) return;
+  setLogContextField('session_id', executor.sessionId);
+  setLogContextField('task_id', executor.taskId);
+  setLogContextField('branch_id', executor.branchId);
+}
 
 export function createRequireAuthHook(
   authenticatedHook: AuthHook,
@@ -23,6 +45,7 @@ export function createRequireAuthHook(
 ): AuthHook {
   return async (context: HookContext): Promise<HookContext> => {
     const authed = await authenticatedHook(context);
+    stampAuthenticatedLogContext(authed);
     // A terminal-executor identity is valid ONLY for the Socket.IO terminal
     // channel (handled outside Feathers); reject it from every REST/Feathers
     // service call here so it can't ride the RBAC rank table's viewer-rank

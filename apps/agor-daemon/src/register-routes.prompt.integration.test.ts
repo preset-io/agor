@@ -27,6 +27,7 @@ import type {
   TaskID,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
+import { getLogContext, runWithLogContext } from '@agor/core/utils/log-context';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type RegisterRoutesContext, registerRoutes } from './register-routes.js';
 import {
@@ -564,5 +565,61 @@ describe('prompt route provenance envelope', () => {
     const f = await fixture();
     const task = await f.prompt({ prompt: 'rebase onto main and rerun the suite' }, stamp());
     expect(deriveTitleFromPrompt(task.full_prompt)).toBe('rebase onto main and rerun the suite');
+  });
+});
+
+describe('dispatch log context', () => {
+  function recordLogContext(method: 'log' | 'error') {
+    const lines: Array<{ text: string; context: Record<string, string> }> = [];
+    vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+      lines.push({ text: String(args[0]), context: getLogContext() });
+    });
+    return lines;
+  }
+
+  it('logs the Task prompter, not the draining caller, on routing and spawn lines', async () => {
+    const f = await fixture();
+    const logs = recordLogContext('log');
+    const launched: Array<Record<string, string>> = [];
+    f.executeTask.mockImplementationOnce(async () => {
+      launched.push(getLogContext());
+    });
+    // The Task is created by f.actor but drained inside another caller's scope.
+    const task = await runWithLogContext({ user_id: 'user-draining-caller' }, () =>
+      f.prompt({ prompt: 'disposable fixture' })
+    );
+    await vi.waitFor(() =>
+      expect(logs.some((line) => line.text.includes('Executor spawned'))).toBe(true)
+    );
+    const expected = {
+      user_id: f.actor.user_id,
+      session_id: f.session.session_id,
+      task_id: task.task_id,
+    };
+    expect(launched).toEqual([expect.objectContaining(expected)]);
+    for (const marker of ['Routing', 'Executor spawned']) {
+      const line = logs.find((entry) => entry.text.includes(marker));
+      expect(line?.context).toMatchObject(expected);
+    }
+  });
+
+  it('logs a pre-token spawn failure with the Task and Session IDs', async () => {
+    const f = await fixture();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errors = recordLogContext('error');
+    f.executeTask.mockImplementationOnce(async () => {
+      throw new Error('launch prerequisites failed');
+    });
+    const task = await f.prompt({ prompt: 'disposable fixture' });
+    await vi.waitFor(() =>
+      expect(errors.some((line) => line.text.includes('Executor spawn failed'))).toBe(true)
+    );
+    const line = errors.find((entry) => entry.text.includes('Executor spawn failed'));
+    expect(line?.context).toMatchObject({
+      user_id: f.actor.user_id,
+      session_id: f.session.session_id,
+      task_id: task.task_id,
+    });
   });
 });

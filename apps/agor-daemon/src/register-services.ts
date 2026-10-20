@@ -158,6 +158,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
+import { runWithLogContext } from '@agor/core/utils/log-context';
 import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
@@ -2021,37 +2022,44 @@ export function createExecuteHandler(
       },
     });
 
-    if (executorLaunch?.requiresLocalContainment) {
-      const ready = createDeferredSignal();
-      const finished = createDeferredSignal();
-      let spawned = false;
-      const slot = inOpenCodeNativeStateMutationSlot(executorLaunch.namespaceKey, async (fence) => {
+    // Spawn, spawn/exit callbacks and the lines they log run in this scope:
+    // the locked launch principal and Branch, with full IDs.
+    await runWithLogContext({ user_id: userId, branch_id: launchAuthority.branch_id }, async () => {
+      if (executorLaunch?.requiresLocalContainment) {
+        const ready = createDeferredSignal();
+        const finished = createDeferredSignal();
+        let spawned = false;
+        const slot = inOpenCodeNativeStateMutationSlot(
+          executorLaunch.namespaceKey,
+          async (fence) => {
+            try {
+              spawnExecutor(
+                executorPayload,
+                executorOptions({ fence, ready, finished, markSpawned: () => (spawned = true) })
+              );
+              await ready.promise;
+              await finished.promise;
+            } catch (error) {
+              if (!spawned) await fence.releaseWithoutWriter();
+              throw error;
+            }
+          }
+        );
+        void slot.catch((error) => {
+          ready.reject(error);
+          console.error(`${logPrefix} Native-state writer failed:`, error);
+        });
+        await ready.promise;
+      } else {
         try {
-          spawnExecutor(
-            executorPayload,
-            executorOptions({ fence, ready, finished, markSpawned: () => (spawned = true) })
-          );
-          await ready.promise;
-          await finished.promise;
-        } catch (error) {
-          if (!spawned) await fence.releaseWithoutWriter();
-          throw error;
+          spawnExecutor(executorPayload, executorOptions());
+        } finally {
+          // The child inherits its own descriptor during synchronous spawn.
+          // Close only the daemon's copy once spawn returns or throws.
+          await branchCodexAuthBind?.handle?.close().catch(() => undefined);
         }
-      });
-      void slot.catch((error) => {
-        ready.reject(error);
-        console.error(`${logPrefix} Native-state writer failed:`, error);
-      });
-      await ready.promise;
-    } else {
-      try {
-        spawnExecutor(executorPayload, executorOptions());
-      } finally {
-        // The child inherits its own descriptor during synchronous spawn.
-        // Close only the daemon's copy once spawn returns or throws.
-        await branchCodexAuthBind?.handle?.close().catch(() => undefined);
       }
-    }
+    });
 
     return {
       success: true,

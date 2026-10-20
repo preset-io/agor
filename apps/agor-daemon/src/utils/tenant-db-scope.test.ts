@@ -8,6 +8,7 @@ import {
   TenantWriteGateActiveError,
 } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
+import { getLogContext, setLogContextField } from '@agor/core/utils/log-context';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it, vi } from 'vitest';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
@@ -17,6 +18,18 @@ import {
   deferWithTenantContext,
   withFreshTenantWrite,
 } from './tenant-db-scope.js';
+
+const tenantResolution = vi.hoisted(() => ({ tenantless: false }));
+vi.mock('@agor/core/config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/config')>();
+  return {
+    ...actual,
+    resolveTenantContext: (...args: Parameters<typeof actual.resolveTenantContext>) =>
+      tenantResolution.tenantless
+        ? ({ source: 'explicit' } as ReturnType<typeof actual.resolveTenantContext>)
+        : actual.resolveTenantContext(...args),
+  };
+});
 
 function makePgDb() {
   const tx = {
@@ -572,5 +585,38 @@ describe('personal API-key Host routing in the tenant scope hook', () => {
     // Neither Host discovery nor any tenant scope was opened.
     expect(db.transaction).not.toHaveBeenCalled();
     expect(next).not.toHaveBeenCalled();
+  });
+});
+
+describe('createTenantDatabaseScopeAroundHook log context', () => {
+  const staticHook = () =>
+    createTenantDatabaseScopeAroundHook({
+      db: makePgDb().db as never,
+      jwtSecret: 'secret',
+      config: { multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-static' } },
+    });
+
+  it('opens a fresh mutable log context for the call', async () => {
+    let seen: unknown;
+    await staticHook()({ params: {} } as never, async () => {
+      setLogContextField('user_id', 'user-1');
+      seen = getLogContext();
+    });
+    expect(seen).toEqual({ tenant_id: 'tenant-static', user_id: 'user-1' });
+    expect(getLogContext()).toEqual({});
+  });
+
+  it('opens the log context on the tenantless branch too', async () => {
+    tenantResolution.tenantless = true;
+    try {
+      let seen: unknown;
+      await staticHook()({ params: {} } as never, async () => {
+        setLogContextField('user_id', 'user-1');
+        seen = getLogContext();
+      });
+      expect(seen).toEqual({ user_id: 'user-1' });
+    } finally {
+      tenantResolution.tenantless = false;
+    }
   });
 });

@@ -19,6 +19,7 @@ import {
 } from '@agor/core/db';
 import { NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type { HookContext, TenantContext, TenantID } from '@agor/core/types';
+import { runWithLogContext } from '@agor/core/utils/log-context';
 import jwt from 'jsonwebtoken';
 import {
   createApiKeyHostTenantResolver,
@@ -251,14 +252,18 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
     }
 
     const tenantId = context.params.tenant?.tenant_id;
+    // Open a fresh, mutable log context for the call. The service's own auth
+    // hook runs inside next() and stamps the caller onto it (require-auth.ts).
     if (!tenantId) {
-      await runWithTenantDatabaseScope(options.db, tenantId, next);
+      await runWithLogContext({}, () => runWithTenantDatabaseScope(options.db, tenantId, next));
       return;
     }
     await runWithTenantContext(tenantId, () =>
-      options.transaction === false
-        ? next()
-        : runWithTenantDatabaseScope(options.db, tenantId, next)
+      runWithLogContext({}, () =>
+        options.transaction === false
+          ? next()
+          : runWithTenantDatabaseScope(options.db, tenantId, next)
+      )
     );
   };
 }
