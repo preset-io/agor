@@ -20,11 +20,10 @@ export function isBottomLockEngaged(state: StickToBottomState): boolean {
 }
 
 /**
- * Whether the reader has scrolled away from the bottom since the hook last
- * handled a scroll event. The hook decides about an escape a moment after the
- * event, so the lock still reads as engaged; acting on it then (a trim) would
- * bury the reader's scroll under its own guard. The hook's own writes, and a
- * clamp that leaves the reader at the bottom, do not count.
+ * Whether the viewport has moved up and away from the bottom since the hook
+ * last handled a scroll event: a reader's scroll whose event is still on its
+ * way, or the browser anchoring content that shrank above. The hook's own
+ * writes do not count.
  */
 export function hasPendingScrollAway(state: StickToBottomState, scrollTop: number): boolean {
   return (

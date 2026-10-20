@@ -203,6 +203,11 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // A queue/composer resize changes only the latter. Reconcile through the
     // same bottom lock so a scrolled-up reader is never pulled away.
     const viewportCleanupRef = useRef<(() => void) | null>(null);
+    // The hook decides whether an upward scroll escaped the lock a moment after
+    // the event. Trims wait for that decision, then retry after the next frame.
+    const scrollsPendingDecision = useRef(0);
+    const trimDeferred = useRef(false);
+    const [trimRetry, setTrimRetry] = useState(0);
     const setScrollViewport = useCallback(
       (element: HTMLDivElement | null) => {
         viewportCleanupRef.current?.();
@@ -238,23 +243,22 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           }
         });
         observer.observe(element);
-        // Escape when the reader's scroll arrives, as the hook does for an upward
-        // wheel. The hook decides a moment later, and a trim or resize in between
-        // would guard the scroll away and keep pinning the reader.
-        const escapeOnScrollAway = () => {
-          if (isBottomLockEngaged(state) && hasPendingScrollAway(state, element.scrollTop)) {
-            stopScroll();
-          }
+        // Capture runs before the hook's handler updates its scroll record.
+        const trackDecision = () => {
+          const top = element.scrollTop;
+          if (top === state.ignoreScrollToTop || top >= (state.lastScrollTop ?? top)) return;
+          scrollsPendingDecision.current++;
+          setTimeout(() => scrollsPendingDecision.current--, 2);
         };
-        element.addEventListener('scroll', escapeOnScrollAway, { capture: true, passive: true });
+        element.addEventListener('scroll', trackDecision, { capture: true, passive: true });
         viewportCleanupRef.current = () => {
           ++resizeGeneration;
-          element.removeEventListener('scroll', escapeOnScrollAway, { capture: true });
+          element.removeEventListener('scroll', trackDecision, { capture: true });
           observer.disconnect();
           if (state.resizeDifference === guardedDifference) state.resizeDifference = 0;
         };
       },
-      [scrollRef, scrollToBottom, state, stopScroll]
+      [scrollRef, scrollToBottom, state]
     );
 
     // Public scroll-to-bottom for the jump pill and, via onScrollRef, the
@@ -486,7 +490,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // request, a settled turn) moves the first protected turn: trim again then,
     // without waiting for another turn to arrive.
     const firstProtectedTurn = currentReactiveState?.firstProtectedTaskId;
-    // biome-ignore lint/correctness/useExhaustiveDependencies: firstProtectedTurn and escapedFromLock only re-run the trim (protection released, a manual return to the bottom).
+    // biome-ignore lint/correctness/useExhaustiveDependencies: firstProtectedTurn, escapedFromLock and trimRetry only re-run the trim (protection released, a manual return to the bottom, a deferred trim).
     useLayoutEffect(() => {
       const viewport = scrollRef.current;
       if (
@@ -497,10 +501,23 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         // The rendered flags re-run this when the reader returns to the bottom;
         // the hook's live state decides whether the lock is engaged right now.
         !isAtBottom ||
-        !isBottomLockEngaged(state) ||
-        hasPendingScrollAway(state, viewport.scrollTop)
+        !isBottomLockEngaged(state)
       )
         return;
+      // A reader's scroll may be about to release the lock: trimming now would
+      // guard that scroll away and keep pinning them.
+      if (scrollsPendingDecision.current > 0 || hasPendingScrollAway(state, viewport.scrollTop)) {
+        if (!trimDeferred.current) {
+          trimDeferred.current = true;
+          requestAnimationFrame(() =>
+            setTimeout(() => {
+              trimDeferred.current = false;
+              setTrimRetry((retry) => retry + 1);
+            }, 2)
+          );
+        }
+        return;
+      }
       const anchor = firstVisibleTurn(viewport);
       if (!anchor) return;
       trimAnchor.current = {
@@ -520,6 +537,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       loadingOlder,
       scrollRef,
       state,
+      trimRetry,
     ]);
 
     // Streaming auto-scroll, manual scroll-away detection, and lazy-content
