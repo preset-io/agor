@@ -10,12 +10,18 @@ beforeEach(() =>
 );
 afterEach(() => cdp().send('Emulation.setEmulatedMedia', { features: [] }));
 
+const BRANCH = 'feature-fade-truncation-for-long-titles-on-desktop-and-mobile-surfaces';
+
 it('fades a clipped compact label instead of cutting it mid-letter', async () => {
   render(
-    <BranchPill branch="feature-fade-truncation-for-long-titles" compact quiet maxWidth={120} />
+    <div style={{ width: 200 }}>
+      <BranchPill branch={BRANCH} compact quiet maxWidth={120} />
+    </div>
   );
 
-  const label = screen.getByText('feature-fade-truncation-for-long-titles');
-  await expect.poll(() => getComputedStyle(label).maskImage).toContain('calc(100% - 12px)');
+  const label = screen.getByText(BRANCH);
+  // CI runs two files per viewport page, so this frame can lay out late; wait for the clip.
+  await expect.poll(() => label.dataset.overflowing, { timeout: 10_000 }).toBe('true');
+  expect(getComputedStyle(label).maskImage).toContain('calc(100% - 12px)');
   expect(label.getBoundingClientRect().width).toBeLessThanOrEqual(120);
 });
