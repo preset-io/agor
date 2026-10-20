@@ -644,7 +644,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       <ComposerMenuRow
         label="Session IDs"
         icon={<IdcardOutlined />}
-        value={shortId(session.session_id)}
         trailing={infoPin('session-ids', 'session IDs')}
       />
       <ComposerMenuRow
