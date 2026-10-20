@@ -5,7 +5,7 @@ import { useIsTouchInput } from '../../hooks/useCanHover';
 import { getSessionTitleStyles } from '../../utils/sessionTitle';
 
 const LINE_HEIGHT = 1.5;
-/** Controls whose keyboard focus shows a clipped label's tooltip. */
+/** Controls whose keyboard focus shows the tooltip of their first FadeText (the title). */
 const FOCUS_HOST =
   'button, a[href], [role="button"], [role="link"], [role="tab"], [role="menuitem"]';
 
@@ -90,7 +90,7 @@ export function FadeText({
 
   useEffect(() => {
     const host = node?.parentElement?.closest<HTMLElement>(FOCUS_HOST);
-    if (!host || touch) return;
+    if (!host || touch || host.querySelector('[data-fade-text]') !== node) return;
     const onFocus = () => setFocused(host.matches(':focus-visible'));
     const onBlur = () => setFocused(false);
     host.addEventListener('focus', onFocus);
@@ -160,6 +160,7 @@ export function FadeText({
     <Typography.Text
       ref={setNode}
       {...textProps}
+      data-fade-text
       data-overflowing={overflowing || undefined}
       style={{
         display: 'block',

@@ -171,22 +171,19 @@ const BoardSessionRow = memo(function BoardSessionRow({
             <HighlightMatch text={titleText} query={query} />
           </FadeText>
           {/* The branch is quiet metadata beside the title, like a gateway channel. */}
-          <span
-            title={branchLabel ?? 'No branch'}
+          <FadeText
+            dense
+            fullText={branchLabel ?? 'No branch'}
             style={{
               color: token.colorTextDescription,
               fontSize: token.fontSizeSM,
               // Keep a fixed share for the branch; the title yields space first.
               flex: '0 0 auto',
-              minWidth: 0,
               maxWidth: '35%',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
             }}
           >
             <BranchesOutlined /> {branch?.name ?? 'No branch'}
-          </span>
+          </FadeText>
           <span style={{ flex: 1 }} />
           <SessionStatusMark session={session} />
         </Flex>

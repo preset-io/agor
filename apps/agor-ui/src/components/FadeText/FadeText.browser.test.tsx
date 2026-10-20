@@ -50,3 +50,19 @@ it('ends the fade where the row actions begin while the row is hovered', async (
   await userEvent.unhover(title);
   await expect.poll(() => getComputedStyle(title).maskImage).toContain('calc(100% - 24px)');
 });
+
+it('shows only the first label of a focused control', async () => {
+  render(
+    <button type="button" style={{ display: 'flex', width: 200 }}>
+      <FadeText>{LONG}</FadeText>
+      <FadeText dense style={{ flex: '0 0 auto', maxWidth: '35%' }}>
+        feature-fade-truncation-for-long-titles
+      </FadeText>
+    </button>
+  );
+
+  await userEvent.tab();
+
+  await expect.poll(() => screen.queryAllByRole('tooltip').length).toBe(1);
+  expect(screen.getByRole('tooltip')).toHaveTextContent(LONG);
+});
