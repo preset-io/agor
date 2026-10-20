@@ -10,8 +10,8 @@ const DEFAULTS = {
   showUploadInBar: true,
   /** Desktop row pins. MCP tools is pinned by default, as main showed its chip by default. */
   pinnedItems: ['fork', 'upload', 'mcp'] as string[],
-  /** Phone pins are separate from desktop pins and start empty. */
-  pinnedItemsCompact: [] as string[],
+  /** Phone pins are separate from desktop pins. Attach stays one tap, as on main. */
+  pinnedItemsCompact: ['upload'] as string[],
   pinnedChips: ['timer', 'tokens', 'context'] as string[],
   pinsVersion: 2,
 };

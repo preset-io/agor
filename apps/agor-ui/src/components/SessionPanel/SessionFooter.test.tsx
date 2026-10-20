@@ -473,11 +473,18 @@ describe('MCP tools', () => {
 describe('phone pins', () => {
   beforeEach(() => setWidth(390));
 
-  it('start empty and ignore desktop pins', () => {
+  it('start with Attach only and ignore desktop pins', () => {
     renderFooter();
-    expect(screen.queryByTestId('upload-bar-btn')).not.toBeInTheDocument();
+    // Attaching stays one tap, as on main.
+    expect(screen.getByTestId('upload-bar-btn')).toBeInTheDocument();
     expect(screen.queryByTestId('fork-bar-btn')).not.toBeInTheDocument();
     expect(screen.queryByTestId('mcp-bar-btn')).not.toBeInTheDocument();
+  });
+
+  it('keep a saved phone pin list, even an empty one', () => {
+    localStorage.setItem('agor-footer-prefs', JSON.stringify({ pinnedItemsCompact: [] }));
+    renderFooter();
+    expect(screen.queryByTestId('upload-bar-btn')).not.toBeInTheDocument();
   });
 
   it('cap at 2, with the note', async () => {
@@ -817,10 +824,10 @@ describe('MCP notice', () => {
 });
 
 describe('useFooterPreferences', () => {
-  it('defaults: desktop pins Attach, Fork and MCP tools, phone pins empty, context shown', () => {
+  it('defaults: desktop pins Attach, Fork and MCP tools, phone pins Attach, context shown', () => {
     const { result } = renderHook(() => useFooterPreferences());
     expect(result.current[0].pinnedItems).toEqual(['fork', 'upload', 'mcp']);
-    expect(result.current[0].pinnedItemsCompact).toEqual([]);
+    expect(result.current[0].pinnedItemsCompact).toEqual(['upload']);
     expect(result.current[0].pinnedChips).toContain('context');
     expect(result.current[0].pinnedChips).not.toContain('tools');
   });

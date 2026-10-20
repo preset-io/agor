@@ -212,14 +212,8 @@ it.each([
     const plus = screen.getByRole('button', { name: 'Add files and actions' });
     const modelChip = screen.getByTestId('model-chip');
     const circle = screen.getByTestId('composer-circle');
-    // Desktop pins Attach files here; phone pins are kept separately and start empty.
-    if (isMobile) expect(screen.queryByTestId('upload-bar-btn')).toBeNull();
-    const row = [
-      plus,
-      ...(isMobile ? [] : [screen.getByTestId('upload-bar-btn')]),
-      modelChip,
-      circle,
-    ];
+    // Attach is pinned on desktop here, and on phones by default.
+    const row = [plus, screen.getByTestId('upload-bar-btn'), modelChip, circle];
     const rects = row.map((control) => control.getBoundingClientRect());
     rects.forEach((rect, index) => {
       expect(rect.height).toBe(size);
@@ -280,7 +274,7 @@ it.each([
     const attach = within(plusMenu).getByText('Attach files', { exact: true }).closest('button')!;
     expect(attach.getBoundingClientRect().height).toBeGreaterThanOrEqual(rowHeight);
     const pin = within(plusMenu).getByRole('button', {
-      name: isMobile ? 'Pin Attach files to the composer' : 'Unpin Attach files from the composer',
+      name: 'Unpin Attach files from the composer',
     });
     expect(pin.getBoundingClientRect().height).toBe(rowHeight);
     expect(pin.getBoundingClientRect().width).toBe(rowHeight);
