@@ -310,7 +310,7 @@ it('puts the phone composer in one card whose text grows to five lines above the
     return field.height;
   };
   const singleLine = expectRowBelowText();
-  // Not focused: the info line shows under the card.
+  // Not focused: the info line shows above the card.
   expect(screen.getByTestId('composer-info-line')).toBeVisible();
 
   await userEvent.fill(input, Array.from({ length: 8 }, (_, i) => `Line ${i + 1}`).join('\n'));

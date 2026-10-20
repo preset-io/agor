@@ -599,7 +599,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const detailsMain = (
     <>
       {!isMobile && <ComposerMenuSection>Session details</ComposerMenuSection>}
-      <ComposerMenuNote>Choose what shows under the composer</ComposerMenuNote>
+      <ComposerMenuNote>Choose what shows above the composer</ComposerMenuNote>
       {detailRow(
         'timer',
         <ComposerMenuRow
@@ -739,7 +739,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         />
       )}
       <ComposerMenuNote>
-        Pin an item to show it in the info bar under the composer. MCP sign-in problems always show.
+        Pin an item to show it in the row above the composer. MCP sign-in problems always show.
       </ComposerMenuNote>
     </>
   );

@@ -684,7 +684,7 @@ describe('info line segments', () => {
     renderFooter({ latestContextWindow: contextWindow(172_000) });
     fireEvent.click(within(line()).getByRole('button', { name: 'Session details' }));
     const details = await screen.findByRole('dialog', { name: 'Session details' });
-    expect(within(details).getByText('Choose what shows under the composer')).toBeInTheDocument();
+    expect(within(details).getByText('Choose what shows above the composer')).toBeInTheDocument();
     for (const row of details.querySelectorAll<HTMLElement>('[data-detail-row]')) {
       expect(row.style.background).toBe('');
     }
@@ -711,7 +711,7 @@ describe('info line segments', () => {
     fireEvent.click(within(line()).getByRole('button', { name: /^Turn time/ }));
     const sheet = await screen.findByRole('dialog');
     expect(sheet.closest('.ant-drawer')).not.toBeNull();
-    expect(within(sheet).getByText('Choose what shows under the composer')).toBeInTheDocument();
+    expect(within(sheet).getByText('Choose what shows above the composer')).toBeInTheDocument();
   });
 });
 
