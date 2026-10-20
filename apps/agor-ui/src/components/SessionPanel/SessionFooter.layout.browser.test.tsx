@@ -120,13 +120,20 @@ it.each([false, true])(
       ).toSatisfy((element: Element | null) => !!element && control.contains(element));
     }
     for (const control of [stop, plus]) expect(control.getBoundingClientRect().height).toBe(size);
-    // The working line heads the card, above the prompt and the control row.
-    expect(card()).toContainElement(activity);
-    expect(activity.getBoundingClientRect().bottom).toBeLessThanOrEqual(buttonBounds.top);
-    // The info line under the card keeps the footer's bottom inset too.
+    // The working status and the info share one row above the card; the card ends the footer.
+    const statusRow = screen.getByTestId('composer-status-row');
+    expect(statusRow).toContainElement(activity);
+    expect(card()).not.toContainElement(activity);
     const infoLine = screen.getByTestId('composer-info-line').getBoundingClientRect();
-    expect(infoLine.top).toBeGreaterThanOrEqual(card().getBoundingClientRect().bottom);
-    expect(infoLine.bottom).toBeLessThanOrEqual(bounds.bottom - bottomInset);
+    expect(statusRow.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      card().getBoundingClientRect().top
+    );
+    expect(
+      Math.abs(center(infoLine) - center(activity.getBoundingClientRect()))
+    ).toBeLessThanOrEqual(1);
+    expect(bounds.bottom - card().getBoundingClientRect().bottom).toBeGreaterThanOrEqual(
+      bottomInset
+    );
     const expectCenteredActivity = () => {
       expect(dot).toBeVisible();
       const indicator = dot.getBoundingClientRect();

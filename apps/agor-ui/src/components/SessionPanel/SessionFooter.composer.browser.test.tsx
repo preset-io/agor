@@ -252,14 +252,18 @@ it.each([
       expect(modelLabel.scrollWidth).toBeLessThanOrEqual(modelLabel.clientWidth);
     }
 
-    // The info line sits under the card on one line, with phone-sized targets.
+    // The info sits in the one row above the card, beside the working status, on one line.
     const infoLine = screen.getByTestId('composer-info-line');
     expect(infoLine).toHaveTextContent('4%');
     // Usage is lazy: no snapshot yet, so no usage segment.
     expect(infoLine).not.toHaveTextContent(/Usage|tokens/);
     const info = infoLine.getBoundingClientRect();
-    expect(info.top).toBeGreaterThanOrEqual(card.bottom);
+    expect(info.bottom).toBeLessThanOrEqual(card.top);
     expect(info.right).toBeLessThanOrEqual(window.innerWidth);
+    const statusRow = screen.getByTestId('composer-status-row').getBoundingClientRect();
+    expect(statusRow.height).toBe(
+      isMobile ? MOBILE_TOUCH_TARGET : theme.getDesignToken().controlHeightSM
+    );
     const infoButtons = within(infoLine)
       .getAllByRole('button')
       .map((button) => button.getBoundingClientRect());
@@ -300,6 +304,83 @@ it.each([
     expect(within(permissions).getByRole('radio', { checked: true })).toBeVisible();
     expectMenuType(modelMenu);
     await page.screenshot({ path: `./.vitest/composer-${width}-${dark ? 'dark' : 'light'}.png` });
+  }
+);
+
+function rowFooter(width?: number, state: Partial<SessionFooterProps> = {}) {
+  return (
+    <ConfigProvider theme={{ token: { motion: false } }}>
+      <App>
+        <main style={{ paddingInline: 24, width, boxSizing: 'border-box' }}>
+          <SessionFooter {...props} {...state} />
+        </main>
+      </App>
+    </ConfigProvider>
+  );
+}
+
+/** The status row: one line directly above the card, never scrolling, nothing under the card. */
+function expectStatusRowAboveCard() {
+  const row = screen.getByTestId('composer-status-row');
+  const box = screen.getByTestId('composer-card').getBoundingClientRect();
+  const rowRect = row.getBoundingClientRect();
+  expect(rowRect.bottom).toBeLessThanOrEqual(box.top);
+  expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
+  const controls = [...row.querySelectorAll('button, [role="status"]')].map((control) =>
+    control.getBoundingClientRect()
+  );
+  for (const rect of controls) {
+    expect(Math.abs(center(rect) - center(rowRect))).toBeLessThanOrEqual(1);
+    expect(rect.left).toBeGreaterThanOrEqual(rowRect.left);
+    expect(rect.right).toBeLessThanOrEqual(rowRect.right);
+  }
+  for (const element of row.parentElement!.querySelectorAll('*')) {
+    const rect = element.getBoundingClientRect();
+    if (rect.height > 0) expect(rect.top).toBeLessThan(box.bottom);
+  }
+  expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+  return row;
+}
+
+it.each([360, 390, 430])(
+  'puts the working status, Stop and info in one row above the phone card at %ipx',
+  async (width) => {
+    await page.viewport(width, 800);
+    render(rowFooter());
+    const row = expectStatusRowAboveCard();
+    const stop = screen.getByRole('button', { name: 'Stop the agent' });
+    const info = screen.getByTestId('composer-info-line');
+    expect(row).toContainElement(screen.getByRole('status', { name: 'Agent is working' }));
+    expect(row).toContainElement(stop);
+    expect(stop.getBoundingClientRect().height).toBe(MOBILE_TOUCH_TARGET);
+    // Status on the left, info on the right.
+    expect(stop.getBoundingClientRect().right).toBeLessThanOrEqual(
+      info.getBoundingClientRect().left
+    );
+    // Crowded or not, the context ring and Session details stay.
+    expect(within(info).getByRole('button', { name: /^Context 4% used/ })).toBeVisible();
+    expect(within(info).getByRole('button', { name: 'Session details' })).toBeVisible();
+  }
+);
+
+it.each([340, 360])(
+  'folds the info into Session details in a %ipx panel, keeping the ring',
+  async (width) => {
+    await page.viewport(1280, 900);
+    const view = render(rowFooter(width));
+    const info = screen.getByTestId('composer-info-line');
+    await waitFor(() => expect(info).toHaveAttribute('data-folded', 'true'));
+    expectStatusRowAboveCard();
+    expect(screen.getByRole('button', { name: 'Stop the agent' })).toBeVisible();
+    expect(within(info).queryByRole('button', { name: /^Session ID / })).toBeNull();
+    expect(within(info).getByRole('button', { name: /^Context 4% used/ })).toBeVisible();
+    expect(within(info).getByRole('button', { name: 'Session details' })).toBeVisible();
+    // Idle, with room again, the full set comes back; the left side is empty.
+    view.rerender(rowFooter(900, { isRunning: false, hasInput: false }));
+    await waitFor(() => expect(info).not.toHaveAttribute('data-folded'));
+    expect(screen.queryByTestId('composer-working-line')).toBeNull();
+    expect(within(info).getByRole('button', { name: /^Session ID / })).toBeVisible();
+    expectStatusRowAboveCard();
   }
 );
 

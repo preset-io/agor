@@ -193,6 +193,28 @@ describe('composer circle', () => {
     expect(onStop).toHaveBeenCalledOnce();
   });
 
+  it('stacks the queue, then the status and info row, then the card, with nothing under it', () => {
+    renderFooter({
+      isRunning: true,
+      hasInput: true,
+      queueSlot: <div data-testid="queue-slot" />,
+    });
+    const row = screen.getByTestId('composer-status-row');
+    expect(row).toContainElement(screen.getByTestId('composer-working-line'));
+    expect(row).toContainElement(screen.getByTestId('composer-info-line'));
+    const card = screen.getByTestId('composer-card');
+    expect(card).not.toContainElement(screen.getByTestId('composer-working-line'));
+    const follows = (a: Element, b: Element) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(follows(screen.getByTestId('queue-slot'), row)).toBeTruthy();
+    expect(follows(row, card)).toBeTruthy();
+    // Nothing in the footer follows the card.
+    for (const element of row.parentElement!.querySelectorAll('*')) {
+      if (element === card || card.contains(element) || element.contains(card)) continue;
+      expect(follows(card, element)).toBeFalsy();
+    }
+  });
+
   it('shows stopping feedback and blocks a second stop while the request is in flight', () => {
     const onStop = vi.fn();
     renderFooter({ isRunning: true, stopRequestInFlight: true, onStop });

@@ -929,16 +929,61 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       </ComposerMenu>
     );
   };
-  const infoLineVisible = detailsOpen || !(keyboardUp && !mcpWarning);
-  const infoLine = infoLineVisible && (
+  // Phones hide the info while typing unless an MCP problem needs attention.
+  const infoVisible = detailsOpen || !(keyboardUp && !mcpWarning);
+  // One line only: when the segments don't fit, keep the %, any MCP problem and "›".
+  const [foldInfo, setFoldInfo] = React.useState(false);
+  const statusRowRef = React.useRef<HTMLDivElement>(null);
+  const statusRef = React.useRef<HTMLDivElement>(null);
+  const infoGroupRef = React.useRef<HTMLDivElement>(null);
+  const fullInfoWidthRef = React.useRef(0);
+  const segmentKeys = infoSegments.map((segment) => segment.key).join('|');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure the full set when items change
+  React.useLayoutEffect(() => setFoldInfo(false), [segmentKeys]);
+  const measureInfo = React.useCallback(() => {
+    const row = statusRowRef.current;
+    const group = infoGroupRef.current;
+    if (!row || !group || row.clientWidth === 0) return;
+    const available =
+      row.clientWidth -
+      (statusRef.current?.offsetWidth ?? 0) -
+      token.paddingXS * 2 -
+      (statusRef.current ? token.marginXS : 0);
+    setFoldInfo((folded) => {
+      if (!folded) {
+        fullInfoWidthRef.current = group.scrollWidth;
+        return group.scrollWidth > available + 1;
+      }
+      return fullInfoWidthRef.current > available + 1;
+    });
+  }, [token.paddingXS, token.marginXS]);
+  React.useLayoutEffect(() => measureInfo());
+  React.useLayoutEffect(() => {
+    const row = statusRowRef.current;
+    if (!row) return;
+    const observer = new ResizeObserver(() => measureInfo());
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [measureInfo]);
+  const shownSegments = foldInfo
+    ? infoSegments.filter(
+        (segment) =>
+          segment.key === 'context' ||
+          segment.key === 'mcp-warning' ||
+          (detailsOpen && segment.key === detailsAnchor)
+      )
+    : infoSegments;
+  const infoGroup = infoVisible && (
     // Segments hover with the subtle fill, so the line reads as clickable.
     <ConfigProvider theme={{ components: { Button: { textHoverBg: token.colorFillTertiary } } }}>
       <Flex
+        ref={infoGroupRef}
         align="center"
-        style={{ minWidth: 0, paddingInline: token.paddingXS, overflow: 'hidden' }}
+        style={{ minWidth: 0, marginInlineStart: 'auto', overflow: 'hidden' }}
         data-testid="composer-info-line"
+        data-folded={foldInfo || undefined}
       >
-        {infoSegments.map((segment, index) => (
+        {shownSegments.map((segment, index) => (
           <React.Fragment key={segment.key}>
             {index > 0 && (
               <span
@@ -1374,14 +1419,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   const workingLine = showStop && (
     <Flex
+      ref={statusRef}
       align="center"
       gap={token.marginXS}
-      style={{
-        minHeight: isMobile ? token.controlHeight : token.controlHeightSM,
-        paddingInlineEnd: token.paddingXXS,
-        fontSize: token.fontSizeSM,
-        color: token.colorTextSecondary,
-      }}
+      style={{ flexShrink: 0, fontSize: token.fontSizeSM, color: token.colorTextSecondary }}
       data-testid="composer-working-line"
     >
       <span
@@ -1395,11 +1436,14 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           flexShrink: 0,
         }}
       />
-      <span role="status" aria-label={showActivity ? 'Agent is working' : undefined}>
-        {stopBusy ? 'Stopping' : 'Working'}
+      {/* A steady width, so Stop doesn't move as the label or the clock changes. */}
+      <span
+        role="status"
+        aria-label={showActivity ? 'Agent is working' : undefined}
+        style={{ minWidth: '15ch', fontVariantNumeric: 'tabular-nums' }}
+      >
+        {stopBusy ? 'Stopping' : 'Working'} {workingElapsed}
       </span>
-      {workingElapsed}
-      <span style={{ flex: 1 }} />
       {circleState !== 'stop' && (
         <Tooltip title={stopTooltip}>
           <Button
@@ -1412,15 +1456,35 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             onClick={onStop}
             style={{
               fontSize: token.fontSizeSM,
-              ...(isMobile
-                ? { minHeight: MOBILE_TOUCH_TARGET, minWidth: MOBILE_TOUCH_TARGET }
-                : {}),
+              // Room for the loading spinner, so the button doesn't grow while stopping.
+              minWidth: token.controlHeight * 2,
+              ...(isMobile && { minHeight: MOBILE_TOUCH_TARGET }),
             }}
           >
             Stop
           </Button>
         </Tooltip>
       )}
+    </Flex>
+  );
+
+  // One quiet row above the card: the running status on the left, pinned info on the right.
+  const statusRow = (showStop || infoVisible) && (
+    <Flex
+      ref={statusRowRef}
+      align="center"
+      gap={token.marginXS}
+      style={{
+        minWidth: 0,
+        minHeight: isMobile ? MOBILE_TOUCH_TARGET : token.controlHeightSM,
+        paddingInline: token.paddingXS,
+        marginBottom: token.marginXXS,
+        whiteSpace: 'nowrap',
+      }}
+      data-testid="composer-status-row"
+    >
+      {workingLine}
+      {infoGroup}
     </Flex>
   );
 
@@ -1502,6 +1566,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
       {queueSlot}
 
+      {statusRow}
+
       <SessionComposerDropZone
         disabled={composerAttachmentUploading}
         onDragActiveChange={onDropActiveChange}
@@ -1537,7 +1603,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             transition: reducedMotion ? undefined : `border-color ${token.motionDurationFast}`,
           }}
         >
-          {workingLine}
           <Flex vertical gap={token.sizeXS} style={{ minWidth: 0 }}>
             {promptInputSlot}
           </Flex>
@@ -1611,8 +1676,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           </ConfigProvider>
         </div>
       </SessionComposerDropZone>
-
-      {infoLine}
     </div>
   );
 };
