@@ -422,7 +422,12 @@ describe('info line and Session details', () => {
     const hide = within(details).getByRole('button', { name: 'Hide context' });
     expect(hide).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(hide);
-    expect(screen.queryByRole('button', { name: /^Context 86% used/ })).not.toBeInTheDocument();
+    // The open menu keeps its anchor; the % leaves the line once it closes.
+    expect(within(details).getByRole('button', { name: 'Show context' })).toBeInTheDocument();
+    fireEvent.keyDown(details, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /^Context 86% used/ })).not.toBeInTheDocument()
+    );
     expect(JSON.parse(localStorage.getItem('agor-footer-prefs') ?? '{}').pinnedChips).not.toContain(
       'context'
     );

@@ -533,6 +533,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       : unauthedMcpServers.length > 1
         ? `${unauthedMcpServers.length} MCP servers need sign-in`
         : null;
+  // MCP problems always show on the info line, even while typing.
+  const mcpWarning = sessionMcpLoadFailed ? "MCP tools didn't load" : signInWarning;
   const usageValue = usage ? `${formatTokenCount(usage.total)} tokens` : usageLoading ? '…' : '';
   const infoItems = [
     pinnedChips.includes('timer') && elapsed.hasTiming ? elapsed.label : null,
@@ -577,6 +579,24 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         onClick={() => setDetailsPage('mcp')}
         trailing={infoPin('tools', 'MCP tools')}
       />
+      {sessionMcpLoadFailed && (
+        <Flex
+          align="center"
+          gap={token.marginXS}
+          style={{ paddingInline: token.paddingSM, paddingBottom: token.paddingXXS }}
+        >
+          <Typography.Text
+            style={{ flex: 1, fontSize: token.fontSizeSM, color: token.colorWarningText }}
+          >
+            MCP tools didn't load.
+          </Typography.Text>
+          {onSessionMcpRetry && (
+            <Button size="small" onClick={onSessionMcpRetry}>
+              Retry
+            </Button>
+          )}
+        </Flex>
+      )}
       {unauthedMcpServers.map((server) => (
         <Flex
           key={server.mcp_server_id}
@@ -655,6 +675,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             currentUserId={currentUserId}
             sessionId={session.session_id}
             sessionMcpServerIds={sessionMcpServerIds}
+            sessionMcpLoadFailed={sessionMcpLoadFailed}
+            onSessionMcpRetry={onSessionMcpRetry}
             mcpServerById={mcpServerById}
             userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
           />
@@ -675,15 +697,18 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     minWidth: 0,
   };
   const showContextInInfo = contextPercent !== null && pinnedChips.includes('context');
+  // An open Session details keeps its anchor, even if the line's content changes underneath it.
+  const detailsAnchored = openMenu === 'details';
   const infoLineVisible =
-    (showContextInInfo || infoItems.length > 0 || signInWarning) && !(keyboardUp && !signInWarning);
+    detailsOpen ||
+    ((showContextInInfo || infoItems.length > 0 || mcpWarning) && !(keyboardUp && !mcpWarning));
   const infoLine = infoLineVisible && (
     <Flex
       align="center"
       style={{ minWidth: 0, paddingInline: token.paddingXS }}
       data-testid="composer-info-line"
     >
-      {showContextInInfo && (
+      {contextPercent !== null && (showContextInInfo || openMenu === 'details-context') && (
         <ComposerMenu
           above={cardRef}
           sheet={isMobile}
@@ -714,7 +739,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           </Tooltip>
         </ComposerMenu>
       )}
-      {(infoItems.length > 0 || signInWarning) && (
+      {(infoItems.length > 0 || mcpWarning || detailsAnchored) && (
         <ComposerMenu
           above={cardRef}
           sheet={isMobile}
@@ -726,17 +751,17 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           <Button
             type="text"
             size="small"
-            aria-label={`Session details. ${[...infoItems, signInWarning].filter(Boolean).join(', ')}`}
+            aria-label={`Session details. ${[...infoItems, mcpWarning].filter(Boolean).join(', ')}`}
             onClick={isMobile ? () => openDetails('details')(true) : undefined}
             style={infoTextStyle}
           >
             <Typography.Text ellipsis style={{ fontSize: token.fontSizeSM, color: 'inherit' }}>
               {showContextInInfo && infoItems.length > 0 ? '· ' : ''}
               {infoItems.join(' · ')}
-              {signInWarning && (
+              {mcpWarning && (
                 <span style={{ color: token.colorWarningText }}>
                   {infoItems.length > 0 ? ' · ' : ''}
-                  {signInWarning}
+                  {mcpWarning}
                 </span>
               )}
             </Typography.Text>
