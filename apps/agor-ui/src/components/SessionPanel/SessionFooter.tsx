@@ -25,6 +25,7 @@ import {
   BranchesOutlined,
   ClockCircleOutlined,
   CopyOutlined,
+  ExperimentOutlined,
   ForkOutlined,
   IdcardOutlined,
   InfoCircleOutlined,
@@ -497,7 +498,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   const [openMenu, setOpenMenu] = React.useState<ComposerMenuId | null>(null);
   const [plusPage, setPlusPage] = React.useState<'main' | 'details' | 'mcp'>('main');
-  const [modelPage, setModelPage] = React.useState<'model' | 'permissions'>('model');
+  const [modelPage, setModelPage] = React.useState<'model' | 'permissions' | 'advanced'>('model');
   const runAction = (action: () => void) => () => {
     setOpenMenu(null);
     action();
@@ -1129,6 +1130,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   );
 
   const effortLevels = toolCaps?.reasoningEffortLevels ?? [];
+  const isClaudeSession = session.agentic_tool === 'claude-code';
   const permissionModes = getPermissionModes(session.agentic_tool);
   const defaultPermissionMode = getDefaultPermissionMode(session.agentic_tool);
   const presetNote = managedByPreset ? (
@@ -1271,6 +1273,14 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         drill
         onClick={() => setModelPage('permissions')}
       />
+      <ComposerMenuRow
+        label={isClaudeSession ? 'Advisor and exact version' : 'Exact version'}
+        icon={<ExperimentOutlined />}
+        hint={modelConfig?.advisorModel ? `Advisor: ${modelConfig.advisorModel}` : undefined}
+        disabled={managedByPreset}
+        drill
+        onClick={() => setModelPage('advanced')}
+      />
       {onOpenSessionSettings && (
         <ComposerMenuRow
           label="Session settings"
@@ -1280,7 +1290,29 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       )}
     </>
   );
-  const modelMenuContent = modelPage === 'permissions' ? permissionsPage : modelPageContent;
+  // Main's model chip popover held the full picker: advisor model and "Pin a specific version".
+  const advancedModelPage = (
+    <>
+      <ComposerMenuBack label="Model" onBack={() => setModelPage('model')} />
+      <div style={{ padding: `0 ${token.paddingSM}px ${token.paddingSM}px` }}>
+        <ModelSelector
+          key={`${session.session_id}:advanced`}
+          value={modelRowsValue}
+          onCommit={onModelConfigCommit}
+          agentic_tool={session.agentic_tool}
+          client={client}
+          branchId={session.branch_id}
+          catalogEnabled={session.created_by === currentUserId}
+        />
+      </div>
+    </>
+  );
+  const modelMenuContent =
+    modelPage === 'permissions'
+      ? permissionsPage
+      : modelPage === 'advanced'
+        ? advancedModelPage
+        : modelPageContent;
   const openModelMenu = (menu: 'model' | 'permissions') => (open: boolean) => {
     setModelPage(menu === 'permissions' ? 'permissions' : 'model');
     setOpenMenu(open ? menu : null);

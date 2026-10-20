@@ -302,3 +302,43 @@ it.each([
     await page.screenshot({ path: `./.vitest/composer-${width}-${dark ? 'dark' : 'light'}.png` });
   }
 );
+
+it('keeps the advisor and exact-version picker one drill-in from the model chip', async () => {
+  await page.viewport(1280, 900);
+  const onModelConfigCommit = vi.fn();
+  render(
+    <ConfigProvider theme={{ token: { motion: false } }}>
+      <App>
+        <main style={{ paddingInline: 24, paddingTop: 600 }}>
+          <SessionFooter
+            {...props}
+            isRunning={false}
+            hasInput={false}
+            modelConfig={{ mode: 'alias', model: 'claude-opus-5-5' }}
+            onModelConfigCommit={onModelConfigCommit}
+          />
+        </main>
+      </App>
+    </ConfigProvider>
+  );
+  await userEvent.click(screen.getByTestId('model-chip'));
+  const menu = await screen.findByRole('dialog', { name: 'Model' });
+  await userEvent.click(within(menu).getByRole('button', { name: /Advisor and exact version/ }));
+  expect(await within(menu).findByText('Advisor model')).toBeVisible();
+  expect(within(menu).getByRole('button', { name: /Pin a specific version/ })).toBeVisible();
+  // A dropdown opened inside the menu must not close the menu.
+  await userEvent.click(within(menu).getAllByRole('combobox')[0]);
+  const options = await waitFor(() => {
+    const visible = [...document.querySelectorAll<HTMLElement>('.ant-select-item-option')];
+    expect(visible.length).toBeGreaterThan(1);
+    return visible;
+  });
+  const other = options.find(
+    (option) => !option.classList.contains('ant-select-item-option-selected')
+  )!;
+  await userEvent.click(other);
+  await waitFor(() => expect(onModelConfigCommit).toHaveBeenCalledOnce());
+  expect(screen.getByRole('dialog', { name: 'Model' })).toBeVisible();
+  await userEvent.click(within(menu).getByRole('button', { name: 'Back to model' }));
+  expect(await within(menu).findByRole('radiogroup', { name: 'Model' })).toBeVisible();
+});
