@@ -190,8 +190,6 @@ it('excludes hidden cards, searches, and counts but retains saved connections', 
     'com.vercel/vercel-mcp',
     'com.intercom/mcp',
     'com.squareup/mcp',
-    'com.canva/mcp',
-    'com.dropbox/mcp',
     'com.newrelic/mcp-server',
   ];
   const api = makeCatalogClient([

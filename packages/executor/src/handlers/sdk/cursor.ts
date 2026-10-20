@@ -18,7 +18,10 @@ import {
 } from '@agor/core/mcp';
 import { DEFAULT_CURSOR_MODEL } from '@agor/core/models';
 import { renderAgorSessionIdentity } from '@agor/core/templates/session-context';
-import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import {
+  hasPrescribedMCPAuthHeader,
+  mergeMCPRemoteHeaders,
+} from '@agor/core/tools/mcp/http-headers';
 import type {
   ContentBlock,
   Message,
@@ -276,9 +279,7 @@ async function buildCursorMcpServers(args: {
       // collector); the notice tells the agent how the user fixes it.
       if (
         !lookupFailed &&
-        server.auth &&
-        server.auth.type !== 'none' &&
-        !authHeaders?.Authorization &&
+        !hasPrescribedMCPAuthHeader(server.auth, authHeaders) &&
         signIn.recordMissingGrant(scoped)
       ) {
         continue;

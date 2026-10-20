@@ -10,7 +10,12 @@
 
 import type { AgenticToolName } from './agentic-tool';
 import type { BranchID } from './id';
-import type { MCPOAuthCompatibilityMode, MCPOAuthDCRMode, MCPServer } from './mcp';
+import type {
+  MCPOAuthCompatibilityMode,
+  MCPOAuthDCRMode,
+  MCPOAuthTokenEndpointAuthMethod,
+  MCPServer,
+} from './mcp';
 import type { Session } from './session';
 
 /**
@@ -163,6 +168,8 @@ export interface MCPCatalogEntry {
   starter_prompt: string;
   /** Plain-language statement of what connecting grants access to. */
   permission_disclosure: string;
+  /** Short provider-side setup someone must do before Connect works, shown above it. */
+  setup_hint?: string;
   icon_url?: string;
   /** 1 = most popular. Absent sorts last. */
   popularity_rank?: number;
@@ -194,6 +201,36 @@ export interface MCPCatalogEntryCredentials {
    * deliberately opt-in: an OAuth challenge never implies API-key support.
    */
   oauth_challenge_compatible?: true;
+  /**
+   * Header that carries the pasted secret; `Authorization` when omitted. The
+   * secret is stored as `auth.token` either way, with this as
+   * `auth.token_header`.
+   */
+  header?: string;
+  /**
+   * Literal text sent before the secret, spacing included (`"Token "` for
+   * `Authorization: Token <key>`). Defaults to `"Bearer "` only when `header`
+   * is omitted; with an explicit header, omission sends the bare secret.
+   */
+  prefix?: string;
+  /**
+   * Further values the vendor needs as request headers alongside the secret,
+   * e.g. a workspace or environment ID. Stored in the install's custom headers,
+   * which are redacted on every read like any other custom header.
+   */
+  fields?: MCPCatalogCredentialField[];
+}
+
+/** One extra user-supplied value an entry's credential recipe sends as a header. */
+export interface MCPCatalogCredentialField {
+  /** Stable form key, sent back as a `credential_fields` key on connect. */
+  key: string;
+  /** Form label, e.g. "Production environment ID". */
+  label: string;
+  /** Request header the value is sent in. */
+  header: string;
+  /** Render as a password input. Every value is redacted on read regardless. */
+  secret: boolean;
 }
 
 /**
@@ -252,7 +289,34 @@ export interface MCPCatalogEntryCredentials {
  */
 export interface MCPCatalogEntryOAuth {
   /** Reviewed customer-owned app setup; contains no credentials or endpoint overrides. */
-  configured_client?: { setup_url: string; issuer: string; secret_required: boolean };
+  configured_client?: {
+    setup_url: string;
+    issuer: string;
+    secret_required: boolean;
+    /** Short provider-specific guidance on which credentials to use and where. */
+    credentials_hint?: string;
+  };
+  /**
+   * A DCR provider that admits only allowlisted redirect URIs. On a runtime with
+   * the hosted callback relay, flows use the relay's fixed per-issuer callback
+   * (the same one `configured_client` uses), so each deployment submits its one
+   * stable relay callback to the provider. Without the relay, the direct
+   * callback is used.
+   */
+  stable_callback?: { issuer: string };
+  /**
+   * A provider whose admin allowlists redirect URIs, for a flow that uses the
+   * daemon's direct callback. Changes nothing in the flow; readiness returns
+   * that callback so the drawer can show what to allowlist.
+   */
+  redirect_allowlist?: true;
+  /**
+   * How a confidential client authenticates at the token endpoint, for both
+   * the code exchange and every refresh of an install of this entry.
+   * `client_secret_basic` (HTTP Basic) when omitted; `client_secret_post` for
+   * providers that accept only form-body credentials (e.g. HubSpot, Slack).
+   */
+  token_endpoint_auth_method?: MCPOAuthTokenEndpointAuthMethod;
   /** Space-separated OAuth scopes to request. */
   scope?: string;
   /** A pre-registered *public* client id. Never a confidential one. */
@@ -315,6 +379,22 @@ export function catalogDisplayName(entry: Pick<MCPCatalogEntry, 'name' | 'title'
   const publisher = catalogPublisherSegment(entry.name);
   if (!publisher) return entry.name;
   return publisher.charAt(0).toUpperCase() + publisher.slice(1);
+}
+
+/**
+ * Whether a reviewed entry declares OAuth up front rather than waiting for a
+ * challenge: it states `auth_type: oauth` and brings a reviewed client (a
+ * customer-owned app recipe or a public client ID). Some such servers (Google
+ * Workspace) answer an unauthenticated `initialize` with no 401 at all, so for
+ * these entries the catalog, not the challenge, is what says sign-in is needed.
+ * Discovery still comes from the server's own protected-resource metadata.
+ */
+export function catalogEntryDeclaresOAuth(
+  entry: Pick<MCPCatalogEntry, 'auth_type' | 'oauth'>
+): boolean {
+  return (
+    entry.auth_type === 'oauth' && Boolean(entry.oauth?.configured_client || entry.oauth?.client_id)
+  );
 }
 
 /**
@@ -410,6 +490,11 @@ export interface MCPCatalogConnectData {
    * to a row with no reason to carry it.
    */
   bearer_token?: string;
+  /**
+   * Values for the entry's `credentials.fields`, keyed by field `key`. Sent
+   * only alongside `bearer_token`, and every declared field is required.
+   */
+  credential_fields?: Record<string, string>;
   /** Browser-only configured app material. Never submit through model-visible tools. */
   oauth_client?: { client_id: string; client_secret?: string };
 }

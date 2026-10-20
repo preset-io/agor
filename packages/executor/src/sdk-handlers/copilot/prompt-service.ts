@@ -23,7 +23,10 @@ import {
   renderAgorSessionIdentity,
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
-import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import {
+  hasPrescribedMCPAuthHeader,
+  mergeMCPRemoteHeaders,
+} from '@agor/core/tools/mcp/http-headers';
 import { MCP_CLIENT_HINT_HEADER, MCP_CLIENT_HINTS } from '@agor/core/types';
 import type * as CopilotSdk from '@github/copilot-sdk';
 import type { CopilotSession } from '@github/copilot-sdk';
@@ -258,9 +261,7 @@ export class CopilotPromptService {
         // collector); the notice tells the agent how the user fixes it.
         if (
           !lookupFailed &&
-          server.auth &&
-          server.auth.type !== 'none' &&
-          !authHeaders?.Authorization &&
+          !hasPrescribedMCPAuthHeader(server.auth, authHeaders) &&
           signIn.recordMissingGrant(scoped)
         ) {
           continue;

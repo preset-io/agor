@@ -32,7 +32,8 @@ vi.mock('@agor/core/templates/session-context', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@agor/core/templates/session-context')>()),
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
 }));
-vi.mock('@agor/core/tools/mcp/http-headers', () => ({
+vi.mock('@agor/core/tools/mcp/http-headers', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agor/core/tools/mcp/http-headers')>()),
   mergeMCPRemoteHeaders: vi.fn(({ custom, auth }) => ({ ...(custom || {}), ...(auth || {}) })),
 }));
 vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
@@ -59,6 +60,7 @@ vi.mock('../base/permission-hooks.js', () => ({
 }));
 
 import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
+import { renderMCPTokenHeader } from '@agor/core/tools/mcp/http-headers';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import * as Claude from '@anthropic-ai/claude-agent-sdk';
 import {
@@ -1285,6 +1287,58 @@ describe('setupQuery - Local Settings Support', () => {
     expect(mcpServers.agor).toMatchObject({ alwaysLoad: true });
     expect(mcpServers.bearerRemote.alwaysLoad).toBeUndefined();
     expect(mcpServers.jwtRemote.alwaysLoad).toBeUndefined();
+  });
+
+  it('treats vendor token header recipes as resolved auth', async () => {
+    const deps = createMockDeps();
+    vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({
+      session_id: 'test-session' as SessionID,
+      branch_id: 'test-branch' as BranchID,
+      mcp_token: 'test-token',
+      custom_context: { gateway_source: { channel_id: 'channel-1' } },
+    } as any);
+    deps.sessionMCPRepo = {} as any;
+    deps.mcpServerRepo = {} as any;
+    vi.mocked(resolveMCPAuthHeaders).mockImplementation(async (auth) =>
+      renderMCPTokenHeader(auth as { token: string })
+    );
+    vi.mocked(getMcpServersForSession).mockResolvedValue([
+      {
+        server: {
+          name: 'pagerduty',
+          transport: 'http',
+          url: 'https://pd.example.com/mcp',
+          auth: { type: 'bearer', token: 'pd-key', token_prefix: 'Token token=' },
+        },
+      } as any,
+      {
+        server: {
+          name: 'similarweb',
+          transport: 'http',
+          url: 'https://sw.example.com/mcp',
+          auth: { type: 'bearer', token: 'sw-key', token_header: 'api-key' },
+        },
+      } as any,
+    ]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await setupQuery('test-session' as SessionID, 'test prompt', deps);
+      const mcpServers = claudeQuery.mock.calls[0][0].options.mcpServers as Record<
+        string,
+        Record<string, unknown>
+      >;
+      expect(mcpServers.pagerduty).toMatchObject({
+        headers: { Authorization: 'Token token=pd-key' },
+        alwaysLoad: true,
+      });
+      expect(mcpServers.similarweb).toMatchObject({
+        headers: { 'api-key': 'sw-key' },
+        alwaysLoad: true,
+      });
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('credential_unavailable');
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it.each(['claude-opus-5-5', 'claude-opus-5-5[1m]', 'claude-sonnet-5-5'])(

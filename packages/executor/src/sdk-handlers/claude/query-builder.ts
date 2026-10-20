@@ -13,7 +13,10 @@ import {
   renderAgorSessionIdentity,
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
-import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import {
+  hasPrescribedMCPAuthHeader,
+  mergeMCPRemoteHeaders,
+} from '@agor/core/tools/mcp/http-headers';
 import type {
   MCPRuntimeRefreshRequest,
   MCPRuntimeReprojection,
@@ -559,10 +562,7 @@ export async function setupQuery(
               surfaceAuthorityError: true,
             });
             const missingRequiredAuth =
-              !!server.auth &&
-              server.auth.type !== 'none' &&
-              transport !== 'stdio' &&
-              !authHeaders?.Authorization;
+              transport !== 'stdio' && !hasPrescribedMCPAuthHeader(server.auth, authHeaders);
             const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
             if (headers && transport !== 'stdio') {
               serverConfig.headers = headers;

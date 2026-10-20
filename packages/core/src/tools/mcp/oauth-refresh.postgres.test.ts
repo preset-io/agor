@@ -125,7 +125,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     }
 
-    async function seed(label: string, tokenEndpoint: string): Promise<Seed> {
+    async function seed(
+      label: string,
+      tokenEndpoint: string,
+      clientSecret?: string
+    ): Promise<Seed> {
       const tenantId = `oauth-refresh-${label}-${crypto.randomUUID()}`;
       return runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
         const user = await new UsersRepository(scoped).create({
@@ -161,6 +165,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             accessToken: `expired-access-${label}`,
             refreshToken: `refresh-${label}-0`,
             clientId: 'configured-client',
+            ...(clientSecret ? { clientSecret } : {}),
             expiresAt: new Date(Date.now() - 60_000),
             grantBinding: {
               generation,
@@ -309,6 +314,52 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               oauth_access_token: 'shared-rotation',
             });
         });
+      }
+    );
+
+    it.each([
+      ['client_secret_post', 'body'],
+      [undefined, 'basic'],
+    ] as const)(
+      'authenticates the rotating refresh with the resolver method for the saved server (%s)',
+      async (method, expected) => {
+        const requests: Array<{ body: URLSearchParams }> = [];
+        const tokenProvider = await provider(async (body, response) => {
+          requests.push({ body });
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              access_token: 'rotated',
+              refresh_token: 'rotated-r',
+              expires_in: 3600,
+            })
+          );
+        });
+        const bound = await seed(`auth-${expected}`, tokenProvider.url, 'configured-secret');
+        const resolver = vi.fn(async () => method);
+        await refreshAndPersistToken({
+          db: dbA,
+          tenantId: bound.tenantId,
+          userId: bound.userId,
+          mcpServerId: bound.serverId,
+          validateGrant: async () => true,
+          observedRefreshVersion: initialRefreshVersion(bound),
+          allowLocalhostHttpDevelopment: true,
+          resolveTokenEndpointAuthMethod: resolver,
+        });
+        expect(resolver).toHaveBeenCalledWith(
+          expect.objectContaining({ mcp_server_id: bound.serverId })
+        );
+        const [request] = requests;
+        expect(request.body.get('grant_type')).toBe('refresh_token');
+        if (expected === 'body') {
+          expect(request.body.get('client_id')).toBe('configured-client');
+          expect(request.body.get('client_secret')).toBe('configured-secret');
+        } else {
+          // HTTP Basic: no credentials in the form body.
+          expect(request.body.get('client_id')).toBeNull();
+          expect(request.body.get('client_secret')).toBeNull();
+        }
       }
     );
 

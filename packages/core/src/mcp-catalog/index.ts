@@ -10,6 +10,7 @@ export {
   probeRemoteAuth,
   probeRemoteAuthType,
   probeRemoteBearerToken,
+  probeRemoteCredentialHeaders,
   type RemoteAuthProbeResult,
 } from './auth-probe';
 export { findCatalogEntry, loadCatalog } from './catalog';
@@ -24,4 +25,4 @@ export {
 // Also reachable as `@agor/core/mcp-catalog/query`, which is the import the
 // browser bundle uses: this barrel pulls in the loader, and the loader reads
 // the file off disk.
-export { filterCatalog, isCatalogEntryVisible } from './query';
+export { catalogRelayIssuer, filterCatalog, isCatalogEntryVisible } from './query';

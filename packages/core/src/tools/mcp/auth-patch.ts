@@ -20,13 +20,20 @@ import {
   type MCPAuthPatch,
 } from '../../types/mcp';
 import { MCP_AUTH_SECRET_FIELDS } from './auth-secrets';
-import { MCP_HEADER_REDACTED_SENTINEL } from './http-headers';
+import {
+  isReservedMCPCustomHeaderName,
+  isValidMCPHeaderName,
+  MCP_HEADER_REDACTED_SENTINEL,
+  MCP_TOKEN_PREFIX_RE,
+} from './http-headers';
 
 const secretFields = new Set<keyof MCPAuth>(MCP_AUTH_SECRET_FIELDS);
 
 const AUTH_FIELDS = new Set<keyof MCPAuth>([
   'type',
   'token',
+  'token_header',
+  'token_prefix',
   'api_url',
   'api_token',
   'api_secret',
@@ -47,6 +54,8 @@ const AUTH_FIELDS = new Set<keyof MCPAuth>([
 
 const STRING_AUTH_FIELDS = new Set<keyof MCPAuth>([
   'token',
+  'token_header',
+  'token_prefix',
   'api_url',
   'api_token',
   'api_secret',
@@ -84,7 +93,7 @@ export class MCPAuthValidationError extends Error {
 
 const AUTH_FIELDS_BY_TYPE = {
   none: new Set<keyof MCPAuth>(['type']),
-  bearer: new Set<keyof MCPAuth>(['type', 'token', 'insecure']),
+  bearer: new Set<keyof MCPAuth>(['type', 'token', 'token_header', 'token_prefix', 'insecure']),
   jwt: new Set<keyof MCPAuth>(['type', 'api_url', 'api_token', 'api_secret', 'insecure']),
   oauth: new Set<keyof MCPAuth>([
     'type',
@@ -106,6 +115,8 @@ const AUTH_FIELDS_BY_TYPE = {
 
 const AUTH_FIELD_FAMILY = new Map<keyof MCPAuth, MCPAuth['type']>([
   ['token', 'bearer'],
+  ['token_header', 'bearer'],
+  ['token_prefix', 'bearer'],
   ['api_url', 'jwt'],
   ['api_token', 'jwt'],
   ['api_secret', 'jwt'],
@@ -262,6 +273,17 @@ function validateMCPAuthPatch(value: unknown, options: MCPAuthValidationOptions 
     throw new Error(
       'auth.oauth_grant_type must be client_credentials, authorization_code, or null'
     );
+  }
+  if (
+    typeof auth.token_header === 'string' &&
+    (!isValidMCPHeaderName(auth.token_header) ||
+      (isReservedMCPCustomHeaderName(auth.token_header) &&
+        auth.token_header.toLowerCase() !== 'authorization'))
+  ) {
+    throw new Error('auth.token_header must be a valid, non-transport HTTP header name');
+  }
+  if (typeof auth.token_prefix === 'string' && !MCP_TOKEN_PREFIX_RE.test(auth.token_prefix)) {
+    throw new Error('auth.token_prefix must be short printable text not starting with a space');
   }
   if (
     options.requireConfiguredCredentials &&

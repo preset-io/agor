@@ -960,6 +960,30 @@ describe('authoritative MCP gateway real transport', () => {
     expect(await forwarded.response.text()).not.toContain(secret);
   });
 
+  it.each([
+    [{ token_prefix: 'Token token=' }, 'authorization', 'Token token=vendor-key'],
+    [{ token_header: 'api-key' }, 'api-key', 'vendor-key'],
+  ])('injects a vendor token header recipe %o', async (recipe, header, expected) => {
+    let received: { authorization?: string; vendor?: string | string[] } = {};
+    const url = await listen((request, response) => {
+      received = { authorization: request.headers.authorization, vendor: request.headers[header] };
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"jsonrpc":"2.0","id":1,"result":{}}');
+    });
+    const h = await harness({
+      server: {
+        transport: 'http',
+        url: `${url}/mcp`,
+        auth: { type: 'bearer', token: 'vendor-key', ...recipe },
+      },
+    });
+
+    const forwarded = await h.request('POST', initialize);
+    expect(forwarded.response.status).toBe(200);
+    expect(received.vendor).toBe(expected);
+    if (header !== 'authorization') expect(received.authorization).toBeUndefined();
+  });
+
   it('uses the actual prompting principal OAuth grant for a shared session', async () => {
     let authorization: string | undefined;
     const url = await listen((request, response) => {

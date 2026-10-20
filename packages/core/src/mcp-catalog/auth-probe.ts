@@ -179,7 +179,7 @@ type ProbeAttempt = { response: Response } | { failure: 'refused' | 'unreachable
 async function sendInitialize(
   remoteUrl: string,
   options: AuthProbeOptions,
-  authorization?: string
+  credentialHeaders?: Record<string, string>
 ): Promise<ProbeAttempt> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
 
@@ -209,7 +209,7 @@ async function sendInitialize(
         'content-type': 'application/json',
         // Streamable HTTP servers negotiate between JSON and SSE replies.
         accept: 'application/json, text/event-stream',
-        ...(authorization ? { authorization } : {}),
+        ...(credentialHeaders ?? {}),
       },
       body: JSON.stringify({
         jsonrpc: '2.0',
@@ -323,7 +323,21 @@ export async function probeRemoteBearerToken(
   apiKey: string,
   options: AuthProbeOptions = {}
 ): Promise<MCPApiKeyProbeVerdict> {
-  const attempt = await sendInitialize(remoteUrl, options, `Bearer ${apiKey}`);
+  return probeRemoteCredentialHeaders(remoteUrl, { authorization: `Bearer ${apiKey}` }, options);
+}
+
+/**
+ * {@link probeRemoteBearerToken} for a credential sent some other way: a
+ * vendor scheme word (`Authorization: Token <key>`), a vendor header
+ * (`api-key: <key>`), or extra headers the vendor needs alongside the secret.
+ * Same verdicts, same single pinned `initialize`.
+ */
+export async function probeRemoteCredentialHeaders(
+  remoteUrl: string,
+  credentialHeaders: Record<string, string>,
+  options: AuthProbeOptions = {}
+): Promise<MCPApiKeyProbeVerdict> {
+  const attempt = await sendInitialize(remoteUrl, options, credentialHeaders);
   if ('failure' in attempt) return 'unusable';
   const { response } = attempt;
 

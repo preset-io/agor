@@ -36,9 +36,9 @@ function createMCPCatalogConnectService(
   const candidate = (value: MCPServer): MCPCatalogServerCandidate => ({
     server: {
       ...value,
-      headers: Object.keys(value.headers ?? {}).length
-        ? { __configured__: MCP_HEADER_REDACTED_SENTINEL }
-        : {},
+      headers: Object.fromEntries(
+        Object.keys(value.headers ?? {}).map((name) => [name, MCP_HEADER_REDACTED_SENTINEL])
+      ),
       auth: redactMCPAuthSecrets(value.auth),
       created_at: new Date(value.created_at ?? 0),
       updated_at: new Date(value.updated_at ?? 0),
@@ -409,9 +409,12 @@ function buildApp(
         created_at: new Date(0),
         updated_at: new Date(0),
         ...(server as unknown as MCPServer),
-        headers: Object.keys((server.headers as Record<string, string> | undefined) ?? {}).length
-          ? { __configured__: MCP_HEADER_REDACTED_SENTINEL }
-          : {},
+        headers: Object.fromEntries(
+          Object.keys((server.headers as Record<string, string> | undefined) ?? {}).map((name) => [
+            name,
+            MCP_HEADER_REDACTED_SENTINEL,
+          ])
+        ),
         ...(safeAuth ? { auth: safeAuth } : {}),
       },
       has_row_secret: Boolean(originalAuth?.type === 'bearer' && originalAuth.token),
@@ -2388,6 +2391,24 @@ describe('customer-owned configured OAuth app', () => {
     expect(probeRemoteAuthType).not.toHaveBeenCalled();
     expect(fixture.created.mcpServers).toHaveLength(0);
     expect(fixture.patched).toHaveLength(0);
+  });
+  it('installs a declared-OAuth recipe for sign-in when the endpoint answers without a challenge', async () => {
+    // Google Workspace answers an unauthenticated initialize with 200.
+    probeRemoteAuthType.mockResolvedValue('none');
+    const fixture = buildApp({ ...byo, auth_type: 'oauth' });
+    await createMCPCatalogConnectService(fixture.app, fixture.deps).create(
+      { ...request, oauth_client: { client_id: 'customer-app', client_secret: 'customer-secret' } },
+      params
+    );
+    expect(fixture.created.mcpServers[0]).toMatchObject({
+      auth: { type: 'oauth', oauth_client_id: 'customer-app', oauth_dcr_mode: 'disabled' },
+    });
+  });
+  it('keeps the challenge-driven answer for an OAuth entry without a reviewed client', async () => {
+    probeRemoteAuthType.mockResolvedValue('none');
+    const fixture = buildApp({ ...CURATED, auth_type: 'oauth' });
+    await createMCPCatalogConnectService(fixture.app, fixture.deps).create(request, params);
+    expect(fixture.created.mcpServers[0]).toMatchObject({ auth: { type: 'none' } });
   });
   it('refuses app material for entries without a reviewed recipe', async () => {
     const fixture = buildApp(CURATED);

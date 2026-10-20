@@ -259,6 +259,42 @@ it('adds no client hint to an external OpenCode HTTP connection', async () => {
   expect(external[0]).not.toHaveProperty('headers.x-agor-mcp-client');
 });
 
+it('sends vendor token header recipes to an external OpenCode HTTP connection', async () => {
+  const tool = new OpenCodeTool({
+    getDaemonUrl: async () => 'http://localhost:3030',
+    resolveMcpServers: async () =>
+      [
+        {
+          server: {
+            ...server(PLAIN),
+            transport: 'http',
+            url: 'https://pd.example.com/mcp',
+            auth: { type: 'bearer', token: 'pd-key', token_prefix: 'Token token=' },
+          },
+        },
+        {
+          server: {
+            ...server(GATED),
+            transport: 'http',
+            url: 'https://sw.example.com/mcp',
+            auth: { type: 'bearer', token: 'sw-key', token_header: 'api-key' },
+          },
+        },
+      ] as never,
+  });
+  const config = await (
+    tool as unknown as {
+      buildInvocationConfig(s: string, t: string): Promise<{ mcp: Record<string, unknown> }>;
+    }
+  ).buildInvocationConfig('session-1', 'token');
+  const byUrl = (url: string) =>
+    Object.values(config.mcp).find((value) => (value as { url?: string }).url === url);
+  expect(byUrl('https://pd.example.com/mcp')).toMatchObject({
+    headers: { Authorization: 'Token token=pd-key' },
+  });
+  expect(byUrl('https://sw.example.com/mcp')).toMatchObject({ headers: { 'api-key': 'sw-key' } });
+});
+
 /**
  * OpenCode fails the whole turn on a remote server it cannot authenticate, so
  * every server the acting user has no credential for is withheld and named in

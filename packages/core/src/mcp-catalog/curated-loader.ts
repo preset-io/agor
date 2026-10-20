@@ -17,8 +17,14 @@ import {
   MCP_CATALOG_CATEGORIES,
   MCP_OAUTH_COMPATIBILITY_MODES,
   MCP_OAUTH_DCR_MODES,
+  MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHODS,
 } from '@agor/core/types';
 import { z } from 'zod';
+import {
+  isReservedMCPCustomHeaderName,
+  isValidMCPHeaderName,
+  MCP_TOKEN_PREFIX_RE,
+} from '../tools/mcp/http-headers';
 import { load as loadYaml } from '../yaml';
 
 /** Thrown when `curated.yaml` cannot be parsed or fails validation. */
@@ -46,6 +52,20 @@ const httpUrl = z.url().refine((value) => /^https?:\/\//i.test(value), {
 });
 
 /**
+ * An OAuth issuer, which the relay hashes into its callback and rejects unless
+ * it is a bare HTTPS URL. Refuse the same shapes here, at review time.
+ */
+const issuerUrl = httpUrl.refine(
+  (value) => {
+    // Refinements still run after `z.url()` fails; that failure is reported.
+    if (!URL.canParse(value)) return true;
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash;
+  },
+  { message: 'must be an https URL without userinfo, query, or fragment' }
+);
+
+/**
  * The per-server OAuth settings an entry may state.
  *
  * `.strict()` is what keeps a secret out. The obvious mistake this file invites
@@ -61,9 +81,24 @@ const catalogEntryOAuthSchema = z
   .object({
     scope: nonEmpty.optional(),
     configured_client: z
-      .object({ setup_url: httpUrl, issuer: httpUrl, secret_required: z.boolean() })
+      .object({
+        setup_url: httpUrl,
+        issuer: issuerUrl,
+        secret_required: z.boolean(),
+        // Short, provider-specific "where to find it" for the app credentials,
+        // shown next to the Client ID/secret fields. Prose only, never a value.
+        credentials_hint: nonEmpty.max(400).optional(),
+      })
       .strict()
       .optional(),
+    stable_callback: z.object({ issuer: issuerUrl }).strict().optional(),
+    // Display only: readiness shows the direct callback for an admin to allowlist.
+    redirect_allowlist: z.literal(true).optional(),
+    // Describes the provider, so it should almost never change. Changing or
+    // removing it after grants exist makes their next refresh use the new
+    // method; a provider that refuses it drops the grant and users reconnect.
+    // The health audit flags a method the token endpoint does not advertise.
+    token_endpoint_auth_method: z.enum(MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHODS).optional(),
     client_id: nonEmpty.optional(),
     dcr_mode: z.enum(MCP_OAUTH_DCR_MODES).optional(),
     compatibility_mode: z.enum(MCP_OAUTH_COMPATIBILITY_MODES).optional(),
@@ -96,7 +131,47 @@ const catalogEntryOAuthSchema = z
     {
       message: 'configured_client requires disabled DCR and no shared client ID',
     }
+  )
+  // A configured app already uses the stable callback; stating both would be
+  // two issuers for one flow.
+  .refine((value) => !value.configured_client || !value.stable_callback, {
+    message: 'stable_callback is implied by configured_client; state only one',
+  })
+  // Those two already show their own (relay) callback.
+  .refine(
+    (value) => !value.redirect_allowlist || (!value.configured_client && !value.stable_callback),
+    {
+      message: 'redirect_allowlist applies only without configured_client or stable_callback',
+    }
+  )
+  // Only a client with a secret authenticates at the token endpoint, and only
+  // a customer-owned app recipe brings one.
+  .refine((value) => !value.token_endpoint_auth_method || value.configured_client, {
+    message: 'token_endpoint_auth_method applies only to a configured_client recipe',
+  });
+
+/**
+ * A header an entry may aim a user's value at. Transport-controlled names are
+ * refused; `Authorization` only where the caller says it is allowed, because
+ * custom headers can never carry it (it belongs to `auth`).
+ */
+const credentialHeaderName = (allowAuthorization: boolean) =>
+  nonEmpty.refine(
+    (name) =>
+      isValidMCPHeaderName(name) &&
+      (!isReservedMCPCustomHeaderName(name) ||
+        (allowAuthorization && name.toLowerCase() === 'authorization')),
+    { message: 'must be a valid header name that is not transport- or auth-controlled' }
   );
+
+const catalogCredentialFieldSchema = z
+  .object({
+    key: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/, 'must be a lower_snake_case key'),
+    label: nonEmpty,
+    header: credentialHeaderName(false),
+    secret: z.boolean(),
+  })
+  .strict();
 
 const catalogEntryCredentialsSchema = z
   .object({
@@ -104,8 +179,38 @@ const catalogEntryCredentialsSchema = z
     acquisition_url: httpUrl,
     label: nonEmpty.optional(),
     oauth_challenge_compatible: z.literal(true).optional(),
+    header: credentialHeaderName(true).optional(),
+    prefix: z
+      .string()
+      .regex(MCP_TOKEN_PREFIX_RE, 'must be short printable text not starting with a space')
+      .optional(),
+    fields: z.array(catalogCredentialFieldSchema).min(1).max(4).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((credentials, context) => {
+    // One request header per value: a field sharing a name with the secret's
+    // header (or another field) would be silently dropped or comma-joined.
+    const headers = new Set([(credentials.header ?? 'Authorization').toLowerCase()]);
+    const keys = new Set<string>();
+    for (const [index, field] of (credentials.fields ?? []).entries()) {
+      if (headers.has(field.header.toLowerCase())) {
+        context.addIssue({
+          code: 'custom',
+          path: ['fields', index, 'header'],
+          message: 'duplicates another credential header',
+        });
+      }
+      if (keys.has(field.key)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['fields', index, 'key'],
+          message: 'duplicates another field key',
+        });
+      }
+      headers.add(field.header.toLowerCase());
+      keys.add(field.key);
+    }
+  });
 
 const catalogEntrySchema = z
   .object({
@@ -116,6 +221,8 @@ const catalogEntrySchema = z
     benefit: nonEmpty,
     starter_prompt: nonEmpty,
     permission_disclosure: nonEmpty,
+    // Provider-side setup before Connect works. Prose only, never a value.
+    setup_hint: nonEmpty.max(400).optional(),
     title: nonEmpty.optional(),
     description: nonEmpty.optional(),
     icon_url: httpUrl.optional(),
