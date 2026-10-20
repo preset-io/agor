@@ -8,10 +8,12 @@ const DEFAULTS = {
   showStatsChip: true,
   showForkInBar: true,
   showUploadInBar: true,
-  pinnedItems: ['fork', 'upload'] as string[],
+  /** Desktop row pins. MCP tools is pinned by default, as main showed its chip by default. */
+  pinnedItems: ['fork', 'upload', 'mcp'] as string[],
   /** Phone pins are separate from desktop pins and start empty. */
   pinnedItemsCompact: [] as string[],
-  pinnedChips: ['timer', 'tools', 'tokens', 'context'] as string[],
+  pinnedChips: ['timer', 'tokens', 'context'] as string[],
+  pinsVersion: 2,
 };
 
 export type FooterPreferences = typeof DEFAULTS;
@@ -31,15 +33,25 @@ export function useFooterPreferences(): [
     try {
       const stored = JSON.parse(localStorage.getItem(KEY) ?? 'null');
       if (stored && typeof stored === 'object') {
+        let pinnedItems = stringList(stored.pinnedItems, DEFAULTS.pinnedItems);
+        let pinnedChips = stringList(stored.pinnedChips, DEFAULTS.pinnedChips);
+        // Once: an MCP chip shown in the info bar becomes the MCP button in the row.
+        if (stored.pinsVersion !== DEFAULTS.pinsVersion) {
+          if (pinnedChips.includes('tools') && !pinnedItems.includes('mcp')) {
+            pinnedItems = [...pinnedItems, 'mcp'];
+          }
+          pinnedChips = pinnedChips.filter((chip) => chip !== 'tools');
+        }
         return {
           ...DEFAULTS,
           ...stored,
-          pinnedItems: stringList(stored.pinnedItems, DEFAULTS.pinnedItems),
+          pinsVersion: DEFAULTS.pinsVersion,
+          pinnedItems,
           pinnedItemsCompact: stringList(
             stored.pinnedItemsCompact,
             DEFAULTS.pinnedItemsCompact
           ).slice(0, COMPACT_PIN_LIMIT),
-          pinnedChips: stringList(stored.pinnedChips, DEFAULTS.pinnedChips),
+          pinnedChips,
         };
       }
     } catch {

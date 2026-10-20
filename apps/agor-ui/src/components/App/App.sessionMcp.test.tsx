@@ -155,13 +155,11 @@ describe('session footer MCP read recovery through its owning surfaces', () => {
         </AntApp>
       </ConfigProvider>
     );
-    // The composer's info line always names the failed read; it opens Session details.
+    // The composer's info line always names the failed read; it opens the MCP panel directly.
     fireEvent.click(
       await screen.findByRole('button', { name: /^MCP tools didn't load\. Session details$/ })
     );
-    const details = await screen.findByRole('dialog', { name: 'Session details' });
-    fireEvent.click(within(details).getByRole('button', { name: /MCP tools \d/ }));
-    const dialog = within(details);
+    const dialog = within(await screen.findByRole('dialog', { name: 'MCP tools' }));
     expect(await dialog.findByText('Session MCP servers')).toBeInTheDocument();
     const retry = await dialog.findByRole('button', { name: 'Retry' });
     expect(dialog.getByText('MCP servers unavailable')).toBeInTheDocument();

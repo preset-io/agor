@@ -152,7 +152,7 @@ export interface SessionFooterProps {
   onDropActiveChange?: (active: boolean) => void;
 }
 
-type ComposerMenuId = 'plus' | 'model' | 'permissions' | 'details';
+type ComposerMenuId = 'plus' | 'model' | 'permissions' | 'details' | 'mcp';
 /** Session details rows an info-line segment can open on. */
 type DetailRow = 'timer' | 'tools' | 'usage' | 'context' | 'session-ids';
 interface InfoSegment {
@@ -170,7 +170,7 @@ const formatTokenCount = (count: number) =>
 /** Visible size of the phone circle; its touch target stays 44px. */
 const CIRCLE_VISUAL_COMPACT = 36;
 
-const PINNABLE_ACTIONS = ['upload', 'advanced-upload', 'fork', 'btw-fork', 'spawn'];
+const PINNABLE_ACTIONS = ['upload', 'advanced-upload', 'fork', 'btw-fork', 'spawn', 'mcp'];
 
 // Memoized: the panel re-renders once per animation frame while its session
 // streams (reactive-session notifies), and this footer is a large subtree of
@@ -494,7 +494,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   };
 
   const [openMenu, setOpenMenu] = React.useState<ComposerMenuId | null>(null);
-  const [plusPage, setPlusPage] = React.useState<'main' | 'details'>('main');
+  const [plusPage, setPlusPage] = React.useState<'main' | 'details' | 'mcp'>('main');
   const [modelPage, setModelPage] = React.useState<'model' | 'permissions'>('model');
   const runAction = (action: () => void) => () => {
     setOpenMenu(null);
@@ -710,23 +710,27 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       </ComposerMenuNote>
     </>
   );
+  // The attach and manage panel the footer MCP chip opened on main (attach, sign-in, retry).
+  const mcpPanel = (
+    <div style={{ padding: `${token.paddingXXS}px ${token.paddingSM}px ${token.paddingXS}px` }}>
+      <SessionMcpFooterControl
+        inline
+        client={client}
+        currentUserId={currentUserId}
+        sessionId={session.session_id}
+        sessionMcpServerIds={sessionMcpServerIds}
+        sessionMcpLoadFailed={sessionMcpLoadFailed}
+        onSessionMcpRetry={onSessionMcpRetry}
+        mcpServerById={mcpServerById}
+        userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
+      />
+    </div>
+  );
   const detailsContent =
     detailsPage === 'mcp' ? (
       <>
         <ComposerMenuBack label="Session details" onBack={() => setDetailsPage('main')} />
-        <div style={{ padding: `0 ${token.paddingSM}px ${token.paddingXS}px` }}>
-          <SessionMcpFooterControl
-            inline
-            client={client}
-            currentUserId={currentUserId}
-            sessionId={session.session_id}
-            sessionMcpServerIds={sessionMcpServerIds}
-            sessionMcpLoadFailed={sessionMcpLoadFailed}
-            onSessionMcpRetry={onSessionMcpRetry}
-            mcpServerById={mcpServerById}
-            userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
-          />
-        </div>
+        {mcpPanel}
       </>
     ) : (
       detailsMain
@@ -844,11 +848,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         key={segment.key}
         above={cardRef}
         sheet={isMobile}
-        title="Session details"
+        title={segment.key === 'mcp-warning' ? 'MCP tools' : 'Session details'}
         open={open}
         onOpenChange={(next) => (next ? openDetailsAt(segment) : setOpenMenu(null))}
-        content={detailsContent}
-        focusTarget={segment.row ? `[data-detail-row="${segment.row}"]` : undefined}
+        content={segment.key === 'mcp-warning' ? mcpPanel : detailsContent}
+        focusTarget={
+          segment.row && segment.key !== 'mcp-warning'
+            ? `[data-detail-row="${segment.row}"]`
+            : undefined
+        }
       >
         <Tooltip title={segment.tooltip} open={open ? false : undefined}>
           <Button
@@ -940,11 +948,20 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       onClick: onSpawnOpen,
       disabled: spawnDisabled,
     },
+    mcp: {
+      label: 'MCP tools',
+      hint: mcpWarning ?? 'Attach servers and sign in',
+      icon: <ApiOutlined />,
+      onClick: () => setPlusPage('mcp'),
+      disabled: false,
+    },
   };
+
   const pinsFull = isMobile && pinnedItems.length >= COMPACT_PIN_LIMIT;
   const renderActionRow = (id: string) => {
     const row = actionRows[id];
     const pinned = pinnedItems.includes(id);
+    const isMcp = id === 'mcp';
     return (
       <ComposerMenuRow
         key={id}
@@ -952,7 +969,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         hint={connectionDisabled ? LOST_CONNECTION_TOOLTIP : row.hint}
         icon={row.icon}
         disabled={row.disabled}
-        onClick={runAction(row.onClick)}
+        // MCP tools drills into its panel inside this menu; the others run and close it.
+        onClick={isMcp ? () => setPlusPage('mcp') : runAction(row.onClick)}
+        value={isMcp ? String(mcpSummary.attachedCount) : undefined}
+        drill={isMcp}
         trailing={
           <ComposerPinToggle
             pinned={pinned}
@@ -977,6 +997,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       {['fork', 'btw-fork', 'spawn']
         .filter((id) => availableActions.includes(id))
         .map(renderActionRow)}
+      <ComposerMenuSection>Tools</ComposerMenuSection>
+      {renderActionRow('mcp')}
       <ComposerMenuNote>
         {pinsFull
           ? 'The composer fits 2 pins on a phone. Unpin one to add another.'
@@ -1018,7 +1040,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         setOpenMenu(open ? 'plus' : null);
       }}
       content={
-        plusPage === 'details' ? (
+        plusPage === 'mcp' ? (
+          <>
+            <ComposerMenuBack label="Add files and actions" onBack={() => setPlusPage('main')} />
+            {mcpPanel}
+          </>
+        ) : plusPage === 'details' ? (
           <>
             {detailsPage === 'main' && (
               <ComposerMenuBack label="Add files and actions" onBack={() => setPlusPage('main')} />
@@ -1315,8 +1342,39 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     </Flex>
   );
 
+  const mcpButton = (
+    <ComposerMenu
+      above={cardRef}
+      sheet={isMobile}
+      title="MCP tools"
+      open={openMenu === 'mcp'}
+      onOpenChange={(open) => setOpenMenu(open ? 'mcp' : null)}
+      content={mcpPanel}
+    >
+      <Tooltip title="MCP tools" open={openMenu === 'mcp' ? false : undefined}>
+        <Button
+          type="text"
+          aria-label={`MCP tools, ${mcpSummary.attachedCount} attached`}
+          aria-haspopup="dialog"
+          aria-expanded={openMenu === 'mcp'}
+          icon={<ApiOutlined />}
+          onClick={isMobile ? () => setOpenMenu('mcp') : undefined}
+          style={{
+            ...rowButtonStyle,
+            paddingInline: token.paddingXS,
+            fontSize: token.fontSizeSM,
+            ...(openMenu === 'mcp' && { color: token.colorText }),
+            ...(mcpWarning && { color: token.colorWarningText }),
+          }}
+          data-testid="mcp-bar-btn"
+        >
+          {mcpSummary.attachedCount}
+        </Button>
+      </Tooltip>
+    </ComposerMenu>
+  );
   const pinnedRow = rowPins.map((id) => (
-    <React.Fragment key={id}>{pinnedActionButtons[id]}</React.Fragment>
+    <React.Fragment key={id}>{id === 'mcp' ? mcpButton : pinnedActionButtons[id]}</React.Fragment>
   ));
 
   return (

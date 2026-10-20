@@ -386,6 +386,68 @@ describe('"+" menu and pins', () => {
   });
 });
 
+describe('MCP tools', () => {
+  const linear = { mcp_server_id: 'linear', name: 'linear', display_name: 'Linear' } as MCPServer;
+
+  it('is pinned in the desktop row by default, after Attach and Fork and before the model chip', () => {
+    renderFooter({ sessionMcpServerIds: ['a', 'b', 'c'] });
+    const order = [
+      screen.getByRole('button', { name: 'Add files and actions' }),
+      screen.getByTestId('upload-bar-btn'),
+      screen.getByTestId('fork-bar-btn'),
+      screen.getByTestId('mcp-bar-btn'),
+      screen.getByTestId('model-chip'),
+    ];
+    for (let i = 1; i < order.length; i++) {
+      expect(
+        order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    }
+    expect(screen.getByTestId('mcp-bar-btn')).toHaveAccessibleName('MCP tools, 3 attached');
+    expect(screen.getByTestId('mcp-bar-btn')).toHaveTextContent('3');
+  });
+
+  it('opens the attach and manage panel from the pinned button', async () => {
+    renderFooter({ sessionMcpServerIds: [] });
+    fireEvent.click(screen.getByTestId('mcp-bar-btn'));
+    const panel = await screen.findByRole('dialog', { name: 'MCP tools' });
+    expect(within(panel).getByText('Session MCP servers')).toBeInTheDocument();
+    expect(within(panel).getByRole('combobox')).toBeInTheDocument();
+  });
+
+  it('has a Tools section in "+" with the count, a chevron and its pin', async () => {
+    renderFooter({ sessionMcpServerIds: ['a', 'b'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Add files and actions' }));
+    const menu = await screen.findByRole('dialog', { name: 'Add files and actions' });
+    expect(within(menu).getByText('Tools')).toBeInTheDocument();
+    const row = within(menu).getByText('MCP tools').closest('button')!;
+    expect(row).toHaveTextContent('2');
+    expect(row.querySelector('[data-icon="right"]')).not.toBeNull();
+    expect(within(menu).getByLabelText('Unpin MCP tools from the composer')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    fireEvent.click(row);
+    expect(await within(menu).findByText('Session MCP servers')).toBeInTheDocument();
+    expect(within(menu).getByLabelText('Back to add files and actions')).toBeInTheDocument();
+  });
+
+  it('opens the panel straight from an amber sign-in problem on the info line', async () => {
+    renderFooter({ unauthedMcpServers: [linear], sessionMcpServerIds: ['linear'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Linear needs sign-in. Session details' }));
+    const panel = await screen.findByRole('dialog', { name: 'MCP tools' });
+    expect(within(panel).getByText('Session MCP servers')).toBeInTheDocument();
+  });
+
+  it('keeps an MCP tools row in Session details that links into the same panel', async () => {
+    renderFooter({ sessionMcpServerIds: ['a'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Session details' }));
+    const details = await screen.findByRole('dialog', { name: 'Session details' });
+    fireEvent.click(within(details).getByRole('button', { name: /MCP tools 1/ }));
+    expect(await within(details).findByText('Session MCP servers')).toBeInTheDocument();
+  });
+});
+
 describe('phone pins', () => {
   beforeEach(() => setWidth(390));
 
@@ -393,6 +455,7 @@ describe('phone pins', () => {
     renderFooter();
     expect(screen.queryByTestId('upload-bar-btn')).not.toBeInTheDocument();
     expect(screen.queryByTestId('fork-bar-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('mcp-bar-btn')).not.toBeInTheDocument();
   });
 
   it('cap at 2, with the note', async () => {
@@ -528,6 +591,13 @@ describe('info line and Session details', () => {
 });
 
 describe('info line segments', () => {
+  // The MCP count lives in the row by default; these cases pin it to the line too.
+  beforeEach(() =>
+    localStorage.setItem(
+      'agor-footer-prefs',
+      JSON.stringify({ pinnedChips: ['timer', 'tools', 'tokens', 'context'], pinsVersion: 2 })
+    )
+  );
   const contextWindow = (used: number) => ({ used, limit: 200_000, taskMetadata: {} });
   const doneTask = {
     task_id: 't1',
@@ -647,11 +717,34 @@ describe('MCP notice', () => {
 });
 
 describe('useFooterPreferences', () => {
-  it('defaults: desktop pins Attach and Fork, phone pins empty, context shown', () => {
+  it('defaults: desktop pins Attach, Fork and MCP tools, phone pins empty, context shown', () => {
     const { result } = renderHook(() => useFooterPreferences());
-    expect(result.current[0].pinnedItems).toEqual(['fork', 'upload']);
+    expect(result.current[0].pinnedItems).toEqual(['fork', 'upload', 'mcp']);
     expect(result.current[0].pinnedItemsCompact).toEqual([]);
     expect(result.current[0].pinnedChips).toContain('context');
+    expect(result.current[0].pinnedChips).not.toContain('tools');
+  });
+
+  it('moves a stored MCP info-bar chip to the MCP row pin once', () => {
+    localStorage.setItem(
+      'agor-footer-prefs',
+      JSON.stringify({ pinnedItems: ['fork', 'upload'], pinnedChips: ['timer', 'tools'] })
+    );
+    const { result } = renderHook(() => useFooterPreferences());
+    expect(result.current[0].pinnedItems).toEqual(['fork', 'upload', 'mcp']);
+    expect(result.current[0].pinnedChips).toEqual(['timer']);
+    act(() => result.current[1]({ pinnedItems: ['fork'] }));
+    const again = renderHook(() => useFooterPreferences());
+    expect(again.result.current[0].pinnedItems).toEqual(['fork']);
+  });
+
+  it('leaves the MCP pin alone when the stored info bar hid MCP', () => {
+    localStorage.setItem(
+      'agor-footer-prefs',
+      JSON.stringify({ pinnedItems: ['upload'], pinnedChips: ['timer'] })
+    );
+    const { result } = renderHook(() => useFooterPreferences());
+    expect(result.current[0].pinnedItems).toEqual(['upload']);
   });
 
   it('persists phone pins separately and caps stored ones at 2', () => {
