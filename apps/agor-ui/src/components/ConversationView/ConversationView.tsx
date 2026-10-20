@@ -32,7 +32,12 @@ import { BrandMark } from '../BrandMark';
 import { HistoryTextChoices, historyTextKeyTurn } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from '../TaskBlock';
 import { JumpToLatest, useNewMessageCount } from './JumpToLatest';
-import { isBottomLockEngaged, jumpToBottom, resetScrollBaseline } from './stickToBottomLock';
+import {
+  hasPendingScrollAway,
+  isBottomLockEngaged,
+  jumpToBottom,
+  resetScrollBaseline,
+} from './stickToBottomLock';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
@@ -233,13 +238,23 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           }
         });
         observer.observe(element);
+        // Escape when the reader's scroll arrives, as the hook does for an upward
+        // wheel. The hook decides a moment later, and a trim or resize in between
+        // would guard the scroll away and keep pinning the reader.
+        const escapeOnScrollAway = () => {
+          if (isBottomLockEngaged(state) && hasPendingScrollAway(state, element.scrollTop)) {
+            stopScroll();
+          }
+        };
+        element.addEventListener('scroll', escapeOnScrollAway, { capture: true, passive: true });
         viewportCleanupRef.current = () => {
           ++resizeGeneration;
+          element.removeEventListener('scroll', escapeOnScrollAway, { capture: true });
           observer.disconnect();
           if (state.resizeDifference === guardedDifference) state.resizeDifference = 0;
         };
       },
-      [scrollRef, scrollToBottom, state]
+      [scrollRef, scrollToBottom, state, stopScroll]
     );
 
     // Public scroll-to-bottom for the jump pill and, via onScrollRef, the
@@ -446,22 +461,21 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       // The browser may already have moved scrollTop (scroll anchoring or
       // clamping). With a turn appended in the same frame the content height
       // can net out, so no resize guards that scroll event. Share the hook's
-      // resize guard, as the viewport observer does, or it reads as the reader
-      // scrolling up and releases the bottom lock.
+      // resize guard, as the viewport observer does, and record the position as
+      // programmatic, or it reads as the reader scrolling up and releases the
+      // bottom lock. An unmoved position needs neither: guarding it would
+      // swallow a reader's scroll-up landing in the same frame.
       const shift = anchor.element.isConnected
         ? anchor.element.getBoundingClientRect().top - anchor.top
         : 0;
-      const guard = shift || -1;
-      state.resizeDifference = guard;
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          if (state.resizeDifference === guard) state.resizeDifference = 0;
-        }, 1);
-      });
-      // A browser clamp or anchoring move from the removal is programmatic too;
-      // a stale record reads it as the reader scrolling up. Leave an unmoved
-      // position alone: it may be a reader's scroll whose event is still pending.
       if (shift || viewport.scrollTop !== anchor.scrollTop) {
+        const guard = shift || -1;
+        state.resizeDifference = guard;
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            if (state.resizeDifference === guard) state.resizeDifference = 0;
+          }, 1);
+        });
         state.scrollTop = viewport.scrollTop + shift;
       }
       // Removal can outweigh a turn appended in the same frame; a negative resize
@@ -483,7 +497,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         // The rendered flags re-run this when the reader returns to the bottom;
         // the hook's live state decides whether the lock is engaged right now.
         !isAtBottom ||
-        !isBottomLockEngaged(state)
+        !isBottomLockEngaged(state) ||
+        hasPendingScrollAway(state, viewport.scrollTop)
       )
         return;
       const anchor = firstVisibleTurn(viewport);

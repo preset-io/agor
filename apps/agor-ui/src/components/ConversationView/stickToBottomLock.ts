@@ -20,6 +20,22 @@ export function isBottomLockEngaged(state: StickToBottomState): boolean {
 }
 
 /**
+ * Whether the reader has scrolled away from the bottom since the hook last
+ * handled a scroll event. The hook decides about an escape a moment after the
+ * event, so the lock still reads as engaged; acting on it then (a trim) would
+ * bury the reader's scroll under its own guard. The hook's own writes, and a
+ * clamp that leaves the reader at the bottom, do not count.
+ */
+export function hasPendingScrollAway(state: StickToBottomState, scrollTop: number): boolean {
+  return (
+    state.lastScrollTop !== undefined &&
+    scrollTop < state.lastScrollTop &&
+    scrollTop !== state.ignoreScrollToTop &&
+    !state.isNearBottom
+  );
+}
+
+/**
  * A newly attached scroll container (reopening a session renders a spinner
  * first) starts a fresh scroll baseline, as on first mount. Otherwise the hook
  * compares the old container's last position with this one's first scroll,
