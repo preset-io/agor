@@ -12,7 +12,63 @@ export const GEMINI_KEY_MESSAGE =
   'Gemini needs an API key. Add one in Settings → Gemini (Google-account sign-in is not supported).';
 export const GEMINI_HISTORY_NOTICE =
   'Earlier Gemini conversation could not be restored; continuing without it.';
-export class GeminiIntegrationError extends Error {}
+/** Closed provider failure classes from geminiError; never provider text. */
+type GeminiFailureCategory =
+  | 'authentication'
+  | 'model_unavailable'
+  | 'quota'
+  | 'busy'
+  | 'provider_error'
+  | 'network'
+  | 'unknown';
+
+interface GeminiFailureDiagnostic {
+  category?: GeminiFailureCategory;
+  httpStatus?: number;
+  errorClass?: string;
+}
+
+const GEMINI_ERROR_CLASSES: ReadonlySet<string> = new Set([
+  'ApiError',
+  'TerminalQuotaError',
+  'RetryableQuotaError',
+  'UnauthorizedError',
+  'ForbiddenError',
+  'AccountSuspendedError',
+  'FatalAuthenticationError',
+  'ModelNotFoundError',
+  'ValidationRequiredError',
+]);
+
+export class GeminiIntegrationError extends Error {
+  readonly category?: GeminiFailureCategory;
+  readonly httpStatus?: number;
+  readonly errorClass?: string;
+
+  constructor(message: string, diagnostic: GeminiFailureDiagnostic = {}) {
+    super(message);
+    this.category = diagnostic.category;
+    this.httpStatus = diagnostic.httpStatus;
+    this.errorClass = diagnostic.errorClass;
+  }
+}
+
+/**
+ * One `[gemini.failure]` key=value line for a failed task. Provider-classified
+ * failures carry their closed category; other fixed integration errors say
+ * `integration`, and non-Gemini errors say `local`.
+ */
+export function geminiFailureLine(stage: string, error: unknown): string {
+  const fields =
+    error instanceof GeminiIntegrationError
+      ? [
+          `category=${error.category ?? 'integration'}`,
+          ...(error.httpStatus !== undefined ? [`http_status=${error.httpStatus}`] : []),
+          ...(error.errorClass ? [`error_class=${error.errorClass}`] : []),
+        ]
+      : ['category=local'];
+  return `[gemini.failure] stage=${stage} ${fields.join(' ')}`;
+}
 export const GEMINI_RESET_HISTORY_FOR = 'AGOR_GEMINI_RESET_HISTORY_FOR';
 
 /** Only fixed messages leave this boundary; never propagate provider bodies. */
@@ -26,7 +82,14 @@ export function geminiError(error: unknown, model: string): GeminiIntegrationErr
   const message = String(nested.message ?? '');
   const status = Number(nested.status ?? nested.code);
   const name = String(nested.name ?? '');
+  const httpStatus =
+    Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+  const errorClass = [nested.name, value.name].find(
+    (candidate): candidate is string =>
+      typeof candidate === 'string' && GEMINI_ERROR_CLASSES.has(candidate)
+  );
   let safe = 'Gemini integration error.';
+  let category: GeminiFailureCategory = 'unknown';
   if (
     (status === 400 && /API_KEY_INVALID|API key not valid/i.test(message)) ||
     status === 401 ||
@@ -34,8 +97,10 @@ export function geminiError(error: unknown, model: string): GeminiIntegrationErr
     /Account.*Error|AuthenticationError|UnauthorizedError|ValidationRequiredError/.test(name)
   ) {
     safe = 'Gemini rejected the API key. Check it in Settings → Gemini.';
+    category = 'authentication';
   } else if (status === 404 || /model.*(?:not found|not available|not supported)/i.test(message)) {
     safe = `Model ${model} isn't available to this API key. Pick another Gemini model.`;
+    category = 'model_unavailable';
   } else if (
     name === 'TerminalQuotaError' ||
     (name !== 'RetryableQuotaError' &&
@@ -43,14 +108,18 @@ export function geminiError(error: unknown, model: string): GeminiIntegrationErr
       !/RetryInfo|retryDelay|per.minute|retry (?:in|after)/i.test(message))
   ) {
     safe = "This API key's plan or quota doesn't allow this request.";
+    category = 'quota';
   } else if (status === 429 || status === 503 || name === 'RetryableQuotaError') {
     safe = 'Gemini is busy or rate-limited. Try again shortly.';
+    category = 'busy';
   } else if (status >= 500 && status < 600) {
     safe = 'Gemini API error. Try again later.';
+    category = 'provider_error';
   } else if (/fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|network/i.test(message)) {
     safe = 'Could not reach the Gemini API.';
+    category = 'network';
   }
-  return new GeminiIntegrationError(safe);
+  return new GeminiIntegrationError(safe, { category, httpStatus, errorClass });
 }
 
 // UUIDv7's first bytes are a timestamp; the SDK truncates IDs in filenames.

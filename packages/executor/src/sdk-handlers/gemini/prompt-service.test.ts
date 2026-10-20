@@ -22,6 +22,10 @@ const state = vi.hoisted(() => ({
   events: [] as SDK.ServerGeminiStreamEvent[][],
 }));
 vi.mock('../../config.js', () => ({ getDaemonUrl: vi.fn(async () => 'http://localhost:3030') }));
+vi.mock('@agor/core/utils/logger', async (original) => ({
+  ...(await original<typeof import('@agor/core/utils/logger')>()),
+  writeLogLine: vi.fn(),
+}));
 const mcp = vi.hoisted(() => ({
   servers: [] as unknown[],
   authorization: undefined as string | undefined,
@@ -119,6 +123,7 @@ vi.mock('@agor/core/agentic-integrations', () => ({
   })),
 }));
 
+import { writeLogLine } from '@agor/core/utils/logger';
 import {
   realMcpScoping,
   shippedAsanaInstall,
@@ -386,17 +391,23 @@ describe('Gemini prompt boundary', () => {
     expect(tasksService.patch).not.toHaveBeenCalled();
   });
   it('does not classify a local Forbidden error as a rejected provider key', async () => {
-    const diagnostic = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     vi.mocked(messages.getNextIndexBySessionId).mockRejectedValueOnce(
       Object.assign(new Error('private repository detail'), { status: 403 })
     );
-    try {
-      await expect(collect()).rejects.toThrow('Gemini integration error.');
-      expect(diagnostic).toHaveBeenCalledWith('Gemini task failure stage=history category=local\n');
-      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private repository detail');
-    } finally {
-      diagnostic.mockRestore();
-    }
+    await expect(collect()).rejects.toThrow('Gemini integration error.');
+    expect(vi.mocked(writeLogLine).mock.calls).toEqual([
+      ['error', '[gemini.failure] stage=history category=local'],
+    ]);
+  });
+  it('emits exactly one [gemini.failure] line for a failing stream, without provider text', async () => {
+    state.events = [
+      [event('error', { error: { status: 401, message: 'SECRET-provider AIza-key' } })],
+    ];
+    await expect(collect()).rejects.toThrow('Gemini rejected the API key.');
+    expect(vi.mocked(writeLogLine).mock.calls).toEqual([
+      ['error', '[gemini.failure] stage=generation category=authentication http_status=401'],
+    ]);
+    expect(JSON.stringify(vi.mocked(writeLogLine).mock.calls)).not.toContain('SECRET');
   });
   it('does not classify a local SDK-iteration Forbidden error as a rejected provider key', async () => {
     state.streamError = Object.assign(new Error('private local detail'), { status: 403 });

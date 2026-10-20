@@ -28,7 +28,11 @@ import type {
 } from '@agor/core/sdk';
 import type { ContextUsageSnapshot, SessionID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
-import { type ClaudeExecutionError, classifyClaudeResultFailure } from './claude-error.js';
+import {
+  type ClaudeExecutionError,
+  classifyClaudeResultFailure,
+  claudeProviderError,
+} from './claude-error.js';
 import { CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 
 const CLAUDE_CODE_TODO_TOOL_NAMES = new Set<string>(CLAUDE_CODE_TODO_TOOLS);
@@ -215,6 +219,8 @@ interface ProcessorState {
   skills: string[];
   /** Built-in tool names keyed by call ID until the matching result arrives. */
   toolNamesByUseId: Map<string, string>;
+  /** Latest closed SDK assistant-message error class, for result diagnosis. */
+  assistantError?: ReturnType<typeof claudeProviderError>;
 }
 
 /**
@@ -323,6 +329,9 @@ export class SDKMessageProcessor {
   private handleAssistant(msg: SDKAssistantMessage): ProcessedEvent[] {
     this.state.lastAssistantMessageTime = Date.now();
     this.state.assistantMessageCount++;
+    // Unknown strings are ignored: only the SDK's closed classes are kept.
+    const assistantError = claudeProviderError(msg.error);
+    if (assistantError) this.state.assistantError = assistantError;
 
     const contentBlocks = this.processContentBlocks(msg.message?.content as ContentBlock[]);
     const toolUses = this.extractToolUses(contentBlocks);
@@ -600,11 +609,14 @@ export class SDKMessageProcessor {
       }
     }
 
+    const failure = classifyClaudeResultFailure(msg, { assistantError: this.state.assistantError });
+    // A result closes the turn; a later turn must not inherit this error class.
+    this.state.assistantError = undefined;
     events.push(
       {
         type: 'result',
         raw_sdk_message: msg,
-        failure: classifyClaudeResultFailure(msg),
+        failure,
         agentSessionId: this.state.capturedAgentSessionId,
       },
       {

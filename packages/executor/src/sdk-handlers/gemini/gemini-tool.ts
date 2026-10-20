@@ -12,6 +12,7 @@
 
 import { execSync } from 'node:child_process';
 import { generateId } from '@agor/core/db';
+import { writeLogLine } from '@agor/core/utils/logger';
 import type {
   BranchRepository,
   MCPOAuthAuthHeadersRepository,
@@ -44,7 +45,7 @@ import type {
 import { buildAssistantMessageMetadata, patchTaskModelIfKnown } from '../base/model-recording.js';
 import { createUserMessage } from '../claude/message-builder.js';
 import { GeminiPromptService } from './prompt-service.js';
-import { GeminiIntegrationError } from './runtime.js';
+import { GeminiIntegrationError, geminiFailureLine } from './runtime.js';
 import { extractGeminiTokenUsage } from './usage.js';
 
 interface GeminiExecutionResult {
@@ -332,7 +333,7 @@ export class GeminiTool implements ITool {
     } catch (error) {
       // The prompt generator is suspended during persistence, with SDK console
       // output suppressed. Emit only a fixed category on the unaffected stream.
-      process.stderr.write('Gemini task failure stage=persistence category=local\n');
+      writeLogLine('error', geminiFailureLine('persistence', error));
       throw error;
     }
 

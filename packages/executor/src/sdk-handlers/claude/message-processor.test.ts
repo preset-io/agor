@@ -579,3 +579,48 @@ describe('SDKMessageProcessor tool lifecycle', () => {
     ]);
   });
 });
+
+describe('SDKMessageProcessor provider error', () => {
+  const assistant = (error?: string) =>
+    ({
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'API Error' }] },
+      parent_tool_use_id: null,
+      ...(error ? { error } : {}),
+    }) as never;
+  const failedResult = {
+    type: 'result',
+    subtype: 'success',
+    is_error: true,
+    result: 'opaque provider text',
+  } as never;
+  const resultFailure = (events: ProcessedEvent[]) =>
+    (events.find((event) => event.type === 'result') as { failure?: unknown } | undefined)?.failure;
+
+  it('carries the assistant error class into the result failure', async () => {
+    const processor = createProcessor();
+    await processor.process(assistant('authentication_failed'));
+    const failure = resultFailure(await processor.process(failedResult));
+    expect(failure).toMatchObject({
+      category: 'authentication',
+      providerError: 'authentication_failed',
+    });
+  });
+
+  it('ignores an unknown assistant error string', async () => {
+    const processor = createProcessor();
+    await processor.process(assistant('not_an_sdk_class'));
+    const failure = resultFailure(await processor.process(failedResult));
+    expect(failure).toMatchObject({ category: 'unknown' });
+    expect(failure).not.toHaveProperty('providerError', 'not_an_sdk_class');
+  });
+
+  it('does not carry the error class into the next turn', async () => {
+    const processor = createProcessor();
+    await processor.process(assistant('rate_limit'));
+    await processor.process(failedResult);
+    await processor.process(assistant());
+    const failure = resultFailure(await processor.process(failedResult));
+    expect((failure as { providerError?: unknown }).providerError).toBeUndefined();
+  });
+});

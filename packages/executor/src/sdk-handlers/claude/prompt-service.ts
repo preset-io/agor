@@ -299,12 +299,7 @@ If you continue to see authentication errors, please contact your Agor administr
       }
       // setupQuery normalizes only its SDK call; local setup/RPC errors retain
       // their identity and are never reinterpreted as provider authentication.
-      logClaudeFailure(
-        '[claude.query] setup_failed',
-        error,
-        { sessionId: shortId(sessionId) },
-        this.logger
-      );
+      logClaudeFailure('[claude.query] setup_failed', error, undefined, this.logger);
       throw error;
     }
 
@@ -519,12 +514,7 @@ If you continue to see authentication errors, please contact your Agor administr
                   `stderr_bytes=${stderr.byteLength} assistants=${state.assistantMessageCount} text_deltas=${state.hasTextDeltas}`,
                 event.failure ??
                   new ClaudeExecutionError('unknown', SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE),
-                {
-                  sessionId: shortId(sessionId),
-                  taskId: taskId ? shortId(taskId) : undefined,
-                  messageCount: state.messageCount,
-                  hasStderr: stderr.hasStderr,
-                },
+                { messageCount: state.messageCount, hasStderr: stderr.hasStderr },
                 this.logger
               );
             }
@@ -564,7 +554,7 @@ If you continue to see authentication errors, please contact your Agor administr
                 logClaudeFailure(
                   '[claude.query] context_usage_unavailable',
                   sanitizeClaudeExecutionError(error),
-                  { sessionId: shortId(sessionId) },
+                  undefined,
                   { error: (...args) => console.warn(...args) }
                 );
               } finally {
@@ -618,12 +608,7 @@ If you continue to see authentication errors, please contact your Agor administr
       logClaudeFailure(
         '[executor:error] SDK iteration failed:',
         error,
-        {
-          sessionId: shortId(sessionId),
-          taskId: taskId ? shortId(taskId) : undefined,
-          messageCount: state?.messageCount,
-          hasStderr: stderr.hasStderr,
-        },
+        { messageCount: state?.messageCount, hasStderr: stderr.hasStderr },
         this.logger
       );
       throw error;

@@ -9,6 +9,7 @@ import {
   GEMINI_RESET_HISTORY_FOR,
   GeminiIntegrationError,
   geminiError,
+  geminiFailureLine,
   geminiSessionId,
 } from './runtime.js';
 
@@ -179,4 +180,44 @@ it('quarantines ambiguous recordings only for an explicit matching session reset
     else process.env[GEMINI_RESET_HISTORY_FOR] = priorReset;
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+describe('Gemini failure fields', () => {
+  it('records authentication and the HTTP status for a 401', () => {
+    const error = geminiError({ status: 401, message: 'SECRET' }, 'test');
+    expect(error).toMatchObject({ category: 'authentication', httpStatus: 401 });
+    expect(geminiFailureLine('generation', error)).toBe(
+      '[gemini.failure] stage=generation category=authentication http_status=401'
+    );
+  });
+
+  it('records quota and the allowlisted class for a TerminalQuotaError', () => {
+    class TerminalQuotaError extends Error {
+      override name = 'TerminalQuotaError';
+    }
+    const error = geminiError(new TerminalQuotaError('SECRET quota detail'), 'test');
+    expect(error).toMatchObject({ category: 'quota', errorClass: 'TerminalQuotaError' });
+    expect(geminiFailureLine('generation', error)).toBe(
+      '[gemini.failure] stage=generation category=quota error_class=TerminalQuotaError'
+    );
+  });
+
+  it('drops a class name that is not allowlisted', () => {
+    class SecretLeakingError extends Error {
+      override name = 'SecretLeakingError';
+    }
+    const error = geminiError(Object.assign(new SecretLeakingError('x'), { status: 503 }), 'test');
+    expect(error).toMatchObject({ category: 'busy', httpStatus: 503 });
+    expect(error.errorClass).toBeUndefined();
+    expect(geminiFailureLine('stream', error)).not.toContain('SecretLeakingError');
+  });
+
+  it('labels fixed integration and local failures without provider fields', () => {
+    expect(geminiFailureLine('preflight', new GeminiIntegrationError('fixed'))).toBe(
+      '[gemini.failure] stage=preflight category=integration'
+    );
+    expect(geminiFailureLine('persistence', new Error('SECRET'))).toBe(
+      '[gemini.failure] stage=persistence category=local'
+    );
+  });
 });
