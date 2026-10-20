@@ -589,6 +589,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const detailsMain = (
     <>
       {!isMobile && <ComposerMenuSection>Session details</ComposerMenuSection>}
+      <ComposerMenuNote>Choose what shows under the composer</ComposerMenuNote>
       {detailRow(
         'timer',
         <ComposerMenuRow
