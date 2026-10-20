@@ -537,7 +537,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const mcpWarning = sessionMcpLoadFailed ? "MCP tools didn't load" : signInWarning;
   const usageValue = usage ? `${formatTokenCount(usage.total)} tokens` : usageLoading ? '…' : '';
   const infoItems = [
-    pinnedChips.includes('timer') && elapsed.hasTiming ? elapsed.label : null,
+    // While a turn runs, the working line carries the live time.
+    pinnedChips.includes('timer') && elapsed.hasTiming && !showStop ? elapsed.label : null,
     pinnedChips.includes('tools') && mcpSummary.attachedCount > 0
       ? `MCP ${mcpSummary.attachedCount}`
       : null,
@@ -568,7 +569,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       <ComposerMenuRow
         label="Timer"
         icon={<ClockCircleOutlined />}
-        value={elapsed.hasTiming ? elapsed.label : 'Not started'}
+        value={
+          !elapsed.hasTiming ? 'Not started' : showStop ? `Running ${elapsed.label}` : elapsed.label
+        }
         trailing={infoPin('timer', 'timer')}
       />
       <ComposerMenuRow

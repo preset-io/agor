@@ -466,6 +466,30 @@ describe('info line and Session details', () => {
     renderFooter({ footerTimerTask: task });
     expect(screen.getByTestId('composer-info-line')).toHaveTextContent('02:14');
   });
+
+  it('leaves the timer to the working line while a turn runs', async () => {
+    const task = {
+      task_id: 't1',
+      status: 'running',
+      created_at: new Date(Date.now() - 134_000).toISOString(),
+    } as unknown as Task;
+    renderFooter({
+      footerTimerTask: task,
+      isRunning: true,
+      session: { ...baseSession, status: SessionStatus.RUNNING },
+      latestContextWindow: contextWindow(36_000),
+    });
+    // The clock ticks each second; match the minute and tens of seconds only.
+    expect(screen.getByTestId('composer-working-line')).toHaveTextContent(/02:1\d/);
+    expect(screen.getByTestId('composer-info-line')).not.toHaveTextContent(/\d\d:\d\d/);
+    fireEvent.click(screen.getByRole('button', { name: /^Context 18% used/ }));
+    const details = await screen.findByRole('dialog', { name: 'Session details' });
+    expect(within(details).getByText(/^Running 02:1\d$/)).toBeInTheDocument();
+    expect(within(details).getByRole('button', { name: 'Hide timer' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+  });
 });
 
 describe('MCP notice', () => {
