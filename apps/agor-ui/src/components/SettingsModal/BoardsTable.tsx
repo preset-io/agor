@@ -2,6 +2,8 @@ import {
   type AgorClient,
   type Board,
   type Branch,
+  hasMinimumRole,
+  ROLES,
   summarizeBoardImportSkips,
   type User,
 } from '@agor-live/client';
@@ -56,6 +58,9 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 }) => {
   const { modal } = App.useApp();
   const { showSuccess, showError, showWarning } = useThemedMessage();
+  // Creating, importing, cloning and changing boards need member or above
+  // (the daemon enforces it); viewers see these actions disabled.
+  const canManageBoards = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
   // Create board is a drill-in (no stacked modal on top of Settings).
   const { drill, openDrill, closeDrill } = useSettingsDrill();
   // Edit board also drills in place of the list (no stacked modal), driven by
@@ -275,6 +280,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       render: (_: unknown, board: Board) => (
         <SettingsActionGroup>
           <ArchiveToggleButton
+            disabled={!canManageBoards}
             archived={Boolean(board.archived)}
             tooltip={board.archived ? 'Archived • Click to unarchive' : 'Archive board'}
             stopPropagation={false}
@@ -291,6 +297,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
               type="text"
               size="small"
               icon={<CopyOutlined />}
+              disabled={!canManageBoards}
               onClick={() => handleClone(board)}
             />
           </Tooltip>
@@ -307,19 +314,32 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
               type="text"
               size="small"
               icon={<EditOutlined />}
+              disabled={!canManageBoards}
               onClick={() => handleEdit(board)}
             />
           </Tooltip>
           <Popconfirm
+            // Anchored to the icon's right edge (the column sits at the dialog's
+            // right), and wrapped like other delete confirms, so it never runs
+            // into the viewport edge.
+            placement="topRight"
+            overlayStyle={{ maxWidth: 500 }}
             title="Delete board?"
             description={`Are you sure you want to delete "${board.name}"? Sessions will not be deleted.`}
             onConfirm={() => handleDelete(board.board_id)}
             okText="Delete"
             cancelText="Cancel"
             okButtonProps={{ danger: true }}
+            disabled={!canManageBoards}
           >
             <Tooltip title="Delete board (sessions will not be deleted)">
-              <Button type="text" size="small" icon={<DeleteOutlined />} danger />
+              <Button
+                type="text"
+                size="small"
+                icon={<DeleteOutlined />}
+                danger
+                disabled={!canManageBoards}
+              />
             </Tooltip>
           </Popconfirm>
         </SettingsActionGroup>
@@ -392,12 +412,17 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         count={`${boards.length} ${boards.length === 1 ? 'board' : 'boards'}`}
         primaryActions={
           <>
-            <Button icon={<UploadOutlined />} onClick={handleImportClick}>
+            <Button
+              icon={<UploadOutlined />}
+              disabled={!canManageBoards}
+              onClick={handleImportClick}
+            >
               Import Board
             </Button>
             <Button
               type="primary"
               icon={<PlusOutlined />}
+              disabled={!canManageBoards}
               onClick={() => openDrill({ mode: 'create' })}
             >
               New Board
