@@ -694,6 +694,30 @@ The **daemon** (not the executor) is responsible for knowing its own URL. It pas
 
 The executor simply uses `payload.daemonUrl` to connect back - it never reads `config.yaml`.
 
+### Log Format
+
+Executors and the daemon print plain text by default. When a log collector ingests container
+output, set these on launched executor containers (and on the daemon):
+
+```yaml
+env:
+  - name: AGOR_LOG_FORMAT
+    value: json
+  - name: NODE_NO_WARNINGS
+    value: '1'
+```
+
+With `AGOR_LOG_FORMAT=json`, every log call is one JSON line on stdout with `timestamp`,
+`status` (`debug`, `info`, `warn`, `error`) and `message`, plus the run's `tenant_id`,
+`user_id`, `session_id`, `task_id` and `branch_id` when known. Multi-line output such as stack
+traces stays in one entry, and warnings keep `warn` severity. `NODE_NO_WARNINGS=1` stops Node
+from printing process warnings as extra multi-line text; Agor logs each one as a single
+`[process.warning]` line instead. Set both together.
+
+Locally spawned executors inherit both variables from the daemon. A launcher started from
+`executor_command_template` receives them too, and should pass them on to the executor
+container it creates.
+
 **Local mode**: The daemon defaults to `http://localhost:{PORT}`.
 
 **Containerized mode**: Configure `daemon.public_url` so the daemon knows its k8s service URL:
