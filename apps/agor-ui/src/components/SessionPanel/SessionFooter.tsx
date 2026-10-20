@@ -35,7 +35,6 @@ import {
   PlusOutlined,
   QuestionCircleOutlined,
   SettingOutlined,
-  UnorderedListOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
 import type { ButtonProps } from 'antd';
@@ -348,7 +347,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     ) : composerAttachmentUploading ? (
       composerUploadTooltip
     ) : circleState === 'queue' ? (
-      'Queue message Enter'
+      'Queue message (runs after the current turn)'
     ) : (
       <>
         <div>Send Enter</div>
@@ -1428,9 +1427,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                         background: 'currentColor',
                       }}
                     />
-                  ) : circleState === 'queue' ? (
-                    <UnorderedListOutlined />
                   ) : (
+                    // Queue reads as Send: same arrow and colour, only the label differs.
                     <ArrowUpOutlined />
                   )
                 }

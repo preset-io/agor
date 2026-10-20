@@ -157,6 +157,27 @@ describe('composer circle', () => {
     expect(onStop).toHaveBeenCalledOnce();
   });
 
+  it.each([1280, 390])(
+    'at %ipx, Queue looks like Send: same arrow and colour, only the label differs',
+    async (width) => {
+      setWidth(width);
+      const view = renderFooter({ hasInput: true });
+      const sendClass = circle().className;
+      expect(circle().querySelector('[data-icon="arrow-up"]')).not.toBeNull();
+      view.rerender(<SessionFooter {...baseProps} isRunning hasInput />);
+      expect(circle()).toHaveAccessibleName('Queue message');
+      expect(circle().querySelector('[data-icon="arrow-up"]')).not.toBeNull();
+      expect(circle().querySelector('[data-icon="unordered-list"]')).toBeNull();
+      expect(circle().className).toBe(sendClass);
+      if (width === 1280) {
+        fireEvent.mouseEnter(circle());
+        expect(
+          await screen.findByText('Queue message (runs after the current turn)')
+        ).toBeInTheDocument();
+      }
+    }
+  );
+
   it('is Queue while running with text, and Stop moves to the working line', () => {
     const onStop = vi.fn();
     const onSendPrompt = vi.fn();
