@@ -1,17 +1,20 @@
 import { cleanup, render, screen } from '@testing-library/react';
-import type {} from '@vitest/browser-playwright';
-import { afterEach, beforeEach, expect, it } from 'vitest';
-import { cdp, userEvent } from 'vitest/browser';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
+import { TOUCH_INPUT_QUERY } from '../../hooks/useCanHover';
 import { FadeText } from './FadeText';
 
 const LONG = 'Refactor session permissions approval flow for teams and gateways';
 
 afterEach(cleanup);
-// A file earlier in this worker may leave touch emulation on; pin a hover-capable pointer.
-beforeEach(() =>
-  cdp().send('Emulation.setEmulatedMedia', { features: [{ name: 'hover', value: 'hover' }] })
-);
-afterEach(() => cdp().send('Emulation.setEmulatedMedia', { features: [] }));
+// Touch emulation is page-wide and other files toggle it in parallel; pin hover in this frame.
+const realMatchMedia = window.matchMedia.bind(window);
+beforeEach(() => {
+  vi.spyOn(window, 'matchMedia').mockImplementation((query) =>
+    realMatchMedia(query === TOUCH_INPUT_QUERY ? 'not all' : query)
+  );
+});
+afterEach(() => vi.restoreAllMocks());
 
 function mount(title: string, dir?: 'rtl') {
   render(
