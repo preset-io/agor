@@ -685,6 +685,11 @@ describe('info line segments', () => {
     fireEvent.click(within(line()).getByRole('button', { name: 'Session details' }));
     const details = await screen.findByRole('dialog', { name: 'Session details' });
     expect(within(details).getByText('Choose what shows above the composer')).toBeInTheDocument();
+    expect(
+      within(details).getByText(
+        'Pin an item to show it above the composer. MCP sign-in problems always show.'
+      )
+    ).toBeInTheDocument();
     for (const row of details.querySelectorAll<HTMLElement>('[data-detail-row]')) {
       expect(row.style.background).toBe('');
     }

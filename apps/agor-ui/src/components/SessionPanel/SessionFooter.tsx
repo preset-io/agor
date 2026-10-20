@@ -739,7 +739,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         />
       )}
       <ComposerMenuNote>
-        Pin an item to show it in the row above the composer. MCP sign-in problems always show.
+        Pin an item to show it above the composer. MCP sign-in problems always show.
       </ComposerMenuNote>
     </>
   );
