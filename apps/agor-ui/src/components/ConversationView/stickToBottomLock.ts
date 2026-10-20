@@ -20,21 +20,6 @@ export function isBottomLockEngaged(state: StickToBottomState): boolean {
 }
 
 /**
- * Whether the viewport has moved up and away from the bottom since the hook
- * last handled a scroll event: a reader's scroll whose event is still on its
- * way, or the browser anchoring content that shrank above. The hook's own
- * writes do not count.
- */
-export function hasPendingScrollAway(state: StickToBottomState, scrollTop: number): boolean {
-  return (
-    state.lastScrollTop !== undefined &&
-    scrollTop < state.lastScrollTop &&
-    scrollTop !== state.ignoreScrollToTop &&
-    !state.isNearBottom
-  );
-}
-
-/**
  * A newly attached scroll container (reopening a session renders a spinner
  * first) starts a fresh scroll baseline, as on first mount. Otherwise the hook
  * compares the old container's last position with this one's first scroll,

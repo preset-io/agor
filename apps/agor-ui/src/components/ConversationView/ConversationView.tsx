@@ -32,12 +32,7 @@ import { BrandMark } from '../BrandMark';
 import { HistoryTextChoices, historyTextKeyTurn } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from '../TaskBlock';
 import { JumpToLatest, useNewMessageCount } from './JumpToLatest';
-import {
-  hasPendingScrollAway,
-  isBottomLockEngaged,
-  jumpToBottom,
-  resetScrollBaseline,
-} from './stickToBottomLock';
+import { isBottomLockEngaged, jumpToBottom, resetScrollBaseline } from './stickToBottomLock';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
@@ -55,6 +50,19 @@ function firstVisibleTurn(viewport: HTMLElement): HTMLElement | undefined {
   return Array.from(viewport.querySelectorAll<HTMLElement>('[data-task-block]')).find(
     (element) => element.getBoundingClientRect().bottom >= top
   );
+}
+
+type ReaderAnchor = { current: { element: HTMLElement; offset: number } | null };
+const turnOffset = (viewport: HTMLElement, element: HTMLElement) =>
+  element.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+/** Layout keeps the visible turn in place; a reader scrolling up moves it down. */
+function readerMovedUp(anchor: ReaderAnchor, viewport: HTMLElement): boolean {
+  const seen = anchor.current;
+  return !!seen && seen.element.isConnected && turnOffset(viewport, seen.element) > seen.offset + 1;
+}
+function recordReader(anchor: ReaderAnchor, viewport: HTMLElement): void {
+  const element = firstVisibleTurn(viewport);
+  anchor.current = element ? { element, offset: turnOffset(viewport, element) } : null;
 }
 
 export interface ConversationViewProps {
@@ -203,9 +211,10 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // A queue/composer resize changes only the latter. Reconcile through the
     // same bottom lock so a scrolled-up reader is never pulled away.
     const viewportCleanupRef = useRef<(() => void) | null>(null);
-    // The hook decides whether an upward scroll escaped the lock a moment after
-    // the event. Trims wait for that decision, then retry after the next frame.
-    const scrollsPendingDecision = useRef(0);
+    // Where the first visible turn sat when the reader was last seen. The hook
+    // decides on an escape a moment after the scroll event, and a resize in
+    // between (an appended or trimmed turn) makes it ignore the scroll.
+    const readerAnchor = useRef<ReaderAnchor['current']>(null);
     const trimDeferred = useRef(false);
     const [trimRetry, setTrimRetry] = useState(0);
     const setScrollViewport = useCallback(
@@ -243,22 +252,26 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           }
         });
         observer.observe(element);
-        // Capture runs before the hook's handler updates its scroll record.
-        const trackDecision = () => {
-          const top = element.scrollTop;
-          if (top === state.ignoreScrollToTop || top >= (state.lastScrollTop ?? top)) return;
-          scrollsPendingDecision.current++;
-          setTimeout(() => scrollsPendingDecision.current--, 2);
+        // Escape as the reader's scroll arrives, as the hook does for an upward wheel.
+        const escapeOnScrollAway = () => {
+          if (
+            isBottomLockEngaged(state) &&
+            !state.isNearBottom &&
+            readerMovedUp(readerAnchor, element)
+          ) {
+            stopScroll();
+          }
+          recordReader(readerAnchor, element);
         };
-        element.addEventListener('scroll', trackDecision, { capture: true, passive: true });
+        element.addEventListener('scroll', escapeOnScrollAway, { capture: true, passive: true });
         viewportCleanupRef.current = () => {
           ++resizeGeneration;
-          element.removeEventListener('scroll', trackDecision, { capture: true });
+          element.removeEventListener('scroll', escapeOnScrollAway, { capture: true });
           observer.disconnect();
           if (state.resizeDifference === guardedDifference) state.resizeDifference = 0;
         };
       },
-      [scrollRef, scrollToBottom, state]
+      [scrollRef, scrollToBottom, state, stopScroll]
     );
 
     // Public scroll-to-bottom for the jump pill and, via onScrollRef, the
@@ -504,9 +517,9 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         !isBottomLockEngaged(state)
       )
         return;
-      // A reader's scroll may be about to release the lock: trimming now would
-      // guard that scroll away and keep pinning them.
-      if (scrollsPendingDecision.current > 0 || hasPendingScrollAway(state, viewport.scrollTop)) {
+      // A reader's scroll whose event is still on its way: trimming now would
+      // guard it away and keep pinning them.
+      if (readerMovedUp(readerAnchor, viewport)) {
         if (!trimDeferred.current) {
           trimDeferred.current = true;
           requestAnimationFrame(() =>
@@ -539,6 +552,11 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       state,
       trimRetry,
     ]);
+    // Layout changes keep the reader's place; a pending scroll keeps its record.
+    useLayoutEffect(() => {
+      const viewport = scrollRef.current;
+      if (viewport && !readerMovedUp(readerAnchor, viewport)) recordReader(readerAnchor, viewport);
+    });
 
     // Streaming auto-scroll, manual scroll-away detection, and lazy-content
     // re-pinning are all handled by use-stick-to-bottom's persistent
