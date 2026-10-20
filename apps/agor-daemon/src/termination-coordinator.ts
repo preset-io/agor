@@ -223,6 +223,7 @@ async function containRemoteExecution(input: TerminationInput, task: Task, waite
   return {
     status: 'verified_absent' as const,
     helperConfirmed: true as const,
+    cleanupResult: result,
     // The helper's optional result explains why the executor stopped.
     errorMessage:
       result.cause === 'oom_killed'
@@ -435,6 +436,7 @@ async function runContainment(
             ? containment.errorMessage
             : input.errorMessage,
         coordinationToken,
+        cleanupResult: 'cleanupResult' in containment ? containment.cleanupResult : undefined,
       },
       { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
     )

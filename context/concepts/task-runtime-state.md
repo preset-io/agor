@@ -513,6 +513,15 @@ asserts containment (including suppression of delayed launches/retries). On exit
 error message with the shared `executorOutOfMemoryMessage` text; any malformed or
 unknown result means no cause, never "not contained".
 
+On a successful terminal settlement, that same confirmed helper result adds
+`failure_reason: "oom_killed"` and, only when reported, `memory_limit_bytes` to
+the existing operator `task.completed` analytics event. This is an explicit
+two-field allowlist, not error-text classification or a new browser/community
+telemetry event. Diagnostics and cleanup tokens are never event properties.
+The evidence is passed only to that settlement call, not persisted or replayed;
+existing analytics enablement, exclusions, tenant attribution, and best-effort
+delivery still apply. Task status and user-stop precedence are unchanged.
+
 `TaskRepository.beginCleanupAttempt` records one attempt under the existing
 coordination token before external effects. The marker survives cause changes,
 lease expiry and daemon restart: replacement coordinators settle an uncertain

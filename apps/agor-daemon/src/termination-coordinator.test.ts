@@ -1172,12 +1172,21 @@ describe('remote cleanup integration', () => {
     state.settle(task(TaskStatus.FAILED));
     expect((await execute(state)).status).toBe('terminal');
     expect(state.settleTermination).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: 'verified_absent', errorMessage }),
+      expect.objectContaining({
+        outcome: 'verified_absent',
+        errorMessage,
+        cleanupResult: { confirmed: true, diagnostic: 'exit 0', ...reported },
+      }),
       expect.anything()
     );
   });
   it('persists a failed attempt without claiming termination', async () => {
-    runCleanup.mockResolvedValue({ confirmed: false, diagnostic: 'Cleanup timed out.' });
+    runCleanup.mockResolvedValue({
+      confirmed: false,
+      diagnostic: 'Cleanup timed out.',
+      cause: 'oom_killed',
+      memoryLimitBytes: 1024,
+    });
     const state = appDouble('codex', { config });
     state.claim({
       ...stopping('heartbeat_lost'),
@@ -1190,6 +1199,7 @@ describe('remote cleanup integration', () => {
       expect.objectContaining({ outcome: 'unverified' }),
       expect.anything()
     );
+    expect(state.settleTermination.mock.calls[0][0]).not.toHaveProperty('cleanupResult');
   });
   it('settles a quiescence report arriving during the helper without repeating cleanup', async () => {
     const state = appDouble('codex', { config });

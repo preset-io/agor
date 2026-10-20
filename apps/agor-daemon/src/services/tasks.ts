@@ -100,6 +100,7 @@ import {
 import { appendSystemMessage } from '../utils/append-system-message.js';
 import { completionCallbackTaskId } from '../utils/durable-task-id.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import type { ExecutorCleanupCommandResult } from '../utils/executor-cleanup-command.js';
 import {
   type ExecutorHeartbeatCallbackPayload,
   ExecutorHeartbeatCallbackRunner,
@@ -568,9 +569,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
   }
 
-  private trackTaskCompleted(task: Task): void {
+  private trackTaskCompleted(task: Task, cleanupResult?: ExecutorCleanupCommandResult): void {
     recordTaskSettlement(getDaemonMetrics(this.app), task);
     const normalized = task.normalized_sdk_response;
+    // Closed allowlist from structured helper evidence only. Never spread the
+    // result (which includes diagnostics), inspect error prose, or guess a limit.
+    const oomKilled = cleanupResult?.confirmed === true && cleanupResult.cause === 'oom_killed';
+    const memoryLimitBytes = cleanupResult?.memoryLimitBytes;
     analyticsLogger.track(
       'task.completed',
       {
@@ -584,6 +589,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         context_window_limit: normalized?.contextWindowLimit ?? null,
         context_window_percentage: normalized?.contextUsageSnapshot?.percentage ?? null,
         has_error: Boolean(task.error_message),
+        ...(oomKilled ? { failure_reason: 'oom_killed' } : {}),
+        ...(oomKilled &&
+        typeof memoryLimitBytes === 'number' &&
+        Number.isSafeInteger(memoryLimitBytes) &&
+        memoryLimitBytes > 0
+          ? { memory_limit_bytes: memoryLimitBytes }
+          : {}),
       },
       { userId: task.created_by }
     );
@@ -704,10 +716,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   async settleTermination(
-    input: TerminationSettlementInput,
+    input: TerminationSettlementInput & {
+      /** Internal, ephemeral evidence: not a Task patch field or repository input. */
+      cleanupResult?: ExecutorCleanupCommandResult;
+    },
     params?: TaskParams
   ): Promise<TerminationSettlementResult> {
-    const result = await this.taskRepo.settleTermination(input);
+    const { cleanupResult, ...settlementInput } = input;
+    const result = await this.taskRepo.settleTermination(settlementInput);
     // Repository settlement is used by cooperative stop, watchdog, startup
     // reconciliation, and force-fail paths. It must retire the same exact Task
     // lease as a normal executor terminal patch.
@@ -742,7 +758,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       });
       if (result.outcome === 'unverified') return;
 
-      this.trackTaskCompleted(result.task);
+      this.trackTaskCompleted(
+        result.task,
+        input.outcome === 'verified_absent' ? cleanupResult : undefined
+      );
       const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
       const isStop = result.task.status === TaskStatus.STOPPED;
       const completionParams = {
