@@ -1,3 +1,4 @@
+import { hasActiveEnvironmentCommand } from '@agor/core/types';
 import type { BranchEnvironmentInstance } from '@agor-live/client';
 
 /**
@@ -65,4 +66,30 @@ export function getEnvironmentStateDescription(state: EnvironmentInferredState):
     default:
       return 'Unknown';
   }
+}
+
+/**
+ * Whether Start and Stop are available, shared by every environment control
+ * (the board card pill, the session strip and Branch details). The daemon still
+ * enforces permissions; `canControl` only reflects an access decision a parent
+ * has already loaded.
+ */
+export function getEnvironmentControlState(
+  env: BranchEnvironmentInstance | undefined,
+  {
+    hasConfig,
+    canControl = true,
+    connectionDisabled = false,
+  }: { hasConfig: boolean; canControl?: boolean; connectionDisabled?: boolean }
+): { startDisabled: boolean; stopDisabled: boolean } {
+  const status = env?.status || 'stopped';
+  const blocked =
+    hasActiveEnvironmentCommand(env) || connectionDisabled || !canControl || !hasConfig;
+  const canStop =
+    status === 'running' || status === 'starting' || (status === 'error' && !!env?.command_attempt);
+  return {
+    startDisabled:
+      blocked || status === 'starting' || status === 'stopping' || status === 'running',
+    stopDisabled: blocked || status === 'stopping' || !canStop,
+  };
 }

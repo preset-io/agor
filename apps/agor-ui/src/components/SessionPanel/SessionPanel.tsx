@@ -27,6 +27,7 @@ import {
 } from '@agor-live/client';
 import {
   AimOutlined,
+  BranchesOutlined,
   CloseOutlined,
   CodeOutlined,
   DownOutlined,
@@ -415,6 +416,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // teammate's conversations address the teammate by name.
   const boardView = useBoardViewContext();
   const inChat = boardView?.view === 'chat';
+  // Where Close and Escape in the preview return focus after "Branch details".
+  const moreActionsButtonRef = React.useRef<HTMLButtonElement>(null);
   const composerPlaceholder =
     inChat && branch && isTeammate(branch) ? `Message ${teammateLabel(branch)}…` : undefined;
 
@@ -1019,6 +1022,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
   const moreMenuItems: MenuProps['items'] = [
+    // Chat hides the branch strip; its summary opens in the preview instead.
+    ...(inChat && showCenterMap && branch
+      ? [
+          {
+            key: 'branch-details',
+            icon: <BranchesOutlined />,
+            label: 'Branch details',
+            onClick: () =>
+              boardView.openPreview(
+                { kind: 'branch', id: branch.branch_id },
+                { returnFocus: moreActionsButtonRef.current }
+              ),
+          },
+        ]
+      : []),
     ...(onCloseOtherTabs
       ? [
           {
@@ -1749,6 +1767,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
                 <Button
+                  ref={moreActionsButtonRef}
                   type="text"
                   aria-label="More actions"
                   icon={<EllipsisOutlined />}

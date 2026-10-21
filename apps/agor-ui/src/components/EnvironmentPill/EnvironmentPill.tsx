@@ -14,7 +14,7 @@ import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment
 import { getEnvironmentAccessUrls } from '../../utils/environmentAccessUrls';
 import { hasEnvironmentLogs } from '../../utils/environmentCommand';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
-import { getEnvironmentState } from '../../utils/environmentState';
+import { getEnvironmentControlState, getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
 import { EnvironmentStatusIcon } from './EnvironmentStatusIcon';
 import {
@@ -126,27 +126,14 @@ export function EnvironmentPill({
   const status = env?.status || 'stopped';
   const isRunning = status === 'running';
   const isStarting = status === 'starting';
-  const isStopping = status === 'stopping';
-  const canStop =
-    status === 'running' || status === 'starting' || (status === 'error' && !!env?.command_attempt);
   const canOpenEnvironment = (isRunning || isStarting) && Boolean(environmentUrl);
-  const startDisabled =
-    commandActive ||
-    connectionDisabled ||
-    !resolvedCanControlEnvironment ||
-    !hasConfig ||
-    !onStartEnvironment ||
-    isStarting ||
-    isStopping ||
-    isRunning;
-  const stopDisabled =
-    commandActive ||
-    connectionDisabled ||
-    !resolvedCanControlEnvironment ||
-    !hasConfig ||
-    !onStopEnvironment ||
-    isStopping ||
-    !canStop;
+  const controls = getEnvironmentControlState(env, {
+    hasConfig,
+    canControl: resolvedCanControlEnvironment,
+    connectionDisabled,
+  });
+  const startDisabled = !onStartEnvironment || controls.startDisabled;
+  const stopDisabled = !onStopEnvironment || controls.stopDisabled;
 
   const getTooltipText = () => {
     const healthCheck = env?.last_health_check;

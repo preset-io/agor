@@ -7,18 +7,21 @@ import { agorStore } from '../store/agorStore';
 import { availableBoardViews } from '../utils/boardViews';
 import { teammateLabel } from '../utils/teammateLabels';
 import { resolveBoardFromUrlPure } from '../utils/urlResolution';
+import { useBoardPreview } from './useBoardPreview';
 import { useBoardTabOrder } from './useBoardTabOrder';
 import { useBoardView } from './useBoardView';
 import { useCanManageBoard } from './useCanManageBoard';
 import { useStableCallback } from './useStableCallback';
 import type { ActiveUrlTarget } from './useUrlState';
+import { useUserLocalStorage } from './useUserLocalStorage';
 
 const HIGHLIGHT_MS = 6000;
 
 /**
  * The board tabs' controller for the desktop shell: which tab is on screen,
- * the shared tab order, when the canvas mounts, and Show on board. Deliberate
- * recenters elsewhere ("go to card") reach it through CanvasNavigationContext.
+ * the shared tab order, when the canvas mounts, the preview pane, and Show on
+ * board. Deliberate recenters elsewhere ("go to card") reach it through
+ * CanvasNavigationContext.
  */
 export function useBoardViewShell({
   client,
@@ -111,9 +114,18 @@ export function useBoardViewShell({
     [highlight]
   );
 
+  // The preview pane beside Chat. Its size is a share of the main area, kept per
+  // person and written on drag only, like the session panel's.
+  const { preview, openPreview, closePreview, setPreviewFullScreen } = useBoardPreview(boardId);
+  const [previewSize, setPreviewSize] = useUserLocalStorage<number>(
+    user?.user_id,
+    'panel:preview:size',
+    45
+  );
+
   const context = useMemo<BoardViewContextValue | null>(
-    () => (ready ? { view, showOnBoard } : null),
-    [ready, view, showOnBoard]
+    () => (ready ? { view, showOnBoard, preview, openPreview, closePreview } : null),
+    [ready, view, showOnBoard, preview, openPreview, closePreview]
   );
 
   return {
@@ -130,6 +142,12 @@ export function useBoardViewShell({
     highlightTip,
     highlightBranchId: highlight?.branchId ?? null,
     clearHighlight,
+    showOnBoard,
+    preview,
+    closePreview,
+    setPreviewFullScreen,
+    previewSize,
+    setPreviewSize,
     context,
   };
 }

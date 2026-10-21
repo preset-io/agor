@@ -19,7 +19,7 @@ import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEnvironmentAccessUrls } from '../../utils/environmentAccessUrls';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
-import { getEnvironmentState } from '../../utils/environmentState';
+import { getEnvironmentControlState, getEnvironmentState } from '../../utils/environmentState';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
 import { EnvironmentStatusIcon } from '../EnvironmentPill';
 import {
@@ -128,27 +128,14 @@ export function BranchHeaderPill({
   const status = env?.status || 'stopped';
   const isRunning = status === 'running';
   const isStarting = status === 'starting';
-  const isStopping = status === 'stopping';
-  const canStop =
-    status === 'running' || status === 'starting' || (status === 'error' && !!env?.command_attempt);
   const canOpenEnvironment = (isRunning || isStarting) && Boolean(environmentUrl);
-  const startDisabled =
-    commandActive ||
-    connectionDisabled ||
-    !resolvedCanControlEnvironment ||
-    !hasConfig ||
-    !onStartEnvironment ||
-    isStarting ||
-    isStopping ||
-    isRunning;
-  const stopDisabled =
-    commandActive ||
-    connectionDisabled ||
-    !resolvedCanControlEnvironment ||
-    !hasConfig ||
-    !onStopEnvironment ||
-    isStopping ||
-    !canStop;
+  const controls = getEnvironmentControlState(env, {
+    hasConfig,
+    canControl: resolvedCanControlEnvironment,
+    connectionDisabled,
+  });
+  const startDisabled = !onStartEnvironment || controls.startDisabled;
+  const stopDisabled = !onStopEnvironment || controls.stopDisabled;
 
   const openTab = (tab: BranchModalTab) => (e: React.MouseEvent) => {
     e.stopPropagation();
