@@ -1037,10 +1037,11 @@ export const App: React.FC<AppProps> = ({
   }, [effectiveSelectedSessionId, handleCloseOtherSessionTabs]);
 
   const handleShowSessionTabs = useCallback(() => {
-    const { sessions, selectedId } = sessionTabs;
-    const shown = sessions.find((session) => session.session_id === selectedId) ?? sessions[0];
+    const shown =
+      sessionTabs.sessions.find((session) => session.session_id === sessionTabs.selectedId) ??
+      sessionTabs.sessions[0];
     if (shown) handleSessionClick(shown.session_id);
-  }, [handleSessionClick, sessionTabs]);
+  }, [handleSessionClick, sessionTabs.sessions, sessionTabs.selectedId]);
 
   const handlePermissionDecision = usePermissionDecision(client);
 

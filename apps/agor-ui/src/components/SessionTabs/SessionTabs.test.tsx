@@ -50,14 +50,27 @@ describe('splitVisibleTabs', () => {
   const sessions = ['a', 'b', 'c', 'd', 'e'].map((id) => session(id));
   const ids = (list: Session[]) => list.map((s) => s.session_id);
 
-  it('shows every tab when they fit', () => {
-    expect(ids(splitVisibleTabs(sessions.slice(0, 2), 'a', 700).visible)).toEqual(['a', 'b']);
+  it('shows every tab when they fit, stretched up to the maximum width', () => {
+    const two = sessions.slice(0, 2);
+    expect(splitVisibleTabs(two, 'a', 500)).toMatchObject({ hidden: [], tabWidth: 228 });
+    const wide = splitVisibleTabs(two, 'a', 700);
+    expect(ids(wide.visible)).toEqual(['a', 'b']);
+    expect(wide.tabWidth).toBe(280);
   });
 
   it('moves the rest into More in order and keeps the selected tab visible', () => {
-    const { visible, hidden } = splitVisibleTabs(sessions, 'e', 700);
+    const { visible, hidden, tabWidth } = splitVisibleTabs(sessions, 'e', 640);
     expect(ids(visible)).toEqual(['a', 'e']);
     expect(ids(hidden)).toEqual(['b', 'c', 'd']);
+    // The fitting tabs share the row up to More instead of leaving a gap.
+    expect(tabWidth).toBe(250);
+  });
+
+  it('keeps one tab at the minimum width before the bar is measured', () => {
+    expect(splitVisibleTabs(sessions, 'c', 0)).toMatchObject({
+      visible: [sessions[2]],
+      tabWidth: 200,
+    });
   });
 });
 

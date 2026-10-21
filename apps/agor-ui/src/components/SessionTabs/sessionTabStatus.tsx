@@ -1,4 +1,4 @@
-import { type Session, SessionStatus } from '@agor-live/client';
+import type { Session } from '@agor-live/client';
 import {
   CheckCircleFilled,
   CloseCircleFilled,
@@ -8,7 +8,7 @@ import {
 import { theme } from 'antd';
 import type React from 'react';
 import { isUnreadResult } from '../../store/homeSelectors';
-import { isSessionFailed } from '../../utils/sessionStatus';
+import { getSessionStatusTone } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 
 export type SessionTabStatus = 'needs-you' | 'running' | 'unread' | 'failed' | 'idle';
@@ -23,16 +23,10 @@ export const SESSION_TAB_STATUS_LABELS: Record<SessionTabStatus, string> = {
 
 /** The selected tab is being read, so it never shows as unread. */
 export function getSessionTabStatus(session: Session, selected = false): SessionTabStatus {
-  switch (session.status) {
-    case SessionStatus.AWAITING_PERMISSION:
-    case SessionStatus.AWAITING_INPUT:
-    case SessionStatus.TIMED_OUT:
-      return 'needs-you';
-    case SessionStatus.RUNNING:
-    case SessionStatus.STOPPING:
-      return 'running';
-  }
-  if (isSessionFailed(session)) return 'failed';
+  const tone = getSessionStatusTone(session.status);
+  if (tone === 'warning') return 'needs-you';
+  if (tone === 'processing') return 'running';
+  if (tone === 'error') return 'failed';
   return !selected && isUnreadResult(session) ? 'unread' : 'idle';
 }
 

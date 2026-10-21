@@ -81,7 +81,7 @@ export const OpenSessionsSwitcher: React.FC<OpenSessionsSwitcherProps> = ({
         open={open}
         onClose={() => setOpen(false)}
         placement="bottom"
-        height="auto"
+        size="auto"
         title="Open sessions"
         {...reducedMotionSurface(reducedMotion)}
         styles={{

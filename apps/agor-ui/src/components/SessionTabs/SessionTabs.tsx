@@ -14,27 +14,43 @@ import {
   SessionTabStatusIcon,
 } from './sessionTabStatus';
 
-/** A tab is 200px: this label plus antd's card padding and close button. */
-const TAB_LABEL_WIDTH = 152;
-const TAB_WIDTH = 204;
-const MORE_BUTTON_WIDTH = 104;
+/** Tabs share the row between these widths, Chrome style. */
+const MIN_TAB_WIDTH = 200;
+const MAX_TAB_WIDTH = 280;
+/** antd's small card padding and close button around the label. */
+const TAB_CHROME_WIDTH = 46;
+/** antd's card gutter between tabs. */
+const TAB_GAP = 2;
+const MORE_BUTTON_WIDTH = 96;
 const HIDE_BUTTON_WIDTH = 40;
 
-/** How many tabs fit; the selected one always stays visible, order is kept. */
+/**
+ * As many tabs as fit at the minimum width, stretched to share the row up to
+ * the maximum. The selected one always stays visible, order is kept.
+ */
 export function splitVisibleTabs<T extends { session_id: string }>(
   sessions: T[],
   selectedId: string,
   barWidth: number
-): { visible: T[]; hidden: T[] } {
+): { visible: T[]; hidden: T[]; tabWidth: number } {
   const room = barWidth - HIDE_BUTTON_WIDTH;
-  if (sessions.length * TAB_WIDTH <= room) return { visible: sessions, hidden: [] };
-  const fit = Math.max(1, Math.floor((room - MORE_BUTTON_WIDTH) / TAB_WIDTH));
+  const fitsAll = sessions.length * (MIN_TAB_WIDTH + TAB_GAP) <= room;
+  const row = fitsAll ? room : room - MORE_BUTTON_WIDTH;
+  const fit = fitsAll ? sessions.length : Math.max(1, Math.floor(row / (MIN_TAB_WIDTH + TAB_GAP)));
+  const tabWidth = Math.min(
+    MAX_TAB_WIDTH,
+    Math.max(MIN_TAB_WIDTH, Math.floor(row / fit) - TAB_GAP)
+  );
   let visible = sessions.slice(0, fit);
   if (!visible.some((session) => session.session_id === selectedId)) {
     const selected = sessions.find((session) => session.session_id === selectedId);
     if (selected) visible = [...visible.slice(0, fit - 1), selected];
   }
-  return { visible, hidden: sessions.filter((session) => !visible.includes(session)) };
+  return {
+    visible,
+    hidden: sessions.filter((session) => !visible.includes(session)),
+    tabWidth,
+  };
 }
 
 interface SessionTabsProps {
@@ -57,7 +73,7 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
   const { token } = theme.useToken();
   const barRef = useRef<HTMLDivElement>(null);
   const barWidth = useElementWidth(barRef);
-  const { visible, hidden } = splitVisibleTabs(sessions, selectedId, barWidth);
+  const { visible, hidden, tabWidth } = splitVisibleTabs(sessions, selectedId, barWidth);
   const hiddenWaiting = filterNeedsYou(hidden);
 
   const statusLine = (session: Session) => {
@@ -180,7 +196,11 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
                     </>
                   }
                 >
-                  <Flex align="center" gap={token.marginXS} style={{ width: TAB_LABEL_WIDTH }}>
+                  <Flex
+                    align="center"
+                    gap={token.marginXS}
+                    style={{ width: tabWidth - TAB_CHROME_WIDTH }}
+                  >
                     <ToolIcon tool={session.agentic_tool} size={16} bordered={false} />
                     <Typography.Text ellipsis style={{ flex: 1, minWidth: 0, color: 'inherit' }}>
                       {title}
