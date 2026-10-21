@@ -169,7 +169,7 @@ it.each([false, true])(
     expect(stop).toHaveAttribute('aria-disabled', 'true');
     expect(stop).toHaveAttribute('aria-busy', 'true');
     expect(screen.queryByRole('status', { name: 'Agent is working' })).toBeNull();
-    expect(screen.getByTestId('composer-working-line')).toHaveTextContent('Stopping');
+    expect(screen.getByTestId('composer-working-label')).toHaveTextContent('Stopping');
     expect(stop.getBoundingClientRect().toJSON()).toEqual(buttonBounds.toJSON());
 
     // Idle: the same circle becomes Send, unavailable until there is a draft.

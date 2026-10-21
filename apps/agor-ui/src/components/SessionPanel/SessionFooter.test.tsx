@@ -222,7 +222,7 @@ describe('composer circle', () => {
     expect(circle()).toHaveAttribute('aria-disabled', 'true');
     fireEvent.click(circle());
     expect(onStop).not.toHaveBeenCalled();
-    expect(screen.getByTestId('composer-working-line')).toHaveTextContent('Stopping');
+    expect(screen.getByTestId('composer-working-label')).toHaveTextContent('Stopping');
   });
 
   it('disables Stop and Send without a daemon connection', () => {

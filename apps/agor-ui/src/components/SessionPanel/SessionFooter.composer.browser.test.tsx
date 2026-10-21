@@ -167,7 +167,7 @@ it.each([
         // The circle never takes the disabled attribute, so it keeps focus and its tooltip.
         expect(stop).toHaveAttribute('aria-disabled', 'true');
       }
-      expect(screen.getByTestId('composer-working-line')).toHaveTextContent('Stopping');
+      expect(screen.getByTestId('composer-working-label')).toHaveTextContent('Stopping');
       expect(stop).toHaveAttribute('aria-busy', 'true');
       expect(stop.querySelector('[data-icon="loading"]')).toBeVisible();
       const bounds = stop.getBoundingClientRect().toJSON();
@@ -347,9 +347,24 @@ it.each([360, 390, 430])(
     expect(row).toContainElement(screen.getByRole('status', { name: 'Agent is working' }));
     expect(row).toContainElement(stop);
     expect(stop.getBoundingClientRect().height).toBe(MOBILE_TOUCH_TARGET);
-    // Status on the left, info on the right.
+    // Status on the left with Stop 8px after it; info on the right.
+    const status = screen.getByRole('status', { name: 'Agent is working' }).getBoundingClientRect();
+    expect(stop.getBoundingClientRect().left - status.right).toBeCloseTo(
+      theme.getDesignToken().marginXS,
+      0
+    );
     expect(stop.getBoundingClientRect().right).toBeLessThanOrEqual(
       info.getBoundingClientRect().left
+    );
+    // The context ring sits 4px from its number.
+    const ring = within(info)
+      .getByRole('button', { name: /^Context 4% used/ })
+      .querySelector('.ant-progress')!;
+    const number = document.createRange();
+    number.selectNodeContents(ring.nextSibling!);
+    expect(number.getBoundingClientRect().left - ring.getBoundingClientRect().right).toBeCloseTo(
+      theme.getDesignToken().marginXXS,
+      0
     );
     // Crowded or not, the context ring and Session details stay.
     expect(within(info).getByRole('button', { name: /^Context 4% used/ })).toBeVisible();
@@ -357,26 +372,40 @@ it.each([360, 390, 430])(
   }
 );
 
-it.each([340, 360])(
-  'folds the info into Session details in a %ipx panel, keeping the ring',
+it.each([340, 357])(
+  'keeps the status row on one line in a %ipx panel, with the ring and "›"',
   async (width) => {
     await page.viewport(1280, 900);
-    const view = render(rowFooter(width));
+    render(rowFooter(width));
     const info = screen.getByTestId('composer-info-line');
-    await waitFor(() => expect(info).toHaveAttribute('data-folded', 'true'));
-    expectStatusRowAboveCard();
+    await waitFor(expectStatusRowAboveCard);
     expect(screen.getByRole('button', { name: 'Stop the agent' })).toBeVisible();
-    expect(within(info).queryByRole('button', { name: /^Session ID / })).toBeNull();
     expect(within(info).getByRole('button', { name: /^Context 4% used/ })).toBeVisible();
     expect(within(info).getByRole('button', { name: 'Session details' })).toBeVisible();
-    // Idle, with room again, the full set comes back; the left side is empty.
-    view.rerender(rowFooter(900, { isRunning: false, hasInput: false }));
-    await waitFor(() => expect(info).not.toHaveAttribute('data-folded'));
-    expect(screen.queryByTestId('composer-working-line')).toBeNull();
-    expect(within(info).getByRole('button', { name: /^Session ID / })).toBeVisible();
-    expectStatusRowAboveCard();
+    // Everything that fits shows; only a crowded row folds the rest away.
+    if (!info.hasAttribute('data-folded')) {
+      expect(within(info).getByRole('button', { name: /^Session ID / })).toBeVisible();
+    }
   }
 );
+
+it('folds a crowded status row into Session details, keeping the ring, and unfolds with room', async () => {
+  await page.viewport(1280, 900);
+  const view = render(rowFooter(280));
+  const info = screen.getByTestId('composer-info-line');
+  await waitFor(() => expect(info).toHaveAttribute('data-folded', 'true'));
+  expectStatusRowAboveCard();
+  expect(screen.getByRole('button', { name: 'Stop the agent' })).toBeVisible();
+  expect(within(info).queryByRole('button', { name: /^Session ID / })).toBeNull();
+  expect(within(info).getByRole('button', { name: /^Context 4% used/ })).toBeVisible();
+  expect(within(info).getByRole('button', { name: 'Session details' })).toBeVisible();
+  // Idle, with room again, the full set comes back; the left side is empty.
+  view.rerender(rowFooter(900, { isRunning: false, hasInput: false }));
+  await waitFor(() => expect(info).not.toHaveAttribute('data-folded'));
+  expect(screen.queryByTestId('composer-working-line')).toBeNull();
+  expect(within(info).getByRole('button', { name: /^Session ID / })).toBeVisible();
+  expectStatusRowAboveCard();
+});
 
 it.each([
   [340, 'auto'],

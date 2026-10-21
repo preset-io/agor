@@ -29,6 +29,7 @@ import {
   ForkOutlined,
   IdcardOutlined,
   InfoCircleOutlined,
+  LoadingOutlined,
   LockOutlined,
   NumberOutlined,
   PaperClipOutlined,
@@ -829,7 +830,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       key: 'context',
       row: 'context',
       label: (
-        <>
+        <Flex align="center" gap={token.marginXXS}>
           <Progress
             type="circle"
             size={token.fontSizeSM}
@@ -840,7 +841,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             aria-hidden
           />
           {contextPercent}%
-        </>
+        </Flex>
       ),
       ariaLabel: `Context ${contextPercent}% used. Session details`,
       tooltip: `Context ${contextPercent}% used`,
@@ -1005,32 +1006,29 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       )
     : infoSegments;
   const infoGroup = infoVisible && (
-    // Segments hover with the subtle fill, so the line reads as clickable.
-    <ConfigProvider theme={{ components: { Button: { textHoverBg: token.colorFillTertiary } } }}>
-      <Flex
-        ref={infoGroupRef}
-        align="center"
-        style={{ minWidth: 0, marginInlineStart: 'auto', overflow: 'hidden' }}
-        data-testid="composer-info-line"
-        data-folded={foldInfo || undefined}
-      >
-        {shownSegments.map((segment, index) => (
-          <React.Fragment key={segment.key}>
-            {index > 0 && (
-              <span
-                aria-hidden
-                data-testid="info-separator"
-                style={{ color: token.colorTextQuaternary, fontSize: token.fontSizeSM }}
-              >
-                ·
-              </span>
-            )}
-            {renderSegment(segment)}
-          </React.Fragment>
-        ))}
-        {renderSegment(moreSegment)}
-      </Flex>
-    </ConfigProvider>
+    <Flex
+      ref={infoGroupRef}
+      align="center"
+      style={{ minWidth: 0, marginInlineStart: 'auto', overflow: 'hidden' }}
+      data-testid="composer-info-line"
+      data-folded={foldInfo || undefined}
+    >
+      {shownSegments.map((segment, index) => (
+        <React.Fragment key={segment.key}>
+          {index > 0 && (
+            <span
+              aria-hidden
+              data-testid="info-separator"
+              style={{ color: token.colorTextQuaternary, fontSize: token.fontSizeSM }}
+            >
+              ·
+            </span>
+          )}
+          {renderSegment(segment)}
+        </React.Fragment>
+      ))}
+      {renderSegment(moreSegment)}
+    </Flex>
   );
 
   const attachmentsHint = composerAttachmentsPresent ? composerAttachmentActionTooltip : undefined;
@@ -1475,13 +1473,18 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           flexShrink: 0,
         }}
       />
-      {/* A steady width, so Stop doesn't move as the label or the clock changes. */}
+      {/* Sized for the longer "Stopping", so Stop stays put when the label changes. */}
       <span
         role="status"
         aria-label={showActivity ? 'Agent is working' : undefined}
-        style={{ minWidth: '15ch', fontVariantNumeric: 'tabular-nums' }}
+        style={{ display: 'inline-grid', fontVariantNumeric: 'tabular-nums' }}
       >
-        {stopBusy ? 'Stopping' : 'Working'} {workingElapsed}
+        <span style={{ gridArea: '1 / 1' }} data-testid="composer-working-label">
+          {stopBusy ? 'Stopping' : 'Working'} {workingElapsed}
+        </span>
+        <span aria-hidden style={{ gridArea: '1 / 1', visibility: 'hidden' }}>
+          Stopping {workingElapsed}
+        </span>
       </span>
       {circleState !== 'stop' && (
         <Tooltip title={stopTooltip}>
@@ -1490,17 +1493,17 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             size="small"
             aria-label="Stop the agent"
             aria-busy={stopBusy}
-            loading={stopBusy}
             disabled={stopDisabled}
             onClick={onStop}
-            style={{
-              fontSize: token.fontSizeSM,
-              // Room for the loading spinner, so the button doesn't grow while stopping.
-              minWidth: token.controlHeight * 2,
-              ...(isMobile && { minHeight: MOBILE_TOUCH_TARGET }),
-            }}
+            style={infoButtonStyle}
           >
-            Stop
+            {/* The spinner takes the word's place, so the button keeps its width. */}
+            <span style={{ display: 'inline-grid', placeItems: 'center' }}>
+              <span style={{ gridArea: '1 / 1', visibility: stopBusy ? 'hidden' : undefined }}>
+                Stop
+              </span>
+              {stopBusy && <LoadingOutlined style={{ gridArea: '1 / 1' }} />}
+            </span>
           </Button>
         </Tooltip>
       )}
@@ -1509,22 +1512,25 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   // One quiet row above the card: the running status on the left, pinned info on the right.
   const statusRow = (showStop || infoVisible) && (
-    <Flex
-      ref={statusRowRef}
-      align="center"
-      gap={token.marginXS}
-      style={{
-        minWidth: 0,
-        minHeight: isMobile ? MOBILE_TOUCH_TARGET : token.controlHeightSM,
-        paddingInline: token.paddingXS,
-        marginBottom: token.marginXXS,
-        whiteSpace: 'nowrap',
-      }}
-      data-testid="composer-status-row"
-    >
-      {workingLine}
-      {infoGroup}
-    </Flex>
+    // Stop and the info items share the subtle hover fill, so the row reads as clickable.
+    <ConfigProvider theme={{ components: { Button: { textHoverBg: token.colorFillTertiary } } }}>
+      <Flex
+        ref={statusRowRef}
+        align="center"
+        gap={token.marginXS}
+        style={{
+          minWidth: 0,
+          minHeight: isMobile ? MOBILE_TOUCH_TARGET : token.controlHeightSM,
+          paddingInline: token.paddingXS,
+          marginBottom: token.marginXXS,
+          whiteSpace: 'nowrap',
+        }}
+        data-testid="composer-status-row"
+      >
+        {workingLine}
+        {infoGroup}
+      </Flex>
+    </ConfigProvider>
   );
 
   const mcpButton = (
