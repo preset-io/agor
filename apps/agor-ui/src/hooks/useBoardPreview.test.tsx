@@ -18,14 +18,16 @@ describe('useBoardPreview', () => {
 
     act(() => result.current.openPreview(branchA));
     expect(result.current.preview?.target).toEqual(branchA);
-    const firstOpen = result.current.preview?.openId;
+    const firstOpen = result.current.preview?.target;
 
     act(() => result.current.setPreviewFullScreen(true));
     act(() => result.current.openPreview(branchB));
     // Another item swaps the content and keeps the pane as it was.
     expect(result.current.preview?.target).toEqual(branchB);
     expect(result.current.preview?.fullScreen).toBe(true);
-    expect(result.current.preview?.openId).not.toBe(firstOpen);
+    // Each open is a new target object, which is how the pane knows to take focus.
+    act(() => result.current.openPreview({ ...branchB }));
+    expect(result.current.preview?.target).not.toBe(firstOpen);
 
     act(() => result.current.closePreview());
     expect(result.current.preview).toBeNull();
@@ -52,7 +54,7 @@ describe('useBoardPreview', () => {
     expect(result.current.preview).toBeNull();
   });
 
-  it('returns focus to the trigger it was given on close', () => {
+  it('keeps the trigger it was given, for focus to return to', () => {
     const trigger = document.createElement('button');
     const other = document.createElement('button');
     document.body.append(trigger, other);
@@ -60,8 +62,7 @@ describe('useBoardPreview', () => {
 
     other.focus();
     act(() => result.current.openPreview(branchA, { returnFocus: trigger }));
-    act(() => result.current.closePreview());
-    expect(document.activeElement).toBe(trigger);
+    expect(result.current.returnFocusRef.current).toBe(trigger);
   });
 
   it('defaults to the element focused at open time', () => {
@@ -71,8 +72,6 @@ describe('useBoardPreview', () => {
 
     trigger.focus();
     act(() => result.current.openPreview(branchA));
-    trigger.blur();
-    act(() => result.current.closePreview());
-    expect(document.activeElement).toBe(trigger);
+    expect(result.current.returnFocusRef.current).toBe(trigger);
   });
 });

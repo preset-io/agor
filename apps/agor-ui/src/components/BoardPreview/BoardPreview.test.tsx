@@ -1,10 +1,12 @@
-import type { Board, Branch, BranchID, Repo, Session } from '@agor-live/client';
+import type { AgorClient, Board, Branch, BranchID, Repo, Session, User } from '@agor-live/client';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
+import { BoardViewContext, type BoardViewContextValue } from '../../contexts/BoardViewContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
+import { resetAccessCacheForTests } from '../../utils/accessCache';
 import { BoardPreviewPane } from './BoardPreviewPane';
 
 vi.mock('../MarkdownRenderer', () => ({
@@ -15,6 +17,7 @@ vi.mock('../ToolIcon', () => ({ ToolIcon: () => null }));
 const connected = {
   connected: true,
   connecting: false,
+  authGeneration: 1,
   outOfSync: false,
   capturedSha: null,
   currentSha: null,
@@ -50,7 +53,7 @@ const session = {
   last_updated: '2026-10-21T10:00:00.000Z',
 } as unknown as Session;
 
-function seed(branch: Partial<Branch>, repo: Repo = repoWithEnv) {
+function seed(branch: Partial<Branch>, repo: Repo = repoWithEnv, onBoard: Board = board) {
   const full = { ...baseBranch, ...branch } as Branch;
   agorStore.setState({
     branchById: new Map([
@@ -58,7 +61,7 @@ function seed(branch: Partial<Branch>, repo: Repo = repoWithEnv) {
       [teammate.branch_id, teammate],
     ]),
     repoById: new Map([[repo.repo_id, repo]]),
-    boardById: new Map([[board.board_id, board]]),
+    boardById: new Map([[onBoard.board_id, onBoard]]),
     sessionsByBranch: new Map([[full.branch_id, [session]]]),
   });
 }
@@ -72,25 +75,40 @@ const actions = {
   onViewLogs: vi.fn(),
 };
 
+const admin = { user_id: 'user-1', role: 'admin' } as User;
+const member = { user_id: 'user-2', role: 'member' } as User;
+/** A client answering `effective-access` with `access`, or never when it is absent. */
+const clientWith = (access?: { can: string }) => {
+  const find = vi.fn(() => (access ? Promise.resolve(access) : new Promise(() => {})));
+  return { service: () => ({ find }) } as unknown as AgorClient;
+};
+
+const boardView: BoardViewContextValue = {
+  view: 'chat',
+  showOnBoard: vi.fn(),
+  previewTarget: { kind: 'branch', id: BRANCH_ID },
+  openPreview: vi.fn(),
+  closePreview: vi.fn(),
+  openConversation: vi.fn(),
+};
+
 function renderPane(props: Partial<React.ComponentProps<typeof BoardPreviewPane>> = {}) {
-  const handlers = {
-    onShowOnBoard: vi.fn(),
-    onOpenConversation: vi.fn(),
-    onClose: vi.fn(),
-    onToggleFullScreen: vi.fn(),
-  };
+  const handlers = { onShowOnBoard: vi.fn(), onClose: vi.fn(), onToggleFullScreen: vi.fn() };
   render(
     <ConnectionProvider value={connected}>
       <AppActionsProvider value={actions}>
-        <AntApp>
-          <BoardPreviewPane
-            client={null}
-            target={{ kind: 'branch', id: BRANCH_ID }}
-            fullScreen={false}
-            {...handlers}
-            {...props}
-          />
-        </AntApp>
+        <BoardViewContext.Provider value={boardView}>
+          <AntApp>
+            <BoardPreviewPane
+              target={{ kind: 'branch', id: BRANCH_ID }}
+              client={clientWith()}
+              user={admin}
+              fullScreen={false}
+              {...handlers}
+              {...props}
+            />
+          </AntApp>
+        </BoardViewContext.Provider>
       </AppActionsProvider>
     </ConnectionProvider>
   );
@@ -99,6 +117,8 @@ function renderPane(props: Partial<React.ComponentProps<typeof BoardPreviewPane>
 
 beforeEach(() => {
   for (const fn of Object.values(actions)) fn.mockReset();
+  vi.mocked(boardView.openConversation).mockReset();
+  resetAccessCacheForTests();
 });
 afterEach(cleanup);
 
@@ -112,7 +132,7 @@ describe('BoardPreviewPane header', () => {
     fireEvent.click(screen.getByRole('button', { name: /Open full screen/ }));
     expect(onToggleFullScreen).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Show on board/ }));
-    expect(onShowOnBoard).toHaveBeenCalledWith(BRANCH_ID, 'branch');
+    expect(onShowOnBoard).toHaveBeenCalledWith(BRANCH_ID);
     fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -189,16 +209,57 @@ describe('Branch details', () => {
     expect(screen.queryByText(/did$/)).toBeNull();
   });
 
-  it('lists the conversations about it, opening one as a session', () => {
+  it('reads "Notes" when the board has no primary teammate', () => {
+    seed({ notes: 'Built the QBR dashboard.' }, repoWithEnv, {
+      ...board,
+      primary_teammate_id: undefined,
+    } as Board);
+    renderPane();
+    expect(screen.getByRole('heading', { name: 'Notes' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /did$/ })).toBeNull();
+  });
+
+  it('prefers the link the environment reports over the static app link, as the pills do', () => {
+    seed({
+      app_url: 'https://northwind.example.com',
+      environment_instance: {
+        status: 'running',
+        access_urls: [{ name: 'App', url: 'http://localhost:5173' }],
+      } as Branch['environment_instance'],
+    });
+    renderPane();
+    expect(screen.getByRole('link', { name: /Open app/ })).toHaveAttribute(
+      'href',
+      'http://localhost:5173'
+    );
+  });
+
+  it('lists the conversations about it, opening one through the preview rule', () => {
     seed({});
     renderPane();
     expect(screen.getByRole('heading', { name: 'Conversations about it' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /QBR prep/ }));
-    expect(actions.onSessionClick).toHaveBeenCalledWith('session-1');
+    expect(boardView.openConversation).toHaveBeenCalledWith('session-1');
+    expect(actions.onSessionClick).not.toHaveBeenCalled();
+  });
+
+  it('marks the conversation already on screen as current', () => {
+    seed({});
+    renderPane({ currentSessionId: 'session-1' });
+    expect(screen.getByRole('button', { name: /QBR prep/ })).toHaveAttribute(
+      'aria-current',
+      'true'
+    );
+    cleanup();
+    renderPane({ currentSessionId: 'session-9' });
+    expect(screen.getByRole('button', { name: /QBR prep/ })).not.toHaveAttribute('aria-current');
   });
 
   it('folds the environment away, with Start, Stop and Logs on the strip handlers', () => {
-    seed({ environment_instance: { status: 'stopped' } as Branch['environment_instance'] });
+    seed({
+      logs_command: 'docker compose logs',
+      environment_instance: { status: 'stopped' } as Branch['environment_instance'],
+    });
     renderPane();
     const header = screen.getByRole('button', { name: /Environment/ });
     expect(header).toHaveAttribute('aria-expanded', 'false');
@@ -220,6 +281,59 @@ describe('Branch details', () => {
     expect(envButton('Start')).toBeDisabled();
     fireEvent.click(envButton('Stop'));
     expect(actions.onStopEnvironment).toHaveBeenCalledWith(BRANCH_ID);
+  });
+
+  it('offers Logs for a rendered logs command alone, and not without one', () => {
+    const repoUpDown = {
+      ...repoWithEnv,
+      environment_config: { up_command: 'up', down_command: 'down' },
+    } as unknown as Repo;
+    seed(
+      {
+        logs_command: 'docker compose logs',
+        environment_instance: { status: 'running' } as Branch['environment_instance'],
+      },
+      repoUpDown
+    );
+    renderPane();
+    fireEvent.click(screen.getByRole('button', { name: /Environment/ }));
+    expect(envButton('Logs')).toBeEnabled();
+    cleanup();
+    seed({ environment_instance: { status: 'running' } as Branch['environment_instance'] });
+    renderPane();
+    fireEvent.click(screen.getByRole('button', { name: /Environment/ }));
+    expect(screen.queryByText('Logs')).toBeNull();
+  });
+
+  it('disables Start, Stop and Logs for a viewer, and says why', async () => {
+    seed({
+      logs_command: 'docker compose logs',
+      environment_instance: { status: 'running' } as Branch['environment_instance'],
+    });
+    renderPane({ user: member, client: clientWith({ can: 'view' }) });
+    fireEvent.click(screen.getByRole('button', { name: /Environment/ }));
+    expect(
+      await screen.findByText('You need full control of this branch to control its environment.')
+    ).toBeInTheDocument();
+    for (const label of ['Start', 'Stop', 'Logs']) expect(envButton(label)).toBeDisabled();
+  });
+
+  it('keeps the controls disabled while access is loading', () => {
+    seed({
+      logs_command: 'docker compose logs',
+      environment_instance: { status: 'stopped' } as Branch['environment_instance'],
+    });
+    renderPane({ user: member, client: clientWith() });
+    fireEvent.click(screen.getByRole('button', { name: /Environment/ }));
+    for (const label of ['Start', 'Logs']) expect(envButton(label)).toBeDisabled();
+    expect(screen.queryByText(/You need full control/)).toBeNull();
+  });
+
+  it('enables the controls for full control', async () => {
+    seed({ environment_instance: { status: 'stopped' } as Branch['environment_instance'] });
+    renderPane({ user: member, client: clientWith({ can: 'all' }) });
+    fireEvent.click(screen.getByRole('button', { name: /Environment/ }));
+    await vi.waitFor(() => expect(envButton('Start')).toBeEnabled());
   });
 
   it('reads "Not set up" with no buttons when the repo has no environment', () => {

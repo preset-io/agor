@@ -46,7 +46,7 @@ function boardView(): BoardViewContextValue {
   return {
     view: 'files',
     showOnBoard: vi.fn(),
-    preview: null,
+    previewTarget: null,
     openPreview: vi.fn(),
     closePreview: vi.fn(),
     openConversation: vi.fn(),

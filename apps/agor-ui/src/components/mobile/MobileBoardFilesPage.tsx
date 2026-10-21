@@ -1,4 +1,4 @@
-import type { AgorClient, Board } from '@agor-live/client';
+import type { AgorClient, Board, User } from '@agor-live/client';
 import { Typography, theme } from 'antd';
 import { useParams } from 'react-router-dom';
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
@@ -17,8 +17,9 @@ import { useMobileBack } from './useMobileBack';
  */
 export const MobileBoardFilesPage: React.FC<{
   client: AgorClient | null;
+  currentUser?: User | null;
   boardById: Map<string, Board>;
-}> = ({ client, boardById }) => {
+}> = ({ client, currentUser, boardById }) => {
   const { token } = theme.useToken();
   const { boardId = '' } = useParams<{ boardId: string }>();
   // Boards arrive with the first workspace read; until then a missing board may still come.
@@ -31,7 +32,7 @@ export const MobileBoardFilesPage: React.FC<{
     <div style={mobilePageStyle}>
       <MobileHeader title="Files" onBack={back} />
       {resolvedBoardId ? (
-        <MobileBoardPreview client={client}>
+        <MobileBoardPreview client={client} user={currentUser}>
           <div style={{ flex: 1, minHeight: 0 }}>
             <BoardFiles client={client} boardId={resolvedBoardId} active mobile />
           </div>

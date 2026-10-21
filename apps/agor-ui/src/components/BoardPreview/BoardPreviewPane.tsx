@@ -1,4 +1,4 @@
-import { type AgorClient, isTeammate } from '@agor-live/client';
+import { type AgorClient, isTeammate, type User } from '@agor-live/client';
 import {
   AimOutlined,
   BranchesOutlined,
@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Flex, Skeleton, Tooltip, Typography, theme } from 'antd';
 import { forwardRef, lazy, Suspense, useMemo } from 'react';
+import { useBoardViewContext } from '../../contexts/BoardViewContext';
 import type { BoardPreviewTarget } from '../../hooks/useBoardPreview';
 import { useAgorStore } from '../../store/agorStore';
 import { makeBranchSelector } from '../../store/selectors';
@@ -28,85 +29,85 @@ const ArtifactPreview = lazy(() =>
   import('./ArtifactPreview').then((module) => ({ default: module.ArtifactPreview }))
 );
 
-export interface BoardPreviewSummary {
-  icon: React.ReactNode;
-  title: string;
-  /** "{type} · {status}". */
-  meta: string;
-  /** The conversation it came from, when the reader can see it. */
-  sourceSessionId?: string;
-  /** What "Show on board" pans to: branches and artifacts are cards on the board. */
-  boardCard?: { kind: 'branch' | 'artifact'; id: string };
-}
-
-/** The header line for any preview: icon, title, type and status, and where it came from. */
-export function useBoardPreviewSummary(target: BoardPreviewTarget): BoardPreviewSummary {
-  const { token } = theme.useToken();
-  const branchId = target.kind === 'branch' ? target.id : undefined;
-  const branch = useAgorStore(useMemo(() => makeBranchSelector(branchId), [branchId]));
-  if (target.kind === 'branch') {
-    return {
-      icon: <BranchesOutlined style={{ color: token.colorTextSecondary }} />,
-      title: branch ? (isTeammate(branch) ? teammateLabel(branch) : branch.name) : 'Branch',
-      meta: ['Branch', branch && branchPreviewStatus(branch)].filter(Boolean).join(' · '),
-      boardCard: branch ? { kind: 'branch', id: branch.branch_id } : undefined,
-    };
-  }
-  const { item } = target;
-  return {
-    icon: (
-      <span style={{ color: boardFileIconColor(item.kind, token) }}>
-        {BOARD_FILE_ICONS[item.kind]}
-      </span>
-    ),
-    title: item.name,
-    meta: [boardFileTypeLabel(item.kind), boardFileStatus(item)].filter(Boolean).join(' · '),
-    sourceSessionId: typeof item.source === 'object' ? item.source.session_id : undefined,
-    boardCard: target.kind === 'artifact' ? { kind: 'artifact', id: target.id } : undefined,
-  };
-}
-
-/** The previewed item itself, shared by the desktop pane and the phone's bottom sheet. */
-export const BoardPreviewBody: React.FC<{
+interface BoardPreviewSources {
   client: AgorClient | null;
-  target: BoardPreviewTarget;
-}> = ({ client, target }) => {
+  user: User | null | undefined;
+  /** The conversation on screen, marked as current in the item's conversations. */
+  currentSessionId?: string | null;
+}
+
+/**
+ * The header and body for each kind of item, shared by the pane and the
+ * phone's bottom sheet. `boardItem` is the card Show on board pans to;
+ * `sourceSessionId` is the conversation it came from, when the reader can see
+ * it; `body` is null once the item is gone.
+ */
+export function useBoardPreviewContent(
+  target: BoardPreviewTarget,
+  { client, user, currentSessionId }: BoardPreviewSources
+) {
   const { token } = theme.useToken();
-  const branchId = target.kind === 'branch' ? target.id : undefined;
-  const branch = useAgorStore(useMemo(() => makeBranchSelector(branchId), [branchId]));
+  const branch = useAgorStore(
+    useMemo(() => makeBranchSelector(target.kind === 'branch' ? target.id : undefined), [target])
+  );
   switch (target.kind) {
-    case 'artifact':
-      return (
-        <Suspense fallback={<Skeleton active style={{ padding: token.paddingMD }} />}>
-          <ArtifactPreview key={target.id} client={client} artifactId={target.id} />
-        </Suspense>
-      );
-    case 'document':
-      return <KnowledgeDocPreview client={client} documentId={target.id} />;
-    case 'upload':
-      return <UploadPreview key={target.ref} uploadRef={target.ref} item={target.item} />;
     case 'branch':
-      return branch ? (
-        <BranchDetailsPreview branch={branch} />
-      ) : (
-        <Typography.Text type="secondary" style={{ display: 'block', padding: token.paddingMD }}>
-          No longer available
-        </Typography.Text>
-      );
+      return {
+        icon: <BranchesOutlined style={{ color: token.colorTextSecondary }} />,
+        title: branch ? (isTeammate(branch) ? teammateLabel(branch) : branch.name) : 'Branch',
+        meta: ['Branch', branch && branchPreviewStatus(branch)].filter(Boolean).join(' · '),
+        boardItem: branch ? { id: branch.branch_id, kind: 'branch' as const } : undefined,
+        sourceSessionId: undefined,
+        body: branch && (
+          <BranchDetailsPreview
+            branch={branch}
+            client={client}
+            user={user}
+            currentSessionId={currentSessionId}
+          />
+        ),
+      };
+    case 'artifact':
+    case 'document':
+    case 'upload': {
+      const { item } = target;
+      return {
+        icon: (
+          <span style={{ color: boardFileIconColor(item.kind, token) }}>
+            {BOARD_FILE_ICONS[item.kind]}
+          </span>
+        ),
+        title: item.name,
+        meta: [boardFileTypeLabel(item.kind), boardFileStatus(item)].filter(Boolean).join(' · '),
+        boardItem:
+          target.kind === 'artifact' ? { id: target.id, kind: 'artifact' as const } : undefined,
+        sourceSessionId: typeof item.source === 'object' ? item.source.session_id : undefined,
+        body:
+          target.kind === 'artifact' ? (
+            <Suspense fallback={<Skeleton active style={{ padding: token.paddingMD }} />}>
+              <ArtifactPreview key={target.id} client={client} artifactId={target.id} />
+            </Suspense>
+          ) : target.kind === 'document' ? (
+            <KnowledgeDocPreview client={client} documentId={target.id} />
+          ) : (
+            <UploadPreview key={target.ref} uploadRef={target.ref} item={item} />
+          ),
+      };
+    }
   }
-};
+}
 
 interface BoardPreviewPaneProps {
-  client: AgorClient | null;
   target: BoardPreviewTarget;
+  client: AgorClient | null;
+  user: User | null | undefined;
+  /** The conversation on screen, marked as current in the item's conversations. */
+  currentSessionId?: string | null;
   fullScreen: boolean;
   /** Absent when the window is too narrow for a split: the preview stays full screen. */
   onToggleFullScreen?: () => void;
-  onShowOnBoard: (id: string, kind: 'branch' | 'artifact') => void;
-  /** Opens the item's conversation in Chat and keeps the preview. */
-  onOpenConversation: (sessionId: string) => void;
-  /** The conversation already on screen in Chat, which needs no "Open conversation". */
-  shownSessionId?: string | null;
+  /** Branches pan with the id alone; artifacts say so. */
+  onShowOnBoard: (id: string, kind?: 'artifact') => void;
   onClose: () => void;
 }
 
@@ -118,21 +119,32 @@ interface BoardPreviewPaneProps {
 export const BoardPreviewPane = forwardRef<HTMLElement, BoardPreviewPaneProps>(
   function BoardPreviewPane(
     {
-      client,
       target,
+      client,
+      user,
+      currentSessionId,
       fullScreen,
       onToggleFullScreen,
       onShowOnBoard,
-      onOpenConversation,
-      shownSessionId,
       onClose,
     },
     ref
   ) {
     const { token } = theme.useToken();
-    const { icon, title, meta, sourceSessionId, boardCard } = useBoardPreviewSummary(target);
-    const showsOpenConversation = !!sourceSessionId && sourceSessionId !== shownSessionId;
-    const hasActions = !!onToggleFullScreen || showsOpenConversation || !!boardCard;
+    const { icon, title, meta, boardItem, sourceSessionId, body } = useBoardPreviewContent(target, {
+      client,
+      user,
+      currentSessionId,
+    });
+    // "Open conversation" for items from a conversation that Chat is not already showing.
+    const boardView = useBoardViewContext();
+    const conversationShown = boardView?.view === 'chat' && sourceSessionId === currentSessionId;
+    const openConversation =
+      boardView && sourceSessionId && !conversationShown
+        ? () => boardView.openConversation(sourceSessionId)
+        : undefined;
+
+    const hasActions = !!onToggleFullScreen || !!openConversation || !!boardItem;
 
     return (
       <section
@@ -153,8 +165,7 @@ export const BoardPreviewPane = forwardRef<HTMLElement, BoardPreviewPaneProps>(
         }}
       >
         <Flex
-          align="center"
-          wrap
+          vertical
           gap={token.marginXS}
           style={{
             flexShrink: 0,
@@ -162,33 +173,35 @@ export const BoardPreviewPane = forwardRef<HTMLElement, BoardPreviewPaneProps>(
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
           }}
         >
-          <span aria-hidden style={{ display: 'flex' }}>
-            {icon}
-          </span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Typography.Text strong ellipsis={{ tooltip: title }} style={{ display: 'block' }}>
-              {title}
-            </Typography.Text>
-            <Typography.Text
-              type="secondary"
-              ellipsis
-              style={{ display: 'block', fontSize: token.fontSizeSM }}
-            >
-              {meta}
-            </Typography.Text>
-          </div>
-          <Tooltip title="Close preview">
-            <Button
-              type="text"
-              size="small"
-              aria-label="Close preview"
-              icon={<CloseOutlined />}
-              onClick={onClose}
-            />
-          </Tooltip>
-          {/* Labelled actions on their own row, so a narrow pane keeps the title readable. */}
+          <Flex align="center" gap={token.marginXS}>
+            <span aria-hidden style={{ display: 'flex' }}>
+              {icon}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Typography.Text strong ellipsis={{ tooltip: title }} style={{ display: 'block' }}>
+                {title}
+              </Typography.Text>
+              <Typography.Text
+                type="secondary"
+                ellipsis
+                style={{ display: 'block', fontSize: token.fontSizeSM }}
+              >
+                {meta}
+              </Typography.Text>
+            </div>
+            <Tooltip title="Close preview">
+              <Button
+                type="text"
+                size="small"
+                aria-label="Close preview"
+                icon={<CloseOutlined />}
+                onClick={onClose}
+              />
+            </Tooltip>
+          </Flex>
+          {/* On their own row, so the title keeps the width and the labels stay. */}
           {hasActions && (
-            <Flex wrap gap={token.marginXS} style={{ flexBasis: '100%' }}>
+            <Flex gap={token.marginXS} wrap>
               {onToggleFullScreen && (
                 <Button
                   size="small"
@@ -198,20 +211,20 @@ export const BoardPreviewPane = forwardRef<HTMLElement, BoardPreviewPaneProps>(
                   {fullScreen ? 'Exit full screen' : 'Open full screen'}
                 </Button>
               )}
-              {sourceSessionId && sourceSessionId !== shownSessionId && (
-                <Button
-                  size="small"
-                  icon={<MessageOutlined />}
-                  onClick={() => onOpenConversation(sourceSessionId)}
-                >
+              {openConversation && (
+                <Button size="small" icon={<MessageOutlined />} onClick={openConversation}>
                   Open conversation
                 </Button>
               )}
-              {boardCard && (
+              {boardItem && (
                 <Button
                   size="small"
                   icon={<AimOutlined />}
-                  onClick={() => onShowOnBoard(boardCard.id, boardCard.kind)}
+                  onClick={() =>
+                    boardItem.kind === 'artifact'
+                      ? onShowOnBoard(boardItem.id, 'artifact')
+                      : onShowOnBoard(boardItem.id)
+                  }
                 >
                   Show on board
                 </Button>
@@ -220,7 +233,14 @@ export const BoardPreviewPane = forwardRef<HTMLElement, BoardPreviewPaneProps>(
           )}
         </Flex>
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-          <BoardPreviewBody client={client} target={target} />
+          {body || (
+            <Typography.Text
+              type="secondary"
+              style={{ display: 'block', padding: token.paddingMD }}
+            >
+              No longer available
+            </Typography.Text>
+          )}
         </div>
       </section>
     );

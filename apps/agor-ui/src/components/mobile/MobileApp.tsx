@@ -636,7 +636,9 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           />
           <Route
             path="board/:boardId/files"
-            element={<MobileBoardFilesPage client={client} boardById={boardById} />}
+            element={
+              <MobileBoardFilesPage client={client} currentUser={user} boardById={boardById} />
+            }
           />
           <Route
             path="session/:sessionId"

@@ -1,5 +1,6 @@
+import type { AgorClient, User } from '@agor-live/client';
 import { Flex, theme } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type ImperativePanelHandle,
   Panel,
@@ -8,9 +9,12 @@ import {
 } from 'react-resizable-panels';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { BoardViewContext, type BoardViewContextValue } from '../../contexts/BoardViewContext';
+import { type BoardPreviewTarget, useBoardPreview } from '../../hooks/useBoardPreview';
 import type { BoardViewShell } from '../../hooks/useBoardViewShell';
 import { useElementWidth } from '../../hooks/useElementWidth';
 import { useStableCallback } from '../../hooks/useStableCallback';
+import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
+import { clampPercent, percentOf } from '../App/panelSizing';
 import { BoardFiles } from '../BoardFiles';
 import { BoardPreviewPane } from '../BoardPreview';
 import { BoardViewTabs } from '../BoardViewTabs';
@@ -18,21 +22,27 @@ import { BoardViewTabs } from '../BoardViewTabs';
 // Matches the canvas panel's own `minSize` below; App caps the session panel with it.
 export const CANVAS_MIN_SIZE_PERCENT = 20;
 
-// Beside a preview the conversation keeps 420px, the Files list 480px and the
-// preview 400px. Narrower than both, the preview opens full screen.
+// Beside a preview the conversation keeps 420px and the preview 400px. Narrower
+// than both, the preview opens full screen.
 export const CONVERSATION_MIN_WIDTH_PX = 420;
-export const FILES_MIN_WIDTH_PX = 480;
 export const PREVIEW_MIN_WIDTH_PX = 400;
+// Beside a preview, the Files list keeps 480px.
+export const FILES_MIN_WIDTH_PX = 480;
 
 const PREVIEW_HANDLE_WIDTH_PX = 4;
 
-const percentOf = (px: number, width: number) =>
-  width > 0 ? Math.min(100, (px / width) * 100) : 0;
-const clampPercent = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, value));
+/** Whether focus can land on `element`: still on the page, and not inert or hidden. */
+const canTakeFocus = (element: HTMLElement | null): element is HTMLElement =>
+  !!element?.isConnected &&
+  !element.closest('[inert], [aria-hidden="true"]') &&
+  (element.checkVisibility?.() ?? true);
 
 interface BoardViewAreaProps {
   shell: BoardViewShell;
+  client: AgorClient | null;
+  user: User | null | undefined;
+  /** The conversation on screen, marked as current in the preview. */
+  currentSessionId?: string | null;
   /** The canvas, or Home / the teammates directory in its place. */
   canvas: React.ReactNode;
   /** The session panel's content. Null leaves Board without a session panel. */
@@ -51,6 +61,9 @@ interface BoardViewAreaProps {
  */
 export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
   shell,
+  client,
+  user,
+  currentSessionId,
   canvas,
   conversation,
   sessionPanel,
@@ -64,30 +77,32 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
   const sessionPanelRef = useRef<ImperativePanelHandle>(null);
   const resizeDraggingRef = useRef(false);
 
-  // Files mounts the first time it is shown, then stays (hidden elsewhere), so
-  // its search, filters and scroll survive a trip to Chat.
-  const [filesMounted, setFilesMounted] = useState(false);
-  if (isFiles && !filesMounted) setFilesMounted(true);
-
-  // "Open conversation": Chat for this visit, then the session, keeping the preview.
+  // The preview: Chat only, never Board, where it is kept but hidden. Its state
+  // and size live here, where the pane renders, so a divider drag re-renders
+  // only this area. The size is a share of the area, kept per person and
+  // written on drag only, like the session panel's.
   const { onSessionClick } = useAppActions();
-  const openConversation = useStableCallback((sessionId: string) => {
-    shell.visit('chat');
-    onSessionClick?.(sessionId);
-  });
-  const context = useMemo<BoardViewContextValue | null>(
-    () => (shell.context ? { ...shell.context, openConversation } : null),
-    [shell.context, openConversation]
+  const {
+    preview: keptPreview,
+    returnFocusRef,
+    openPreview,
+    closePreview,
+    setPreviewFullScreen,
+  } = useBoardPreview(shell.boardId);
+  const [keptPreviewSize, setPreviewSize] = useUserLocalStorage<number>(
+    user?.user_id,
+    'panel:preview:size',
+    45
   );
-
-  // The preview: Chat and Files, never Board, where it is kept but hidden.
+  const rootRef = useRef<HTMLDivElement>(null);
   const areaRef = useRef<HTMLDivElement>(null);
+  const mainAreaRef = useRef<HTMLDivElement>(null);
   const areaWidth = useElementWidth(areaRef);
   const mainPanelRef = useRef<ImperativePanelHandle>(null);
   const previewPanelRef = useRef<ImperativePanelHandle>(null);
   const previewPaneRef = useRef<HTMLElement>(null);
   const previewDraggingRef = useRef(false);
-  const preview = shell.ready && (isChat || isFiles) ? shell.preview : null;
+  const preview = shell.ready && (isChat || isFiles) ? keptPreview : null;
   const mainMinWidth = isFiles ? FILES_MIN_WIDTH_PX : CONVERSATION_MIN_WIDTH_PX;
   // Panel sizes share the width left beside the divider.
   const panelsWidth = areaWidth - PREVIEW_HANDLE_WIDTH_PX;
@@ -95,7 +110,42 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
   const fullScreen = !!preview && (preview.fullScreen || narrow);
   const mainMinSize = percentOf(mainMinWidth, panelsWidth);
   const previewMinSize = percentOf(PREVIEW_MIN_WIDTH_PX, panelsWidth);
-  const previewSize = clampPercent(shell.previewSize, previewMinSize, 100 - mainMinSize);
+  const previewSize = clampPercent(keptPreviewSize, previewMinSize, 100 - mainMinSize);
+
+  // Every way of opening a conversation from the preview goes through here, so
+  // the conversation is seen: full screen ends, and where the window has no
+  // room for both, the preview closes.
+  const openConversation = useStableCallback((sessionId: string) => {
+    shell.visit('chat');
+    if (narrow) closePreview();
+    else setPreviewFullScreen(false);
+    onSessionClick?.(sessionId);
+  });
+
+  const previewTarget = keptPreview?.target ?? null;
+  const { ready, view, showOnBoard } = shell;
+  const context = useMemo<BoardViewContextValue | null>(
+    () =>
+      ready
+        ? { view, showOnBoard, previewTarget, openPreview, closePreview, openConversation }
+        : null,
+    [ready, view, showOnBoard, previewTarget, openPreview, closePreview, openConversation]
+  );
+
+  // Files mounts the first time it is shown, then stays (hidden elsewhere), so
+  // its search, filters and scroll survive a trip to Chat.
+  const [filesMounted, setFilesMounted] = useState(false);
+  if (isFiles && !filesMounted) setFilesMounted(true);
+
+  // A conversation opened while Files is shown (a row's link, the left panel, a
+  // deep link) shows Chat for this visit, where it opens as a tab. Before paint,
+  // so Files never shows an empty frame.
+  const shownSessionRef = useRef(currentSessionId);
+  useLayoutEffect(() => {
+    const opened = currentSessionId && currentSessionId !== shownSessionRef.current;
+    shownSessionRef.current = currentSessionId;
+    if (opened && isFiles) shell.visit('chat');
+  }, [currentSessionId, isFiles, shell.visit]);
 
   // Chat collapses the canvas; Board expands it again, and the effect below
   // restores the session panel size.
@@ -132,17 +182,51 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
     if (preview) previewPanelRef.current?.resize(previewSize);
   }, [fullScreen, !!preview]);
 
-  // Each open moves focus into the preview, once: coming back from Board does not.
-  const focusedOpenIdRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (!preview || focusedOpenIdRef.current === preview.openId) return;
-    focusedOpenIdRef.current = preview.openId;
-    previewPaneRef.current?.focus();
-  }, [preview]);
+  // Focus follows the preview. Each open (a new target) moves focus into it;
+  // coming back from Board is not an open. Closing returns focus to whatever
+  // opened it if that can still take focus, else to the active board tab, but
+  // only when focus went with the pane. Going full screen, or too narrow for
+  // both, while focus is in the main area moves it into the preview, since the
+  // main area turns inert; focus elsewhere, such as a modal, stays put. A layout
+  // effect, so focus moves before the browser drops it from the inert area.
+  const shown = !!preview;
+  const focusedTargetRef = useRef<BoardPreviewTarget | null>(null);
+  const wasFullScreenRef = useRef(false);
+  useLayoutEffect(() => {
+    const wasFullScreen = wasFullScreenRef.current;
+    wasFullScreenRef.current = fullScreen;
+    if (!previewTarget) {
+      if (!focusedTargetRef.current) return;
+      focusedTargetRef.current = null;
+      const trigger = returnFocusRef.current;
+      returnFocusRef.current = null;
+      const focused = document.activeElement;
+      if (focused && focused !== document.body) return;
+      if (canTakeFocus(trigger)) trigger.focus();
+      if (trigger && document.activeElement === trigger) return;
+      const activeTab = Array.from(
+        rootRef.current?.querySelectorAll<HTMLElement>('[role="tab"][aria-selected="true"]') ?? []
+      ).find((tab) => !areaRef.current?.contains(tab));
+      activeTab?.focus();
+      return;
+    }
+    const pane = previewPaneRef.current;
+    if (!shown || !pane) return;
+    if (focusedTargetRef.current !== previewTarget) {
+      focusedTargetRef.current = previewTarget;
+      pane.focus();
+    } else if (
+      fullScreen &&
+      !wasFullScreen &&
+      mainAreaRef.current?.contains(document.activeElement)
+    ) {
+      pane.focus();
+    }
+  }, [previewTarget, shown, fullScreen, returnFocusRef]);
 
   return (
     <BoardViewContext.Provider value={context}>
-      <Flex vertical style={{ height: '100%' }}>
+      <Flex ref={rootRef} vertical style={{ height: '100%' }}>
         {shell.ready && (
           <BoardViewTabs
             order={shell.order}
@@ -156,7 +240,7 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
             id="board-view"
             direction="horizontal"
             onLayout={(sizes) => {
-              if (previewDraggingRef.current && sizes.length === 2) shell.setPreviewSize(sizes[1]);
+              if (previewDraggingRef.current && sizes.length === 2) setPreviewSize(sizes[1]);
             }}
           >
             <Panel
@@ -170,13 +254,14 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
             >
               {/* Collapsed in full screen, not unmounted: hidden like the canvas in Chat. */}
               <div
+                ref={mainAreaRef}
                 inert={fullScreen}
                 aria-hidden={fullScreen || undefined}
                 style={{ height: '100%', position: 'relative' }}
               >
                 {/* Files lays over the board and conversation, which stay laid out but
                     hidden, so scroll positions and React Flow measurements survive. */}
-                {filesMounted && shell.boardId && (
+                {filesMounted && (
                   <div
                     inert={!isFiles}
                     aria-hidden={!isFiles || undefined}
@@ -187,7 +272,7 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
                       visibility: isFiles ? 'visible' : 'hidden',
                     }}
                   >
-                    <BoardFiles client={shell.client} boardId={shell.boardId} active={isFiles} />
+                    <BoardFiles client={client} boardId={shell.boardId} active={isFiles} />
                   </div>
                 )}
                 <div
@@ -297,16 +382,16 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
                 >
                   <BoardPreviewPane
                     ref={previewPaneRef}
-                    client={shell.client}
                     target={preview.target}
+                    client={client}
+                    user={user}
+                    currentSessionId={currentSessionId}
                     fullScreen={fullScreen}
                     onToggleFullScreen={
-                      narrow ? undefined : () => shell.setPreviewFullScreen(!preview.fullScreen)
+                      narrow ? undefined : () => setPreviewFullScreen(!preview.fullScreen)
                     }
-                    onShowOnBoard={shell.showOnBoard}
-                    onOpenConversation={openConversation}
-                    shownSessionId={isChat ? shell.selectedSessionId : null}
-                    onClose={shell.closePreview}
+                    onShowOnBoard={showOnBoard}
+                    onClose={closePreview}
                   />
                 </Panel>
               </>

@@ -52,7 +52,7 @@ export const WorkCard = memo(function WorkCard({
   const boardView = useBoardViewContext();
   const type = boardFileTypeLabel(item.kind);
   const archived = !!item.archived;
-  const showing = isPreviewing(boardView?.preview, item);
+  const showing = isPreviewing(boardView?.previewTarget, item);
   const onBoard = boardView?.view === 'board';
   const showsOnBoard = onBoard && (item.kind === 'artifact' || item.kind === 'app');
 

@@ -1031,7 +1031,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             label: 'Branch details',
             onClick: () =>
               boardView.openPreview(
-                { kind: 'branch', id: branch.branch_id },
+                { kind: 'branch', id: branch.branch_id, fromSessionId: session.session_id },
                 { returnFocus: moreActionsButtonRef.current }
               ),
           },

@@ -2,7 +2,7 @@ import type { BoardFileItem, Branch, UserID } from '@agor-live/client';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BoardViewContext, type BoardViewContextValue } from '../../contexts/BoardViewContext';
-import type { BoardPreviewState } from '../../hooks/useBoardPreview';
+import type { BoardPreviewTarget } from '../../hooks/useBoardPreview';
 import { assignWorkToTasks } from '../../hooks/useSessionWork';
 import { agorStore } from '../../store/agorStore';
 import { SessionWorkContext, TaskWorkCards, WorkCard } from './WorkCard';
@@ -27,7 +27,7 @@ function boardView(overrides: Partial<BoardViewContextValue> = {}): BoardViewCon
   return {
     view: 'chat',
     showOnBoard: vi.fn(),
-    preview: null,
+    previewTarget: null,
     openPreview: vi.fn(),
     closePreview: vi.fn(),
     openConversation: vi.fn(),
@@ -86,12 +86,12 @@ describe('WorkCard', () => {
     });
     unmount();
 
-    const preview: BoardPreviewState = {
-      target: { kind: 'artifact', id: 'artifact-1' as never, item: item() },
-      fullScreen: false,
-      openId: 1,
+    const previewTarget: BoardPreviewTarget = {
+      kind: 'artifact',
+      id: 'artifact-1' as never,
+      item: item(),
     };
-    renderCard(item(), boardView({ preview }));
+    renderCard(item(), boardView({ previewTarget }));
     expect(screen.getByRole('button', { name: 'Showing' })).toBeDisabled();
   });
 

@@ -105,7 +105,9 @@ import {
 } from './boardPanelActions';
 import {
   capSessionSizeForCanvasMin,
+  clampPercent,
   getContentPanelWidthPercent,
+  percentOf,
   toContentRelativePercent,
   toViewportRelativePercent,
 } from './panelSizing';
@@ -302,10 +304,10 @@ const SESSION_PANEL_MIN_SIZE_FLOOR_PERCENT = 15;
 const LEFT_PANEL_RAIL_WIDTH_PX = 56;
 
 const getLeftPanelMinSizePercent = (viewportWidth: number) =>
-  Math.min(LEFT_PANEL_MAX_SIZE_PERCENT, (LEFT_PANEL_MIN_WIDTH_PX / viewportWidth) * 100);
+  Math.min(LEFT_PANEL_MAX_SIZE_PERCENT, percentOf(LEFT_PANEL_MIN_WIDTH_PX, viewportWidth));
 
 const getLeftPanelRailSizePercent = (viewportWidth: number) =>
-  (LEFT_PANEL_RAIL_WIDTH_PX / viewportWidth) * 100;
+  percentOf(LEFT_PANEL_RAIL_WIDTH_PX, viewportWidth);
 
 // Express the session panel's 360px minimum through the panel sizing system
 // (a percentage of the current viewport) rather than a CSS px `minWidth`, which
@@ -315,12 +317,9 @@ const getSessionPanelMinSizePercent = (viewportWidth: number) =>
     SESSION_PANEL_MAX_SIZE_PERCENT,
     Math.max(
       SESSION_PANEL_MIN_SIZE_FLOOR_PERCENT,
-      (SESSION_PANEL_MIN_WIDTH_PX / viewportWidth) * 100
+      percentOf(SESSION_PANEL_MIN_WIDTH_PX, viewportWidth)
     )
   );
-
-const clampPercent = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, value));
 
 export const App: React.FC<AppProps> = ({
   client,
@@ -551,7 +550,6 @@ export const App: React.FC<AppProps> = ({
     onBoardSurface: !isHomeSurface && !isTeammatesPath,
     urlNamesBoard: !!routeParams.boardParam || hasExplicitEntityTarget,
     activeUrlTarget,
-    selectedSessionId: effectiveSelectedSessionId,
   });
   const isChat = boardView.isChat;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
@@ -1462,6 +1460,9 @@ export const App: React.FC<AppProps> = ({
             <Panel id="content-panel" order={2} defaultSize={contentPanelWidthPercent} minSize={40}>
               <BoardViewArea
                 shell={boardView}
+                client={client}
+                user={user}
+                currentSessionId={effectiveSelectedSessionId}
                 sessionPanel={{
                   size: sessionPanelSizeWithinContent,
                   minSize: sessionPanelMinSizeWithinContent,
@@ -1520,7 +1521,7 @@ export const App: React.FC<AppProps> = ({
                         activeUrlTargetArtifactId={
                           activeUrlTargetArtifactId ?? boardView.highlightArtifactId
                         }
-                        hidden={isChat}
+                        hidden={isChat || boardView.isFiles}
                         highlightTip={boardView.highlightTip}
                         onDismissHighlightTip={boardView.clearHighlight}
                         availableAgents={availableAgents}

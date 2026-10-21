@@ -1,7 +1,8 @@
-import type { AgorClient, BoardFileItem, UserID } from '@agor-live/client';
+import type { AgorClient, BoardFileItem, BoardView, UserID } from '@agor-live/client';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BoardViewContext, type BoardViewContextValue } from '../../contexts/BoardViewContext';
 import type { BoardPreviewTarget } from '../../hooks/useBoardPreview';
 import { BoardPreviewPane } from './BoardPreviewPane';
 
@@ -36,27 +37,34 @@ function renderPane(
   target: BoardPreviewTarget,
   {
     client = null,
-    shownSessionId = null,
-  }: { client?: AgorClient | null; shownSessionId?: string | null } = {}
+    view = 'files',
+    currentSessionId = null,
+  }: { client?: AgorClient | null; view?: BoardView; currentSessionId?: string | null } = {}
 ) {
-  const handlers = {
-    onShowOnBoard: vi.fn(),
-    onOpenConversation: vi.fn(),
-    onClose: vi.fn(),
-    onToggleFullScreen: vi.fn(),
+  const handlers = { onShowOnBoard: vi.fn(), onClose: vi.fn(), onToggleFullScreen: vi.fn() };
+  const context: BoardViewContextValue = {
+    view,
+    showOnBoard: vi.fn(),
+    previewTarget: target,
+    openPreview: vi.fn(),
+    closePreview: vi.fn(),
+    openConversation: vi.fn(),
   };
   render(
     <AntApp>
-      <BoardPreviewPane
-        client={client}
-        target={target}
-        fullScreen={false}
-        shownSessionId={shownSessionId}
-        {...handlers}
-      />
+      <BoardViewContext.Provider value={context}>
+        <BoardPreviewPane
+          client={client}
+          user={null}
+          target={target}
+          currentSessionId={currentSessionId}
+          fullScreen={false}
+          {...handlers}
+        />
+      </BoardViewContext.Provider>
     </AntApp>
   );
-  return handlers;
+  return { ...handlers, onOpenConversation: context.openConversation };
 }
 
 afterEach(() => {
@@ -88,7 +96,8 @@ describe('document preview', () => {
   it('leaves out Open conversation for the conversation already shown in Chat', () => {
     renderPane(target, {
       client: docClient(async () => ({ content: '' })),
-      shownSessionId: 'session-1',
+      view: 'chat',
+      currentSessionId: 'session-1',
     });
     expect(screen.queryByRole('button', { name: /Open conversation/ })).toBeNull();
   });

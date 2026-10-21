@@ -1,7 +1,12 @@
 // Pure width math for the resizable App layout panels. Extracted so it's
 // unit-testable without mounting the full App component tree.
 
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+export const clampPercent = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+// A pixel width as a percentage of `width`, capped at 100; 0 while `width` is unmeasured.
+export const percentOf = (px: number, width: number) =>
+  width > 0 ? Math.min(100, (px / width) * 100) : 0;
 
 // Width of the middle "content" panel (canvas + session panel) as a
 // percentage of the full viewport — whatever's left once the left
@@ -24,13 +29,13 @@ export const toContentRelativePercent = (
   contentPanelWidthPercent: number
 ) =>
   contentPanelWidthPercent > 0
-    ? clamp((viewportRelativePercent / contentPanelWidthPercent) * 100, 0, 100)
+    ? clampPercent((viewportRelativePercent / contentPanelWidthPercent) * 100, 0, 100)
     : 0;
 
 export const toViewportRelativePercent = (
   contentRelativePercent: number,
   contentPanelWidthPercent: number
-) => clamp((contentRelativePercent * contentPanelWidthPercent) / 100, 0, 100);
+) => clampPercent((contentRelativePercent * contentPanelWidthPercent) / 100, 0, 100);
 
 // The session panel shares the content panel with the canvas, which enforces
 // its own `minSize`. A content-relative session size only bounded to [0, 100]

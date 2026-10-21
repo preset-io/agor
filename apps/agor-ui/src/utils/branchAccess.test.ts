@@ -2,6 +2,7 @@ import type { EffectiveBranchAccess } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import {
   type BranchAccessLookup,
+  canControlBranchEnvironment,
   canManageBranch,
   canStartSessions,
   provisioningAccess,
@@ -49,5 +50,19 @@ describe('canManageBranch', () => {
     ['lookup loading', 'loading', false],
   ])('%s', (_name, lookup, expected) => {
     expect(canManageBranch(lookup)).toBe(expected);
+  });
+});
+
+describe('canControlBranchEnvironment', () => {
+  it.each<[string, BranchAccessLookup | null, string | undefined, boolean | undefined]>([
+    ['an admin, before access loads', 'loading', 'admin', true],
+    ['effective all', access({ can: 'all' }), 'member', true],
+    ['a viewer', access({ can: 'view' }), 'member', false],
+    ['prompt access', access({ can: 'prompt' }), 'member', false],
+    ['loading', 'loading', 'member', undefined],
+    ['a failed lookup', 'failed', 'member', undefined],
+    ['no lookup', null, 'member', undefined],
+  ])('%s', (_label, lookup, role, expected) => {
+    expect(canControlBranchEnvironment(lookup, role)).toBe(expected);
   });
 });

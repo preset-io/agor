@@ -1,27 +1,24 @@
 import { type AgorClient, type Board, isTeammate, type User } from '@agor-live/client';
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import type { BoardViewContextValue } from '../contexts/BoardViewContext';
 import { useRecenterMap, useRegisterBoardView } from '../contexts/CanvasNavigationContext';
 import { agorStore } from '../store/agorStore';
 import { availableBoardViews } from '../utils/boardViews';
 import { teammateLabel } from '../utils/teammateLabels';
 import { resolveBoardFromUrlPure } from '../utils/urlResolution';
-import { useBoardPreview } from './useBoardPreview';
 import { useBoardTabOrder } from './useBoardTabOrder';
 import { useBoardView } from './useBoardView';
 import { useCanManageBoard } from './useCanManageBoard';
 import { useStableCallback } from './useStableCallback';
 import type { ActiveUrlTarget } from './useUrlState';
-import { useUserLocalStorage } from './useUserLocalStorage';
 
 const HIGHLIGHT_MS = 6000;
 
 /**
  * The board tabs' controller for the desktop shell: which tab is on screen,
- * the shared tab order, when the canvas mounts, the preview pane, and Show on
- * board. Deliberate recenters elsewhere ("go to card") reach it through
- * CanvasNavigationContext.
+ * the shared tab order, when the canvas mounts, and Show on board. Deliberate
+ * recenters elsewhere ("go to card") reach it through CanvasNavigationContext.
+ * The preview pane lives in BoardViewArea, so resizing it re-renders only that.
  */
 export function useBoardViewShell({
   client,
@@ -31,7 +28,6 @@ export function useBoardViewShell({
   onBoardSurface,
   urlNamesBoard,
   activeUrlTarget,
-  selectedSessionId = null,
 }: {
   client: AgorClient | null;
   user: User | null | undefined;
@@ -42,8 +38,6 @@ export function useBoardViewShell({
   /** The URL names a board or an entity on one, which decides the tab once resolved. */
   urlNamesBoard: boolean;
   activeUrlTarget: ActiveUrlTarget | null;
-  /** The session in the URL. Opening one while Files is shown visits Chat. */
-  selectedSessionId?: string | null;
 }) {
   // The row shows once the board is known.
   const ready = onBoardSurface && !!board;
@@ -57,14 +51,6 @@ export function useBoardViewShell({
   });
   const isChat = ready && view === 'chat';
   const isFiles = ready && view === 'files';
-
-  // A conversation opened while Files is shown (a row's link, the left panel, a
-  // deep link) shows Chat for this visit, where it opens as a tab.
-  const [openedSessionId, setOpenedSessionId] = useState(selectedSessionId);
-  if (selectedSessionId !== openedSessionId) {
-    setOpenedSessionId(selectedSessionId);
-    if (selectedSessionId && isFiles) visit('chat');
-  }
 
   // A branch or artifact link shows Board for that visit, set in the render the
   // target arrives in so Chat never flashes. The link's recenter then finds Board shown.
@@ -89,13 +75,14 @@ export function useBoardViewShell({
   useRegisterBoardView(
     useStableCallback((targetBoardId?: string) => {
       const target = targetBoardId || boardId;
-      if (!target || (target === boardId && !isChat)) return false;
+      if (!target || (target === boardId && view === 'board')) return false;
       visit('board', target);
       return true;
     })
   );
 
-  // Show on board: pan to the card, outline it like a deep link, and anchor a tip.
+  // Show on board: pan to the branch or artifact card, outline it like a deep
+  // link, and anchor a tip.
   const recenterMap = useRecenterMap();
   const [highlight, setHighlight] = useState<{
     kind: 'branch' | 'artifact';
@@ -122,28 +109,14 @@ export function useBoardViewShell({
     return () => window.clearTimeout(timer);
   }, [highlight]);
   // Leaving Board, or the board, ends it.
+  const onBoard = ready && view === 'board';
   // biome-ignore lint/correctness/useExhaustiveDependencies: clear on every board change.
   useEffect(() => {
-    if (isChat || !ready) setHighlight(null);
-  }, [isChat, ready, boardId]);
+    if (!onBoard) setHighlight(null);
+  }, [onBoard, boardId]);
   const highlightTip = useMemo(
     () => (highlight ? { nodeId: highlight.id, text: highlight.text } : null),
     [highlight]
-  );
-
-  // The preview pane beside Chat. Its size is a share of the main area, kept per
-  // person and written on drag only, like the session panel's.
-  const { preview, openPreview, closePreview, setPreviewFullScreen } = useBoardPreview(boardId);
-  const [previewSize, setPreviewSize] = useUserLocalStorage<number>(
-    user?.user_id,
-    'panel:preview:size',
-    45
-  );
-
-  // BoardViewArea adds openConversation, which needs the app's session opener.
-  const context = useMemo<Omit<BoardViewContextValue, 'openConversation'> | null>(
-    () => (ready ? { view, showOnBoard, preview, openPreview, closePreview } : null),
-    [ready, view, showOnBoard, preview, openPreview, closePreview]
   );
 
   return {
@@ -151,9 +124,6 @@ export function useBoardViewShell({
     view,
     isChat,
     isFiles,
-    client,
-    boardId,
-    selectedSessionId,
     order,
     pick,
     visit,
@@ -166,12 +136,8 @@ export function useBoardViewShell({
     highlightArtifactId: highlight?.kind === 'artifact' ? highlight.id : null,
     clearHighlight,
     showOnBoard,
-    preview,
-    closePreview,
-    setPreviewFullScreen,
-    previewSize,
-    setPreviewSize,
-    context,
+    /** The board the tabs and the preview belong to. */
+    boardId,
   };
 }
 

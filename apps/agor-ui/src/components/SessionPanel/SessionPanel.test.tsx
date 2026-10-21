@@ -771,9 +771,10 @@ describe('SessionPanel Branch details', () => {
   const boardView = (view: 'chat' | 'board'): BoardViewContextValue => ({
     view,
     showOnBoard: vi.fn(),
-    preview: null,
+    previewTarget: null,
     openPreview: vi.fn(),
     closePreview: vi.fn(),
+    openConversation: vi.fn(),
   });
 
   it('opens the branch in the preview from More actions in Chat, returning focus to the button', async () => {
@@ -785,7 +786,7 @@ describe('SessionPanel Branch details', () => {
     expect(items[0]).toHaveTextContent('Branch details');
     fireEvent.click(items[0]);
     expect(chat.openPreview).toHaveBeenCalledWith(
-      { kind: 'branch', id: 'branch-1' },
+      { kind: 'branch', id: 'branch-1', fromSessionId: 'session-1' },
       { returnFocus: more }
     );
   });

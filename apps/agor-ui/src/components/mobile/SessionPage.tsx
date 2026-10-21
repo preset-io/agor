@@ -216,7 +216,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           composer down behind the persistent tab bar; `flex: 1` reserves exactly
           the space left over the bar and its safe-area inset. */}
       {/* Work cards open in a bottom sheet, through the same context as desktop. */}
-      <MobileBoardPreview client={client} shownSessionId={session.session_id}>
+      <MobileBoardPreview client={client} user={currentUser} shownSessionId={session.session_id}>
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <SessionPanel
             client={client}

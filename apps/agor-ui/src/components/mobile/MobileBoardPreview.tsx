@@ -1,25 +1,30 @@
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
 import { CloseOutlined, MessageOutlined } from '@ant-design/icons';
 import { Button, Drawer, Flex, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BoardViewContext, type BoardViewContextValue } from '../../contexts/BoardViewContext';
-import type { BoardPreviewState, BoardPreviewTarget } from '../../hooks/useBoardPreview';
+import type { BoardPreviewTarget } from '../../hooks/useBoardPreview';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
-import { BoardPreviewBody, useBoardPreviewSummary } from '../BoardPreview/BoardPreviewPane';
+import { useBoardPreviewContent } from '../BoardPreview/BoardPreviewPane';
 
 const SheetContent: React.FC<{
   client: AgorClient | null;
+  user: User | null | undefined;
   target: BoardPreviewTarget;
   /** The conversation already on screen, which needs no "Open conversation". */
   shownSessionId?: string;
   onOpenConversation: (sessionId: string) => void;
   onClose: () => void;
-}> = ({ client, target, shownSessionId, onOpenConversation, onClose }) => {
+}> = ({ client, user, target, shownSessionId, onOpenConversation, onClose }) => {
   const { token } = theme.useToken();
-  const { icon, title, meta, sourceSessionId } = useBoardPreviewSummary(target);
+  const { icon, title, meta, sourceSessionId, body } = useBoardPreviewContent(target, {
+    client,
+    user,
+    currentSessionId: shownSessionId,
+  });
   return (
     <Flex vertical style={{ height: '100%' }}>
       <Flex
@@ -58,7 +63,11 @@ const SheetContent: React.FC<{
         )}
       </Flex>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        <BoardPreviewBody client={client} target={target} />
+        {body || (
+          <Typography.Text type="secondary" style={{ display: 'block', padding: token.padding }}>
+            No longer available
+          </Typography.Text>
+        )}
       </div>
     </Flex>
   );
@@ -71,24 +80,24 @@ const SheetContent: React.FC<{
  */
 export function MobileBoardPreview({
   client,
+  user,
   shownSessionId,
   children,
 }: {
   client: AgorClient | null;
+  user: User | null | undefined;
   shownSessionId?: string;
   children: React.ReactNode;
 }) {
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const reducedMotion = usePrefersReducedMotion();
-  const [preview, setPreview] = useState<BoardPreviewState | null>(null);
+  const [previewTarget, setPreviewTarget] = useState<BoardPreviewTarget | null>(null);
 
-  const openPreview = useStableCallback((target: BoardPreviewTarget) =>
-    setPreview((prev) => ({ target, fullScreen: false, openId: (prev?.openId ?? 0) + 1 }))
-  );
-  const closePreview = useStableCallback(() => setPreview(null));
+  const openPreview = useStableCallback((target: BoardPreviewTarget) => setPreviewTarget(target));
+  const closePreview = useStableCallback(() => setPreviewTarget(null));
   const openConversation = useStableCallback((sessionId: string) => {
-    setPreview(null);
+    setPreviewTarget(null);
     navigate(`/m/session/${sessionId}`);
   });
   // Phones have no Board tab beside the conversation; their board canvas is read-only.
@@ -99,20 +108,20 @@ export function MobileBoardPreview({
       view: 'chat',
       mobile: true,
       showOnBoard,
-      preview,
+      previewTarget,
       openPreview,
       closePreview,
       openConversation,
     }),
-    [showOnBoard, preview, openPreview, closePreview, openConversation]
+    [showOnBoard, previewTarget, openPreview, closePreview, openConversation]
   );
-  const tall = preview?.target.kind === 'artifact';
+  const tall = previewTarget?.kind === 'artifact';
 
   return (
     <BoardViewContext.Provider value={value}>
       {children}
       <Drawer
-        open={!!preview}
+        open={!!previewTarget}
         onClose={closePreview}
         placement="bottom"
         size="auto"
@@ -132,10 +141,11 @@ export function MobileBoardPreview({
           },
         }}
       >
-        {preview && (
+        {previewTarget && (
           <SheetContent
             client={client}
-            target={preview.target}
+            user={user}
+            target={previewTarget}
             shownSessionId={shownSessionId}
             onOpenConversation={openConversation}
             onClose={closePreview}

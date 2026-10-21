@@ -106,7 +106,7 @@ export const BoardFiles: React.FC<BoardFilesProps> = ({
     (sessionId: string) => boardView?.openConversation(sessionId),
     [boardView]
   );
-  const preview = boardView?.preview ?? null;
+  const previewTarget = boardView?.previewTarget ?? null;
 
   const activeFilters =
     Number(kind !== 'all') + Number(sort !== 'recent') + Number(view !== 'list');
@@ -199,7 +199,11 @@ export const BoardFiles: React.FC<BoardFilesProps> = ({
         >
           {files.items.map((item) => (
             <li key={`${item.kind}:${item.id}`}>
-              <BoardFileTile item={item} selected={isPreviewing(preview, item)} onOpen={openItem} />
+              <BoardFileTile
+                item={item}
+                selected={isPreviewing(previewTarget, item)}
+                onOpen={openItem}
+              />
             </li>
           ))}
         </ul>
@@ -224,7 +228,7 @@ export const BoardFiles: React.FC<BoardFilesProps> = ({
             <div style={index ? { borderTop: homeDivider(token) } : undefined}>
               <BoardFileRow
                 item={entry}
-                selected={isPreviewing(preview, entry)}
+                selected={isPreviewing(previewTarget, entry)}
                 compact={compact}
                 onOpen={openItem}
                 onOpenConversation={openConversation}
