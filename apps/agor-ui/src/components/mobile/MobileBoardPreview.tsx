@@ -1,0 +1,147 @@
+import type { AgorClient } from '@agor-live/client';
+import { CloseOutlined, MessageOutlined } from '@ant-design/icons';
+import { Button, Drawer, Flex, Typography, theme } from 'antd';
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { BoardViewContext, type BoardViewContextValue } from '../../contexts/BoardViewContext';
+import type { BoardPreviewState, BoardPreviewTarget } from '../../hooks/useBoardPreview';
+import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { useStableCallback } from '../../hooks/useStableCallback';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { BoardPreviewBody, useBoardPreviewSummary } from '../BoardPreview/BoardPreviewPane';
+
+const SheetContent: React.FC<{
+  client: AgorClient | null;
+  target: BoardPreviewTarget;
+  /** The conversation already on screen, which needs no "Open conversation". */
+  shownSessionId?: string;
+  onOpenConversation: (sessionId: string) => void;
+  onClose: () => void;
+}> = ({ client, target, shownSessionId, onOpenConversation, onClose }) => {
+  const { token } = theme.useToken();
+  const { icon, title, meta, sourceSessionId } = useBoardPreviewSummary(target);
+  return (
+    <Flex vertical style={{ height: '100%' }}>
+      <Flex
+        align="center"
+        wrap
+        gap={token.marginXS}
+        style={{ flexShrink: 0, padding: `0 ${token.padding}px ${token.paddingXS}px` }}
+      >
+        <span aria-hidden style={{ display: 'flex' }}>
+          {icon}
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Typography.Text strong ellipsis style={{ display: 'block' }}>
+            {title}
+          </Typography.Text>
+          <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
+            {meta}
+          </Typography.Text>
+        </div>
+        <Button
+          type="text"
+          aria-label="Close preview"
+          icon={<CloseOutlined />}
+          style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
+          onClick={onClose}
+        />
+        {sourceSessionId && sourceSessionId !== shownSessionId && (
+          <Button
+            block
+            icon={<MessageOutlined />}
+            style={{ minHeight: MOBILE_TOUCH_TARGET }}
+            onClick={() => onOpenConversation(sourceSessionId)}
+          >
+            Open conversation
+          </Button>
+        )}
+      </Flex>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        <BoardPreviewBody client={client} target={target} />
+      </div>
+    </Flex>
+  );
+};
+
+/**
+ * The board preview on phones: a bottom sheet over the page, opened through the
+ * same `BoardViewContext` as desktop, so Files rows and work cards need no
+ * phone-specific code. "Open conversation" goes to the session page.
+ */
+export function MobileBoardPreview({
+  client,
+  shownSessionId,
+  children,
+}: {
+  client: AgorClient | null;
+  shownSessionId?: string;
+  children: React.ReactNode;
+}) {
+  const { token } = theme.useToken();
+  const navigate = useNavigate();
+  const reducedMotion = usePrefersReducedMotion();
+  const [preview, setPreview] = useState<BoardPreviewState | null>(null);
+
+  const openPreview = useStableCallback((target: BoardPreviewTarget) =>
+    setPreview((prev) => ({ target, fullScreen: false, openId: (prev?.openId ?? 0) + 1 }))
+  );
+  const closePreview = useStableCallback(() => setPreview(null));
+  const openConversation = useStableCallback((sessionId: string) => {
+    setPreview(null);
+    navigate(`/m/session/${sessionId}`);
+  });
+  // Phones have no Board tab beside the conversation; their board canvas is read-only.
+  const showOnBoard = useStableCallback(() => {});
+
+  const value = useMemo<BoardViewContextValue>(
+    () => ({
+      view: 'chat',
+      mobile: true,
+      showOnBoard,
+      preview,
+      openPreview,
+      closePreview,
+      openConversation,
+    }),
+    [showOnBoard, preview, openPreview, closePreview, openConversation]
+  );
+  const tall = preview?.target.kind === 'artifact';
+
+  return (
+    <BoardViewContext.Provider value={value}>
+      {children}
+      <Drawer
+        open={!!preview}
+        onClose={closePreview}
+        placement="bottom"
+        size="auto"
+        title={null}
+        closable={false}
+        {...reducedMotionSurface(reducedMotion)}
+        styles={{
+          wrapper: { maxHeight: '85dvh' },
+          section: { maxHeight: '85dvh' },
+          body: {
+            ...(tall ? { height: '75dvh' } : {}),
+            minHeight: 0,
+            overflowY: 'auto',
+            overscrollBehaviorY: 'contain',
+            padding: `${token.paddingSM}px 0`,
+            paddingBottom: `max(${token.paddingSM}px, env(safe-area-inset-bottom))`,
+          },
+        }}
+      >
+        {preview && (
+          <SheetContent
+            client={client}
+            target={preview.target}
+            shownSessionId={shownSessionId}
+            onOpenConversation={openConversation}
+            onClose={closePreview}
+          />
+        )}
+      </Drawer>
+    </BoardViewContext.Provider>
+  );
+}

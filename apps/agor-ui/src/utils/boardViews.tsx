@@ -2,8 +2,8 @@ import type { BoardView } from '@agor-live/client';
 import { AppstoreOutlined, FolderOutlined, MessageOutlined } from '@ant-design/icons';
 import type React from 'react';
 
-/** The tabs this build shows. Stored orders keep every view, Files included. */
-export const AVAILABLE_BOARD_VIEWS: readonly BoardView[] = ['chat', 'board'];
+/** The tabs this build shows, in any stored order. */
+export const AVAILABLE_BOARD_VIEWS: readonly BoardView[] = ['chat', 'board', 'files'];
 
 export const BOARD_VIEW_LABELS: Record<BoardView, string> = {
   chat: 'Chat',

@@ -2,6 +2,7 @@ import type { BranchID } from '@agor-live/client';
 import { cleanup, render, screen } from '@testing-library/react';
 import { useEffect } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import type { BoardPreviewState } from '../../hooks/useBoardPreview';
 import type { BoardViewShell } from '../../hooks/useBoardViewShell';
 import { BoardViewArea } from './BoardViewArea';
@@ -90,12 +91,14 @@ function shell(overrides: Partial<BoardViewShell> = {}): BoardViewShell {
 }
 
 const renderArea = (s: BoardViewShell) => (
-  <BoardViewArea
-    shell={s}
-    canvas={<div>Canvas</div>}
-    conversation={<Conversation />}
-    sessionPanel={{ size: 50, minSize: 20, maxSize: 80 }}
-  />
+  <AppActionsProvider value={{}}>
+    <BoardViewArea
+      shell={s}
+      canvas={<div>Canvas</div>}
+      conversation={<Conversation />}
+      sessionPanel={{ size: 50, minSize: 20, maxSize: 80 }}
+    />
+  </AppActionsProvider>
 );
 
 const mainArea = () =>

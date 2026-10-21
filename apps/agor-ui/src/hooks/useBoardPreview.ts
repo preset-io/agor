@@ -1,9 +1,40 @@
-import type { BranchID } from '@agor-live/client';
+import type { ArtifactID, BoardFileItem, BranchID, KnowledgeDocumentID } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { useStableCallback } from './useStableCallback';
 
-/** What the board's preview pane shows. Branch details is the only kind so far. */
-export type BoardPreviewTarget = { kind: 'branch'; id: BranchID };
+/**
+ * What the board's preview pane shows. Branch details also stands for apps and
+ * pull requests. The rest carry their Files item, which names them in the header
+ * and says where they came from (an upload has no other metadata to read).
+ */
+export type BoardPreviewTarget =
+  | { kind: 'branch'; id: BranchID }
+  | { kind: 'artifact'; id: ArtifactID; item: BoardFileItem }
+  | { kind: 'document'; id: KnowledgeDocumentID; item: BoardFileItem }
+  | { kind: 'upload'; ref: string; item: BoardFileItem };
+
+/** The preview for a Files item: apps and pull requests open as Branch details. */
+export function boardFilePreviewTarget(item: BoardFileItem): BoardPreviewTarget {
+  switch (item.kind) {
+    case 'app':
+      return { kind: 'branch', id: item.id as BranchID };
+    case 'artifact':
+      return { kind: 'artifact', id: item.id as ArtifactID, item };
+    case 'document':
+      return { kind: 'document', id: item.id as KnowledgeDocumentID, item };
+    case 'upload':
+      return { kind: 'upload', ref: item.id, item };
+  }
+}
+
+/** True when the preview shows this Files item. */
+export function isPreviewing(preview: BoardPreviewState | null | undefined, item: BoardFileItem) {
+  const target = preview?.target;
+  if (!target) return false;
+  const id = target.kind === 'upload' ? target.ref : target.id;
+  const kind = target.kind === 'branch' ? 'app' : target.kind;
+  return kind === item.kind && id === item.id;
+}
 
 export interface BoardPreviewState {
   target: BoardPreviewTarget;

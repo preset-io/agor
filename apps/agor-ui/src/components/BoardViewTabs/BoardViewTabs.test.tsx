@@ -16,9 +16,13 @@ const openMenu = async (name: string) => {
 };
 
 describe('BoardViewTabs', () => {
-  it('shows only the available tabs, labelled, in the board order', () => {
+  it('shows the tabs, labelled, in the board order', () => {
     render(<BoardViewTabs order={['chat', 'files', 'board']} view="chat" onPick={vi.fn()} />);
-    expect(screen.getAllByRole('tab').map((node) => node.textContent)).toEqual(['Chat', 'Board']);
+    expect(screen.getAllByRole('tab').map((node) => node.textContent)).toEqual([
+      'Chat',
+      'Files',
+      'Board',
+    ]);
   });
 
   it('remembers a click as a pick', () => {

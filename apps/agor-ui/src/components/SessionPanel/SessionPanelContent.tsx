@@ -20,6 +20,7 @@ import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BranchMetadataRow } from '../BranchMetadataRow';
 import { ConversationView } from '../ConversationView';
 import { ForkSpawnModal } from '../ForkSpawnModal';
+import { SessionWorkProvider } from '../WorkCard';
 import { SessionConversationLayout } from './SessionConversationLayout';
 
 export interface SessionPanelContentProps {
@@ -294,26 +295,35 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             ) : undefined
           }
         >
-          <ConversationView
+          {/* Work cards after each turn, read from the board's Files. */}
+          <SessionWorkProvider
             client={client}
-            sessionId={session.session_id}
-            agentic_tool={session.agentic_tool}
-            sessionModel={session.model_config?.model}
-            userById={userById}
-            currentUserId={currentUserId}
-            onScrollRef={handleScrollRef}
-            onPermissionDecision={onPermissionDecision}
-            branchName={branch?.name}
-            scheduledFromBranch={session.scheduled_from_branch}
-            scheduledRunAt={session.scheduled_run_at}
-            isActive={isOpen}
-            genealogy={session.genealogy}
-            teammateEmoji={
-              branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
-            }
-            onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-            canStartTurn={canSessionStartTurn(session, queuedTasks.length)}
-          />
+            session={session}
+            boardId={branch?.board_id}
+            branchId={branch?.branch_id}
+            active={isOpen}
+          >
+            <ConversationView
+              client={client}
+              sessionId={session.session_id}
+              agentic_tool={session.agentic_tool}
+              sessionModel={session.model_config?.model}
+              userById={userById}
+              currentUserId={currentUserId}
+              onScrollRef={handleScrollRef}
+              onPermissionDecision={onPermissionDecision}
+              branchName={branch?.name}
+              scheduledFromBranch={session.scheduled_from_branch}
+              scheduledRunAt={session.scheduled_run_at}
+              isActive={isOpen}
+              genealogy={session.genealogy}
+              teammateEmoji={
+                branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
+              }
+              onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+              canStartTurn={canSessionStartTurn(session, queuedTasks.length)}
+            />
+          </SessionWorkProvider>
         </SessionConversationLayout>
 
         {/* Advanced Spawn Modal */}

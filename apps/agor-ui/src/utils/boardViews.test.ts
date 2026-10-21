@@ -21,26 +21,26 @@ describe('moveBoardView', () => {
       'board',
       'files',
     ]);
-    expect(moveBoardView(['chat', 'board', 'files'], 'board', 1)).toEqual([
+    expect(moveBoardView(['chat', 'board', 'files'], 'files', 1)).toEqual([
       'chat',
       'board',
       'files',
     ]);
   });
 
-  it('keeps a view that is not shown in its slot', () => {
+  it('moves Files like the other tabs', () => {
     expect(moveBoardView(['board', 'files', 'chat'], 'chat', -1)).toEqual([
+      'board',
       'chat',
       'files',
-      'board',
     ]);
   });
 
   it('moves by more than one place for a drop', () => {
     expect(moveBoardView(['board', 'chat', 'files'], 'board', 5)).toEqual([
       'chat',
-      'board',
       'files',
+      'board',
     ]);
   });
 });

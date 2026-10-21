@@ -542,7 +542,7 @@ export const App: React.FC<AppProps> = ({
   const isHomeSurface = isRootHomePath && !hasExplicitEntityTarget;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
 
-  // Board tabs over the main area: Chat and Board.
+  // Board tabs over the main area: Chat, Board and Files.
   const boardView = useBoardViewShell({
     client,
     user,
@@ -551,6 +551,7 @@ export const App: React.FC<AppProps> = ({
     onBoardSurface: !isHomeSurface && !isTeammatesPath,
     urlNamesBoard: !!routeParams.boardParam || hasExplicitEntityTarget,
     activeUrlTarget,
+    selectedSessionId: effectiveSelectedSessionId,
   });
   const isChat = boardView.isChat;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
@@ -1516,7 +1517,9 @@ export const App: React.FC<AppProps> = ({
                         activeUrlTargetBranchId={
                           activeUrlTargetBranchId ?? boardView.highlightBranchId
                         }
-                        activeUrlTargetArtifactId={activeUrlTargetArtifactId}
+                        activeUrlTargetArtifactId={
+                          activeUrlTargetArtifactId ?? boardView.highlightArtifactId
+                        }
                         hidden={isChat}
                         highlightTip={boardView.highlightTip}
                         onDismissHighlightTip={boardView.clearHighlight}

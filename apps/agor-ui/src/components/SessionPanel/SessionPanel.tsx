@@ -415,7 +415,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // The board's Chat tab: no branch strip, "Show on board" in the ⋯ menu, and a
   // teammate's conversations address the teammate by name.
   const boardView = useBoardViewContext();
-  const inChat = boardView?.view === 'chat';
+  const inChat = boardView?.view === 'chat' && !boardView.mobile;
   // Where Close and Escape in the preview return focus after "Branch details".
   const moreActionsButtonRef = React.useRef<HTMLButtonElement>(null);
   const composerPlaceholder =

@@ -60,6 +60,7 @@ import { PrimaryLookupFailedNotice } from '../PrimaryAssistantCompose/PrimaryLoo
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { TeammatesDirectory } from '../TeammatesDirectory';
 import { mobilePageStyle } from './constants';
+import { MobileBoardFilesPage } from './MobileBoardFilesPage';
 import { type MobileBoardLocationState, MobileBoardPage } from './MobileBoardPage';
 import { MobileHeader } from './MobileHeader';
 import { MobileMarketplacePage } from './MobileMarketplacePage';
@@ -632,6 +633,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 settingsHydrated={settingsHydrated}
               />
             }
+          />
+          <Route
+            path="board/:boardId/files"
+            element={<MobileBoardFilesPage client={client} boardById={boardById} />}
           />
           <Route
             path="session/:sessionId"

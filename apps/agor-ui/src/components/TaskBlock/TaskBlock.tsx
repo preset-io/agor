@@ -46,6 +46,7 @@ import { StickyTodoRenderer } from '../StickyTodoRenderer';
 import { Tag } from '../Tag';
 import { ToolDisclosureHeader } from '../ToolBlock/ToolBlock';
 import { ToolIcon } from '../ToolIcon';
+import { TaskWorkCards } from '../WorkCard';
 import { ContextUsageRule } from './ContextUsageRule';
 import { describeTurnOutcome, type TurnOutcomeContext } from './describeTurnOutcome';
 import { TurnOutcome } from './TurnOutcome';
@@ -1292,6 +1293,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
 
         {/* Keep latest TODO visible even after completion (Claude parity). */}
         <StickyTodoRenderer messages={messages} taskStatus={task.status} />
+
+        {/* What this turn made: artifacts, documents, and the branch's app or pull request. */}
+        <TaskWorkCards taskId={task.task_id} />
 
         {/* Show typing only during active work, not recovery or a failed cleanup.
                       Marked as a conversation block so its unmount at stream

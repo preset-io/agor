@@ -9,6 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import type {
+  BoardID,
   GroupID,
   KnowledgeArchiveFilter,
   KnowledgeDocument,
@@ -39,6 +40,7 @@ import type {
   KnowledgeSearchMode,
   KnowledgeSearchResult,
   KnowledgeVisibility,
+  SessionID,
   UserID,
 } from '@agor/core/types';
 import {
@@ -54,7 +56,7 @@ import {
   parseKnowledgeUri,
   titleFromKnowledgePath,
 } from '@agor/core/types';
-import { and, asc, desc, eq, inArray, like, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, like, ne, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getKnowledgeUrl } from '../../utils/url';
@@ -73,6 +75,7 @@ import {
   update,
 } from '../database-wrapper';
 import {
+  branches,
   groupMemberships,
   groups,
   type KBDocumentInsert,
@@ -95,6 +98,7 @@ import {
   kbGraphNodes,
   kbNamespaceAcl,
   kbNamespaces,
+  sessions,
 } from '../schema';
 import {
   type BaseRepository,
@@ -1448,6 +1452,62 @@ export class KnowledgeDocumentRepository
     const rows = await select(this.db)
       .from(kbDocuments)
       .where(and(...conditions))
+      .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
+      .all();
+    return this.rowsToDocuments(rows);
+  }
+
+  /**
+   * Documents that belong to a board: the ones a session on one of its
+   * branches last wrote as an agent (`updated_by_session_id`), so a document a
+   * teammate on another board edits later moves there. Memory documents are
+   * left out. Read access and draft browsing follow document lists: readable
+   * namespaces, public or own documents, and no one else's drafts.
+   */
+  async findForBoard(
+    boardId: BoardID,
+    options: {
+      read: KnowledgeDocumentReadScope;
+      /** Whose drafts are shown: the caller's. */
+      draftUserId?: UserID;
+      sessionId?: SessionID;
+      includeArchived?: boolean;
+    }
+  ): Promise<KnowledgeDocument[]> {
+    const conditions = await this.documentConditions({
+      archive_filter: options.includeArchived ? 'all' : 'active',
+      include_my_drafts: true,
+      include_other_user_drafts: false,
+      draft_filter_user_id: options.draftUserId,
+    });
+    const readConditions = knowledgeDocumentReadConditions(
+      options.read.as_admin
+        ? { asAdmin: true }
+        : {
+            asAdmin: false,
+            userId: options.read.user_id,
+            namespaceIds: options.read.namespace_ids,
+          }
+    );
+    if (!conditions || !readConditions) return [];
+    // kb_documents.updated_by_session_id has no index; a board holds hundreds of
+    // these at most, within one tenant.
+    const boardSessions = sql`${kbDocuments.updated_by_session_id} in (
+        select ${sessions.session_id} from ${sessions}
+        inner join ${branches} on ${branches.branch_id} = ${sessions.branch_id}
+        where ${branches.board_id} = ${boardId}
+      )`;
+    const rows = await select(this.db)
+      .from(kbDocuments)
+      .where(
+        and(
+          ...conditions,
+          ...readConditions,
+          ne(kbDocuments.kind, 'memory'),
+          options.sessionId ? eq(kbDocuments.updated_by_session_id, options.sessionId) : undefined,
+          boardSessions
+        )
+      )
       .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
       .all();
     return this.rowsToDocuments(rows);

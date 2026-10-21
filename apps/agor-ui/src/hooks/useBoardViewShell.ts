@@ -31,6 +31,7 @@ export function useBoardViewShell({
   onBoardSurface,
   urlNamesBoard,
   activeUrlTarget,
+  selectedSessionId = null,
 }: {
   client: AgorClient | null;
   user: User | null | undefined;
@@ -41,6 +42,8 @@ export function useBoardViewShell({
   /** The URL names a board or an entity on one, which decides the tab once resolved. */
   urlNamesBoard: boolean;
   activeUrlTarget: ActiveUrlTarget | null;
+  /** The session in the URL. Opening one while Files is shown visits Chat. */
+  selectedSessionId?: string | null;
 }) {
   // The row shows once the board is known.
   const ready = onBoardSurface && !!board;
@@ -53,6 +56,15 @@ export function useBoardViewShell({
     order: shownViews,
   });
   const isChat = ready && view === 'chat';
+  const isFiles = ready && view === 'files';
+
+  // A conversation opened while Files is shown (a row's link, the left panel, a
+  // deep link) shows Chat for this visit, where it opens as a tab.
+  const [openedSessionId, setOpenedSessionId] = useState(selectedSessionId);
+  if (selectedSessionId !== openedSessionId) {
+    setOpenedSessionId(selectedSessionId);
+    if (selectedSessionId && isFiles) visit('chat');
+  }
 
   // A branch or artifact link shows Board for that visit, set in the render the
   // target arrives in so Chat never flashes. The link's recenter then finds Board shown.
@@ -85,18 +97,23 @@ export function useBoardViewShell({
 
   // Show on board: pan to the card, outline it like a deep link, and anchor a tip.
   const recenterMap = useRecenterMap();
-  const [highlight, setHighlight] = useState<{ branchId: string; text: string } | null>(null);
-  const showOnBoard = useStableCallback((branchId: string) => {
-    const { branchById } = agorStore.getState();
-    const branch = branchById.get(branchId);
-    if (!branch) return;
-    const name = isTeammate(branch) ? teammateLabel(branch) : branch.name;
+  const [highlight, setHighlight] = useState<{
+    kind: 'branch' | 'artifact';
+    id: string;
+    text: string;
+  } | null>(null);
+  const showOnBoard = useStableCallback((id: string, kind: 'branch' | 'artifact' = 'branch') => {
+    const { branchById, artifactById } = agorStore.getState();
+    const card = kind === 'branch' ? branchById.get(id) : artifactById.get(id);
+    if (!card) return;
+    const name =
+      'artifact_id' in card ? card.name : isTeammate(card) ? teammateLabel(card) : card.name;
     const teammate = board?.primary_teammate_id
       ? branchById.get(board.primary_teammate_id)
       : undefined;
     const place = teammate ? `${teammateLabel(teammate)}’s board` : 'this board';
-    recenterMap(branchId, { boardId: branch.board_id ?? boardId });
-    setHighlight({ branchId, text: `${name} is here on ${place}. Switch back to Chat anytime.` });
+    recenterMap(id, { boardId: card.board_id ?? boardId });
+    setHighlight({ kind, id, text: `${name} is here on ${place}. Switch back to Chat anytime.` });
   });
   const clearHighlight = useStableCallback(() => setHighlight(null));
   useEffect(() => {
@@ -110,7 +127,7 @@ export function useBoardViewShell({
     if (isChat || !ready) setHighlight(null);
   }, [isChat, ready, boardId]);
   const highlightTip = useMemo(
-    () => (highlight ? { nodeId: highlight.branchId, text: highlight.text } : null),
+    () => (highlight ? { nodeId: highlight.id, text: highlight.text } : null),
     [highlight]
   );
 
@@ -123,7 +140,8 @@ export function useBoardViewShell({
     45
   );
 
-  const context = useMemo<BoardViewContextValue | null>(
+  // BoardViewArea adds openConversation, which needs the app's session opener.
+  const context = useMemo<Omit<BoardViewContextValue, 'openConversation'> | null>(
     () => (ready ? { view, showOnBoard, preview, openPreview, closePreview } : null),
     [ready, view, showOnBoard, preview, openPreview, closePreview]
   );
@@ -132,6 +150,10 @@ export function useBoardViewShell({
     ready,
     view,
     isChat,
+    isFiles,
+    client,
+    boardId,
+    selectedSessionId,
     order,
     pick,
     visit,
@@ -140,7 +162,8 @@ export function useBoardViewShell({
     canManage,
     canvasMounted,
     highlightTip,
-    highlightBranchId: highlight?.branchId ?? null,
+    highlightBranchId: highlight?.kind === 'branch' ? highlight.id : null,
+    highlightArtifactId: highlight?.kind === 'artifact' ? highlight.id : null,
     clearHighlight,
     showOnBoard,
     preview,

@@ -433,6 +433,7 @@ export const REALTIME_PUBLISH_POLICY = {
   health: { audience: 'none', why: 'Liveness probe.' },
   'boards/:id/aligned-branches': { audience: 'none', why: 'Query route.' },
   'boards/:id/effective-access': { audience: 'none', why: 'Query route.' },
+  'boards/:id/files': { audience: 'none', why: 'Read-only list filtered per caller.' },
   'branches/:id/effective-access': { audience: 'none', why: 'Query route.' },
   'branches/:id/fs-access-users': { audience: 'none', why: 'Query route.' },
   'me/artifact-trust-grants': { audience: 'none', why: 'Trust grants belonging to the caller.' },

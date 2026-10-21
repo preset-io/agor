@@ -1,4 +1,5 @@
 import type {
+  BoardID,
   BranchID,
   SessionID,
   TenantID,
@@ -8,7 +9,7 @@ import type {
   UploadRef,
   UserID,
 } from '@agor/core/types';
-import { and, asc, eq, isNotNull, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
 import { lockSessionBranchForAdmission } from '../branch-admission';
 import type { Database, SystemDatabase } from '../client';
 import {
@@ -19,8 +20,9 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { type UploadRow, uploads } from '../schema';
+import { branches, sessions, type UploadRow, uploads } from '../schema';
 import { RepositoryError } from './base';
+import { visibleBranchReferenceAccessExists } from './branch-access';
 
 function logical(row: UploadRow, tenantId: TenantID): Upload {
   return {
@@ -126,6 +128,44 @@ export class UploadRepository {
       .from(uploads)
       .where(eq(uploads.created_by, userId))
       .orderBy(asc(uploads.created_at))
+      .all();
+    return rows.map((row: UploadRow) => logical(row, tenantId));
+  }
+
+  /**
+   * Active, unexpired uploads from conversations on a board, newest first.
+   * With `visibleToUserId`, only the ones that person may open: their own, or
+   * ones on a branch they can see, the same rule as `GET /uploads/:ref/content`.
+   * Omit it only for callers that already bypass branch access (superadmins).
+   */
+  async listForBoard(
+    tenantId: TenantID,
+    boardId: BoardID,
+    options: { visibleToUserId?: UserID; sessionId?: SessionID; now?: Date } = {}
+  ): Promise<Upload[]> {
+    const now = options.now ?? new Date();
+    const conditions: (SQL | undefined)[] = [
+      eq(uploads.status, 'active'),
+      or(isNull(uploads.expires_at), gt(uploads.expires_at, now)),
+      sql`${uploads.session_id} in (
+        select ${sessions.session_id} from ${sessions}
+        inner join ${branches} on ${branches.branch_id} = ${sessions.branch_id}
+        where ${branches.board_id} = ${boardId}
+      )`,
+    ];
+    if (options.sessionId) conditions.push(eq(uploads.session_id, options.sessionId));
+    if (options.visibleToUserId) {
+      conditions.push(
+        or(
+          eq(uploads.created_by, options.visibleToUserId),
+          visibleBranchReferenceAccessExists(this.db, options.visibleToUserId, uploads.branch_id)
+        )
+      );
+    }
+    const rows = await select(this.db)
+      .from(uploads)
+      .where(and(...conditions))
+      .orderBy(desc(uploads.created_at))
       .all();
     return rows.map((row: UploadRow) => logical(row, tenantId));
   }

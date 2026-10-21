@@ -1,23 +1,27 @@
 import { Flex, theme } from 'antd';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   type ImperativePanelHandle,
   Panel,
   PanelGroup,
   PanelResizeHandle,
 } from 'react-resizable-panels';
-import { BoardViewContext } from '../../contexts/BoardViewContext';
+import { useAppActions } from '../../contexts/AppActionsContext';
+import { BoardViewContext, type BoardViewContextValue } from '../../contexts/BoardViewContext';
 import type { BoardViewShell } from '../../hooks/useBoardViewShell';
 import { useElementWidth } from '../../hooks/useElementWidth';
+import { useStableCallback } from '../../hooks/useStableCallback';
+import { BoardFiles } from '../BoardFiles';
 import { BoardPreviewPane } from '../BoardPreview';
 import { BoardViewTabs } from '../BoardViewTabs';
 
 // Matches the canvas panel's own `minSize` below; App caps the session panel with it.
 export const CANVAS_MIN_SIZE_PERCENT = 20;
 
-// Beside a preview the conversation keeps 420px and the preview 400px. Narrower
-// than both, the preview opens full screen.
+// Beside a preview the conversation keeps 420px, the Files list 480px and the
+// preview 400px. Narrower than both, the preview opens full screen.
 export const CONVERSATION_MIN_WIDTH_PX = 420;
+export const FILES_MIN_WIDTH_PX = 480;
 export const PREVIEW_MIN_WIDTH_PX = 400;
 
 const PREVIEW_HANDLE_WIDTH_PX = 4;
@@ -54,24 +58,42 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
 }) => {
   const { token } = theme.useToken();
   const isChat = shell.isChat;
+  const isFiles = shell.isFiles;
   const conversationShown = conversation != null;
   const canvasPanelRef = useRef<ImperativePanelHandle>(null);
   const sessionPanelRef = useRef<ImperativePanelHandle>(null);
   const resizeDraggingRef = useRef(false);
 
-  // The preview: Chat only, never Board, where it is kept but hidden.
+  // Files mounts the first time it is shown, then stays (hidden elsewhere), so
+  // its search, filters and scroll survive a trip to Chat.
+  const [filesMounted, setFilesMounted] = useState(false);
+  if (isFiles && !filesMounted) setFilesMounted(true);
+
+  // "Open conversation": Chat for this visit, then the session, keeping the preview.
+  const { onSessionClick } = useAppActions();
+  const openConversation = useStableCallback((sessionId: string) => {
+    shell.visit('chat');
+    onSessionClick?.(sessionId);
+  });
+  const context = useMemo<BoardViewContextValue | null>(
+    () => (shell.context ? { ...shell.context, openConversation } : null),
+    [shell.context, openConversation]
+  );
+
+  // The preview: Chat and Files, never Board, where it is kept but hidden.
   const areaRef = useRef<HTMLDivElement>(null);
   const areaWidth = useElementWidth(areaRef);
   const mainPanelRef = useRef<ImperativePanelHandle>(null);
   const previewPanelRef = useRef<ImperativePanelHandle>(null);
   const previewPaneRef = useRef<HTMLElement>(null);
   const previewDraggingRef = useRef(false);
-  const preview = shell.ready && isChat ? shell.preview : null;
+  const preview = shell.ready && (isChat || isFiles) ? shell.preview : null;
+  const mainMinWidth = isFiles ? FILES_MIN_WIDTH_PX : CONVERSATION_MIN_WIDTH_PX;
   // Panel sizes share the width left beside the divider.
   const panelsWidth = areaWidth - PREVIEW_HANDLE_WIDTH_PX;
-  const narrow = areaWidth > 0 && panelsWidth < CONVERSATION_MIN_WIDTH_PX + PREVIEW_MIN_WIDTH_PX;
+  const narrow = areaWidth > 0 && panelsWidth < mainMinWidth + PREVIEW_MIN_WIDTH_PX;
   const fullScreen = !!preview && (preview.fullScreen || narrow);
-  const mainMinSize = percentOf(CONVERSATION_MIN_WIDTH_PX, panelsWidth);
+  const mainMinSize = percentOf(mainMinWidth, panelsWidth);
   const previewMinSize = percentOf(PREVIEW_MIN_WIDTH_PX, panelsWidth);
   const previewSize = clampPercent(shell.previewSize, previewMinSize, 100 - mainMinSize);
 
@@ -119,7 +141,7 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
   }, [preview]);
 
   return (
-    <BoardViewContext.Provider value={shell.context}>
+    <BoardViewContext.Provider value={context}>
       <Flex vertical style={{ height: '100%' }}>
         {shell.ready && (
           <BoardViewTabs
@@ -150,74 +172,96 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
               <div
                 inert={fullScreen}
                 aria-hidden={fullScreen || undefined}
-                style={{ height: '100%' }}
+                style={{ height: '100%', position: 'relative' }}
               >
-                <PanelGroup
-                  id="canvas-session"
-                  direction="horizontal"
-                  onLayout={(sizes) => {
-                    // Persist only user drags, so panel open/close and programmatic
-                    // restores do not overwrite the user's preference.
-                    if (resizeDraggingRef.current && sizes.length === 2) {
-                      onSessionPanelResize?.(sizes[1]);
-                    }
-                  }}
-                >
-                  <Panel
-                    id="canvas-panel"
-                    order={1}
-                    ref={canvasPanelRef}
-                    defaultSize={isChat ? 0 : conversationShown ? 100 - sessionPanel.size : 100}
-                    minSize={CANVAS_MIN_SIZE_PERCENT}
-                    // Only Chat collapses the canvas; on Board it keeps its minimum.
-                    collapsible={isChat}
-                    collapsedSize={0}
+                {/* Files lays over the board and conversation, which stay laid out but
+                    hidden, so scroll positions and React Flow measurements survive. */}
+                {filesMounted && shell.boardId && (
+                  <div
+                    inert={!isFiles}
+                    aria-hidden={!isFiles || undefined}
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      zIndex: 1,
+                      visibility: isFiles ? 'visible' : 'hidden',
+                    }}
                   >
-                    {/* Collapsed, not unmounted: out of the tab order and hidden from assistive tech. */}
-                    <div
-                      inert={isChat}
-                      aria-hidden={isChat || undefined}
-                      style={{ position: 'relative', overflow: 'hidden', height: '100%' }}
+                    <BoardFiles client={shell.client} boardId={shell.boardId} active={isFiles} />
+                  </div>
+                )}
+                <div
+                  inert={isFiles}
+                  aria-hidden={isFiles || undefined}
+                  style={{ height: '100%', visibility: isFiles ? 'hidden' : undefined }}
+                >
+                  <PanelGroup
+                    id="canvas-session"
+                    direction="horizontal"
+                    onLayout={(sizes) => {
+                      // Persist only user drags, so panel open/close and programmatic
+                      // restores do not overwrite the user's preference.
+                      if (resizeDraggingRef.current && sizes.length === 2) {
+                        onSessionPanelResize?.(sizes[1]);
+                      }
+                    }}
+                  >
+                    <Panel
+                      id="canvas-panel"
+                      order={1}
+                      ref={canvasPanelRef}
+                      defaultSize={isChat ? 0 : conversationShown ? 100 - sessionPanel.size : 100}
+                      minSize={CANVAS_MIN_SIZE_PERCENT}
+                      // Only Chat collapses the canvas; on Board it keeps its minimum.
+                      collapsible={isChat}
+                      collapsedSize={0}
                     >
-                      {canvas}
-                    </div>
-                  </Panel>
-                  {conversationShown && (
-                    <>
-                      <PanelResizeHandle
-                        disabled={isChat}
-                        tabIndex={isChat ? -1 : undefined}
-                        style={{
-                          width: isChat ? 0 : '4px',
-                          background: token.colorBorderSecondary,
-                          cursor: 'col-resize',
-                          transition: 'background 0.2s',
-                        }}
-                        onDragging={(isDragging) => {
-                          resizeDraggingRef.current = isDragging;
-                        }}
-                        onMouseEnter={(e) => {
-                          (e.currentTarget as unknown as HTMLDivElement).style.background =
-                            token.colorPrimary;
-                        }}
-                        onMouseLeave={(e) => {
-                          (e.currentTarget as unknown as HTMLDivElement).style.background =
-                            token.colorBorderSecondary;
-                        }}
-                      />
-                      <Panel
-                        id="session-panel"
-                        order={2}
-                        ref={sessionPanelRef}
-                        defaultSize={isChat ? 100 : sessionPanel.size}
-                        minSize={isChat ? 0 : sessionPanel.minSize}
-                        maxSize={isChat ? 100 : sessionPanel.maxSize}
+                      {/* Collapsed, not unmounted: out of the tab order and hidden from assistive tech. */}
+                      <div
+                        inert={isChat}
+                        aria-hidden={isChat || undefined}
+                        style={{ position: 'relative', overflow: 'hidden', height: '100%' }}
                       >
-                        {conversation}
-                      </Panel>
-                    </>
-                  )}
-                </PanelGroup>
+                        {canvas}
+                      </div>
+                    </Panel>
+                    {conversationShown && (
+                      <>
+                        <PanelResizeHandle
+                          disabled={isChat}
+                          tabIndex={isChat ? -1 : undefined}
+                          style={{
+                            width: isChat ? 0 : '4px',
+                            background: token.colorBorderSecondary,
+                            cursor: 'col-resize',
+                            transition: 'background 0.2s',
+                          }}
+                          onDragging={(isDragging) => {
+                            resizeDraggingRef.current = isDragging;
+                          }}
+                          onMouseEnter={(e) => {
+                            (e.currentTarget as unknown as HTMLDivElement).style.background =
+                              token.colorPrimary;
+                          }}
+                          onMouseLeave={(e) => {
+                            (e.currentTarget as unknown as HTMLDivElement).style.background =
+                              token.colorBorderSecondary;
+                          }}
+                        />
+                        <Panel
+                          id="session-panel"
+                          order={2}
+                          ref={sessionPanelRef}
+                          defaultSize={isChat ? 100 : sessionPanel.size}
+                          minSize={isChat ? 0 : sessionPanel.minSize}
+                          maxSize={isChat ? 100 : sessionPanel.maxSize}
+                        >
+                          {conversation}
+                        </Panel>
+                      </>
+                    )}
+                  </PanelGroup>
+                </div>
               </div>
             </Panel>
             {preview && (
@@ -253,12 +297,15 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
                 >
                   <BoardPreviewPane
                     ref={previewPaneRef}
+                    client={shell.client}
                     target={preview.target}
                     fullScreen={fullScreen}
                     onToggleFullScreen={
                       narrow ? undefined : () => shell.setPreviewFullScreen(!preview.fullScreen)
                     }
                     onShowOnBoard={shell.showOnBoard}
+                    onOpenConversation={openConversation}
+                    shownSessionId={isChat ? shell.selectedSessionId : null}
                     onClose={shell.closePreview}
                   />
                 </Panel>

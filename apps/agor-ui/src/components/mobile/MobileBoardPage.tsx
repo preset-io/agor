@@ -1,13 +1,17 @@
 import type { AgorClient, Board, Branch, SpawnConfig, User } from '@agor-live/client';
-import { Spin, Typography, theme } from 'antd';
-import { lazy, Suspense, useEffect, useMemo } from 'react';
+import { EllipsisOutlined, FolderOutlined, SettingOutlined } from '@ant-design/icons';
+import { Button, Dropdown, Flex, Spin, Typography, theme } from 'antd';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
+import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { useTrackBoardVisit } from '../../hooks/useRecentBoards';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { makeBranchesForBoardSelector } from '../../store/selectors';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { OPEN_BOARD_SWITCHER_EVENT, requestShellPicker } from '../../utils/shellEvents';
+import { BoardEditModal } from '../BoardEditModal/BoardEditModal';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BoardTeammatePanel, type BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { useBoardTeammatePanelData } from '../BoardTeammatePanel/useBoardTeammatePanelData';
@@ -21,9 +25,17 @@ const SessionCanvas = lazy(() => import('../SessionCanvas/SessionCanvas'));
 export const BOARD_UNAVAILABLE =
   "This board isn't available. It may have been deleted, or you may not have access.";
 
-// Teammate leads (and is the default), like the desktop panel; the view-only canvas is second.
+// Teammate leads, like the desktop panel; the view-only canvas is second.
 const BOARD_TABS: BoardTeammatePanelTab[] = ['teammate', 'board', 'all-sessions', 'comments'];
-const DEFAULT_BOARD_TAB: BoardTeammatePanelTab = 'teammate';
+
+/**
+ * The tab a phone opens on without `?tab=`: Teammate, unless an editor has
+ * stored a tab order that puts Board first. Boards without a stored order keep
+ * Teammate, so phones are unchanged until someone chooses Board first.
+ */
+export function mobileDefaultBoardTab(board: Pick<Board, 'tab_order'> | undefined) {
+  return board?.tab_order?.[0] === 'board' ? 'board' : 'teammate';
+}
 
 /** Route state that opens the board switcher on arrival (Home's "All boards"). */
 export interface MobileBoardLocationState {
@@ -100,11 +112,16 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     navigate({ pathname, search }, { replace: true, state: null });
   }, [openBoardSwitcher, navigate, pathname, search]);
 
+  const defaultTab = mobileDefaultBoardTab(board);
   const tabParam = searchParams.get('tab') as BoardTeammatePanelTab | null;
-  const activeTab = tabParam && BOARD_TABS.includes(tabParam) ? tabParam : DEFAULT_BOARD_TAB;
+  const activeTab = tabParam && BOARD_TABS.includes(tabParam) ? tabParam : defaultTab;
   const setActiveTab = useStableCallback((tab: BoardTeammatePanelTab) =>
-    setSearchParams(tab === DEFAULT_BOARD_TAB ? {} : { tab }, { replace: true })
+    setSearchParams(tab === defaultTab ? {} : { tab }, { replace: true })
   );
+
+  // Board ⋯: Files, and Board settings for people who can edit the board.
+  const canManageBoard = useCanManageBoard(client, board, currentUser);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const boards = useMemo(() => Array.from(boardById.values()), [boardById]);
   // Shallow-equal like desktop: unrelated socket churn keeps the array, so the canvas stays put.
@@ -168,17 +185,64 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           borderBottom: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
         }}
       >
-        <BoardSwitcher
-          boards={boards}
-          currentBoardId={resolvedBoardId}
-          onBoardChange={(id) => navigate(`/m/board/${id}`)}
-          onHomeClick={() => navigate('/m')}
-          branchById={branchById}
-          client={client}
-          currentUser={currentUser}
-          onUpdateBoard={onUpdateBoard}
-        />
+        <Flex align="center">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <BoardSwitcher
+              boards={boards}
+              currentBoardId={resolvedBoardId}
+              onBoardChange={(id) => navigate(`/m/board/${id}`)}
+              onHomeClick={() => navigate('/m')}
+              branchById={branchById}
+              client={client}
+              currentUser={currentUser}
+              onUpdateBoard={onUpdateBoard}
+            />
+          </div>
+          {board && (
+            <Dropdown
+              trigger={['click']}
+              placement="bottomRight"
+              menu={{
+                items: [
+                  {
+                    key: 'files',
+                    icon: <FolderOutlined />,
+                    label: 'Files',
+                    onClick: () => navigate(`/m/board/${board.board_id}/files`),
+                  },
+                  ...(canManageBoard
+                    ? [
+                        {
+                          key: 'settings',
+                          icon: <SettingOutlined />,
+                          label: 'Board settings',
+                          onClick: () => setSettingsOpen(true),
+                        },
+                      ]
+                    : []),
+                ],
+              }}
+            >
+              <Button
+                type="text"
+                aria-label="More board actions"
+                icon={<EllipsisOutlined />}
+                style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
+              />
+            </Dropdown>
+          )}
+        </Flex>
       </div>
+      {settingsOpen && (
+        <BoardEditModal
+          board={board ?? null}
+          client={client}
+          open
+          onClose={() => setSettingsOpen(false)}
+          onUpdate={onUpdateBoard}
+          currentUser={currentUser}
+        />
+      )}
       {!settingsHydrated && (
         <Typography.Text
           role="status"

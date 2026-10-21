@@ -117,7 +117,7 @@ export const HomePressable: React.FC<HomePressableProps> = ({
 };
 
 /** Two-line Home list row: lead · title · time, then reason and context. */
-const HomeRow: React.FC<HomeRowProps> = ({
+export const HomeRow: React.FC<HomeRowProps> = ({
   lead,
   title,
   time,

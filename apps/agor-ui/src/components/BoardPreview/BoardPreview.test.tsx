@@ -73,12 +73,18 @@ const actions = {
 };
 
 function renderPane(props: Partial<React.ComponentProps<typeof BoardPreviewPane>> = {}) {
-  const handlers = { onShowOnBoard: vi.fn(), onClose: vi.fn(), onToggleFullScreen: vi.fn() };
+  const handlers = {
+    onShowOnBoard: vi.fn(),
+    onOpenConversation: vi.fn(),
+    onClose: vi.fn(),
+    onToggleFullScreen: vi.fn(),
+  };
   render(
     <ConnectionProvider value={connected}>
       <AppActionsProvider value={actions}>
         <AntApp>
           <BoardPreviewPane
+            client={null}
             target={{ kind: 'branch', id: BRANCH_ID }}
             fullScreen={false}
             {...handlers}
@@ -106,7 +112,7 @@ describe('BoardPreviewPane header', () => {
     fireEvent.click(screen.getByRole('button', { name: /Open full screen/ }));
     expect(onToggleFullScreen).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Show on board/ }));
-    expect(onShowOnBoard).toHaveBeenCalledWith(BRANCH_ID);
+    expect(onShowOnBoard).toHaveBeenCalledWith(BRANCH_ID, 'branch');
     fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });

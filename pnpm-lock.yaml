@@ -449,6 +449,9 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.3.0)
+      '@rc-component/virtual-list':
+        specifier: 1.5.1
+        version: 1.5.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@streamdown/cjk':
         specifier: ^1.0.3
         version: 1.0.3(@types/mdast@4.0.4)(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@8.1.1))(react@19.3.0)(supports-color@8.1.1)(unified@11.0.5)
