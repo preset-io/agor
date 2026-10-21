@@ -300,6 +300,9 @@ export function getMessageSpeaker(message: Message): 'user' | 'agent' | null {
   ) {
     return null;
   }
+  if (message.metadata?.is_agor_callback === true || getPromptProvenance(message)) {
+    return 'agent';
+  }
   if (message.role === 'user' && !isTaskToolPrompt(message) && !isTaskToolResult(message)) {
     return 'user';
   }
@@ -509,11 +512,13 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const isTaskPrompt = isTaskToolPrompt(message);
   const isTaskResult = isTaskToolResult(message);
   const isSystem = message.role === 'system';
-  const isCallback = message.metadata?.is_agor_callback === true;
+  const provenance = getPromptProvenance(message);
+  const isCallback = message.metadata?.is_agor_callback === true || !!provenance;
 
   // Determine if this should be displayed as user or agent message
   const isUser = getMessageSpeaker(message) === 'user';
-  const isAgent = message.role === 'assistant' || isTaskPrompt || isTaskResult || isSystem;
+  const isAgent =
+    message.role === 'assistant' || isTaskPrompt || isTaskResult || isSystem || isCallback;
 
   // Check if message is currently streaming
   const isStreaming = 'isStreaming' in message && message.isStreaming === true;
@@ -654,7 +659,6 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
     // Other system message types handled elsewhere (e.g., compaction in TaskBlock)
   }
 
-  const provenance = getPromptProvenance(message);
   const displayText = (text: string) => (provenance ? stripProvenanceForDisplay(text) : text);
 
   // Parse content blocks from message, preserving order

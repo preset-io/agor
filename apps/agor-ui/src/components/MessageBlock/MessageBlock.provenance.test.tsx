@@ -3,15 +3,17 @@ import { renderPromptProvenanceBlock } from '@agor/core/templates/prompt-provena
 import {
   type Message,
   MessageRole,
+  type Session,
   type SessionID,
   sessionPath,
   shortId,
   type TaskMetadata,
 } from '@agor-live/client';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { agorStore } from '../../store/agorStore';
 import { TaskBlock } from '../TaskBlock/TaskBlock';
-import { MessageBlock } from './MessageBlock';
+import { getMessageSpeaker, MessageBlock } from './MessageBlock';
 
 const origin = '01a0d369-82f3-7458-8265-861a4752b7b2' as SessionID;
 const block = renderPromptProvenanceBlock({
@@ -44,17 +46,43 @@ const message = (content: Message['content'], metadata?: Message['metadata']): M
   content,
   metadata,
 });
-afterEach(cleanup);
+const sender: Session = {
+  session_id: origin,
+  branch_id: generateId(),
+  created_by: generateId(),
+  agentic_tool: 'claude-code',
+  status: 'idle',
+  created_at: '2026-10-21T00:00:00.000Z',
+  last_updated: '2026-10-21T00:00:00.000Z',
+  unix_username: null,
+  sdk_home_scope: 'branch',
+  url: null,
+  genealogy: { children: [] },
+  tasks: [],
+  scheduled_from_branch: false,
+  ready_for_prompt: true,
+  archived: false,
+  title: 'Release planning',
+};
+const originalSessions = agorStore.getState().sessionById;
+beforeEach(() => agorStore.setState({ sessionById: new Map([[origin, sender]]) }));
+afterEach(() => {
+  cleanup();
+  agorStore.setState({ sessionById: originalSessions });
+});
 
 function expectCompactLine() {
-  expect(screen.getByRole('link', { name: shortId(origin) })).toHaveAttribute(
+  expect(screen.getByRole('link', { name: sender.title })).toHaveAttribute(
     'href',
     sessionPath(origin)
   );
-  const expander = screen.getByRole('button', { name: /what the agent saw/ });
+  const expander = screen.getByRole('button', { name: /Details/ });
   expect(expander).toHaveAttribute('aria-expanded', 'false');
   expect(screen.queryByText(/Server-stamped by Agor/)).not.toBeInTheDocument();
-  expect(expander).toHaveTextContent('claude-code · via agor_sessions_prompt (continue)');
+  expect(screen.getByText(/Sent by/)).toHaveTextContent(`Sent by ${sender.title}`);
+  expect(
+    screen.queryByText(/claude-code|agor_sessions_prompt|continue|01a0d369/)
+  ).not.toBeInTheDocument();
   expect(
     screen.queryByText((_, node) => node?.tagName === 'PRE' && node.textContent === block)
   ).not.toBeInTheDocument();
@@ -85,11 +113,97 @@ describe('prompt provenance presentation', () => {
     }
   );
 
+  it.each(['missing', 'untitled', 'blank title'] as const)(
+    'does not reveal a sender identity when the session is %s',
+    (kind) => {
+      const sessions =
+        kind === 'missing'
+          ? new Map<string, Session>()
+          : new Map([
+              [
+                origin,
+                {
+                  ...sender,
+                  title: kind === 'untitled' ? undefined : '  ',
+                  description: 'Do not use this fallback',
+                },
+              ],
+            ]);
+      agorStore.setState({ sessionById: sessions });
+      render(
+        <MessageBlock
+          message={message(`${block}\n\nship the branch`, { prompt_provenance: provenance })}
+        />
+      );
+      expect(screen.getByText('Sent by another session')).toBeVisible();
+      expect(screen.queryByRole('link')).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Do not use this fallback|claude-code|01a0d369/)
+      ).not.toBeInTheDocument();
+    }
+  );
+
+  it('follows sender title changes in the existing session state', () => {
+    render(<MessageBlock message={message(`${block}\n\nship the branch`)} />);
+    act(() =>
+      agorStore.setState({ sessionById: new Map([[origin, { ...sender, title: 'Updated plan' }]]) })
+    );
+    expect(screen.getByRole('link', { name: 'Updated plan' })).toHaveAttribute(
+      'href',
+      sessionPath(origin)
+    );
+    expect(screen.queryByRole('link', { name: sender.title })).not.toBeInTheDocument();
+  });
+
+  it('drops the title and link when the sender leaves the viewer session map', () => {
+    render(<MessageBlock message={message(`${block}\n\nship the branch`)} />);
+    expect(screen.getByRole('link', { name: sender.title })).toBeVisible();
+    act(() => agorStore.setState({ sessionById: new Map() }));
+    expect(screen.getByText('Sent by another session')).toBeVisible();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['structured', MessageRole.ASSISTANT],
+    ['structured', MessageRole.USER],
+    ['legacy', MessageRole.ASSISTANT],
+    ['legacy', MessageRole.USER],
+  ] as const)(
+    'uses callback presentation for %s provenance (callback role: %s)',
+    (kind, callbackRole) => {
+      const stamped = message(
+        `${block}\n\nship the branch`,
+        kind === 'structured' ? { prompt_provenance: provenance } : undefined
+      );
+      const callback = {
+        ...message('Callback body', { is_agor_callback: true }),
+        role: callbackRole,
+      };
+      const { container } = render(
+        <>
+          <MessageBlock message={callback} />
+          <MessageBlock message={stamped} />
+        </>
+      );
+      const bubbles = container.querySelectorAll<HTMLElement>('.ant-bubble-content');
+      const avatars = container.querySelectorAll<HTMLImageElement>('.ant-bubble-avatar img');
+      expect(bubbles).toHaveLength(2);
+      expect(bubbles[0]).toHaveClass('ant-bubble-content-filled');
+      expect(bubbles[1]).toHaveClass('ant-bubble-content-filled');
+      expect(bubbles[1].style.backgroundColor).toBe(bubbles[0].style.backgroundColor);
+      expect(avatars).toHaveLength(2);
+      expect(avatars[1].getAttribute('src')).toBe(avatars[0].getAttribute('src'));
+      expect(avatars[1].getAttribute('alt')).toBe(avatars[0].getAttribute('alt'));
+      expect(getMessageSpeaker(stamped)).toBe('agent');
+      expect(getMessageSpeaker(message('Human body'))).toBe('user');
+    }
+  );
+
   it('links to the session under the mounted UI base path', () => {
     window.history.replaceState(null, '', '/ui/');
     try {
       render(<MessageBlock message={message(`${block}\n\nship the branch`)} />);
-      expect(screen.getByRole('link', { name: shortId(origin) })).toHaveAttribute(
+      expect(screen.getByRole('link', { name: sender.title })).toHaveAttribute(
         'href',
         `/ui${sessionPath(origin)}`
       );
@@ -101,7 +215,7 @@ describe('prompt provenance presentation', () => {
   it('keeps a block-only message available without repeating it in the body', () => {
     render(<MessageBlock message={message(block, { prompt_provenance: provenance })} />);
     expect(screen.queryByText(/Server-stamped by Agor/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /what the agent saw/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
     expect(
       screen.getByText((_, node) => node?.tagName === 'PRE' && node.textContent === block)
     ).toBeVisible();
@@ -119,7 +233,7 @@ describe('prompt provenance presentation', () => {
         })}
       />
     );
-    expect(screen.getByText(/origin not established/)).toBeVisible();
+    expect(screen.getByText('Sent by another session')).toBeVisible();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 
@@ -130,9 +244,9 @@ describe('prompt provenance presentation', () => {
       tool: 'agor_sessions_create',
     });
     render(<MessageBlock message={message(`${unattributed}\n\nship the branch`)} />);
-    expect(screen.getByText(/origin not established/)).toBeVisible();
+    expect(screen.getByText('Sent by another session')).toBeVisible();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /what the agent saw/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
     expect(
       screen.getByText((_, node) => node?.tagName === 'PRE' && node.textContent === unattributed)
     ).toBeVisible();
@@ -142,8 +256,11 @@ describe('prompt provenance presentation', () => {
     'ordinary message',
     'quoted &lt;agor_prompt_provenance&gt;not a stamp&lt;/agor_prompt_provenance&gt;',
   ])('leaves unstamped text unchanged: %s', (text) => {
-    render(<MessageBlock message={message(text)} />);
-    expect(screen.queryByRole('button', { name: /what the agent saw/ })).not.toBeInTheDocument();
+    const unstamped = message(text);
+    const { container } = render(<MessageBlock message={unstamped} />);
+    expect(getMessageSpeaker(unstamped)).toBe('user');
+    expect(container.querySelector('.ant-bubble-avatar img')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Details/ })).not.toBeInTheDocument();
     expect(screen.getByText(text.replaceAll('&lt;', '<').replaceAll('&gt;', '>'))).toBeVisible();
   });
 

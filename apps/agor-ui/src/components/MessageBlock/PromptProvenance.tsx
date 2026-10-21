@@ -3,16 +3,17 @@ import {
   PROMPT_PROVENANCE_OPEN_TAG,
   stripPromptProvenanceBlock,
 } from '@agor/core/templates/prompt-provenance';
-import { type Message, type SessionID, sessionPath, shortId } from '@agor-live/client';
-import { Collapse, Typography, theme } from 'antd';
+import { type Message, type SessionID, sessionPath } from '@agor-live/client';
+import { Collapse, Flex, Typography, theme } from 'antd';
+import { useMemo } from 'react';
+import { useAgorStore } from '../../store/agorStore';
+import { makeSessionSelector } from '../../store/selectors';
+import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { uiRouteHref } from '../../utils/uiRoutes';
 
 interface Provenance {
   block: string;
   sessionId?: SessionID;
-  agenticTool?: string;
-  tool?: string;
-  mode?: string;
 }
 
 function provenanceBlock(text: string): string | undefined {
@@ -35,9 +36,6 @@ export function getPromptProvenance(message: Message): Provenance | undefined {
     return {
       block: metadata.rendered_block,
       sessionId: metadata.origin_session_id,
-      agenticTool: metadata.origin_agentic_tool,
-      tool: metadata.tool,
-      mode: metadata.mode,
     };
   }
 
@@ -57,66 +55,51 @@ export function getPromptProvenance(message: Message): Provenance | undefined {
   const lines = block.split('\n');
   const verify = lines.find((line) => line.startsWith('Verify: agor_sessions_get sessionId="'));
   const sessionId = verify?.split('sessionId="')[1]?.split('"')[0] as SessionID | undefined;
-  const details = lines.find((line) => line.includes(' · auth: '))?.split(' · ') ?? [];
-  const via = details.find((field) => field.startsWith('via '))?.slice('via '.length);
-  return {
-    block,
-    sessionId,
-    agenticTool: details
-      .find((field) => field.startsWith('agent tool '))
-      ?.slice('agent tool '.length),
-    tool: via?.split(' (')[0],
-    mode: via?.includes(' (') ? via.split(' (')[1]?.slice(0, -1) : undefined,
-  };
+  return { block, sessionId };
 }
 
 export function PromptProvenance({ provenance }: { provenance: Provenance }) {
   const { token } = theme.useToken();
+  const sender = useAgorStore(
+    useMemo(() => makeSessionSelector(provenance.sessionId), [provenance.sessionId])
+  );
+  const senderTitle = sender?.title?.trim() ? getSessionDisplayTitle(sender) : undefined;
   return (
-    <Collapse
-      ghost
-      size="small"
-      style={{ color: token.colorTextSecondary, fontSize: token.fontSizeSM }}
-      items={[
-        {
-          key: 'provenance',
-          label: (
-            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              {provenance.sessionId ? (
-                <>
-                  from session{' '}
-                  <Typography.Link
-                    href={uiRouteHref(sessionPath(provenance.sessionId))}
-                    onClick={(event) => event.stopPropagation()}
-                    onKeyDown={(event) => event.stopPropagation()}
-                  >
-                    {shortId(provenance.sessionId)}
-                  </Typography.Link>
-                </>
-              ) : (
-                'origin not established'
-              )}
-              {provenance.agenticTool && ` · ${provenance.agenticTool}`}
-              {provenance.tool &&
-                ` · via ${provenance.tool}${provenance.mode ? ` (${provenance.mode})` : ''}`}
-              {' · what the agent saw'}
-            </Typography.Text>
-          ),
-          styles: { header: { padding: 0 }, body: { padding: token.paddingXS } },
-          children: (
-            <pre
-              style={{
-                margin: 0,
-                whiteSpace: 'pre-wrap',
-                overflowWrap: 'anywhere',
-                fontFamily: token.fontFamilyCode,
-              }}
-            >
-              {provenance.block}
-            </pre>
-          ),
-        },
-      ]}
-    />
+    <Flex vertical gap={token.sizeUnit / 2}>
+      <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+        Sent by{' '}
+        {senderTitle && provenance.sessionId ? (
+          <Typography.Link href={uiRouteHref(sessionPath(provenance.sessionId))}>
+            {senderTitle}
+          </Typography.Link>
+        ) : (
+          'another session'
+        )}
+      </Typography.Text>
+      <Collapse
+        ghost
+        size="small"
+        style={{ color: token.colorTextSecondary, fontSize: token.fontSizeSM }}
+        items={[
+          {
+            key: 'provenance',
+            label: 'Details',
+            styles: { header: { padding: 0 }, body: { padding: token.paddingXS } },
+            children: (
+              <pre
+                style={{
+                  margin: 0,
+                  whiteSpace: 'pre-wrap',
+                  overflowWrap: 'anywhere',
+                  fontFamily: token.fontFamilyCode,
+                }}
+              >
+                {provenance.block}
+              </pre>
+            ),
+          },
+        ]}
+      />
+    </Flex>
   );
 }
