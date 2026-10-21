@@ -60,7 +60,15 @@ export function ArtifactSandpackErrorReporter({
       : compilation.status;
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      // Another copy owns the daemon's status now. Drop our unsent report and
+      // forget what we sent, so regaining ownership republishes current state.
+      pendingSendRef.current = null;
+      lastSentRef.current = null;
+      return;
+    }
+    // A state change publishes the superseded state that was still throttled.
+    pendingSendRef.current?.();
     const payload: ArtifactSandpackReport = {
       error: sandpack.error
         ? {
@@ -94,11 +102,12 @@ export function ArtifactSandpackErrorReporter({
       sendReport();
     }, SANDPACK_ERROR_THROTTLE_MS);
 
+    // Never publish from cleanup: on unmount or loss of ownership, this copy's
+    // state is no longer the artifact's. The next run flushes it if still owned.
     return () => {
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
-        pendingSendRef.current?.();
       }
     };
   }, [sandpack.error, sandpack.status, compilationStatus, artifactId, contentHash, enabled]);

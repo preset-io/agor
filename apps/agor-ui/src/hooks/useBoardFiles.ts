@@ -8,6 +8,7 @@ import {
   type BoardFilesPage,
   type Branch,
   type KnowledgeDocument,
+  type Task,
 } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { agorStore } from '../store/agorStore';
@@ -15,9 +16,9 @@ import { agorStore } from '../store/agorStore';
 export const BOARD_FILES_SEARCH_DEBOUNCE_MS = 250;
 const LIVE_REFRESH_DEBOUNCE_MS = 1000;
 const ARTIFACT_EVENTS = ['created', 'patched', 'removed'] as const;
-// Archiving a document is a patch; a document listed here may also be patched
-// to another board's session.
-const DOCUMENT_EVENTS = ['patched', 'removed'] as const;
+// A board conversation creates or writes a document; archiving is a patch; a
+// document listed here may also be patched to another board's session.
+const DOCUMENT_EVENTS = ['created', 'patched', 'removed'] as const;
 
 export interface BoardFilesFilters {
   q: string;
@@ -63,10 +64,12 @@ export function fetchBoardFiles(
 /**
  * One board's Files, 50 at a time. Search (debounced), type and sort run on the
  * server. The first page reloads when the tab is shown and, while it is, when
- * something listed or on the board changes: artifacts, branches (including one
- * that leaves or is deleted), and listed documents that are archived or move
- * to another board. A reload starts again from page one, since the order may
- * have changed. Uploads and new documents refresh the next time the tab is shown.
+ * something listed or on the board changes, listed yet or not: artifacts,
+ * branches (including one that leaves or is deleted), documents a board
+ * conversation writes or that are archived or move away, and prompts in a board
+ * conversation (how an upload arrives; uploads have no events of their own). A
+ * reload starts again from page one: an item that changes moves in the order, so
+ * the next offset would skip or repeat one.
  */
 export function useBoardFiles({
   client,
@@ -160,6 +163,11 @@ export function useBoardFiles({
     for (const branch of agorStore.getState().branchById.values()) {
       if (branch.board_id === boardId) boardBranchIds.add(branch.branch_id);
     }
+    // The store holds the displayed board's conversations.
+    const onBoardSession = (sessionId: string | null | undefined) => {
+      const session = sessionId ? agorStore.getState().sessionById.get(sessionId) : undefined;
+      return !!session && boardBranchIds.has(session.branch_id);
+    };
     const onArtifact = (artifact: Partial<Artifact>) => {
       const listed =
         !!artifact?.artifact_id && listedRef.current.has(`artifact:${artifact.artifact_id}`);
@@ -176,16 +184,23 @@ export function useBoardFiles({
     const onBranchChanged = onBranch(false);
     const onBranchRemoved = onBranch(true);
     const onDocument = (doc: Partial<KnowledgeDocument>) => {
-      if (doc?.document_id && listedRef.current.has(`document:${doc.document_id}`)) refresh();
+      if (!doc?.document_id) return;
+      const listed = listedRef.current.has(`document:${doc.document_id}`);
+      if (listed || onBoardSession(doc.updated_by_session_id)) refresh();
+    };
+    const onTask = (task: Partial<Task>) => {
+      if (onBoardSession(task?.session_id)) refresh();
     };
     const artifacts = client.service('artifacts');
     const branches = client.service('branches');
     const documents = client.service('kb/documents');
+    const tasks = client.service('tasks');
     for (const event of ARTIFACT_EVENTS) artifacts.on(event, onArtifact);
     branches.on('created', onBranchChanged);
     branches.on('patched', onBranchChanged);
     branches.on('removed', onBranchRemoved);
     for (const event of DOCUMENT_EVENTS) documents.on(event, onDocument);
+    tasks.on('created', onTask);
     return () => {
       window.clearTimeout(timer);
       for (const event of ARTIFACT_EVENTS) artifacts.removeListener(event, onArtifact);
@@ -193,6 +208,7 @@ export function useBoardFiles({
       branches.removeListener('patched', onBranchChanged);
       branches.removeListener('removed', onBranchRemoved);
       for (const event of DOCUMENT_EVENTS) documents.removeListener(event, onDocument);
+      tasks.removeListener('created', onTask);
     };
   }, [client, active, boardId, load]);
 
