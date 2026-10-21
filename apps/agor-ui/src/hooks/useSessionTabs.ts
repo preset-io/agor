@@ -81,6 +81,11 @@ export function useSessionTabSessions(ids: string[]): Session[] {
 }
 
 interface SessionTabNavigation {
+  /**
+   * The session this window shows (its URL). Closing it navigates; the saved
+   * selection is shared with other windows on the board, so it can differ.
+   */
+  displayedId: string | null | undefined;
   /** Shows the tab a close selected. */
   onSelect: (sessionId: string) => void;
   /** The shown tab closed and no other tab is shown. */
@@ -90,13 +95,13 @@ interface SessionTabNavigation {
 /**
  * The sessions a person has open as tabs on one board, persisted per user per
  * board. `shownIds` are the tabs to draw (see `isSessionTabShown`); closing
- * the selected tab navigates through `onSelect` / `onCloseLast`.
+ * the displayed tab navigates through `onSelect` / `onCloseLast`.
  */
 export function useSessionTabs(
   client: AgorClient | null,
   userId: string | null | undefined,
   boardId: string | null,
-  { onSelect, onCloseLast }: SessionTabNavigation
+  { displayedId, onSelect, onCloseLast }: SessionTabNavigation
 ) {
   const [stored, setStored] = useUserLocalStorage<SessionTabsState>(
     boardId ? userId : null,
@@ -141,24 +146,24 @@ export function useSessionTabs(
   );
 
   const close = useStableCallback((id: string) => {
-    let closesSelected = false;
-    const next = update((current) => {
-      // Not a tab any more: its archive event already moved the selection on.
-      closesSelected = current.selectedId === id || !current.ids.includes(id);
-      return closeSessionTab(current, id, isShown);
-    });
-    if (!closesSelected) return;
+    const closesDisplayed = id === displayedId;
+    // Closing the displayed tab selects its neighbour. If it is not a tab any
+    // more, its archive event already moved the selection on.
+    const next = update((current) =>
+      closeSessionTab(
+        closesDisplayed && current.ids.includes(id) ? { ...current, selectedId: id } : current,
+        id,
+        isShown
+      )
+    );
+    if (!closesDisplayed) return;
     if (next.selectedId && isShown(next.selectedId)) onSelect(next.selectedId);
     else onCloseLast();
   });
 
   const closeOthers = useStableCallback((id: string) => {
-    let selectedId: string | null = null;
-    update((current) => {
-      selectedId = current.selectedId;
-      return closeOtherSessionTabs(current, id, isShown);
-    });
-    if (selectedId !== id) onSelect(id);
+    update((current) => closeOtherSessionTabs(current, id, isShown));
+    if (id !== displayedId) onSelect(id);
   });
 
   // Archived and deleted sessions close their tab; one that is just not loaded keeps it.

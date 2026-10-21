@@ -993,6 +993,7 @@ export const App: React.FC<AppProps> = ({
 
   // Closing a tab replaces the URL, so Back does not reopen it.
   const sessionTabs = useSessionTabs(client, user?.user_id, isHomeSurface ? null : currentBoardId, {
+    displayedId: selectedSessionId,
     onSelect: (sessionId) => {
       clearOpenedSessionFlags(client, sessionId);
       navigation.goToSession(sessionId, { replace: true });
