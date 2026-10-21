@@ -1,11 +1,10 @@
 import {
-  AnalyticsPackageLogger,
   createAnalyticsLogger,
   resetAnalyticsLoggerForTests,
   setAnalyticsLoggerForTests,
 } from '@agor/core/analytics';
 import { runWithTenantContext } from '@agor/core/db';
-import { SessionStatus, type Task, TaskStatus, type TenantID } from '@agor/core/types';
+import { SessionStatus, type Task, TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ExecutorCleanupCommandResult } from '../utils/executor-cleanup-command.js';
 import { TasksService } from './tasks';
@@ -211,7 +210,11 @@ describe('TasksService analytics lifecycle events', () => {
       await service.patch(running.task_id, { status });
       expect(track).toHaveBeenCalledExactlyOnceWith(
         'task.completed',
-        expect.objectContaining({ status, failure_reason: reason }),
+        expect.objectContaining({
+          status,
+          succeeded: status === TaskStatus.COMPLETED,
+          failure_reason: reason,
+        }),
         { userId: terminal.created_by }
       );
       expect(JSON.stringify(track.mock.calls)).not.toMatch(/PRIVATE|full_prompt/);
@@ -253,13 +256,8 @@ describe('TasksService structured cleanup completion analytics', () => {
     fields: Record<string, unknown>;
   }>([
     {
-      name: 'confirmed OOM with a reported (non-default) limit',
+      name: 'confirmed OOM (extra helper details are not exported)',
       cleanupResult: evidence,
-      fields: { failure_reason: 'oom_killed', memory_limit_bytes: evidence.memoryLimitBytes },
-    },
-    {
-      name: 'confirmed OOM without a limit',
-      cleanupResult: { confirmed: true, cause: 'oom_killed', diagnostic: 'private diagnostic' },
       fields: { failure_reason: 'oom_killed' },
     },
     {
@@ -272,11 +270,6 @@ describe('TasksService structured cleanup completion analytics', () => {
       name: 'unconfirmed helper evidence',
       cleanupResult: { ...evidence, confirmed: false },
       fields: {},
-    },
-    {
-      name: 'invalid memory limit is not emitted',
-      cleanupResult: { ...evidence, memoryLimitBytes: Number.POSITIVE_INFINITY },
-      fields: { failure_reason: 'oom_killed' },
     },
   ])('emits only allowlisted fields: $name', async ({ cleanupResult, fields }) => {
     const track = vi.fn();
@@ -311,13 +304,7 @@ describe('TasksService structured cleanup completion analytics', () => {
         context_window_percentage: null,
         has_error: true,
         failure_reason: 'unknown',
-        termination_cause: null,
-        sdk_failure_reason: null,
-        termination_state: null,
-        watchdog_action: null,
-        sdk_elapsed_ms: null,
-        executor_mode: null,
-        executor_connected: false,
+        succeeded: false,
         ...fields,
       },
       { userId: settledTask.created_by }
@@ -353,7 +340,7 @@ describe('TasksService structured cleanup completion analytics', () => {
       if (outcome === 'unverified') {
         expect(track).toHaveBeenCalledExactlyOnceWith(
           'task.termination_unverified',
-          expect.objectContaining({ failure_reason: 'termination_unverified' }),
+          expect.objectContaining({ succeeded: false, failure_reason: 'termination_unverified' }),
           { userId: settledTask.created_by }
         );
         expect(track.mock.calls[0][1]).not.toHaveProperty('memory_limit_bytes');
@@ -376,31 +363,6 @@ describe('TasksService structured cleanup completion analytics', () => {
     expect(track).toHaveBeenCalledOnce();
     expect(track.mock.calls[0][1]).toHaveProperty('failure_reason', 'unknown');
     expect(track.mock.calls[0][1]).not.toHaveProperty('memory_limit_bytes');
-  });
-
-  it('keeps trusted tenant attribution and refuses a conflicting tenant before analytics', async () => {
-    const track = vi.fn().mockResolvedValue(undefined);
-    setAnalyticsLoggerForTests(new AnalyticsPackageLogger({ track } as never));
-    const { service, settledTask } = settlementService();
-    const input = {
-      taskId: settledTask.task_id,
-      outcome: 'verified_absent' as const,
-      coordinationToken: 'private-token',
-      cleanupResult: evidence,
-    };
-    await runWithTenantContext('tenant-a', () => service.settleTermination(input));
-    expect(track).toHaveBeenCalledExactlyOnceWith(
-      'task.completed',
-      expect.objectContaining({ failure_reason: 'oom_killed' }),
-      { userId: settledTask.created_by, context: { tenant_id: 'tenant-a' } }
-    );
-    track.mockClear();
-    await runWithTenantContext('tenant-a', () =>
-      service.settleTermination(input, {
-        tenant: { tenant_id: 'tenant-b' as TenantID, source: 'explicit' },
-      })
-    );
-    expect(track).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -443,7 +405,7 @@ describe('TasksService structured cleanup completion analytics', () => {
       properties: {
         event_type: 'task.completed',
         failure_reason: 'oom_killed',
-        memory_limit_bytes: evidence.memoryLimitBytes,
+        succeeded: false,
       },
     });
     expect(JSON.stringify(events())).not.toMatch(/private|full_prompt|diagnostic|cleanupResult/);

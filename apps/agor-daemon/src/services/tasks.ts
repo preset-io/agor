@@ -573,10 +573,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   private trackTaskCompleted(task: Task, cleanupResult?: ExecutorCleanupCommandResult): void {
     recordTaskSettlement(getDaemonMetrics(this.app), task);
     const normalized = task.normalized_sdk_response;
-    // Closed allowlist from structured helper evidence only. Never spread the
-    // result (which includes diagnostics), inspect error prose, or guess a limit.
-    const oomKilled = cleanupResult?.confirmed === true && cleanupResult.cause === 'oom_killed';
-    const memoryLimitBytes = cleanupResult?.memoryLimitBytes;
     analyticsLogger.track(
       'task.completed',
       {
@@ -590,14 +586,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         context_window_limit: normalized?.contextWindowLimit ?? null,
         context_window_percentage: normalized?.contextUsageSnapshot?.percentage ?? null,
         has_error: Boolean(task.error_message),
-        ...taskFailureAnalytics(task),
-        ...(oomKilled ? { failure_reason: 'oom_killed' } : {}),
-        ...(oomKilled &&
-        typeof memoryLimitBytes === 'number' &&
-        Number.isSafeInteger(memoryLimitBytes) &&
-        memoryLimitBytes > 0
-          ? { memory_limit_bytes: memoryLimitBytes }
-          : {}),
+        ...taskFailureAnalytics(task, cleanupResult),
       },
       { userId: task.created_by }
     );
@@ -765,7 +754,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           'task.termination_unverified',
           {
             ...this.baseTaskAnalyticsProperties(result.task),
-            ...taskFailureAnalytics(result.task),
+            succeeded: false,
             failure_reason: 'termination_unverified',
           },
           { userId: result.task.created_by }

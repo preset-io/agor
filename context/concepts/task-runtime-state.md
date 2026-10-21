@@ -513,30 +513,22 @@ asserts containment (including suppression of delayed launches/retries). On exit
 error message with the shared `executorOutOfMemoryMessage` text; any malformed or
 unknown result means no cause, never "not contained".
 
-On a successful terminal settlement, that same confirmed helper result adds
-`failure_reason: "oom_killed"` and, only when reported, `memory_limit_bytes` to
-the existing operator `task.completed` analytics event. This is an explicit
-two-field allowlist, not error-text classification or a new browser/community
-telemetry event. Diagnostics and cleanup tokens are never event properties.
-The evidence is passed only to that settlement call, not persisted or replayed;
-existing analytics enablement, exclusions, tenant attribution, and best-effort
-delivery still apply. Task status and user-stop precedence are unchanged.
+The existing operator `task.completed` analytics event adds only `succeeded`
+and `failure_reason` to its prior completion metrics. A completed task succeeds;
+ordinary user Stop is not success but has no failure reason (the existing
+`status` distinguishes cancellation). Failed tasks use their allowlisted recorded
+termination cause, or `unknown` when absent; timeouts use `timed_out`. Confirmed
+helper OOM evidence overrides the reason with `oom_killed` and success with false,
+without changing task status or user-stop precedence. Analytics does not interpret
+SDK/watchdog observations or error prose, and exports no memory limits or extra
+runtime diagnostics.
 
-All `task.completed` events also carry a closed runtime projection:
-`failure_reason`, `termination_cause`, `sdk_failure_reason`, `termination_state`,
-`watchdog_action`, `sdk_elapsed_ms`, `executor_mode`, and `executor_connected`.
-Unrecognized/missing diagnostic fields are null. Failed turns without structured
-causal evidence use `failure_reason: "unknown"`; arbitrary provider errors are
-not parsed. Timeout uses `timed_out`. An enforced SDK-health termination may use
-its bounded SDK reason; an observe-only watchdog signal is diagnostic context,
-not proof it caused a failure. Success and ordinary user Stop have null failure
-reason. Confirmed helper OOM evidence overrides the reason without changing status.
-
+Helper evidence is passed only to that settlement call, not persisted or replayed.
 A winning unverified containment settlement emits `task.termination_unverified`
-with the same closed runtime fields and `failure_reason: "termination_unverified"`,
-not `task.completed`: the task remains stopping and nonpromptable. A distinct
-explicit cleanup retry may emit another outcome. Losing/stale settlement results
-emit neither event. Both use the existing disabled-by-default operator pipeline,
+with `succeeded: false` and `failure_reason: "termination_unverified"`, not
+`task.completed`: the task remains stopping and nonpromptable. A distinct explicit
+cleanup retry may emit another outcome. Losing/stale settlement results emit
+neither event. Both use the existing disabled-by-default operator pipeline,
 `task.*` exclusions, Task creator attribution, and trusted ambient tenant context.
 No prompts, error messages, pulse details, SDK versions, helper diagnostics,
 coordination tokens, or provider response objects are added to these properties.

@@ -17,12 +17,6 @@ function fixture(status: Task['status'] = TaskStatus.FAILED) {
     full_prompt: 'PRIVATE PROMPT',
     error_message: 'PRIVATE PROVIDER ERROR',
     termination_request: { cause: 'heartbeat_lost', requested_at: '2026-01-01T00:00:00Z' },
-    sdk_failure: {
-      reason: 'heartbeat_lost',
-      detected_at: '2026-01-01T00:00:00Z',
-      tool: 'codex',
-      termination: status === TaskStatus.STOPPING ? 'unverified' : 'verified',
-    },
   } as Task;
   const outcome = status === TaskStatus.STOPPING ? 'unverified' : 'transitioned';
   const settleTermination = vi.fn().mockResolvedValue({ outcome, task });
@@ -37,7 +31,7 @@ function fixture(status: Task['status'] = TaskStatus.FAILED) {
       status === TaskStatus.STOPPING ? ('unverified' as const) : ('verified_absent' as const),
     coordinationToken: 'PRIVATE FENCE',
   };
-  return { service, task, settleTermination, input };
+  return { service, task, input };
 }
 
 afterEach(() => {
@@ -50,29 +44,20 @@ it.each([TaskStatus.FAILED, TaskStatus.STOPPING])(
   async (status) => {
     const track = vi.fn().mockResolvedValue(undefined);
     setAnalyticsLoggerForTests(new AnalyticsPackageLogger({ track } as never));
-    const { service, task, settleTermination, input } = fixture(status);
+    const { service, task, input } = fixture(status);
     const event = status === TaskStatus.FAILED ? 'task.completed' : 'task.termination_unverified';
     await runWithTenantContext('tenant-a', () => service.settleTermination(input));
     expect(track).toHaveBeenCalledExactlyOnceWith(
       event,
       expect.objectContaining({
         failure_reason: status === TaskStatus.FAILED ? 'heartbeat_lost' : 'termination_unverified',
-        termination_cause: 'heartbeat_lost',
-        sdk_failure_reason: 'heartbeat_lost',
-        termination_state: status === TaskStatus.FAILED ? 'verified' : 'unverified',
+        succeeded: false,
       }),
       { userId: task.created_by, context: { tenant_id: 'tenant-a' } }
     );
     expect(JSON.stringify(track.mock.calls)).not.toContain('PRIVATE');
 
     track.mockClear();
-    // The repository owns duplicate/race fences. Losing outcomes must not emit.
-    for (const outcome of ['terminal', 'condition_changed']) {
-      settleTermination.mockResolvedValueOnce({ outcome, task });
-      await runWithTenantContext('tenant-a', () => service.settleTermination(input));
-    }
-    expect(track).not.toHaveBeenCalled();
-
     // Explicit cross-tenant publication is refused before either analytics lane.
     await runWithTenantContext('tenant-a', () =>
       service.settleTermination(input, {
