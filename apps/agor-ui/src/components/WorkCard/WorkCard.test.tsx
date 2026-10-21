@@ -17,6 +17,7 @@ const item = (overrides: Partial<BoardFileItem> = {}): BoardFileItem => ({
   id: 'artifact-1',
   name: 'Northwind dashboard',
   made_at: '2026-10-21T10:05:00.000Z',
+  created_at: '2026-10-21T10:05:00.000Z',
   made_by: { user_id: 'user-1' as UserID },
   source: { session_id: 'session-1', title: 'QBR prep' } as BoardFileItem['source'],
   status: 'Live',
@@ -49,7 +50,7 @@ describe('assignWorkToTasks', () => {
     { task_id: 't1', created_at: '2026-10-21T10:00:00.000Z' },
     { task_id: 't2', created_at: '2026-10-21T11:00:00.000Z' },
   ];
-  const at = (id: string, made_at: string) => item({ id, made_at });
+  const at = (id: string, created_at: string) => item({ id, created_at });
 
   it('puts each item after the last turn that started before it was made', () => {
     const placed = assignWorkToTasks(
@@ -62,6 +63,18 @@ describe('assignWorkToTasks', () => {
     );
     expect(placed.get('t1')?.map((entry) => entry.id)).toEqual(['before', 'between']);
     expect(placed.get('t2')?.map((entry) => entry.id)).toEqual(['after']);
+  });
+
+  it('keeps an item on its own turn after a later edit or archive', () => {
+    const archivedLater = item({
+      id: 'archived',
+      created_at: '2026-10-21T10:30:00.000Z',
+      made_at: '2026-10-21T12:00:00.000Z',
+      archived: true,
+    });
+    const placed = assignWorkToTasks([archivedLater], tasks);
+    expect(placed.get('t1')?.map((entry) => entry.id)).toEqual(['archived']);
+    expect(placed.has('t2')).toBe(false);
   });
 
   it('leaves items older than the loaded turns out while older turns are unloaded', () => {
@@ -95,20 +108,12 @@ describe('WorkCard', () => {
     expect(screen.getByRole('button', { name: 'Showing' })).toBeDisabled();
   });
 
-  it('shows artifacts and apps on the board from Board; documents still open, in Chat', () => {
+  it('shows artifacts on the board from Board; documents still open, in Chat', () => {
     const context = boardView({ view: 'board' });
     const { unmount } = renderCard(item(), context);
     fireEvent.click(screen.getByRole('button', { name: /Show on board/ }));
     expect(context.showOnBoard).toHaveBeenCalledWith('artifact-1', 'artifact');
     unmount();
-
-    const app = renderCard(
-      item({ kind: 'app', id: 'branch-1', status: 'Ready to review' }),
-      context
-    );
-    fireEvent.click(screen.getByRole('button', { name: /Show on board/ }));
-    expect(context.showOnBoard).toHaveBeenCalledWith('branch-1', 'branch');
-    app.unmount();
 
     renderCard(item({ kind: 'document', id: 'doc-1', status: 'Draft' }), context);
     fireEvent.click(screen.getByRole('button', { name: 'Open' }));
@@ -142,9 +147,13 @@ describe('TaskWorkCards', () => {
     agorStore.setState({ branchById: new Map([[branch.branch_id, branch]]) } as never);
   });
 
-  const renderTask = (taskId: string, byTask: Map<string, BoardFileItem[]>) =>
+  const renderTask = (
+    taskId: string,
+    byTask: Map<string, BoardFileItem[]>,
+    view: BoardViewContextValue['view'] = 'chat'
+  ) =>
     render(
-      <BoardViewContext.Provider value={boardView()}>
+      <BoardViewContext.Provider value={boardView({ view })}>
         <SessionWorkContext.Provider
           value={{ sessionId: 'session-1', byTask, latestTaskId: 't2', branchId: 'branch-1' }}
         >
@@ -166,10 +175,19 @@ describe('TaskWorkCards', () => {
     expect(screen.queryByText('renewal-tracker')).toBeNull();
   });
 
-  it('adds the branch’s app and pull request after the latest turn', () => {
+  it('adds the branch’s app and pull request after the latest turn, in Chat and on phones', () => {
     renderTask('t2', new Map());
     expect(screen.getByText('renewal-tracker')).toBeInTheDocument();
     expect(screen.getByText('App and pull request · Ready to review')).toBeInTheDocument();
+    cleanup();
+
+    renderTask('t2', new Map(), null);
+    expect(screen.getByText('renewal-tracker')).toBeInTheDocument();
+    cleanup();
+
+    // Board shows the branch strip, which already has them.
+    renderTask('t2', new Map(), 'board');
+    expect(screen.queryByText('renewal-tracker')).toBeNull();
   });
 
   it('renders nothing for a turn without work', () => {

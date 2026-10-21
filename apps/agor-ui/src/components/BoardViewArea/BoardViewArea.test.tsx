@@ -114,10 +114,13 @@ function Conversation() {
 }
 
 function shell(overrides: Partial<BoardViewShell> = {}): BoardViewShell {
+  const isChat = overrides.isChat ?? true;
   return {
     ready: true,
     view: 'chat',
-    isChat: true,
+    isChat,
+    isFiles: false,
+    chatLayout: isChat,
     order: ['chat', 'board'],
     pick: vi.fn(),
     visit: vi.fn(),

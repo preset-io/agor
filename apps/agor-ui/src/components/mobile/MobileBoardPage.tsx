@@ -25,17 +25,9 @@ const SessionCanvas = lazy(() => import('../SessionCanvas/SessionCanvas'));
 export const BOARD_UNAVAILABLE =
   "This board isn't available. It may have been deleted, or you may not have access.";
 
-// Teammate leads, like the desktop panel; the view-only canvas is second.
+// Teammate leads (and is the default), like the desktop panel; the view-only canvas is second.
 const BOARD_TABS: BoardTeammatePanelTab[] = ['teammate', 'board', 'all-sessions', 'comments'];
-
-/**
- * The tab a phone opens on without `?tab=`: Teammate, unless an editor has
- * stored a tab order that puts Board first. Boards without a stored order keep
- * Teammate, so phones are unchanged until someone chooses Board first.
- */
-export function mobileDefaultBoardTab(board: Pick<Board, 'tab_order'> | undefined) {
-  return board?.tab_order?.[0] === 'board' ? 'board' : 'teammate';
-}
+const DEFAULT_BOARD_TAB: BoardTeammatePanelTab = 'teammate';
 
 /** Route state that opens the board switcher on arrival (Home's "All boards"). */
 export interface MobileBoardLocationState {
@@ -112,11 +104,10 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     navigate({ pathname, search }, { replace: true, state: null });
   }, [openBoardSwitcher, navigate, pathname, search]);
 
-  const defaultTab = mobileDefaultBoardTab(board);
   const tabParam = searchParams.get('tab') as BoardTeammatePanelTab | null;
-  const activeTab = tabParam && BOARD_TABS.includes(tabParam) ? tabParam : defaultTab;
+  const activeTab = tabParam && BOARD_TABS.includes(tabParam) ? tabParam : DEFAULT_BOARD_TAB;
   const setActiveTab = useStableCallback((tab: BoardTeammatePanelTab) =>
-    setSearchParams(tab === defaultTab ? {} : { tab }, { replace: true })
+    setSearchParams(tab === DEFAULT_BOARD_TAB ? {} : { tab }, { replace: true })
   );
 
   // Board ⋯: Files, and Board settings for people who can edit the board.

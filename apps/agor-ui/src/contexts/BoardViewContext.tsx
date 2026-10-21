@@ -10,12 +10,11 @@ import type { BoardPreviewTarget, OpenPreviewOptions } from '../hooks/useBoardPr
  * so resizing the pane re-renders nothing that reads this.
  */
 export interface BoardViewContextValue {
-  view: BoardView;
   /**
-   * The phone pages, which have no board tabs: previews open as a bottom sheet
-   * and the session page keeps its own layout (branch strip and menu).
+   * Null on the phone pages, which have no board tabs: previews open as a bottom
+   * sheet and the session page keeps its own layout (branch strip and menu).
    */
-  mobile?: boolean;
+  view: BoardView | null;
   /** Shows the Board tab, pans to the branch or artifact card, outlines it and anchors a tip. */
   showOnBoard: (id: string, kind?: 'branch' | 'artifact') => void;
   /** What the preview shows; null while nothing is previewed. Kept on Board, where the pane is hidden. */

@@ -1,4 +1,10 @@
-import type { AgorClient, Artifact, BoardFileItem, Session } from '@agor-live/client';
+import type {
+  AgorClient,
+  Artifact,
+  BoardFileItem,
+  KnowledgeDocument,
+  Session,
+} from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { fetchBoardFiles } from './useBoardFiles';
 
@@ -8,7 +14,8 @@ const REFRESH_DEBOUNCE_MS = 1000;
  * The artifacts and documents a conversation made, archived ones included (they
  * stay as greyed cards), read through the board's Files list so visibility has
  * one source. Not the store: artifact `find()` does not apply the private rule.
- * Reloads when a turn finishes and, debounced, when one of its artifacts changes.
+ * Reloads when a turn finishes and, debounced, when one of its artifacts changes
+ * or one of its documents is archived or written by another conversation.
  */
 export function useSessionWork(
   client: AgorClient | null,
@@ -31,11 +38,11 @@ export function useSessionWork(
   useEffect(() => {
     if (!client || !boardId) return;
     let cancelled = false;
+    // The whole list, unpaged: the server reads only this session's work.
     fetchBoardFiles(client, boardId, {
       session_id: session.session_id,
       kind: { $in: ['artifact', 'document'] },
       include_archived: true,
-      $limit: 50,
     })
       .then((page) => {
         if (!cancelled) setState({ key, items: page.data });
@@ -48,33 +55,48 @@ export function useSessionWork(
     };
   }, [client, boardId, session.session_id, key, reloads]);
 
+  const items = state?.key === key ? state.items : NO_WORK;
+  const documentIdsRef = useRef(new Set<string>());
+  documentIdsRef.current = new Set(
+    items.filter((item) => item.kind === 'document').map((item) => item.id)
+  );
+
   useEffect(() => {
     if (!client) return;
     let timer: number | undefined;
-    const refresh = (artifact: Partial<Artifact>) => {
-      if (artifact?.source_session_id !== session.session_id) return;
+    const reload = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => setReloads((n) => n + 1), REFRESH_DEBOUNCE_MS);
     };
+    const onArtifact = (artifact: Partial<Artifact>) => {
+      if (artifact?.source_session_id === session.session_id) reload();
+    };
+    const onDocument = (doc: Partial<KnowledgeDocument>) => {
+      if (doc?.document_id && documentIdsRef.current.has(doc.document_id)) reload();
+    };
     const artifacts = client.service('artifacts');
-    for (const event of ['created', 'patched', 'removed']) artifacts.on(event, refresh);
+    const documents = client.service('kb/documents');
+    for (const event of ['created', 'patched', 'removed']) artifacts.on(event, onArtifact);
+    for (const event of ['patched', 'removed']) documents.on(event, onDocument);
     return () => {
       window.clearTimeout(timer);
       for (const event of ['created', 'patched', 'removed']) {
-        artifacts.removeListener(event, refresh);
+        artifacts.removeListener(event, onArtifact);
       }
+      for (const event of ['patched', 'removed']) documents.removeListener(event, onDocument);
     };
   }, [client, session.session_id]);
 
-  return state?.key === key ? state.items : NO_WORK;
+  return items;
 }
 
 const NO_WORK: BoardFileItem[] = [];
 
 /**
  * Which turn each card follows: the last task that started at or before the
- * item was made. Items older than the first loaded task go to it, unless older
- * turns are still unloaded (they belong to one of those).
+ * item was first made (`created_at`, so a later edit or archive does not move
+ * it). Items older than the first loaded task go to it, unless older turns are
+ * still unloaded (they belong to one of those).
  */
 export function assignWorkToTasks(
   items: readonly BoardFileItem[],
@@ -84,12 +106,12 @@ export function assignWorkToTasks(
   const byTask = new Map<string, BoardFileItem[]>();
   if (tasks.length === 0) return byTask;
   const starts = tasks.map((task) => ({ id: task.task_id, at: Date.parse(task.created_at) }));
-  const ordered = [...items].sort((a, b) => a.made_at.localeCompare(b.made_at));
+  const ordered = [...items].sort((a, b) => a.created_at.localeCompare(b.created_at));
   for (const item of ordered) {
-    const madeAt = Date.parse(item.made_at);
+    const createdAt = Date.parse(item.created_at);
     let owner: string | undefined;
     for (const start of starts) {
-      if (start.at <= madeAt) owner = start.id;
+      if (start.at <= createdAt) owner = start.id;
       else break;
     }
     if (!owner && !hasOlderTasks) owner = starts[0].id;

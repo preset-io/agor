@@ -30,6 +30,7 @@ export function appWorkItem(branch: Branch | undefined): BoardFileItem | null {
     id: branch.branch_id as BranchID,
     name: isTeammate(branch) ? teammateLabel(branch) : branch.name,
     made_at: branch.updated_at,
+    created_at: branch.created_at,
     made_by: { user_id: branch.created_by },
     source: 'board',
     status: branchPreviewStatus(branch),
@@ -39,7 +40,8 @@ export function appWorkItem(branch: Branch | undefined): BoardFileItem | null {
 /**
  * A compact card in the transcript for something a turn made: icon, name,
  * "{type} · {status}" and one action. Chat and phones open it in the preview;
- * Board shows artifacts and apps on the board. Archived items stay, greyed.
+ * Board shows artifacts on the board (the app card is not shown there). Archived
+ * items stay, greyed.
  */
 export const WorkCard = memo(function WorkCard({
   item,
@@ -54,12 +56,12 @@ export const WorkCard = memo(function WorkCard({
   const archived = !!item.archived;
   const showing = isPreviewing(boardView?.previewTarget, item);
   const onBoard = boardView?.view === 'board';
-  const showsOnBoard = onBoard && (item.kind === 'artifact' || item.kind === 'app');
+  const showsOnBoard = onBoard && item.kind === 'artifact';
 
   const open = () => {
     if (!boardView) return;
     if (showsOnBoard) {
-      boardView.showOnBoard(item.id, item.kind === 'app' ? 'branch' : 'artifact');
+      boardView.showOnBoard(item.id, 'artifact');
       return;
     }
     boardView.openPreview(boardFilePreviewTarget(item));
@@ -132,13 +134,18 @@ export const WorkCard = memo(function WorkCard({
   );
 });
 
-/** The cards after one turn; the latest turn also gets the branch's app and pull request. */
+/**
+ * The cards after one turn. In Chat and on phones, where the branch strip is
+ * hidden, the latest turn also gets the branch's app and pull request.
+ */
 export const TaskWorkCards: React.FC<{ taskId: string }> = ({ taskId }) => {
   const work = useContext(SessionWorkContext);
+  const view = useBoardViewContext()?.view;
   const branch = useAgorStore(useMemo(() => makeBranchSelector(work?.branchId), [work?.branchId]));
   if (!work) return null;
   const items = work.byTask.get(taskId) ?? [];
-  const app = taskId === work.latestTaskId ? appWorkItem(branch) : null;
+  const stripHidden = view === 'chat' || view === null;
+  const app = stripHidden && taskId === work.latestTaskId ? appWorkItem(branch) : null;
   if (items.length === 0 && !app) return null;
   return (
     <div data-work-cards>

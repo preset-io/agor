@@ -51,6 +51,10 @@ export function useBoardViewShell({
   });
   const isChat = ready && view === 'chat';
   const isFiles = ready && view === 'files';
+  // Files lays over the layout it was opened from, which stays as it was: the
+  // canvas collapses in Chat, expands in Board, and is left alone in Files.
+  const [chatLayout, setChatLayout] = useState(isChat);
+  if (!isFiles && chatLayout !== isChat) setChatLayout(isChat);
 
   // A branch or artifact link shows Board for that visit, set in the render the
   // target arrives in so Chat never flashes. The link's recenter then finds Board shown.
@@ -124,6 +128,8 @@ export function useBoardViewShell({
     view,
     isChat,
     isFiles,
+    /** The canvas is collapsed: Chat, or Files opened from Chat. */
+    chatLayout,
     order,
     pick,
     visit,

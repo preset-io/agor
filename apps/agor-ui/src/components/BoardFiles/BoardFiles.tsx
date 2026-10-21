@@ -155,6 +155,14 @@ export const BoardFiles: React.FC<BoardFilesProps> = ({
     [files.items, files.hasMore]
   );
 
+  const loadMore = (
+    <LoadMoreSentinel
+      key={files.nextSkip}
+      onVisible={files.loadMore}
+      onRetry={files.loadMoreFailed ? files.retryMore : undefined}
+    />
+  );
+
   let body: React.ReactNode;
   if (files.error && files.items.length === 0) {
     body = (
@@ -207,7 +215,7 @@ export const BoardFiles: React.FC<BoardFilesProps> = ({
             </li>
           ))}
         </ul>
-        {files.hasMore && <LoadMoreSentinel key={files.items.length} onVisible={files.loadMore} />}
+        {files.hasMore && loadMore}
       </div>
     );
   } else {
@@ -221,9 +229,7 @@ export const BoardFiles: React.FC<BoardFilesProps> = ({
       >
         {(entry, index) =>
           'sentinel' in entry ? (
-            <div style={{ borderTop: homeDivider(token) }}>
-              <LoadMoreSentinel key={files.items.length} onVisible={files.loadMore} />
-            </div>
+            <div style={{ borderTop: homeDivider(token) }}>{loadMore}</div>
           ) : (
             <div style={index ? { borderTop: homeDivider(token) } : undefined}>
               <BoardFileRow

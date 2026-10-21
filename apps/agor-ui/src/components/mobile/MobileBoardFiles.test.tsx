@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { MobileBoardFilesPage } from './MobileBoardFilesPage';
-import { MobileBoardPage, mobileDefaultBoardTab } from './MobileBoardPage';
+import { MobileBoardPage } from './MobileBoardPage';
 
 vi.mock('../SessionCanvas/SessionCanvas', () => ({ default: () => <div data-testid="canvas" /> }));
 vi.mock('../CommentsPanel', () => ({ CommentsPanel: () => null }));
@@ -30,6 +30,7 @@ const doc: BoardFileItem = {
   id: 'doc-1',
   name: 'Talking points',
   made_at: '2026-10-21T10:00:00.000Z',
+  created_at: '2026-10-21T10:00:00.000Z',
   made_by: { user_id: 'user-1' as UserID },
   source: { session_id: 'session-1', title: 'QBR prep' } as BoardFileItem['source'],
   status: 'Shared',
@@ -133,14 +134,5 @@ describe('mobile Files page', () => {
     expect(screen.getByText('Document · Shared')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Open conversation/ }));
     expect(location()).toBe('/m/session/session-1');
-  });
-});
-
-describe('mobileDefaultBoardTab', () => {
-  it('keeps Teammate unless an editor stored an order with Board first', () => {
-    expect(mobileDefaultBoardTab(undefined)).toBe('teammate');
-    expect(mobileDefaultBoardTab({})).toBe('teammate');
-    expect(mobileDefaultBoardTab({ tab_order: ['chat', 'board', 'files'] })).toBe('teammate');
-    expect(mobileDefaultBoardTab({ tab_order: ['board', 'chat', 'files'] })).toBe('board');
   });
 });

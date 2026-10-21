@@ -3,14 +3,88 @@ import { SafetyOutlined, WarningOutlined } from '@ant-design/icons';
 import { useSandpack, useSandpackConsole } from '@codesandbox/sandpack-react';
 import { Tooltip, theme } from 'antd';
 import type { CSSProperties } from 'react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { getDaemonUrl } from '@/config/daemon';
 import { getAuthHeaders, getCurrentUserIdFromJwt } from '@/utils/authHeaders';
+import { ArtifactSandpackErrorReporter } from './ArtifactSandpackErrorReporter';
 
 /** Max console entries to send per batch, and minimum interval between sends. */
 const CONSOLE_BATCH_MAX = 50;
 const CONSOLE_THROTTLE_MS = 2000;
 const RUNTIME_QUERY_DEFAULT_TIMEOUT_MS = 6000;
+
+/**
+ * Who reports for an artifact. The same artifact can run in more than one
+ * Sandpack at once (its board card, kept hidden in Chat, and the preview), and
+ * each would send its console and errors and answer agent DOM queries. Claimants
+ * (a visible preview) own it while mounted, the latest first, and hand it back
+ * on unmount; copies that do not claim own it only while nobody does.
+ */
+const runtimeClaims = new Map<string, symbol[]>();
+const runtimeListeners = new Set<() => void>();
+const subscribeRuntimeClaims = (listener: () => void) => {
+  runtimeListeners.add(listener);
+  return () => {
+    runtimeListeners.delete(listener);
+  };
+};
+const notifyRuntimeClaims = () => {
+  for (const listener of runtimeListeners) listener();
+};
+
+/** Whether this copy of the artifact reports and answers queries. */
+export function useArtifactRuntimeOwner(artifactId: string, claim: boolean): boolean {
+  const [self] = useState(() => Symbol('artifact-runtime'));
+  useEffect(() => {
+    if (!claim) return;
+    runtimeClaims.set(artifactId, [...(runtimeClaims.get(artifactId) ?? []), self]);
+    notifyRuntimeClaims();
+    return () => {
+      const rest = (runtimeClaims.get(artifactId) ?? []).filter((entry) => entry !== self);
+      if (rest.length > 0) runtimeClaims.set(artifactId, rest);
+      else runtimeClaims.delete(artifactId);
+      notifyRuntimeClaims();
+    };
+  }, [artifactId, claim, self]);
+  const owner = useSyncExternalStore(
+    subscribeRuntimeClaims,
+    () => runtimeClaims.get(artifactId)?.at(-1) ?? null
+  );
+  return claim ? owner === self : owner === null;
+}
+
+/**
+ * The console, error and DOM-query bridge for one Sandpack copy of an
+ * artifact. All three stay mounted, so their state is current; only the owner
+ * (`useArtifactRuntimeOwner`) sends or answers. Must be rendered inside a SandpackProvider.
+ */
+export function ArtifactRuntimeReporting({
+  artifactId,
+  contentHash,
+  claim = false,
+}: {
+  artifactId: string;
+  contentHash?: string;
+  /** A visible preview: it reports while mounted. */
+  claim?: boolean;
+}) {
+  const enabled = useArtifactRuntimeOwner(artifactId, claim);
+  return (
+    <>
+      <ArtifactConsoleReporter
+        artifactId={artifactId}
+        contentHash={contentHash}
+        enabled={enabled}
+      />
+      <ArtifactSandpackErrorReporter
+        artifactId={artifactId}
+        contentHash={contentHash}
+        enabled={enabled}
+      />
+      <ArtifactRuntimeBridge artifactId={artifactId} enabled={enabled} />
+    </>
+  );
+}
 
 /**
  * Captures Sandpack console events and forwards them to the daemon.
@@ -19,9 +93,12 @@ const RUNTIME_QUERY_DEFAULT_TIMEOUT_MS = 6000;
 export function ArtifactConsoleReporter({
   artifactId,
   contentHash,
+  enabled = true,
 }: {
   artifactId: string;
   contentHash?: string;
+  /** Off while another copy reports; what it sees meanwhile is not sent later. */
+  enabled?: boolean;
 }) {
   const { logs } = useSandpackConsole({ resetOnPreviewRestart: false });
   const lastSentRef = useRef(0);
@@ -29,6 +106,10 @@ export function ArtifactConsoleReporter({
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      lastSentRef.current = logs.length;
+      return;
+    }
     if (logs.length <= lastSentRef.current) return;
 
     const sendBatch = () => {
@@ -75,19 +156,26 @@ export function ArtifactConsoleReporter({
         timerRef.current = null;
       }
     };
-  }, [logs, artifactId, contentHash]);
+  }, [logs, artifactId, contentHash, enabled]);
 
   return null;
 }
 
-export { ArtifactSandpackErrorReporter } from './ArtifactSandpackErrorReporter';
+export { ArtifactSandpackErrorReporter };
 
 /**
  * Bridges agent-driven runtime queries: daemon WebSocket event → parent page →
  * Sandpack iframe via postMessage → daemon response endpoint.
  * Must be rendered inside a SandpackProvider.
  */
-export function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
+export function ArtifactRuntimeBridge({
+  artifactId,
+  enabled = true,
+}: {
+  artifactId: string;
+  /** Off while another copy answers. */
+  enabled?: boolean;
+}) {
   // CRITICAL: read existing clients rather than registering a new Sandpack client;
   // the sibling SandpackPreview owns the actual iframe ref.
   const { sandpack } = useSandpack();
@@ -95,6 +183,7 @@ export function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
   sandpackRef.current = sandpack;
 
   useEffect(() => {
+    if (!enabled) return;
     const handleQuery = (event: Event) => {
       const detail = (event as CustomEvent).detail as {
         request_id: string;
@@ -163,7 +252,7 @@ export function ArtifactRuntimeBridge({ artifactId }: { artifactId: string }) {
 
     window.addEventListener('agor:artifact-runtime-query', handleQuery);
     return () => window.removeEventListener('agor:artifact-runtime-query', handleQuery);
-  }, [artifactId]);
+  }, [artifactId, enabled]);
 
   return null;
 }

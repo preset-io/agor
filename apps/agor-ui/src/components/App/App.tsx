@@ -552,6 +552,7 @@ export const App: React.FC<AppProps> = ({
     activeUrlTarget,
   });
   const isChat = boardView.isChat;
+  const isFiles = boardView.isFiles;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
   const isLeavingHomeSurface = wasHomeSurfaceRef.current && !isHomeSurface;
   const [homeExitSidePanelDeferred, setHomeExitSidePanelDeferred] = useState(false);
@@ -976,20 +977,19 @@ export const App: React.FC<AppProps> = ({
     [currentBoardId, effectiveSelectedSessionId, isChat, navigation]
   );
 
-  const handleSessionClick = useCallback(
-    (sessionId: string) => {
-      // Reads the store at call time, so the handler's identity stays stable across
-      // socket churn (it flows into SessionCanvas → initialNodes deps).
-      clearOpenedSessionFlags(client, sessionId);
+  const handleSessionClick = useStableCallback((sessionId: string) => {
+    // Stable, reading the store and the tab at call time, so socket churn and tab
+    // switches keep its identity (it flows into SessionCanvas → initialNodes deps).
+    clearOpenedSessionFlags(client, sessionId);
+    // Files has no session panel: the conversation shows in Chat, even the one already open.
+    if (isFiles) boardView.visit('chat');
 
-      // Route through URL nav so deep links / back-forward / cross-board
-      // recenter all funnel through the same pipe. setSelectedSessionId
-      // happens via useUrlState's onSessionChange callback.
-      setPendingToolChoiceBranchId(null);
-      navigation.goToSession(sessionId);
-    },
-    [client, navigation]
-  );
+    // Route through URL nav so deep links / back-forward / cross-board
+    // recenter all funnel through the same pipe. setSelectedSessionId
+    // happens via useUrlState's onSessionChange callback.
+    setPendingToolChoiceBranchId(null);
+    navigation.goToSession(sessionId);
+  });
 
   // Closing a tab replaces the URL, so Back does not reopen it.
   const sessionTabs = useSessionTabs(client, user?.user_id, isHomeSurface ? null : currentBoardId, {
@@ -1273,7 +1273,7 @@ export const App: React.FC<AppProps> = ({
   const handleTeammatesBack = useStableCallback(() => navigation.goBack());
   const handleEventStreamClick = useStableCallback(() => {
     // The event stream lives in the Board tab's right panel.
-    if (isChat) boardView.visit('board');
+    if (boardView.ready && boardView.view !== 'board') boardView.visit('board');
     // If a session is open, close it and reveal the event stream; otherwise
     // toggle the event stream panel.
     if (effectiveSelectedSessionId) {
@@ -1521,7 +1521,7 @@ export const App: React.FC<AppProps> = ({
                         activeUrlTargetArtifactId={
                           activeUrlTargetArtifactId ?? boardView.highlightArtifactId
                         }
-                        hidden={isChat || boardView.isFiles}
+                        hidden={isChat || isFiles}
                         highlightTip={boardView.highlightTip}
                         onDismissHighlightTip={boardView.clearHighlight}
                         availableAgents={availableAgents}

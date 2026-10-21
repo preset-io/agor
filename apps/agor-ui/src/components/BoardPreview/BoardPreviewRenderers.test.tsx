@@ -24,6 +24,7 @@ const item = (overrides: Partial<BoardFileItem>): BoardFileItem => ({
   id: 'doc-1',
   name: 'Talking points',
   made_at: '2026-10-21T10:00:00.000Z',
+  created_at: '2026-10-21T10:00:00.000Z',
   made_by: { user_id: 'user-1' as UserID },
   source: { session_id: 'session-1', title: 'QBR prep' } as BoardFileItem['source'],
   status: 'Shared',

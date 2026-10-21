@@ -105,8 +105,7 @@ export function MobileBoardPreview({
 
   const value = useMemo<BoardViewContextValue>(
     () => ({
-      view: 'chat',
-      mobile: true,
+      view: null,
       showOnBoard,
       previewTarget,
       openPreview,

@@ -7,11 +7,7 @@ import {
 } from '@codesandbox/sandpack-react';
 import { Spin, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  ArtifactConsoleReporter,
-  ArtifactRuntimeBridge,
-  ArtifactSandpackErrorReporter,
-} from '@/components/artifacts/ArtifactRenderSupport';
+import { ArtifactRuntimeReporting } from '@/components/artifacts/ArtifactRenderSupport';
 import { ensureSandpackCryptoSubtle } from '@/utils/sandpackCrypto';
 import { ArtifactConsentModal } from '../ArtifactConsentModal/ArtifactConsentModal';
 import {
@@ -187,15 +183,12 @@ export function ArtifactSandbox({ sandbox }: { sandbox: ArtifactSandboxState }) 
               showOpenInCodeSandbox={false}
               showRefreshButton
             />
-            <ArtifactConsoleReporter
+            {/* On screen: this copy reports, not the board card kept hidden behind it. */}
+            <ArtifactRuntimeReporting
               artifactId={payload.artifact_id}
               contentHash={payload.runtime_report_hash ?? payload.content_hash}
+              claim
             />
-            <ArtifactSandpackErrorReporter
-              artifactId={payload.artifact_id}
-              contentHash={payload.runtime_report_hash ?? payload.content_hash}
-            />
-            <ArtifactRuntimeBridge artifactId={payload.artifact_id} />
           </SandpackProvider>
         </div>
       </div>

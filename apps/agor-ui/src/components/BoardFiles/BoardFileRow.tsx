@@ -1,6 +1,6 @@
 import type { BoardFileItem } from '@agor-live/client';
 import { MessageOutlined } from '@ant-design/icons';
-import { Flex, Typography, theme } from 'antd';
+import { Button, Flex, Typography, theme } from 'antd';
 import { memo, useEffect, useRef } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { BOARD_FILE_ICONS, boardFileIconColor, boardFileTypeLabel } from '../../utils/boardFiles';
@@ -171,21 +171,45 @@ export const BoardFileTile = memo(function BoardFileTile({
   );
 });
 
-/** Loads the next page when it scrolls into view; it remounts per page, so it fires again if still in view. */
-export const LoadMoreSentinel: React.FC<{ onVisible: () => void }> = ({ onVisible }) => {
+/**
+ * Loads the next page when it scrolls into view; it remounts per page, so it
+ * fires again if still in view. With `onRetry` that page failed: it says so,
+ * and Retry asks for the same page again.
+ */
+export const LoadMoreSentinel: React.FC<{ onVisible: () => void; onRetry?: () => void }> = ({
+  onVisible,
+  onRetry,
+}) => {
   const { token } = theme.useToken();
   const ref = useRef<HTMLDivElement>(null);
   const onVisibleRef = useRef(onVisible);
   onVisibleRef.current = onVisible;
+  const failed = !!onRetry;
   useEffect(() => {
     const element = ref.current;
-    if (!element || typeof IntersectionObserver === 'undefined') return;
+    if (failed || !element || typeof IntersectionObserver === 'undefined') return;
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) onVisibleRef.current();
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [failed]);
+  if (onRetry) {
+    return (
+      <Flex
+        role="alert"
+        align="center"
+        justify="center"
+        gap={token.marginXS}
+        style={{ padding: token.paddingSM }}
+      >
+        <Typography.Text type="secondary">Couldn’t load more.</Typography.Text>
+        <Button size="small" onClick={onRetry}>
+          Retry
+        </Button>
+      </Flex>
+    );
+  }
   return (
     <div
       ref={ref}

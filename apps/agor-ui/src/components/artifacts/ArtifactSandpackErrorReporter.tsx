@@ -10,9 +10,12 @@ const SANDPACK_ERROR_THROTTLE_MS = 1000;
 export function ArtifactSandpackErrorReporter({
   artifactId,
   contentHash,
+  enabled = true,
 }: {
   artifactId: string;
   contentHash?: string;
+  /** Off while another copy reports; it keeps tracking, and sends its state when it takes over. */
+  enabled?: boolean;
 }) {
   const { sandpack, listen } = useSandpack();
   const [compilation, setCompilation] = useState<{
@@ -57,6 +60,7 @@ export function ArtifactSandpackErrorReporter({
       : compilation.status;
 
   useEffect(() => {
+    if (!enabled) return;
     const payload: ArtifactSandpackReport = {
       error: sandpack.error
         ? {
@@ -97,7 +101,7 @@ export function ArtifactSandpackErrorReporter({
         pendingSendRef.current?.();
       }
     };
-  }, [sandpack.error, sandpack.status, compilationStatus, artifactId, contentHash]);
+  }, [sandpack.error, sandpack.status, compilationStatus, artifactId, contentHash, enabled]);
 
   return null;
 }

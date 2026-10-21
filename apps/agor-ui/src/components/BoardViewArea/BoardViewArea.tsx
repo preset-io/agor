@@ -70,8 +70,7 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
   onSessionPanelResize,
 }) => {
   const { token } = theme.useToken();
-  const isChat = shell.isChat;
-  const isFiles = shell.isFiles;
+  const { isChat, isFiles, chatLayout } = shell;
   const conversationShown = conversation != null;
   const canvasPanelRef = useRef<ImperativePanelHandle>(null);
   const sessionPanelRef = useRef<ImperativePanelHandle>(null);
@@ -137,9 +136,10 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
   const [filesMounted, setFilesMounted] = useState(false);
   if (isFiles && !filesMounted) setFilesMounted(true);
 
-  // A conversation opened while Files is shown (a row's link, the left panel, a
-  // deep link) shows Chat for this visit, where it opens as a tab. Before paint,
-  // so Files never shows an empty frame.
+  // A conversation opened while Files is shown by the URL (Back, a deep link)
+  // shows Chat for this visit, where it opens as a tab; clicks go through App's
+  // session handler, which shows Chat even for the conversation already open.
+  // Before paint, so Files never shows an empty frame.
   const shownSessionRef = useRef(currentSessionId);
   useLayoutEffect(() => {
     const opened = currentSessionId && currentSessionId !== shownSessionRef.current;
@@ -148,14 +148,14 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
   }, [currentSessionId, isFiles, shell.visit]);
 
   // Chat collapses the canvas; Board expands it again, and the effect below
-  // restores the session panel size.
+  // restores the session panel size. Files leaves both as they were.
   useEffect(() => {
     const canvasPanel = canvasPanelRef.current;
     if (!canvasPanel) return;
     // expand() leaves an expanded panel as it is.
-    if (isChat) canvasPanel.collapse();
+    if (chatLayout) canvasPanel.collapse();
     else canvasPanel.expand();
-  }, [isChat]);
+  }, [chatLayout]);
 
   // Re-resize whenever the size changes, including when the left panel toggles
   // or resizes and shifts the content width it is derived from. Without this,
@@ -165,8 +165,8 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
   const sessionShown = !!onSessionPanelResize;
   // biome-ignore lint/correctness/useExhaustiveDependencies: also re-run when a session opens.
   useEffect(() => {
-    if (!isChat && conversationShown) sessionPanelRef.current?.resize(sessionPanel.size);
-  }, [isChat, conversationShown, sessionShown, sessionPanel.size]);
+    if (!chatLayout && conversationShown) sessionPanelRef.current?.resize(sessionPanel.size);
+  }, [chatLayout, conversationShown, sessionShown, sessionPanel.size]);
 
   // Full screen collapses the main area; leaving it, or closing the preview,
   // expands it again and restores the kept preview size.
@@ -295,16 +295,18 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
                       id="canvas-panel"
                       order={1}
                       ref={canvasPanelRef}
-                      defaultSize={isChat ? 0 : conversationShown ? 100 - sessionPanel.size : 100}
+                      defaultSize={
+                        chatLayout ? 0 : conversationShown ? 100 - sessionPanel.size : 100
+                      }
                       minSize={CANVAS_MIN_SIZE_PERCENT}
                       // Only Chat collapses the canvas; on Board it keeps its minimum.
-                      collapsible={isChat}
+                      collapsible={chatLayout}
                       collapsedSize={0}
                     >
                       {/* Collapsed, not unmounted: out of the tab order and hidden from assistive tech. */}
                       <div
-                        inert={isChat}
-                        aria-hidden={isChat || undefined}
+                        inert={chatLayout}
+                        aria-hidden={chatLayout || undefined}
                         style={{ position: 'relative', overflow: 'hidden', height: '100%' }}
                       >
                         {canvas}
@@ -313,10 +315,10 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
                     {conversationShown && (
                       <>
                         <PanelResizeHandle
-                          disabled={isChat}
-                          tabIndex={isChat ? -1 : undefined}
+                          disabled={chatLayout}
+                          tabIndex={chatLayout ? -1 : undefined}
                           style={{
-                            width: isChat ? 0 : '4px',
+                            width: chatLayout ? 0 : '4px',
                             background: token.colorBorderSecondary,
                             cursor: 'col-resize',
                             transition: 'background 0.2s',
@@ -337,9 +339,9 @@ export const BoardViewArea: React.FC<BoardViewAreaProps> = ({
                           id="session-panel"
                           order={2}
                           ref={sessionPanelRef}
-                          defaultSize={isChat ? 100 : sessionPanel.size}
-                          minSize={isChat ? 0 : sessionPanel.minSize}
-                          maxSize={isChat ? 100 : sessionPanel.maxSize}
+                          defaultSize={chatLayout ? 100 : sessionPanel.size}
+                          minSize={chatLayout ? 0 : sessionPanel.minSize}
+                          maxSize={chatLayout ? 100 : sessionPanel.maxSize}
                         >
                           {conversation}
                         </Panel>
