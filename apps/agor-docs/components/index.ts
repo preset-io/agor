@@ -9,4 +9,5 @@ export { JoinBetaCTA } from './JoinBetaCTA';
 export { LandingPage } from './LandingPage';
 export { AgentRoster } from './landing/AgentRoster';
 export { FeatureLanding } from './landing/FeatureLanding';
+export { TeamsCampaignLanding } from './landing/TeamsCampaignLanding';
 export { YouTubeEmbed } from './YouTubeEmbed';

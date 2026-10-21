@@ -111,7 +111,7 @@ export function DetailSection({ detail }: { detail: LandingDetail }) {
  * it's the pill row. Clicks scroll smoothly (instantly under reduced motion)
  * and update the hash without a jump.
  */
-export function DetailNav({ details }: { details: LandingDetail[] }) {
+export function DetailNav({ details }: { details: Array<Pick<LandingDetail, 'id' | 'navLabel'>> }) {
   const [active, setActive] = useState(details[0]?.id);
 
   useEffect(() => {

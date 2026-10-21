@@ -52,6 +52,9 @@ export default {
   // The Preset agent roster (linked from the home radar and the nav); not a
   // spoke in LANDING_PAGES, but framed the same way.
   'agent-roster': landingPageMeta,
+  // Google Ads campaign page for Agor Cloud. Unlisted: noindex (so out of the
+  // sitemap), kept out of site search, and nothing on the site links to it.
+  teams: landingPageMeta,
   guide: 'Docs',
   blog: 'Blog',
   'api-reference': 'API Reference',
