@@ -19,7 +19,12 @@ function allowed<T extends string>(value: unknown, values: readonly T[]): T | nu
  * Confirmed cleanup-helper evidence (including OOM) is added by the settlement
  * owner, not inferred here from a message, exit code, signal, or missing heartbeat.
  */
-export function taskFailureAnalytics(task: Task) {
+export function taskFailureAnalytics(
+  task: Pick<
+    Task,
+    'status' | 'termination_request' | 'sdk_failure' | 'executor_mode' | 'executor_connected_at'
+  >
+) {
   const terminationCause = allowed(task.termination_request?.cause, TERMINATION_CAUSES);
   const sdkReason = allowed(task.sdk_failure?.reason, SDK_FAILURE_REASONS);
   const terminationState = allowed(task.sdk_failure?.termination, SDK_TERMINATION_STATES);

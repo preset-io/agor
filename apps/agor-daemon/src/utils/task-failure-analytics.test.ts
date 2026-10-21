@@ -3,7 +3,10 @@ import { expect, it } from 'vitest';
 import { taskFailureAnalytics } from './task-failure-analytics';
 
 // This pure projection needs only lifecycle fields, not a repository fixture.
-const task = (fields: Partial<Task>) => ({ status: TaskStatus.FAILED, ...fields }) as Task;
+const task = (fields: Partial<Task>): Parameters<typeof taskFailureAnalytics>[0] => ({
+  status: TaskStatus.FAILED,
+  ...fields,
+});
 
 it.each(TERMINATION_CAUSES)('projects the bounded termination cause %s', (cause) => {
   const result = taskFailureAnalytics(
@@ -111,7 +114,7 @@ it('drops unrecognized runtime enums, nested content, and invalid numeric detail
       elapsed_ms: Infinity,
       last_pulse: { detail: 'PRIVATE' },
     },
-  } as unknown as Task;
+  } as unknown as Parameters<typeof taskFailureAnalytics>[0];
   expect(taskFailureAnalytics(malformed)).toEqual({
     failure_reason: 'unknown',
     termination_cause: null,
