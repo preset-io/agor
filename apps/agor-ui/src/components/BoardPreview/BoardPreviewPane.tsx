@@ -1,4 +1,4 @@
-import { isTeammate } from '@agor-live/client';
+import { type AgorClient, isTeammate, type User } from '@agor-live/client';
 import {
   AimOutlined,
   BranchesOutlined,
@@ -16,6 +16,10 @@ import { BranchDetailsPreview, branchPreviewStatus } from './BranchDetailsPrevie
 
 interface BoardPreviewPaneProps {
   target: BoardPreviewTarget;
+  client: AgorClient | null;
+  user: User | null | undefined;
+  /** The conversation on screen, marked as current in the item's conversations. */
+  currentSessionId?: string | null;
   fullScreen: boolean;
   /** Absent when the window is too narrow for a split: the preview stays full screen. */
   onToggleFullScreen?: () => void;
@@ -30,13 +34,46 @@ interface BoardPreviewPaneProps {
  */
 export const BoardPreviewPane = forwardRef<HTMLElement, BoardPreviewPaneProps>(
   function BoardPreviewPane(
-    { target, fullScreen, onToggleFullScreen, onShowOnBoard, onClose },
+    {
+      target,
+      client,
+      user,
+      currentSessionId,
+      fullScreen,
+      onToggleFullScreen,
+      onShowOnBoard,
+      onClose,
+    },
     ref
   ) {
     const { token } = theme.useToken();
-    const branch = useAgorStore(useMemo(() => makeBranchSelector(target.id), [target.id]));
-    const title = branch ? (isTeammate(branch) ? teammateLabel(branch) : branch.name) : 'Branch';
-    const meta = ['Branch', branch && branchPreviewStatus(branch)].filter(Boolean).join(' · ');
+    const branch = useAgorStore(
+      useMemo(() => makeBranchSelector(target.kind === 'branch' ? target.id : undefined), [target])
+    );
+
+    // The header and body for each kind of item. `boardItemId` is the card
+    // Show on board pans to; `body` is null once the item is gone.
+    const { icon, title, meta, boardItemId, body } = (() => {
+      switch (target.kind) {
+        case 'branch':
+          return {
+            icon: <BranchesOutlined />,
+            title: branch ? (isTeammate(branch) ? teammateLabel(branch) : branch.name) : 'Branch',
+            meta: ['Branch', branch && branchPreviewStatus(branch)].filter(Boolean).join(' · '),
+            boardItemId: branch?.branch_id,
+            body: branch && (
+              <BranchDetailsPreview
+                branch={branch}
+                client={client}
+                user={user}
+                currentSessionId={currentSessionId}
+              />
+            ),
+          };
+      }
+    })();
+
+    const hasActions = !!onToggleFullScreen || !!boardItemId;
 
     return (
       <section
@@ -57,7 +94,7 @@ export const BoardPreviewPane = forwardRef<HTMLElement, BoardPreviewPaneProps>(
         }}
       >
         <Flex
-          align="center"
+          vertical
           gap={token.marginXS}
           style={{
             flexShrink: 0,
@@ -65,51 +102,58 @@ export const BoardPreviewPane = forwardRef<HTMLElement, BoardPreviewPaneProps>(
             borderBottom: `1px solid ${token.colorBorderSecondary}`,
           }}
         >
-          <BranchesOutlined aria-hidden style={{ color: token.colorTextSecondary }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Typography.Text strong ellipsis={{ tooltip: title }} style={{ display: 'block' }}>
-              {title}
-            </Typography.Text>
-            <Typography.Text
-              type="secondary"
-              ellipsis
-              style={{ display: 'block', fontSize: token.fontSizeSM }}
-            >
-              {meta}
-            </Typography.Text>
-          </div>
-          {onToggleFullScreen && (
-            <Button
-              size="small"
-              icon={fullScreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
-              onClick={onToggleFullScreen}
-            >
-              {fullScreen ? 'Exit full screen' : 'Open full screen'}
-            </Button>
+          <Flex align="center" gap={token.marginXS}>
+            <span aria-hidden style={{ color: token.colorTextSecondary }}>
+              {icon}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Typography.Text strong ellipsis={{ tooltip: title }} style={{ display: 'block' }}>
+                {title}
+              </Typography.Text>
+              <Typography.Text
+                type="secondary"
+                ellipsis
+                style={{ display: 'block', fontSize: token.fontSizeSM }}
+              >
+                {meta}
+              </Typography.Text>
+            </div>
+            <Tooltip title="Close preview">
+              <Button
+                type="text"
+                size="small"
+                aria-label="Close preview"
+                icon={<CloseOutlined />}
+                onClick={onClose}
+              />
+            </Tooltip>
+          </Flex>
+          {/* On their own row, so the title keeps the width and the labels stay. */}
+          {hasActions && (
+            <Flex gap={token.marginXS} wrap>
+              {onToggleFullScreen && (
+                <Button
+                  size="small"
+                  icon={fullScreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+                  onClick={onToggleFullScreen}
+                >
+                  {fullScreen ? 'Exit full screen' : 'Open full screen'}
+                </Button>
+              )}
+              {boardItemId && (
+                <Button
+                  size="small"
+                  icon={<AimOutlined />}
+                  onClick={() => onShowOnBoard(boardItemId)}
+                >
+                  Show on board
+                </Button>
+              )}
+            </Flex>
           )}
-          {branch && (
-            <Button
-              size="small"
-              icon={<AimOutlined />}
-              onClick={() => onShowOnBoard(branch.branch_id)}
-            >
-              Show on board
-            </Button>
-          )}
-          <Tooltip title="Close preview">
-            <Button
-              type="text"
-              size="small"
-              aria-label="Close preview"
-              icon={<CloseOutlined />}
-              onClick={onClose}
-            />
-          </Tooltip>
         </Flex>
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-          {branch ? (
-            <BranchDetailsPreview branch={branch} />
-          ) : (
+          {body || (
             <Typography.Text
               type="secondary"
               style={{ display: 'block', padding: token.paddingMD }}

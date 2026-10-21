@@ -30,6 +30,7 @@ import type {
 } from '@agor-live/client';
 import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { canControlBranchEnvironment } from '../../utils/branchAccess';
 import { CLIENT_NOT_CONNECTED_ERROR } from '../../utils/connectionErrors';
 
 /** Patchable subset of `Branch` writable from the modal form. */
@@ -369,12 +370,10 @@ export function useBranchModalForm({
   const canManagePolicy = Boolean(
     capabilityPolicy && (isSuperAdmin || effectiveAccess?.can === 'all' || isPrimaryOwner)
   );
-  // Mirrors the daemon's environment rule: admin, or effective `all` on the branch.
-  const canControlEnvironment = hasMinimumRole(currentUser?.role, ROLES.ADMIN)
-    ? true
-    : permissionsLoading || permissionsLoadError || !effectiveAccess
-      ? undefined
-      : effectiveAccess.can === 'all';
+  const canControlEnvironment = canControlBranchEnvironment(
+    permissionsLoading || permissionsLoadError ? null : effectiveAccess,
+    currentUser?.role
+  );
   const canViewPermissions = Boolean(capabilityPolicy);
   const canEditGeneral = canManagePolicy;
   // Every authenticated viewer may author their own personal session-sharing

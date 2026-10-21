@@ -1,4 +1,4 @@
-import type { Branch } from '@agor-live/client';
+import type { AgorClient, Branch, User } from '@agor-live/client';
 import {
   ExportOutlined,
   FileTextOutlined,
@@ -9,7 +9,10 @@ import {
 import { Button, Collapse, Flex, Typography, theme } from 'antd';
 import { useMemo } from 'react';
 import { useAppActions } from '../../contexts/AppActionsContext';
+import { useBoardViewContext } from '../../contexts/BoardViewContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useAuthConfigSnapshot } from '../../hooks/useAuthConfig';
+import { useBranchAccess } from '../../hooks/useBranchAccess';
 import { useAgorStore } from '../../store/agorStore';
 import {
   makeBoardSelector,
@@ -17,7 +20,9 @@ import {
   makeRepoSelector,
   makeSessionsForBranchSelector,
 } from '../../store/selectors';
+import { canControlBranchEnvironment } from '../../utils/branchAccess';
 import { getEnvironmentAccessUrls } from '../../utils/environmentAccessUrls';
+import { hasEnvironmentLogs } from '../../utils/environmentCommand';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import {
   getEnvironmentControlState,
@@ -27,7 +32,10 @@ import {
 import { teammateLabel } from '../../utils/teammateLabels';
 import { formatRelativeTimeSafe } from '../../utils/time';
 import { EnvironmentStatusIcon } from '../EnvironmentPill';
-import { isEnvironmentUnconfirmed } from '../EnvironmentPill/environmentStatusCopy';
+import {
+  ENVIRONMENT_NO_CONTROL,
+  isEnvironmentUnconfirmed,
+} from '../EnvironmentPill/environmentStatusCopy';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import {
   getSessionTabStatus,
@@ -41,21 +49,24 @@ export function pullRequestNumber(url: string): string | null {
   return url.match(/\/pull\/(\d+)/)?.[1] ?? null;
 }
 
-/** The branch's app: its own link, else the first one its environment reports. */
-export function branchAppUrl(branch: Branch): string | undefined {
-  return branch.app_url || getEnvironmentAccessUrls(branch.environment_instance)[0]?.url;
-}
-
 /**
  * Branch details in the board's preview: what the teammate did, the app and
  * pull request, the conversations about it, and its environment folded away.
- * Environment actions are the same handlers the branch strip uses; the daemon
- * enforces who may run them.
+ * Environment actions are the same handlers the branch strip uses, offered to
+ * people who may run them (the daemon still decides).
  */
-export const BranchDetailsPreview: React.FC<{ branch: Branch }> = ({ branch }) => {
+export const BranchDetailsPreview: React.FC<{
+  branch: Branch;
+  client: AgorClient | null;
+  user: User | null | undefined;
+  /** The conversation on screen, marked as current. */
+  currentSessionId?: string | null;
+}> = ({ branch, client, user, currentSessionId }) => {
   const { token } = theme.useToken();
-  const { onSessionClick, onStartEnvironment, onStopEnvironment, onViewLogs } = useAppActions();
+  const { onStartEnvironment, onStopEnvironment, onViewLogs } = useAppActions();
+  const openConversation = useBoardViewContext()?.openConversation;
   const connectionDisabled = useConnectionDisabled();
+  const { featuresConfig } = useAuthConfigSnapshot();
   const repo = useAgorStore(useMemo(() => makeRepoSelector(branch.repo_id), [branch.repo_id]));
   const board = useAgorStore(useMemo(() => makeBoardSelector(branch.board_id), [branch.board_id]));
   const teammate = useAgorStore(
@@ -73,18 +84,28 @@ export const BranchDetailsPreview: React.FC<{ branch: Branch }> = ({ branch }) =
   );
 
   const notes = branch.notes?.trim();
-  const appUrl = branchAppUrl(branch);
+  const env = branch.environment_instance;
+  const appUrl = getEnvironmentAccessUrls(env, branch.app_url)[0]?.url;
   const prUrl = branch.pull_request_url;
   const prNumber = prUrl ? pullRequestNumber(prUrl) : null;
 
-  const env = branch.environment_instance;
   const effectiveEnv = repo ? getEffectiveEnv(repo) : null;
   const hasConfig = !!effectiveEnv?.hasConfig;
   const envState = getEnvironmentState(env);
+  // Closed until access is known.
+  const access = useBranchAccess(client, branch, user, hasConfig);
+  const controlAccess = canControlBranchEnvironment(access, user?.role);
+  const canControl = controlAccess ?? false;
   const { startDisabled, stopDisabled } = getEnvironmentControlState(env, {
     hasConfig,
+    canControl,
     connectionDisabled,
   });
+  const canViewLogs = hasEnvironmentLogs(
+    env,
+    branch.logs_command,
+    featuresConfig?.environmentCommands?.shellLogs
+  );
 
   const environmentLabel = (
     <Flex align="center" gap={token.marginXS} wrap>
@@ -110,7 +131,7 @@ export const BranchDetailsPreview: React.FC<{ branch: Branch }> = ({ branch }) =
     <Flex vertical gap={token.marginLG} style={{ padding: token.paddingMD }}>
       {notes && (
         <Flex vertical gap={token.marginXS}>
-          {heading(`What ${teammate ? teammateLabel(teammate) : 'your teammate'} did`)}
+          {heading(teammate ? `What ${teammateLabel(teammate)} did` : 'Notes')}
           <MarkdownRenderer content={notes} />
         </Flex>
       )}
@@ -152,7 +173,8 @@ export const BranchDetailsPreview: React.FC<{ branch: Branch }> = ({ branch }) =
               <Button
                 key={session.session_id}
                 type="text"
-                onClick={() => onSessionClick?.(session.session_id)}
+                aria-current={session.session_id === currentSessionId || undefined}
+                onClick={() => openConversation?.(session.session_id)}
                 style={{ justifyContent: 'flex-start', paddingInline: token.paddingXS }}
               >
                 <ToolIcon tool={session.agentic_tool} size={16} bordered={false} />
@@ -181,32 +203,38 @@ export const BranchDetailsPreview: React.FC<{ branch: Branch }> = ({ branch }) =
               // Lined up with the other sections.
               styles: { header: { paddingInline: 0 }, body: { paddingInline: 0 } },
               children: (
-                <Flex gap={token.marginXS} wrap>
-                  <Button
-                    size="small"
-                    icon={<PlayCircleOutlined />}
-                    disabled={!onStartEnvironment || startDisabled}
-                    onClick={() => onStartEnvironment?.(branch.branch_id)}
-                  >
-                    Start
-                  </Button>
-                  <Button
-                    size="small"
-                    icon={<StopOutlined />}
-                    disabled={!onStopEnvironment || stopDisabled}
-                    onClick={() => onStopEnvironment?.(branch.branch_id)}
-                  >
-                    Stop
-                  </Button>
-                  {onViewLogs && effectiveEnv?.logs && (
+                <Flex vertical gap={token.marginXS}>
+                  {controlAccess === false && (
+                    <Typography.Text type="secondary">{ENVIRONMENT_NO_CONTROL}</Typography.Text>
+                  )}
+                  <Flex gap={token.marginXS} wrap>
                     <Button
                       size="small"
-                      icon={<FileTextOutlined />}
-                      onClick={() => onViewLogs(branch.branch_id)}
+                      icon={<PlayCircleOutlined />}
+                      disabled={!onStartEnvironment || startDisabled}
+                      onClick={() => onStartEnvironment?.(branch.branch_id)}
                     >
-                      Logs
+                      Start
                     </Button>
-                  )}
+                    <Button
+                      size="small"
+                      icon={<StopOutlined />}
+                      disabled={!onStopEnvironment || stopDisabled}
+                      onClick={() => onStopEnvironment?.(branch.branch_id)}
+                    >
+                      Stop
+                    </Button>
+                    {onViewLogs && canViewLogs && (
+                      <Button
+                        size="small"
+                        icon={<FileTextOutlined />}
+                        disabled={!canControl}
+                        onClick={() => onViewLogs(branch.branch_id)}
+                      >
+                        Logs
+                      </Button>
+                    )}
+                  </Flex>
                 </Flex>
               ),
             },
@@ -223,6 +251,6 @@ export const BranchDetailsPreview: React.FC<{ branch: Branch }> = ({ branch }) =
 /** Header status for a branch (A14): a pull request is ready to review; an app alone is live. */
 export function branchPreviewStatus(branch: Branch): string | undefined {
   if (branch.pull_request_url) return 'Ready to review';
-  if (branchAppUrl(branch)) return 'Live';
+  if (getEnvironmentAccessUrls(branch.environment_instance, branch.app_url).length) return 'Live';
   return undefined;
 }

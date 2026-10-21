@@ -42,3 +42,15 @@ export function provisioningAccess(
 /** Branch Manager: the owner or effective `all`, as the workspace notification dismiss route checks. */
 export const canManageBranch = (lookup: BranchAccessLookup) =>
   typeof lookup === 'object' && (lookup.is_owner || lookup.can === 'all');
+
+/**
+ * Environment Start, Stop and Logs, mirroring the daemon's rule: an admin, or
+ * effective `all` on the branch. Undefined while access is loading or unknown.
+ */
+export function canControlBranchEnvironment(
+  lookup: BranchAccessLookup | null,
+  role: string | undefined
+): boolean | undefined {
+  if (hasMinimumRole(role, ROLES.ADMIN)) return true;
+  return typeof lookup === 'object' && lookup ? lookup.can === 'all' : undefined;
+}
