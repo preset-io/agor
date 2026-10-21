@@ -9,7 +9,6 @@ export interface BlogPost {
 
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
-  // DRAFT: agent-modeling-201 is unapproved; date is a placeholder. Do not merge without sign-off.
   {
     slug: 'agent-modeling-201',
     title: 'Agent Modeling 201: Growing What AI Owns Without Creating Chaos',
