@@ -110,6 +110,7 @@ import {
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   hasMinimumRole,
+  isBoardTabOrder,
   ROLES,
   SCHEDULE_CREATE_WRITE_FIELDS,
   SCHEDULE_PATCH_WRITE_FIELDS,
@@ -3899,6 +3900,18 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             });
             // Skip normal patch flow to prevent double emit
             context.dispatch = result;
+            return context;
+          }
+
+          if (_action === 'setTabOrder') {
+            if (!context.id) throw new Error('Board ID required');
+            const { tab_order } = contextData as UnknownJson;
+            if (!isBoardTabOrder(tab_order)) {
+              throw new BadRequest('tab_order must list chat, board and files once each');
+            }
+            // Setting the result skips the generic patch; Feathers' event hook then
+            // emits the one `boards patched` event every viewer receives.
+            context.result = await boardsService!.setTabOrder(context.id as string, tab_order);
             return context;
           }
 

@@ -619,6 +619,7 @@ export const boards = sqliteTable(
         custom_css?: string; // Custom CSS for animations, keyframes, etc. (rendered in scoped <style> tag)
         objects?: Record<string, import('@agor/core/types').BoardObject>; // Board objects (text, zone)
         custom_context?: Record<string, unknown>; // Custom context for Handlebars templates
+        tab_order?: import('@agor/core/types').BoardView[]; // Shared tab order; see setTabOrder
       }>()
       .notNull(),
 

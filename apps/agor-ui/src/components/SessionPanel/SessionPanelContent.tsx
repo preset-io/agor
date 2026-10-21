@@ -38,6 +38,8 @@ export interface SessionPanelContentProps {
   onSpawnModalConfirm: (config: string | Partial<SpawnConfig>) => Promise<void>;
   inputValueRef: React.RefObject<string>;
   isOpen: boolean;
+  /** The branch pills over the conversation; the scroll buttons stay either way. */
+  showBranchStrip?: boolean;
   /** When true, all task blocks are force-expanded (used by in-session search) */
 }
 
@@ -57,6 +59,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     onSpawnModalConfirm,
     inputValueRef,
     isOpen,
+    showBranchStrip = true,
   }) => {
     const { token } = theme.useToken();
     const isMobileShell = useIsMobileViewport();
@@ -125,7 +128,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
           }}
         >
           {/* Pills section (only shown if there's content) */}
-          {branch && (
+          {branch && showBranchStrip && (
             <BranchMetadataRow branch={branch} repo={repo} style={{ flex: '1 1 0', minWidth: 0 }}>
               {repo && (
                 <BranchHeaderPill
@@ -144,7 +147,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             </BranchMetadataRow>
           )}
           {/* Spacer if no pills */}
-          {!branch && <div style={{ flex: 1 }} />}
+          {!(branch && showBranchStrip) && <div style={{ flex: 1 }} />}
           {/* Scroll Navigation Buttons - always visible */}
           <Space size={4} style={{ flexShrink: 0 }}>
             <Tooltip title="Scroll to top of conversation">

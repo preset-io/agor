@@ -293,6 +293,26 @@ export function jsonSetString(db: Database, column: SQLWrapper, key: string, val
   )`;
 }
 
+/**
+ * Set a top-level JSON property to a JSON value (array, object, number...)
+ * without replacing unrelated properties. Same rule as `jsonSetString`.
+ */
+export function jsonSetJson(db: Database, column: SQLWrapper, key: string, value: unknown): SQL {
+  if (key.includes('.') || !/^[A-Za-z0-9_]+$/.test(key)) {
+    throw new Error(`jsonSetJson only supports safe top-level keys: ${key}`);
+  }
+  const json = JSON.stringify(value);
+  if (isSQLiteDatabase(db)) {
+    return sql`json_set(${column}, ${`$.${key}`}, json(${json}))`;
+  }
+  return sql`pg_catalog.jsonb_set(
+    ${column},
+    ${`{${key}}`}::pg_catalog.text[],
+    ${json}::pg_catalog.jsonb,
+    true
+  )`;
+}
+
 /** Remove a top-level JSON property without replacing unrelated properties. */
 export function jsonRemoveProperty(db: Database, column: SQLWrapper, key: string): SQL {
   if (key.includes('.') || !/^[A-Za-z0-9_]+$/.test(key)) {

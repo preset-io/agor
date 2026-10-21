@@ -381,6 +381,12 @@ export interface SessionPanelProps {
   onCloseOtherTabs?: () => void;
   /** Extra header control, e.g. the mobile open-sessions switcher. */
   headerExtra?: React.ReactNode;
+  /** The branch pills over the conversation. Hidden in the board's Chat tab. */
+  showBranchStrip?: boolean;
+  /** Replaces "Center map on branch" with "Show on board" (the board's Chat tab). */
+  onShowOnBoard?: (branchId: string) => void;
+  /** Composer placeholder while the session is not running. */
+  composerPlaceholder?: string;
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
@@ -397,6 +403,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   closesTab,
   onCloseOtherTabs,
   headerExtra,
+  showBranchStrip = true,
+  onShowOnBoard,
+  composerPlaceholder,
   uploadPolicy,
 }) => {
   const { token } = theme.useToken();
@@ -915,10 +924,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             isMobileShell
               ? isRunning
                 ? 'Queue here…'
-                : 'Prompt here…'
+                : (composerPlaceholder ?? 'Prompt here…')
               : isRunning
                 ? 'Queue here… @ for mentions, : for emoji'
-                : 'Prompt here… @ for mentions, : for emoji'
+                : (composerPlaceholder ?? 'Prompt here… @ for mentions, : for emoji')
           }
           autoSize={{ minRows: 1, maxRows: isMobileShell ? 5 : 10 }}
           client={client}
@@ -972,6 +981,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     handleHasInputChange,
     stableFooterHandlers,
     token.borderRadius,
+    composerPlaceholder,
   ]);
 
   // When there's no session, render nothing (panel is collapsed to zero).
@@ -1022,12 +1032,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       : []),
     ...(showCenterMap && branch
       ? [
-          {
-            key: 'center-map',
-            icon: <AimOutlined />,
-            label: 'Center map on branch',
-            onClick: () => recenterMap(branch.branch_id, { boardId: branch.board_id ?? undefined }),
-          },
+          onShowOnBoard
+            ? {
+                key: 'show-on-board',
+                icon: <AimOutlined />,
+                label: 'Show on board',
+                onClick: () => onShowOnBoard(branch.branch_id),
+              }
+            : {
+                key: 'center-map',
+                icon: <AimOutlined />,
+                label: 'Center map on branch',
+                onClick: () =>
+                  recenterMap(branch.branch_id, { boardId: branch.board_id ?? undefined }),
+              },
         ]
       : []),
     ...(onOpenTerminal && branch
@@ -1940,6 +1958,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             onSpawnModalConfirm={handleSpawnModalConfirm}
             inputValueRef={inputValueRef}
             isOpen={open}
+            showBranchStrip={showBranchStrip}
           />
         </div>
 

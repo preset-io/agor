@@ -1046,6 +1046,8 @@ describe('OnboardingWizard', () => {
         board_id: TEST_BOARD_ID,
         name: 'Rusty',
         icon: '✨',
+        // The teammate's board opens on Chat.
+        tab_order: ['chat', 'board', 'files'],
       });
     });
   });

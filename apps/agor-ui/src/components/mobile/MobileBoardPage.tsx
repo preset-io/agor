@@ -21,9 +21,16 @@ const SessionCanvas = lazy(() => import('../SessionCanvas/SessionCanvas'));
 export const BOARD_UNAVAILABLE =
   "This board isn't available. It may have been deleted, or you may not have access.";
 
-// Teammate leads (and is the default), like the desktop panel; the view-only canvas is second.
+// Teammate leads, like the desktop panel; the view-only canvas is second.
 const BOARD_TABS: BoardTeammatePanelTab[] = ['teammate', 'board', 'all-sessions', 'comments'];
-const DEFAULT_BOARD_TAB: BoardTeammatePanelTab = 'teammate';
+
+/**
+ * Where a phone opens the board: Board when the board's shared tab order puts
+ * Board first, otherwise Teammate. Boards without a stored order keep Teammate.
+ */
+export const mobileDefaultBoardTab = (
+  board: Pick<Board, 'tab_order'> | undefined
+): BoardTeammatePanelTab => (board?.tab_order?.[0] === 'board' ? 'board' : 'teammate');
 
 /** Route state that opens the board switcher on arrival (Home's "All boards"). */
 export interface MobileBoardLocationState {
@@ -101,9 +108,10 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   }, [openBoardSwitcher, navigate, pathname, search]);
 
   const tabParam = searchParams.get('tab') as BoardTeammatePanelTab | null;
-  const activeTab = tabParam && BOARD_TABS.includes(tabParam) ? tabParam : DEFAULT_BOARD_TAB;
+  const defaultTab = mobileDefaultBoardTab(board);
+  const activeTab = tabParam && BOARD_TABS.includes(tabParam) ? tabParam : defaultTab;
   const setActiveTab = useStableCallback((tab: BoardTeammatePanelTab) =>
-    setSearchParams(tab === DEFAULT_BOARD_TAB ? {} : { tab }, { replace: true })
+    setSearchParams(tab === defaultTab ? {} : { tab }, { replace: true })
   );
 
   const boards = useMemo(() => Array.from(boardById.values()), [boardById]);

@@ -330,6 +330,11 @@ export interface BoardsServiceImpl extends Service<Board, Partial<Board>, Feathe
     patches: Record<string, unknown>,
     params?: FeathersParams
   ): Promise<Board>;
+  setTabOrder(
+    boardId: string,
+    order: import('@agor/core/types').BoardView[],
+    params?: FeathersParams
+  ): Promise<Board>;
   deleteZone(
     boardId: string,
     zoneId: string,

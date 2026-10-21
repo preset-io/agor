@@ -1,4 +1,4 @@
-import type { Board } from '@agor-live/client';
+import type { Board, BoardView } from '@agor-live/client';
 import { LockOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Form, Input, Space, Tabs, Typography } from 'antd';
@@ -9,6 +9,7 @@ import {
   type RbacVisibility,
 } from '../permissions/RbacPermissionFields';
 import { BoardBackgroundEditor } from './BoardBackgroundEditor';
+import { BoardTabOrderField } from './BoardTabOrderField';
 
 /** A value carrying AntD's ColorPicker `toHexString()` serializer. */
 interface HexSerializable {
@@ -94,6 +95,9 @@ export interface BoardFormFieldsProps {
    * uniformly rather than field-by-field.
    */
   canEditGeneral?: boolean;
+  /** The board's tab order (editing an existing board only); saved separately. */
+  tabOrder?: BoardView[];
+  onTabOrderChange?: (order: BoardView[]) => void;
 }
 
 /**
@@ -110,6 +114,8 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
   backgroundResetSignal,
   capabilityPolicyEditor,
   canEditGeneral = true,
+  tabOrder,
+  onTabOrderChange,
 }) => {
   const generalFields = (
     <>
@@ -146,6 +152,13 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
       <Form.Item label="Description" name="description">
         <Input.TextArea placeholder="Optional description..." rows={3} disabled={!canEditGeneral} />
       </Form.Item>
+
+      {tabOrder && (
+        <BoardTabOrderField
+          value={tabOrder}
+          onChange={canEditGeneral ? onTabOrderChange : undefined}
+        />
+      )}
     </>
   );
 

@@ -83,9 +83,11 @@ describe('createTeammateBranch', () => {
       }),
       { silent: true }
     );
+    // A fresh teammate board opens on Chat.
     expect(boardsService.create).toHaveBeenCalledWith({
       name: "Pineapple Helper's Board",
       icon: '🍍',
+      tab_order: ['chat', 'board', 'files'],
     });
     expect(boardsService.ensureTeammateWelcomeNote).toHaveBeenCalledWith({
       boardId: 'board-1',

@@ -6,6 +6,16 @@ import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { BoardEditModal } from './BoardEditModal';
 
 vi.mock('@/utils/message', () => ({ useThemedMessage: () => ({ showError: vi.fn() }) }));
+// jsdom cannot compute styles for disabled text buttons, which role queries need; the
+// Tabs list has its own tests (BoardTabOrderField.test.tsx). This stand-in changes the order.
+vi.mock('../forms/BoardTabOrderField', () => ({
+  BoardTabOrderField: ({ onChange }: { onChange?: (order: string[]) => void }) =>
+    onChange ? (
+      <button type="button" onClick={() => onChange(['chat', 'board', 'files'])}>
+        Put Chat first
+      </button>
+    ) : null,
+}));
 vi.mock('../JSONEditor', () => ({
   JSONEditor: () => <textarea aria-label="Custom Context (JSON)" />,
   validateJSON: () => Promise.resolve(),
@@ -36,7 +46,8 @@ const collaborator = { user_id: 'collaborator-1', role: 'member' } as User;
 function makeClient(
   getBoard: () => Board,
   capabilities: EffectiveCapabilityPolicyAccess['capabilities'] = ['board.view', 'board.edit'],
-  permissionsPatch = vi.fn(async (_id: unknown, value: unknown) => value)
+  permissionsPatch = vi.fn(async (_id: unknown, value: unknown) => value),
+  boardsPatch = vi.fn()
 ): AgorClient {
   const policy = {
     primary_owner_user_id: 'owner-1',
@@ -62,7 +73,8 @@ function makeClient(
   };
   return {
     service: (name: string) => {
-      if (name === 'boards') return { get: vi.fn().mockImplementation(getBoard) };
+      if (name === 'boards')
+        return { get: vi.fn().mockImplementation(getBoard), patch: boardsPatch };
       if (name === 'boards/:id/permissions') {
         return {
           find: vi.fn().mockResolvedValue(policy),
@@ -83,6 +95,49 @@ function makeClient(
     },
   } as unknown as AgorClient;
 }
+
+describe('BoardEditModal — tab order', () => {
+  beforeEach(() => {
+    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
+  });
+
+  const renderModal = (boardsPatch: ReturnType<typeof vi.fn>, onClose = vi.fn()) =>
+    render(
+      <AntApp>
+        <BoardEditModal
+          board={listedBoard}
+          client={makeClient(() => listedBoard, undefined, undefined, boardsPatch)}
+          open
+          onClose={onClose}
+          onUpdate={vi.fn()}
+          currentUser={owner}
+        />
+      </AntApp>
+    );
+
+  it('saves a changed order through setTabOrder only', async () => {
+    const boardsPatch = vi.fn();
+    const onClose = vi.fn();
+    renderModal(boardsPatch, onClose);
+    fireEvent.click(await screen.findByText('Put Chat first'));
+    fireEvent.click(screen.getByText('Save').closest('button')!);
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(boardsPatch).toHaveBeenCalledExactlyOnceWith('board-1', {
+      _action: 'setTabOrder',
+      tab_order: ['chat', 'board', 'files'],
+    });
+  });
+
+  it('does not send an order nobody changed', async () => {
+    const boardsPatch = vi.fn();
+    const onClose = vi.fn();
+    renderModal(boardsPatch, onClose);
+    await screen.findByText('Put Chat first');
+    fireEvent.click(screen.getByText('Save').closest('button')!);
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(boardsPatch).not.toHaveBeenCalled();
+  });
+});
 
 describe('BoardEditModal — board metadata', () => {
   beforeEach(() => {
