@@ -480,15 +480,17 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     visibleToUserId?: UUID;
     branchId?: BranchID;
     branchIds?: BranchID[];
+    sessionIds?: string[];
     archived?: boolean;
   }): Promise<Session[]> {
-    if (filter?.branchIds?.length === 0) return [];
+    if (filter?.branchIds?.length === 0 || filter?.sessionIds?.length === 0) return [];
     try {
       const baseUrl = await getBaseUrl(this.db);
 
       const conditions = [];
       if (filter?.branchId) conditions.push(eq(sessions.branch_id, filter.branchId));
       if (filter?.branchIds) conditions.push(inArray(sessions.branch_id, filter.branchIds));
+      if (filter?.sessionIds) conditions.push(inArray(sessions.session_id, filter.sessionIds));
       if (filter?.archived !== undefined) {
         conditions.push(eq(sessions.archived, filter.archived));
       }

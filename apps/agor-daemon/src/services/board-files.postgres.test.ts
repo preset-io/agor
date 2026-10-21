@@ -1,4 +1,5 @@
 import {
+  ArtifactRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
   type Database,
@@ -6,6 +7,7 @@ import {
   initializeDatabase,
   KnowledgeDocumentRepository,
   runWithTenantDatabaseScope,
+  SessionRepository,
   sql,
   UploadRepository,
   UsersRepository,
@@ -70,15 +72,22 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         expect(page.total).toBe(7);
         expect(page.data.map((item) => item.id)).toContain(a.uploads.orderForm.ref);
 
+        const work = `${resource}?session_id=${a.kickoff.session_id}&include_archived=true`;
+        const ownWork = await fetch(work, { headers: server.headers(a.owner.user_id, tenantA) });
+        expect(((await ownWork.json()) as BoardFilesPage).total).toBe(5);
+
         for (const headers of [
           server.headers(bAdmin.user_id, tenantB),
           server.headers(a.owner.user_id, tenantB),
         ]) {
-          const denied = await fetch(resource, { headers });
-          expect([400, 401, 403, 404]).toContain(denied.status);
-          const body = await denied.text();
-          expect(body).not.toContain(a.artifacts.dashboard.name);
-          expect(body).not.toContain(a.uploads.orderForm.ref);
+          for (const url of [resource, work]) {
+            const denied = await fetch(url, { headers });
+            expect([400, 401, 403, 404]).toContain(denied.status);
+            const body = await denied.text();
+            expect(body).not.toContain(a.artifacts.dashboard.name);
+            expect(body).not.toContain(a.docs.talkingPoints.title);
+            expect(body).not.toContain(a.uploads.orderForm.ref);
+          }
         }
 
         // The new board-scoped reads return nothing for the same board id in another tenant.
@@ -87,10 +96,17 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           expect(
             await new UploadRepository(scoped).listForBoard(tenantB as TenantID, boardId)
           ).toEqual([]);
+          const documents = new KnowledgeDocumentRepository(scoped);
+          for (const scope of [{ boardId }, { sessionId: a.kickoff.session_id }]) {
+            expect(await documents.findForBoard(scope, { read: { as_admin: true } })).toEqual([]);
+          }
           expect(
-            await new KnowledgeDocumentRepository(scoped).findForBoard(boardId, {
-              read: { as_admin: true },
+            await new ArtifactRepository(scoped).findAll({
+              source_session_id: a.kickoff.session_id,
             })
+          ).toEqual([]);
+          expect(
+            await new SessionRepository(scoped).findAll({ sessionIds: [a.kickoff.session_id] })
           ).toEqual([]);
         });
       } finally {

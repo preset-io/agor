@@ -75,7 +75,7 @@ const toInteger = (value: unknown, fallback: number) => {
   return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
 };
 
-/** Validates the query; `$limit` is capped at one page of 50. */
+/** Validates the query; `$limit` is capped at one page of 50 (unused with `session_id`). */
 export function parseBoardFilesQuery(query: Record<string, unknown> = {}): BoardFilesQueryOptions {
   const rawKind = query.kind as unknown;
   const kindList =
@@ -148,7 +148,10 @@ export function pageBoardFiles(
   };
 }
 
-/** A conversation's name, as the Sessions list shows it. */
+/**
+ * A conversation's name, as the Sessions list shows it. The UI's own version is
+ * `getSessionDisplayTitle` in `apps/agor-ui/src/utils/sessionTitle.ts`; keep them in step.
+ */
 export function boardFileSessionTitle(session: Pick<Session, 'title' | 'description'>): string {
   if (session.title?.trim()) return session.title.trim();
   const firstLine = session.description?.trim().split('\n')[0]?.trim();
@@ -171,6 +174,58 @@ function teammateMadeBy(branch: Branch | undefined): BoardFileMadeBy | null {
 
 function userMadeBy(userId: string | null | undefined): BoardFileMadeBy {
   return { user_id: (userId ?? '') as UserID };
+}
+
+/** Where an artifact or document came from, and the branch of the session that made it. */
+interface MadeIn {
+  source: BoardFileSource;
+  sessionBranch?: Branch;
+  includeArchived: boolean;
+}
+
+function artifactCandidate(
+  artifact: Artifact,
+  { source, sessionBranch, includeArchived }: MadeIn,
+  artifactBranch?: Branch
+): BoardFileCandidate {
+  return {
+    item: {
+      kind: 'artifact',
+      id: artifact.artifact_id,
+      name: artifact.name,
+      made_at: toIso(artifact.updated_at),
+      created_at: toIso(artifact.created_at),
+      made_by: teammateMadeBy(sessionBranch ?? artifactBranch) ?? userMadeBy(artifact.created_by),
+      source,
+      ...(artifact.build_status === 'success' ? { status: 'Live' } : {}),
+      ...(includeArchived ? { archived: !!artifact.archived } : {}),
+    },
+    searchText: artifact.description ? [artifact.description] : undefined,
+  };
+}
+
+function documentCandidate(
+  doc: KnowledgeDocument,
+  { source, sessionBranch, includeArchived }: MadeIn
+): BoardFileCandidate {
+  return {
+    item: {
+      kind: 'document',
+      id: doc.document_id,
+      name: doc.title || doc.path,
+      made_at: toIso(doc.updated_at ?? doc.created_at),
+      created_at: toIso(doc.created_at),
+      made_by:
+        teammateMadeBy(sessionBranch) ??
+        (doc.updated_by_teammate_name
+          ? { name: doc.updated_by_teammate_name }
+          : userMadeBy(doc.created_by)),
+      source,
+      status: doc.status === 'published' ? 'Shared' : 'Draft',
+      ...(includeArchived ? { archived: !!doc.archived } : {}),
+    },
+    searchText: [doc.path],
+  };
 }
 
 export class BoardFilesService {
@@ -212,6 +267,10 @@ export class BoardFilesService {
       !!user._isServiceAccount || isSuperAdmin(user.role, this.options.allowSuperadmin ?? true);
     const visibleToUserId = seesEveryBranch ? undefined : userId;
 
+    if (options.sessionId) {
+      return this.findSessionWork(boardId, options.sessionId, user, visibleToUserId, options);
+    }
+
     // The board's conversations and branches this caller can see.
     const [visibleSessions, boardBranches] = await Promise.all([
       this.sessions.findByBoard(boardId, { visibleToUserId }),
@@ -222,16 +281,15 @@ export class BoardFilesService {
 
     const wants = (kind: BoardFileKind) => options.kinds.has(kind);
     const [artifacts, documents, uploads] = await Promise.all([
-      wants('artifact') ? this.readArtifacts(boardId, userId, visibleToUserId, options) : [],
-      wants('document') ? this.readDocuments(boardId, user, options) : [],
+      wants('artifact')
+        ? this.readArtifacts({ board_id: boardId }, userId, visibleToUserId, options)
+        : [],
+      wants('document') ? this.readDocuments({ boardId }, user, options) : [],
       wants('upload')
         ? this.uploads.listForBoard(
             authParams?.tenant?.tenant_id ?? ('default' as TenantID),
             boardId,
-            {
-              visibleToUserId,
-              sessionId: options.sessionId,
-            }
+            { visibleToUserId }
           )
         : [],
     ]);
@@ -239,24 +297,16 @@ export class BoardFilesService {
     // Conversations named by an artifact or document that are not on this board
     // (the branch moved): visible ones keep their link; deleted ones read as none.
     const offBoard = new Set<string>();
-    for (const artifact of artifacts) {
-      if (artifact.source_session_id && !sessionById.has(artifact.source_session_id)) {
-        offBoard.add(artifact.source_session_id);
-      }
+    for (const sessionId of [
+      ...artifacts.map((artifact) => artifact.source_session_id),
+      ...documents.map((doc) => doc.updated_by_session_id),
+    ]) {
+      if (sessionId && !sessionById.has(sessionId)) offBoard.add(sessionId);
     }
-    for (const doc of documents) {
-      if (doc.updated_by_session_id && !sessionById.has(doc.updated_by_session_id)) {
-        offBoard.add(doc.updated_by_session_id);
-      }
-    }
-    const missingSessions = new Set<string>();
+    const missingSessions = new Set<string>(offBoard);
     if (offBoard.size > 0) {
-      const found = (
-        await Promise.all([...offBoard].map((id) => this.sessions.findById(id)))
-      ).filter((s): s is Session => !!s);
-      for (const id of offBoard) {
-        if (!found.some((s) => s.session_id === id)) missingSessions.add(id);
-      }
+      const found = await this.sessions.findAll({ sessionIds: [...offBoard] });
+      for (const session of found) missingSessions.delete(session.session_id);
       const visibleBranches = await this.branches.findAll({
         branchIds: [...new Set(found.map((s) => s.branch_id as BranchID))],
         visibleToUserId,
@@ -274,58 +324,31 @@ export class BoardFilesService {
         ? { session_id: session.session_id as SessionID, title: boardFileSessionTitle(session) }
         : 'private';
     };
-    const sessionBranch = (sessionId: string | null | undefined) => {
+    const madeIn = (sessionId: string | null | undefined): MadeIn => {
       const session = sessionId ? sessionById.get(sessionId) : undefined;
-      return session ? branchById.get(session.branch_id) : undefined;
+      return {
+        source: sourceOf(sessionId),
+        sessionBranch: session ? branchById.get(session.branch_id) : undefined,
+        includeArchived: false,
+      };
     };
 
     const candidates: BoardFileCandidate[] = [];
     for (const artifact of artifacts) {
-      candidates.push({
-        item: {
-          kind: 'artifact',
-          id: artifact.artifact_id,
-          name: artifact.name,
-          made_at: toIso(artifact.updated_at),
-          made_by:
-            teammateMadeBy(
-              sessionBranch(artifact.source_session_id) ??
-                (artifact.branch_id ? branchById.get(artifact.branch_id) : undefined)
-            ) ?? userMadeBy(artifact.created_by),
-          source: sourceOf(artifact.source_session_id),
-          ...(artifact.build_status === 'success' ? { status: 'Live' } : {}),
-          ...(options.includeArchived ? { archived: !!artifact.archived } : {}),
-        },
-        searchText: artifact.description ? [artifact.description] : undefined,
-      });
+      candidates.push(
+        artifactCandidate(
+          artifact,
+          madeIn(artifact.source_session_id),
+          artifact.branch_id ? branchById.get(artifact.branch_id) : undefined
+        )
+      );
     }
     for (const doc of documents) {
-      const teammate = teammateMadeBy(sessionBranch(doc.updated_by_session_id));
-      candidates.push({
-        item: {
-          kind: 'document',
-          id: doc.document_id,
-          name: doc.title || doc.path,
-          made_at: toIso(doc.updated_at ?? doc.created_at),
-          made_by:
-            teammate ??
-            (doc.updated_by_teammate_name
-              ? { name: doc.updated_by_teammate_name }
-              : userMadeBy(doc.created_by)),
-          source: sourceOf(doc.updated_by_session_id),
-          status: doc.status === 'published' ? 'Shared' : 'Draft',
-          ...(options.includeArchived ? { archived: !!doc.archived } : {}),
-        },
-        searchText: [doc.path],
-      });
+      candidates.push(documentCandidate(doc, madeIn(doc.updated_by_session_id)));
     }
     if (wants('app')) {
-      const sessionBranchId = options.sessionId
-        ? sessionById.get(options.sessionId)?.branch_id
-        : undefined;
       for (const branch of boardBranches) {
         if (branch.archived || !(branch.app_url || branch.pull_request_url)) continue;
-        if (options.sessionId && branch.branch_id !== sessionBranchId) continue;
         const newest = visibleSessions
           .filter((s) => s.branch_id === branch.branch_id)
           .sort((a, b) => (b.last_updated ?? '').localeCompare(a.last_updated ?? ''))[0];
@@ -334,15 +357,16 @@ export class BoardFilesService {
           item: {
             kind: 'app',
             id: branch.branch_id,
-            name: teammate && 'name' in teammate ? teammate.name : branch.name,
+            name: branch.name,
             made_at: toIso(branch.updated_at),
+            created_at: toIso(branch.created_at),
             made_by: teammate ?? userMadeBy(newest?.created_by ?? branch.created_by),
             source: newest ? sourceOf(newest.session_id) : 'board',
             status: branch.pull_request_url ? 'Ready to review' : 'Live',
             ...(branch.app_url ? { app_url: branch.app_url } : {}),
             ...(branch.pull_request_url ? { pull_request_url: branch.pull_request_url } : {}),
           },
-          searchText: [branch.name],
+          searchText: teammate && 'name' in teammate ? [teammate.name] : undefined,
         });
       }
     }
@@ -353,35 +377,72 @@ export class BoardFilesService {
     return pageBoardFiles(candidates, options);
   }
 
-  private async readArtifacts(
+  /**
+   * One conversation's work cards: its artifacts and documents, archived ones
+   * included when asked, whole and unpaged. Only that session is read, and only
+   * when the caller can see it and it is on this board; the items themselves
+   * follow the same rules as the board's list.
+   */
+  private async findSessionWork(
     boardId: BoardID,
+    sessionId: SessionID,
+    user: NonNullable<AuthenticatedParams['user']>,
+    visibleToUserId: UserID | undefined,
+    options: BoardFilesQueryOptions
+  ): Promise<BoardFilesPage> {
+    const session = await this.sessions.findById(sessionId);
+    const [branch] = session
+      ? await this.branches.findAll({
+          branchIds: [session.branch_id as BranchID],
+          visibleToUserId,
+        })
+      : [];
+    if (!session || branch?.board_id !== boardId) {
+      return { total: 0, limit: 0, skip: 0, data: [] };
+    }
+    const userId = user.user_id as UserID;
+    const [artifacts, documents] = await Promise.all([
+      options.kinds.has('artifact')
+        ? this.readArtifacts({ source_session_id: sessionId }, userId, visibleToUserId, options)
+        : [],
+      options.kinds.has('document') ? this.readDocuments({ sessionId }, user, options) : [],
+    ]);
+    const madeIn: MadeIn = {
+      source: { session_id: sessionId, title: boardFileSessionTitle(session) },
+      sessionBranch: branch,
+      includeArchived: options.includeArchived,
+    };
+    const candidates = [
+      ...artifacts.map((artifact) => artifactCandidate(artifact, madeIn)),
+      ...documents.map((doc) => documentCandidate(doc, madeIn)),
+    ];
+    return pageBoardFiles(candidates, { ...options, limit: candidates.length, skip: 0 });
+  }
+
+  /** Artifacts on visible branches that are public or the caller's own; no role bypasses that. */
+  private readArtifacts(
+    scope: { board_id: BoardID } | { source_session_id: SessionID },
     userId: UserID,
     visibleToUserId: UserID | undefined,
     options: BoardFilesQueryOptions
   ): Promise<Artifact[]> {
-    const rows = await this.artifacts.findAll({
-      board_id: boardId,
+    return this.artifacts.findAll({
+      ...scope,
       ...(options.includeArchived ? {} : { archived: false }),
       visibleToUserId,
+      readableBy: userId,
       projection: 'metadata',
     });
-    // The private rule `isVisibleTo` applies everywhere a payload is served:
-    // public, or the caller made it. No role bypasses it.
-    return rows.filter(
-      (artifact) =>
-        (artifact.public || artifact.created_by === userId) &&
-        (!options.sessionId || artifact.source_session_id === options.sessionId)
-    );
   }
 
   private async readDocuments(
-    boardId: BoardID,
+    scope: { boardId: BoardID } | { sessionId: SessionID },
     user: NonNullable<AuthenticatedParams['user']>,
     options: BoardFilesQueryOptions
   ): Promise<KnowledgeDocument[]> {
     const userId = user.user_id as UserID;
     const asAdmin = isKnowledgeAdmin(user as Parameters<typeof isKnowledgeAdmin>[0]);
-    return this.documents.findForBoard(boardId, {
+    return this.documents.findForBoard(scope, {
       read: asAdmin
         ? { as_admin: true }
         : {
@@ -390,7 +451,6 @@ export class BoardFilesService {
             namespace_ids: await this.namespaces.findReadableNamespaceIds(userId),
           },
       draftUserId: userId,
-      sessionId: options.sessionId,
       includeArchived: options.includeArchived,
     });
   }
@@ -401,6 +461,7 @@ export class BoardFilesService {
       id: upload.ref,
       name: upload.displayName,
       made_at: toIso(upload.createdAt),
+      created_at: toIso(upload.createdAt),
       made_by: userMadeBy(upload.createdBy),
       source,
       mime_type: upload.mimeType,

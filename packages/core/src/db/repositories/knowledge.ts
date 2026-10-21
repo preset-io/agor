@@ -1460,17 +1460,17 @@ export class KnowledgeDocumentRepository
   /**
    * Documents that belong to a board: the ones a session on one of its
    * branches last wrote as an agent (`updated_by_session_id`), so a document a
-   * teammate on another board edits later moves there. Memory documents are
-   * left out. Read access and draft browsing follow document lists: readable
-   * namespaces, public or own documents, and no one else's drafts.
+   * teammate on another board edits later moves there. With `sessionId`, only
+   * the ones that session last wrote. Memory documents are left out. Read
+   * access and draft browsing follow document lists: readable namespaces,
+   * public or own documents, and no one else's drafts.
    */
   async findForBoard(
-    boardId: BoardID,
+    scope: { boardId: BoardID } | { sessionId: SessionID },
     options: {
       read: KnowledgeDocumentReadScope;
       /** Whose drafts are shown: the caller's. */
       draftUserId?: UserID;
-      sessionId?: SessionID;
       includeArchived?: boolean;
     }
   ): Promise<KnowledgeDocument[]> {
@@ -1490,24 +1490,18 @@ export class KnowledgeDocumentRepository
           }
     );
     if (!conditions || !readConditions) return [];
-    // kb_documents.updated_by_session_id has no index; a board holds hundreds of
-    // these at most, within one tenant.
-    const boardSessions = sql`${kbDocuments.updated_by_session_id} in (
+    // Both read through the (tenant_id, updated_by_session_id) index.
+    const written =
+      'sessionId' in scope
+        ? eq(kbDocuments.updated_by_session_id, scope.sessionId)
+        : sql`${kbDocuments.updated_by_session_id} in (
         select ${sessions.session_id} from ${sessions}
         inner join ${branches} on ${branches.branch_id} = ${sessions.branch_id}
-        where ${branches.board_id} = ${boardId}
+        where ${branches.board_id} = ${scope.boardId}
       )`;
     const rows = await select(this.db)
       .from(kbDocuments)
-      .where(
-        and(
-          ...conditions,
-          ...readConditions,
-          ne(kbDocuments.kind, 'memory'),
-          options.sessionId ? eq(kbDocuments.updated_by_session_id, options.sessionId) : undefined,
-          boardSessions
-        )
-      )
+      .where(and(...conditions, ...readConditions, ne(kbDocuments.kind, 'memory'), written))
       .orderBy(desc(kbDocuments.updated_at), asc(kbDocuments.document_id))
       .all();
     return this.rowsToDocuments(rows);

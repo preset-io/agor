@@ -14,7 +14,15 @@ import {
 } from './board-files.js';
 
 const item = (id: string, name: string, made_at: string, kind: BoardFileItem['kind']) => ({
-  item: { kind, id, name, made_at, made_by: { user_id: 'u' as UserID }, source: 'board' as const },
+  item: {
+    kind,
+    id,
+    name,
+    made_at,
+    created_at: made_at,
+    made_by: { user_id: 'u' as UserID },
+    source: 'board' as const,
+  },
 });
 
 describe('pageBoardFiles', () => {
@@ -89,30 +97,36 @@ describe('parseBoardFilesQuery', () => {
   });
 });
 
+async function filesServer(rawDb: Parameters<typeof seedBoardFiles>[0]) {
+  const seed = await seedBoardFiles(rawDb);
+  const db = createTenantScopedDatabaseProxy(rawDb, { label: 'board-files-test' });
+  const server = await boardMetadataTestApp(
+    db,
+    {
+      database: { dialect: 'sqlite' },
+      multi_tenancy: { mode: 'static', static_tenant_id: 'board-files-test' },
+      execution: {},
+    } as RegisterHooksContext['config'],
+    false,
+    false,
+    false,
+    async (app) => setupBoardFilesService(app, db, { allowSuperadmin: false })
+  );
+  const list = async (userId: string, query = '') => {
+    const response = await fetch(`${server.url}/boards/${seed.board.board_id}/files${query}`, {
+      headers: server.headers(userId as UserID),
+    });
+    return { status: response.status, body: (await response.json()) as BoardFilesPage };
+  };
+  return { seed, server, list };
+}
+
+const byId = (page: BoardFilesPage) => new Map(page.data.map((entry) => [entry.id, entry]));
+
 dbTest(
   'boards/:id/files lists only what each caller may see, with server-side filters and paging',
   async ({ db: rawDb }) => {
-    const seed = await seedBoardFiles(rawDb);
-    const db = createTenantScopedDatabaseProxy(rawDb, { label: 'board-files-test' });
-    const server = await boardMetadataTestApp(
-      db,
-      {
-        database: { dialect: 'sqlite' },
-        multi_tenancy: { mode: 'static', static_tenant_id: 'board-files-test' },
-        execution: {},
-      } as RegisterHooksContext['config'],
-      false,
-      false,
-      false,
-      async (app) => setupBoardFilesService(app, db, { allowSuperadmin: false })
-    );
-    const list = async (userId: string, query = '') => {
-      const response = await fetch(`${server.url}/boards/${seed.board.board_id}/files${query}`, {
-        headers: server.headers(userId as UserID),
-      });
-      return { status: response.status, body: (await response.json()) as BoardFilesPage };
-    };
-    const byId = (page: BoardFilesPage) => new Map(page.data.map((entry) => [entry.id, entry]));
+    const { seed, server, list } = await filesServer(rawDb);
     try {
       // The owner sees their private artifact, the hidden branch and their draft;
       // never archived items or memory documents.
@@ -142,6 +156,7 @@ dbTest(
       });
       expect(ownerItems.get(seed.open.branch_id)).toMatchObject({
         kind: 'app',
+        name: 'open',
         status: 'Ready to review',
         pull_request_url: 'https://github.com/example/repo/pull/14',
         source: { session_id: seed.kickoff.session_id },
@@ -224,6 +239,63 @@ dbTest(
       // No board access: Forbidden, whatever the query.
       const outsider = await list(seed.outsider.user_id);
       expect(outsider.status).toBe(403);
+    } finally {
+      await server.close();
+    }
+  }
+);
+
+dbTest(
+  'boards/:id/files?session_id= reads one visible session, whole, with the same item rules',
+  async ({ db: rawDb }) => {
+    const { seed, server, list } = await filesServer(rawDb);
+    const work = (userId: string, sessionId: string, extra = '') =>
+      list(userId, `?session_id=${sessionId}&include_archived=true${extra}`);
+    try {
+      // Only artifacts and documents, whatever the kinds asked for, and every one
+      // of them: `$limit` does not page it.
+      const owner = await work(seed.owner.user_id, seed.kickoff.session_id, '&$limit=1');
+      expect(owner.status).toBe(200);
+      expect(owner.body.total).toBe(owner.body.data.length);
+      const ownerItems = byId(owner.body);
+      expect([...ownerItems.keys()].sort()).toEqual(
+        [
+          seed.artifacts.dashboard.artifact_id,
+          seed.artifacts.privateDraft.artifact_id,
+          seed.artifacts.archivedChart.artifact_id,
+          seed.docs.talkingPoints.document_id,
+          seed.docs.ownerDraft.document_id,
+        ].sort()
+      );
+      expect(ownerItems.get(seed.artifacts.archivedChart.artifact_id)).toMatchObject({
+        archived: true,
+        source: { session_id: seed.kickoff.session_id, title: 'Kickoff' },
+        created_at: expect.any(String),
+      });
+
+      // The private rule and other people's drafts apply as on the board's list.
+      const viewer = await work(seed.viewer.user_id, seed.kickoff.session_id);
+      expect([...byId(viewer.body).keys()].sort()).toEqual(
+        [
+          seed.artifacts.dashboard.artifact_id,
+          seed.artifacts.archivedChart.artifact_id,
+          seed.docs.talkingPoints.document_id,
+        ].sort()
+      );
+
+      // A session the caller cannot see, or that does not exist, has no work.
+      const hidden = await work(seed.viewer.user_id, seed.secret.session_id);
+      expect(hidden.status).toBe(200);
+      expect(hidden.body).toMatchObject({ total: 0, data: [] });
+      const missing = await work(seed.owner.user_id, '00000000-0000-7000-8000-000000000000');
+      expect(missing.body).toMatchObject({ total: 0, data: [] });
+      // Its owner sees it: two artifacts and a document.
+      expect(await work(seed.owner.user_id, seed.secret.session_id)).toMatchObject({
+        body: { total: 3 },
+      });
+
+      // No board access: Forbidden.
+      expect((await work(seed.outsider.user_id, seed.kickoff.session_id)).status).toBe(403);
     } finally {
       await server.close();
     }

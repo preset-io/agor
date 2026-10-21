@@ -32,8 +32,10 @@ export interface BoardFileItem {
   /** artifact_id, document_id, branch_id or upload ref. */
   id: string;
   name: string;
-  /** ISO time it was last made or changed. */
+  /** ISO time it was last made or changed. "Recent" sorts by this. */
   made_at: string;
+  /** ISO time it was first made. Work cards follow the turn that made it. */
+  created_at: string;
   made_by: BoardFileMadeBy;
   source: BoardFileSource;
   /** Only with `include_archived`. */
@@ -53,6 +55,10 @@ export interface BoardFilesQuery {
   q?: string;
   kind?: BoardFileKind | { $in: BoardFileKind[] };
   sort?: BoardFileSort;
+  /**
+   * One conversation's work cards: its artifacts and documents only, whole and
+   * unpaged (`$limit` and `$skip` are ignored).
+   */
   session_id?: SessionID;
   /** Only together with `session_id` (work cards keep archived items, greyed). */
   include_archived?: boolean;

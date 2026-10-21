@@ -141,7 +141,7 @@ export class UploadRepository {
   async listForBoard(
     tenantId: TenantID,
     boardId: BoardID,
-    options: { visibleToUserId?: UserID; sessionId?: SessionID; now?: Date } = {}
+    options: { visibleToUserId?: UserID; now?: Date } = {}
   ): Promise<Upload[]> {
     const now = options.now ?? new Date();
     const conditions: (SQL | undefined)[] = [
@@ -153,7 +153,6 @@ export class UploadRepository {
         where ${branches.board_id} = ${boardId}
       )`,
     ];
-    if (options.sessionId) conditions.push(eq(uploads.session_id, options.sessionId));
     if (options.visibleToUserId) {
       conditions.push(
         or(

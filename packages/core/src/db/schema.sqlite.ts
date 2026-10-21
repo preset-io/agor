@@ -2931,6 +2931,10 @@ export const kbDocuments = sqliteTable(
     statusIdx: index('kb_documents_status_idx').on(table.status),
     createdByIdx: index('kb_documents_created_by_idx').on(table.created_by),
     updatedAtIdx: index('kb_documents_updated_at_idx').on(table.updated_at),
+    // Work cards: one session's documents (`boards/:id/files?session_id=`).
+    updatedBySessionIdx: index('kb_documents_updated_by_session_idx').on(
+      table.updated_by_session_id
+    ),
     archivedIdx: index('kb_documents_archived_idx').on(table.archived),
   })
 );

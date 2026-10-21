@@ -827,6 +827,13 @@
       "when": 1790129000303,
       "tag": "0119_branch_deletion_failed_discovery",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1790129000304,
+      "tag": "0120_kb_documents_session_index",
+      "breakpoints": true
     }
   ]
 }
