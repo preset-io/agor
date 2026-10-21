@@ -1511,6 +1511,7 @@ export const AutocompleteTextarea = React.forwardRef<
             transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
             position: 'relative',
             zIndex: 1,
+            overflowX: 'hidden',
             ...textareaStyle,
           }}
         />
