@@ -513,27 +513,11 @@ asserts containment (including suppression of delayed launches/retries). On exit
 error message with the shared `executorOutOfMemoryMessage` text; any malformed or
 unknown result means no cause, never "not contained".
 
-The existing operator `task.completed` analytics event adds only `succeeded`
-and `failure_reason` to its prior completion metrics. A completed task succeeds;
-ordinary user Stop is not success but has no failure reason (the existing
-`status` distinguishes cancellation). Failed tasks use their allowlisted recorded
-termination cause, or `unknown` when absent; timeouts use `timed_out`. Confirmed
-helper OOM evidence overrides the reason with `oom_killed` and success with false,
-without changing task status or user-stop precedence. Analytics does not interpret
-SDK/watchdog observations or error prose, and exports no memory limits or extra
-runtime diagnostics.
-
-Helper evidence is passed only to that settlement call, not persisted or replayed.
-A winning unverified containment settlement emits `task.termination_unverified`
-with `succeeded: false` and `failure_reason: "termination_unverified"`, not
-`task.completed`: the task remains stopping and nonpromptable. A distinct explicit
-cleanup retry may emit another outcome. Losing/stale settlement results emit
-neither event. Both use the existing disabled-by-default operator pipeline,
-`task.*` exclusions, Task creator attribution, and trusted ambient tenant context.
-No prompts, error messages, pulse details, SDK versions, helper diagnostics,
-coordination tokens, or provider response objects are added to these properties.
-These are best-effort task-outcome signals, not an audit log of every provider
-subcall or a backfill of earlier failures. No lifecycle or containment policy changes.
+Confirmed helper evidence is passed to post-commit task analytics, not persisted
+or replayed. Analytics reports the recorded outcome without parsing error prose
+or changing task status. Unverified containment is a separate nonterminal event;
+losing/stale settlements emit nothing. Existing tenant attribution and operator
+analytics enablement/exclusions apply.
 
 `TaskRepository.beginCleanupAttempt` records one attempt under the existing
 coordination token before external effects. The marker survives cause changes,

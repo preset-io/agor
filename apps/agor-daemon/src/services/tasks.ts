@@ -110,6 +110,11 @@ import { taskFailureAnalytics } from '../utils/task-failure-analytics.js';
 import { deferWithTenantContext, withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 import type { SessionParams, SessionsService } from './sessions';
 
+/** Internal settlement input; cleanup evidence is not persisted or accepted in Task patches. */
+export type TaskTerminationSettlementInput = TerminationSettlementInput & {
+  cleanupResult?: ExecutorCleanupCommandResult;
+};
+
 export interface TaskExecutorCredentialRevoker {
   revokeTaskTokens(taskId: string): Promise<number>;
   isTaskTokenAuthorityCurrent?(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean>;
@@ -707,10 +712,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   async settleTermination(
-    input: TerminationSettlementInput & {
-      /** Internal, ephemeral evidence: not a Task patch field or repository input. */
-      cleanupResult?: ExecutorCleanupCommandResult;
-    },
+    input: TaskTerminationSettlementInput,
     params?: TaskParams
   ): Promise<TerminationSettlementResult> {
     const { cleanupResult, ...settlementInput } = input;

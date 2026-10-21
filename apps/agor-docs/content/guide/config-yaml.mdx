@@ -507,63 +507,6 @@ options to the analytics client.
 Only use non-secret, non-PII deployment labels. Bounds are structural validation,
 not a PII detector; operators own field selection and destination access/retention.
 
-### Login, Home, and onboarding events
-
-These events use the same disabled-by-default operator analytics pipeline, identity
-fields, and `exclude_events` filters as task and branch events. They do not enable
-community telemetry or add a browser analytics SDK, cookie, or anonymous identifier.
-To exclude this funnel, use `['auth.login_succeeded', 'home.*', 'onboarding.*']`.
-
-| Semantic event         | Properties                                   | Boundary                                                                                                                            |
-| ---------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `auth.login_succeeded` | `method`: `local` or `external_launch`       | Agor has successfully issued browser tokens following password authentication or verified launch-code exchange and user projection. |
-| `home.viewed`          | None                                         | The authenticated shared Home surface mounts, including client-side navigation back to Home.                                        |
-| `onboarding.step`      | `step`, `action` from the closed lists below | A wizard activation, step view, explicit skip/deferral, or completion attempt/outcome.                                              |
-
-`step` uses the wizard's navigation IDs: `workspace` (teammate name/template),
-`llm` (AI connection), `tools` (catalog picks), and `done` (Ready/provisioning).
-Labels and selected values are not sent. `action` is one of:
-
-- `started`: wizard opens, including resume/restart; the step can be `done` when resuming.
-- `viewed`: the settled step is shown. Back navigation counts as another view;
-  rerenders do not. Opening emits both `started` and the first `viewed`.
-- `skipped`: an explicit skip on `workspace`, `llm`, or `tools`.
-- `deferred`: the user closes the wizard. This records the decision, not proof
-  that the asynchronous deferral preference was saved.
-- `completion_started`: the final action begins on `done`, including retries.
-- `completion_failed`: the final provisioning/completion action rejects while
-  its wizard owner is current. No error message is sent.
-- `completed`: the completion preference write succeeds and the current
-  activation acknowledges it, before navigation away. Viewing `done` alone is
-  not completion.
-
-Login means a new Agor credential establishment, not every restored browser
-session. Failed/abandoned authentication, JWT revalidation, token refresh,
-Socket.IO reconnects, API-key authentication, and impersonation do not emit it.
-External provider pages, including WorkOS pages, are not observed. A fresh
-successful Cloud launch exchange is a new establishment, even if the external
-provider already had an SSO session.
-
-Home counts mounted visits, not unique people or lifetime first landings.
-A full reload is another visit; rerenders and in-place reconnects are not.
-There is no first-session flag or durable browser-session identifier. Onboarding
-step views describe navigation, not verified provider connectivity. Only final
-completion failures are captured; credential validation and provider subflows
-are intentionally excluded.
-
-Home/onboarding delivery is best effort through an authenticated, tenant-scoped
-allowlisted endpoint. There is no offline queue or retry, and client-reported
-signals are not an audit log. Infer drop-off from missing subsequent events,
-allowing for delivery loss; no unload/abandonment event is sent.
-
-As with existing product events, `userId` is the authenticated Agor user ID and
-`context.tenant_id` is trusted runtime identity, never browser-supplied identity.
-The endpoint rejects additional fields. These events contain no emails, names,
-credentials, OAuth claims, prompts, repository names, route URLs, selected
-catalog/template values, or free-form errors. Browser event requests suppress
-referrers. No analytics settings, consent controls, or community-telemetry
-payloads are changed.
-
 ### Segment event naming and rollout
 
 Both built-in analytics transports now emit `type: 'track'`, `event: 'agor_event'`,

@@ -31,11 +31,12 @@ export class ProductAnalyticsService {
     if (!parsed.success) throw new BadRequest('Invalid product analytics event');
     const input = parsed.data;
     if (input.event === PRODUCT_ANALYTICS_EVENTS.ONBOARDING_STEP) {
-      if (
-        ((input.action.startsWith('completion_') || input.action === 'completed') &&
-          input.step !== 'done') ||
-        (input.action === 'skipped' && input.step === 'done')
-      ) {
+      const isCompletion =
+        input.action === 'completion_started' ||
+        input.action === 'completion_failed' ||
+        input.action === 'completed';
+      const isFinalStep = input.step === 'done';
+      if ((isCompletion && !isFinalStep) || (input.action === 'skipped' && isFinalStep)) {
         throw new BadRequest('Invalid onboarding analytics transition');
       }
       analyticsLogger.track(input.event, { step: input.step, action: input.action }, { userId });
