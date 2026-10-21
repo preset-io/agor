@@ -2046,7 +2046,7 @@ describe('onboarding analytics boundaries', () => {
         action: 'completion_failed',
       })
     );
-    await findAndClickButton(/try again/i);
+    await findAndClickButton(/^try again →$/i);
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
     const events = vi.mocked(trackProductEvent).mock.calls.map(([, event]) => event);
     expect(
