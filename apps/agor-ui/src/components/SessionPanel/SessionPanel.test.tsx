@@ -144,6 +144,7 @@ function renderPanel({
   activeSession = session,
   open = true,
   onClose = vi.fn(),
+  closesTab,
   onCloseOtherTabs,
   currentUserId,
 }: {
@@ -153,6 +154,7 @@ function renderPanel({
   activeSession?: Session;
   open?: boolean;
   onClose?: ReturnType<typeof vi.fn>;
+  closesTab?: boolean;
   onCloseOtherTabs?: ReturnType<typeof vi.fn>;
   currentUserId?: string;
 } = {}) {
@@ -166,6 +168,7 @@ function renderPanel({
             branch={branch}
             open={open}
             onClose={onClose}
+            closesTab={closesTab}
             onCloseOtherTabs={onCloseOtherTabs}
             currentUserId={currentUserId}
           />
@@ -737,7 +740,7 @@ describe('SessionPanel with several open tabs', () => {
 
   it('closes just this tab and offers Close other tabs in More actions', async () => {
     const onCloseOtherTabs = vi.fn();
-    const { onClose } = renderPanel({ onCloseOtherTabs });
+    const { onClose } = renderPanel({ closesTab: true, onCloseOtherTabs });
 
     fireEvent.click(screen.getByRole('button', { name: 'Close tab' }));
     expect(onClose).toHaveBeenCalled();

@@ -375,7 +375,9 @@ export interface SessionPanelProps {
   onSessionMcpRetry?: () => void;
   open: boolean;
   onClose: () => void;
-  /** Set while 2+ sessions are open as tabs; Close then closes this tab. */
+  /** Labels the header close button "Close tab" instead of "Close panel". */
+  closesTab?: boolean;
+  /** Adds Close other tabs to More actions. */
   onCloseOtherTabs?: () => void;
   /** Extra header control, e.g. the mobile open-sessions switcher. */
   headerExtra?: React.ReactNode;
@@ -392,6 +394,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   onSessionMcpRetry,
   open,
   onClose,
+  closesTab,
   onCloseOtherTabs,
   headerExtra,
   uploadPolicy,
@@ -1746,12 +1749,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </Tooltip>
             {/* Desktop closes from the right; mobile closes from the leading X above. */}
             {!isMobileShell && (
-              <Tooltip
-                title={onCloseOtherTabs ? 'Close tab. The agent keeps running.' : 'Close Panel'}
-              >
+              <Tooltip title={closesTab ? 'Close tab. The agent keeps running.' : 'Close Panel'}>
                 <Button
                   type="text"
-                  aria-label={onCloseOtherTabs ? 'Close tab' : 'Close panel'}
+                  aria-label={closesTab ? 'Close tab' : 'Close panel'}
                   icon={<CloseOutlined />}
                   onClick={onClose}
                   style={{ marginLeft: token.sizeUnit }}

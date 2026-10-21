@@ -1,6 +1,8 @@
 import type { Session } from '@agor-live/client';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EMPTY_MAPS } from '../../store/agorMaps';
+import { agorStore } from '../../store/agorStore';
 import { OpenSessionsSwitcher } from './OpenSessions';
 import { SessionTabs, splitVisibleTabs } from './SessionTabs';
 import { formatNeedsYou, getSessionTabStatus } from './sessionTabStatus';
@@ -17,7 +19,16 @@ const session = (id: string, extra: Partial<Session> = {}) =>
     ...extra,
   }) as Session;
 
-afterEach(cleanup);
+/** The tab components read their live sessions from the store. */
+const seed = (...sessions: Session[]) => {
+  agorStore.setState({ sessionById: new Map(sessions.map((s) => [s.session_id, s])) });
+  return sessions.map((s) => s.session_id);
+};
+
+afterEach(() => {
+  cleanup();
+  agorStore.setState({ ...EMPTY_MAPS });
+});
 
 describe('getSessionTabStatus', () => {
   it.each([
@@ -52,14 +63,14 @@ describe('splitVisibleTabs', () => {
 
   it('shows every tab when they fit, stretched up to the maximum width', () => {
     const two = sessions.slice(0, 2);
-    expect(splitVisibleTabs(two, 'a', 500)).toMatchObject({ hidden: [], tabWidth: 228 });
-    const wide = splitVisibleTabs(two, 'a', 700);
+    expect(splitVisibleTabs(two, 'a', 460)).toMatchObject({ hidden: [], tabWidth: 228 });
+    const wide = splitVisibleTabs(two, 'a', 660);
     expect(ids(wide.visible)).toEqual(['a', 'b']);
     expect(wide.tabWidth).toBe(280);
   });
 
   it('moves the rest into More in order and keeps the selected tab visible', () => {
-    const { visible, hidden, tabWidth } = splitVisibleTabs(sessions, 'e', 640);
+    const { visible, hidden, tabWidth } = splitVisibleTabs(sessions, 'e', 600);
     expect(ids(visible)).toEqual(['a', 'e']);
     expect(ids(hidden)).toEqual(['b', 'c', 'd']);
     // The fitting tabs share the row up to More instead of leaving a gap.
@@ -78,9 +89,10 @@ describe('SessionTabs', () => {
   it('counts hidden tabs that need you on a neutral More button and closes tabs', () => {
     const onClose = vi.fn();
     const onHide = vi.fn();
+    const ids = seed(session('a'), session('b', { status: 'awaiting_permission' }), session('c'));
     render(
       <SessionTabs
-        sessions={[session('a'), session('b', { status: 'awaiting_permission' }), session('c')]}
+        ids={ids}
         selectedId="a"
         onSelect={vi.fn()}
         onClose={onClose}
@@ -97,6 +109,19 @@ describe('SessionTabs', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Hide panel' }));
     expect(onHide).toHaveBeenCalled();
   });
+
+  it('leaves out Hide panel when there is nowhere to hide to', () => {
+    render(
+      <SessionTabs
+        ids={seed(session('a'), session('b'))}
+        selectedId="a"
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+        onCloseOthers={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'Hide panel' })).not.toBeInTheDocument();
+  });
 });
 
 describe('OpenSessionsSwitcher', () => {
@@ -104,14 +129,14 @@ describe('OpenSessionsSwitcher', () => {
     const onClose = vi.fn();
     render(
       <OpenSessionsSwitcher
-        sessions={[session('a'), session('b', { status: 'failed' })]}
+        ids={seed(session('a'), session('b', { status: 'failed' }))}
         selectedId="a"
         onSelect={vi.fn()}
         onClose={onClose}
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /2 open/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open sessions, 2 open' }));
     const sheet = await screen.findByRole('dialog');
     expect(within(sheet).getByText('Open sessions')).toBeInTheDocument();
     expect(within(sheet).getByText('Failed')).toBeInTheDocument();

@@ -16,6 +16,7 @@ import { usePinnedOpenRows } from '../../hooks/usePinnedRows';
 import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { useSessionTabs } from '../../hooks/useSessionTabs';
 import { useAgorStore } from '../../store/agorStore';
+import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
 import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { CompactNotice } from '../CompactNotice';
@@ -117,19 +118,19 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 
   // Same per-board open sessions as the desktop tabs; Back keeps them open.
   const navigate = useNavigate();
-  const sessionTabs = useSessionTabs(currentUser?.user_id, boardId ?? null);
+  const switchSession = (id: string) => {
+    clearOpenedSessionFlags(client, id);
+    navigate(`/m/session/${id}`, { replace: true });
+  };
+  const sessionTabs = useSessionTabs(client, currentUser?.user_id, boardId ?? null, {
+    onSelect: switchSession,
+    onCloseLast: closeSession,
+  });
   const { open: openSessionTab } = sessionTabs;
   useEffect(() => {
-    if (canonicalSessionId && boardId) openSessionTab(canonicalSessionId);
-  }, [boardId, canonicalSessionId, openSessionTab]);
-  const switchSession = (id: string) => navigate(`/m/session/${id}`, { replace: true });
-  const closeSessionTab = (id: string) => {
-    const nextSessionId = sessionTabs.close(id);
-    if (id !== canonicalSessionId) return;
-    if (nextSessionId) switchSession(nextSessionId);
-    else closeSession();
-  };
-  const hasSessionTabs = !!canonicalSessionId && sessionTabs.sessions.length > 1;
+    if (canonicalSessionId) openSessionTab(canonicalSessionId);
+  }, [canonicalSessionId, openSessionTab]);
+  const hasSessionTabs = !!canonicalSessionId && sessionTabs.shownIds.length > 1;
 
   const handlePermissionDecision = usePermissionDecision(client);
 
@@ -229,10 +230,10 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           headerExtra={
             hasSessionTabs ? (
               <OpenSessionsSwitcher
-                sessions={sessionTabs.sessions}
+                ids={sessionTabs.shownIds}
                 selectedId={session.session_id}
                 onSelect={switchSession}
-                onClose={closeSessionTab}
+                onClose={sessionTabs.close}
               />
             ) : undefined
           }

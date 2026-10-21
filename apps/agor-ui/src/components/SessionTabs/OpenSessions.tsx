@@ -1,9 +1,9 @@
-import type { Session } from '@agor-live/client';
 import { CloseOutlined, DownOutlined } from '@ant-design/icons';
 import { Badge, Button, type ButtonProps, Drawer, Flex, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { useSessionTabSessions } from '../../hooks/useSessionTabs';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { ToolIcon } from '../ToolIcon';
 import {
@@ -16,21 +16,22 @@ import {
 } from './sessionTabStatus';
 
 interface OpenSessionsButtonProps extends Omit<ButtonProps, 'children'> {
-  count: number;
-  /** Open sessions not on screen; any that need you badge the button. */
-  offscreen: Session[];
+  ids: string[];
+  /** The session on screen, if any; the others badge the button when they need you. */
+  shownId?: string;
   tooltip: string;
 }
 
 /** Neutral "{n} open" button with an amber count of the off-screen sessions that need you. */
 export const OpenSessionsButton: React.FC<OpenSessionsButtonProps> = ({
-  count,
-  offscreen,
+  ids,
+  shownId,
   tooltip,
   ...buttonProps
 }) => {
   const { token } = theme.useToken();
-  const waiting = filterNeedsYou(offscreen);
+  const sessions = useSessionTabSessions(ids);
+  const waiting = filterNeedsYou(sessions.filter((session) => session.session_id !== shownId));
   return (
     <Tooltip
       title={
@@ -41,14 +42,16 @@ export const OpenSessionsButton: React.FC<OpenSessionsButtonProps> = ({
       }
     >
       <Badge count={waiting.length} color={token.colorWarning} size="small">
-        <Button {...buttonProps}>{count} open</Button>
+        <Button aria-label={`${tooltip}, ${ids.length} open`} {...buttonProps}>
+          {ids.length} open
+        </Button>
       </Badge>
     </Tooltip>
   );
 };
 
 interface OpenSessionsSwitcherProps {
-  sessions: Session[];
+  ids: string[];
   selectedId: string;
   onSelect: (sessionId: string) => void;
   onClose: (sessionId: string) => void;
@@ -56,19 +59,20 @@ interface OpenSessionsSwitcherProps {
 
 /** Mobile: "{n} open" in the session header opens a sheet listing every open session. */
 export const OpenSessionsSwitcher: React.FC<OpenSessionsSwitcherProps> = ({
-  sessions,
+  ids,
   selectedId,
   onSelect,
   onClose,
 }) => {
   const { token } = theme.useToken();
+  const sessions = useSessionTabSessions(ids);
   const reducedMotion = usePrefersReducedMotion();
   const [open, setOpen] = useState(false);
   return (
     <>
       <OpenSessionsButton
-        count={sessions.length}
-        offscreen={sessions.filter((session) => session.session_id !== selectedId)}
+        ids={ids}
+        shownId={selectedId}
         tooltip="Open sessions"
         type="text"
         size="small"
@@ -85,7 +89,14 @@ export const OpenSessionsSwitcher: React.FC<OpenSessionsSwitcherProps> = ({
         title="Open sessions"
         {...reducedMotionSurface(reducedMotion)}
         styles={{
+          // Same bounds as MobileMoreSheet: a long list scrolls in the body.
+          wrapper: { maxHeight: '85dvh' },
+          section: { maxHeight: '85dvh' },
           body: {
+            minHeight: 0,
+            overflowY: 'auto',
+            overscrollBehaviorY: 'contain',
+            touchAction: 'pan-y',
             padding: token.paddingXS,
             paddingBottom: `max(${token.paddingXS}px, env(safe-area-inset-bottom))`,
           },

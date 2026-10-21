@@ -4,6 +4,7 @@ import { Badge, Button, Dropdown, Flex, Tabs, Tooltip, Typography, theme } from 
 import type React from 'react';
 import { useRef } from 'react';
 import { useElementWidth } from '../../hooks/useElementWidth';
+import { useSessionTabSessions } from '../../hooks/useSessionTabs';
 import { ToolIcon } from '../ToolIcon';
 import {
   filterNeedsYou,
@@ -25,15 +26,14 @@ const MORE_BUTTON_WIDTH = 96;
 const HIDE_BUTTON_WIDTH = 40;
 
 /**
- * As many tabs as fit at the minimum width, stretched to share the row up to
- * the maximum. The selected one always stays visible, order is kept.
+ * As many tabs as fit at the minimum width in `room`, stretched to share the
+ * row up to the maximum. The selected one always stays visible, order is kept.
  */
 export function splitVisibleTabs<T extends { session_id: string }>(
   sessions: T[],
   selectedId: string,
-  barWidth: number
+  room: number
 ): { visible: T[]; hidden: T[]; tabWidth: number } {
-  const room = barWidth - HIDE_BUTTON_WIDTH;
   const fitsAll = sessions.length * (MIN_TAB_WIDTH + TAB_GAP) <= room;
   const row = fitsAll ? room : room - MORE_BUTTON_WIDTH;
   const fit = fitsAll ? sessions.length : Math.max(1, Math.floor(row / (MIN_TAB_WIDTH + TAB_GAP)));
@@ -54,16 +54,17 @@ export function splitVisibleTabs<T extends { session_id: string }>(
 }
 
 interface SessionTabsProps {
-  sessions: Session[];
+  ids: string[];
   selectedId: string;
   onSelect: (sessionId: string) => void;
   onClose: (sessionId: string) => void;
   onCloseOthers: (sessionId: string) => void;
-  onHide: () => void;
+  /** Adds a Hide panel button at the end of the row. */
+  onHide?: () => void;
 }
 
 export const SessionTabs: React.FC<SessionTabsProps> = ({
-  sessions,
+  ids,
   selectedId,
   onSelect,
   onClose,
@@ -73,7 +74,12 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
   const { token } = theme.useToken();
   const barRef = useRef<HTMLDivElement>(null);
   const barWidth = useElementWidth(barRef);
-  const { visible, hidden, tabWidth } = splitVisibleTabs(sessions, selectedId, barWidth);
+  const sessions = useSessionTabSessions(ids);
+  const { visible, hidden, tabWidth } = splitVisibleTabs(
+    sessions,
+    selectedId,
+    barWidth - (onHide ? HIDE_BUTTON_WIDTH : 0)
+  );
   const hiddenWaiting = filterNeedsYou(hidden);
 
   const statusLine = (session: Session) => {
@@ -149,15 +155,17 @@ export const SessionTabs: React.FC<SessionTabsProps> = ({
                   </Tooltip>
                 </Dropdown>
               )}
-              <Tooltip title="Hide panel. Your tabs stay open.">
-                <Button
-                  type="text"
-                  size="small"
-                  aria-label="Hide panel"
-                  icon={<DoubleRightOutlined />}
-                  onClick={onHide}
-                />
-              </Tooltip>
+              {onHide && (
+                <Tooltip title="Hide panel. Your tabs stay open.">
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label="Hide panel"
+                    icon={<DoubleRightOutlined />}
+                    onClick={onHide}
+                  />
+                </Tooltip>
+              )}
             </Flex>
           ),
         }}
