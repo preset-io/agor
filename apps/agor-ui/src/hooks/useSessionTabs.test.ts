@@ -57,14 +57,18 @@ describe('useSessionTabs', () => {
     agorStore.setState({ sessionById: sessions, branchById: branches });
   };
 
-  const render = (state: { ids: string[]; selectedId: string | null }) => {
+  /** `displayedId` is the session the window shows; it defaults to the saved selection. */
+  const render = (
+    state: { ids: string[]; selectedId: string | null },
+    displayedId = state.selectedId
+  ) => {
     localStorage.setItem(storageKey, JSON.stringify(state));
     const sessions = new EventEmitter();
     const client = { service: () => sessions } as unknown as AgorClient;
     const onSelect = vi.fn();
     const onCloseLast = vi.fn();
     const { result } = renderHook(() =>
-      useSessionTabs(client, 'u1', 'board-1', { onSelect, onCloseLast })
+      useSessionTabs(client, 'u1', 'board-1', { displayedId, onSelect, onCloseLast })
     );
     return { result, sessions, onSelect, onCloseLast };
   };
@@ -83,6 +87,16 @@ describe('useSessionTabs', () => {
     act(() => result.current.close('b'));
     expect(saved()).toEqual(tabs(['a', 'c'], null));
     expect(onCloseLast).toHaveBeenCalled();
+  });
+
+  it('navigates from the displayed tab when another window saved a different selection', () => {
+    load('board-1', ['a', 'b', 'c']);
+    // This window shows a; a second window on the board saved c as selected.
+    const { result, onSelect } = render(tabs(['a', 'b', 'c'], 'c'), 'a');
+
+    act(() => result.current.close('a'));
+    expect(onSelect).toHaveBeenCalledWith('b');
+    expect(saved()).toEqual(tabs(['b', 'c'], 'b'));
   });
 
   it('selects the neighbour when the selected tab is archived', () => {

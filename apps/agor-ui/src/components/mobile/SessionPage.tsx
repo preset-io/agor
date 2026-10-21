@@ -123,6 +123,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
     navigate(`/m/session/${id}`, { replace: true });
   };
   const sessionTabs = useSessionTabs(client, currentUser?.user_id, boardId ?? null, {
+    displayedId: canonicalSessionId,
     onSelect: switchSession,
     onCloseLast: closeSession,
   });
