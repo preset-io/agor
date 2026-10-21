@@ -8,7 +8,7 @@ import {
   RightOutlined,
   UpOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Flex, Typography, theme } from 'antd';
+import { Alert, Button, ConfigProvider, Flex, Typography, theme } from 'antd';
 import React from 'react';
 import { useCanHover } from '../../hooks/useCanHover';
 import { useComposerFocused } from '../../hooks/useComposerFocus';
@@ -157,27 +157,42 @@ export function SessionQueue({
   return (
     <section
       aria-label="Queued messages"
-      style={{
-        ...glassSurfaceStyle(token, 0.7),
-        borderWidth: token.lineWidth,
-        borderStyle: token.lineType,
-        borderColor: token.colorBorder,
-        borderRadius: token.borderRadius * 2,
-        marginBottom: token.marginXS,
-        padding: token.paddingXXS,
-      }}
+      // Folded, the queue is one quiet line; only the open list gets the card.
+      style={
+        open
+          ? {
+              ...glassSurfaceStyle(token, 0.7),
+              borderWidth: token.lineWidth,
+              borderStyle: token.lineType,
+              borderColor: token.colorBorder,
+              borderRadius: token.borderRadius * 2,
+              marginBottom: token.marginXS,
+              padding: token.paddingXXS,
+            }
+          : { paddingInline: token.paddingXS, marginBottom: token.marginXXS }
+      }
     >
       <Flex align="center" gap={token.marginXS}>
-        <Button
-          type="text"
-          aria-expanded={open}
-          onClick={() => setExpanded((value) => !value)}
-          icon={open ? <DownOutlined aria-hidden /> : <RightOutlined aria-hidden />}
-          iconPlacement="end"
-          style={{ height: isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight }}
+        <ConfigProvider
+          theme={{ components: { Button: { textHoverBg: token.colorFillTertiary } } }}
         >
-          {`${queuedTasks.length} queued`}
-        </Button>
+          <Button
+            type="text"
+            size="small"
+            aria-expanded={open}
+            onClick={() => setExpanded((value) => !value)}
+            icon={open ? <DownOutlined aria-hidden /> : <RightOutlined aria-hidden />}
+            iconPlacement="end"
+            style={{
+              height: isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight,
+              paddingInline: token.paddingXXS,
+              fontSize: token.fontSizeSM,
+              color: token.colorTextSecondary,
+            }}
+          >
+            {`${queuedTasks.length} queued`}
+          </Button>
+        </ConfigProvider>
         {heldByFailure && (
           <Button
             size="small"

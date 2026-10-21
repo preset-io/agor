@@ -57,6 +57,17 @@ describe('SessionQueue', () => {
     expect(screen.getByText('Run the e2e suite')).toBeInTheDocument();
   });
 
+  it('folds to a quiet line, and only the open list gets the bordered card', () => {
+    setup();
+    const queue = screen.getByRole('region', { name: 'Queued messages' });
+    const header = screen.getByRole('button', { name: /3 queued/ });
+    expect(queue.style.borderStyle).toBe('');
+    expect(header.style.fontSize).toBe('12px');
+    expect(header.style.height).toBe('32px');
+    expand();
+    expect(queue.style.borderStyle).toBe('solid');
+  });
+
   it('renders nothing without queued messages', () => {
     const { container } = render(
       <SessionQueue
