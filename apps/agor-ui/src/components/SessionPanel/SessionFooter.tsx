@@ -1559,7 +1559,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }}
           data-testid="mcp-bar-btn"
         >
-          {mcpSummary.attachedCount}
+          {mcpSummary.attachedCount > 0 ? mcpSummary.attachedCount : null}
         </Button>
       </Tooltip>
     </ComposerMenu>

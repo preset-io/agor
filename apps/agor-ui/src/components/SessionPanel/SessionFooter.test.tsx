@@ -429,6 +429,13 @@ describe('MCP tools', () => {
     expect(screen.getByTestId('mcp-bar-btn')).toHaveTextContent('3');
   });
 
+  it('shows only the icon with no servers attached, and keeps the count in its name', () => {
+    renderFooter({ sessionMcpServerIds: [] });
+    const button = screen.getByTestId('mcp-bar-btn');
+    expect(button).toHaveAccessibleName('MCP tools, 0 attached');
+    expect(button).toHaveTextContent(/^$/);
+  });
+
   it('opens the attach and manage panel from the pinned button', async () => {
     renderFooter({ sessionMcpServerIds: [] });
     fireEvent.click(screen.getByTestId('mcp-bar-btn'));
