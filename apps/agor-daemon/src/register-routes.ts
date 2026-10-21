@@ -1717,6 +1717,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const isCallback = task.metadata?.is_agor_callback === true;
     const messageMetadata: Message['metadata'] = {};
     if (isCallback) messageMetadata.is_agor_callback = true;
+    if (task.metadata?.prompt_provenance) {
+      messageMetadata.prompt_provenance = task.metadata.prompt_provenance;
+    }
     if (input.messageSource === 'gateway' || input.messageSource === 'agor') {
       messageMetadata.source = input.messageSource;
     }
@@ -1876,9 +1879,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    *     during executor startup loses the prompt from the chat transcript
    *     even though `tasks.full_prompt` still has the text. Gated by
    *     `config.execution.daemon_writes_user_message` (kill switch).
-   *   - `task.metadata.is_agor_callback` / `task.metadata.source` are
-   *     re-stamped onto the new message so the UI's callback styling
-   *     (`MessageBlock.tsx`) survives the queue → run transition.
+   *   - `task.metadata.is_agor_callback` / `task.metadata.source` /
+   *     `task.metadata.prompt_provenance` are copied onto the new message so
+   *     callback styling and prompt origin (`MessageBlock.tsx`) survive the queue → run transition.
    *   - Spawn failures synthesise a `type:'system'` error message so the
    *     chat surfaces *why* the assistant didn't respond, instead of silently
    *     leaving a ghost task in FAILED with no transcript trace.
