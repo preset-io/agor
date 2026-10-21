@@ -286,16 +286,32 @@ export class MCPOAuthPendingFlowRepository {
     }
   }
 
-  /** Claim from an unauthenticated callback running under mcp_oauth_callback. */
-  async claimForCallback(
-    stateHash: string,
-    claimId: string
-  ): Promise<MCPOAuthPendingFlowClaimResult> {
+  /**
+   * Read-only lookup from an unauthenticated callback running under
+   * mcp_oauth_callback. It tells the callback which tenant's UI should finish
+   * the flow; completing it always requires the authenticated claimForUser().
+   */
+  async findForCallback(
+    stateHash: string
+  ): Promise<Pick<MCPOAuthPendingFlowRecord, 'tenantId' | 'status'> | null> {
     await this.bindCallbackStateFingerprint(stateHash);
-    return this.claim(stateHash, claimId);
+    try {
+      const row = await select(this.db, {
+        tenant_id: mcpOauthPendingFlows.tenant_id,
+        status: mcpOauthPendingFlows.status,
+      })
+        .from(mcpOauthPendingFlows)
+        .where(eq(mcpOauthPendingFlows.state_hash, stateHash))
+        .one();
+      if (!row) return null;
+      const { tenant_id, status } = row as { tenant_id: string; status: string };
+      return { tenantId: tenant_id, status: status as MCPOAuthPendingFlowStatus };
+    } catch (error) {
+      throw databaseFailure('callback lookup', error);
+    }
   }
 
-  /** Claim from an authenticated manual-complete request in its tenant scope. */
+  /** Claim from an authenticated completion request in its tenant scope. */
   async claimForUser(
     tenantId: string,
     userId: UserID,
@@ -308,12 +324,12 @@ export class MCPOAuthPendingFlowRepository {
   private async claim(
     stateHash: string,
     claimId: string,
-    expected?: { tenantId: string; userId: UserID }
+    expected: { tenantId: string; userId: UserID }
   ): Promise<MCPOAuthPendingFlowClaimResult> {
     assertStateHash(stateHash);
     if (!claimId) throw new RepositoryError('MCP OAuth exchange claim is missing');
-    const tenantPredicate = expected ? sql`AND tenant_id = ${expected.tenantId}` : sql``;
-    const userPredicate = expected ? sql`AND user_id = ${expected.userId}` : sql``;
+    const tenantPredicate = sql`AND tenant_id = ${expected.tenantId}`;
+    const userPredicate = sql`AND user_id = ${expected.userId}`;
     try {
       // Preserve an explicit expired terminal state rather than making an
       // expired capability indistinguishable from a random state value.
@@ -357,13 +373,11 @@ export class MCPOAuthPendingFlowRepository {
       const observed = await select(this.db)
         .from(mcpOauthPendingFlows)
         .where(
-          expected
-            ? and(
-                eq(mcpOauthPendingFlows.state_hash, stateHash),
-                eq(mcpOauthPendingFlows.tenant_id, expected.tenantId),
-                eq(mcpOauthPendingFlows.user_id, expected.userId)
-              )
-            : eq(mcpOauthPendingFlows.state_hash, stateHash)
+          and(
+            eq(mcpOauthPendingFlows.state_hash, stateHash),
+            eq(mcpOauthPendingFlows.tenant_id, expected.tenantId),
+            eq(mcpOauthPendingFlows.user_id, expected.userId)
+          )
         )
         .one();
       return {

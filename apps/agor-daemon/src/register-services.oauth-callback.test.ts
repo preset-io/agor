@@ -200,7 +200,10 @@ describe('register-services OAuth callback URL regression', () => {
   });
 
   it('uses durable hashed state claims on PostgreSQL and never broadcasts raw flow state', () => {
-    expect(codeOnly).toMatch(/durableOAuthFlows!?\.claimForCallback\s*\(\s*state\s*\)/);
+    expect(codeOnly).toMatch(
+      /durableOAuthFlows\.claimForUser\s*\(\s*activeTenantId,\s*activeUserId,\s*state\s*\)/
+    );
+    expect(codeOnly).not.toMatch(/claimForCallback/);
     expect(codeOnly).toMatch(/cacheToken:\s*false/);
     expect(codeOnly).toMatch(/attempt_id:\s*pendingFlow\.attemptId/);
     expect(codeOnly).toMatch(/reservation_token:\s*opts\.browserReservation\.reservationToken/);
@@ -214,9 +217,27 @@ describe('register-services OAuth callback URL regression', () => {
     expect(codeOnly).not.toMatch(/emit\s*\(\s*['"]oauth:completed['"][\s\S]{0,300}\bstate\b/);
   });
 
+  it('only forwards the direct provider redirect to the signed-in UI', () => {
+    const directBody = codeOnly.slice(
+      codeOnly.indexOf('const handleDirectOAuthCallback'),
+      codeOnly.indexOf('const handleOAuthCallback')
+    );
+    expect(directBody).toMatch(/durableOAuthFlows\.findForCallback\s*\(\s*state\s*\)/);
+    expect(directBody).toMatch(/getMcpOAuthReturnUrl\s*\(/);
+    expect(directBody).toMatch(/res\.redirect\s*\(\s*303/);
+    // Completion, failure transitions and the provider exchange all belong to
+    // the authenticated oauth-complete path, and the destination never comes
+    // from the request.
+    expect(directBody).not.toMatch(
+      /\b(?:claimFor\w*|failPending\w*|finish|openClaim|completeMCPOAuthFlow|persistOAuthTokenForPendingFlow)\s*\(/
+    );
+    expect(directBody).not.toMatch(/req\.(?:headers|get|hostname|host|protocol)\b/);
+    expect(directBody).not.toMatch(/pendingOAuthFlows\.delete/);
+  });
+
   it('keeps provider capability material out of callback logs', () => {
     const callbackBody = rawSource.slice(
-      rawSource.indexOf('const handleOAuthCallback'),
+      rawSource.indexOf('const handleDirectOAuthCallback'),
       rawSource.indexOf("app.use('/mcp-servers',")
     );
     const loggedExpressions = [...callbackBody.matchAll(/console\.(?:log|warn|error)\(([^;]+)\)/g)]
