@@ -16,6 +16,7 @@ import {
   RepoRepository,
   runMigrations,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   SessionMCPServerRepository,
   SessionRepository,
   setMCPEgressGatewayMode,
@@ -23,6 +24,7 @@ import {
   setMcpMemberPolicy,
   shortId,
   TaskRepository,
+  TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
@@ -592,6 +594,8 @@ async function createHarness(
     outboundDnsLookup?: OutboundDnsLookup;
     requireAuth?: RegisterServicesContext['requireAuth'];
     deployment?: RegisterServicesContext['deployment'];
+    /** Startup config; defaults to an empty (static, self-hosted) config. */
+    config?: RegisterServicesContext['config'];
     /**
      * Arm the daemon's tenant database scope guard for this harness.
      *
@@ -717,7 +721,7 @@ async function createHarness(
   const { oauthCallbackHandler } = await registerMCPServices({
     db,
     app,
-    config: {} as RegisterServicesContext['config'],
+    config: options.config ?? ({} as RegisterServicesContext['config']),
     jwtSecret: 'test-jwt',
     daemonUrl: 'http://127.0.0.1:3030',
     bundledUiAvailable: false,
@@ -5965,5 +5969,152 @@ describe('SQLite saved-row OAuth authority', () => {
       grant_generation: 3,
       oauth_access_token: 'sqlite-access-token-2',
     });
+  });
+});
+
+describe('per-workspace direct OAuth callback', () => {
+  const CELL_CALLBACK = 'https://agor.example.test/mcp-servers/oauth-callback';
+  const WORKSPACE_CALLBACK = 'https://acme.example.test/mcp-servers/oauth-callback';
+  const hostedConfig = {
+    multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+  } as RegisterServicesContext['config'];
+
+  const observeLaunch = (harness: SQLiteHarness, tenantId: string, origin: string) =>
+    runWithTenantDatabaseTransaction(harness.rawDb, tenantId, (scoped) =>
+      new TenantPublicRoutingRepository(scoped).observeVerifiedLaunch({
+        public_base_url: origin,
+        assertion_issued_at: 100,
+      })
+    );
+
+  const createCatalogHarness = async (
+    provider: TestProvider,
+    config?: RegisterServicesContext['config']
+  ) => {
+    const catalogEntry = {
+      name: 'test/per-workspace-callback',
+      title: 'Per-workspace callback fixture',
+      category: 'developer-tools',
+      capabilities: ['testing'],
+      benefit: 'Exercises the direct callback origin.',
+      starter_prompt: 'Exercise the callback.',
+      permission_disclosure: 'Fixture only.',
+      popularity_rank: 999_989,
+      transport: 'streamable-http',
+      remote_url: provider.savedMcpUrl,
+      has_remote: true,
+      has_package: false,
+      auth_type: 'oauth',
+    } as MCPCatalogEntry;
+    const catalogMock = vi.mocked(loadCatalog);
+    const previousImplementation = catalogMock.getMockImplementation();
+    catalogMock.mockResolvedValue([catalogEntry]);
+    onTestFinished(() => {
+      catalogMock.mockReset();
+      if (previousImplementation) catalogMock.mockImplementation(previousImplementation);
+    });
+    const harness = await createHarness(provider, undefined, { catalogEntry, config });
+    databases.push(harness.rawDb);
+    return harness;
+  };
+
+  /** Start, pass the provider's front channel, and complete the callback. */
+  const connect = async (harness: SQLiteHarness, params = paramsFor(harness)) => {
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, params)) as {
+      success: boolean;
+      authorizationUrl?: string;
+    };
+    expect(started).toMatchObject({ success: true });
+    const authorizationUrl = new URL(started.authorizationUrl!);
+    const authorize = await fetch(authorizationUrl, { redirect: 'manual' });
+    expect(authorize.status).toBe(302);
+    expect((await harness.callback(authorizationUrl.searchParams.get('state')!)).status).toBe(200);
+    return authorizationUrl;
+  };
+
+  const forceRefresh = (harness: SQLiteHarness) =>
+    harness.app
+      .service('mcp-servers/oauth-auth-headers')
+      .create({ mcp_server_ids: [harness.server.mcp_server_id], force_refresh: true }, {
+        provider: undefined,
+        user: harness.user,
+        tenant: { tenant_id: 'default', source: 'static' },
+        authentication: { _isServiceAccount: true },
+      } as unknown as AuthenticatedParams);
+
+  const storedGrant = (harness: SQLiteHarness) =>
+    runWithTenantDatabaseScope(harness.db, 'default', (scoped) =>
+      new UserMCPOAuthTokenRepository(scoped, process.env.AGOR_MASTER_SECRET).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    );
+
+  const tokenRedirectUris = (provider: TestProvider, grantType: string) =>
+    provider.requests
+      .filter((entry) => entry.path === '/token')
+      .filter((entry) => entry.formBody?.get('grant_type') === grantType)
+      .map((entry) => entry.formBody?.get('redirect_uri'));
+
+  it("uses the tenant's launch-observed origin for DCR, authorize, token, and refresh", async () => {
+    const provider = await createTestProvider({ serveDynamicRegistration: true });
+    providers.push(provider);
+    const harness = await createCatalogHarness(provider, hostedConfig);
+    await observeLaunch(harness, 'default', 'https://acme.example.test');
+
+    // Request headers are not an input: only the stored routing row is.
+    const params = {
+      ...paramsFor(harness),
+      headers: { host: 'attacker.example.test', 'x-forwarded-host': 'attacker.example.test' },
+    } as AuthenticatedParams;
+    const authorizationUrl = await connect(harness, params);
+
+    const registered = provider.registeredClients.get(
+      authorizationUrl.searchParams.get('client_id')!
+    );
+    expect(registered?.redirectUris).toEqual([WORKSPACE_CALLBACK]);
+    expect(authorizationUrl.searchParams.get('redirect_uri')).toBe(WORKSPACE_CALLBACK);
+    expect(tokenRedirectUris(provider, 'authorization_code')).toEqual([WORKSPACE_CALLBACK]);
+    expect((await storedGrant(harness))?.oauth_redirect_uri).toBe(WORKSPACE_CALLBACK);
+
+    await forceRefresh(harness);
+    expect(tokenRedirectUris(provider, 'refresh_token')).toEqual([WORKSPACE_CALLBACK]);
+  });
+
+  it('keeps refreshing an existing grant with its stored callback; new flows move to the workspace', async () => {
+    const provider = await createTestProvider({ serveDynamicRegistration: true });
+    providers.push(provider);
+    const harness = await createCatalogHarness(provider, hostedConfig);
+
+    // Only another tenant's routing is stored: never used for this tenant,
+    // which keeps the startup (cell) callback, as before.
+    await observeLaunch(harness, 'globex', 'https://globex.example.test');
+    const first = await connect(harness);
+    expect(first.searchParams.get('redirect_uri')).toBe(CELL_CALLBACK);
+    expect((await storedGrant(harness))?.oauth_redirect_uri).toBe(CELL_CALLBACK);
+
+    await observeLaunch(harness, 'default', 'https://acme.example.test');
+    await forceRefresh(harness);
+    expect(tokenRedirectUris(provider, 'refresh_token')).toEqual([CELL_CALLBACK]);
+
+    const second = await connect(harness);
+    expect(second.searchParams.get('redirect_uri')).toBe(WORKSPACE_CALLBACK);
+    expect(
+      provider.registeredClients.get(second.searchParams.get('client_id')!)?.redirectUris
+    ).toEqual([WORKSPACE_CALLBACK]);
+    expect((await storedGrant(harness))?.oauth_redirect_uri).toBe(WORKSPACE_CALLBACK);
+  });
+
+  it('ignores tenant routing on a static (self-hosted) deployment', async () => {
+    const provider = await createTestProvider({ serveDynamicRegistration: true });
+    providers.push(provider);
+    const harness = await createCatalogHarness(provider);
+    await observeLaunch(harness, 'default', 'https://acme.example.test');
+
+    const authorizationUrl = await connect(harness);
+    expect(authorizationUrl.searchParams.get('redirect_uri')).toBe(CELL_CALLBACK);
+    expect(tokenRedirectUris(provider, 'authorization_code')).toEqual([CELL_CALLBACK]);
   });
 });

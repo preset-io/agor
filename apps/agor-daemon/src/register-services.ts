@@ -31,6 +31,7 @@ import {
   resolveClaudeOAuthCapability,
   resolveDeploymentAgenticToolPolicy,
   resolveExecutionSecurityMode,
+  resolveMcpOAuthCallbackUrlsForOrigin,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
@@ -70,6 +71,7 @@ import {
   shortId,
   TaskRepository,
   TeamsMessageDeliveryRepository,
+  TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   ThreadSessionMapRepository,
@@ -2399,13 +2401,46 @@ export async function registerMCPServices(
     '(3) /.well-known/oauth-authorization-server at MCP origin (RFC 8414), ' +
     '(4) /.well-known/openid-configuration at MCP origin (OIDC).';
 
-  async function resolveMCPOAuthRedirectUri(): Promise<string> {
+  const hostedTenantOAuthCallbacks =
+    resolveMultiTenancyConfig(ctx.config).mode === 'required_from_auth';
+
+  /**
+   * The direct callback a new flow registers, authorizes, and exchanges with.
+   * Flows store it (`context.redirectUri`, then `oauth_redirect_uri`), so
+   * existing grants and pending flows keep their original value. Hosted
+   * tenants use their launch-observed public URL; a tenant without one, and
+   * every static deployment, uses the startup URL.
+   */
+  async function resolveMCPOAuthRedirectUri(tenantId: string | undefined): Promise<string> {
     if (!ctx.mcpOAuthCallbackUrl) {
       throw new PublicBaseUrlNotConfiguredError(
         'The effective startup configuration does not provide a safe browser-reachable OAuth callback URL.'
       );
     }
-    return ctx.mcpOAuthCallbackUrl;
+    if (!hostedTenantOAuthCallbacks) return ctx.mcpOAuthCallbackUrl;
+    if (!tenantId) {
+      throw new PublicBaseUrlNotConfiguredError(
+        'MCP OAuth requires trusted tenant identity to resolve its callback URL.'
+      );
+    }
+    const routing = await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+      new TenantPublicRoutingRepository(scoped).find()
+    );
+    if (!routing) {
+      console.warn('[MCP OAuth] callback_tenant_routing_missing');
+      return ctx.mcpOAuthCallbackUrl;
+    }
+    const tenantCallback = resolveMcpOAuthCallbackUrlsForOrigin(routing.public_base_url);
+    const callbackUrl =
+      ctx.deployment.mode === 'ha'
+        ? tenantCallback.haCallbackUrl
+        : tenantCallback.standaloneCallbackUrl;
+    if (!callbackUrl) {
+      throw new PublicBaseUrlNotConfiguredError(
+        'The workspace public URL is not a safe browser-reachable OAuth callback URL.'
+      );
+    }
+    return callbackUrl;
   }
 
   type OAuthBrowserReservationClaim = {
@@ -2542,9 +2577,8 @@ export async function registerMCPServices(
     );
 
     // Strict public base URL — see oauth-start endpoint for the rationale.
-    const redirectUri = await runWithinOAuthAuthority(
-      assertFlowAuthority,
-      resolveMCPOAuthRedirectUri
+    const redirectUri = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+      resolveMCPOAuthRedirectUri(opts.tenantId)
     );
 
     const hasRfc9728 = !!opts.resourceMetadataUrl;
@@ -4546,14 +4580,13 @@ export async function registerMCPServices(
   app.use(
     '/mcp-catalog/readiness',
     new MCPCatalogReadinessService(app, {
-      redirectUri: (entry) => {
+      redirectUri: async (entry, params) => {
         const issuer = catalogRelayIssuer(entry);
         if (issuer && oauthRelay) return oauthRelay.redirectUri(issuer);
         // The direct callback: a customer app's without the relay, or the one a
         // provider admin allowlists (the flow itself is unchanged).
-        return entry.oauth?.configured_client || entry.oauth?.redirect_allowlist
-          ? ctx.mcpOAuthCallbackUrl
-          : undefined;
+        if (!entry.oauth?.configured_client && !entry.oauth?.redirect_allowlist) return undefined;
+        return resolveMCPOAuthRedirectUri(tenantIdFromParams(params)).catch(() => undefined);
       },
       listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
       // Readiness is advisory and may not open credential material merely to
@@ -6096,7 +6129,9 @@ export async function registerMCPServices(
         // discovery. The flow helper validates it again at the side-effect
         // boundary; this earlier check ensures a missing/unsafe deployment
         // origin cannot trigger discovery or DCR first.
-        await runWithinOAuthAuthority(assertRequestAuthority, resolveMCPOAuthRedirectUri);
+        await runWithinOAuthAuthority(assertRequestAuthority, () =>
+          resolveMCPOAuthRedirectUri(tenantId)
+        );
 
         let probeResponse = await runStartPhase('probe', () =>
           oauthFetch(
@@ -6414,9 +6449,8 @@ export async function registerMCPServices(
             preliminaryRecovery.category === 'client_registration_failed'
           ) {
             try {
-              redirectUri = await runWithinOAuthAuthority(
-                assertRequestAuthority,
-                resolveMCPOAuthRedirectUri
+              redirectUri = await runWithinOAuthAuthority(assertRequestAuthority, () =>
+                resolveMCPOAuthRedirectUri(tenantIdFromParams(params))
               );
             } catch {
               assertRequestAuthority?.();

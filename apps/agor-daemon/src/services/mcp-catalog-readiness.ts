@@ -16,7 +16,10 @@ import {
 import { catalogOAuthConfig } from './mcp-catalog-install-policy.js';
 
 export interface MCPCatalogReadinessDeps {
-  redirectUri?(entry: MCPCatalogEntry): string | undefined;
+  redirectUri?(
+    entry: MCPCatalogEntry,
+    params: AuthenticatedParams
+  ): string | undefined | Promise<string | undefined>;
   listCandidates(userId: UserID, params: AuthenticatedParams): Promise<MCPCatalogServerCandidate[]>;
   isGrantAuthorized(
     candidate: MCPCatalogServerCandidate,
@@ -75,7 +78,7 @@ export class MCPCatalogReadinessService {
     // the direct callback a provider admin allowlists.
     const redirectUri =
       catalogRelayIssuer(entry) || entry.oauth?.redirect_allowlist
-        ? this.deps.redirectUri?.(entry)
+        ? await this.deps.redirectUri?.(entry, params)
         : undefined;
     const setup = redirectUri ? { redirect_uri: redirectUri } : {};
     const knownOAuthInstall = candidates.some(

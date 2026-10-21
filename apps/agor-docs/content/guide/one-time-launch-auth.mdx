@@ -281,9 +281,12 @@ updated issuer. There is no automatic backfill, routing-change push, or rewrite
 of URLs already embedded in historical content.
 
 Static/single-tenant installations retain their configured `AGOR_BASE_URL`,
-`ui.base_url`, `daemon.base_url`, and local fallback behavior. Deployment-wide
-OAuth callback URLs and internal executor endpoints remain separate and are not
-changed by this claim. Knowledge reader links need no `mode=edit` query; both
+`ui.base_url`, `daemon.base_url`, and local fallback behavior. In hosted mode,
+new direct MCP OAuth flows use `<public_base_url>/mcp-servers/oauth-callback`
+as their redirect URI; a tenant without this metadata keeps the
+deployment-wide callback. Existing grants keep the redirect URI they were issued
+with, and the deployment-wide callback keeps accepting their flows. Internal
+executor endpoints and the hosted callback relay are not changed by this claim. Knowledge reader links need no `mode=edit` query; both
 `/ui/kb/...` and `/ui/knowledge/...` are supported routes.
 
 ### Tenant display label
