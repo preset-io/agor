@@ -290,6 +290,7 @@ import {
   classifyMCPAuthRecovery,
   MCPCloudIdentityRequiredError,
   MCPLinkAdmissionError,
+  MCPOAuthWorkspaceUrlUnavailableError,
   recoveryForOAuthAttemptFailure,
 } from './services/mcp-auth-recovery.js';
 import { createMCPCatalogService } from './services/mcp-catalog.js';
@@ -2401,6 +2402,23 @@ export async function registerMCPServices(
     '(3) /.well-known/oauth-authorization-server at MCP origin (RFC 8414), ' +
     '(4) /.well-known/openid-configuration at MCP origin (OIDC).';
 
+  /**
+   * The trusted UI address where the initiator finishes a direct-callback
+   * flow: tenant routing in hosted mode, deployment config otherwise. Never
+   * derived from a request. Shared by the start precheck and the callback.
+   */
+  async function resolveMcpOAuthReturnUrl(tenantId: string | undefined): Promise<string> {
+    const url = getMcpOAuthReturnUrl(
+      await runInOAuthTenantScope(db, tenantId, () => getBaseUrl(db))
+    );
+    if (!url) {
+      throw new MCPOAuthWorkspaceUrlUnavailableError(
+        'The workspace public URL is not known, so a direct MCP OAuth callback cannot be finished.'
+      );
+    }
+    return url;
+  }
+
   async function resolveMCPOAuthRedirectUri(): Promise<string> {
     if (!ctx.mcpOAuthCallbackUrl) {
       throw new PublicBaseUrlNotConfiguredError(
@@ -2644,6 +2662,13 @@ export async function registerMCPServices(
     // providers (stable_callback) use the hosted relay; DCR then registers the
     // relay callback. Every other flow keeps the daemon's direct callback.
     const relayFlow = Boolean(oauthRelay && relayIssuer);
+    // A direct callback hands the flow to its workspace UI. Refuse now, before
+    // discovery, DCR or authorization, if that address cannot be resolved.
+    if (!relayFlow) {
+      await runWithinOAuthAuthority(assertFlowAuthority, () =>
+        resolveMcpOAuthReturnUrl(opts.tenantId ?? getCurrentTenantId())
+      );
+    }
 
     // Local reservations are attempt-aware, so establish identity before
     // allocating a generation. PostgreSQL obtains its durable attempt ID from
@@ -4082,12 +4107,12 @@ export async function registerMCPServices(
         );
         return;
       }
-      const tenantId = flow.tenantId;
-
-      const returnUrl = getMcpOAuthReturnUrl(
-        await runInOAuthTenantScope(db, tenantId, () => getBaseUrl(db))
-      );
-      if (!returnUrl) {
+      let returnUrl: string;
+      try {
+        returnUrl = await resolveMcpOAuthReturnUrl(flow.tenantId);
+      } catch (error) {
+        if (!(error instanceof MCPOAuthWorkspaceUrlUnavailableError)) throw error;
+        // Backstop only: starts are refused when this address is unknown.
         sendOAuthResultPage(
           res,
           false,

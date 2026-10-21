@@ -223,7 +223,11 @@ describe('register-services OAuth callback URL regression', () => {
       codeOnly.indexOf('const handleOAuthCallback')
     );
     expect(directBody).toMatch(/durableOAuthFlows\.findForCallback\s*\(\s*state\s*\)/);
-    expect(directBody).toMatch(/getMcpOAuthReturnUrl\s*\(/);
+    // One trusted resolver, shared with the start precheck.
+    expect(directBody).toMatch(/resolveMcpOAuthReturnUrl\s*\(\s*flow\.tenantId\s*\)/);
+    expect(codeOnly).toMatch(
+      /if \(!relayFlow\) \{\s*await runWithinOAuthAuthority\(assertFlowAuthority, \(\) =>\s*resolveMcpOAuthReturnUrl\(/
+    );
     expect(directBody).toMatch(/res\.redirect\s*\(\s*303/);
     // Completion, failure transitions and the provider exchange all belong to
     // the authenticated oauth-complete path, and the destination never comes

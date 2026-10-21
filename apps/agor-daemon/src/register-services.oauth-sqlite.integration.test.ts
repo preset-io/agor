@@ -16,6 +16,7 @@ import {
   RepoRepository,
   runMigrations,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   SessionMCPServerRepository,
   SessionRepository,
   setMCPEgressGatewayMode,
@@ -23,6 +24,7 @@ import {
   setMcpMemberPolicy,
   shortId,
   TaskRepository,
+  TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
@@ -61,6 +63,7 @@ import type { OutboundDnsLookup } from '@agor/core/utils/safe-outbound-fetch';
 import { getMcpOAuthReturnUrl } from '@agor/core/utils/url';
 import { type Socket as ClientSocket, io as createSocketClient } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { hostedTenantRouting } from '../test/hosted-tenant-routing-fixture.js';
 import { RuntimeJWTStrategy } from './auth/runtime-jwt-strategy.js';
 import {
   issueRuntimeToken,
@@ -3862,6 +3865,68 @@ describe('SQLite saved-row OAuth authority', () => {
     };
     return { harness, started };
   };
+
+  it('starts a hosted direct-callback flow only when the workspace address is known', async () => {
+    // Real hosted config (required_from_auth) with no tenant routing yet.
+    const hosted = await hostedTenantRouting({ tenantId: 'default' });
+    try {
+      const provider = await createTestProvider({ serveDynamicRegistration: true });
+      providers.push(provider);
+      const catalogEntry = dcrCatalogEntry('test/hosted-workspace-url', provider.savedMcpUrl);
+      const catalogMock = vi.mocked(loadCatalog);
+      const previousImplementation = catalogMock.getMockImplementation();
+      catalogMock.mockResolvedValue([catalogEntry]);
+      onTestFinished(() => {
+        catalogMock.mockReset();
+        if (previousImplementation) catalogMock.mockImplementation(previousImplementation);
+      });
+      const harness = await createHarness(provider, undefined, { catalogEntry });
+      databases.push(harness.rawDb);
+      const start = () =>
+        harness.app
+          .service('mcp-servers/oauth-start')
+          .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness)) as Promise<{
+          success: boolean;
+          authorizationUrl?: string;
+          recovery?: { category: string; action: string };
+        }>;
+
+      // Refused before any provider side effect: no DCR, no authorization.
+      await expect(start()).resolves.toMatchObject({
+        success: false,
+        recovery: { category: 'configuration_required', action: 'retry' },
+      });
+      expect(
+        provider.requests.some(({ path }) => ['/register', '/authorize', '/token'].includes(path))
+      ).toBe(false);
+
+      // Once a verified launch records the workspace origin, the callback
+      // hands off to it, never to the cell origin or the request host.
+      await runWithTenantDatabaseTransaction(harness.rawDb, 'default', (scoped) =>
+        new TenantPublicRoutingRepository(scoped).observeVerifiedLaunch({
+          public_base_url: 'https://tenant-a.example.test',
+          assertion_issued_at: 100,
+        })
+      );
+      const started = await start();
+      expect(started).toMatchObject({ success: true });
+      // The same start does register a client once the address is known.
+      expect(provider.requests.some(({ path }) => path === '/register')).toBe(true);
+      const state = new URL(started.authorizationUrl!).searchParams.get('state')!;
+      const cellHost = new URL(hosted.cellBaseUrl).host;
+      const forwarded = await harness.providerRedirect(
+        { code: 'authorization-code', state, iss: provider.baseUrl },
+        { host: cellHost }
+      );
+      expect(forwarded.status).toBe(303);
+      const location = new URL(forwarded.location!);
+      expect(`${location.origin}${location.pathname}`).toBe(
+        'https://tenant-a.example.test/ui/connect/mcp/return'
+      );
+    } finally {
+      await hosted.cleanup();
+    }
+  });
 
   it('registers under the deployed client name, and the front channel accepts that client', async () => {
     const provider = await createTestProvider({ serveDynamicRegistration: true });
