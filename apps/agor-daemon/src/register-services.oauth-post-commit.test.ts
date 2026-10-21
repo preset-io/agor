@@ -86,9 +86,29 @@ describe('committed OAuth best-effort tails', () => {
     const completion = source.slice(completionStart, disconnectStart);
     const disconnect = source.slice(disconnectStart, source.indexOf("'/mcp-servers/oauth-status'"));
 
-    expect(completion.indexOf('persistOAuthTokenForPendingFlow')).toBeLessThan(
-      completion.indexOf('preserveCommittedOAuthResult')
+    // Completion has several tail calls: success tails must follow the grant
+    // write, and failure-only tails must follow the terminal attempt mutation.
+    const persistAt = completion.indexOf('persistOAuthTokenForPendingFlow(');
+    expect(persistAt).toBeGreaterThan(-1);
+    const tailCalls = [...completion.matchAll(/preserveCommittedOAuthResult\(/g)].map(
+      (match) => match.index
     );
+    expect(tailCalls.length).toBeGreaterThan(0);
+    const successTail = /code: '(?:completion_\w+|slack_(?:recovery|connect)_projection)'/;
+    let sawSuccessTail = false;
+    for (const [index, at] of tailCalls.entries()) {
+      const call = completion.slice(at, tailCalls[index + 1] ?? completion.length);
+      if (successTail.test(call)) {
+        sawSuccessTail = true;
+        expect(at).toBeGreaterThan(persistAt);
+      } else {
+        const sincePrevious = completion.slice(tailCalls[index - 1] ?? 0, at);
+        expect(sincePrevious).toMatch(
+          /\.finish\(|markLocalOAuthAttempt\(\s*\w+,\s*(?:'failed'|completionStatus)/
+        );
+      }
+    }
+    expect(sawSuccessTail).toBe(true);
     expect(disconnect.indexOf('performOAuthDisconnect')).toBeLessThan(
       disconnect.indexOf('preserveCommittedOAuthResult')
     );
