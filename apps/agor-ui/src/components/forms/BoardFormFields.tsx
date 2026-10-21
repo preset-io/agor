@@ -2,6 +2,7 @@ import type { Board, BoardView } from '@agor-live/client';
 import { LockOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Form, Input, Space, Tabs, Typography } from 'antd';
+import { lazy, Suspense } from 'react';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import {
   RbacPermissionFields,
@@ -9,7 +10,11 @@ import {
   type RbacVisibility,
 } from '../permissions/RbacPermissionFields';
 import { BoardBackgroundEditor } from './BoardBackgroundEditor';
-import { BoardTabOrderField } from './BoardTabOrderField';
+
+// Loaded with the settings modal's General tab, so dnd-kit stays out of the first paint.
+const BoardTabOrderField = lazy(() =>
+  import('./BoardTabOrderField').then((module) => ({ default: module.BoardTabOrderField }))
+);
 
 /** A value carrying AntD's ColorPicker `toHexString()` serializer. */
 interface HexSerializable {
@@ -154,10 +159,12 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
       </Form.Item>
 
       {tabOrder && (
-        <BoardTabOrderField
-          value={tabOrder}
-          onChange={canEditGeneral ? onTabOrderChange : undefined}
-        />
+        <Suspense fallback={null}>
+          <BoardTabOrderField
+            value={tabOrder}
+            onChange={canEditGeneral ? onTabOrderChange : undefined}
+          />
+        </Suspense>
       )}
     </>
   );

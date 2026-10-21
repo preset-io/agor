@@ -98,6 +98,9 @@ export const BoardViewTabs: React.FC<BoardViewTabsProps> = ({ order, view, onPic
     return () => window.clearTimeout(timer);
   }, [firstTabTip]);
 
+  const focusTab = (key: BoardView) =>
+    rowRef.current?.querySelector<HTMLElement>(`[data-node-key="${key}"] [role="tab"]`)?.focus();
+
   const move = (moved: BoardView, delta: number) => {
     if (!onReorder) return;
     const next = moveBoardView(order, moved, delta);
@@ -105,9 +108,7 @@ export const BoardViewTabs: React.FC<BoardViewTabsProps> = ({ order, view, onPic
     onReorder(next);
     setFirstTabTip(nextFirst !== shown[0] ? nextFirst : null);
     // Keyed nodes move in the DOM, which can drop focus; keep it on the moved tab.
-    requestAnimationFrame(() =>
-      rowRef.current?.querySelector<HTMLElement>(`[data-node-key="${moved}"] [role="tab"]`)?.focus()
-    );
+    requestAnimationFrame(() => focusTab(moved));
   };
 
   // The pointer is released over the dragged tab; that click is not a pick.
@@ -131,6 +132,15 @@ export const BoardViewTabs: React.FC<BoardViewTabsProps> = ({ order, view, onPic
       <Dropdown
         key={key}
         trigger={['contextMenu']}
+        // Focus the menu so the keyboard can use it, opened by the context-menu key.
+        // Closing it returns focus to the tab, unless the person clicked elsewhere.
+        autoFocus
+        onOpenChange={(open) => {
+          const active = document.activeElement;
+          if (!open && (!active || active === document.body || active.closest('.ant-dropdown'))) {
+            focusTab(key);
+          }
+        }}
         menu={{
           items: [
             { key: 'left', label: 'Move left', disabled: index <= 0, onClick: () => move(key, -1) },

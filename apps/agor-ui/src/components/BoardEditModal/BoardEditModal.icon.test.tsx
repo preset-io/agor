@@ -7,7 +7,8 @@ import { BoardEditModal } from './BoardEditModal';
 
 vi.mock('@/utils/message', () => ({ useThemedMessage: () => ({ showError: vi.fn() }) }));
 // jsdom cannot compute styles for disabled text buttons, which role queries need; the
-// Tabs list has its own tests (BoardTabOrderField.test.tsx). This stand-in changes the order.
+// Tabs list has its own tests (BoardTabOrderField.test.tsx). This stand-in changes the order;
+// it loads lazily, like the real list.
 vi.mock('../forms/BoardTabOrderField', () => ({
   BoardTabOrderField: ({ onChange }: { onChange?: (order: string[]) => void }) =>
     onChange ? (
@@ -119,7 +120,7 @@ describe('BoardEditModal — tab order', () => {
     const boardsPatch = vi.fn();
     const onClose = vi.fn();
     renderModal(boardsPatch, onClose);
-    fireEvent.click(await screen.findByText('Put Chat first'));
+    fireEvent.click(await screen.findByText('Put Chat first', {}, { timeout: 5000 }));
     fireEvent.click(screen.getByText('Save').closest('button')!);
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(boardsPatch).toHaveBeenCalledExactlyOnceWith('board-1', {
@@ -132,7 +133,7 @@ describe('BoardEditModal — tab order', () => {
     const boardsPatch = vi.fn();
     const onClose = vi.fn();
     renderModal(boardsPatch, onClose);
-    await screen.findByText('Put Chat first');
+    await screen.findByText('Put Chat first', {}, { timeout: 5000 });
     fireEvent.click(screen.getByText('Save').closest('button')!);
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(boardsPatch).not.toHaveBeenCalled();
