@@ -254,15 +254,6 @@ export function normalizeBoardTabOrder(value: unknown): BoardView[] {
   return [...new Set([...stored, ...DEFAULT_BOARD_TAB_ORDER])];
 }
 
-/** True when `value` names every view exactly once. */
-export function isBoardTabOrder(value: unknown): value is BoardView[] {
-  return (
-    Array.isArray(value) &&
-    value.length === BOARD_VIEWS.length &&
-    BOARD_VIEWS.every((view) => value.includes(view))
-  );
-}
-
 /** The board's normalized tab_order, or the default. */
 export function resolveBoardTabOrder(
   board: Pick<Board, 'tab_order'> | null | undefined

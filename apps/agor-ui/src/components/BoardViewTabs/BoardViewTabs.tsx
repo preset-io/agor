@@ -1,18 +1,8 @@
 import type { BoardView } from '@agor-live/client';
 import { CheckCircleFilled, HolderOutlined } from '@ant-design/icons';
-import {
-  closestCenter,
-  DndContext,
-  type DragEndEvent,
-  PointerSensor,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core';
-import { horizontalListSortingStrategy, SortableContext, useSortable } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
 import { Dropdown, Flex, Tabs, type TabsProps, Tooltip, theme } from 'antd';
-import React, { useEffect, useRef, useState } from 'react';
-import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import React, { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import {
   availableBoardViews,
   BOARD_VIEW_ICONS,
@@ -20,10 +10,15 @@ import {
   boardViewMoveForKey,
   moveBoardView,
 } from '../../utils/boardViews';
+import type { SortableTabBarProps } from './SortableTabBar';
+
+const SortableTabBar = lazy(() => import('./SortableTabBar'));
 
 export const BOARD_VIEW_TABS_HEIGHT = 36;
 const DRAG_HINT = 'The first tab is where this board opens for everyone.';
 const AFTER_MOVE_TIP_MS = 6000;
+const opensOnText = (view: BoardView) =>
+  `This board now opens on ${BOARD_VIEW_LABELS[view]} for everyone.`;
 
 interface BoardViewTabsProps {
   /** The board's full tab order; only the shown views are drawn. */
@@ -34,106 +29,48 @@ interface BoardViewTabsProps {
   onReorder?: (order: BoardView[]) => void;
 }
 
-type TabNodeProps = React.HTMLAttributes<HTMLDivElement> & {
-  'data-node-key': string;
-  children: React.ReactElement<React.HTMLAttributes<HTMLDivElement> & { ref?: React.Ref<unknown> }>;
-  dragging: boolean;
-  onMoveKey: (view: BoardView, delta: -1 | 1) => void;
-};
-
-/** One rc-tabs tab node made sortable, as in antd's draggable tabs demo. */
-const SortableTabNode: React.FC<TabNodeProps> = ({
-  dragging,
-  onMoveKey,
-  onMouseEnter,
-  onMouseLeave,
-  children,
-  'data-node-key': nodeKey,
-}) => {
-  const reducedMotion = usePrefersReducedMotion();
-  const view = nodeKey as BoardView;
-  const { listeners, setNodeRef, transform, transition } = useSortable({
-    id: view,
-    transition: reducedMotion ? null : undefined,
-  });
-  const node = React.cloneElement(children, {
-    ref: setNodeRef,
-    style: {
-      ...children.props.style,
-      transform: CSS.Translate.toString(transform),
-      transition: reducedMotion ? undefined : transition,
-      cursor: dragging ? 'grabbing' : 'grab',
-    },
-    ...listeners,
-    onMouseEnter,
-    onMouseLeave,
-    // Capture phase: runs before rc-tabs' arrow navigation, and stops the browser's Alt + Left "back".
-    onKeyDownCapture: (event: React.KeyboardEvent<HTMLDivElement>) => {
-      const delta = boardViewMoveForKey(event);
-      if (!delta) return;
-      event.preventDefault();
-      event.stopPropagation();
-      onMoveKey(view, delta);
-    },
-  });
-  return dragging ? (
-    <Tooltip open title={DRAG_HINT} placement="bottom">
-      {node}
-    </Tooltip>
-  ) : (
-    node
-  );
-};
-
-/** An editor's tab label: tooltip, hover grip and the Move left / Move right menu. */
+/** An editor's tab label: the hover grip, and the hint, drag or after-move tooltip. */
 const EditableTabLabel: React.FC<{
-  label: string;
-  canMoveLeft: boolean;
-  canMoveRight: boolean;
+  view: BoardView;
   showGrip: boolean;
+  /** Some tab is being dragged; this one when `dragged`. */
   dragging: boolean;
+  dragged: boolean;
   /** Says where the board now opens, after this tab became the first one. */
   showFirstTabTip: boolean;
-  onMove: (delta: -1 | 1) => void;
-}> = ({ label, canMoveLeft, canMoveRight, showGrip, dragging, showFirstTabTip, onMove }) => {
+}> = ({ view, showGrip, dragging, dragged, showFirstTabTip }) => {
   const { token } = theme.useToken();
-  const content = (
-    <Dropdown
-      trigger={['contextMenu']}
-      menu={{
-        items: [
-          { key: 'left', label: 'Move left', disabled: !canMoveLeft, onClick: () => onMove(-1) },
-          { key: 'right', label: 'Move right', disabled: !canMoveRight, onClick: () => onMove(1) },
-        ],
-      }}
-    >
-      <span>
-        {label}
-        <HolderOutlined
-          aria-hidden
-          style={{
-            fontSize: 12,
-            color: token.colorTextQuaternary,
-            marginInlineStart: token.marginXXS,
-            visibility: showGrip ? 'visible' : 'hidden',
-          }}
-        />
-      </span>
-    </Dropdown>
+  const label = (
+    <span>
+      {BOARD_VIEW_LABELS[view]}
+      <HolderOutlined
+        aria-hidden
+        style={{
+          fontSize: 12,
+          color: token.colorTextQuaternary,
+          marginInlineStart: token.marginXXS,
+          visibility: showGrip ? 'visible' : 'hidden',
+        }}
+      />
+    </span>
   );
-  if (showFirstTabTip) {
+  if (showFirstTabTip || dragged) {
     return (
       <Tooltip
         open
-        placement="bottomLeft"
+        placement={dragged ? 'bottom' : 'bottomLeft'}
         title={
-          <Flex align="center" gap={token.marginXS}>
-            <CheckCircleFilled style={{ color: token.colorSuccess }} />
-            <span>This board now opens on {label} for everyone.</span>
-          </Flex>
+          dragged ? (
+            DRAG_HINT
+          ) : (
+            <Flex align="center" gap={token.marginXS}>
+              <CheckCircleFilled style={{ color: token.colorSuccess }} />
+              <span>{opensOnText(view)}</span>
+            </Flex>
+          )
         }
       >
-        {content}
+        {label}
       </Tooltip>
     );
   }
@@ -142,7 +79,7 @@ const EditableTabLabel: React.FC<{
       title={dragging ? undefined : 'Drag to reorder. Alt + arrow keys also move it.'}
       mouseEnterDelay={0.5}
     >
-      {content}
+      {label}
     </Tooltip>
   );
 };
@@ -154,7 +91,6 @@ export const BoardViewTabs: React.FC<BoardViewTabsProps> = ({ order, view, onPic
   const [hovered, setHovered] = useState<BoardView | null>(null);
   const [dragging, setDragging] = useState<BoardView | null>(null);
   const [firstTabTip, setFirstTabTip] = useState<BoardView | null>(null);
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   useEffect(() => {
     if (!firstTabTip) return;
@@ -162,8 +98,9 @@ export const BoardViewTabs: React.FC<BoardViewTabsProps> = ({ order, view, onPic
     return () => window.clearTimeout(timer);
   }, [firstTabTip]);
 
-  const reorder = (next: BoardView[], moved: BoardView) => {
+  const move = (moved: BoardView, delta: number) => {
     if (!onReorder) return;
+    const next = moveBoardView(order, moved, delta);
     const nextFirst = availableBoardViews(next)[0];
     onReorder(next);
     setFirstTabTip(nextFirst !== shown[0] ? nextFirst : null);
@@ -172,71 +109,89 @@ export const BoardViewTabs: React.FC<BoardViewTabsProps> = ({ order, view, onPic
       rowRef.current?.querySelector<HTMLElement>(`[data-node-key="${moved}"] [role="tab"]`)?.focus()
     );
   };
-  const move = (moved: BoardView, delta: number) =>
-    reorder(moveBoardView(order, moved, delta), moved);
 
   // The pointer is released over the dragged tab; that click is not a pick.
   const justDraggedRef = useRef(false);
-  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+  const handleDragEnd = (moved: BoardView, over: BoardView | null) => {
     setDragging(null);
     justDraggedRef.current = true;
     window.setTimeout(() => {
       justDraggedRef.current = false;
     }, 0);
-    if (!over || active.id === over.id) return;
-    const moved = active.id as BoardView;
-    move(moved, shown.indexOf(over.id as BoardView) - shown.indexOf(moved));
+    if (over && over !== moved) move(moved, shown.indexOf(over) - shown.indexOf(moved));
   };
 
-  const items: TabsProps['items'] = shown.map((key, index) => {
-    const label = BOARD_VIEW_LABELS[key];
-    if (!onReorder) return { key, icon: BOARD_VIEW_ICONS[key], label };
-    return {
-      key,
-      icon: BOARD_VIEW_ICONS[key],
-      label: (
-        <EditableTabLabel
-          label={label}
-          canMoveLeft={index > 0}
-          canMoveRight={index < shown.length - 1}
-          showGrip={hovered === key && !dragging}
-          dragging={!!dragging}
-          showFirstTabTip={firstTabTip === key}
-          onMove={(delta) => move(key, delta)}
-        />
-      ),
-    };
-  });
+  // The whole tab node carries the Move menu, so the keyboard's context-menu key
+  // on the focused tab opens it too. Alt + arrows run in the capture phase: before
+  // rc-tabs' arrow navigation, and stopping the browser's Alt + Left "back".
+  const wrapNode: SortableTabBarProps['wrapNode'] = (node) => {
+    const key = node.key as BoardView;
+    const index = shown.indexOf(key);
+    return (
+      <Dropdown
+        key={key}
+        trigger={['contextMenu']}
+        menu={{
+          items: [
+            { key: 'left', label: 'Move left', disabled: index <= 0, onClick: () => move(key, -1) },
+            {
+              key: 'right',
+              label: 'Move right',
+              disabled: index >= shown.length - 1,
+              onClick: () => move(key, 1),
+            },
+          ],
+        }}
+      >
+        {React.cloneElement(node as React.ReactElement<React.HTMLAttributes<HTMLElement>>, {
+          onMouseEnter: () => setHovered(key),
+          onMouseLeave: () => setHovered(null),
+          onKeyDownCapture: (event: React.KeyboardEvent<HTMLElement>) => {
+            const delta = boardViewMoveForKey(event);
+            if (!delta) return;
+            event.preventDefault();
+            event.stopPropagation();
+            move(key, delta);
+          },
+        })}
+      </Dropdown>
+    );
+  };
 
+  const items: TabsProps['items'] = shown.map((key) => ({
+    key,
+    icon: BOARD_VIEW_ICONS[key],
+    label: onReorder ? (
+      <EditableTabLabel
+        view={key}
+        showGrip={hovered === key && !dragging}
+        dragging={!!dragging}
+        dragged={dragging === key}
+        showFirstTabTip={firstTabTip === key}
+      />
+    ) : (
+      BOARD_VIEW_LABELS[key]
+    ),
+  }));
+
+  // Editors get the menu and keys at once; drag arrives with the lazily loaded bar.
   const renderTabBar: TabsProps['renderTabBar'] = onReorder
     ? (tabBarProps, DefaultTabBar) => (
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragStart={({ active }) => {
-            setDragging(active.id as BoardView);
-            setFirstTabTip(null);
-          }}
-          onDragEnd={handleDragEnd}
-          onDragCancel={() => setDragging(null)}
-        >
-          <SortableContext items={shown} strategy={horizontalListSortingStrategy}>
-            <DefaultTabBar {...tabBarProps}>
-              {(node) => (
-                <SortableTabNode
-                  {...(node.props as TabNodeProps)}
-                  key={node.key}
-                  dragging={dragging === node.key}
-                  onMoveKey={move}
-                  onMouseEnter={() => setHovered(node.key as BoardView)}
-                  onMouseLeave={() => setHovered(null)}
-                >
-                  {node as TabNodeProps['children']}
-                </SortableTabNode>
-              )}
-            </DefaultTabBar>
-          </SortableContext>
-        </DndContext>
+        <Suspense fallback={<DefaultTabBar {...tabBarProps}>{wrapNode}</DefaultTabBar>}>
+          <SortableTabBar
+            tabBarProps={tabBarProps}
+            DefaultTabBar={DefaultTabBar}
+            views={shown}
+            wrapNode={wrapNode}
+            regionRef={rowRef}
+            onDragStart={(dragged) => {
+              setDragging(dragged);
+              setFirstTabTip(null);
+            }}
+            onDragEnd={handleDragEnd}
+            onDragCancel={() => setDragging(null)}
+          />
+        </Suspense>
       )
     : undefined;
 
@@ -259,6 +214,10 @@ export const BoardViewTabs: React.FC<BoardViewTabsProps> = ({ order, view, onPic
         renderTabBar={renderTabBar}
         tabBarStyle={{ height: BOARD_VIEW_TABS_HEIGHT, margin: 0, paddingInline: token.paddingSM }}
       />
+      {/* The after-move tooltip is not announced; this says the same for screen readers. */}
+      <span role="status" aria-live="polite" style={VISUALLY_HIDDEN_STYLE}>
+        {firstTabTip ? opensOnText(firstTabTip) : ''}
+      </span>
     </div>
   );
 };

@@ -1,7 +1,6 @@
 import type { BoardView } from '@agor-live/client';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { readLocalStorageJson } from './localStorageJson';
-import { userStorageKey, useUserLocalStorage } from './useUserLocalStorage';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useUserLocalStorage } from './useUserLocalStorage';
 
 interface BoardViewVisit {
   boardId: string;
@@ -25,21 +24,10 @@ export function useBoardView({
   boardId: string | null;
   order: readonly BoardView[];
 }) {
-  const key = `board-view:${boardId}`;
-  const [stored, setPicked] = useUserLocalStorage<BoardView | null>(
+  const [picked, setPicked] = useUserLocalStorage<BoardView | null>(
     boardId ? userId : null,
-    key,
+    `board-view:${boardId}`,
     null
-  );
-  // The storage hook adopts a new key's value one effect late. Read it now so a
-  // board switch never renders, or acts on, the previous board's tab.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `stored` changes on every write, so the read follows it.
-  const picked = useMemo(
-    () =>
-      boardId && userId
-        ? readLocalStorageJson<BoardView | null>(userStorageKey(userId, key), null)
-        : null,
-    [boardId, userId, key, stored]
   );
 
   const [visit, setVisit] = useState<BoardViewVisit | null>(null);

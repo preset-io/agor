@@ -1,8 +1,9 @@
-import { act, renderHook } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   CanvasNavigationProvider,
+  useConsumePendingRecenter,
   useRecenterMap,
   useRegisterBoardView,
   useRegisterRecenter,
@@ -12,8 +13,6 @@ const wrapper = ({ children }: { children: ReactNode }) => (
   <CanvasNavigationProvider>{children}</CanvasNavigationProvider>
 );
 
-afterEach(() => vi.useRealTimers());
-
 const setup = (switched: boolean) => {
   const recenter = vi.fn(() => true);
   const showBoard = vi.fn(() => switched);
@@ -21,24 +20,21 @@ const setup = (switched: boolean) => {
     () => {
       useRegisterRecenter(recenter);
       useRegisterBoardView(showBoard);
-      return useRecenterMap();
+      return { recenterMap: useRecenterMap(), consumePending: useConsumePendingRecenter() };
     },
     { wrapper }
   );
-  return { recenter, showBoard, recenterMap: result.current };
+  return { recenter, showBoard, ...result.current };
 };
 
 describe('useRecenterMap and the Board tab', () => {
-  it('shows the Board tab for a deliberate recenter, then recenters once laid out', () => {
-    vi.useFakeTimers();
-    const { recenter, showBoard, recenterMap } = setup(true);
-    act(() => {
-      recenterMap('branch-1', { boardId: 'board-1' });
-    });
+  it('shows the Board tab for a deliberate recenter and stashes the target for the canvas', () => {
+    const { recenter, showBoard, recenterMap, consumePending } = setup(true);
+    expect(recenterMap('branch-1', { boardId: 'board-1' })).toBe(true);
     expect(showBoard).toHaveBeenCalledWith('board-1');
     expect(recenter).not.toHaveBeenCalled();
-    act(() => vi.advanceTimersByTime(50));
-    expect(recenter).toHaveBeenCalledWith('branch-1', {
+    expect(consumePending()).toEqual({
+      nodeId: 'branch-1',
       sessionId: undefined,
       ensureVisible: undefined,
     });

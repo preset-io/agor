@@ -27,7 +27,14 @@ export function useUserLocalStorage<T>(
     [initialValue, storageKey]
   );
 
-  const [storedValue, setStoredValue] = useState<T>(readStoredValue);
+  // Tagged with its key, so a key change reads the new key's value in the same render
+  // instead of returning the previous key's value until an effect catches up.
+  const [stored, setStored] = useState(() => ({ key: storageKey, value: readStoredValue() }));
+  let storedValue = stored.value;
+  if (stored.key !== storageKey) {
+    storedValue = readStoredValue();
+    setStored({ key: storageKey, value: storedValue });
+  }
   const storedValueRef = useRef(storedValue);
   storedValueRef.current = storedValue;
   const storageKeyRef = useRef(storageKey);
@@ -40,8 +47,8 @@ export function useUserLocalStorage<T>(
   const adoptStoredValue = useCallback(() => {
     const value = readStoredValue();
     storedValueRef.current = value;
-    setStoredValue(value);
-  }, [readStoredValue]);
+    setStored({ key: storageKey, value });
+  }, [readStoredValue, storageKey]);
 
   useEffect(() => {
     adoptStoredValue();
@@ -69,8 +76,8 @@ export function useUserLocalStorage<T>(
   const setValue = useCallback((value: T | ((val: T) => T)) => {
     const valueToStore = value instanceof Function ? value(storedValueRef.current) : value;
     storedValueRef.current = valueToStore;
-    setStoredValue(valueToStore);
     const currentKey = storageKeyRef.current;
+    setStored({ key: currentKey, value: valueToStore });
     if (currentKey && writeLocalStorageJson(currentKey, valueToStore)) {
       writingRef.current = true;
       try {

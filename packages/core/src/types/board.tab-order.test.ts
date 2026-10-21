@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  DEFAULT_BOARD_TAB_ORDER,
-  isBoardTabOrder,
-  normalizeBoardTabOrder,
-  resolveBoardTabOrder,
-} from './board';
+import { DEFAULT_BOARD_TAB_ORDER, normalizeBoardTabOrder, resolveBoardTabOrder } from './board';
 
 describe('normalizeBoardTabOrder', () => {
   it('falls back to the default order for missing or non-list values', () => {
@@ -37,16 +32,5 @@ describe('resolveBoardTabOrder', () => {
       'board',
       'files',
     ]);
-  });
-});
-
-describe('isBoardTabOrder', () => {
-  it('accepts only a permutation of every view', () => {
-    expect(isBoardTabOrder(['chat', 'files', 'board'])).toBe(true);
-    expect(isBoardTabOrder(['chat', 'board'])).toBe(false);
-    expect(isBoardTabOrder(['chat', 'chat', 'board'])).toBe(false);
-    expect(isBoardTabOrder(['chat', 'board', 'files', 'files'])).toBe(false);
-    expect(isBoardTabOrder(['chat', 'board', 'canvas'])).toBe(false);
-    expect(isBoardTabOrder('chat,board,files')).toBe(false);
   });
 });

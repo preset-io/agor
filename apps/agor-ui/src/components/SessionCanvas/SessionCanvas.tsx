@@ -2049,6 +2049,18 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       recenterOnNode,
     ]);
 
+    // Shown again after the Chat tab: run the recenter asked for while it was
+    // collapsed (Show on board, "go to card"). A board not fitted yet takes it
+    // on its first fit above. Same delay as that fit, so the panel has its size.
+    useEffect(() => {
+      if (hidden || !board?.board_id || board.board_id !== lastFitBoardIdRef.current) return;
+      const timer = setTimeout(() => {
+        const pending = consumePendingRecenter();
+        if (pending) recenterOnNode(pending.nodeId, { sessionId: pending.sessionId });
+      }, 100);
+      return () => clearTimeout(timer);
+    }, [hidden, board?.board_id, consumePendingRecenter, recenterOnNode]);
+
     // Intercept onNodesChange to detect resize events
     const onNodesChange = useCallback(
       // biome-ignore lint/suspicious/noExplicitAny: React Flow change event types are not exported

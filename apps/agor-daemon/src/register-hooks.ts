@@ -110,7 +110,7 @@ import {
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   hasMinimumRole,
-  isBoardTabOrder,
+  normalizeBoardTabOrder,
   ROLES,
   SCHEDULE_CREATE_WRITE_FIELDS,
   SCHEDULE_PATCH_WRITE_FIELDS,
@@ -3906,12 +3906,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           if (_action === 'setTabOrder') {
             if (!context.id) throw new Error('Board ID required');
             const { tab_order } = contextData as UnknownJson;
-            if (!isBoardTabOrder(tab_order)) {
-              throw new BadRequest('tab_order must list chat, board and files once each');
-            }
+            if (!Array.isArray(tab_order)) throw new BadRequest('tab_order must be a list');
+            // Normalized rather than validated, so an older or newer cached UI never gets a 400.
             // Setting the result skips the generic patch; Feathers' event hook then
             // emits the one `boards patched` event every viewer receives.
-            context.result = await boardsService!.setTabOrder(context.id as string, tab_order);
+            context.result = await boardsService!.setTabOrder(
+              context.id as string,
+              normalizeBoardTabOrder(tab_order)
+            );
             return context;
           }
 

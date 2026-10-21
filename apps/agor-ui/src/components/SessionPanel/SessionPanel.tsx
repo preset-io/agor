@@ -19,6 +19,7 @@ import {
   hasFullSessionDetails,
   hasMinimumRole,
   isAgenticToolName,
+  isTeammate,
   mapToCodexPermissionConfig,
   ROLES,
   SessionStatus,
@@ -55,6 +56,7 @@ import {
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
+import { useBoardViewContext } from '../../contexts/BoardViewContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useIsTouchInput } from '../../hooks/useCanHover';
@@ -90,6 +92,7 @@ import {
 } from '../../utils/promptDrafts';
 import { describeSessionStatus } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
+import { teammateLabel } from '../../utils/teammateLabels';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { FileUpload } from '../FileUpload';
@@ -381,12 +384,6 @@ export interface SessionPanelProps {
   onCloseOtherTabs?: () => void;
   /** Extra header control, e.g. the mobile open-sessions switcher. */
   headerExtra?: React.ReactNode;
-  /** The branch pills over the conversation. Hidden in the board's Chat tab. */
-  showBranchStrip?: boolean;
-  /** Replaces "Center map on branch" with "Show on board" (the board's Chat tab). */
-  onShowOnBoard?: (branchId: string) => void;
-  /** Composer placeholder while the session is not running. */
-  composerPlaceholder?: string;
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
@@ -403,9 +400,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   closesTab,
   onCloseOtherTabs,
   headerExtra,
-  showBranchStrip = true,
-  onShowOnBoard,
-  composerPlaceholder,
   uploadPolicy,
 }) => {
   const { token } = theme.useToken();
@@ -417,6 +411,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const { showInfo, showError, showWarning } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const recenterMap = useRecenterMap();
+  // The board's Chat tab: no branch strip, "Show on board" in the ⋯ menu, and a
+  // teammate's conversations address the teammate by name.
+  const boardView = useBoardViewContext();
+  const inChat = boardView?.view === 'chat';
+  const composerPlaceholder =
+    inChat && branch && isTeammate(branch) ? `Message ${teammateLabel(branch)}…` : undefined;
 
   // Subscribe only to the entity families this panel needs via narrow store
   // selectors. SessionPanel intentionally does NOT subscribe to live (sessions
@@ -1032,12 +1032,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       : []),
     ...(showCenterMap && branch
       ? [
-          onShowOnBoard
+          inChat
             ? {
                 key: 'show-on-board',
                 icon: <AimOutlined />,
                 label: 'Show on board',
-                onClick: () => onShowOnBoard(branch.branch_id),
+                onClick: () => boardView.showOnBoard(branch.branch_id),
               }
             : {
                 key: 'center-map',
@@ -1958,7 +1958,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             onSpawnModalConfirm={handleSpawnModalConfirm}
             inputValueRef={inputValueRef}
             isOpen={open}
-            showBranchStrip={showBranchStrip}
+            showBranchStrip={!inChat}
           />
         </div>
 

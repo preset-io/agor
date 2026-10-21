@@ -5,10 +5,11 @@ import {
   HolderOutlined,
   LockOutlined,
 } from '@ant-design/icons';
-import { closestCenter, DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Button, Flex, Form, Tag, Tooltip, Typography, theme } from 'antd';
+import { useRef } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import {
   availableBoardViews,
@@ -16,6 +17,7 @@ import {
   BOARD_VIEW_LABELS,
   moveBoardView,
 } from '../../utils/boardViews';
+import { closestCenterWithin } from '../../utils/dndRegion';
 
 const ROW_HEIGHT = 40;
 
@@ -102,6 +104,7 @@ interface BoardTabOrderFieldProps {
 export const BoardTabOrderField: React.FC<BoardTabOrderFieldProps> = ({ value, onChange }) => {
   const { token } = theme.useToken();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const listRef = useRef<HTMLUListElement>(null);
   const shown = availableBoardViews(value);
   const move = onChange
     ? (view: BoardView, delta: number) => onChange(moveBoardView(value, view, delta))
@@ -126,7 +129,8 @@ export const BoardTabOrderField: React.FC<BoardTabOrderFieldProps> = ({ value, o
     >
       <DndContext
         sensors={sensors}
-        collisionDetection={closestCenter}
+        // A drop outside the list cancels and changes nothing.
+        collisionDetection={closestCenterWithin(listRef)}
         onDragEnd={({ active, over }) => {
           if (!move || !over || active.id === over.id) return;
           const view = active.id as BoardView;
@@ -135,6 +139,7 @@ export const BoardTabOrderField: React.FC<BoardTabOrderFieldProps> = ({ value, o
       >
         <SortableContext items={shown} strategy={verticalListSortingStrategy}>
           <ul
+            ref={listRef}
             aria-label="Tab order"
             style={{
               margin: 0,

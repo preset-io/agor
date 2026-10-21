@@ -42,7 +42,7 @@ import {
  *
  * Board tab: every request except an ensure-visible one shows the Board tab
  * first (App registers `useRegisterBoardView`). When that needed a switch,
- * the recenter runs once the canvas has laid out again.
+ * the target is stashed and the canvas recenters on it once it is shown.
  *
  * Returns `true` if the camera moved synchronously or a cross-board hop is
  * in flight, `false` otherwise (no canvas mounted, unknown id, no
@@ -74,8 +74,6 @@ interface CanvasNavigationContextValue {
 // the new canvas to mount and load nodes, short enough to be invisible if
 // the switch fails.
 const PENDING_TTL_MS = 5000;
-// Same settle delay `useUrlState` gives layout before it recenters.
-const BOARD_VIEW_SETTLE_MS = 50;
 
 const CanvasNavigationContext = createContext<CanvasNavigationContextValue | null>(null);
 
@@ -178,16 +176,14 @@ export function useRecenterMap(): (nodeId: string, opts?: RecenterOpts) => boole
     (nodeId: string, opts?: RecenterOpts) => {
       // Selection never changes tabs; while the canvas is hidden it does nothing, as before.
       if (!opts?.ensureVisible && ctx?.boardViewRef.current?.(opts?.boardId)) {
-        window.setTimeout(() => {
-          // A canvas mounting for this switch fits the board once; the stash makes that
-          // first fit land on the target instead of overriding the recenter below.
-          ctx.pendingRef.current = {
-            nodeId,
-            sessionId: opts?.sessionId,
-            expiresAt: Date.now() + PENDING_TTL_MS,
-          };
-          recenter(nodeId, opts);
-        }, BOARD_VIEW_SETTLE_MS);
+        // The canvas is collapsed or not mounted yet: SessionCanvas drains this
+        // when it is shown again, or on its first fit.
+        ctx.pendingRef.current = {
+          nodeId,
+          sessionId: opts?.sessionId,
+          expiresAt: Date.now() + PENDING_TTL_MS,
+        };
+        if (opts?.boardId) ctx.boardSwitcherRef.current?.(opts.boardId);
         return true;
       }
       return recenter(nodeId, opts);

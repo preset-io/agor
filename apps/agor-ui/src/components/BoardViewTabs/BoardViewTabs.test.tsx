@@ -9,8 +9,9 @@ afterEach(cleanup);
 
 const tab = (name: string) => screen.getByRole('tab', { name: new RegExp(name) });
 
+// The keyboard's context-menu key fires `contextmenu` on the focused tab element itself.
 const openMenu = async (name: string) => {
-  fireEvent.contextMenu(within(tab(name)).getByText(name));
+  fireEvent.contextMenu(tab(name));
   return await screen.findByRole('menu');
 };
 
@@ -62,10 +63,16 @@ describe('BoardViewTabs', () => {
     expect(onReorder).toHaveBeenCalledWith(['chat', 'board', 'files']);
   });
 
-  it('says where the board now opens when the first tab changes', () => {
+  it('says, and announces, where the board now opens when the first tab changes', () => {
     const onReorder = vi.fn();
     render(<BoardViewTabs order={ORDER} view="board" onPick={vi.fn()} onReorder={onReorder} />);
+    const status = screen.getByRole('status');
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.textContent).toBe('');
     fireEvent.keyDown(tab('Chat'), { key: 'ArrowLeft', altKey: true });
-    expect(screen.getByText('This board now opens on Chat for everyone.')).toBeTruthy();
+    expect(status.textContent).toBe('This board now opens on Chat for everyone.');
+    expect(screen.getByRole('tooltip').textContent).toBe(
+      'This board now opens on Chat for everyone.'
+    );
   });
 });

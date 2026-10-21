@@ -18,7 +18,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { DoubleLeftOutlined } from '@ant-design/icons';
 import { Flex, Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -31,18 +31,12 @@ import {
 import { useLocation, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
-import {
-  useRecenterMap,
-  useRegisterBoardSwitcher,
-  useRegisterBoardView,
-} from '../../contexts/CanvasNavigationContext';
+import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
-import { useBoardTabOrder } from '../../hooks/useBoardTabOrder';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
-import { useBoardView } from '../../hooks/useBoardView';
-import { useCanManageBoard } from '../../hooks/useCanManageBoard';
+import { useBoardViewShell, useChatOpensSelectedTab } from '../../hooks/useBoardViewShell';
 import { useCreateFlows } from '../../hooks/useCreateFlows';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
@@ -76,19 +70,17 @@ import {
 import { SharedUserSettingsModal } from '../../surfaces/SharedUserSettingsModal';
 import type { AgenticToolOption, CreateRepoOptions } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
-import { availableBoardViews } from '../../utils/boardViews';
 import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
-import { teammateLabel } from '../../utils/teammateLabels';
 import { isTeammatesRoute } from '../../utils/uiRoutes';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
 import { useBoardTeammatePanelData } from '../BoardTeammatePanel/useBoardTeammatePanelData';
-import { BoardViewTabs } from '../BoardViewTabs';
+import { BoardViewArea, CANVAS_MIN_SIZE_PERCENT } from '../BoardViewArea';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { ChatEmptyState } from '../ChatEmptyState';
@@ -304,9 +296,6 @@ const LEFT_PANEL_MAX_SIZE_PERCENT = 45;
 const SESSION_PANEL_MIN_WIDTH_PX = 360;
 const SESSION_PANEL_MAX_SIZE_PERCENT = 75;
 const SESSION_PANEL_MIN_SIZE_FLOOR_PERCENT = 15;
-// Matches the canvas panel's own `minSize` below — kept as one constant so
-// the two cannot drift apart.
-const CANVAS_MIN_SIZE_PERCENT = 20;
 // Width of the persistent icon rail (TeammatePanelRail) shown in place of
 // the panel when collapsed. Replaces the old 0px-collapse + floating
 // reopen-knob pattern (see issue agor-cloud#123).
@@ -553,36 +542,17 @@ export const App: React.FC<AppProps> = ({
   const isHomeSurface = isRootHomePath && !hasExplicitEntityTarget;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
 
-  // Board tabs over the main area. The row shows once the board is known.
-  const boardViewReady = !isHomeSurface && !isTeammatesPath && !!currentBoard;
-  const canManageBoard = useCanManageBoard(client, currentBoard, user);
-  const { order: boardTabOrder, setOrder: setBoardTabOrder } = useBoardTabOrder(
+  // Board tabs over the main area: Chat and Board.
+  const boardView = useBoardViewShell({
     client,
-    currentBoard
-  );
-  const shownBoardViews = useMemo(() => availableBoardViews(boardTabOrder), [boardTabOrder]);
-  const {
-    view: boardView,
-    pick: pickBoardView,
-    visit: visitBoardView,
-  } = useBoardView({
-    userId: user?.user_id,
-    boardId: boardViewReady ? currentBoardId : null,
-    order: shownBoardViews,
+    user,
+    board: currentBoard,
+    boardId: currentBoardId,
+    onBoardSurface: !isHomeSurface && !isTeammatesPath,
+    urlNamesBoard: !!routeParams.boardParam || hasExplicitEntityTarget,
+    activeUrlTarget,
   });
-  const isChat = boardViewReady && boardView === 'chat';
-  // React Flow mounts the first time Board is shown, then stays (collapsed in Chat),
-  // keeping its camera. People who start on Chat never load it. A board named in
-  // the URL is waited for, since its tab decides. Set in an effect so the canvas
-  // mounts after its panel has expanded.
-  const urlNamesBoard = !!routeParams.boardParam || hasExplicitEntityTarget;
-  const canvasWanted = boardViewReady
-    ? boardView === 'board'
-    : !isHomeSurface && !isTeammatesPath && !urlNamesBoard;
-  const [canvasMounted, setCanvasMounted] = useState(false);
-  useEffect(() => {
-    if (canvasWanted) setCanvasMounted(true);
-  }, [canvasWanted]);
+  const isChat = boardView.isChat;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
   const isLeavingHomeSurface = wasHomeSurfaceRef.current && !isHomeSurface;
   const [homeExitSidePanelDeferred, setHomeExitSidePanelDeferred] = useState(false);
@@ -692,10 +662,7 @@ export const App: React.FC<AppProps> = ({
     toContentRelativePercent(sessionPanelMinSize, contentPanelWidthPercent),
     sessionPanelMaxSizeWithinContent
   );
-  const sessionPanelRef = useRef<ImperativePanelHandle>(null);
-  const canvasPanelRef = useRef<ImperativePanelHandle>(null);
   const leftPanelResizeDraggingRef = useRef(false);
-  const rightPanelResizeDraggingRef = useRef(false);
 
   // Comment highlight state (hover and sticky selection)
   const [hoveredCommentId, setHoveredCommentId] = useState<string | null>(null);
@@ -755,32 +722,6 @@ export const App: React.FC<AppProps> = ({
       }
     }
   }, [effectiveCommentsPanelSize, leftPanelCollapsed]);
-
-  // Chat collapses the canvas so the conversation fills the area; Board
-  // expands it again, and the effect below restores the session panel size.
-  useEffect(() => {
-    const canvas = canvasPanelRef.current;
-    if (!canvas) return;
-    // expand() leaves an expanded panel as it is.
-    if (isChat) canvas.collapse();
-    else canvas.expand();
-  }, [isChat]);
-
-  // Re-resize whenever the content-relative size changes — including when
-  // the left panel toggles or resizes and shifts contentPanelWidthPercent,
-  // which sessionPanelSizeWithinContent is derived from. Without this, the
-  // session panel keeps the same content-relative percentage while its
-  // parent's absolute width changes, so its own absolute pixel width would
-  // drift along with the left panel.
-  useEffect(() => {
-    if (
-      !isChat &&
-      sessionPanelRef.current &&
-      (sessionPanelTargetOpen || !eventStreamPanelCollapsed)
-    ) {
-      sessionPanelRef.current.resize(sessionPanelSizeWithinContent);
-    }
-  }, [isChat, sessionPanelTargetOpen, sessionPanelSizeWithinContent, eventStreamPanelCollapsed]);
 
   // URL⇄state sync renders via UrlStateBridge (in the JSX below) so its
   // whole-map subscriptions never wake the shell. Stable callbacks only.
@@ -1094,19 +1035,16 @@ export const App: React.FC<AppProps> = ({
     if (shownId) handleSessionClick(shownId);
   }, [handleSessionClick, selectedSessionTabId, sessionTabIds]);
 
-  // Chat shows the open conversations: with no session in the URL, open the
-  // selected tab in place. Closing the last tab lands on the empty state.
-  const chatTabToShow =
-    isChat && !routeParams.sessionShortId && !pendingToolChoiceBranchId
-      ? selectedSessionTabId && sessionTabIds.includes(selectedSessionTabId)
-        ? selectedSessionTabId
-        : (sessionTabIds[0] ?? null)
-      : null;
-  useEffect(() => {
-    if (!chatTabToShow) return;
-    clearOpenedSessionFlags(client, chatTabToShow);
-    navigation.goToSession(chatTabToShow, { replace: true });
-  }, [chatTabToShow, client, navigation]);
+  useChatOpensSelectedTab({
+    active: isChat && !pendingToolChoiceBranchId,
+    board: currentBoard,
+    tabIds: sessionTabIds,
+    selectedTabId: selectedSessionTabId,
+    onOpen: (sessionId) => {
+      clearOpenedSessionFlags(client, sessionId);
+      navigation.goToSession(sessionId, { replace: true });
+    },
+  });
 
   const handlePermissionDecision = usePermissionDecision(client);
 
@@ -1336,7 +1274,7 @@ export const App: React.FC<AppProps> = ({
   const handleTeammatesBack = useStableCallback(() => navigation.goBack());
   const handleEventStreamClick = useStableCallback(() => {
     // The event stream lives in the Board tab's right panel.
-    if (isChat) visitBoardView('board');
+    if (isChat) boardView.visit('board');
     // If a session is open, close it and reveal the event stream; otherwise
     // toggle the event stream panel.
     if (effectiveSelectedSessionId) {
@@ -1363,70 +1301,6 @@ export const App: React.FC<AppProps> = ({
   const stableOnCreateSession = useStableCallback(onCreateSession);
   const canCreateSessions = !!onCreateSession && hasMinimumRole(user?.role, ROLES.MEMBER);
 
-  // Deliberate recenters ("go to card", Show on board) show the Board tab for
-  // this visit; CanvasNavigationContext asks through this channel.
-  const showBoardTab = useStableCallback((boardId?: string) => {
-    const target = boardId || currentBoardId;
-    if (!target || (target === currentBoardId && !isChat)) return false;
-    visitBoardView('board', target);
-    return true;
-  });
-  useRegisterBoardView(showBoardTab);
-
-  // A branch or artifact link opens the Board tab with the card outlined, for that visit.
-  const handleActiveUrlTargetChange = useStableCallback((target: ActiveUrlTarget | null) => {
-    setActiveUrlTarget(target);
-    if (!target) return;
-    const { branchById, artifactById } = agorStore.getState();
-    const boardId =
-      target.kind === 'branch'
-        ? branchById.get(target.id)?.board_id
-        : artifactById.get(target.id)?.board_id;
-    visitBoardView('board', boardId);
-  });
-
-  // Show on board: pan to the card, outline it like a deep link, and anchor a tip.
-  const recenterMap = useRecenterMap();
-  const [boardHighlight, setBoardHighlight] = useState<{ branchId: string; text: string } | null>(
-    null
-  );
-  const clearBoardHighlight = useStableCallback(() => setBoardHighlight(null));
-  const handleShowBranchOnBoard = useStableCallback((branchId: string) => {
-    const branch = agorStore.getState().branchById.get(branchId);
-    if (!branch) return;
-    const name = isTeammate(branch) ? teammateLabel(branch) : branch.name;
-    const place = primaryTeammateBranch
-      ? `${teammateLabel(primaryTeammateBranch)}’s board`
-      : 'this board';
-    recenterMap(branchId, { boardId: branch.board_id ?? currentBoardId });
-    setBoardHighlight({
-      branchId,
-      text: `${name} is here on ${place}. Switch back to Chat anytime.`,
-    });
-  });
-  useEffect(() => {
-    if (!boardHighlight) return;
-    const timer = window.setTimeout(() => setBoardHighlight(null), 6000);
-    return () => window.clearTimeout(timer);
-  }, [boardHighlight]);
-  // Leaving Board, or the board, ends it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: clear on every board change.
-  useEffect(() => {
-    if (isChat || !boardViewReady) setBoardHighlight(null);
-  }, [isChat, boardViewReady, currentBoardId]);
-  const canvasHighlightTip = useMemo(
-    () => (boardHighlight ? { nodeId: boardHighlight.branchId, text: boardHighlight.text } : null),
-    [boardHighlight]
-  );
-  const canvasTargetBranchId = activeUrlTargetBranchId ?? boardHighlight?.branchId ?? null;
-
-  // In Chat, a teammate's conversations address the teammate by name.
-  const chatComposerPlaceholder =
-    isChat && selectedSessionBranch && isTeammate(selectedSessionBranch)
-      ? `Message ${teammateLabel(selectedSessionBranch)}…`
-      : undefined;
-  const canCreateBoardTeammate = canManageBoard && !currentBoard?.primary_teammate_id;
-
   return (
     <AppActionsProvider value={appActionsValue}>
       <BoardSwitcherBridge setCurrentBoardId={setCurrentBoardId} />
@@ -1435,7 +1309,7 @@ export const App: React.FC<AppProps> = ({
         currentSessionId={effectiveSelectedSessionId}
         onBoardChange={handleUrlBoardChange}
         onSessionChange={setSelectedSessionId}
-        onActiveUrlTargetChange={handleActiveUrlTargetChange}
+        onActiveUrlTargetChange={setActiveUrlTarget}
       />
       {/* `viewport-fit=cover` (index.html, for the phone shell) lets a tablet's home
           indicator overlap the page, so keep the workspace above it. */}
@@ -1585,251 +1459,186 @@ export const App: React.FC<AppProps> = ({
               }}
             />
             <Panel id="content-panel" order={2} defaultSize={contentPanelWidthPercent} minSize={40}>
-              <Flex vertical style={{ height: '100%' }}>
-                {boardViewReady && (
-                  <BoardViewTabs
-                    order={boardTabOrder}
-                    view={boardView}
-                    onPick={pickBoardView}
-                    onReorder={canManageBoard ? setBoardTabOrder : undefined}
-                  />
-                )}
-                <PanelGroup
-                  id="canvas-session"
-                  direction="horizontal"
-                  style={{ flex: 1, minHeight: 0 }}
-                  onLayout={(sizes) => {
-                    // Persist only user drag updates so panel open/close and
-                    // programmatic restores do not overwrite the user's preference.
-                    // sizes[1] is content-relative (react-resizable-panels sizes
-                    // panels relative to their own PanelGroup) — convert back to
-                    // viewport-relative before persisting, matching the frame
-                    // sessionPanelSize is stored in.
-                    if (
-                      effectiveSelectedSessionId &&
-                      rightPanelResizeDraggingRef.current &&
-                      sizes.length === 2
-                    ) {
-                      const viewportRelativeSize = toViewportRelativePercent(
-                        sizes[1],
-                        contentPanelWidthPercent
-                      );
-                      setSessionPanelSize(
-                        clampPercent(
-                          viewportRelativeSize,
-                          sessionPanelMinSize,
-                          SESSION_PANEL_MAX_SIZE_PERCENT
+              <BoardViewArea
+                shell={boardView}
+                sessionPanel={{
+                  size: sessionPanelSizeWithinContent,
+                  minSize: sessionPanelMinSizeWithinContent,
+                  maxSize: sessionPanelMaxSizeWithinContent,
+                }}
+                // Sizes here are content-relative (react-resizable-panels sizes panels
+                // relative to their own PanelGroup); convert back to viewport-relative
+                // before persisting, matching the frame sessionPanelSize is stored in.
+                onSessionPanelResize={
+                  effectiveSelectedSessionId
+                    ? (size) =>
+                        setSessionPanelSize(
+                          clampPercent(
+                            toViewportRelativePercent(size, contentPanelWidthPercent),
+                            sessionPanelMinSize,
+                            SESSION_PANEL_MAX_SIZE_PERCENT
+                          )
                         )
-                      );
-                    }
-                  }}
-                >
-                  <Panel
-                    id="canvas-panel"
-                    order={1}
-                    ref={canvasPanelRef}
-                    defaultSize={
-                      isChat
-                        ? 0
-                        : sessionPanelTargetOpen
-                          ? 100 - sessionPanelSizeWithinContent
-                          : 100
-                    }
-                    minSize={CANVAS_MIN_SIZE_PERCENT}
-                    // Only Chat collapses the canvas; on Board it keeps its minimum.
-                    collapsible={isChat}
-                    collapsedSize={0}
-                  >
-                    <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
-                      {isTeammatesPath ? (
-                        <TeammatesDirectory
-                          client={client}
-                          currentUser={user}
-                          checkAccess={canCreateSessions}
-                          onOpenBoard={handleHomeBoardClick}
-                          onBack={handleTeammatesBack}
-                        />
-                      ) : isHomeSurface ? (
-                        <HomePage
-                          client={client}
-                          currentUser={user}
-                          recentBoardIds={recentBoardIds}
-                          onBoardClick={handleHomeBoardClick}
-                          onBranchClick={handleHomeBranchClick}
-                          onSessionClick={handleSessionClick}
-                          onCreateSession={canCreateSessions ? stableOnCreateSession : undefined}
-                          onOpenCreateDialog={createFlows.openCreate}
-                          onOpenSettings={openSettings}
-                          onSeeAllTeammates={handleSeeAllTeammates}
-                        />
-                      ) : canvasMounted ? (
-                        <SessionCanvas
-                          ref={sessionCanvasRef}
-                          board={currentBoard || null}
-                          client={client}
-                          branches={boardBranches}
-                          primaryTeammateId={primaryTeammateId}
-                          currentUserId={user?.user_id}
-                          selectedSessionId={effectiveSelectedSessionId}
-                          activeUrlTargetBranchId={canvasTargetBranchId}
-                          activeUrlTargetArtifactId={activeUrlTargetArtifactId}
-                          hidden={isChat}
-                          highlightTip={canvasHighlightTip}
-                          onDismissHighlightTip={clearBoardHighlight}
-                          availableAgents={availableAgents}
-                          onSessionClick={handleSessionClick}
-                          onSessionUpdate={stableOnSessionUpdate}
-                          onSessionDelete={stableOnSessionDelete}
-                          onForkSession={stableOnForkSession}
-                          onSpawnSession={stableOnSpawnSession}
-                          onUpdateSessionMcpServers={stableOnUpdateSessionMcpServers}
-                          onOpenSettings={setSessionSettingsId}
-                          onCreateSessionForBranch={handleQuickStartSession}
-                          onOpenBranch={setBranchModalBranchId}
-                          onArchiveOrDeleteBranch={stableOnArchiveOrDeleteBranch}
-                          onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
-                          onStartEnvironment={stableOnStartEnvironment}
-                          onStopEnvironment={stableOnStopEnvironment}
-                          onViewLogs={setLogsModalBranchId}
-                          onNukeEnvironment={stableOnNukeEnvironment}
-                          onOpenCommentsPanel={handleOpenCommentsPanel}
-                          onCommentHover={setHoveredCommentId}
-                          onCommentSelect={handleCommentSelect}
-                        />
-                      ) : null}
-                      {!isHomeSurface && !sessionPanelTargetOpen && sessionTabIds.length > 0 && (
-                        <div
-                          style={{
-                            position: 'absolute',
-                            top: token.marginSM,
-                            right: token.marginSM,
-                            zIndex: 10,
-                          }}
-                        >
-                          <OpenSessionsButton
-                            ids={sessionTabIds}
-                            tooltip="Show sessions"
-                            icon={<DoubleLeftOutlined />}
-                            onClick={handleShowSessionTabs}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </Panel>
-                  {(sessionPanelTargetOpen || !eventStreamPanelCollapsed || isChat) && (
-                    <>
-                      <PanelResizeHandle
-                        disabled={isChat}
-                        style={{
-                          width: isChat ? 0 : '4px',
-                          background: token.colorBorderSecondary,
-                          cursor: 'col-resize',
-                          transition: 'background 0.2s',
-                        }}
-                        onDragging={(isDragging) => {
-                          rightPanelResizeDraggingRef.current = isDragging;
-                        }}
-                        onMouseEnter={(e) => {
-                          (e.currentTarget as unknown as HTMLDivElement).style.background =
-                            token.colorPrimary;
-                        }}
-                        onMouseLeave={(e) => {
-                          (e.currentTarget as unknown as HTMLDivElement).style.background =
-                            token.colorBorderSecondary;
-                        }}
+                    : undefined
+                }
+                canvas={
+                  <>
+                    {isTeammatesPath ? (
+                      <TeammatesDirectory
+                        client={client}
+                        currentUser={user}
+                        checkAccess={canCreateSessions}
+                        onOpenBoard={handleHomeBoardClick}
+                        onBack={handleTeammatesBack}
                       />
-                      <Panel
-                        id="session-panel"
-                        order={2}
-                        ref={sessionPanelRef}
-                        defaultSize={isChat ? 100 : sessionPanelSizeWithinContent}
-                        minSize={isChat ? 0 : sessionPanelMinSizeWithinContent}
-                        maxSize={isChat ? 100 : sessionPanelMaxSizeWithinContent}
+                    ) : isHomeSurface ? (
+                      <HomePage
+                        client={client}
+                        currentUser={user}
+                        recentBoardIds={recentBoardIds}
+                        onBoardClick={handleHomeBoardClick}
+                        onBranchClick={handleHomeBranchClick}
+                        onSessionClick={handleSessionClick}
+                        onCreateSession={canCreateSessions ? stableOnCreateSession : undefined}
+                        onOpenCreateDialog={createFlows.openCreate}
+                        onOpenSettings={openSettings}
+                        onSeeAllTeammates={handleSeeAllTeammates}
+                      />
+                    ) : boardView.canvasMounted ? (
+                      <SessionCanvas
+                        ref={sessionCanvasRef}
+                        board={currentBoard || null}
+                        client={client}
+                        branches={boardBranches}
+                        primaryTeammateId={primaryTeammateId}
+                        currentUserId={user?.user_id}
+                        selectedSessionId={effectiveSelectedSessionId}
+                        activeUrlTargetBranchId={
+                          activeUrlTargetBranchId ?? boardView.highlightBranchId
+                        }
+                        activeUrlTargetArtifactId={activeUrlTargetArtifactId}
+                        hidden={isChat}
+                        highlightTip={boardView.highlightTip}
+                        onDismissHighlightTip={boardView.clearHighlight}
+                        availableAgents={availableAgents}
+                        onSessionClick={handleSessionClick}
+                        onSessionUpdate={stableOnSessionUpdate}
+                        onSessionDelete={stableOnSessionDelete}
+                        onForkSession={stableOnForkSession}
+                        onSpawnSession={stableOnSpawnSession}
+                        onUpdateSessionMcpServers={stableOnUpdateSessionMcpServers}
+                        onOpenSettings={setSessionSettingsId}
+                        onCreateSessionForBranch={handleQuickStartSession}
+                        onOpenBranch={setBranchModalBranchId}
+                        onArchiveOrDeleteBranch={stableOnArchiveOrDeleteBranch}
+                        onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
+                        onStartEnvironment={stableOnStartEnvironment}
+                        onStopEnvironment={stableOnStopEnvironment}
+                        onViewLogs={setLogsModalBranchId}
+                        onNukeEnvironment={stableOnNukeEnvironment}
+                        onOpenCommentsPanel={handleOpenCommentsPanel}
+                        onCommentHover={setHoveredCommentId}
+                        onCommentSelect={handleCommentSelect}
+                      />
+                    ) : null}
+                    {!isHomeSurface && !sessionPanelTargetOpen && sessionTabIds.length > 0 && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: token.marginSM,
+                          right: token.marginSM,
+                          zIndex: 10,
+                        }}
                       >
-                        {effectiveSelectedSessionId ? (
-                          <Flex vertical style={{ height: '100%' }}>
-                            {hasSessionTabs && (
-                              <SessionTabs
-                                ids={sessionTabIds}
-                                selectedId={effectiveSelectedSessionId}
-                                onSelect={handleSessionClick}
-                                onClose={closeSessionTab}
-                                onCloseOthers={closeOtherSessionTabs}
-                                onHide={isChat ? undefined : handleCloseSessionPanel}
-                              />
-                            )}
-                            <div style={{ flex: 1, minHeight: 0 }}>
-                              <SessionPanel
-                                client={client}
-                                session={selectedSession}
-                                branch={selectedSessionBranch}
-                                currentUserId={user?.user_id}
-                                sessionMcpServerIds={selectedSessionMcpServerIds}
-                                sessionMcpLoadFailed={sessionMcpLoadFailed}
-                                onSessionMcpRetry={retrySessionMcpLoad}
-                                open={!!effectiveSelectedSessionId}
-                                onClose={handleCloseSelectedSessionTab}
-                                closesTab={hasSessionTabs}
-                                onCloseOtherTabs={
-                                  hasSessionTabs ? handleCloseOtherSelectedSessionTabs : undefined
-                                }
-                                showBranchStrip={!isChat}
-                                onShowOnBoard={isChat ? handleShowBranchOnBoard : undefined}
-                                composerPlaceholder={chatComposerPlaceholder}
-                                uploadPolicy={uploadPolicy}
-                              />
-                            </div>
-                          </Flex>
-                        ) : pendingToolChoiceBranchId ? (
-                          <PendingToolChoicePanel
-                            branch={pendingToolChoiceBranch}
-                            availableAgents={availableAgents}
-                            onChoose={async (tool) => {
-                              await chooseAgenticTool(pendingToolChoiceBranchId, tool);
-                            }}
-                            onClose={handleCloseSessionPanel}
-                            onAdvancedSetup={() => {
-                              setNewSessionBranchId(pendingToolChoiceBranchId);
-                              setPendingToolChoiceBranchId(null);
-                            }}
-                          />
-                        ) : isChat ? (
-                          <ChatEmptyState
-                            client={client}
-                            currentUser={user}
-                            teammate={primaryTeammateBranch ?? null}
-                            teammateLoading={
-                              !!currentBoard?.primary_teammate_id &&
-                              !primaryTeammateBranch &&
-                              !primaryTeammateInaccessible
-                            }
-                            teammateInaccessible={!!primaryTeammateInaccessible}
-                            onCreateSession={canCreateSessions ? stableOnCreateSession : undefined}
-                            onOpenSession={handleSessionClick}
-                            onCreateTeammate={
-                              canCreateBoardTeammate
-                                ? createFlows.openCreateBoardTeammate
-                                : undefined
-                            }
-                          />
-                        ) : (
-                          <EventStreamPanel
-                            collapsed={false}
-                            onToggleCollapse={() => setEventStreamPanelCollapsed(true)}
-                            events={events}
-                            onClear={clearEvents}
-                            currentUserId={user?.user_id}
-                            selectedSessionId={effectiveSelectedSessionId}
-                            currentBoard={currentBoard}
-                            client={client}
-                            branchActions={eventStreamBranchActions}
-                          />
-                        )}
-                      </Panel>
-                    </>
-                  )}
-                </PanelGroup>
-              </Flex>
+                        <OpenSessionsButton
+                          ids={sessionTabIds}
+                          tooltip="Show sessions"
+                          icon={<DoubleLeftOutlined />}
+                          onClick={handleShowSessionTabs}
+                        />
+                      </div>
+                    )}
+                  </>
+                }
+                conversation={
+                  effectiveSelectedSessionId ? (
+                    <Flex vertical style={{ height: '100%' }}>
+                      {hasSessionTabs && (
+                        <SessionTabs
+                          ids={sessionTabIds}
+                          selectedId={effectiveSelectedSessionId}
+                          onSelect={handleSessionClick}
+                          onClose={closeSessionTab}
+                          onCloseOthers={closeOtherSessionTabs}
+                          onHide={isChat ? undefined : handleCloseSessionPanel}
+                        />
+                      )}
+                      <div style={{ flex: 1, minHeight: 0 }}>
+                        <SessionPanel
+                          client={client}
+                          session={selectedSession}
+                          branch={selectedSessionBranch}
+                          currentUserId={user?.user_id}
+                          sessionMcpServerIds={selectedSessionMcpServerIds}
+                          sessionMcpLoadFailed={sessionMcpLoadFailed}
+                          onSessionMcpRetry={retrySessionMcpLoad}
+                          open={!!effectiveSelectedSessionId}
+                          onClose={handleCloseSelectedSessionTab}
+                          closesTab={hasSessionTabs}
+                          onCloseOtherTabs={
+                            hasSessionTabs ? handleCloseOtherSelectedSessionTabs : undefined
+                          }
+                          uploadPolicy={uploadPolicy}
+                        />
+                      </div>
+                    </Flex>
+                  ) : pendingToolChoiceBranchId ? (
+                    <PendingToolChoicePanel
+                      branch={pendingToolChoiceBranch}
+                      availableAgents={availableAgents}
+                      onChoose={async (tool) => {
+                        await chooseAgenticTool(pendingToolChoiceBranchId, tool);
+                      }}
+                      onClose={handleCloseSessionPanel}
+                      onAdvancedSetup={() => {
+                        setNewSessionBranchId(pendingToolChoiceBranchId);
+                        setPendingToolChoiceBranchId(null);
+                      }}
+                    />
+                  ) : isChat ? (
+                    <ChatEmptyState
+                      client={client}
+                      currentUser={user}
+                      teammate={primaryTeammateBranch ?? null}
+                      teammateLoading={
+                        !!currentBoard?.primary_teammate_id &&
+                        !primaryTeammateBranch &&
+                        !primaryTeammateInaccessible
+                      }
+                      teammateInaccessible={!!primaryTeammateInaccessible}
+                      onCreateSession={canCreateSessions ? stableOnCreateSession : undefined}
+                      onOpenSession={handleSessionClick}
+                      onCreateTeammate={
+                        boardView.canManage && !currentBoard?.primary_teammate_id
+                          ? createFlows.openCreateBoardTeammate
+                          : undefined
+                      }
+                    />
+                  ) : !eventStreamPanelCollapsed ? (
+                    <EventStreamPanel
+                      collapsed={false}
+                      onToggleCollapse={() => setEventStreamPanelCollapsed(true)}
+                      events={events}
+                      onClear={clearEvents}
+                      currentUserId={user?.user_id}
+                      selectedSessionId={effectiveSelectedSessionId}
+                      currentBoard={currentBoard}
+                      client={client}
+                      branchActions={eventStreamBranchActions}
+                    />
+                  ) : null
+                }
+              />
             </Panel>
           </PanelGroup>
         </Content>

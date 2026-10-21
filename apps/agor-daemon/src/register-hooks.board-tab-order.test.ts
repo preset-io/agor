@@ -14,7 +14,7 @@ import type { RegisterHooksContext } from './register-hooks.js';
 const zone = { type: 'zone', x: 0, y: 0, width: 400, height: 300, label: 'Ready' } as BoardObject;
 
 dbTest(
-  'setTabOrder needs board.edit, validates the list, writes only tab_order and emits boards patched',
+  'setTabOrder needs board.edit, normalizes the list, writes only tab_order and emits boards patched',
   async ({ db: rawDb }) => {
     const users = new UsersRepository(rawDb);
     const owner = await users.create({ email: 'owner@example.test', role: 'member' });
@@ -69,18 +69,15 @@ dbTest(
       expect(denied.status).toBe(403);
       expect((await boards.findById(board.board_id))?.tab_order).toBeUndefined();
 
-      for (const bad of [
-        ['chat', 'board'],
-        ['chat', 'chat', 'board'],
-        ['chat', 'board', 'x'],
-        'chat',
-      ]) {
+      for (const bad of ['chat', { chat: 0 }, null]) {
         const rejected = await setTabOrder(editor.user_id, bad);
         expect(rejected.status).toBe(400);
       }
       expect(patched).toHaveLength(0);
 
-      const allowed = await setTabOrder(editor.user_id, ['chat', 'board', 'files']);
+      // An older or newer UI's list is normalized: duplicates and unknown views dropped,
+      // missing views appended.
+      const allowed = await setTabOrder(editor.user_id, ['chat', 'chat', 'canvas']);
       expect(allowed.status, await allowed.clone().text()).toBe(200);
       await expect(allowed.json()).resolves.toMatchObject({
         tab_order: ['chat', 'board', 'files'],
