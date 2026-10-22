@@ -31,6 +31,22 @@ describe('useUserLocalStorage', () => {
     expect(result.current[0]).toBe(55);
   });
 
+  it("returns the new key's value in the render that changes the key", () => {
+    localStorage.setItem('agor:user:a:view:b1', '"chat"');
+    localStorage.setItem('agor:user:a:view:b2', '"board"');
+    const seen: string[] = [];
+    const { rerender } = renderHook(
+      ({ key }) => {
+        const [value] = useUserLocalStorage('a', key, 'none');
+        seen.push(`${key}=${value}`);
+      },
+      { initialProps: { key: 'view:b1' } }
+    );
+    rerender({ key: 'view:b2' });
+    expect(seen.filter((entry) => entry.startsWith('view:b2'))).not.toContain('view:b2=chat');
+    expect(seen.at(-1)).toBe('view:b2=board');
+  });
+
   it('does not write a shared value before a user id is available', () => {
     const { result } = renderHook(() => useUserLocalStorage(undefined, 'panel:left:size', 24));
 

@@ -20,7 +20,7 @@ import type {
   SessionID,
   UUID,
 } from '@agor/core/types';
-import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, like, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId, isValidUUID } from '../../lib/ids';
 import { canonicalizeAgorGrants } from '../../types/artifact-grants';
@@ -47,6 +47,25 @@ function canonicalGrantsOrUndefined(input: unknown): AgorGrants | undefined {
 
 function canonicalGrantsOrNull(input: unknown): AgorGrants | null {
   return canonicalGrantsOrUndefined(input) ?? null;
+}
+
+/**
+ * Who may see an artifact's payload: anyone if it is public, else only the
+ * person who made it. No role bypasses it. `isArtifactVisibleTo` is the same
+ * rule for a row already read.
+ */
+export function visibleArtifactCondition(userId: string): SQL {
+  return or(eq(artifacts.public, true), eq(artifacts.created_by, userId)) as SQL;
+}
+
+/** `visibleArtifactCondition` for an artifact already read. */
+export function isArtifactVisibleTo(
+  artifact: Pick<Artifact, 'public' | 'created_by'>,
+  userId?: string
+): boolean {
+  if (artifact.public) return true;
+  if (!userId || !artifact.created_by) return false;
+  return artifact.created_by === userId;
 }
 
 export type ArtifactListProjection = 'full' | 'without-files' | 'metadata';
@@ -351,6 +370,9 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    *   visible to this user under branch RBAC, pushed down as a correlated SQL
    *   EXISTS instead of a preloaded `branch_id IN (...)` list. Null-branch
    *   artifacts are excluded, matching the existing RBAC find-hook behavior.
+   * @param filter.source_session_id - Only artifacts this conversation made.
+   * @param filter.readableBy - Only artifacts this user may see
+   *   (`visibleArtifactCondition`); `find()` does not apply the private rule.
    * @param filter.projection - Exclude source/runtime JSON columns from the SQL
    *   select when a list caller explicitly requested a lean response.
    */
@@ -359,6 +381,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
     archived?: boolean;
     branchIds?: BranchID[];
     visibleToUserId?: UUID;
+    source_session_id?: SessionID;
+    readableBy?: UUID;
     projection?: ArtifactListProjection;
   }): Promise<Artifact[]> {
     try {
@@ -383,6 +407,10 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
           visibleBranchReferenceAccessExists(this.db, filter.visibleToUserId, artifacts.branch_id)
         );
       }
+      if (filter?.source_session_id) {
+        conditions.push(eq(artifacts.source_session_id, filter.source_session_id));
+      }
+      if (filter?.readableBy) conditions.push(visibleArtifactCondition(filter.readableBy));
 
       const predicate = conditions.length > 0 ? and(...conditions) : undefined;
       const projection = filter?.projection ?? 'full';
@@ -412,9 +440,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    */
   async findVisible(userId: string, options?: { limit?: number }): Promise<Artifact[]> {
     try {
-      let query = select(this.db)
-        .from(artifacts)
-        .where(or(eq(artifacts.public, true), eq(artifacts.created_by, userId))!);
+      let query = select(this.db).from(artifacts).where(visibleArtifactCondition(userId));
 
       if (options?.limit) {
         query = query.limit(options.limit);
@@ -457,10 +483,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         conditions.push(eq(artifacts.archived, options.archived));
       }
 
-      // Visibility filtering: public artifacts + private artifacts owned by the user
-      if (options?.userId) {
-        conditions.push(or(eq(artifacts.public, true), eq(artifacts.created_by, options.userId))!);
-      }
+      if (options?.userId) conditions.push(visibleArtifactCondition(options.userId));
 
       let query = select(this.db)
         .from(artifacts)

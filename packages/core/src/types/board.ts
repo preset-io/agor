@@ -234,6 +234,33 @@ export interface TeammateWelcomeNoteRequest {
   teammateEmoji?: string | null;
 }
 
+/**
+ * The tabs over a board's main area. Every board stores all of them in its
+ * `tab_order`, even ones the UI does not show yet.
+ */
+export const BOARD_VIEWS = ['chat', 'board', 'files'] as const;
+export type BoardView = (typeof BOARD_VIEWS)[number];
+/** Boards without a stored order open on Board. */
+export const DEFAULT_BOARD_TAB_ORDER: readonly BoardView[] = ['board', 'chat', 'files'];
+/** New teammate boards open on Chat. */
+export const TEAMMATE_BOARD_TAB_ORDER: readonly BoardView[] = ['chat', 'board', 'files'];
+
+const isBoardView = (value: unknown): value is BoardView =>
+  (BOARD_VIEWS as readonly unknown[]).includes(value);
+
+/** Known views in stored order, deduplicated, with missing views appended in default order. */
+export function normalizeBoardTabOrder(value: unknown): BoardView[] {
+  const stored = Array.isArray(value) ? value.filter(isBoardView) : [];
+  return [...new Set([...stored, ...DEFAULT_BOARD_TAB_ORDER])];
+}
+
+/** The board's normalized tab_order, or the default. */
+export function resolveBoardTabOrder(
+  board: Pick<Board, 'tab_order'> | null | undefined
+): BoardView[] {
+  return normalizeBoardTabOrder(board?.tab_order);
+}
+
 export type BoardAccessMode = 'private' | 'shared';
 export type BoardDefaultFsAccess = 'none' | 'read' | 'write';
 
@@ -322,6 +349,13 @@ export interface Board {
    * Access in templates: {{ board.context.team }}
    */
   custom_context?: Record<string, unknown>;
+
+  /**
+   * Order of the tabs over the board's main area, shared by everyone. The
+   * first one is where the board opens. Absent means `DEFAULT_BOARD_TAB_ORDER`.
+   * Written only through the boards patch `_action: 'setTabOrder'`.
+   */
+  tab_order?: BoardView[];
 
   /**
    * External/user-facing URL for viewing this board in the UI.
@@ -426,4 +460,6 @@ export interface BoardExportBlob {
 
   // Custom context for templates
   custom_context?: Record<string, unknown>;
+
+  tab_order?: BoardView[];
 }

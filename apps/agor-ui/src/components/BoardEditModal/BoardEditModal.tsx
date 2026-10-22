@@ -1,15 +1,18 @@
-import type {
-  AgorClient,
-  Board,
-  BoardCapabilityPolicies,
-  CapabilityPolicyWorkspacePreferences,
-  EffectiveCapabilityPolicyAccess,
-  Group,
-  User,
+import {
+  type AgorClient,
+  type Board,
+  type BoardCapabilityPolicies,
+  type BoardView,
+  type CapabilityPolicyWorkspacePreferences,
+  type EffectiveCapabilityPolicyAccess,
+  type Group,
+  resolveBoardTabOrder,
+  type User,
 } from '@agor-live/client';
 import { Alert, Form, Modal, Skeleton } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
+import { saveBoardTabOrder } from '../../hooks/useBoardTabOrder';
 import { useAgorStore } from '../../store/agorStore';
 import { selectUserById } from '../../store/selectors';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
@@ -58,6 +61,8 @@ export function BoardEditModal({
     null
   );
   const [loadedBoard, setLoadedBoard] = useState<Board | null>(null);
+  // Compared with the order the modal opened with; realtime reorders do not reset it.
+  const [tabOrder, setTabOrder] = useState<BoardView[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const permissionUsers = useMemo(() => {
@@ -137,6 +142,7 @@ export function BoardEditModal({
           custom_css: fresh.custom_css,
           custom_context: fresh.custom_context ? JSON.stringify(fresh.custom_context, null, 2) : '',
         });
+        setTabOrder(resolveBoardTabOrder(fresh));
         // Expose the loaded board last: this is what un-gates the form render.
         setLoadedBoard(fresh);
       } catch (error) {
@@ -171,11 +177,22 @@ export function BoardEditModal({
     setLoadedPolicy(saved);
   };
 
+  const tabOrderChanged = () =>
+    !!loadedBoard && tabOrder.join(',') !== resolveBoardTabOrder(loadedBoard).join(',');
+
+  // Sent only when the person changed the order, through the same narrow write as the tab row.
+  const syncTabOrder = async () => {
+    if (!client || !board || !tabOrderChanged()) return;
+    await saveBoardTabOrder(client, board.board_id, tabOrder);
+  };
+
   // Unsaved-changes guard for the drill-in: form values vs the loaded board
   // (covers programmatic edits such as background presets) or a policy draft.
   const isFormDirty = useDrillFormDraft(form, loadedBoard);
   const isDirty = () =>
-    isFormDirty() || (policy !== null && JSON.stringify(policy) !== JSON.stringify(loadedPolicy));
+    isFormDirty() ||
+    tabOrderChanged() ||
+    (policy !== null && JSON.stringify(policy) !== JSON.stringify(loadedPolicy));
 
   const close = () => {
     form.resetFields();
@@ -192,6 +209,7 @@ export function BoardEditModal({
         extractBoardFormValues(form, { includeLegacyPermissions: false })
       );
       if (updated === false) return;
+      await syncTabOrder();
       await syncPermissions();
       close();
     } catch (error) {
@@ -216,6 +234,8 @@ export function BoardEditModal({
         form={form}
         backgroundResetSignal={loadedBoard.board_id}
         canEditGeneral={canEditGeneral}
+        tabOrder={tabOrder}
+        onTabOrderChange={setTabOrder}
         capabilityPolicyEditor={
           policy ? (
             <BoardCapabilityPolicyModalEditor

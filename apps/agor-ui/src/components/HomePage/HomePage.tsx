@@ -35,6 +35,7 @@ import {
   selectMySessionsLoaded,
   selectMySessionsTruncated,
 } from '../../store/userScope';
+import { firstNameOf } from '../../utils/firstName';
 import { useThemedMessage } from '../../utils/message';
 import { runWithLimit } from '../../utils/promisePool';
 import {
@@ -417,7 +418,7 @@ export const HomePage = memo(function HomePage({
     [onSeeAllSessions]
   );
 
-  const firstName = currentUser?.name?.trim().split(/\s+/)[0] || 'there';
+  const firstName = firstNameOf(currentUser);
   // Waits for hydration so returning users never see it flash on a cold load.
   const onboarding = hydrated && !onboardingHidden && onOpenSettings && !buckets.hasSessions && (
     <HomeOnboarding

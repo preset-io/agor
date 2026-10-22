@@ -19,6 +19,7 @@ import {
   hasFullSessionDetails,
   hasMinimumRole,
   isAgenticToolName,
+  isTeammate,
   mapToCodexPermissionConfig,
   ROLES,
   SessionStatus,
@@ -26,6 +27,7 @@ import {
 } from '@agor-live/client';
 import {
   AimOutlined,
+  BranchesOutlined,
   CloseOutlined,
   CodeOutlined,
   DownOutlined,
@@ -55,6 +57,7 @@ import {
 import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
+import { useBoardViewContext } from '../../contexts/BoardViewContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useIsTouchInput } from '../../hooks/useCanHover';
@@ -90,6 +93,7 @@ import {
 } from '../../utils/promptDrafts';
 import { describeSessionStatus } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
+import { teammateLabel } from '../../utils/teammateLabels';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { FileUpload } from '../FileUpload';
@@ -408,6 +412,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const { showInfo, showError, showWarning } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const recenterMap = useRecenterMap();
+  // The board's Chat tab: no branch strip, "Show on board" in the ⋯ menu, and a
+  // teammate's conversations address the teammate by name.
+  const boardView = useBoardViewContext();
+  const inChat = boardView?.view === 'chat';
+  // Where Close and Escape in the preview return focus after "Branch details".
+  const moreActionsButtonRef = React.useRef<HTMLButtonElement>(null);
+  const composerPlaceholder =
+    inChat && branch && isTeammate(branch) ? `Message ${teammateLabel(branch)}…` : undefined;
 
   // Subscribe only to the entity families this panel needs via narrow store
   // selectors. SessionPanel intentionally does NOT subscribe to live (sessions
@@ -915,10 +927,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             isMobileShell
               ? isRunning
                 ? 'Queue here…'
-                : 'Prompt here…'
+                : (composerPlaceholder ?? 'Prompt here…')
               : isRunning
                 ? 'Queue here… @ for mentions, : for emoji'
-                : 'Prompt here… @ for mentions, : for emoji'
+                : (composerPlaceholder ?? 'Prompt here… @ for mentions, : for emoji')
           }
           autoSize={{ minRows: 1, maxRows: isMobileShell ? 5 : 10 }}
           client={client}
@@ -972,6 +984,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     handleHasInputChange,
     stableFooterHandlers,
     token.borderRadius,
+    composerPlaceholder,
   ]);
 
   // When there's no session, render nothing (panel is collapsed to zero).
@@ -1009,6 +1022,21 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
   const moreMenuItems: MenuProps['items'] = [
+    // Chat hides the branch strip; its summary opens in the preview instead.
+    ...(inChat && showCenterMap && branch
+      ? [
+          {
+            key: 'branch-details',
+            icon: <BranchesOutlined />,
+            label: 'Branch details',
+            onClick: () =>
+              boardView.openPreview(
+                { kind: 'branch', id: branch.branch_id, fromSessionId: session.session_id },
+                { returnFocus: moreActionsButtonRef.current }
+              ),
+          },
+        ]
+      : []),
     ...(onCloseOtherTabs
       ? [
           {
@@ -1022,12 +1050,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       : []),
     ...(showCenterMap && branch
       ? [
-          {
-            key: 'center-map',
-            icon: <AimOutlined />,
-            label: 'Center map on branch',
-            onClick: () => recenterMap(branch.branch_id, { boardId: branch.board_id ?? undefined }),
-          },
+          inChat
+            ? {
+                key: 'show-on-board',
+                icon: <AimOutlined />,
+                label: 'Show on board',
+                onClick: () => boardView.showOnBoard(branch.branch_id),
+              }
+            : {
+                key: 'center-map',
+                icon: <AimOutlined />,
+                label: 'Center map on branch',
+                onClick: () =>
+                  recenterMap(branch.branch_id, { boardId: branch.board_id ?? undefined }),
+              },
         ]
       : []),
     ...(onOpenTerminal && branch
@@ -1731,6 +1767,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
                 <Button
+                  ref={moreActionsButtonRef}
                   type="text"
                   aria-label="More actions"
                   icon={<EllipsisOutlined />}
@@ -1940,6 +1977,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             onSpawnModalConfirm={handleSpawnModalConfirm}
             inputValueRef={inputValueRef}
             isOpen={open}
+            showBranchStrip={!inChat}
           />
         </div>
 

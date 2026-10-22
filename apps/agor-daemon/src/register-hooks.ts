@@ -110,6 +110,7 @@ import {
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
   hasMinimumRole,
+  normalizeBoardTabOrder,
   ROLES,
   SCHEDULE_CREATE_WRITE_FIELDS,
   SCHEDULE_PATCH_WRITE_FIELDS,
@@ -142,6 +143,7 @@ import {
   publicBoardCommentPatchInput,
   rejectPublicBoardCommentUpdate,
 } from './services/board-comments.js';
+import { BOARD_FILES_SERVICE_PATH } from './services/board-files.js';
 import { CODEX_AUTH_DEFER_USER_REALTIME } from './services/codex-auth-shared.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
@@ -499,6 +501,7 @@ export const AUTHENTICATED_RBAC_SERVICE_PATHS = [
   'boards/:id/permissions',
   'boards/:id/effective-access',
   'boards/:id/aligned-branches',
+  BOARD_FILES_SERVICE_PATH,
   'workspace-preferences',
 ] as const;
 
@@ -3902,6 +3905,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             return context;
           }
 
+          if (_action === 'setTabOrder') {
+            if (!context.id) throw new Error('Board ID required');
+            const { tab_order } = contextData as UnknownJson;
+            if (!Array.isArray(tab_order)) throw new BadRequest('tab_order must be a list');
+            // Normalized rather than validated, so an older or newer cached UI never gets a 400.
+            // Setting the result skips the generic patch; Feathers' event hook then
+            // emits the one `boards patched` event every viewer receives.
+            context.result = await boardsService!.setTabOrder(
+              context.id as string,
+              normalizeBoardTabOrder(tab_order)
+            );
+            return context;
+          }
+
           if (_action === 'deleteZone' && objectId) {
             if (!context.id) throw new Error('Board ID required');
             const result = await boardsService!.deleteZone(
@@ -4017,6 +4034,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
     // biome-ignore lint/suspicious/noExplicitAny: Custom service methods not in default hook map
   } as any);
+
+  // The board's Files list reads only what the caller may see; viewing the board comes first.
+  safeService(BOARD_FILES_SERVICE_PATH)?.hooks({
+    before: { find: [ensureCanViewBoard('view files on this board')] },
+  });
 
   // ============================================================================
   // Board archive/unarchive routes (hooks only — services registered elsewhere)

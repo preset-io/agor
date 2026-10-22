@@ -12,6 +12,7 @@ import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../
 import { makeLatestOwnSessionSelector, makeTeammatesSelector } from '../../store/selectors';
 import { isComposerSendKey } from '../../utils/composerKeys';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { NEW_USER_PROMPTS } from '../../utils/starterPrompts';
 import { teammateEmoji, teammateLabel, teammateOption } from '../../utils/teammateLabels';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
@@ -26,13 +27,6 @@ import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { HomeList, HomePressable } from './HomeRow';
 import { HomeCard, HomeLink, HomeSectionError, HomeSheet, useHomeCompact } from './HomeSection';
 import { HOME_ASK_TARGET_MAX_WIDTH } from './homeLayout';
-
-// Starters for new users only; returning users get the placeholder.
-const NEW_USER_PROMPTS = [
-  { label: 'What can you help me with?', short: 'What can you do?' },
-  { label: 'Help me set up my first board', short: 'Set up a board' },
-  { label: 'How do I talk to you from Slack?', short: 'Use Slack' },
-];
 
 const NO_TEAMMATES: Branch[] = [];
 const noTeammates = () => NO_TEAMMATES;
@@ -357,6 +351,7 @@ export const HomeAskBox = memo(function HomeAskBox({
             />
           </Flex>
         )}
+        {/* Starters for new users only; returning users get the placeholder. */}
         {!hasSessions && (
           <Flex align="center" gap={token.marginXS} wrap>
             {NEW_USER_PROMPTS.map((suggestion) => (

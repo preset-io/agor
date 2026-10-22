@@ -154,4 +154,55 @@ describe('ArtifactSandpackErrorReporter', () => {
       error: mock.sandpack.error,
     });
   });
+  describe('runtime ownership hand-off', () => {
+    function Copies({ preview }: { preview: boolean }) {
+      return (
+        <>
+          <ArtifactSandpackErrorReporter
+            artifactId="artifact-a"
+            contentHash="revision-a"
+            enabled={!preview}
+          />
+          {preview && (
+            <ArtifactSandpackErrorReporter artifactId="artifact-a" contentHash="revision-a" />
+          )}
+        </>
+      );
+    }
+
+    it('republishes the canvas state when it regains ownership from a closed preview', async () => {
+      const { rerender } = render(<Copies preview={false} />);
+      emit({ type: 'done', compilatonError: false });
+      await flush();
+      expect(messages().at(-1)?.compilation_status).toBe('success');
+
+      // The preview takes over before it has compiled and reports pending.
+      rerender(<Copies preview />);
+      await flush();
+      expect(messages().at(-1)?.compilation_status).toBe('pending');
+
+      // Closing it hands ownership back; the canvas payload is unchanged.
+      rerender(<Copies preview={false} />);
+      await flush();
+      expect(messages().at(-1)).toMatchObject({ compilation_status: 'success', error: null });
+    });
+
+    it('does not publish a closed or demoted copy’s throttled report', async () => {
+      const { rerender } = render(<Copies preview={false} />);
+      emit({ type: 'done', compilatonError: false });
+      await flush();
+      const sent = messages().length;
+
+      // Close the preview while its pending report is still throttled.
+      rerender(<Copies preview />);
+      rerender(<Copies preview={false} />);
+      expect(messages()).toHaveLength(sent);
+      await flush();
+      expect(
+        messages()
+          .slice(sent)
+          .map((report) => report.compilation_status)
+      ).toEqual(['success']);
+    });
+  });
 });

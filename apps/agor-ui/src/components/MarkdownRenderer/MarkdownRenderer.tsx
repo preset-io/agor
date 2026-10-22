@@ -299,7 +299,8 @@ const INTERNAL_UPLOAD_MARKDOWN_LINK = new RegExp(
   'g'
 );
 
-function UploadAttachmentLink({
+/** Opens or downloads one upload, re-typed so it can never run as Agor. */
+export function UploadAttachmentLink({
   uploadRef,
   children,
 }: {

@@ -22,7 +22,7 @@ import type {
   User,
   UserPreferences,
 } from '@agor-live/client';
-import { isCanonicalTeammateFrameworkRepo } from '@agor-live/client';
+import { isCanonicalTeammateFrameworkRepo, TEAMMATE_BOARD_TAB_ORDER } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CheckOutlined,
@@ -946,6 +946,8 @@ export function OnboardingWizard({
           board_id: boardId,
           name: name || (user?.name ? `${user.name}'s board` : 'My board'),
           icon: teammateEmoji,
+          // The onboarding teammate's board opens on Chat.
+          tab_order: [...TEAMMATE_BOARD_TAB_ORDER],
         });
       } catch (createError) {
         // The response can fail after the server committed. Resolve the

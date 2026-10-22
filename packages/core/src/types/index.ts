@@ -7,6 +7,7 @@ export * from './artifact';
 export * from './artifact-grants';
 export * from './board';
 export * from './board-comment';
+export * from './board-files';
 export * from './branch';
 export * from './branch-cleanup';
 export * from './branch-deletion';

@@ -23,6 +23,7 @@ import {
   isTeammate,
   OWNERSHIP_TRANSFER_SERVICES,
   resolveRepoCleanupPolicy,
+  TEAMMATE_BOARD_TAB_ORDER,
 } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
@@ -921,6 +922,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               name: teammateConfig.displayName,
               created_by: ctx.userId,
               ...(teammateConfig.emoji ? { icon: teammateConfig.emoji } : {}),
+              // A dedicated teammate board opens on Chat.
+              tab_order: [...TEAMMATE_BOARD_TAB_ORDER],
             } as Partial<Board>,
             ctx.baseServiceParams
           )) as Board;

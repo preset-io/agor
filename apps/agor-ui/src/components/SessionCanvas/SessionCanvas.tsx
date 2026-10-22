@@ -116,6 +116,7 @@ import { ActionErrorNotice } from '../CompactNotice';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import SessionCard from '../SessionCard';
 import { BoardPartitionStatus } from './BoardPartitionStatus';
+import { CanvasNodeTip, type CanvasNodeTipTarget } from './CanvasNodeTip';
 import { AppNode } from './canvas/AppNodeLazy';
 import { ArtifactNode } from './canvas/ArtifactNodeLazy';
 import { CommentNode, ZoneNode } from './canvas/BoardObjectNodes';
@@ -201,6 +202,12 @@ interface SessionCanvasProps {
   height?: React.CSSProperties['height'];
   /** View only (mobile): pan, zoom and open items; no tools, dragging, edits or cursor broadcast. */
   readOnly?: boolean;
+  /** Collapsed out of view (the Chat tab): no first fit and no recenter until shown again. */
+  hidden?: boolean;
+  /** An anchored tip over a node, e.g. after Show on board. */
+  highlightTip?: CanvasNodeTipTarget | null;
+  /** The person panned or clicked the canvas, so the tip has done its job. */
+  onDismissHighlightTip?: () => void;
 }
 
 export interface SessionCanvasRef {
@@ -538,6 +545,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       staticCursorScale,
       height = '100vh',
       readOnly = false,
+      hidden = false,
+      highlightTip,
+      onDismissHighlightTip,
     }: SessionCanvasProps,
     ref
   ) => {
@@ -1370,10 +1380,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // logical `artifact_id` on `data.artifactId`). Rather than thread a
     // boardObjectById lookup through every caller, we accept the logical
     // id and fall back to a `data.artifactId` scan when `getNode` misses.
+    const hiddenRef = useRef(hidden);
+    hiddenRef.current = hidden;
     const recenterOnNode = useCallback(
       (nodeId: string, subTarget?: { sessionId?: string; ensureVisible?: boolean }): boolean => {
         const instance = reactFlowInstanceRef.current;
-        if (!instance) return false;
+        // A collapsed canvas has no viewport to aim at.
+        if (!instance || hiddenRef.current) return false;
         const allNodes = instance.getNodes();
         let node = instance.getNode(nodeId);
         if (!node) {
@@ -1964,8 +1977,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // This ensures nodes are visible when navigating between boards or on initial load,
     // but doesn't disrupt the user's zoom level when comments/zones change
     useEffect(() => {
-      // Wait for ReactFlow to be ready and nodes to be loaded
-      if (!isReactFlowReady || !reactFlowInstanceRef.current || nodes.length === 0) return;
+      // Wait for ReactFlow to be ready and nodes to be loaded, and for the canvas to be shown.
+      if (hidden || !isReactFlowReady || !reactFlowInstanceRef.current || nodes.length === 0) {
+        return;
+      }
 
       // Only fit view once per board - skip if we already fit for this board
       if (board?.board_id === lastFitBoardIdRef.current) return;
@@ -2025,6 +2040,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
       return () => clearTimeout(timer);
     }, [
+      hidden,
       isReactFlowReady,
       nodes.length,
       board?.board_id,
@@ -2032,6 +2048,18 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       consumePendingRecenter,
       recenterOnNode,
     ]);
+
+    // Shown again after the Chat tab: run the recenter asked for while it was
+    // collapsed (Show on board, "go to card"). A board not fitted yet takes it
+    // on its first fit above. Same delay as that fit, so the panel has its size.
+    useEffect(() => {
+      if (hidden || !board?.board_id || board.board_id !== lastFitBoardIdRef.current) return;
+      const timer = setTimeout(() => {
+        const pending = consumePendingRecenter();
+        if (pending) recenterOnNode(pending.nodeId, { sessionId: pending.sessionId });
+      }, 100);
+      return () => clearTimeout(timer);
+    }, [hidden, board?.board_id, consumePendingRecenter, recenterOnNode]);
 
     // Intercept onNodesChange to detect resize events
     const onNodesChange = useCallback(
@@ -3094,6 +3122,20 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }
     }, [canMutateBoard, canMutateComments, activeTool]);
 
+    const handlePaneClickWithTip = useStableCallback((event: React.MouseEvent) => {
+      onDismissHighlightTip?.();
+      handlePaneClick(event);
+    });
+    // A collapsed canvas (Chat tab) has no size on purpose; other errors keep React Flow's dev warning.
+    const handleFlowError = useStableCallback((code: string, message: string) => {
+      if (code === '004' && hiddenRef.current) return;
+      if (import.meta.env.DEV) console.warn(`[React Flow]: ${message}`);
+    });
+    // Programmatic moves (the recenter that placed the tip) carry no event.
+    const handleMoveStart = useStableCallback((event: MouseEvent | TouchEvent | null) => {
+      if (event) onDismissHighlightTip?.();
+    });
+
     return (
       <div
         style={{
@@ -3142,7 +3184,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             onNodeDrag={handleNodeDrag}
             onNodeDragStop={handleNodeDragStop}
             onNodeClick={handleNodeClick}
-            onPaneClick={handlePaneClick}
+            onPaneClick={handlePaneClickWithTip}
+            onMoveStart={handleMoveStart}
+            onError={handleFlowError}
             onInit={(instance) => {
               reactFlowInstanceRef.current = instance;
               setIsReactFlowReady(true);
@@ -3182,6 +3226,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             style={{ background: 'transparent' }}
           >
             {!canvasBackground && <Background />}
+            {highlightTip && !hidden && <CanvasNodeTip tip={highlightTip} />}
             {/* View-only canvas: no edit controls or minimap, not even hidden (the minimap redraws on every pan). */}
             {!readOnly && (
               <Controls

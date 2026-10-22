@@ -1,2 +1,2 @@
 export { MarkdownPreview } from './MarkdownPreview';
-export { MarkdownRenderer } from './MarkdownRenderer';
+export { MarkdownRenderer, UploadAttachmentLink } from './MarkdownRenderer';

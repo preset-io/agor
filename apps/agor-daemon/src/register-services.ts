@@ -214,6 +214,7 @@ import {
 } from './services/artifacts.js';
 import { createBoardBranchMover } from './services/board-branch-move.js';
 import { createBoardCommentsService } from './services/board-comments.js';
+import { setupBoardFilesService } from './services/board-files.js';
 import { createBoardObjectsService } from './services/board-objects.js';
 import { createBoardsService } from './services/boards.js';
 import { createBranchCountsService } from './services/branch-counts.js';
@@ -821,6 +822,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   setupBranchEffectiveAccessService(app, new BranchRepository(db), { allowSuperadmin });
   setupBoardEffectiveAccessService(app, new BoardRepository(db), { allowSuperadmin });
   setupBoardAlignedBranchesService(app, new BranchRepository(db));
+  setupBoardFilesService(app, db, { allowSuperadmin });
   setupBranchFsAccessUsersService(app, new BranchRepository(db));
   setupCapabilityPolicyServices(app, db, { allowSuperadmin });
   setupOwnershipTransferServices(app, db);

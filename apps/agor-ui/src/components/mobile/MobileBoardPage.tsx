@@ -1,13 +1,17 @@
 import type { AgorClient, Board, Branch, SpawnConfig, User } from '@agor-live/client';
-import { Spin, Typography, theme } from 'antd';
-import { lazy, Suspense, useEffect, useMemo } from 'react';
+import { EllipsisOutlined, FolderOutlined, SettingOutlined } from '@ant-design/icons';
+import { Button, Dropdown, Flex, Spin, Typography, theme } from 'antd';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
+import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { useTrackBoardVisit } from '../../hooks/useRecentBoards';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { makeBranchesForBoardSelector } from '../../store/selectors';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { OPEN_BOARD_SWITCHER_EVENT, requestShellPicker } from '../../utils/shellEvents';
+import { BoardEditModal } from '../BoardEditModal/BoardEditModal';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BoardTeammatePanel, type BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { useBoardTeammatePanelData } from '../BoardTeammatePanel/useBoardTeammatePanelData';
@@ -106,6 +110,10 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     setSearchParams(tab === DEFAULT_BOARD_TAB ? {} : { tab }, { replace: true })
   );
 
+  // Board ⋯: Files, and Board settings for people who can edit the board.
+  const canManageBoard = useCanManageBoard(client, board, currentUser);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   const boards = useMemo(() => Array.from(boardById.values()), [boardById]);
   // Shallow-equal like desktop: unrelated socket churn keeps the array, so the canvas stays put.
   const boardBranches = useStoreWithEqualityFn(
@@ -168,17 +176,64 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           borderBottom: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
         }}
       >
-        <BoardSwitcher
-          boards={boards}
-          currentBoardId={resolvedBoardId}
-          onBoardChange={(id) => navigate(`/m/board/${id}`)}
-          onHomeClick={() => navigate('/m')}
-          branchById={branchById}
-          client={client}
-          currentUser={currentUser}
-          onUpdateBoard={onUpdateBoard}
-        />
+        <Flex align="center">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <BoardSwitcher
+              boards={boards}
+              currentBoardId={resolvedBoardId}
+              onBoardChange={(id) => navigate(`/m/board/${id}`)}
+              onHomeClick={() => navigate('/m')}
+              branchById={branchById}
+              client={client}
+              currentUser={currentUser}
+              onUpdateBoard={onUpdateBoard}
+            />
+          </div>
+          {board && (
+            <Dropdown
+              trigger={['click']}
+              placement="bottomRight"
+              menu={{
+                items: [
+                  {
+                    key: 'files',
+                    icon: <FolderOutlined />,
+                    label: 'Files',
+                    onClick: () => navigate(`/m/board/${board.board_id}/files`),
+                  },
+                  ...(canManageBoard
+                    ? [
+                        {
+                          key: 'settings',
+                          icon: <SettingOutlined />,
+                          label: 'Board settings',
+                          onClick: () => setSettingsOpen(true),
+                        },
+                      ]
+                    : []),
+                ],
+              }}
+            >
+              <Button
+                type="text"
+                aria-label="More board actions"
+                icon={<EllipsisOutlined />}
+                style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
+              />
+            </Dropdown>
+          )}
+        </Flex>
       </div>
+      {settingsOpen && (
+        <BoardEditModal
+          board={board ?? null}
+          client={client}
+          open
+          onClose={() => setSettingsOpen(false)}
+          onUpdate={onUpdateBoard}
+          currentUser={currentUser}
+        />
+      )}
       {!settingsHydrated && (
         <Typography.Text
           role="status"

@@ -5,6 +5,7 @@ import {
   type Branch,
   defaultsToPublicTeammateTemplate,
   type Repo,
+  TEAMMATE_BOARD_TAB_ORDER,
   TEAMMATE_FRAMEWORK_DEFAULT_BRANCH,
   TEAMMATE_FRAMEWORK_REPO_URL,
   type TeammateConfig,
@@ -133,6 +134,8 @@ export async function createTeammateBranch(
     const newBoard = (await deps.client.service('boards').create({
       name: `${displayName}'s Board`,
       icon: input.emoji || '\u{1F916}',
+      // A fresh teammate board opens on Chat.
+      tab_order: [...TEAMMATE_BOARD_TAB_ORDER],
     })) as Board;
     if (!shouldContinue()) return null;
     boardId = newBoard.board_id;

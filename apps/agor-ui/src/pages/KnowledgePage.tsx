@@ -90,6 +90,7 @@ import {
   PanelResizeHandle,
 } from 'react-resizable-panels';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { clampPercent, percentOf } from '../components/App/panelSizing';
 import { ArchiveActionButton } from '../components/ArchiveButton';
 import {
   AutocompleteTextarea,
@@ -225,12 +226,6 @@ const KNOWLEDGE_SIDEBAR_MIN_WIDTH_PX = 280;
 const KNOWLEDGE_SIDEBAR_MAX_WIDTH_PX = 780;
 const KNOWLEDGE_SIDEBAR_DEFAULT_SIZE_PERCENT = 24;
 const KNOWLEDGE_SIDEBAR_MAX_SIZE_PERCENT = 60;
-
-const clampPercent = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, value));
-
-const widthToPercent = (widthPx: number, viewportWidth: number) =>
-  (widthPx / Math.max(viewportWidth, 1)) * 100;
 
 const OPENAI_EMBEDDING_MODEL_LABELS = {
   'text-embedding-3-small': 'text-embedding-3-small — recommended',
@@ -935,7 +930,7 @@ export function KnowledgePage({
     () =>
       Math.min(
         KNOWLEDGE_SIDEBAR_MAX_SIZE_PERCENT,
-        widthToPercent(KNOWLEDGE_SIDEBAR_MIN_WIDTH_PX, viewportWidth)
+        percentOf(KNOWLEDGE_SIDEBAR_MIN_WIDTH_PX, viewportWidth)
       ),
     [viewportWidth]
   );
@@ -945,7 +940,7 @@ export function KnowledgePage({
         sidebarMinSize,
         Math.min(
           KNOWLEDGE_SIDEBAR_MAX_SIZE_PERCENT,
-          widthToPercent(KNOWLEDGE_SIDEBAR_MAX_WIDTH_PX, viewportWidth)
+          percentOf(KNOWLEDGE_SIDEBAR_MAX_WIDTH_PX, viewportWidth)
         )
       ),
     [sidebarMinSize, viewportWidth]

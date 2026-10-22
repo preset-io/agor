@@ -12,6 +12,7 @@ import {
 import { App as AntApp } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
+import { BoardViewContext, type BoardViewContextValue } from '../../contexts/BoardViewContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { buildSessionMaps } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
@@ -147,6 +148,7 @@ function renderPanel({
   closesTab,
   onCloseOtherTabs,
   currentUserId,
+  boardView = null,
 }: {
   onOpenTerminal?: ReturnType<typeof vi.fn>;
   onChooseAgenticTool?: ReturnType<typeof vi.fn>;
@@ -157,21 +159,24 @@ function renderPanel({
   closesTab?: boolean;
   onCloseOtherTabs?: ReturnType<typeof vi.fn>;
   currentUserId?: string;
+  boardView?: BoardViewContextValue | null;
 } = {}) {
   render(
     <ConnectionProvider value={connected}>
       <AppActionsProvider value={{ onOpenTerminal, onChooseAgenticTool }}>
         <AntApp>
-          <SessionPanel
-            client={client}
-            session={activeSession}
-            branch={branch}
-            open={open}
-            onClose={onClose}
-            closesTab={closesTab}
-            onCloseOtherTabs={onCloseOtherTabs}
-            currentUserId={currentUserId}
-          />
+          <BoardViewContext.Provider value={boardView}>
+            <SessionPanel
+              client={client}
+              session={activeSession}
+              branch={branch}
+              open={open}
+              onClose={onClose}
+              closesTab={closesTab}
+              onCloseOtherTabs={onCloseOtherTabs}
+              currentUserId={currentUserId}
+            />
+          </BoardViewContext.Provider>
         </AntApp>
       </AppActionsProvider>
     </ConnectionProvider>
@@ -754,6 +759,46 @@ describe('SessionPanel with several open tabs', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await screen.findByRole('menuitem', { name: /Archive session/ });
     expect(screen.queryByRole('menuitem', { name: /Close other tabs/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('SessionPanel Branch details', () => {
+  afterEach(() => {
+    reactive.tasks = [];
+    vi.restoreAllMocks();
+  });
+
+  const boardView = (view: 'chat' | 'board'): BoardViewContextValue => ({
+    view,
+    showOnBoard: vi.fn(),
+    previewTarget: null,
+    openPreview: vi.fn(),
+    closePreview: vi.fn(),
+    openConversation: vi.fn(),
+  });
+
+  it('opens the branch in the preview from More actions in Chat, returning focus to the button', async () => {
+    const chat = boardView('chat');
+    renderPanel({ boardView: chat });
+    const more = screen.getByRole('button', { name: 'More actions' });
+    fireEvent.click(more);
+    const items = await screen.findAllByRole('menuitem');
+    expect(items[0]).toHaveTextContent('Branch details');
+    fireEvent.click(items[0]);
+    expect(chat.openPreview).toHaveBeenCalledWith(
+      { kind: 'branch', id: 'branch-1', fromSessionId: 'session-1' },
+      { returnFocus: more }
+    );
+  });
+
+  it.each([
+    ['on Board', boardView('board')],
+    ['outside a board', null],
+  ])('is not offered %s', async (_label, value) => {
+    renderPanel({ boardView: value });
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await screen.findByRole('menuitem', { name: /Archive session/ });
+    expect(screen.queryByRole('menuitem', { name: /Branch details/ })).toBeNull();
   });
 });
 

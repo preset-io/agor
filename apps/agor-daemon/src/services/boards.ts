@@ -32,6 +32,7 @@ import {
   type BoardID,
   type BoardImportResult,
   type BoardObject,
+  type BoardView,
   type BranchID,
   boardCommentZoneParentObjectKey,
   hasMinimumRole,
@@ -473,6 +474,11 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     _params?: BoardParams
   ): Promise<Board> {
     return this.boardRepo.mergeBoardObjectFields(boardId, patches);
+  }
+
+  /** Custom method: set the shared tab order (writes only `data.tab_order`). */
+  async setTabOrder(boardId: string, order: BoardView[], _params?: BoardParams): Promise<Board> {
+    return this.boardRepo.setTabOrder(boardId, order);
   }
 
   /**

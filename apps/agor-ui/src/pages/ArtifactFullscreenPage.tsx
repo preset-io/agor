@@ -1,11 +1,4 @@
-import type {
-  AgorClient,
-  Artifact,
-  ArtifactPayload,
-  SandpackTemplate,
-  SessionID,
-  User,
-} from '@agor-live/client';
+import type { AgorClient, Artifact, ArtifactPayload, SessionID, User } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
 import {
   ArrowLeftOutlined,
@@ -13,39 +6,16 @@ import {
   MessageOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import {
-  type SandpackPredefinedTemplate,
-  SandpackPreview,
-  SandpackProvider,
-  type SandpackSetup,
-} from '@codesandbox/sandpack-react';
-import { Button, Layout, Space, Spin, Tooltip, Typography, theme } from 'antd';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Button, Layout, Space, Tooltip, Typography, theme } from 'antd';
+import { useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import {
-  ArtifactConsoleReporter,
-  ArtifactRuntimeBridge,
-  ArtifactSandpackErrorReporter,
-  ArtifactTrustStatusIcon,
-} from '@/components/artifacts/ArtifactRenderSupport';
-import { ensureSandpackCryptoSubtle } from '@/utils/sandpackCrypto';
+import { ArtifactTrustStatusIcon } from '@/components/artifacts/ArtifactRenderSupport';
+import { ArtifactSandbox, useArtifactSandbox } from '@/components/artifacts/ArtifactSandbox';
 import { uiRouteHref } from '@/utils/uiRoutes';
-import { ArtifactConsentModal } from '../components/ArtifactConsentModal/ArtifactConsentModal';
 import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
 import { useMobileBack } from '../components/mobile/useMobileBack';
-import {
-  ArtifactLegacyNotice,
-  ArtifactLoadErrorNotice,
-} from '../components/SessionCanvas/canvas/ArtifactNotices';
-import {
-  type ArtifactLoadFailure,
-  fetchArtifactPayload,
-} from '../components/SessionCanvas/canvas/artifactLoadError';
-import { useStableSandpackProviderInputs } from '../components/SessionCanvas/canvas/utils/sandpackDefaults';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
-
-ensureSandpackCryptoSubtle();
 
 const { Header, Content } = Layout;
 const { Title } = Typography;
@@ -212,93 +182,10 @@ export function ArtifactFullscreenPage({
     searchParams.get('show_navbar') !== 'false' &&
     searchParams.get('chrome') !== '0' &&
     searchParams.get('navbar') !== '0';
-  const [artifact, setArtifact] = useState<Artifact | null>(null);
-  const [payload, setPayload] = useState<ArtifactPayload | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<ArtifactLoadFailure | null>(null);
-  const [consentOpen, setConsentOpen] = useState(false);
-  const lastHashRef = useRef<string | null>(null);
-
   const artifactIdParam = artifactShortId ?? '';
-
-  const fetchArtifact = useCallback(async () => {
-    if (!artifactIdParam) return;
-    setLoading(true);
-    setError(null);
-    const result = await fetchArtifactPayload(artifactIdParam);
-    if (result.failure) {
-      setError(result.failure);
-      setLoading(false);
-      return;
-    }
-    const nextPayload = result.payload;
-    setPayload(nextPayload);
-    if (client) {
-      try {
-        const metadata = await client.service('artifacts').get(nextPayload.artifact_id);
-        setArtifact(metadata as Artifact);
-      } catch {
-        // Metadata only powers the optional "back to board" link; payload
-        // access is the authoritative visibility/trust check for rendering.
-        setArtifact(null);
-      }
-    }
-    lastHashRef.current = nextPayload.content_hash;
-    setLoading(false);
-  }, [artifactIdParam, client]);
-
-  useEffect(() => {
-    fetchArtifact();
-  }, [fetchArtifact]);
-
-  // Lightweight equivalent of useAgorData's artifact runtime bridge wiring.
-  // The fullscreen surface intentionally does not hydrate Workspace data, but
-  // MCP DOM-query tools still need the artifacts service event forwarded to
-  // the Sandpack iframe bridge when this tab is the active viewer.
-  useEffect(() => {
-    if (!client) return;
-    const service = client.service('artifacts');
-    const handleAgorQuery = (event: unknown) => {
-      window.dispatchEvent(new CustomEvent('agor:artifact-runtime-query', { detail: event }));
-    };
-    service.on('agor-query', handleAgorQuery);
-    return () => {
-      service.removeListener('agor-query', handleAgorQuery);
-    };
-  }, [client]);
-
-  useEffect(() => {
-    if (!client) return;
-    const service = client.service('artifacts');
-    const handler = (updated: Artifact) => {
-      const currentId = payload?.artifact_id ?? artifact?.artifact_id;
-      if (!currentId || updated.artifact_id !== currentId) return;
-      setArtifact(updated);
-      if (updated.content_hash && updated.content_hash !== lastHashRef.current) {
-        fetchArtifact();
-      }
-    };
-    service.on('patched', handler);
-    service.on('updated', handler);
-    return () => {
-      service.removeListener('patched', handler);
-      service.removeListener('updated', handler);
-    };
-  }, [artifact?.artifact_id, client, fetchArtifact, payload?.artifact_id]);
-
-  const sandpackConfig = payload?.sandpack_config ?? {};
-  const sandpackOptions = sandpackConfig.options ?? {};
-  const sandpackTemplate = (sandpackConfig.template ??
-    payload?.template ??
-    'react') as SandpackTemplate;
-  const sandpackInputs = useStableSandpackProviderInputs({
-    template: sandpackTemplate,
-    files: payload?.files ?? {},
-    customSetup: sandpackConfig.customSetup,
-    dependencies: payload?.dependencies,
-    entryFile: payload?.entry,
-    options: sandpackOptions,
-  });
+  // This page has no useAgorData, so it relays agent DOM queries itself.
+  const sandbox = useArtifactSandbox(client, artifactIdParam, { forwardRuntimeQueries: true });
+  const { artifact, payload, loading } = sandbox;
   const title = payload?.name ?? artifact?.name ?? `Artifact ${artifactIdParam}`;
 
   const hideNavbar = useCallback(() => {
@@ -317,69 +204,6 @@ export function ArtifactFullscreenPage({
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  const body = (() => {
-    if (loading && !payload) {
-      return <Spin size="large" tip="Loading artifact…" />;
-    }
-    if (error) {
-      return (
-        <ArtifactLoadErrorNotice
-          failure={error}
-          onRetry={fetchArtifact}
-          style={{ alignSelf: 'flex-start', flex: 1, margin: token.sizeMD }}
-        />
-      );
-    }
-    if (!payload) return null;
-    return (
-      <div style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
-        {payload.legacy?.is_legacy && (
-          <ArtifactLegacyNotice
-            upgradeInstructions={payload.legacy.upgrade_instructions}
-            style={{ borderRadius: 0, flexShrink: 0, maxHeight: '50%', overflowY: 'auto' }}
-          />
-        )}
-        <style>{`
-          .artifact-fullscreen-sandpack .sp-wrapper,
-          .artifact-fullscreen-sandpack .sp-layout,
-          .artifact-fullscreen-sandpack .sp-stack,
-          .artifact-fullscreen-sandpack .sp-preview,
-          .artifact-fullscreen-sandpack .sp-preview-container {
-            height: 100% !important;
-          }
-        `}</style>
-        <div className="artifact-fullscreen-sandpack" style={{ flex: 1, minHeight: 0 }}>
-          <SandpackProvider
-            key={payload.content_hash}
-            // The shared artifact union includes legacy `vue3`; Sandpack's
-            // provider type is narrower than the persisted compatibility set.
-            template={sandpackInputs.template as SandpackPredefinedTemplate}
-            files={sandpackInputs.files}
-            customSetup={sandpackInputs.customSetup as SandpackSetup | undefined}
-            theme={sandpackConfig.theme as never}
-            options={sandpackInputs.options}
-          >
-            <SandpackPreview
-              style={{ height: '100%', border: 'none' }}
-              showNavigator={false}
-              showOpenInCodeSandbox={false}
-              showRefreshButton
-            />
-            <ArtifactConsoleReporter
-              artifactId={payload.artifact_id}
-              contentHash={payload.runtime_report_hash ?? payload.content_hash}
-            />
-            <ArtifactSandpackErrorReporter
-              artifactId={payload.artifact_id}
-              contentHash={payload.runtime_report_hash ?? payload.content_hash}
-            />
-            <ArtifactRuntimeBridge artifactId={payload.artifact_id} />
-          </SandpackProvider>
-        </div>
-      </div>
-    );
-  })();
-
   return (
     <Layout style={{ minHeight: '100vh', background: token.colorBgLayout }}>
       {showNavbar ? (
@@ -390,8 +214,8 @@ export function ArtifactFullscreenPage({
           loading={loading}
           currentUser={currentUser}
           onBackToShell={cameFromMobileShell ? onBackToShell : undefined}
-          onReload={fetchArtifact}
-          onTrustClick={() => setConsentOpen(true)}
+          onReload={sandbox.reload}
+          onTrustClick={() => sandbox.setConsentOpen(true)}
           onHideNavbar={hideNavbar}
           onUserSettingsClick={onUserSettingsClick}
           onLogout={onLogout}
@@ -417,23 +241,8 @@ export function ArtifactFullscreenPage({
           background: token.colorBgContainer,
         }}
       >
-        {body}
+        <ArtifactSandbox sandbox={sandbox} />
       </Content>
-      {payload && consentOpen && (
-        <ArtifactConsentModal
-          open={consentOpen}
-          artifactId={payload.artifact_id}
-          name={payload.name}
-          files={payload.files}
-          requiredEnvVars={payload.required_env_vars ?? []}
-          grants={payload.agor_grants ?? {}}
-          onClose={() => setConsentOpen(false)}
-          onGranted={() => {
-            setConsentOpen(false);
-            fetchArtifact();
-          }}
-        />
-      )}
     </Layout>
   );
 }

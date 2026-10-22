@@ -15,13 +15,14 @@ import type {
   BoardImportSkippedObject,
   BoardObject,
   BoardObjectType,
+  BoardView,
   Branch,
   BranchPermissionLevel,
   EffectiveCapabilityPolicyAccess,
   UserID,
   UUID,
 } from '@agor/core/types';
-import { isTeammate } from '@agor/core/types';
+import { isTeammate, normalizeBoardTabOrder } from '@agor/core/types';
 import {
   and,
   asc,
@@ -46,6 +47,7 @@ import {
   deleteFrom,
   insert,
   isPostgresDatabase,
+  jsonSetJson,
   runDatabaseTransaction,
   select,
   update,
@@ -186,6 +188,7 @@ export function mapBoardExportBlobToCreateData(
     custom_css: blob.custom_css,
     objects: blob.objects,
     custom_context: blob.custom_context,
+    tab_order: blob.tab_order,
     access_mode: blob.access_mode,
     default_others_can: blob.default_others_can,
     default_others_fs_access: blob.default_others_fs_access,
@@ -232,6 +235,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       access_mode?: BoardAccessMode;
       default_others_can?: BranchPermissionLevel;
       default_others_fs_access?: 'none' | 'read' | 'write';
+      tab_order?: unknown;
     };
 
     const boardId = row.board_id as UUID;
@@ -269,6 +273,8 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         access_mode: data.access_mode ?? 'private',
         default_others_can: data.default_others_can ?? 'none',
         default_others_fs_access: data.default_others_fs_access ?? 'none',
+        tab_order:
+          data.tab_order === undefined ? undefined : normalizeBoardTabOrder(data.tab_order),
       },
       row
     );
@@ -305,6 +311,8 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         custom_css: board.custom_css,
         objects: board.objects,
         custom_context: board.custom_context,
+        tab_order:
+          board.tab_order === undefined ? undefined : normalizeBoardTabOrder(board.tab_order),
       },
     };
   }
@@ -772,6 +780,11 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       if (Object.hasOwn(updates, 'primary_owner_user_id')) {
         throw new RepositoryError('Primary ownership is immutable');
       }
+      if (Object.hasOwn(updates, 'tab_order')) {
+        throw new RepositoryError(
+          'Cannot set tab_order via generic board writes; use setTabOrder()'
+        );
+      }
       if (
         ['access_mode', 'default_others_can', 'default_others_fs_access'].some((field) =>
           Object.hasOwn(updates, field)
@@ -841,6 +854,25 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         error
       );
     }
+  }
+
+  /**
+   * Set the shared tab order. Writes only `data.tab_order` in one statement,
+   * so it cannot lose a concurrent edit to any other board field.
+   */
+  async setTabOrder(id: string, order: readonly BoardView[]): Promise<Board> {
+    const fullId = await this.resolveId(id);
+    const result = await update(this.db, boards)
+      .set({
+        data: jsonSetJson(this.db, boards.data, 'tab_order', normalizeBoardTabOrder(order)),
+        updated_at: new Date(),
+      })
+      .where(eq(boards.board_id, fullId))
+      .run();
+    if (result.rowsAffected === 0) throw new EntityNotFoundError('Board', id);
+    const updated = await this.findById(fullId);
+    if (!updated) throw new EntityNotFoundError('Board', id);
+    return updated;
   }
 
   /**
@@ -1337,6 +1369,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       default_others_fs_access: templateOthers.fs_access,
       objects: board.objects,
       custom_context: board.custom_context,
+      tab_order: board.tab_order,
     };
   }
 

@@ -24,6 +24,7 @@ import {
   bindRepositoryToTenantUnitOfWork,
   generateId,
   getCurrentTenantId,
+  isArtifactVisibleTo,
   RepoRepository,
   type TenantScopeAwareDatabase,
   UsersRepository,
@@ -524,13 +525,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Centralized visibility predicate. Private artifacts are only readable
-   * by their creator; public artifacts are readable by anyone.
+   * Centralized visibility predicate (`visibleArtifactCondition` in SQL).
+   * Private artifacts are only readable by their creator; public artifacts are
+   * readable by anyone.
    */
   isVisibleTo(artifact: Pick<Artifact, 'public' | 'created_by'>, userId?: string): boolean {
-    if (artifact.public) return true;
-    if (!userId || !artifact.created_by) return false;
-    return artifact.created_by === userId;
+    return isArtifactVisibleTo(artifact, userId);
   }
 
   async remove(id: string | number, params?: ArtifactParams): Promise<Artifact> {

@@ -24,6 +24,7 @@ import { SessionPanel } from '../SessionPanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
 import { OpenSessionsSwitcher } from '../SessionTabs';
 import { mobilePageStyle } from './constants';
+import { MobileBoardPreview } from './MobileBoardPreview';
 import { MobileHeader } from './MobileHeader';
 import { sessionBoardId } from './sessionBoardId';
 import { useMobileBack } from './useMobileBack';
@@ -214,32 +215,35 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           bar), not the whole viewport. Using `100dvh` here would push the
           composer down behind the persistent tab bar; `flex: 1` reserves exactly
           the space left over the bar and its safe-area inset. */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <SessionPanel
-          client={client}
-          session={session}
-          branch={branch}
-          currentUserId={currentUser?.user_id}
-          sessionMcpServerIds={sessionMcpServerIds}
-          sessionMcpLoadFailed={sessionMcpLoadFailed}
-          onSessionMcpRetry={retrySessionMcpLoad}
-          open
-          onClose={closeSession}
-          onCloseOtherTabs={
-            hasSessionTabs ? () => sessionTabs.closeOthers(session.session_id) : undefined
-          }
-          headerExtra={
-            hasSessionTabs ? (
-              <OpenSessionsSwitcher
-                ids={sessionTabs.shownIds}
-                selectedId={session.session_id}
-                onSelect={switchSession}
-                onClose={sessionTabs.close}
-              />
-            ) : undefined
-          }
-        />
-      </div>
+      {/* Work cards open in a bottom sheet, through the same context as desktop. */}
+      <MobileBoardPreview client={client} user={currentUser} shownSessionId={session.session_id}>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <SessionPanel
+            client={client}
+            session={session}
+            branch={branch}
+            currentUserId={currentUser?.user_id}
+            sessionMcpServerIds={sessionMcpServerIds}
+            sessionMcpLoadFailed={sessionMcpLoadFailed}
+            onSessionMcpRetry={retrySessionMcpLoad}
+            open
+            onClose={closeSession}
+            onCloseOtherTabs={
+              hasSessionTabs ? () => sessionTabs.closeOthers(session.session_id) : undefined
+            }
+            headerExtra={
+              hasSessionTabs ? (
+                <OpenSessionsSwitcher
+                  ids={sessionTabs.shownIds}
+                  selectedId={session.session_id}
+                  onSelect={switchSession}
+                  onClose={sessionTabs.close}
+                />
+              ) : undefined
+            }
+          />
+        </div>
+      </MobileBoardPreview>
       <SessionSettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

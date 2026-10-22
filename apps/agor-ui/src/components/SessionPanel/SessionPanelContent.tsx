@@ -20,6 +20,7 @@ import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BranchMetadataRow } from '../BranchMetadataRow';
 import { ConversationView } from '../ConversationView';
 import { ForkSpawnModal } from '../ForkSpawnModal';
+import { SessionWorkProvider } from '../WorkCard';
 import { SessionConversationLayout } from './SessionConversationLayout';
 
 export interface SessionPanelContentProps {
@@ -38,6 +39,8 @@ export interface SessionPanelContentProps {
   onSpawnModalConfirm: (config: string | Partial<SpawnConfig>) => Promise<void>;
   inputValueRef: React.RefObject<string>;
   isOpen: boolean;
+  /** The branch pills over the conversation; the scroll buttons stay either way. */
+  showBranchStrip?: boolean;
   /** When true, all task blocks are force-expanded (used by in-session search) */
 }
 
@@ -57,6 +60,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
     onSpawnModalConfirm,
     inputValueRef,
     isOpen,
+    showBranchStrip = true,
   }) => {
     const { token } = theme.useToken();
     const isMobileShell = useIsMobileViewport();
@@ -125,7 +129,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
           }}
         >
           {/* Pills section (only shown if there's content) */}
-          {branch && (
+          {branch && showBranchStrip && (
             <BranchMetadataRow branch={branch} repo={repo} style={{ flex: '1 1 0', minWidth: 0 }}>
               {repo && (
                 <BranchHeaderPill
@@ -144,7 +148,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             </BranchMetadataRow>
           )}
           {/* Spacer if no pills */}
-          {!branch && <div style={{ flex: 1 }} />}
+          {!(branch && showBranchStrip) && <div style={{ flex: 1 }} />}
           {/* Scroll Navigation Buttons - always visible */}
           <Space size={4} style={{ flexShrink: 0 }}>
             <Tooltip title="Scroll to top of conversation">
@@ -291,26 +295,35 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             ) : undefined
           }
         >
-          <ConversationView
+          {/* Work cards after each turn, read from the board's Files. */}
+          <SessionWorkProvider
             client={client}
-            sessionId={session.session_id}
-            agentic_tool={session.agentic_tool}
-            sessionModel={session.model_config?.model}
-            userById={userById}
-            currentUserId={currentUserId}
-            onScrollRef={handleScrollRef}
-            onPermissionDecision={onPermissionDecision}
-            branchName={branch?.name}
-            scheduledFromBranch={session.scheduled_from_branch}
-            scheduledRunAt={session.scheduled_run_at}
-            isActive={isOpen}
-            genealogy={session.genealogy}
-            teammateEmoji={
-              branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
-            }
-            onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-            canStartTurn={canSessionStartTurn(session, queuedTasks.length)}
-          />
+            session={session}
+            boardId={branch?.board_id}
+            branchId={branch?.branch_id}
+            active={isOpen}
+          >
+            <ConversationView
+              client={client}
+              sessionId={session.session_id}
+              agentic_tool={session.agentic_tool}
+              sessionModel={session.model_config?.model}
+              userById={userById}
+              currentUserId={currentUserId}
+              onScrollRef={handleScrollRef}
+              onPermissionDecision={onPermissionDecision}
+              branchName={branch?.name}
+              scheduledFromBranch={session.scheduled_from_branch}
+              scheduledRunAt={session.scheduled_run_at}
+              isActive={isOpen}
+              genealogy={session.genealogy}
+              teammateEmoji={
+                branch && isTeammate(branch) ? getTeammateConfig(branch)?.emoji : undefined
+              }
+              onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+              canStartTurn={canSessionStartTurn(session, queuedTasks.length)}
+            />
+          </SessionWorkProvider>
         </SessionConversationLayout>
 
         {/* Advanced Spawn Modal */}

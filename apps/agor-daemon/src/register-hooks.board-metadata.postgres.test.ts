@@ -100,6 +100,12 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             });
             expect([400, 401, 403, 404]).toContain(denied.status);
           }
+          const reorder = await fetch(resource, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({ _action: 'setTabOrder', tab_order: ['chat', 'board', 'files'] }),
+          });
+          expect([400, 401, 403, 404]).toContain(reorder.status);
         }
         await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
           expect(await new BoardRepository(scoped).findById(a.board.board_id)).toEqual(a.board);

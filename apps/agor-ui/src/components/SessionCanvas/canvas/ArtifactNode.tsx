@@ -31,9 +31,7 @@ import { compressToBase64 } from 'lz-string';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
 import {
-  ArtifactConsoleReporter,
-  ArtifactRuntimeBridge,
-  ArtifactSandpackErrorReporter,
+  ArtifactRuntimeReporting,
   ArtifactTrustStatusIcon,
 } from '@/components/artifacts/ArtifactRenderSupport';
 import { useThemedMessage } from '@/utils/message';
@@ -654,15 +652,10 @@ export const ArtifactNode = ({
               showOpenInCodeSandbox={false}
               showRefreshButton={interactMode}
             />
-            <ArtifactConsoleReporter
+            <ArtifactRuntimeReporting
               artifactId={data.artifactId}
               contentHash={payload.runtime_report_hash ?? payload.content_hash}
             />
-            <ArtifactSandpackErrorReporter
-              artifactId={data.artifactId}
-              contentHash={payload.runtime_report_hash ?? payload.content_hash}
-            />
-            <ArtifactRuntimeBridge artifactId={data.artifactId} />
             <CodeSandboxExporter artifactId={data.artifactId} />
           </SandpackProvider>
         </div>

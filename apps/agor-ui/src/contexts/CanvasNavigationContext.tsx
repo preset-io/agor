@@ -40,6 +40,10 @@ import {
  * only move when the row isn't already visible. Deliberate gestures
  * (double-click, "go to card" locator) omit it and always re-center.
  *
+ * Board tab: every request except an ensure-visible one shows the Board tab
+ * first (App registers `useRegisterBoardView`). When that needed a switch,
+ * the target is stashed and the canvas recenters on it once it is shown.
+ *
  * Returns `true` if the camera moved synchronously or a cross-board hop is
  * in flight, `false` otherwise (no canvas mounted, unknown id, no
  * switcher).
@@ -48,6 +52,8 @@ export type RecenterSubTarget = { sessionId?: string; ensureVisible?: boolean };
 export type RecenterMapFn = (nodeId: string, subTarget?: RecenterSubTarget) => boolean;
 export type RecenterOpts = { boardId?: string; sessionId?: string; ensureVisible?: boolean };
 export type BoardSwitcherFn = (boardId: string) => void;
+/** Shows the Board tab (of `boardId` when given); returns true if a switch was needed. */
+export type BoardViewFn = (boardId?: string) => boolean;
 
 interface PendingRecenter {
   nodeId: string;
@@ -59,6 +65,7 @@ interface PendingRecenter {
 interface CanvasNavigationContextValue {
   recenterRef: React.MutableRefObject<RecenterMapFn | null>;
   boardSwitcherRef: React.MutableRefObject<BoardSwitcherFn | null>;
+  boardViewRef: React.MutableRefObject<BoardViewFn | null>;
   pendingRef: React.MutableRefObject<PendingRecenter | null>;
 }
 
@@ -73,8 +80,9 @@ const CanvasNavigationContext = createContext<CanvasNavigationContextValue | nul
 export function CanvasNavigationProvider({ children }: { children: ReactNode }) {
   const recenterRef = useRef<RecenterMapFn | null>(null);
   const boardSwitcherRef = useRef<BoardSwitcherFn | null>(null);
+  const boardViewRef = useRef<BoardViewFn | null>(null);
   const pendingRef = useRef<PendingRecenter | null>(null);
-  const value = useMemo(() => ({ recenterRef, boardSwitcherRef, pendingRef }), []);
+  const value = useMemo(() => ({ recenterRef, boardSwitcherRef, boardViewRef, pendingRef }), []);
   return (
     <CanvasNavigationContext.Provider value={value}>{children}</CanvasNavigationContext.Provider>
   );
@@ -106,6 +114,11 @@ export function useRegisterBoardSwitcher(fn: BoardSwitcherFn): void {
   useRegisterRef(useContext(CanvasNavigationContext)?.boardSwitcherRef, fn);
 }
 
+/** App owns the board tabs — register how to show the Board tab. */
+export function useRegisterBoardView(fn: BoardViewFn): void {
+  useRegisterRef(useContext(CanvasNavigationContext)?.boardViewRef, fn);
+}
+
 /** SessionCanvas drains the stash once its new board's nodes are ready.
  *  Returns the pending target (and clears it) if one is live, else null. */
 export function useConsumePendingRecenter(): () => {
@@ -133,7 +146,7 @@ export function useConsumePendingRecenter(): () => {
 /** Consumer hook — safe to call outside the provider (returns a no-op). */
 export function useRecenterMap(): (nodeId: string, opts?: RecenterOpts) => boolean {
   const ctx = useContext(CanvasNavigationContext);
-  return useCallback(
+  const recenter = useCallback(
     (nodeId: string, opts?: RecenterOpts) => {
       if (!ctx) return false;
       // Try a synchronous recenter first — covers the common case where the
@@ -158,5 +171,23 @@ export function useRecenterMap(): (nodeId: string, opts?: RecenterOpts) => boole
       return false;
     },
     [ctx]
+  );
+  return useCallback(
+    (nodeId: string, opts?: RecenterOpts) => {
+      // Selection never changes tabs; while the canvas is hidden it does nothing, as before.
+      if (!opts?.ensureVisible && ctx?.boardViewRef.current?.(opts?.boardId)) {
+        // The canvas is collapsed or not mounted yet: SessionCanvas drains this
+        // when it is shown again, or on its first fit.
+        ctx.pendingRef.current = {
+          nodeId,
+          sessionId: opts?.sessionId,
+          expiresAt: Date.now() + PENDING_TTL_MS,
+        };
+        if (opts?.boardId) ctx.boardSwitcherRef.current?.(opts.boardId);
+        return true;
+      }
+      return recenter(nodeId, opts);
+    },
+    [ctx, recenter]
   );
 }
