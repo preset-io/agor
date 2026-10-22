@@ -48,6 +48,7 @@ import { NodeResizeControl, NodeResizer, ResizeControlVariant, useViewport } fro
 import { useConnectionState, useMutationGate } from '../../../contexts/ConnectionContext';
 import type { BoardWriteResult } from '../../../hooks/useBoardMutationGuard';
 import { type BoardWriteTicket, hasBoardWriteTicketEnded } from '../../../store/boardMutationGuard';
+import { VISUALLY_HIDDEN_STYLE } from '../../../utils/accessibility';
 import { getContrastingTextColor } from '../../../utils/theme';
 import { getUserInitials } from '../../UserIdentityAvatar';
 import { DeleteZoneModal } from './DeleteZoneModal';
@@ -874,6 +875,10 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             />
           )}
         </div>
+        {isAutoZoneLayout(layout) && (
+          // Not shown on the canvas: the toolbar is the visible control, but viewers never see it.
+          <span style={VISUALLY_HIDDEN_STYLE}>{layoutOption.label} layout</span>
+        )}
         {data.status && (
           <div
             style={{

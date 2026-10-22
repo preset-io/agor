@@ -66,6 +66,7 @@ import {
   type EntityPlacementIntent,
   EntityPlacementWrites,
 } from './canvas/utils/entityPlacementWrites';
+import { anchoredZoneRect, isZoneDrag, zoneDrawingPreviewRect } from './canvas/utils/zoneDrawing';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
 import type { ZoneLayout } from '@agor/core/types';
@@ -3101,23 +3102,17 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           return;
         }
 
-        // Calculate position and dimensions in screen space
-        const minX = Math.min(start.x, end.x);
-        const minY = Math.min(start.y, end.y);
-        const screenWidth = Math.abs(end.x - start.x);
-        const screenHeight = Math.abs(end.y - start.y);
-
         // Only create zone if dragged (not just clicked)
-        if (screenWidth > 50 && screenHeight > 50) {
-          const position = reactFlowInstanceRef.current.screenToFlowPosition({
-            x: minX,
-            y: minY,
-          });
-
-          // Convert dimensions to flow space (account for zoom), never smaller than one card
-          const viewport = reactFlowInstanceRef.current.getViewport();
-          const width = Math.max(ZONE_MIN_WIDTH, screenWidth / viewport.zoom);
-          const height = Math.max(ZONE_MIN_HEIGHT, screenHeight / viewport.zoom);
+        if (isZoneDrag(start, end)) {
+          // In flow space (accounts for zoom): never smaller than one card,
+          // pinned to the corner where the drag started.
+          const { x, y, width, height } = anchoredZoneRect(
+            reactFlowInstanceRef.current.screenToFlowPosition(start),
+            reactFlowInstanceRef.current.screenToFlowPosition(end),
+            ZONE_MIN_WIDTH,
+            ZONE_MIN_HEIGHT
+          );
+          const position = { x, y };
 
           // Create zone with drawn dimensions
           const objectId = `zone-${Date.now()}`;
@@ -3506,6 +3501,17 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       }
     }, [canMutateBoard, canMutateComments, activeTool]);
 
+    // Preview the zone that releasing the drag here would create, minimum size included.
+    const drawingPreview =
+      drawingZone &&
+      zoneDrawingPreviewRect(
+        drawingZone.start,
+        drawingZone.end,
+        reactFlowInstanceRef.current?.getViewport().zoom ?? 1,
+        ZONE_MIN_WIDTH,
+        ZONE_MIN_HEIGHT
+      );
+
     return (
       <div
         style={{
@@ -3518,14 +3524,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         onPointerUp={handlePointerUp}
       >
         {/* Drawing preview for zone */}
-        {drawingZone && (
+        {drawingPreview && (
           <div
             style={{
               position: 'fixed',
-              left: Math.min(drawingZone.start.x, drawingZone.end.x),
-              top: Math.min(drawingZone.start.y, drawingZone.end.y),
-              width: Math.abs(drawingZone.end.x - drawingZone.start.x),
-              height: Math.abs(drawingZone.end.y - drawingZone.start.y),
+              left: drawingPreview.x,
+              top: drawingPreview.y,
+              width: drawingPreview.width,
+              height: drawingPreview.height,
               border: `2px dashed ${token.colorPrimary}`,
               background: token.colorPrimaryBg,
               pointerEvents: 'none',

@@ -152,6 +152,17 @@ describe('ZoneNode compact toolbar', () => {
     expect(screen.queryByText('Grid')).not.toBeInTheDocument();
   });
 
+  it('tells viewers an arranged zone layout without a visible badge, and says nothing for free zones', () => {
+    const { unmount } = renderZone(vi.fn(), CONNECTED, { canEdit: false, layout: 'row' });
+    expect(screen.queryByRole('toolbar', { name: 'Zone actions' })).not.toBeInTheDocument();
+    const label = screen.getByText('Row layout');
+    expect(label).toHaveStyle({ position: 'absolute', width: '1px', height: '1px' });
+    unmount();
+
+    renderZone(vi.fn(), CONNECTED, { canEdit: false });
+    expect(screen.queryByText(/ layout$/)).not.toBeInTheDocument();
+  });
+
   it('uses native keyboard-focusable buttons for common actions', () => {
     const onUpdate = vi.fn();
     renderZone(vi.fn(), CONNECTED, { onUpdate });
