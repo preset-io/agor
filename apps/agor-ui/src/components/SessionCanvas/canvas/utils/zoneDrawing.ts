@@ -18,9 +18,9 @@ export function isZoneDrag(start: Position, end: Position): boolean {
 }
 
 /**
- * The rectangle a zone drag draws, at least `minWidth` by `minHeight`. It stays
- * pinned to the corner where the drag started and grows in the drag's
- * direction, so a small drag up or left never spreads past its start.
+ * The rectangle between two points, at least `minWidth` by `minHeight`. It stays
+ * pinned to `start` and grows toward `end`, so a small drag up or left never
+ * spreads past its start.
  */
 export function anchoredZoneRect(
   start: Position,
@@ -38,19 +38,58 @@ export function anchoredZoneRect(
   };
 }
 
+/** The two React Flow conversions drawing needs; both use client (screen) coordinates. */
+export interface ZoneDrawingFlow {
+  screenToFlowPosition(position: Position): Position;
+  flowToScreenPosition(position: Position): Position;
+}
+
 /**
- * Screen rectangle to preview while drawing: the zone that releasing here
- * creates, its flow-space minimum scaled by `zoom`; just the dragged box while
- * the drag is still too small to count.
+ * The zone a drag from `start` to `end` (screen points) creates, in flow space:
+ * zoom and grid snap applied, never smaller than the minimum, pinned to the
+ * start corner and grown in the direction the pointer moved on screen.
  */
-export function zoneDrawingPreviewRect(
+export function drawnZoneFlowRect(
+  flow: ZoneDrawingFlow,
   start: Position,
   end: Position,
-  zoom: number,
   minWidth: number,
   minHeight: number
 ): DrawnRect {
-  return isZoneDrag(start, end)
-    ? anchoredZoneRect(start, end, minWidth * zoom, minHeight * zoom)
-    : anchoredZoneRect(start, end, 0, 0);
+  const anchor = flow.screenToFlowPosition(start);
+  const corner = flow.screenToFlowPosition(end);
+  const width = Math.max(minWidth, Math.abs(corner.x - anchor.x));
+  const height = Math.max(minHeight, Math.abs(corner.y - anchor.y));
+  return {
+    x: end.x < start.x ? anchor.x - width : anchor.x,
+    y: end.y < start.y ? anchor.y - height : anchor.y,
+    width,
+    height,
+  };
+}
+
+/**
+ * Screen rectangle to preview while drawing: exactly the zone releasing here
+ * creates, or just the dragged box while the drag is too small to count.
+ */
+export function zoneDrawingPreviewRect(
+  flow: ZoneDrawingFlow,
+  start: Position,
+  end: Position,
+  minWidth: number,
+  minHeight: number
+): DrawnRect {
+  if (!isZoneDrag(start, end)) return anchoredZoneRect(start, end, 0, 0);
+  const rect = drawnZoneFlowRect(flow, start, end, minWidth, minHeight);
+  const topLeft = flow.flowToScreenPosition({ x: rect.x, y: rect.y });
+  const bottomRight = flow.flowToScreenPosition({
+    x: rect.x + rect.width,
+    y: rect.y + rect.height,
+  });
+  return {
+    x: topLeft.x,
+    y: topLeft.y,
+    width: bottomRight.x - topLeft.x,
+    height: bottomRight.y - topLeft.y,
+  };
 }

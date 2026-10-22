@@ -66,7 +66,7 @@ import {
   type EntityPlacementIntent,
   EntityPlacementWrites,
 } from './canvas/utils/entityPlacementWrites';
-import { anchoredZoneRect, isZoneDrag, zoneDrawingPreviewRect } from './canvas/utils/zoneDrawing';
+import { drawnZoneFlowRect, isZoneDrag, zoneDrawingPreviewRect } from './canvas/utils/zoneDrawing';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
 import type { ZoneLayout } from '@agor/core/types';
@@ -3104,11 +3104,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
         // Only create zone if dragged (not just clicked)
         if (isZoneDrag(start, end)) {
-          // In flow space (accounts for zoom): never smaller than one card,
-          // pinned to the corner where the drag started.
-          const { x, y, width, height } = anchoredZoneRect(
-            reactFlowInstanceRef.current.screenToFlowPosition(start),
-            reactFlowInstanceRef.current.screenToFlowPosition(end),
+          // Never smaller than one card, pinned to the corner where the drag started.
+          const { x, y, width, height } = drawnZoneFlowRect(
+            reactFlowInstanceRef.current,
+            start,
+            end,
             ZONE_MIN_WIDTH,
             ZONE_MIN_HEIGHT
           );
@@ -3504,10 +3504,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Preview the zone that releasing the drag here would create, minimum size included.
     const drawingPreview =
       drawingZone &&
+      reactFlowInstanceRef.current &&
       zoneDrawingPreviewRect(
+        reactFlowInstanceRef.current,
         drawingZone.start,
         drawingZone.end,
-        reactFlowInstanceRef.current?.getViewport().zoom ?? 1,
         ZONE_MIN_WIDTH,
         ZONE_MIN_HEIGHT
       );
