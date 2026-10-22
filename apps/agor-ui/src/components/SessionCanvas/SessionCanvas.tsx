@@ -72,6 +72,8 @@ import type { ZoneLayout } from '@agor/core/types';
 import {
   isAutoZoneLayout,
   ZONE_GRID_GAP,
+  ZONE_MIN_HEIGHT,
+  ZONE_MIN_WIDTH,
   zoneGridDropIndex,
   zoneGridWidthOnSwitch,
   zoneLayoutOf,
@@ -3112,10 +3114,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             y: minY,
           });
 
-          // Convert dimensions to flow space (account for zoom)
+          // Convert dimensions to flow space (account for zoom), never smaller than one card
           const viewport = reactFlowInstanceRef.current.getViewport();
-          const width = screenWidth / viewport.zoom;
-          const height = screenHeight / viewport.zoom;
+          const width = Math.max(ZONE_MIN_WIDTH, screenWidth / viewport.zoom);
+          const height = Math.max(ZONE_MIN_HEIGHT, screenHeight / viewport.zoom);
 
           // Create zone with drawn dimensions
           const objectId = `zone-${Date.now()}`;

@@ -130,34 +130,26 @@ describe('ZoneNode compact toolbar', () => {
     expect(onLayoutChange).not.toHaveBeenCalled();
   });
 
-  it('labels a grid zone on the zone itself and changes its layout from there', async () => {
-    const ticket = { boardId: 'board-1' };
-    const onLayoutChange = vi.fn(async () => {});
+  it('shows the same layout icon in the toolbar whatever the layout', () => {
+    for (const layout of ['free', 'row', 'column', 'grid'] as const) {
+      const { unmount } = renderZone(vi.fn(), CONNECTED, {
+        layout,
+        onLayoutChange: vi.fn(async () => {}),
+      });
+      const button = screen.getByRole('button', { name: /^Zone layout: / });
+      expect(button.querySelector('[aria-label="appstore"]')).not.toBeNull();
+      unmount();
+    }
+  });
+
+  it('keeps the layout control in the toolbar only, off the zone itself', () => {
     renderZone(vi.fn(), CONNECTED, {
       selected: false,
       layout: 'grid',
-      beginBoardWrite: vi.fn(() => ticket),
-      onLayoutChange,
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Grid layout. Change layout' }));
-    fireEvent.click(await screen.findByText('Arrange cards in one column'));
-
-    await waitFor(() => expect(onLayoutChange).toHaveBeenCalledWith('zone-1', 'column', ticket));
-  });
-
-  it('shows viewers the layout without a control, and free zones without a label', () => {
-    const { unmount } = renderZone(vi.fn(), CONNECTED, {
-      canEdit: false,
-      layout: 'row',
       onLayoutChange: vi.fn(async () => {}),
     });
-    expect(screen.getByText('Row')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Change layout/ })).not.toBeInTheDocument();
-    unmount();
-
-    renderZone(vi.fn(), CONNECTED, { selected: false, onLayoutChange: vi.fn(async () => {}) });
-    expect(screen.queryByRole('button', { name: /Change layout/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /layout/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Grid')).not.toBeInTheDocument();
   });
 
   it('uses native keyboard-focusable buttons for common actions', () => {
