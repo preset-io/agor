@@ -18,11 +18,20 @@ const basePath = getBasePath();
 interface LandingShellProps {
   /** Prefix for the Cloud CTA attribution slugs, e.g. `landing` or `board-page`. */
   ctaPrefix: string;
+  /** Replaces the default closing CTA card, e.g. for a campaign page. */
+  finalCta?: ReactNode;
+  /** False keeps the page out of the site search index (unlisted pages). */
+  searchable?: boolean;
   children: ReactNode;
 }
 
 /** Page frame shared by the home page and every landing page: reveal-on-scroll, final CTA, footer. */
-export function LandingShell({ ctaPrefix, children }: LandingShellProps) {
+export function LandingShell({
+  ctaPrefix,
+  finalCta,
+  searchable = true,
+  children,
+}: LandingShellProps) {
   const landingRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -74,30 +83,37 @@ export function LandingShell({ ctaPrefix, children }: LandingShellProps) {
     // provides no main landmark of its own — this is the page's only one.
     // id matches Nextra's "Skip to Content" anchor (#nextra-skip-nav) — the
     // full-page layout omits the docs content wrapper that normally carries it.
-    <main ref={landingRef} id="nextra-skip-nav" className={styles.landingShell}>
+    <main
+      ref={landingRef}
+      id="nextra-skip-nav"
+      className={styles.landingShell}
+      data-pagefind-ignore={searchable ? undefined : 'all'}
+    >
       {children}
 
-      <section className={styles.finalCta} data-reveal data-troupe-section="final">
-        <div className={styles.ctaCard}>
-          <h2>
-            Bring your <span className={styles.headingStrong}>team</span> and{' '}
-            <span className={styles.headingAccent}>agents</span>{' '}
-            <span data-troupe="together">together</span>
-          </h2>
-          <p>
-            Start on your own with Agor Community Edition and bring colleagues in as you go, or talk
-            to us about rolling Agor out across your team. Agor Cloud is here when you’d rather we
-            run it.
-          </p>
-          <div className={styles.heroActions}>
-            <CloudCtaLink placement={`${ctaPrefix}-final-cta`} className={styles.primaryButton} />
-            <DemoButton className={styles.secondaryButton}>Book a demo</DemoButton>
-            <Link href="/guide/getting-started" className={styles.secondaryButton}>
-              Install Community Edition
-            </Link>
+      {finalCta ?? (
+        <section className={styles.finalCta} data-reveal data-troupe-section="final">
+          <div className={styles.ctaCard}>
+            <h2>
+              Bring your <span className={styles.headingStrong}>team</span> and{' '}
+              <span className={styles.headingAccent}>agents</span>{' '}
+              <span data-troupe="together">together</span>
+            </h2>
+            <p>
+              Start on your own with Agor Community Edition and bring colleagues in as you go, or
+              talk to us about rolling Agor out across your team. Agor Cloud is here when you’d
+              rather we run it.
+            </p>
+            <div className={styles.heroActions}>
+              <CloudCtaLink placement={`${ctaPrefix}-final-cta`} className={styles.primaryButton} />
+              <DemoButton className={styles.secondaryButton}>Book a demo</DemoButton>
+              <Link href="/guide/getting-started" className={styles.secondaryButton}>
+                Install Community Edition
+              </Link>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <footer className={styles.landingFooter} data-reveal>
         <div className={styles.footerBrand}>

@@ -1,0 +1,192 @@
+/* /teams campaign page (TeamsCampaignLanding.tsx). Only the pieces the shared
+ * landing skeleton has no block for: the hero placeholder, the before/after
+ * table, the numbered steps, and the FAQ list. Colors come from the
+ * --landing-* tokens on .landingShell. */
+
+.subhead {
+  font-size: clamp(1.1rem, 1.6vw, 1.3rem);
+}
+
+/* Stand-in for the hero capture. Dashed and labeled so nobody mistakes it
+ * for product UI. */
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 320px;
+  padding: 32px;
+  border: 2px dashed rgba(52, 230, 196, 0.4);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--landing-muted);
+  text-align: center;
+}
+
+.placeholderTag {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(232, 196, 104, 0.16);
+  color: #e8c468;
+  font-family: var(--font-mono-stack);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.compare,
+.steps,
+.faq {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: clamp(48px, 7vh, 88px) 28px;
+  scroll-margin-top: 56px;
+}
+
+.compareTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 1.02rem;
+  line-height: 1.5;
+}
+
+.compareTable th,
+.compareTable td {
+  width: 50%;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--landing-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.compareTable th {
+  font-family: var(--font-mono-stack);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.compareTable th:first-child,
+.compareTable td:first-child {
+  color: var(--landing-muted);
+}
+
+.compareTable th:last-child {
+  color: var(--landing-teal);
+}
+
+.compareTable td:last-child {
+  color: var(--landing-ink);
+  background: rgba(52, 230, 196, 0.05);
+}
+
+.stepList {
+  display: grid;
+  gap: 18px;
+  margin: 32px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.stepList li {
+  position: relative;
+  padding-left: 56px;
+  color: var(--landing-muted);
+  font-size: 1.05rem;
+  line-height: 1.6;
+  counter-increment: step;
+}
+
+.stepList li::before {
+  content: counter(step);
+  position: absolute;
+  top: -2px;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(52, 230, 196, 0.45);
+  border-radius: 50%;
+  color: var(--landing-teal);
+  font-family: var(--font-display-stack);
+  font-weight: 600;
+}
+
+.stepList strong {
+  color: var(--landing-ink);
+  font-weight: 600;
+}
+
+.stepsHelp {
+  margin: 28px 0 0;
+  color: var(--landing-muted);
+  font-size: 1.05rem;
+}
+
+/* "Book a demo" as an inline text link that opens the meeting modal. */
+.inlineButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--landing-teal);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(52, 230, 196, 0.45);
+  text-underline-offset: 3px;
+}
+
+.inlineButton:hover {
+  color: #a8f5ed;
+}
+
+.proof {
+  scroll-margin-top: 56px;
+}
+
+.faq h3 {
+  margin: 0 0 0.6rem;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.faq p {
+  margin: 0;
+  color: var(--landing-muted);
+  line-height: 1.6;
+}
+
+.faq p a {
+  color: var(--landing-teal);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+@media (min-width: 1100px) {
+  .compare,
+  .steps,
+  .faq {
+    max-width: none;
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .placeholder {
+    min-height: 200px;
+  }
+
+  .compareTable th,
+  .compareTable td {
+    padding: 12px 10px;
+    font-size: 0.95rem;
+  }
+}
