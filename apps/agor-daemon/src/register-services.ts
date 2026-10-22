@@ -2428,19 +2428,16 @@ export async function registerMCPServices(
    * The direct callback a new flow registers, authorizes, and exchanges with.
    * Flows store it (`context.redirectUri`, then `oauth_redirect_uri`), so
    * existing grants and pending flows keep their original value. Hosted
-   * tenants use their launch-observed public URL (`perWorkspace`); a tenant
-   * without one, and every static deployment, uses the startup URL.
+   * tenants use their launch-observed public URL; a tenant without one, and
+   * every static deployment, uses the startup URL.
    */
-  async function resolveMCPOAuthDirectCallback(
-    tenantId: string | undefined
-  ): Promise<{ redirectUri: string; perWorkspace: boolean }> {
+  async function resolveMCPOAuthRedirectUri(tenantId: string | undefined): Promise<string> {
     if (!ctx.mcpOAuthCallbackUrl) {
       throw new PublicBaseUrlNotConfiguredError(
         'The effective startup configuration does not provide a safe browser-reachable OAuth callback URL.'
       );
     }
-    if (!hostedTenantOAuthCallbacks)
-      return { redirectUri: ctx.mcpOAuthCallbackUrl, perWorkspace: false };
+    if (!hostedTenantOAuthCallbacks) return ctx.mcpOAuthCallbackUrl;
     if (!tenantId) {
       throw new PublicBaseUrlNotConfiguredError(
         'MCP OAuth requires trusted tenant identity to resolve its callback URL.'
@@ -2451,7 +2448,7 @@ export async function registerMCPServices(
     );
     if (!routing) {
       console.warn('[MCP OAuth] callback_tenant_routing_missing');
-      return { redirectUri: ctx.mcpOAuthCallbackUrl, perWorkspace: false };
+      return ctx.mcpOAuthCallbackUrl;
     }
     const tenantCallback = resolveMcpOAuthCallbackUrlsForOrigin(routing.public_base_url);
     const callbackUrl =
@@ -2463,11 +2460,7 @@ export async function registerMCPServices(
         'The workspace public URL is not a safe browser-reachable OAuth callback URL.'
       );
     }
-    return { redirectUri: callbackUrl, perWorkspace: true };
-  }
-
-  async function resolveMCPOAuthRedirectUri(tenantId: string | undefined): Promise<string> {
-    return (await resolveMCPOAuthDirectCallback(tenantId)).redirectUri;
+    return callbackUrl;
   }
 
   type OAuthBrowserReservationClaim = {
@@ -2604,9 +2597,8 @@ export async function registerMCPServices(
     );
 
     // Strict public base URL — see oauth-start endpoint for the rationale.
-    const { redirectUri, perWorkspace: perWorkspaceCallback } = await runWithinOAuthAuthority(
-      assertFlowAuthority,
-      () => resolveMCPOAuthDirectCallback(opts.tenantId)
+    const redirectUri = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+      resolveMCPOAuthRedirectUri(opts.tenantId)
     );
 
     const hasRfc9728 = !!opts.resourceMetadataUrl;
@@ -2622,7 +2614,6 @@ export async function registerMCPServices(
 
     let savedServerAuthority: MCPServer | undefined;
     let relayIssuer: string | undefined;
-    let directConfiguredApp: string | undefined;
     let effectiveMcpUrl = opts.mcpUrl;
     let effectiveClientId = opts.clientId;
     let effectiveClientSecret = opts.clientSecret;
@@ -2690,15 +2681,7 @@ export async function registerMCPServices(
       // Clone the row so later repository/service mutations cannot change the
       // in-memory authority captured by a standalone pending flow.
       savedServerAuthority = structuredClone(server);
-      // With a per-workspace callback, a customer-owned (configured_client)
-      // app uses it directly. The relay-disabled lookup returns only that
-      // issuer, under the same recipe pin and drift refusal as the relay.
-      directConfiguredApp =
-        oauthRelay && perWorkspaceCallback
-          ? await catalogInstallRelayIssuer(server, false)
-          : undefined;
-      relayIssuer =
-        directConfiguredApp ?? (await catalogInstallRelayIssuer(server, Boolean(oauthRelay)));
+      relayIssuer = await catalogInstallRelayIssuer(server, Boolean(oauthRelay));
       if (durableOAuthFlows) {
         durableBinding = {
           tenantId: opts.tenantId!,
@@ -2709,11 +2692,10 @@ export async function registerMCPServices(
       }
     }
 
-    // Only allowlisted DCR providers (stable_callback), and customer-owned
-    // (configured_client) apps of a tenant without a per-workspace callback,
-    // use the hosted relay; DCR then registers the relay callback. Every other
-    // flow keeps the daemon's direct callback.
-    const relayFlow = Boolean(oauthRelay && relayIssuer && !directConfiguredApp);
+    // Only customer-owned (configured_client) catalog apps and allowlisted DCR
+    // providers (stable_callback) use the hosted relay; DCR then registers the
+    // relay callback. Every other flow keeps the daemon's direct callback.
+    const relayFlow = Boolean(oauthRelay && relayIssuer);
     // A direct callback hands the flow to its workspace UI. Refuse now, before
     // discovery, DCR or authorization, if that address cannot be resolved.
     if (!relayFlow) {
@@ -4686,14 +4668,7 @@ export async function registerMCPServices(
     new MCPCatalogReadinessService(app, {
       redirectUri: async (entry, params) => {
         const issuer = catalogRelayIssuer(entry);
-        if (issuer && oauthRelay) {
-          // Same choice as the flow: a configured app of a tenant with a
-          // per-workspace callback uses it, never the relay.
-          const direct = entry.oauth?.configured_client
-            ? await resolveMCPOAuthDirectCallback(tenantIdFromParams(params)).catch(() => undefined)
-            : undefined;
-          return direct?.perWorkspace ? direct.redirectUri : oauthRelay.redirectUri(issuer);
-        }
+        if (issuer && oauthRelay) return oauthRelay.redirectUri(issuer);
         // The direct callback: a customer app's without the relay, or the one a
         // provider admin allowlists (the flow itself is unchanged).
         if (!entry.oauth?.configured_client && !entry.oauth?.redirect_allowlist) return undefined;

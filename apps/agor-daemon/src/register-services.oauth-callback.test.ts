@@ -55,9 +55,7 @@ describe('register-services OAuth callback URL regression', () => {
   });
 
   it('uses only the startup-injected OAuth callback URL', () => {
-    // Static deployments and hosted tenants without routing return the
-    // startup URL; hosted tenants derive theirs from stored launch routing.
-    expect(codeOnly).toMatch(/return\s+\{\s*redirectUri:\s*ctx\.mcpOAuthCallbackUrl/);
+    expect(codeOnly).toMatch(/return\s+ctx\.mcpOAuthCallbackUrl/);
     expect(codeOnly).not.toMatch(/\brequirePublicBaseUrl\s*\(/);
     expect(codeOnly).not.toMatch(/\bloadConfig(?:FromFile)?\s*\(/);
   });

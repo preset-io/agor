@@ -107,13 +107,6 @@ to whatever a redirect names.
   flows tolerate a single trailing-slash difference
   (`oauthIssuerIdentifiersMatch`). A mismatch fails as an `issuer_mismatch`
   configuration error before registration or relay work.
-- **Relay vs direct callback.** With `mcp_oauth_relay` configured,
-  `stable_callback` entries always use the relay. `configured_client` entries
-  use the tenant's per-workspace direct callback when the tenant has one
-  (`resolveMCPOAuthDirectCallback().perWorkspace`), else the relay. The direct
-  path keeps the recipe pin and drift refusal: it resolves the issuer through
-  `catalogInstallRelayIssuer(server, false)`. Flows already started and existing
-  grants keep their stored redirect URI.
 - **Token endpoint client auth** is HTTP Basic unless a configured-app recipe
   declares `oauth.token_endpoint_auth_method: client_secret_post` (Slack,
   HubSpot). The daemon resolves it from the install's catalog provenance
