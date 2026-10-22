@@ -15,6 +15,7 @@ import {
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   sql,
+  TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
   UserExternalIdentitiesRepository,
   UserMCPOAuthTokenRepository,
@@ -1601,6 +1602,229 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             (replica.raw as RawDatabase & { $client: { end(): Promise<void> } }).$client.end()
           )
         );
+      }
+    });
+
+    it('moves configured apps of a routed hosted tenant to the workspace callback; stable_callback keeps the relay', async () => {
+      const cloud = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      const cell = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      const relayEnv = {
+        AGOR_CLOUD_CELL_ID: 'cell-a',
+        AGOR_CLOUD_RUNTIME_CREDENTIAL_ID: 'credential-a',
+        AGOR_CLOUD_RUNTIME_SIGNING_KEY: cell.privateKey
+          .export({ type: 'pkcs8', format: 'pem' })
+          .toString(),
+      };
+      Object.assign(process.env, relayEnv);
+      const hostedRelayConfig: RegisterServicesContext['config'] = {
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        external_launch: {
+          enabled: true,
+          issuer: 'https://cloud.test',
+          audience: 'launch-audience',
+          exchange_url: 'https://cloud.test/launch',
+          public_key: cloud.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+        },
+        mcp_oauth_relay: { callback_origin: 'https://cloud.test' },
+      };
+      const preparations: import('@agor/core/types').MCPOAuthRelayPrepare[] = [];
+      const prepare = vi
+        .spyOn(MCPOAuthRelay.prototype, 'prepare')
+        .mockImplementation(async (input) => {
+          preparations.push(input);
+          return 'https://cloud.test/start/opaque';
+        });
+      const a = await createReplica('hosted-relay-A', hostedRelayConfig);
+      const tenant = `hosted-relay-${crypto.randomUUID()}`;
+      const issuer = 'https://provider.example.test';
+      const relayRedirect = new MCPOAuthRelay(hostedRelayConfig).redirectUri(issuer);
+      const workspaceCallback = 'https://acme.example.test/mcp-servers/oauth-callback';
+      try {
+        const { owner, oldGrant, configured, allowlisted } = await runWithTenantDatabaseScope(
+          a.db,
+          tenant,
+          async (scoped) => {
+            const owner = await new UsersRepository(scoped).create({
+              email: `${crypto.randomUUID()}@test.example`,
+              name: 'Hosted relay user',
+              role: 'admin',
+            });
+            await new UserExternalIdentitiesRepository(scoped).bind(owner.user_id, {
+              key: createHash('sha256')
+                .update(`https://cloud.test\0https://cloud.test\0user:cloud-alice`)
+                .digest('hex'),
+              provider: 'https://cloud.test',
+              issuer: 'https://cloud.test',
+              subject: 'user:cloud-alice',
+              last_login_at: new Date().toISOString(),
+            });
+            const create = (auth: Record<string, unknown>) =>
+              new MCPServerRepository(scoped).create({
+                name: `hosted-relay-${crypto.randomUUID()}`,
+                transport: 'http',
+                url: 'https://mcp.provider.example.test/mcp',
+                scope: 'global',
+                enabled: true,
+                source: 'user',
+                owner_user_id: owner.user_id,
+                auth: {
+                  type: 'oauth',
+                  oauth_mode: 'per_user',
+                  oauth_compatibility_mode: 'strict',
+                  ...auth,
+                },
+              });
+            const customerApp = {
+              oauth_client_id: 'customer-app',
+              oauth_client_secret: 'customer-app-secret',
+              oauth_dcr_mode: 'disabled',
+            };
+            return {
+              owner,
+              oldGrant: await create(customerApp),
+              configured: await create(customerApp),
+              allowlisted: await create({}),
+            };
+          }
+        );
+        oauthFixture.configuredIssuers.set(oldGrant.mcp_server_id, issuer);
+        oauthFixture.configuredIssuers.set(configured.mcp_server_id, issuer);
+        oauthFixture.stableCallbackIssuers.set(allowlisted.mcp_server_id, issuer);
+        const start = (server: { mcp_server_id: string }) =>
+          a.app
+            .service('mcp-servers/oauth-start')
+            .create({ mcp_server_id: server.mcp_server_id }, params(owner, tenant)) as Promise<{
+            success: boolean;
+            authorizationUrl: string;
+          }>;
+        const deliver = async () => {
+          const { authorization_url: _authorization, ...binding } = preparations.at(-1)!;
+          const input = { ...binding, code: 'fake-code', iss: binding.issuer };
+          const body = Buffer.from(JSON.stringify(input));
+          const token = jwt.sign(
+            {
+              purpose: 'mcp_oauth_callback',
+              cell_id: 'cell-a',
+              workspace_id: input.workspace_id,
+              tenant_id: input.workspace_id,
+              sub: `user:${input.cloud_user_id}`,
+              body_sha256: relayBodyHash(body),
+            },
+            cloud.privateKey,
+            {
+              algorithm: 'RS256',
+              issuer: 'https://cloud.test',
+              audience: 'agor-cell:cell-a:mcp-oauth-relay',
+              expiresIn: 30,
+              jwtid: crypto.randomUUID(),
+            }
+          );
+          let result: unknown;
+          const response = {
+            setHeader() {},
+            status() {
+              return this;
+            },
+            json(value: unknown) {
+              result = value;
+              return this;
+            },
+          };
+          await (
+            a.app as unknown as {
+              mcpOAuthRelayCallbackHandler(request: unknown, response: unknown): Promise<void>;
+            }
+          ).mcpOAuthRelayCallbackHandler(
+            { body, headers: { authorization: `Bearer ${token}` } },
+            response
+          );
+          return result;
+        };
+        const storedGrant = (serverId: string) =>
+          runWithTenantDatabaseScope(a.db, tenant, (scoped) =>
+            new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(
+              owner.user_id as UserID,
+              serverId as MCPServerID
+            )
+          );
+        const readinessRedirect = async () =>
+          (
+            (await runWithTenantDatabaseScope(a.db, tenant, () =>
+              a.app.service('mcp-catalog/readiness').get('com.asana/mcp', params(owner, tenant))
+            )) as { redirect_uri?: string }
+          ).redirect_uri;
+
+        // Before the tenant has routing metadata: configured apps keep the relay.
+        expect(await readinessRedirect()).toBe(
+          new MCPOAuthRelay(hostedRelayConfig).redirectUri('https://app.asana.com')
+        );
+        expect(await start(oldGrant)).toMatchObject({
+          success: true,
+          authorizationUrl: 'https://cloud.test/start/opaque',
+        });
+        expect(preparations.at(-1)).toMatchObject({ redirect_uri: relayRedirect });
+        expect(await deliver()).toEqual({ outcome: 'connected' });
+        expect((await storedGrant(oldGrant.mcp_server_id))?.oauth_redirect_uri).toBe(relayRedirect);
+
+        await runWithTenantDatabaseTransaction(a.raw, tenant, (scoped) =>
+          new TenantPublicRoutingRepository(scoped).observeVerifiedLaunch({
+            public_base_url: 'https://acme.example.test',
+            assertion_issued_at: 100,
+          })
+        );
+
+        // Configured app: direct workspace callback for start, authorize and token.
+        const prepared = preparations.length;
+        const exchanges = oauthFixture.exchanges;
+        const direct = await start(configured);
+        expect(direct.success).toBe(true);
+        const directUrl = new URL(direct.authorizationUrl);
+        expect(directUrl.origin).toBe(issuer);
+        expect(directUrl.searchParams.get('redirect_uri')).toBe(workspaceCallback);
+        expect(
+          (
+            await a.callback({
+              code: 'fake-code',
+              state: directUrl.searchParams.get('state')!,
+              iss: issuer,
+            })
+          ).status
+        ).toBe(200);
+        expect(oauthFixture.exchanges).toBe(exchanges + 1);
+        expect(preparations).toHaveLength(prepared);
+        expect((await storedGrant(configured.mcp_server_id))?.oauth_redirect_uri).toBe(
+          workspaceCallback
+        );
+        expect(await readinessRedirect()).toBe(workspaceCallback);
+
+        // The reviewed recipe issuer is still pinned on the direct path.
+        oauthFixture.configuredIssuers.set(configured.mcp_server_id, `${issuer}/other`);
+        expect(await start(configured)).toMatchObject({ success: false });
+        expect(preparations).toHaveLength(prepared);
+        oauthFixture.configuredIssuers.set(configured.mcp_server_id, issuer);
+
+        // stable_callback keeps the relay even for a routed tenant.
+        expect(await start(allowlisted)).toMatchObject({
+          success: true,
+          authorizationUrl: 'https://cloud.test/start/opaque',
+        });
+        expect(preparations.at(-1)).toMatchObject({
+          server_id: allowlisted.mcp_server_id,
+          redirect_uri: relayRedirect,
+        });
+
+        // The earlier relay grant keeps its stored redirect and a valid binding.
+        expect((await storedGrant(oldGrant.mcp_server_id))?.oauth_redirect_uri).toBe(relayRedirect);
+        const status = (await runWithTenantDatabaseScope(a.db, tenant, () =>
+          a.app.service('mcp-servers/oauth-status').find(params(owner, tenant))
+        )) as { authenticated_server_ids: string[] };
+        expect(status.authenticated_server_ids).toContain(oldGrant.mcp_server_id);
+      } finally {
+        oauthFixture.configuredIssuers.clear();
+        oauthFixture.stableCallbackIssuers.clear();
+        prepare.mockRestore();
+        for (const key of Object.keys(relayEnv)) delete process.env[key];
+        await (a.raw as RawDatabase & { $client: { end(): Promise<void> } }).$client.end();
       }
     });
   }

@@ -399,12 +399,13 @@ HubSpot), and refreshes the same way.
 
 By default the redirect URI is this daemon's own OAuth callback. On a hosted
 multi-tenant deployment it is the workspace's own origin
-(`https://<workspace host>/mcp-servers/oauth-callback`), so allowlist that URL
-for providers that require one. An operator can
-instead route customer-owned app callbacks through a stable Agor Cloud origin.
-Providers that only accept pre-approved callback URLs for Dynamic Client
-Registration also use it once they have approved Agor's. All other OAuth servers
-(including other DCR and pre-registered ones) keep the daemon's own callback:
+(`https://<workspace host>/mcp-servers/oauth-callback`), including for
+customer-owned apps, so register or allowlist that URL wherever a provider asks
+for one. An operator can instead route callbacks through a stable Agor Cloud
+origin for providers that only accept pre-approved callback URLs for Dynamic
+Client Registration, once they have approved Agor's, and for customer-owned apps
+of a hosted workspace that has no workspace origin yet. All other OAuth servers
+keep the daemon's own callback:
 
 ```yaml
 mcp_oauth_relay:
