@@ -1,4 +1,3 @@
-import { DEFAULT_AGENTIC_TOOL_NAME } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,26 +6,58 @@ import { ThemeProvider } from '../../contexts/ThemeContext';
 import { agorStore } from '../../store/agorStore';
 import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { OPEN_CREATE_FLOW_EVENT, requestShellPicker } from '../../utils/shellEvents';
-import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { MobileApp } from './MobileApp';
 
 let boardSettingsHydrated: boolean | undefined;
 vi.mock('./MobileBoardPage', () => ({
   MobileBoardPage: ({
     onOpenBranch,
+    onNewSession,
     settingsHydrated,
   }: {
     settingsHydrated: boolean;
     onOpenBranch: (branchId: string, tab: string) => void;
+    onNewSession: (branchId: string) => void;
   }) => {
     boardSettingsHydrated = settingsHydrated;
     return (
-      <button type="button" onClick={() => onOpenBranch('branch-1', 'schedule')}>
-        Open schedule
-      </button>
+      <>
+        <button type="button" onClick={() => onOpenBranch('branch-1', 'schedule')}>
+          Open schedule
+        </button>
+        <button type="button" onClick={() => onNewSession('branch-1')}>
+          New session
+        </button>
+      </>
     );
   },
 }));
+
+// The desktop dialog has its own suites; this captures what mobile hands it and submits for the branch.
+const newSessionModal = vi.hoisted(() => ({ props: {} as Record<string, unknown> }));
+vi.mock('../NewSessionModal', () => ({
+  NewSessionModal: (props: {
+    branchId: string;
+    onCreate: (config: { branch_id: string; agent: string }) => Promise<unknown>;
+  }) => {
+    newSessionModal.props = props;
+    return (
+      <div data-testid="new-session-modal">
+        <button
+          type="button"
+          onClick={() => void props.onCreate({ branch_id: props.branchId, agent: 'codex' })}
+        >
+          Create Session
+        </button>
+      </div>
+    );
+  },
+}));
+
+/** Submits the open new-session dialog. */
+async function submitNewSession() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Create Session' }));
+}
 
 // Capture the props the sheet is actually handed, so a control that renders
 // enabled but is wired to nothing fails here rather than silently on a phone.
@@ -131,6 +162,7 @@ async function askWithPendingCreation(extraProps: Record<string, unknown> = {}) 
   const view = render(mobileAppTree('/m', props));
   await act(async () => {});
   fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+  await submitNewSession();
   await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
   return { view, props, finish: () => act(async () => resolve({ sessionId: 'session-new' })) };
 }
@@ -157,7 +189,7 @@ describe('MobileApp branch actions', () => {
       expect(button).toHaveClass('ant-btn-loading');
       fireEvent.click(button);
       await act(async () => {});
-      expect(onCreateSession).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('new-session-modal')).not.toBeInTheDocument();
       act(() =>
         agorStore.getState().setAgenticToolSettings([
           {
@@ -173,9 +205,10 @@ describe('MobileApp branch actions', () => {
       expect(boardSettingsHydrated).toBe(true);
       expect(button).not.toHaveClass('ant-btn-loading');
       fireEvent.click(button);
+      await submitNewSession();
       await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
       expect(onCreateSession).toHaveBeenCalledWith(
-        expect.objectContaining({ agent: 'codex' }),
+        expect.objectContaining({ branch_id: 'branch-p' }),
         'board-1'
       );
       act(() => agorStore.getState().resetMaps());
@@ -183,7 +216,7 @@ describe('MobileApp branch actions', () => {
       expect(button).toHaveClass('ant-btn-loading');
       fireEvent.click(button);
       await act(async () => {});
-      expect(onCreateSession).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId('new-session-modal')).not.toBeInTheDocument();
     }
   );
 
@@ -198,6 +231,7 @@ describe('MobileApp branch actions', () => {
     const pick = teammatePicker.props.onPicked as (branch: typeof primaryBranch) => void;
     act(() => pick(primaryBranch));
     await act(async () => {});
+    expect(screen.queryByTestId('new-session-modal')).not.toBeInTheDocument();
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
@@ -206,6 +240,34 @@ describe('MobileApp branch actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open schedule' }));
     expect(screen.getByTestId('branch-sheet')).toHaveTextContent('schedule');
+  });
+
+  it('opens the desktop new-session dialog for a board branch, so the provider and model can be chosen', async () => {
+    const branch = { branch_id: 'branch-1', board_id: 'board-2', name: 'Fix it' };
+    agorStore.setState({ branchById: new Map([['branch-1', branch as never]]) });
+    const onCreateSession = vi.fn(async () => ({ sessionId: 'session-new' }));
+    const user = { user_id: 'user-1' };
+    renderMobileApp('/m/board/board-1', { user, onCreateSession });
+
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }));
+    expect(screen.getByTestId('new-session-modal')).toBeInTheDocument();
+    expect(newSessionModal.props).toMatchObject({
+      fullScreen: true,
+      branchId: 'branch-1',
+      branch,
+      currentUser: user,
+    });
+    // Nothing is created until the dialog submits its chosen configuration.
+    expect(onCreateSession).not.toHaveBeenCalled();
+
+    const config = { branch_id: 'branch-1', agent: 'codex', agenticToolPresetId: 'preset-1' };
+    const onCreate = newSessionModal.props.onCreate as (c: typeof config) => Promise<unknown>;
+    await act(async () => {
+      await expect(onCreate(config)).resolves.toEqual({ sessionId: 'session-new' });
+    });
+    expect(onCreateSession).toHaveBeenCalledWith(config, 'board-2');
+    expect(screen.queryByTestId('new-session-modal')).not.toBeInTheDocument();
+    expect(screen.getByTestId('session-page')).toBeInTheDocument();
   });
 
   it("reads the opened branch's active sessions for the sheet, as desktop does", async () => {
@@ -328,6 +390,7 @@ describe('MobileApp branch actions', () => {
     );
     await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    await submitNewSession();
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
 
     // A repeated tap is refused while the first creation is pending.
@@ -338,6 +401,7 @@ describe('MobileApp branch actions', () => {
     // A creation that yields no session (failure already surfaced) releases Ask again.
     await act(async () => resolve(null));
     fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    await submitNewSession();
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(2));
   });
 
@@ -345,7 +409,10 @@ describe('MobileApp branch actions', () => {
     const { view, props } = await askWithPendingCreation();
     view.rerender(mobileAppTree('/m', { ...props, authGeneration: 1 }));
     await act(async () => {});
+    // The dialog opened for the previous identity is gone.
+    expect(screen.queryByTestId('new-session-modal')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    await submitNewSession();
     await waitFor(() => expect(props.onCreateSession).toHaveBeenCalledTimes(2));
   });
 
@@ -380,6 +447,7 @@ describe('MobileApp branch actions', () => {
     await act(async () => {});
     // Precondition: the first caller's branch really is held, so the assertions below cannot pass vacuously.
     fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    await submitNewSession();
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(onCreateSession).toHaveBeenCalledWith(
       expect.objectContaining({ branch_id: 'branch-p' }),
@@ -392,9 +460,10 @@ describe('MobileApp branch actions', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
     await act(async () => {});
-    expect(onCreateSession).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('new-session-modal')).not.toBeInTheDocument();
 
     await act(async () => resolveNext({ ...primaryBranch, branch_id: 'branch-q' }));
+    await submitNewSession();
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(onCreateSession).toHaveBeenCalledWith(
       expect.objectContaining({ branch_id: 'branch-q' }),
@@ -453,37 +522,22 @@ describe('MobileApp branch actions', () => {
     expect(await screen.findByText('New AI teammate')).toBeInTheDocument();
   });
 
-  it('starts Ask sessions with the caller saved agent defaults, like desktop quick compose', async () => {
+  it('opens the new-session dialog on the primary branch from Ask, so the provider and model can be chosen', async () => {
     const onCreateSession = vi.fn(async () => null);
-    const client = primaryClient;
-    // No primary-tool preference, so the caller resolves to the default tool.
-    const user = {
-      user_id: 'user-1',
-      default_mcp_server_ids: ['user-mcp'],
-      default_agentic_config: {
-        [DEFAULT_AGENTIC_TOOL_NAME]: {
-          permissionMode: 'acceptEdits',
-          modelConfig: { model: 'saved-model' },
-        },
-      },
-    };
-    renderMobileApp('/m', { client, user, onCreateSession });
+    const user = { user_id: 'user-1' };
+    renderMobileApp('/m', { client: primaryClient, user, onCreateSession });
     await act(async () => {});
 
     fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
 
-    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
-    expect(onCreateSession.mock.calls[0]).toEqual([
-      expect.objectContaining({
-        branch_id: 'branch-p',
-        agent: DEFAULT_AGENTIC_TOOL_NAME,
-        permissionMode: 'acceptEdits',
-        modelConfig: { model: 'saved-model' },
-        mcpServerIds: undefined,
-        agenticToolPresetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
-      }),
-      'board-1',
-    ]);
+    expect(await screen.findByTestId('new-session-modal')).toBeInTheDocument();
+    expect(newSessionModal.props).toMatchObject({
+      fullScreen: true,
+      branchId: 'branch-p',
+      branch: primaryBranch,
+      currentUser: user,
+    });
+    expect(onCreateSession).not.toHaveBeenCalled();
   });
 });
 
@@ -552,6 +606,7 @@ describe('MobileApp Ask with a failed primary lookup', () => {
 
     getPrimaryTeammate.mockResolvedValue(primaryBranch);
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await submitNewSession();
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
   });
 });
