@@ -28,6 +28,10 @@ import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
 import { lockMCPOAuthGrantConfiguration } from './services/mcp-oauth-grant-binding.js';
+import {
+  fingerprintMCPOAuthState,
+  MCPOAuthPendingFlowAuthority,
+} from './services/mcp-oauth-pending-flow-authority.js';
 import { MCPOAuthRelay, relayBodyHash } from './services/mcp-oauth-relay.js';
 
 const oauthFixture = vi.hoisted(() => ({
@@ -278,6 +282,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const callback = async (query: Record<string, string>) => {
         let status = 200;
         let body = '';
+        let location: string | undefined;
         const response = {
           setHeader() {},
           status(code: number) {
@@ -288,11 +293,41 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             body = value;
             return this;
           },
+          redirect(code: number, url: string) {
+            status = code;
+            location = url;
+            return this;
+          },
         };
         await (
           oauthCallbackHandler as unknown as (request: unknown, response: unknown) => Promise<void>
-        )({ query }, response);
-        return { status, body };
+        )({ query, headers: {} }, response);
+        if (status !== 303 || !location) return { status, body };
+        // The provider redirect only forwards to the UI. Finish it the way the
+        // browser does: as the signed-in user who started the flow.
+        const forwarded = Object.fromEntries(new URLSearchParams(new URL(location).hash.slice(1)));
+        const flow = await new MCPOAuthPendingFlowAuthority(db, masterSecret).findForCallback(
+          forwarded.state!
+        );
+        const initiator = await runWithTenantDatabaseScope(db, flow!.tenantId, async (scoped) => {
+          const [row] = rawRows(
+            await executeRaw(
+              scoped,
+              sql`SELECT user_id FROM mcp_oauth_pending_flows
+                  WHERE state_hash = ${fingerprintMCPOAuthState(forwarded.state!)}`
+            )
+          );
+          return new UsersRepository(scoped).findById(String(row?.user_id));
+        });
+        const result = (await app
+          .service('mcp-servers/oauth-complete')
+          .create(forwarded as never, params(initiator!, flow!.tenantId))) as {
+          success: boolean;
+        };
+        return {
+          status: result.success ? 200 : forwarded.error ? 400 : 409,
+          body: JSON.stringify(result),
+        };
       };
       return { raw, db, app, callback, emitted };
     }
@@ -850,7 +885,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             state: state!,
             iss: 'https://provider.example.test',
           })
-        ).resolves.toMatchObject({ status: 400 });
+        ).resolves.toMatchObject({ status: 409 });
       } finally {
         oauthFixture.exchangeFailure = undefined;
       }
