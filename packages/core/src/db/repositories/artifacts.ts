@@ -116,7 +116,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
   /**
    * Board-reference visibility only, after board authorization and inside the
    * caller's trusted tenant scope. Not a general artifact authorization API:
-   * preserves the board hook's legacy comparison for userless internal calls.
+   * applies `isArtifactVisibleTo`, so userless calls see public artifacts only.
    * External board calls must pass their authenticated user ID.
    * Never load source/runtime JSON or resolve share URLs. Resolve ambiguity
    * BEFORE visibility: a hidden second match must not authorize a prefix.
@@ -153,10 +153,12 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       created_by: artifacts.created_by,
     };
     type VisibilityRow = Pick<ArtifactRow, 'artifact_id' | 'public' | 'created_by'>;
-    // Match rowToArtifact's null-to-undefined creator projection, including
-    // legacy internal calls without a user. This is not a new auth boundary.
+    // Not a new auth boundary: the shared rule over the minimal projection.
     const canSee = (row: VisibilityRow) =>
-      Boolean(row.public) || (row.created_by ?? undefined) === userId;
+      isArtifactVisibleTo(
+        { public: Boolean(row.public), created_by: (row.created_by ?? undefined) as UUID },
+        userId
+      );
     const readChunk = async <T>(work: () => Promise<T>): Promise<T | undefined> => {
       try {
         return await work();

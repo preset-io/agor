@@ -86,15 +86,13 @@ describe('ArtifactRepository board visibility projection', () => {
       expect(
         await repo.findBoardReferenceVisibleIds([ownPrefix.toUpperCase()], 'test-user')
       ).toEqual(new Set([ownPrefix.toUpperCase()]));
-      // Preserve the old DTO comparison for internal callers with no user;
-      // normal authenticated callers cannot see an ownerless private artifact.
+      // isArtifactVisibleTo: an ownerless private artifact is visible to nobody,
+      // including internal callers with no user.
       const ownerless = await repo.create({ board_id: board.board_id, public: false });
       expect(await repo.findBoardReferenceVisibleIds([ownerless.artifact_id], 'test-user')).toEqual(
         new Set()
       );
-      expect(await repo.findBoardReferenceVisibleIds([ownerless.artifact_id])).toEqual(
-        new Set([ownerless.artifact_id])
-      );
+      expect(await repo.findBoardReferenceVisibleIds([ownerless.artifact_id])).toEqual(new Set());
     }
   );
 

@@ -183,8 +183,6 @@ export type ArtifactParams = QueryParams<{
     _agorSqlBranchAccessUserId?: UUID;
     /** Internal private-artifact SQL marker set by register-hooks for external users. */
     _agorArtifactReadableBy?: UUID;
-    /** Set by the patch owner-or-admin hook so the adapter's nested get() is not re-checked. */
-    _agorArtifactWriteAuthorized?: boolean;
   };
 
 const MAX_CONSOLE_ENTRIES = 100;

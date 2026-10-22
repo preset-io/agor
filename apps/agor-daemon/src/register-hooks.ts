@@ -83,6 +83,7 @@ import {
 } from '@agor/core/mcp';
 import { escapePromptProvenanceSentinels } from '@agor/core/templates/prompt-provenance';
 import type {
+  Artifact,
   AuthenticatedParams,
   Board,
   BoardID,
@@ -2076,36 +2077,58 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
+  type ArtifactHookParams = ArtifactParams &
+    RBACParams & {
+      _agorPrefetchedRecord?: { id: string; idField: string; record: Artifact };
+    };
+
+  /**
+   * Load the artifact a get/patch/remove targets once per request. The row is
+   * passed to later hooks and the adapter's existence read through the
+   * request-bounded `_agorPrefetchedRecord` (same pattern as boards), and
+   * `context.id` is canonicalized so short IDs match it.
+   */
+  const loadRequestArtifact = async (context: HookContext): Promise<Artifact | null> => {
+    const params = context.params as ArtifactHookParams;
+    const prefetched = params._agorPrefetchedRecord;
+    if (prefetched?.idField === 'artifact_id' && prefetched.id === String(context.id)) {
+      return prefetched.record;
+    }
+    const artifact = await new ArtifactRepository(db).findById(String(context.id));
+    if (!artifact) return null;
+    context.id = artifact.artifact_id;
+    params._agorPrefetchedRecord = {
+      id: artifact.artifact_id,
+      idField: 'artifact_id',
+      record: artifact,
+    };
+    return artifact;
+  };
+
   /**
    * Before-hook for artifacts patch/remove: only the creator or an
    * admin/superadmin may modify an artifact. Without this, any `member` could
    * PATCH /artifacts/:id and rename, re-board, archive, or unpublish another
    * user's artifact — role-only gating is not enough.
    *
-   * Runs AFTER requireMinimumRole (which guarantees `params.user`), skips
-   * internal calls (no provider) and explicit daemon service accounts.
+   * Runs AFTER requireMinimumRole (which guarantees `params.user`) and
+   * ensureArtifactReadable, so "or admin" only covers artifacts the admin can
+   * see. Skips internal calls (no provider) and explicit daemon service accounts.
    */
   const ensureArtifactOwnerOrAdmin = () => async (context: HookContext) => {
     if (!context.params.provider) return context;
     const user = (context.params as { user?: User })?.user;
     if (!user) throw new NotAuthenticated('Authentication required');
     if ((user as unknown as { _isServiceAccount?: boolean })._isServiceAccount) return context;
-    // The adapter's patch re-reads the row through the hooked get();
-    // write authority decided here must not be re-judged by the read rule.
-    const authorized = () => {
-      (context.params as ArtifactParams)._agorArtifactWriteAuthorized = true;
-      return context;
-    };
-    if (hasMinimumRole(user.role, ROLES.ADMIN)) return authorized();
+    if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
 
     const artifactId = context.id;
     if (artifactId === undefined || artifactId === null) return context;
-    const artifactRepo = new ArtifactRepository(db);
-    const artifact = await artifactRepo.findById(String(artifactId));
+    const artifact = await loadRequestArtifact(context);
     if (!artifact) {
       throw new Forbidden(`Artifact ${artifactId} not found or not accessible`);
     }
-    if (artifact.created_by && artifact.created_by === user.user_id) return authorized();
+    if (artifact.created_by && artifact.created_by === user.user_id) return context;
     throw new Forbidden(
       "Only the artifact's creator or an admin may modify it. Use agor_artifacts_publish to create your own copy."
     );
@@ -2127,28 +2150,32 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   };
 
   /**
-   * get: NotFound unless the caller passes the private rule and can view the
-   * artifact's branch (the same branch rule as find, including its superadmin
-   * bypass). A branchless artifact is reachable only by its creator.
+   * get/patch/remove: NotFound unless the caller passes the private rule and
+   * can view the artifact's branch (the same branch rule as find, including
+   * its superadmin bypass). A branchless artifact is reachable only by its
+   * creator. Writes run this first so a write can never act as a read.
+   * Duplicates `ensureCanView` on purpose: hidden artifacts are NotFound, not Forbidden.
    */
   const ensureArtifactReadable = () => async (context: HookContext) => {
     if (!context.params.provider) return context;
     const user = (context.params as { user?: User }).user;
     if (!user) throw new NotAuthenticated('Authentication required');
     if ((user as { _isServiceAccount?: boolean })._isServiceAccount) return context;
-    if ((context.params as ArtifactParams)._agorArtifactWriteAuthorized) return context;
 
     const notFound = () => new NotFound(`Artifact ${context.id} not found`);
-    const artifact = await new ArtifactRepository(db).findById(String(context.id));
+    const artifact = await loadRequestArtifact(context);
     if (!artifact || !isArtifactVisibleTo(artifact, user.user_id)) throw notFound();
     if (!artifact.branch_id) {
       if (artifact.created_by === user.user_id) return context;
       throw notFound();
     }
-    const branch = await branchRepository.findById(artifact.branch_id);
+    const params = context.params as ArtifactHookParams;
+    const branch =
+      params.branch?.branch_id === artifact.branch_id
+        ? params.branch
+        : await branchRepository.findById(artifact.branch_id);
     if (!branch) throw notFound();
     await cacheBranchAccess(context.params, branchRepository, branch);
-    const params = context.params as RBACParams;
     const canView = hasBranchPermission(
       branch,
       user.user_id as UUID,
@@ -2170,8 +2197,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
       publishFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'publish artifacts')],
       validateFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'validate artifacts')],
-      patch: [requireMinimumRole(ROLES.MEMBER, 'update artifacts'), ensureArtifactOwnerOrAdmin()],
-      remove: [requireMinimumRole(ROLES.MEMBER, 'delete artifacts'), ensureArtifactOwnerOrAdmin()],
+      patch: [
+        requireMinimumRole(ROLES.MEMBER, 'update artifacts'),
+        ensureArtifactReadable(),
+        ensureArtifactOwnerOrAdmin(),
+      ],
+      remove: [
+        requireMinimumRole(ROLES.MEMBER, 'delete artifacts'),
+        ensureArtifactReadable(),
+        ensureArtifactOwnerOrAdmin(),
+      ],
     },
   } as never);
 
