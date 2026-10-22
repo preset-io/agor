@@ -34,6 +34,7 @@ import {
   CapabilityPolicyRepository,
   CardRepository,
   getMCPEgressGatewayMode,
+  isArtifactVisibleTo,
   requireCurrentTenantId,
   runWithTenantDatabaseScope,
   ScheduleRepository,
@@ -95,6 +96,7 @@ import type {
   MessageID,
   Paginated,
   Params,
+  RBACParams,
   Session,
   Task,
   TaskID,
@@ -136,7 +138,7 @@ import { validateMessageCreate } from './hooks/validate-message-create.js';
 import { coordinateMCPServerMutationAfterWrite } from './mcp-egress/coordination.js';
 import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
 import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
-import type { ArtifactsService } from './services/artifacts.js';
+import type { ArtifactParams, ArtifactsService } from './services/artifacts.js';
 import {
   publicBoardCommentCreateInput,
   publicBoardCommentPatchInput,
@@ -167,6 +169,7 @@ import {
   ensureCanPromptInSession,
   ensureCanView,
   ensureSessionImmutability,
+  hasBranchPermission,
   loadBranch,
   loadBranchFromSession,
   loadScheduleAndBranch,
@@ -2087,7 +2090,13 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     const user = (context.params as { user?: User })?.user;
     if (!user) throw new NotAuthenticated('Authentication required');
     if ((user as unknown as { _isServiceAccount?: boolean })._isServiceAccount) return context;
-    if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
+    // The adapter's patch re-reads the row through the hooked get();
+    // write authority decided here must not be re-judged by the read rule.
+    const authorized = () => {
+      (context.params as ArtifactParams)._agorArtifactWriteAuthorized = true;
+      return context;
+    };
+    if (hasMinimumRole(user.role, ROLES.ADMIN)) return authorized();
 
     const artifactId = context.id;
     if (artifactId === undefined || artifactId === null) return context;
@@ -2096,16 +2105,68 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     if (!artifact) {
       throw new Forbidden(`Artifact ${artifactId} not found or not accessible`);
     }
-    if (artifact.created_by && artifact.created_by === user.user_id) return context;
+    if (artifact.created_by && artifact.created_by === user.user_id) return authorized();
     throw new Forbidden(
       "Only the artifact's creator or an admin may modify it. Use agor_artifacts_publish to create your own copy."
     );
   };
 
+  /**
+   * Private artifacts (`public = false`) are readable only by their creator,
+   * like `ArtifactsService.isVisibleTo` on the payload path: no role bypasses
+   * it. Internal calls (no provider) and daemon service accounts are exempt.
+   * find: mark the request so the repository filters in SQL (so `total` never
+   * counts hidden rows).
+   */
+  const markArtifactReadableBy = () => async (context: HookContext) => {
+    if (!context.params.provider) return context;
+    const user = (context.params as { user?: User }).user;
+    if (!user || (user as { _isServiceAccount?: boolean })._isServiceAccount) return context;
+    (context.params as ArtifactParams)._agorArtifactReadableBy = user.user_id as UUID;
+    return context;
+  };
+
+  /**
+   * get: NotFound unless the caller passes the private rule and can view the
+   * artifact's branch (the same branch rule as find, including its superadmin
+   * bypass). A branchless artifact is reachable only by its creator.
+   */
+  const ensureArtifactReadable = () => async (context: HookContext) => {
+    if (!context.params.provider) return context;
+    const user = (context.params as { user?: User }).user;
+    if (!user) throw new NotAuthenticated('Authentication required');
+    if ((user as { _isServiceAccount?: boolean })._isServiceAccount) return context;
+    if ((context.params as ArtifactParams)._agorArtifactWriteAuthorized) return context;
+
+    const notFound = () => new NotFound(`Artifact ${context.id} not found`);
+    const artifact = await new ArtifactRepository(db).findById(String(context.id));
+    if (!artifact || !isArtifactVisibleTo(artifact, user.user_id)) throw notFound();
+    if (!artifact.branch_id) {
+      if (artifact.created_by === user.user_id) return context;
+      throw notFound();
+    }
+    const branch = await branchRepository.findById(artifact.branch_id);
+    if (!branch) throw notFound();
+    await cacheBranchAccess(context.params, branchRepository, branch);
+    const params = context.params as RBACParams;
+    const canView = hasBranchPermission(
+      branch,
+      user.user_id as UUID,
+      params.isBranchOwner === true,
+      'view',
+      user.role,
+      superadminOpts.allowSuperadmin,
+      params.branchPermission
+    );
+    if (!canView) throw notFound();
+    return context;
+  };
+
   safeService('artifacts')?.hooks({
     before: {
       all: [requireAuth],
-      find: [scopeFindToAccessibleBranchesSql(superadminOpts)],
+      find: [scopeFindToAccessibleBranchesSql(superadminOpts), markArtifactReadableBy()],
+      get: [ensureArtifactReadable()],
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
       publishFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'publish artifacts')],
       validateFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'validate artifacts')],

@@ -96,6 +96,12 @@ dbTest(
       email: 'artifact-member@example.test',
       role: ROLES.MEMBER,
     });
+    const adminId = generateId() as UUID;
+    await users.create({
+      user_id: adminId,
+      email: 'artifact-admin@example.test',
+      role: ROLES.ADMIN,
+    });
     const board = await new BoardRepository(rawDb).create({
       name: 'Artifact custom route test board',
       created_by: ownerId,
@@ -109,6 +115,16 @@ dbTest(
       content_hash: 'guarded-custom-route-hash',
       required_env_vars: ['ARTIFACT_ROUTE_TEST_SECRET'],
       public: true,
+      created_by: ownerId,
+    });
+
+    const privateArtifact = await new ArtifactRepository(rawDb).create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'Owner-only artifact',
+      template: 'static',
+      files: { '/index.html': '<h1>private</h1>' },
+      public: false,
       created_by: ownerId,
     });
 
@@ -245,6 +261,25 @@ dbTest(
         revoked: true,
         grantId: grantList[0]?.grant_id,
       });
+
+      // GET /artifacts/:id applies the private rule with no role bypass,
+      // matching the payload route.
+      const getAs = (userId: UUID) =>
+        fetch(`${baseUrl}/artifacts/${privateArtifact.artifact_id}`, {
+          headers: authHeaders(userId),
+        });
+      expect((await getAs(ownerId)).status).toBe(200);
+      expect((await getAs(memberId)).status).toBe(404);
+      expect((await getAs(adminId)).status).toBe(404);
+
+      // Owner-or-admin writes keep working: patch's internal existence read
+      // must not be re-judged by the read rule.
+      const adminPatch = await fetch(`${baseUrl}/artifacts/${privateArtifact.artifact_id}`, {
+        method: 'PATCH',
+        headers: { ...authHeaders(adminId), 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Renamed by admin' }),
+      });
+      expect(adminPatch.status, await adminPatch.clone().text()).toBe(200);
 
       const afterRevoke = await fetch(`${baseUrl}/me/artifact-trust-grants`, {
         headers: authHeaders(memberId),
