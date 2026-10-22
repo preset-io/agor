@@ -375,6 +375,12 @@ export interface SessionPanelProps {
   onSessionMcpRetry?: () => void;
   open: boolean;
   onClose: () => void;
+  /** Labels the header close button "Close tab" instead of "Close panel". */
+  closesTab?: boolean;
+  /** Adds Close other tabs to More actions. */
+  onCloseOtherTabs?: () => void;
+  /** Extra header control, e.g. the mobile open-sessions switcher. */
+  headerExtra?: React.ReactNode;
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
@@ -388,6 +394,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   onSessionMcpRetry,
   open,
   onClose,
+  closesTab,
+  onCloseOtherTabs,
+  headerExtra,
   uploadPolicy,
 }) => {
   const { token } = theme.useToken();
@@ -1000,6 +1009,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
   const moreMenuItems: MenuProps['items'] = [
+    ...(onCloseOtherTabs
+      ? [
+          {
+            key: 'close-other-tabs',
+            icon: <CloseOutlined />,
+            label: 'Close other tabs',
+            onClick: onCloseOtherTabs,
+          },
+          { type: 'divider' as const },
+        ]
+      : []),
     ...(showCenterMap && branch
       ? [
           {
@@ -1706,6 +1726,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </div>
           </div>
           <Space size={4}>
+            {headerExtra}
             <SessionAttachmentsDropdown items={attachmentItems} />
             <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
               <Tooltip title="More actions">
@@ -1728,10 +1749,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </Tooltip>
             {/* Desktop closes from the right; mobile closes from the leading X above. */}
             {!isMobileShell && (
-              <Tooltip title="Close Panel">
+              <Tooltip title={closesTab ? 'Close tab. The agent keeps running.' : 'Close Panel'}>
                 <Button
                   type="text"
-                  aria-label="Close panel"
+                  aria-label={closesTab ? 'Close tab' : 'Close panel'}
                   icon={<CloseOutlined />}
                   onClick={onClose}
                   style={{ marginLeft: token.sizeUnit }}
