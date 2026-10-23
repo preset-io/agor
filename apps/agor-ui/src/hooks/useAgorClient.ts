@@ -46,6 +46,24 @@ export function tenantRestrictionProbeDelay(attempt: number): number {
   return TENANT_RESTRICTION_PROBE_DELAYS_MS[index];
 }
 
+/** Floor between edge restriction reads; failed reconnects arrive every 1–5 s. */
+export const EDGE_RESTRICTION_READ_INTERVAL_MS = 15_000;
+/** Shorter than the floor, so reads never overlap and a stalled one cannot outlive it. */
+export const EDGE_RESTRICTION_READ_TIMEOUT_MS = 10_000;
+
+/** A hosting edge's refused upgrade hides its body, so `/health` asks for the same coded 403. */
+export async function readEdgeTenantRestriction(daemonUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${daemonUrl}/health`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(EDGE_RESTRICTION_READ_TIMEOUT_MS),
+    });
+    return response.status === 403 && isTenantRestrictedError(await response.json());
+  } catch {
+    return false;
+  }
+}
+
 interface UseAgorClientOptions {
   url?: string;
   accessToken?: string | null;
@@ -176,6 +194,20 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         clearTimeout(restrictionProbeTimer);
         restrictionProbeTimer = null;
       }
+    };
+
+    // Edge reads are spaced by EDGE_RESTRICTION_READ_INTERVAL_MS; an accepted handshake voids older reads.
+    let edgeRestrictionReadAt = Number.NEGATIVE_INFINITY;
+    let acceptedHandshakes = 0;
+    const readEdgeRestriction = () => {
+      const now = Date.now();
+      if (now - edgeRestrictionReadAt < EDGE_RESTRICTION_READ_INTERVAL_MS) return;
+      edgeRestrictionReadAt = now;
+      const startedAfter = acceptedHandshakes;
+      void readEdgeTenantRestriction(url).then((closed) => {
+        if (closed && mounted && !restricted && startedAfter === acceptedHandshakes)
+          enterTenantRestricted();
+      });
     };
 
     /** Enter the suspended state: close the socket so only the slow probe, not Socket.IO's fast retry, reopens it. */
@@ -386,6 +418,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         clearManualReconnectTimer();
         clearDisconnectGrace();
         // Only an accepted handshake clears the suspended state.
+        acceptedHandshakes += 1;
         restricted = false;
         restrictionProbes = 0;
         clearRestrictionProbeTimer();
@@ -561,6 +594,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
             setConnecting(true);
             scheduleDisconnectedFlip();
             // Don't set error - socket.io will keep trying
+            readEdgeRestriction();
           }
         }
       });

@@ -210,7 +210,11 @@ rejection (see Credential generations), which is what a browser actually
 receives. agor-ui matches the code (never message text): `useAgorClient`
 closes the socket, renders the full-page `WorkspaceSuspended` state, closes the
 mutation gate, and re-probes with one handshake at 30s/1m/2m/4m/5m-cap until an
-accepted handshake clears it. `useAuth` reports the same code from a
+accepted handshake clears it. A proxy in front of the daemon may refuse the
+upgrade itself, and a browser never sees that body, so after a transport-level
+reconnect failure `useAgorClient` reads `GET /health` (at most every 15s) and
+enters the same state when it answers 403 with the code; the daemon's own
+`/health` is always 200. `useAuth` reports the same code from a
 re-authentication, refresh or sign-in attempt, retains the stored credential and
 re-probes on that schedule; `App` renders the suspended state from either half,
 ahead of the sign-in gate. The browser state is a presentation of the last

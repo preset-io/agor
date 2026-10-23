@@ -8,6 +8,8 @@ import {
 } from '../utils/singleFlightRefresh';
 import { RefreshSupersededError } from '../utils/tokenRefresh';
 import {
+  EDGE_RESTRICTION_READ_INTERVAL_MS,
+  EDGE_RESTRICTION_READ_TIMEOUT_MS,
   TENANT_RESTRICTION_PROBE_DELAYS_MS,
   tenantRestrictionProbeDelay,
   useAgorClient,
@@ -35,6 +37,17 @@ vi.mock('../utils/singleFlightRefresh', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/singleFlightRefresh')>()),
   refreshTokensSingleFlight: refreshTokensMock,
 }));
+
+// A failed reconnect reads `/health`; the default answer is an ordinary healthy daemon.
+const healthFetch = vi.fn(async () => new Response('{"status":"ok"}', { status: 200 }));
+beforeEach(() => {
+  healthFetch.mockReset();
+  healthFetch.mockImplementation(async () => new Response('{"status":"ok"}', { status: 200 }));
+  vi.stubGlobal('fetch', healthFetch);
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 type SocketHandler = { fn: (...args: unknown[]) => void; once: boolean };
 
@@ -1171,5 +1184,138 @@ describe('useAgorClient suspended workspace lifecycle', () => {
 
     expect(result.current.tenantRestricted).toBe(false);
     expect(result.current.connected).toBe(true);
+  });
+});
+
+describe('useAgorClient suspension behind a hosting edge', () => {
+  const edgeSuspended = () =>
+    new Response(
+      JSON.stringify({
+        error: 'workspace_suspended',
+        code: 403,
+        className: 'forbidden',
+        data: { code: 'tenant_restricted' },
+      }),
+      { status: 403, headers: { 'Content-Type': 'application/json' } }
+    );
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    localStorage.clear();
+  });
+
+  async function droppedSocket() {
+    const seam = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(seam.client as never);
+    const hook = renderHook(() =>
+      useAgorClient({ url: 'http://daemon.test', accessToken: 'token', authorityGeneration: 1 })
+    );
+    await act(async () => {});
+    const failReconnect = async () => {
+      await act(async () => {
+        seam.io.connected = false;
+        seam.fireIo('disconnect', 'transport close');
+        // The browser hides a refused upgrade's body: only a bare transport error arrives.
+        seam.fireIo('connect_error', new Error('websocket error'));
+      });
+    };
+    return { ...seam, ...hook, failReconnect };
+  }
+
+  it('shows the suspended screen when the edge answers /health with the coded 403', async () => {
+    healthFetch.mockImplementation(async () => edgeSuspended());
+    const { result, io, failReconnect } = await droppedSocket();
+
+    await failReconnect();
+
+    await waitFor(() => expect(result.current.tenantRestricted).toBe(true));
+    expect(healthFetch).toHaveBeenCalledWith('http://daemon.test/health', {
+      cache: 'no-store',
+      signal: expect.any(AbortSignal),
+    });
+    expect(result.current.connecting).toBe(false);
+    expect(io.disconnect).toHaveBeenCalled();
+  });
+
+  it('keeps reconnecting for an uncoded 403, an outage or an unreachable host', async () => {
+    for (const answer of [
+      () => new Response('<html>Forbidden</html>', { status: 403 }),
+      () => new Response('{"error":"workspace_unavailable"}', { status: 503 }),
+      () => Promise.reject(new TypeError('Failed to fetch')),
+    ]) {
+      healthFetch.mockImplementation(async () => answer());
+      const { result, failReconnect, unmount } = await droppedSocket();
+      await failReconnect();
+      await act(async () => {});
+      expect(healthFetch).toHaveBeenCalledOnce();
+      expect(result.current.tenantRestricted).toBe(false);
+      expect(result.current.connecting).toBe(true);
+      unmount();
+      healthFetch.mockClear();
+    }
+  });
+
+  it('reads /health at most once per interval across repeated failed reconnects', async () => {
+    vi.useFakeTimers();
+    const { failReconnect } = await droppedSocket();
+
+    await failReconnect();
+    await failReconnect();
+    expect(healthFetch).toHaveBeenCalledOnce();
+
+    await act(() => vi.advanceTimersByTimeAsync(EDGE_RESTRICTION_READ_INTERVAL_MS));
+    await failReconnect();
+    expect(healthFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds each read below the interval, so a stalled read never blocks the next one', async () => {
+    expect(EDGE_RESTRICTION_READ_TIMEOUT_MS).toBeLessThan(EDGE_RESTRICTION_READ_INTERVAL_MS);
+    vi.useFakeTimers();
+    healthFetch.mockImplementation(() => new Promise<Response>(() => {}));
+    const { failReconnect } = await droppedSocket();
+
+    await failReconnect();
+    await act(() => vi.advanceTimersByTimeAsync(EDGE_RESTRICTION_READ_INTERVAL_MS));
+    await failReconnect();
+    expect(healthFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores a suspended answer that lands after the socket already reconnected', async () => {
+    const answer = deferred<Response>();
+    healthFetch.mockImplementation(() => answer.promise);
+    const { result, io, fireIo, failReconnect } = await droppedSocket();
+
+    await failReconnect();
+    act(() => {
+      io.connected = true;
+      fireIo('connect');
+    });
+    await act(async () => {
+      answer.resolve(edgeSuspended());
+    });
+
+    expect(result.current.tenantRestricted).toBe(false);
+    expect(result.current.connected).toBe(true);
+  });
+
+  it('ignores a suspended answer from before an accepted handshake, even after a later drop', async () => {
+    const answer = deferred<Response>();
+    healthFetch.mockImplementation(() => answer.promise);
+    const { result, io, fireIo, failReconnect } = await droppedSocket();
+
+    await failReconnect();
+    act(() => {
+      io.connected = true;
+      fireIo('connect');
+      io.connected = false;
+      fireIo('disconnect', 'transport close');
+    });
+    await act(async () => {
+      answer.resolve(edgeSuspended());
+    });
+
+    expect(result.current.tenantRestricted).toBe(false);
+    expect(result.current.connecting).toBe(true);
   });
 });
