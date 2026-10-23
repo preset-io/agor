@@ -15,7 +15,9 @@ The browser never loads the whole workspace. It loads three layers:
    branches, sessions, board objects, cards and full record.
 
 Everything else (search hits, deep links, genealogy, settings tables) is
-read on demand and kept only while a view pins it.
+read on demand and kept only while a view pins it. Transcripts, browser
+storage, and every other client cache are covered in
+[`frontend-state.md`](frontend-state.md).
 
 ## Invariants
 
