@@ -212,8 +212,10 @@ it.each([
     const plus = screen.getByRole('button', { name: 'Add files and actions' });
     const modelChip = screen.getByTestId('model-chip');
     const circle = screen.getByTestId('composer-circle');
-    // Attach is pinned on desktop here, and on phones by default.
-    const row = [plus, screen.getByTestId('upload-bar-btn'), modelChip, circle];
+    // Attach is pinned on desktop, and on phones by default; a crowded phone row folds it first.
+    const upload = screen.queryByTestId('upload-bar-btn');
+    if (!isMobile) expect(upload).not.toBeNull();
+    const row = [plus, ...(upload ? [upload] : []), modelChip, circle];
     const rects = row.map((control) => control.getBoundingClientRect());
     rects.forEach((rect, index) => {
       expect(rect.height).toBe(size);
@@ -222,8 +224,9 @@ it.each([
       expect(rect.right).toBeLessThanOrEqual(card.right);
       if (index > 0) expect(rect.left).toBeGreaterThanOrEqual(rects[index - 1].right);
     });
-    // The circle is a circle, and the row ends with it.
-    expect(rects.at(-1)!.width).toBe(size);
+    // Running with text, the row ends with the labelled Queue pill.
+    expect(circle).toHaveTextContent('Queue');
+    expect(rects.at(-1)!.width).toBeGreaterThan(size);
     expect(card.right).toBeLessThanOrEqual(window.innerWidth);
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
 
@@ -408,23 +411,31 @@ it('folds a crowded status row into Session details, keeping the ring, and unfol
 });
 
 it.each([
-  [340, 'auto'],
-  [357, 'auto'],
-  [340, 'plan'],
-  [357, 'acceptEdits'],
-  [340, 'acceptEdits'],
+  [340, 'auto', false],
+  [357, 'auto', false],
+  [340, 'plan', false],
+  [357, 'acceptEdits', false],
+  [340, 'acceptEdits', false],
+  [340, 'auto', true],
+  [357, 'auto', true],
+  [340, 'acceptEdits', true],
+  [357, 'plan', true],
 ] as const)(
-  'keeps the default pins in a %ipx panel without wrapping (permissions %s)',
-  async (width, permissionMode) => {
+  'keeps the row on one line in a %ipx panel (permissions %s, queue %s)',
+  async (width, permissionMode, queue) => {
     localStorage.removeItem('agor-footer-prefs');
     await page.viewport(1280, 900);
     const state = {
       session: { ...props.session, model_config: { model: 'claude-opus-5-5' } },
       permissionMode,
+      // Idle with text shows the Send circle; running with text shows the Queue pill.
+      isRunning: queue,
+      hasInput: true,
     };
     const view = render(rowFooter(width, state));
     const card = screen.getByTestId('composer-card');
     const modelChip = screen.getByTestId('model-chip');
+    const circle = screen.getByTestId('composer-circle');
     // The narrow row drops the effort: just the model.
     expect(modelChip).toHaveTextContent(/^Opus 5\.5$/);
     const permissionChip = screen.queryByTestId('permission-chip');
@@ -450,22 +461,36 @@ it.each([
       expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
     };
     await waitFor(expectRowFits);
-    expect(screen.getByTestId('upload-bar-btn')).toBeVisible();
-    expect(screen.getByTestId('fork-bar-btn')).toBeVisible();
-    if (!permissionChip) {
+    const pins = ['upload-bar-btn', 'fork-bar-btn', 'mcp-bar-btn'].map((id) =>
+      screen.queryByTestId(id)
+    );
+    // Pins fold from the end: whatever stays is Attach, then Fork, then MCP.
+    const shown = pins.findIndex((pin) => !pin);
+    for (const pin of pins.slice(shown === -1 ? pins.length : shown)) expect(pin).toBeNull();
+    if (queue) {
+      // The label stays; pins give way first.
+      expect(circle).toHaveTextContent('Queue');
+      expect(circle.getBoundingClientRect().height).toBe(theme.getDesignToken().controlHeight);
+    } else {
+      expect(circle.getBoundingClientRect().width).toBe(theme.getDesignToken().controlHeight);
+      expect(screen.getByTestId('upload-bar-btn')).toBeVisible();
+      expect(screen.getByTestId('fork-bar-btn')).toBeVisible();
+    }
+    if (!permissionChip && !queue) {
       // All 3 default pins stay one click away.
       expect(screen.getByTestId('mcp-bar-btn')).toBeVisible();
     } else if (!screen.queryByTestId('mcp-bar-btn')) {
-      // The permission chip wins: the last pin folds into "+", which says so.
+      // The last pin folds into "+", which says so.
       await userEvent.click(screen.getByRole('button', { name: 'Add files and actions' }));
       const menu = await screen.findByRole('dialog', { name: 'Add files and actions' });
       expect(
         within(menu).getByText('MCP tools stays in here until the panel is wider.')
       ).toBeVisible();
       await closeMenu('Add files and actions');
-      // With room again, the pin comes back.
+      // With room again, the pins come back.
       view.rerender(rowFooter(600, state));
       await waitFor(() => expect(screen.getByTestId('mcp-bar-btn')).toBeVisible());
+      expect(screen.getByTestId('upload-bar-btn')).toBeVisible();
     }
   }
 );

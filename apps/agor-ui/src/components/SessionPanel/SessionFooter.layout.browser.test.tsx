@@ -187,7 +187,7 @@ it.each([false, true])(
 );
 
 it.each([360, 390, 430])(
-  'keeps the phone circle fill inside the card at %ipx with a 44px target',
+  'keeps the phone Send and Queue fills inside the card at %ipx with 44px targets',
   async (width) => {
     await page.viewport(width, 700);
     render(panel(SessionStatus.RUNNING, false));
@@ -195,13 +195,15 @@ it.each([360, 390, 430])(
     await waitFor(() => expect(circle()).toHaveAccessibleName('Queue message'));
     const target = circle().getBoundingClientRect();
     const box = card().getBoundingClientRect();
-    expect(target.width).toBe(MOBILE_TOUCH_TARGET);
+    // Queue is a labelled pill: 44px tall, as wide as its label needs.
+    expect(circle()).toHaveTextContent('Queue');
+    expect(target.width).toBeGreaterThan(MOBILE_TOUCH_TARGET);
     expect(target.height).toBe(MOBILE_TOUCH_TARGET);
-    // The fill is the content box: 36px, inset from the 44px target.
+    // The fill is the content box: 36px tall, inset from the 44px target.
     const style = getComputedStyle(circle());
     expect(style.backgroundClip).toBe('content-box');
     const inset = Number.parseFloat(style.paddingRight);
-    expect(target.width - 2 * inset).toBe(36);
+    expect(target.height - 2 * inset).toBe(36);
     expect(box.right - (target.right - inset)).toBeGreaterThanOrEqual(10);
     expect(box.bottom - (target.bottom - inset)).toBeGreaterThanOrEqual(10);
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(width);

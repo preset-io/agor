@@ -128,7 +128,7 @@ const order = () =>
 // The queue folds to "{n} queued" above the composer; expand it to read rows.
 // The header's name also carries its chevron icon's label, so match the count only.
 async function openQueue(count: number) {
-  const header = await screen.findByRole('button', { name: new RegExp(`\\b${count} queued\\b`) });
+  const header = await screen.findByRole('button', { name: new RegExp(`^${count} queued\\b`) });
   if (header.getAttribute('aria-expanded') !== 'true') await userEvent.click(header);
   await waitFor(() => expect(header).toHaveAttribute('aria-expanded', 'true'));
   await waitFor(() => expect(order()).toHaveLength(count));

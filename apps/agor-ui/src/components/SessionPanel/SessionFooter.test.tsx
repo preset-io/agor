@@ -158,17 +158,22 @@ describe('composer circle', () => {
   });
 
   it.each([1280, 390])(
-    'at %ipx, Queue looks like Send: same arrow and colour, only the label differs',
+    'at %ipx, Queue is a labelled pill in the Send colour, and idle returns to the circle',
     async (width) => {
       setWidth(width);
       const view = renderFooter({ hasInput: true });
-      const sendClass = circle().className;
-      expect(circle().querySelector('[data-icon="arrow-up"]')).not.toBeNull();
+      expect(circle()).toHaveClass('ant-btn-circle', 'ant-btn-color-primary');
+      expect(circle()).not.toHaveTextContent('Queue');
       view.rerender(<SessionFooter {...baseProps} isRunning hasInput />);
       expect(circle()).toHaveAccessibleName('Queue message');
+      expect(circle()).toHaveTextContent('Queue');
+      expect(circle()).toHaveClass('ant-btn-round', 'ant-btn-color-primary');
       expect(circle().querySelector('[data-icon="arrow-up"]')).not.toBeNull();
       expect(circle().querySelector('[data-icon="unordered-list"]')).toBeNull();
-      expect(circle().className).toBe(sendClass);
+      view.rerender(<SessionFooter {...baseProps} hasInput />);
+      expect(circle()).toHaveClass('ant-btn-circle');
+      expect(circle()).not.toHaveTextContent('Queue');
+      view.rerender(<SessionFooter {...baseProps} isRunning hasInput />);
       if (width === 1280) {
         fireEvent.mouseEnter(circle());
         expect(
@@ -192,7 +197,9 @@ describe('composer circle', () => {
   it('shows no count with nothing queued', () => {
     renderFooter({ isRunning: true, hasInput: true });
     expect(circle()).toHaveAccessibleName('Queue message');
-    expect(screen.getByTestId('composer-queued-badge')).toHaveTextContent(/^$/);
+    expect(
+      screen.getByTestId('composer-queued-badge').querySelector('.ant-badge-count')
+    ).toBeNull();
   });
 
   it('is Queue while running with text, and Stop moves to the working line', () => {

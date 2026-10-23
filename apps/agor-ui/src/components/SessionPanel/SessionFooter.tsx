@@ -261,12 +261,14 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         ? toolCaps?.supportsChildSpawn !== false
         : true
   );
-  // A narrow row that can't fit the permission chip folds its last pin instead.
-  const [permissionFold, setPermissionFold] = React.useState(false);
+  // A crowded narrow or phone row folds its last pins first, so the chips and Queue stay readable.
+  const [crowdFold, setCrowdFold] = React.useState(0);
+  const pinLimit = isMobile ? COMPACT_PIN_LIMIT : narrow ? NARROW_PIN_LIMIT : undefined;
+  const pinnedCount = availableActions.filter((id) => pinnedItems.includes(id)).length;
   const { row: rowPins, folded: foldedPins } = splitPinnedActions(
     pinnedItems,
     availableActions,
-    isMobile ? COMPACT_PIN_LIMIT : narrow ? NARROW_PIN_LIMIT - (permissionFold ? 1 : 0) : undefined
+    pinLimit === undefined ? undefined : Math.max(0, Math.min(pinLimit, pinnedCount) - crowdFold)
   );
   const togglePin = (id: string) => {
     if (pinnedItems.includes(id)) {
@@ -497,30 +499,33 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       : (permissionMeta?.shortLabel ?? permissionChipName);
   const modelChipTextRef = React.useRef<HTMLSpanElement>(null);
   const permissionChipTextRef = React.useRef<HTMLSpanElement>(null);
-  const unfoldWidthRef = React.useRef(0);
+  // Card widths at which each folded pin fits again.
+  const unfoldWidthsRef = React.useRef<number[]>([]);
   const pinSignature = pinnedItems.join('|');
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure the full row when its items change
   React.useLayoutEffect(
-    () => setPermissionFold(false),
-    [pinSignature, modelChipLabel, permissionChipLabel]
+    () => setCrowdFold(0),
+    [pinSignature, modelChipLabel, permissionChipLabel, circleState]
   );
   React.useLayoutEffect(() => {
-    if (!narrow || !showPermissionChip) {
-      if (permissionFold) setPermissionFold(false);
+    if (!(narrow || isMobile) || !(showPermissionChip || circleState === 'queue')) {
+      if (crowdFold) setCrowdFold(0);
       return;
     }
-    if (permissionFold) {
-      if (cardWidth >= unfoldWidthRef.current) setPermissionFold(false);
+    if (crowdFold > 0 && cardWidth >= unfoldWidthsRef.current[crowdFold - 1]) {
+      setCrowdFold(crowdFold - 1);
       return;
     }
-    // The chips clip their text rather than overflow, so a clipped chip means the row is full.
-    const clipped = [modelChipTextRef.current, permissionChipTextRef.current].reduce(
-      (total, text) => total + (text ? Math.max(0, text.scrollWidth - text.clientWidth) : 0),
-      0
-    );
-    if (clipped > 1 && rowPins.length === NARROW_PIN_LIMIT) {
-      unfoldWidthRef.current = cardWidth + clipped;
-      setPermissionFold(true);
+    // The chips clip their text rather than overflow. The row is full when the permission chip
+    // is clipped, or the model chip can't show its first few words.
+    const missing = (text: HTMLElement | null, readable = Number.POSITIVE_INFINITY) =>
+      text ? Math.max(0, Math.min(text.scrollWidth, readable) - text.clientWidth) : 0;
+    const clipped =
+      missing(modelChipTextRef.current, token.fontSizeSM * 6) +
+      missing(permissionChipTextRef.current);
+    if (clipped > 0 && rowPins.length > 0) {
+      unfoldWidthsRef.current[crowdFold] = cardWidth + clipped;
+      setCrowdFold(crowdFold + 1);
     }
   });
   const chipStyle: React.CSSProperties = {
@@ -1442,7 +1447,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           aria-haspopup="dialog"
           aria-expanded={openMenu === 'permissions'}
           onClick={isMobile ? () => openModelMenu('permissions')(true) : undefined}
-          style={{ ...chipStyle, ...(openMenu === 'permissions' && { color: token.colorText }) }}
+          // The permission label is short and always shown in full; the model chip gives way.
+          style={{
+            ...chipStyle,
+            flexShrink: 0,
+            ...(openMenu === 'permissions' && { color: token.colorText }),
+          }}
           data-testid="permission-chip"
         >
           <Typography.Text
@@ -1696,7 +1706,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 <Tooltip title={circleTooltip}>
                   <Button
                     {...circleVariant}
-                    shape="circle"
+                    // Queue is a labelled pill, so it reads differently from Send at a glance.
+                    shape={circleState === 'queue' ? 'round' : 'circle'}
                     aria-label={circleLabel}
                     aria-disabled={circleDisabled || undefined}
                     aria-busy={circleState === 'stop' ? stopBusy : undefined}
@@ -1713,8 +1724,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                             background: 'currentColor',
                           }}
                         />
-                      ) : (
-                        // Queue reads as Send: same arrow and colour, only the label differs.
+                      ) : circleState === 'queue' ? undefined : (
                         <ArrowUpOutlined />
                       )
                     }
@@ -1724,11 +1734,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                       circleDisabled ? undefined : circleState === 'stop' ? onStop : onSendPrompt
                     }
                     style={{
-                      width: controlSize,
+                      width: circleState === 'queue' ? undefined : controlSize,
                       height: controlSize,
                       minWidth: controlSize,
                       flexShrink: 0,
                       boxShadow: 'none',
+                      ...(circleState === 'queue' &&
+                        !isMobile && { paddingInline: token.paddingSM }),
                       // Phones: a 36px fill inside the 44px target keeps the circle clear of the card edge.
                       ...(isMobile && {
                         border: 'none',
@@ -1739,7 +1751,22 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                       cursor: circleDisabled ? 'not-allowed' : undefined,
                     }}
                     data-testid="composer-circle"
-                  />
+                  >
+                    {circleState === 'queue' && (
+                      // Phones clip the fill to the content box, so the label carries its own padding.
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: token.marginXXS,
+                          paddingInline: isMobile ? token.paddingSM : 0,
+                        }}
+                      >
+                        Queue
+                        <ArrowUpOutlined aria-hidden />
+                      </span>
+                    )}
+                  </Button>
                 </Tooltip>
               </Badge>
             </Flex>

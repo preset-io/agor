@@ -117,13 +117,13 @@ const conversation = () => screen.getByTestId('conversation-scroll-container');
 const queueSection = () => screen.getByRole('region', { name: 'Queued messages' });
 const queueList = () => within(queueSection()).getByRole('list');
 const queueHeader = (count: number) =>
-  screen.getByRole('button', { name: new RegExp(`\\b${count} queued\\b`) });
+  screen.getByRole('button', { name: new RegExp(`^${count} queued\\b`) });
 const card = () => screen.getByTestId('composer-card');
 
 /** Unfolds the "{n} queued" header above the composer. */
 async function expandQueue(count: number) {
   const header = await screen.findByRole('button', {
-    name: new RegExp(`\\b${count} queued\\b`),
+    name: new RegExp(`^${count} queued\\b`),
   });
   if (header.getAttribute('aria-expanded') !== 'true') await userEvent.click(header);
   await waitFor(() => expect(header).toHaveAttribute('aria-expanded', 'true'));
