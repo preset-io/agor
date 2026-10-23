@@ -3446,16 +3446,24 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     );
   });
 
-  it('defaults to aligning Slack users so omitted toggles need no run-as user', async () => {
-    // The manifest tool defaults alignUsers:true so agent-driven setup produces a
-    // valid channel with no empty run-as user. The generated hint therefore aligns
-    // by email and the manifest carries the users:read.email scope.
-    const dmAligned = { ...dmOnly, alignUsers: true };
+  it('defaults to every listening surface and aligned Slack users when toggles are omitted', async () => {
+    // Agent-driven setup must produce a channel that answers @mentions in any
+    // conversation it is added to, with no run-as user to pick.
+    const guidedDefaults = {
+      ...dmOnly,
+      publicChannels: true,
+      privateChannels: true,
+      groupDms: true,
+      alignUsers: true,
+    };
     const tools = await captureTools('admin');
     const parsed = tools.agor_gateway_slack_manifest_generate.cfg.inputSchema.parse({
       appName: 'Agor',
     });
     expect(parsed.alignUsers).toBe(true);
+    expect(parsed.publicChannels).toBe(true);
+    expect(parsed.privateChannels).toBe(true);
+    expect(parsed.groupDms).toBe(true);
     // Schema defaults mirror the capability defaults: thread history stays on,
     // channel history/reactions/fileUpload/fileDownload require explicit opt-in.
     expect(parsed.threadHistory).toBe(true);
@@ -3468,7 +3476,13 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     const result = await tools.agor_gateway_slack_manifest_generate.handler(parsed);
     const payload = JSON.parse(result.content[0].text);
 
-    expect(payload.manifest).toEqual(buildSlackManifest(wizardOptionsFor(dmAligned)));
+    expect(payload.manifest).toEqual(buildSlackManifest(wizardOptionsFor(guidedDefaults)));
+    expect(payload.bot_events).toEqual(expect.arrayContaining(['app_mention', 'message.im']));
+    expect(payload.create_channel_config_hint.config).toMatchObject({
+      enable_channels: true,
+      enable_groups: true,
+      enable_mpim: true,
+    });
     expect(payload.create_channel_config_hint.config.align_slack_users).toBe(true);
     expect(payload.bot_scopes).toEqual(expect.arrayContaining(['users:read.email']));
     expect(payload.create_channel_config_hint.config.inbound_reactions).toBe(false);

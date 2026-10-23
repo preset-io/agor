@@ -19,6 +19,7 @@ import {
   redactGatewayChannelSecrets,
   requiredBotEvents,
   requiredBotScopes,
+  SLACK_SETUP_DEFAULTS,
   type SlackChannelHistoryRequest,
   type SlackChannelHistoryResult,
   type SlackFileInfo,
@@ -1250,35 +1251,41 @@ const slackManifestGenerateSchema = z.strictObject({
   ),
   publicChannels: z
     .boolean()
-    .default(false)
-    .describe('Listen in public channels (#channel) via @mention.'),
+    .default(SLACK_SETUP_DEFAULTS.publicChannels)
+    .describe(
+      'Listen in public channels (#channel) via @mention. Defaults to true; Slack only delivers mentions from channels the bot was added to.'
+    ),
   privateChannels: z
     .boolean()
-    .default(false)
-    .describe('Listen in private channels (groups) via @mention.'),
+    .default(SLACK_SETUP_DEFAULTS.privateChannels)
+    .describe(
+      'Listen in private channels (groups) via @mention. Defaults to true; the bot must be invited to each private channel.'
+    ),
   groupDms: z
     .boolean()
-    .default(false)
-    .describe('Listen in group DMs (multi-person IMs) via @mention.'),
+    .default(SLACK_SETUP_DEFAULTS.groupDms)
+    .describe(
+      'Listen in group DMs (multi-person IMs) via @mention. Defaults to true; the bot must be added to the group DM.'
+    ),
   alignUsers: z
     .boolean()
-    .default(true)
+    .default(SLACK_SETUP_DEFAULTS.alignUsers)
     .describe(
       'Resolve Slack user email → Agor user (adds the users:read.email scope). Defaults to true: each Slack user runs as their matched Agor account and unmatched users are rejected, so no fixed run-as user is needed. Set false to run every message as one fixed Agor user (then pass agorUserId to agor_gateway_channels_create).'
     ),
   outbound: z
     .boolean()
-    .default(false)
+    .default(SLACK_SETUP_DEFAULTS.outbound)
     .describe('Proactive outbound: post to channels by name and DM users by email.'),
   ingestFiles: z
     .boolean()
-    .default(false)
+    .default(SLACK_SETUP_DEFAULTS.ingestFiles)
     .describe(
       'Ingest images and text files attached to inbound messages (adds the files:read scope). The gateway stages them server-side and hands opaque, expiring handles to the session agent.'
     ),
   inboundReactions: z
     .boolean()
-    .default(false)
+    .default(SLACK_SETUP_DEFAULTS.inboundReactions)
     .describe(
       'Deliver human emoji reactions (added/removed) on messages in threads already mapped to a session as a short prompt to that session, e.g. react ✅ to approve. Never starts a session; rate limited per thread. Adds the reactions:read scope and the reaction_added/reaction_removed bot events. Maps to config.inbound_reactions.'
     ),
@@ -1316,7 +1323,7 @@ const slackManifestGenerateSchema = z.strictObject({
     .array(z.string().min(1))
     .optional()
     .describe(
-      'Slack channel ID whitelist. Maps to config.allowed_channel_ids when you call agor_gateway_channels_create; it does NOT change the manifest scopes or events.'
+      'Slack channel ID whitelist for public channels, private channels, and group DMs, also applied to outbound sends, agent posts, file downloads, and channel history reads (DM history included); inbound DMs are never limited. Maps to config.allowed_channel_ids when you call agor_gateway_channels_create; it does NOT change the manifest scopes or events.'
     ),
 });
 
