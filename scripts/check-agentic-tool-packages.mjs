@@ -13,6 +13,9 @@ const forbiddenBaseDependencies = [
   '@cursor/sdk',
   '@opencode-ai/sdk',
   'opencode-ai',
+  '@opencode/cli',
+  '@opencode/client',
+  '@opencode/sdk',
 ];
 const failures = [];
 if (cli.version !== base.version) {
@@ -108,7 +111,7 @@ for (const id of integrations) {
 const opencodeWrapper = JSON.parse(
   await readFile(join(root, 'packages/agor-opencode/package.json'), 'utf8')
 );
-const opencodeRuntimeVersion = opencodeWrapper.dependencies?.['opencode-ai'];
+const opencodeRuntimeVersion = opencodeWrapper.dependencies?.['@opencode/cli'];
 const opencodeToolManifest = JSON.parse(
   await readFile(join(root, 'packages/agentic-tool-opencode/package.json'), 'utf8')
 );
@@ -121,12 +124,12 @@ const opencodeIntegration = await readFile(
   'utf8'
 );
 const opencodeVersionOwners = {
-  'wrapper opencode-ai': opencodeRuntimeVersion,
-  'wrapper @opencode-ai/sdk': opencodeWrapper.dependencies?.['@opencode-ai/sdk'],
-  'tool devDependency @opencode-ai/sdk': opencodeToolManifest.devDependencies?.['@opencode-ai/sdk'],
+  'wrapper @opencode/cli': opencodeRuntimeVersion,
+  'wrapper @opencode/client': opencodeWrapper.dependencies?.['@opencode/client'],
+  'tool devDependency @opencode/client': opencodeToolManifest.devDependencies?.['@opencode/client'],
   OPENCODE_VERSION: opencodeKnownModels.match(/OPENCODE_VERSION\s*=\s*['"]([^'"]+)['"]/)?.[1],
   'OPENCODE_INTEGRATION.sdkVersion': opencodeIntegration.match(
-    /sdkVersion:\s*['"]@opencode-ai\/sdk@([^'"]+)['"]/
+    /sdkVersion:\s*['"]@opencode\/client@([^'"]+)['"]/
   )?.[1],
 };
 for (const [owner, version] of Object.entries(opencodeVersionOwners)) {
@@ -137,7 +140,7 @@ for (const [owner, version] of Object.entries(opencodeVersionOwners)) {
   }
 }
 for (const [path, expected] of [
-  ['docker/Dockerfile', `npm install -g opencode-ai@${opencodeRuntimeVersion}`],
+  ['docker/Dockerfile', `npm install -g @opencode/cli@${opencodeRuntimeVersion}`],
 ]) {
   const contents = await readFile(join(root, path), 'utf8');
   if (!contents.includes(expected)) {

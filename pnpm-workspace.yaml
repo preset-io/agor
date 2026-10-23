@@ -94,6 +94,7 @@ allowBuilds:
   'esbuild@0.25.4 || 0.25.12': true
   'keytar@7.9.0': true
   'node-pty@1.0.0': true
+  '@opencode/cli@2.1.1': true
   'opencode-ai@1.18.31': true
   # Prebuilt JS ships in the tarball; postinstall only warns about version schemes.
   'protobufjs@7.5.8 || 7.6.5 || 7.6.6': false
@@ -107,6 +108,7 @@ allowBuilds:
   # hot-shots uses this optional native addon only for Unix-domain sockets;
   # Agor's exporter deliberately uses UDP to the local Agent.
   'unix-dgram@2.0.7': false
+  opencode-ai: set this to true or false
 patchedDependencies:
   # Vitest 5.0.1 leaves CDP event listeners attached after tester RPC close.
   # Remove once upstream disposes them; regression runs before test:browser.
@@ -134,20 +136,21 @@ minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk@0.3.293'
   - '@openai/codex-sdk@0.160.0'
   - '@openai/codex@0.160.0-darwin-arm64 || 0.160.0-darwin-x64 || 0.160.0-linux-arm64 || 0.160.0-linux-x64 || 0.160.0-win32-arm64 || 0.160.0-win32-x64 || 0.160.0'
-  - '@opencode-ai/sdk@1.18.31'
-  - opencode-ai@1.18.31
-  - opencode-darwin-arm64@1.18.31
-  - opencode-darwin-x64-baseline@1.18.31
-  - opencode-darwin-x64@1.18.31
-  - opencode-linux-arm64-musl@1.18.31
-  - opencode-linux-arm64@1.18.31
-  - opencode-linux-x64-baseline-musl@1.18.31
-  - opencode-linux-x64-baseline@1.18.31
-  - opencode-linux-x64-musl@1.18.31
-  - opencode-linux-x64@1.18.31
-  - opencode-windows-arm64@1.18.31
-  - opencode-windows-x64-baseline@1.18.31
-  - opencode-windows-x64@1.18.31
+  - '@opencode/cli@2.1.1'
+  - '@opencode/client@2.1.1'
+  - '@opencode/sdk@2.1.1'
+  - '@opencode/cli-darwin-arm64@2.1.1'
+  - '@opencode/cli-darwin-x64-baseline@2.1.1'
+  - '@opencode/cli-darwin-x64@2.1.1'
+  - '@opencode/cli-linux-arm64-musl@2.1.1'
+  - '@opencode/cli-linux-arm64@2.1.1'
+  - '@opencode/cli-linux-x64-baseline-musl@2.1.1'
+  - '@opencode/cli-linux-x64-baseline@2.1.1'
+  - '@opencode/cli-linux-x64-musl@2.1.1'
+  - '@opencode/cli-linux-x64@2.1.1'
+  - '@opencode/cli-windows-arm64@2.1.1'
+  - '@opencode/cli-windows-x64-baseline@2.1.1'
+  - '@opencode/cli-windows-x64@2.1.1'
   - '@vitest/browser-playwright@5.0.1'
   - '@vitest/browser@5.0.1'
   - '@vitest/coverage-v8@5.0.1'
@@ -160,3 +163,5 @@ minimumReleaseAgeExclude:
   - '@aws-sdk/client-s3@3.1132.0'
   - '@aws-sdk/lib-storage@3.1132.0'
   - open@11.0.4
+  - '@opencode/protocol@2.1.1'
+  - '@opencode/schema@2.1.1'

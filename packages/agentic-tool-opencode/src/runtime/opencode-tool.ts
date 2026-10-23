@@ -37,7 +37,7 @@ import {
   type ToolPermission,
   type ToolUse,
 } from '@agor/core/types';
-import type { createOpencodeClient } from '@opencode-ai/sdk';
+import type { OpenCodeClient } from '@opencode/client';
 import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '../shared/index.js';
 import type { OpenCodeCommand } from './binary.js';
 import {
@@ -83,7 +83,67 @@ const AGOR_PERMISSION_INTERCEPTION = {
 } as const;
 const AGOR_MANAGED_AGENT = 'agor-managed';
 
-type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
+type DynamicMethod = (...args: unknown[]) => Promise<unknown>;
+type CompatClient = {
+  permission?: {
+    reply?: (opts: { sessionID: string; requestID: string; decision: string }) => Promise<unknown>;
+  };
+  postSessionIdPermissionsPermissionId?: (opts: {
+    path: { id: string; permissionID: string };
+    query?: { directory?: string };
+    body: { response: string };
+  }) => Promise<{ error?: unknown }>;
+  message?: {
+    list?: (req: { sessionID: string }) => Promise<{ data?: unknown[]; error?: unknown }>;
+  };
+  session?: {
+    get?: (opts: {
+      sessionID?: string;
+      path?: { id: string };
+      query?: { directory: string };
+    }) => Promise<unknown>;
+    fork?: (opts: { sessionID: string }) => Promise<unknown>;
+    interrupt?: (opts: { sessionID: string }) => Promise<unknown>;
+    abort?: (opts: {
+      path: { id: string };
+      query?: { directory: string };
+    }) => Promise<{ data?: unknown; error?: unknown }>;
+    create?: (opts: {
+      title?: string;
+      location?: { directory: string };
+      body?: { title: string };
+      query?: { directory: string };
+    }) => Promise<unknown>;
+    prompt?: DynamicMethod;
+    instructions?: {
+      entry?: {
+        put?: (opts: { sessionID: string; key: string; value: string }) => Promise<unknown>;
+      };
+    };
+    switchModel?: (opts: {
+      sessionID: string;
+      model: { id: string; providerID: string; variant?: string };
+    }) => Promise<unknown>;
+    switchAgent?: (opts: { sessionID: string; agent: string }) => Promise<unknown>;
+    messages?: (req: {
+      path: { id: string };
+      query?: { directory?: string };
+    }) => Promise<{ data?: unknown[]; error?: unknown }>;
+  };
+  model?: {
+    list?: (opts: { location: { directory: string } }) => Promise<{
+      data?: Array<{
+        providerID?: string;
+        canonical?: string;
+        id?: string;
+        modelID?: string;
+        variants?: Array<{ id?: string } | string>;
+      }>;
+    }>;
+  };
+};
+
+const asCompat = (client: OpenCodeClient): CompatClient => client as unknown as CompatClient;
 
 export class OpenCodePermissionRejectedError extends Error {
   override name = 'OpenCodePermissionRejectedError';
@@ -98,6 +158,8 @@ export type RunOpenCodeTurnInput = {
   prompt: string;
   agorAssistantMessageId: MessageID;
   existingOpenCodeSessionId?: string;
+  /** Native session forking: if set and existingOpenCodeSessionId is not set, fork from this parent. */
+  parentOpenCodeSessionId?: string;
   title: string;
   directory: string;
   provider?: string;
@@ -182,7 +244,12 @@ export type OpenCodeCanUseToolCallback = (
 export type OpenCodeToolDependencies = {
   resolveBinary?: () => Promise<string | OpenCodeCommand>;
   spawn?: (executable: string, args: readonly string[], options: SpawnOptions) => ManagedChild;
-  createClient?: typeof createOpencodeClient;
+  createClient?: (options: {
+    baseUrl: string;
+    headers?: Record<string, string>;
+    fetch?: typeof globalThis.fetch;
+    directory?: string;
+  }) => OpenCodeClient;
   resolveInvocationConfig?: (input: RunOpenCodeTurnInput) => Promise<OpenCodeInvocationConfig>;
   resolveMcpServers?: (sessionId: SessionID) => Promise<MCPServerWithSource[]>;
   getDaemonUrl?: () => Promise<string>;
@@ -378,15 +445,28 @@ async function applyPermissionEffect(input: {
     }
   }
 
-  const reply = await client.postSessionIdPermissionsPermissionId({
-    path: {
-      id: context.opencodeSessionId,
-      permissionID: effect.request.id,
-    },
-    query: { directory: context.branchPath },
-    body: { response },
-  });
-  if (reply.error) throw new Error('OpenCode failed to apply the permission decision');
+  const compat = asCompat(client);
+  if (compat.permission && typeof compat.permission.reply === 'function') {
+    try {
+      await compat.permission.reply({
+        sessionID: context.opencodeSessionId,
+        requestID: effect.request.id,
+        decision: response,
+      });
+    } catch (error) {
+      throw new Error('OpenCode failed to apply the permission decision', { cause: error });
+    }
+  } else if (typeof compat.postSessionIdPermissionsPermissionId === 'function') {
+    const reply = await compat.postSessionIdPermissionsPermissionId({
+      path: {
+        id: context.opencodeSessionId,
+        permissionID: effect.request.id,
+      },
+      query: { directory: context.branchPath },
+      body: { response },
+    });
+    if (reply.error) throw new Error('OpenCode failed to apply the permission decision');
+  }
   if (response === 'reject') {
     if (interactionTimedOut) {
       throw new OpenCodeInteractionTimeoutError('OpenCode permission request timed out');
@@ -552,17 +632,46 @@ function createOpenCodeEffectConsumer(input: {
 
 async function loadOpenCodeMessageBaseline(
   client: OpenCodeClient,
-  request: Parameters<OpenCodeClient['session']['messages']>[0]
+  sessionId: string,
+  branchPath?: string
 ): Promise<Set<string>> {
-  const response = await client.session.messages(request);
-  if (('error' in response && response.error) || !Array.isArray(response.data)) {
-    throw new Error('OpenCode failed to capture the pre-turn message baseline');
+  const compat = asCompat(client);
+  if (compat.message && typeof compat.message.list === 'function') {
+    const response = await compat.message.list({ sessionID: sessionId });
+    if (!response || !Array.isArray(response.data)) {
+      throw new Error('OpenCode failed to capture the pre-turn message baseline');
+    }
+    return new Set(
+      response.data.flatMap((entry: unknown) => {
+        const item = entry as { id?: string; info?: { id?: string } } | undefined;
+        return item && typeof item.id === 'string'
+          ? [item.id]
+          : item?.info && typeof item.info.id === 'string'
+            ? [item.info.id]
+            : [];
+      })
+    );
   }
-  return new Set(
-    response.data.flatMap((entry) =>
-      entry?.info && typeof entry.info.id === 'string' ? [entry.info.id] : []
-    )
-  );
+  if (compat.session && typeof compat.session.messages === 'function') {
+    const response = await compat.session.messages({
+      path: { id: sessionId },
+      query: branchPath ? { directory: branchPath } : undefined,
+    });
+    if (!response || ('error' in response && response.error) || !Array.isArray(response.data)) {
+      throw new Error('OpenCode failed to capture the pre-turn message baseline');
+    }
+    return new Set(
+      response.data.flatMap((entry: unknown) => {
+        const item = entry as { id?: string; info?: { id?: string } } | undefined;
+        return item?.info && typeof item.info.id === 'string'
+          ? [item.info.id]
+          : item && typeof item.id === 'string'
+            ? [item.id]
+            : [];
+      })
+    );
+  }
+  return new Set();
 }
 
 function createOpenCodeEventCollector(input: {
@@ -575,28 +684,47 @@ function createOpenCodeEventCollector(input: {
   settle: (error: Error) => void;
 }) {
   const controller = new AbortController();
-  let subscription: Awaited<ReturnType<OpenCodeClient['event']['subscribe']>> | undefined;
+  let subscription:
+    | {
+        return?: (value?: unknown) => Promise<unknown>;
+        stream?: { return?: (value?: unknown) => Promise<unknown> };
+      }
+    | AsyncIterable<unknown>
+    | undefined;
   let collector: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
 
   const stop = () => {
     stopPromise ??= (async () => {
       controller.abort(input.signal.reason);
-      if (subscription) await subscription.stream.return?.(undefined);
+      const sub = subscription as
+        | {
+            return?: (value?: unknown) => Promise<unknown>;
+            stream?: { return?: (value?: unknown) => Promise<unknown> };
+          }
+        | undefined;
+      if (sub?.stream && typeof sub.stream.return === 'function') {
+        await sub.stream.return(undefined);
+      } else if (sub && typeof sub.return === 'function') {
+        await sub.return(undefined);
+      }
       if (collector) await collector;
     })();
     return stopPromise;
   };
   const start = async () => {
     subscription = await input.client.event.subscribe({
-      query: input.context.branchPath ? { directory: input.context.branchPath } : undefined,
       signal: controller.signal,
     });
     const translator = createOpenCodeEventTranslator({
       sessionId: input.context.opencodeSessionId,
       baselineMessageIds: input.baselineMessageIds,
     });
-    const iterator = asUnknownAsyncIterable(subscription.stream)[Symbol.asyncIterator]();
+    const rawStream =
+      subscription && typeof subscription === 'object' && 'stream' in subscription
+        ? subscription.stream
+        : subscription;
+    const iterator = asUnknownAsyncIterable(rawStream)[Symbol.asyncIterator]();
     collector = (async () => {
       try {
         for (;;) {
@@ -633,7 +761,7 @@ export class OpenCodeTool {
     | 'cancelPendingPermissions'
     | 'enrichContentBlocks'
   > & {
-    createClient?: typeof createOpencodeClient;
+    createClient?: OpenCodeToolDependencies['createClient'];
     resolveInvocationConfig: (input: RunOpenCodeTurnInput) => Promise<OpenCodeInvocationConfig>;
     resolveMcpServers: NonNullable<OpenCodeToolDependencies['resolveMcpServers']>;
     getDaemonUrl: NonNullable<OpenCodeToolDependencies['getDaemonUrl']>;
@@ -726,23 +854,50 @@ export class OpenCodeTool {
     client: OpenCodeClient,
     input: RunOpenCodeTurnInput
   ): Promise<{ openCodeSessionId: string; sessionWasCreated: boolean }> {
-    if (!input.existingOpenCodeSessionId) {
-      const openCodeSessionId = await this.createSession(client, input.title, input.directory);
-      await input.persistOpenCodeSessionId(openCodeSessionId);
-      return { openCodeSessionId, sessionWasCreated: true };
+    if (input.existingOpenCodeSessionId) {
+      const openCodeSessionId = input.existingOpenCodeSessionId;
+      try {
+        let sessionData: { id: string } | undefined;
+        // Support both OpenCode 2.1 client.session.get({ sessionID }) and legacy client.session.get({ path })
+        const compat = asCompat(client);
+        if (typeof compat.session?.get === 'function') {
+          const res = (await compat.session.get({
+            sessionID: openCodeSessionId,
+            path: { id: openCodeSessionId },
+            query: { directory: input.directory },
+          })) as { data?: { id: string }; id?: string } | undefined;
+          sessionData = res?.data ?? (res?.id ? { id: res.id } : undefined);
+        }
+        if (!sessionData || sessionData.id !== openCodeSessionId) {
+          throw new Error('Invalid session response');
+        }
+        return { openCodeSessionId, sessionWasCreated: false };
+      } catch (error) {
+        throw new Error(
+          `Unable to resume stored OpenCode session ${openCodeSessionId}; verify that its state is available under the executor identity`,
+          { cause: error }
+        );
+      }
     }
 
-    const openCodeSessionId = input.existingOpenCodeSessionId;
-    const response = await client.session.get({
-      path: { id: openCodeSessionId },
-      query: { directory: input.directory },
-    });
-    if (response.error || !response.data || response.data.id !== openCodeSessionId) {
-      throw new Error(
-        `Unable to resume stored OpenCode session ${openCodeSessionId}; verify that its state is available under the executor identity`
-      );
+    if (input.parentOpenCodeSessionId && typeof asCompat(client).session?.fork === 'function') {
+      try {
+        const forkRes = (await asCompat(client).session!.fork!({
+          sessionID: input.parentOpenCodeSessionId,
+        })) as { data?: { id?: string }; id?: string } | undefined;
+        const forkedId = forkRes?.data?.id ?? forkRes?.id;
+        if (typeof forkedId === 'string' && forkedId.length > 0) {
+          await input.persistOpenCodeSessionId(forkedId);
+          return { openCodeSessionId: forkedId, sessionWasCreated: true };
+        }
+      } catch {
+        // OpenCode 2.1 forbids forking empty sessions. Fall back to fresh session creation.
+      }
     }
-    return { openCodeSessionId, sessionWasCreated: false };
+
+    const openCodeSessionId = await this.createSession(client, input.title, input.directory);
+    await input.persistOpenCodeSessionId(openCodeSessionId);
+    return { openCodeSessionId, sessionWasCreated: true };
   }
 
   async runTurn(
@@ -845,8 +1000,14 @@ export class OpenCodeTool {
     let outcome: OpenCodeTurnResult | undefined;
     let turnFailure: Error | undefined;
     try {
+      const sdk = await loadOpenCodeSdk();
       const createClient =
-        this.dependencies.createClient ?? (await loadOpenCodeSdk()).createOpencodeClient;
+        this.dependencies.createClient ??
+        ((opts: {
+          baseUrl: string;
+          headers?: Record<string, string>;
+          fetch?: typeof globalThis.fetch;
+        }) => sdk.OpenCode.make(opts) as unknown as OpenCodeClient);
       client = createClient({
         baseUrl,
         directory: input.directory,
@@ -943,16 +1104,28 @@ export class OpenCodeTool {
     directory: string
   ): Promise<void> {
     if (!client || !openCodeSessionId) return;
+    const compat = asCompat(client);
     try {
-      const response = await client.session.abort({
-        path: { id: openCodeSessionId },
-        query: { directory },
-      });
-      if (response.error || response.data !== true) {
-        throw new OpenCodeCleanupUnverifiedError(
-          'OpenCode active session abort could not be verified',
-          { cause: response.error }
-        );
+      if (typeof compat.session?.interrupt === 'function') {
+        const response = (await compat.session.interrupt({
+          sessionID: openCodeSessionId,
+        })) as { interrupted?: boolean } | undefined;
+        if (response && response.interrupted === false) {
+          throw new OpenCodeCleanupUnverifiedError(
+            'OpenCode active session abort could not be verified'
+          );
+        }
+      } else if (typeof compat.session?.abort === 'function') {
+        const response = await compat.session.abort({
+          path: { id: openCodeSessionId },
+          query: { directory },
+        });
+        if (response.error || response.data !== true) {
+          throw new OpenCodeCleanupUnverifiedError(
+            'OpenCode active session abort could not be verified',
+            { cause: response.error }
+          );
+        }
       }
     } catch (error) {
       if (error instanceof OpenCodeCleanupUnverifiedError) throw error;
@@ -995,26 +1168,62 @@ export class OpenCodeTool {
     let modelAvailable = false;
     let effortAvailable = !effort;
     try {
-      const query = { directory };
-      const [catalogResponse, runtimeResponse] = await Promise.all([
-        client.config.providers({ query }),
-        client.provider.list({ query }),
-      ]);
-      const provider = catalogResponse.data?.providers.find((entry) => entry.id === providerId);
-      const selectedModel = provider
-        ? Object.entries(provider.models).find(
-            ([candidateId, model]) => candidateId === modelId || model.id === modelId
-          )?.[1]
-        : undefined;
-      modelAvailable =
-        !catalogResponse.error &&
-        !runtimeResponse.error &&
-        Boolean(runtimeResponse.data?.connected.includes(providerId)) &&
-        Boolean(selectedModel);
-      if (modelAvailable && effort) {
-        // OpenCode returns native variants here; the generated SDK model type currently omits them.
-        const variants = (selectedModel as { variants?: Record<string, unknown> }).variants;
-        effortAvailable = Boolean(variants && Object.hasOwn(variants, effort));
+      const compat = asCompat(client);
+      if (compat.model && typeof compat.model.list === 'function') {
+        const response = await compat.model.list({ location: { directory } });
+        const selectedModel = response.data?.find(
+          (m) =>
+            (m.providerID === providerId || m.canonical === providerId) &&
+            (m.id === modelId || m.modelID === modelId)
+        );
+        modelAvailable = Boolean(selectedModel);
+        if (modelAvailable && effort) {
+          const variants = selectedModel?.variants;
+          if (Array.isArray(variants)) {
+            effortAvailable = variants.some((v) =>
+              typeof v === 'object' && v ? (v as { id?: string }).id === effort : v === effort
+            );
+          } else if (variants && typeof variants === 'object') {
+            effortAvailable = Object.hasOwn(variants, effort);
+          } else {
+            effortAvailable = false;
+          }
+        }
+      } else {
+        const query = { directory };
+        const legacyClient = client as unknown as {
+          config: {
+            providers: (opts: { query: { directory: string } }) => Promise<{
+              data?: { providers: Array<{ id: string; models: Record<string, unknown> }> };
+              error?: unknown;
+            }>;
+          };
+          provider: {
+            list: (opts: {
+              query: { directory: string };
+            }) => Promise<{ data?: { connected: string[] }; error?: unknown }>;
+          };
+        };
+        const [catalogResponse, runtimeResponse] = await Promise.all([
+          legacyClient.config.providers({ query }),
+          legacyClient.provider.list({ query }),
+        ]);
+        const provider = catalogResponse.data?.providers.find((entry) => entry.id === providerId);
+        const selectedModel = provider
+          ? Object.entries(provider.models).find(
+              ([candidateId, model]) =>
+                candidateId === modelId || (model as { id?: string }).id === modelId
+            )?.[1]
+          : undefined;
+        modelAvailable =
+          !catalogResponse.error &&
+          !runtimeResponse.error &&
+          Boolean(runtimeResponse.data?.connected.includes(providerId)) &&
+          Boolean(selectedModel);
+        if (modelAvailable && effort) {
+          const variants = (selectedModel as { variants?: Record<string, unknown> }).variants;
+          effortAvailable = Boolean(variants && Object.hasOwn(variants, effort));
+        }
       }
     } catch {
       // Public failure stays independent of raw provider objects and SDK details.
@@ -1114,13 +1323,21 @@ export class OpenCodeTool {
     title: string,
     directory: string
   ): Promise<string> {
-    const response = await client.session.create({
-      body: { title: title || 'Agor Session' },
-      query: { directory },
-    });
-    if (response.error) throw new Error('OpenCode failed to create a session');
-    if (!response.data) throw new Error('OpenCode returned no session data');
-    return response.data.id;
+    const sessionTitle = title || 'Agor Session';
+    let response: { data?: { id?: string }; id?: string; error?: unknown } | undefined;
+    const compat = asCompat(client);
+    if (typeof compat.session?.create === 'function') {
+      response = (await compat.session.create({
+        title: sessionTitle,
+        location: { directory },
+        body: { title: sessionTitle },
+        query: { directory },
+      })) as { data?: { id?: string }; id?: string; error?: unknown } | undefined;
+    }
+    const id = response?.data?.id ?? response?.id;
+    if (response?.error) throw new Error('OpenCode failed to create a session');
+    if (!id) throw new Error('OpenCode returned no session data');
+    return id;
   }
 
   private async executeTask(
@@ -1148,27 +1365,43 @@ export class OpenCodeTool {
     ]
       .filter(Boolean)
       .join('\n\n');
-    const request = {
-      path: { id: context.opencodeSessionId },
-      signal: input.signal,
-      body: {
-        agent: AGOR_MANAGED_AGENT,
-        system,
-        parts: [{ type: 'text' as const, text: input.prompt }],
-        ...(input.effort ? { variant: input.effort } : {}),
-        ...(context.model && context.provider
-          ? { model: { providerID: context.provider, modelID: context.model } }
-          : {}),
-        // OpenCode accepts `variant`; the generated SDK request type currently omits it.
-      } as NonNullable<Parameters<OpenCodeClient['session']['prompt']>[0]>['body'],
-      query: context.branchPath ? { directory: context.branchPath } : undefined,
-    };
-    const transcriptRequest = {
-      path: { id: context.opencodeSessionId },
-      query: context.branchPath ? { directory: context.branchPath } : undefined,
-    };
 
-    const baselineMessageIds = await loadOpenCodeMessageBaseline(client, transcriptRequest);
+    const compat = asCompat(client);
+    if (system && compat.session?.instructions?.entry?.put) {
+      await compat.session.instructions.entry
+        .put({
+          sessionID: context.opencodeSessionId,
+          key: 'agor',
+          value: system,
+        })
+        .catch(() => undefined);
+    }
+    if (context.model && context.provider && compat.session?.switchModel) {
+      await compat.session
+        .switchModel({
+          sessionID: context.opencodeSessionId,
+          model: {
+            id: context.model,
+            providerID: context.provider,
+            ...(input.effort ? { variant: input.effort } : {}),
+          },
+        })
+        .catch(() => undefined);
+    }
+    if (compat.session?.switchAgent) {
+      await compat.session
+        .switchAgent({
+          sessionID: context.opencodeSessionId,
+          agent: AGOR_MANAGED_AGENT,
+        })
+        .catch(() => undefined);
+    }
+
+    const baselineMessageIds = await loadOpenCodeMessageBaseline(
+      client,
+      context.opencodeSessionId,
+      context.branchPath
+    );
 
     if (input.signal.aborted) throw new Error('OpenCode turn was aborted before event collection');
     let protocolError: Error | undefined;
@@ -1223,8 +1456,40 @@ export class OpenCodeTool {
         result.error ? Promise.reject(result.error) : new Promise<never>(() => undefined)
       );
       terminalFailure.catch(() => undefined);
-      const promptResponse = await Promise.race([client.session.prompt(request), terminalFailure]);
-      if (promptResponse.error) throw promptFailure(openCodeErrorMessage(promptResponse.error));
+
+      const promptRequest = {
+        sessionID: context.opencodeSessionId,
+        text: input.prompt,
+        // Legacy request properties for backwards compatibility:
+        path: { id: context.opencodeSessionId },
+        signal: input.signal,
+        body: {
+          agent: AGOR_MANAGED_AGENT,
+          system,
+          parts: [{ type: 'text' as const, text: input.prompt }],
+          ...(input.effort ? { variant: input.effort } : {}),
+          ...(context.model && context.provider
+            ? { model: { providerID: context.provider, modelID: context.model } }
+            : {}),
+        },
+        query: context.branchPath ? { directory: context.branchPath } : undefined,
+      };
+
+      const promptFn = client.session.prompt.bind(client.session);
+      const promptResponse = await Promise.race([
+        promptFn(promptRequest as unknown as Parameters<typeof promptFn>[0], {
+          signal: input.signal,
+        }),
+        terminalFailure,
+      ]);
+      if (
+        promptResponse &&
+        typeof promptResponse === 'object' &&
+        'error' in promptResponse &&
+        promptResponse.error
+      ) {
+        throw promptFailure(openCodeErrorMessage(promptResponse.error));
+      }
 
       const terminalResult = await terminal;
       if (terminalResult.error) throw terminalResult.error;
@@ -1237,14 +1502,31 @@ export class OpenCodeTool {
       );
       if (protocolError) throw protocolError;
 
-      const finalResponse = await client.session.messages(transcriptRequest);
-      if (finalResponse.error || !Array.isArray(finalResponse.data)) {
-        throw new Error('OpenCode failed to fetch the authoritative completed transcript');
+      let finalMessages: unknown[] = [];
+      if (compat.message && typeof compat.message.list === 'function') {
+        const finalResponse = await compat.message.list({ sessionID: context.opencodeSessionId });
+        if (!finalResponse || !Array.isArray(finalResponse.data)) {
+          throw new Error('OpenCode failed to fetch the authoritative completed transcript');
+        }
+        finalMessages = finalResponse.data;
+      } else if (compat.session && typeof compat.session.messages === 'function') {
+        const finalResponse = await compat.session.messages({
+          path: { id: context.opencodeSessionId },
+          query: context.branchPath ? { directory: context.branchPath } : undefined,
+        });
+        if (!finalResponse || finalResponse.error || !Array.isArray(finalResponse.data)) {
+          throw new Error('OpenCode failed to fetch the authoritative completed transcript');
+        }
+        finalMessages = finalResponse.data;
       }
-      const finalMessage = reconcileOpenCodeMessages(finalResponse.data, {
-        sessionId: context.opencodeSessionId,
-        baselineMessageIds,
-      });
+
+      const finalMessage = reconcileOpenCodeMessages(
+        finalMessages as Parameters<typeof reconcileOpenCodeMessages>[0],
+        {
+          sessionId: context.opencodeSessionId,
+          baselineMessageIds,
+        }
+      );
       this.dependencies.enrichContentBlocks?.(finalMessage.contentBlocks);
 
       if (effects.thinkingStarted) {

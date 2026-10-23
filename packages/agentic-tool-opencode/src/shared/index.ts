@@ -22,12 +22,12 @@ export const OPENCODE_INTEGRATION = Object.freeze({
   name: 'opencode',
   displayName: 'OpenCode',
   capabilities: {
-    supportsSessionFork: false,
+    supportsSessionFork: true,
     supportsChildSpawn: true,
     reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
   authentication: 'runtime-managed',
-  sdkVersion: '@opencode-ai/sdk@1.18.31',
+  sdkVersion: '@opencode/client@2.1.1',
   unverifiedTerminationReason: 'OpenCode server-side execution termination is not verified.',
   modelConfiguration: OPENCODE_MODEL_CONFIGURATION,
 } as const);

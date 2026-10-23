@@ -64,7 +64,7 @@ const vendors = {
   codex: '@openai/codex-sdk',
   copilot: '@github/copilot-sdk',
   gemini: '@google/gemini-cli-core',
-  opencode: '@opencode-ai/sdk',
+  opencode: '@opencode/client',
   cursor: '@cursor/sdk',
 };
 const writePackage = (name, source) => {

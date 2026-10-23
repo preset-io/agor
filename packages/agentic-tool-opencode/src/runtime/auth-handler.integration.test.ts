@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OPENCODE_VERSION } from '../shared/known-models.js';
@@ -17,6 +20,14 @@ const runtime = vi.hoisted(() => ({
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   return { ...actual, readFile: runtime.readAuthFile };
+});
+
+vi.mock('@opencode/client', () => {
+  const factory = vi.fn(() => runtime.clients.shift());
+  return {
+    createOpencodeClient: factory,
+    OpenCode: { make: factory },
+  };
 });
 
 vi.mock('@opencode-ai/sdk/v2', () => ({
@@ -165,6 +176,51 @@ describe('opencode.auth executor command', () => {
       }),
     });
     expect(JSON.stringify(result)).not.toContain('must-not-cross');
+  });
+
+  it('reads configured provider choices from opencode.db when auth.json is absent', async () => {
+    runtime.readAuthFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    const tempDir = await mkdtemp(join(tmpdir(), 'opencode-db-test-'));
+    const opencodeDir = join(tempDir, 'opencode');
+    await mkdir(opencodeDir, { recursive: true });
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(join(opencodeDir, 'opencode.db'));
+    db.exec(`
+      CREATE TABLE credential (
+        id text PRIMARY KEY,
+        integration_id text,
+        label text NOT NULL,
+        value text NOT NULL,
+        connector_id text
+      );
+      INSERT INTO credential VALUES ('cred-1', 'anthropic', 'Anthropic Key', 'secret', NULL);
+    `);
+    db.close();
+
+    try {
+      const result = await executeCommand({
+        command: 'opencode.auth',
+        dataHome: tempDir,
+        params: { operation: 'read-model-catalog' },
+      });
+
+      expect(result).toEqual({
+        success: true,
+        data: expect.objectContaining({
+          suggestedSelection: {
+            providerId: 'anthropic',
+            modelId: 'claude-sonnet-5',
+          },
+          providers: expect.arrayContaining([
+            expect.objectContaining({ id: 'anthropic', availableForSelection: true }),
+            expect.objectContaining({ id: 'opencode', availableForSelection: true }),
+            expect.objectContaining({ id: 'openai', availableForSelection: false }),
+          ]),
+        }),
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('returns one secret-safe branch-scoped configuration snapshot from one server', async () => {

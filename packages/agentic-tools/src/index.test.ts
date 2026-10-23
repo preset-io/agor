@@ -94,7 +94,7 @@ describe('agentic-tool integrations', () => {
       name: 'opencode',
       displayName: 'OpenCode',
       authentication: 'runtime-managed',
-      sdkVersion: '@opencode-ai/sdk@1.18.31',
+      sdkVersion: '@opencode/client@2.1.1',
       unverifiedTerminationReason: 'OpenCode server-side execution termination is not verified.',
     });
     expect(TOOL_API_KEY_NAMES.opencode).toBeUndefined();

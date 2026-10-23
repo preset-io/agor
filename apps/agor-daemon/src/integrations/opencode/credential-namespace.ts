@@ -29,6 +29,10 @@ const OPENCODE_EXECUTOR_ENV_KEYS = [
   'LC_CTYPE',
   'NODE_ENV',
   'LOG_LEVEL',
+  'AGOR_MANAGED_AGENTIC_TOOLS',
+  'AGOR_VERSION',
+  'AGOR_AGENTIC_TOOLS_DIR',
+  'AGOR_OPENCODE_PATH',
 ] as const;
 
 export type AuthenticatedOpenCodeSubjectContext = OpenCodeCredentialNamespace & {

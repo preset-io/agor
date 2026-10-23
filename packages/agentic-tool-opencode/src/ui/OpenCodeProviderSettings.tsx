@@ -279,7 +279,7 @@ export function OpenCodeProviderSettings({
     if (!provider) return;
     const methodPosition = selectedMethodIndex ?? preferredOAuthMethodIndex(provider.authMethods);
     const method = provider.authMethods[methodPosition];
-    if (method && method.type !== 'api') return;
+    if (method && method.type !== 'api' && (method.type as string) !== 'key') return;
     const visiblePrompts = visibleAuthPrompts(method?.prompts, promptValues);
     if (visiblePrompts.some((prompt) => !promptValues[prompt.key]?.trim())) return;
     const metadata = Object.fromEntries(

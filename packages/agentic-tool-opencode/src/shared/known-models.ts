@@ -4,7 +4,7 @@ import type {
   OpenCodeModelCatalog,
 } from '@agor/core/types';
 
-export const OPENCODE_VERSION = '1.18.31';
+export const OPENCODE_VERSION = '2.1.1';
 
 interface KnownProvider {
   id: string;
@@ -81,6 +81,19 @@ const KNOWN_PROVIDERS = [
       ['claude-sonnet-4-5', 'Claude Sonnet 4.5'],
       ['claude-haiku-5-5', 'Claude Haiku 5.5'],
       ['claude-haiku-4-5', 'Claude Haiku 4.5'],
+    ]),
+  },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    availableWithoutCredentials: false,
+    suggestedModel: 'deepseek-flash',
+    models: activeModels([
+      ['deepseek-flash', 'DeepSeek V4.1 Flash'],
+      ['deepseek-v4-pro', 'DeepSeek V4 Pro'],
+      ['deepseek-v4-flash', 'DeepSeek V4 Flash'],
+      ['deepseek-chat', 'DeepSeek Chat'],
+      ['deepseek-reasoner', 'DeepSeek Reasoner'],
     ]),
   },
   {

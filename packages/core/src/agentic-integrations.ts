@@ -27,7 +27,7 @@ export const AGENTIC_TOOL_INTEGRATIONS = {
   },
   opencode: {
     packageName: '@agor-live/opencode',
-    vendorPackage: '@opencode-ai/sdk',
+    vendorPackage: '@opencode/client',
     displayName: 'OpenCode',
   },
   cursor: { packageName: '@agor-live/cursor', vendorPackage: '@cursor/sdk', displayName: 'Cursor' },

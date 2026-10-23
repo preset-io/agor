@@ -9,7 +9,7 @@ describe('OpenCode integration metadata', () => {
     ) as { devDependencies: Record<string, string> };
 
     expect(OPENCODE_INTEGRATION.sdkVersion).toBe(
-      `@opencode-ai/sdk@${manifest.devDependencies['@opencode-ai/sdk']}`
+      `@opencode/client@${manifest.devDependencies['@opencode/client']}`
     );
   });
 });

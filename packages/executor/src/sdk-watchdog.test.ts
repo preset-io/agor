@@ -44,7 +44,7 @@ describe('SdkWatchdog', () => {
     const { watchdog, decisions } = harness({}, 'opencode');
     watchdog.record('sdk_started');
     vi.advanceTimersByTime(1_000);
-    expect(decisions[0]?.sdk_version).toBe('@opencode-ai/sdk@1.18.31');
+    expect(decisions[0]?.sdk_version).toBe('@opencode/client@2.1.1');
   });
 
   it.each(['observe', 'enforce'] as const)(

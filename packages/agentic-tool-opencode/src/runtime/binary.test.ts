@@ -54,8 +54,8 @@ describe.skipIf(process.platform === 'win32')('OpenCode binary compatibility', (
     expect(resolveManagedAgenticToolPackageDirectory).toHaveBeenCalledWith(
       'opencode',
       '1.2.3',
-      expect.stringMatching(/^opencode-(linux|darwin)-/),
-      'opencode-ai'
+      expect.stringMatching(/^@opencode\/cli-(linux|darwin)-/),
+      '@opencode/cli'
     );
   });
 
@@ -111,14 +111,14 @@ describe.skipIf(process.platform === 'win32')('OpenCode binary compatibility', (
 
 describe('OpenCode native optional package selection', () => {
   it.each([
-    ['linux', 'x64', false, 'opencode-linux-x64-baseline'],
-    ['linux', 'x64', true, 'opencode-linux-x64-baseline-musl'],
-    ['linux', 'arm64', false, 'opencode-linux-arm64'],
-    ['linux', 'arm64', true, 'opencode-linux-arm64-musl'],
-    ['darwin', 'x64', false, 'opencode-darwin-x64-baseline'],
-    ['darwin', 'arm64', false, 'opencode-darwin-arm64'],
-    ['win32', 'x64', false, 'opencode-windows-x64-baseline'],
-    ['win32', 'arm64', false, 'opencode-windows-arm64'],
+    ['linux', 'x64', false, '@opencode/cli-linux-x64-baseline'],
+    ['linux', 'x64', true, '@opencode/cli-linux-x64-baseline-musl'],
+    ['linux', 'arm64', false, '@opencode/cli-linux-arm64'],
+    ['linux', 'arm64', true, '@opencode/cli-linux-arm64-musl'],
+    ['darwin', 'x64', false, '@opencode/cli-darwin-x64-baseline'],
+    ['darwin', 'arm64', false, '@opencode/cli-darwin-arm64'],
+    ['win32', 'x64', false, '@opencode/cli-windows-x64-baseline'],
+    ['win32', 'arm64', false, '@opencode/cli-windows-arm64'],
   ] as const)('selects %s/%s (musl=%s)', (platform, arch, musl, expected) => {
     expect(getOpenCodeNativePackageName(platform, arch, musl)).toBe(expected);
   });

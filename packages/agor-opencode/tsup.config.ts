@@ -5,5 +5,5 @@ export default defineConfig({
   dts: false,
   splitting: false,
   clean: true,
-  external: ['@opencode-ai/sdk'],
+  external: ['@opencode/client'],
 });
