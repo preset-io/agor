@@ -1,8 +1,15 @@
 /** PostgreSQL-coordinated MCP OAuth refresh with rotating-token fencing. */
 
-import { getCurrentTenantId, isPostgresDatabaseHandle, runWithTenantDatabaseScope } from '../../db';
+import {
+  getCurrentTenantId,
+  isPostgresDatabase,
+  isPostgresDatabaseHandle,
+  runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
+} from '../../db';
 import type { Database, TenantScopeAwareDatabase } from '../../db/client';
 import {
+  MCPOAuthClientRegistrationRepository,
   type MCPOAuthGrantStatusRecord,
   type MCPOAuthRefreshVersion,
   MCPServerRepository,
@@ -75,9 +82,15 @@ export function classifyFailedRefreshClaimStatus(
 
 export class InvalidGrantError extends Error {
   readonly code = 'invalid_grant';
-  constructor(message = 'OAuth refresh grant is no longer valid') {
+  readonly invalidClientRegistration: boolean;
+
+  constructor(
+    message = 'OAuth refresh grant is no longer valid',
+    invalidClientRegistration = false
+  ) {
     super(message);
     this.name = 'InvalidGrantError';
+    this.invalidClientRegistration = invalidClientRegistration;
   }
 }
 
@@ -247,8 +260,15 @@ export async function refreshMCPToken(
     ) {
       throw new OAuthRefreshExchangeError('response_ambiguous', true);
     }
-    if (['invalid_grant', 'invalid_client', 'unauthorized_client'].includes(parsed.error)) {
-      throw new InvalidGrantError();
+    const invalidClientRegistration =
+      parsed.error === 'invalid_client' || parsed.error === 'unauthorized_client';
+    if (parsed.error === 'invalid_grant' || invalidClientRegistration) {
+      throw new InvalidGrantError(
+        invalidClientRegistration
+          ? 'OAuth client is no longer valid'
+          : 'OAuth refresh grant is no longer valid',
+        invalidClientRegistration
+      );
     }
     throw new OAuthRefreshExchangeError('provider_rejected', false);
   }
@@ -336,6 +356,7 @@ export interface RefreshAndPersistDeps {
   resolveTokenEndpointAuthMethod?: (
     server: MCPServer | null
   ) => Promise<MCPOAuthTokenEndpointAuthMethod | undefined>;
+  masterSecret?: string;
 }
 
 function exactGrantMatches(
@@ -572,8 +593,33 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
       if (error instanceof OAuthRefreshExchangeError && !error.ambiguous) return 'rejected';
       return 'ambiguous';
     },
-    async settle({ row, fence }, outcome) {
+    async settle({ row, fence }, outcome, error) {
       if (outcome === 'invalid') {
+        // Provider rejected the client credentials (invalid_client / unauthorized_client).
+        // Evict the stale DCR registration so the next connect starts clean with a fresh client
+        // rather than repeating doomed refresh or authorization attempts.
+        const invalidClient = error instanceof InvalidGrantError && error.invalidClientRegistration;
+        if (invalidClient && row.oauth_client_id) {
+          await runWithTenantDatabaseTransaction(deps.db, resolveTenantId(deps), async (db) => {
+            const invalidated = await new MCPOAuthClientRegistrationRepository(
+              db
+            ).invalidateIfCurrentMatchesClientId({
+              tenantId: resolveTenantId(deps),
+              serverId: deps.mcpServerId,
+              clientId: row.oauth_client_id!,
+              masterSecret: deps.masterSecret,
+            });
+            if (invalidated) {
+              console.log(
+                `[MCP OAuth] event=oauth_dcr_invalidated server_id=${deps.mcpServerId} client_id=${row.oauth_client_id} trigger=refresh`
+              );
+            }
+          }).catch(() => {
+            console.warn(
+              `[MCP OAuth Refresh] event=dcr_invalidation_failed server_id=${deps.mcpServerId} reason=database_error`
+            );
+          });
+        }
         const deleted = await tenantWork(deps, (db) =>
           new UserMCPOAuthTokenRepository(db).deleteClaimedInvalidGrant(
             deps.userId,
@@ -720,6 +766,29 @@ async function refreshStandalone(
     return result.access_token;
   } catch (error) {
     if (error instanceof InvalidGrantError) {
+      if (error.invalidClientRegistration && row.oauth_client_id) {
+        const tenantId = deps.tenantId ?? getCurrentTenantId() ?? 'default';
+        await runWithTenantDatabaseTransaction(deps.db, tenantId, async (db) => {
+          if (!isPostgresDatabase(db)) return Promise.resolve(false);
+          const invalidated = await new MCPOAuthClientRegistrationRepository(
+            db
+          ).invalidateIfCurrentMatchesClientId({
+            tenantId,
+            serverId: deps.mcpServerId,
+            clientId: row.oauth_client_id!,
+            masterSecret: deps.masterSecret,
+          });
+          if (invalidated) {
+            console.log(
+              `[MCP OAuth] event=oauth_dcr_invalidated server_id=${deps.mcpServerId} client_id=${row.oauth_client_id} trigger=refresh`
+            );
+          }
+        }).catch(() => {
+          console.warn(
+            `[MCP OAuth Refresh] event=dcr_invalidation_failed server_id=${deps.mcpServerId} reason=database_error`
+          );
+        });
+      }
       const deleted = await userTokenWork((repo) =>
         repo.deleteGrantVersion(
           deps.userId,

@@ -3,6 +3,7 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import {
   BOUND_SECRET_ENVELOPE_VERSION,
+  dcrRegistrationBinding,
   executeRaw,
   generateId,
   type MCPOAuthClientRegistrationRecord,
@@ -49,19 +50,7 @@ export interface DurableMCPOAuthClientRegistrationInput
   serverConfigVersion: number;
 }
 
-function registrationBinding(material: {
-  tenantId: string;
-  registrationId: string;
-  mcpServerId: string;
-  bindingFingerprint: string;
-}): string {
-  return [
-    material.tenantId,
-    material.mcpServerId,
-    material.registrationId,
-    material.bindingFingerprint,
-  ].join('\0');
-}
+const registrationBinding = dcrRegistrationBinding;
 
 function bindingFingerprint(
   masterSecret: string,
@@ -442,6 +431,29 @@ export class MCPOAuthClientRegistrationAuthority {
         registrationId,
       })
     );
+  }
+
+  async invalidateIfCurrentMatchesClientId(
+    tenantId: string,
+    serverId: MCPServerID,
+    clientId: string
+  ): Promise<boolean> {
+    return runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
+      const invalidated = await new MCPOAuthClientRegistrationRepository(
+        scoped
+      ).invalidateIfCurrentMatchesClientId({
+        tenantId,
+        serverId,
+        clientId,
+        masterSecret: this.masterSecret,
+      });
+      if (invalidated) {
+        console.log(
+          `[MCP OAuth] event=oauth_dcr_invalidated server_id=${serverId} client_id=${clientId} trigger=authority`
+        );
+      }
+      return invalidated;
+    });
   }
 
   async maintain() {
