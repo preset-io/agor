@@ -2344,6 +2344,32 @@ describe('ArtifactsService.find SQL pushdown', () => {
     });
   });
 
+  dbTest("hides other users' private artifacts from find and total", async ({ db }) => {
+    const { service, boardA, branch1 } = await seedPushdownFixture(db);
+    const ownerId = generateId() as UUID;
+    const memberId = generateId() as UUID;
+    await new ArtifactRepository(db).create({
+      artifact_id: generateId(),
+      board_id: boardA,
+      branch_id: branch1,
+      name: 'a-private',
+      public: false,
+      created_by: ownerId,
+    });
+    const names = async (userId: UUID) => {
+      const result = (await service.find({
+        _agorArtifactReadableBy: userId,
+        query: { board_id: boardA },
+      })) as { data: Artifact[]; total: number };
+      expect(result.total).toBe(result.data.length);
+      return result.data.map((a) => a.name).sort();
+    };
+
+    // Seeded fixture rows are public; the private row is the creator's alone.
+    expect(await names(memberId)).toEqual(['a-branch1', 'a-branch2', 'a-orphan']);
+    expect(await names(ownerId)).toEqual(['a-branch1', 'a-branch2', 'a-orphan', 'a-private']);
+  });
+
   // branch_id is nullable: a `{ $in }` containing a non-string element must NOT
   // be pushed, because SQL `IN (NULL)` never matches an orphan's null branch_id
   // while the JS `includes` path does. Pushing it would return a SUBSET.

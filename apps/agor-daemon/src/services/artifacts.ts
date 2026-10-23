@@ -24,6 +24,7 @@ import {
   bindRepositoryToTenantUnitOfWork,
   generateId,
   getCurrentTenantId,
+  isArtifactVisibleTo,
   RepoRepository,
   type TenantScopeAwareDatabase,
   UsersRepository,
@@ -180,6 +181,8 @@ export type ArtifactParams = QueryParams<{
   AuthenticatedParams & {
     /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
     _agorSqlBranchAccessUserId?: UUID;
+    /** Internal private-artifact SQL marker set by register-hooks for external users. */
+    _agorArtifactReadableBy?: UUID;
   };
 
 const MAX_CONSOLE_ENTRIES = 100;
@@ -411,6 +414,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       archived?: boolean;
       branchIds?: BranchID[];
       visibleToUserId?: UUID;
+      readableBy?: UUID;
       projection?: ArtifactListProjection;
     } = {};
 
@@ -419,6 +423,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (params?._agorSqlBranchAccessUserId) {
       filter.visibleToUserId = params._agorSqlBranchAccessUserId;
     }
+    if (params?._agorArtifactReadableBy) filter.readableBy = params._agorArtifactReadableBy;
 
     // `$select` used to run only after `SELECT *` and JSON decoding, so even a
     // metadata-only initial hydration pulled every source file over the DB
@@ -524,13 +529,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   }
 
   /**
-   * Centralized visibility predicate. Private artifacts are only readable
-   * by their creator; public artifacts are readable by anyone.
+   * Centralized visibility predicate (`visibleArtifactCondition` in SQL).
+   * Private artifacts are only readable by their creator; public artifacts are
+   * readable by anyone.
    */
   isVisibleTo(artifact: Pick<Artifact, 'public' | 'created_by'>, userId?: string): boolean {
-    if (artifact.public) return true;
-    if (!userId || !artifact.created_by) return false;
-    return artifact.created_by === userId;
+    return isArtifactVisibleTo(artifact, userId);
   }
 
   async remove(id: string | number, params?: ArtifactParams): Promise<Artifact> {
