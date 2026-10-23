@@ -237,7 +237,9 @@ There are two ways to get the manifest:
 - **The Add Channel wizard (UI).** When you create a Slack channel in Agor, a guided wizard turns your choices into a live scope/event summary, then hands you the finished manifest ready to copy on the next step.
 - **The `agor_gateway_slack_manifest_generate` MCP tool (agent-driven).** Ask an agent to generate the manifest for you. The tool is the programmatic equivalent of the wizard, backed by the same generator: from a set of capability toggles it returns the manifest JSON, the derived bot scopes and events, ordered setup steps, and the channel config to pass to `agor_gateway_channels_create`. It is pure. It creates no Slack app, no Agor channel, and validates no tokens. When an agent completes setup, it creates the channel disabled and without tokens via `agor_gateway_channels_create` (`enabled: false`), then calls `agor_widgets_request_gateway_token` so you enter the `xoxb-`/`xapp-` tokens in a secure inline form. The agent never asks you to paste tokens into the chat or passes them as `agor_gateway_channels_create` arguments, because raw secrets in tool arguments would leak into the MCP transcript.
 
-Once a channel exists, its edit form also has an **App Manifest** panel showing the recommended manifest for the channel's current options. Re-paste it into Slack whenever you change surfaces or capabilities so the app's scopes stay aligned.
+Once a channel exists, its edit form shows the same **Where it listens**, **What it receives**, and **What agents can do** sections, each summarized in its header, plus an **App Manifest** panel with the recommended manifest and derived scopes for the channel's current options. Re-paste it into Slack whenever you change surfaces or capabilities so the app's scopes stay aligned.
+
+Channels created before guided setup started checking every surface keep their saved choices; editing them never turns a surface on. To let an existing bot answer in channels, check the surfaces under **Where it listens**, save, then paste the updated manifest into the Slack app and reinstall it.
 
 The one step neither path can cover is the **app-level token**: `connections:write` is an app-level scope, not a bot scope, so you generate that token by hand after creating the app.
 
@@ -248,10 +250,12 @@ The one step neither path can cover is the **app-level token**: `connections:wri
 3. On the **Channel** step, select an **AI Teammate** to route messages to, or choose **Specific branch** for a custom workflow. Below the target picker, **Channel name** shows a suggestion such as `Mira · Slack`. Keep it or click **Rename** to enter a custom display name. The suggestion follows your target and channel type until you edit it; existing channels keep their saved names, which you can change in the edit form. Set whether the channel is **Enabled**, then click **Continue**.
 4. On the **Options** step, choose what the bot can do:
    - **App Name.** The display name for the Slack app.
-   - **Surfaces.** Where the bot listens. Direct messages are always on; optionally add **Public channels** (all, or a specific list of channel IDs), **Private channels**, and **Group DMs**.
-   - **Align Slack users.** Match each Slack profile's email to an Agor user (unmatched senders are rejected). When off, pick a single Agor user to run every session as.
-   - **Enable outbound sends.** Allow authorized agents to post proactive Slack messages through this channel.
-5. As you toggle options, the wizard updates **Required Slack Scopes & Events** with the derived bot scopes and event subscriptions. You never add a scope by hand — the manifest itself is assembled for the **Create app** step, where you copy it. Click **Continue**.
+   - **Where it listens.** Direct messages are always on. **Public channels**, **Private channels**, and **Group DMs** start checked, so the bot answers an `@`-mention in any conversation it has been added to. Slack never delivers mentions from conversations the bot isn't in, and private channels and group DMs need someone to add it. Uncheck a surface to keep the bot out of it.
+   - **Limit to specific channels.** Optionally restrict the bot to a list of channel IDs. The list applies to every channel and group DM, and also to outbound sends, agent posts, file downloads, and channel history reads (including a DM's history). Direct messages to the bot still arrive.
+   - **Identity.** **Align Slack users** (the default) matches each Slack profile's email to an Agor user and rejects unmatched senders. **Run as selected user** runs every session as one Agor user.
+   - **What it receives.** **Attached files** and **Reactions in session threads**, both off by default.
+   - **What agents can do.** The gateway tools session agents may call: read thread history (on by default), read channel history, add and remove reactions, upload files, download files, and send proactive messages.
+5. As you toggle options, the wizard updates **Required Slack scopes and events** with the derived bot scopes and event subscriptions. You never add a scope by hand — the manifest itself is assembled for the **Create app** step, where you copy it. Click **Continue**.
 
 ### 2. Create the Slack app from the manifest
 
@@ -298,8 +302,8 @@ The wizard and manifest bake these in automatically. This table is for understan
 | **Private channels**                      | `groups:history`, `groups:read`                                                     | `app_mention`                     |
 | **Group DMs**                             | `mpim:history`, `mpim:read`                                                         | `app_mention`                       |
 | **Align Slack users**                     | `users:read.email`                                                                  | —                                    |
-| **Outbound sends**                        | `chat:write.public`, `channels:read`, `groups:read`, `im:write`, `users:read.email` | —                                    |
-| **Deliver reactions to sessions**         | `reactions:read`                                                                    | `reaction_added`, `reaction_removed` |
+| **Send proactive messages**               | `chat:write.public`, `channels:read`, `groups:read`, `im:write`, `users:read.email` | —                                    |
+| **Reactions in session threads**          | `reactions:read`                                                                    | `reaction_added`, `reaction_removed` |
 
 Notes:
 
@@ -308,7 +312,7 @@ Notes:
 
 ### Emoji reactions as input
 
-With **Deliver reactions to sessions** on (`config.inbound_reactions: true`, off by default), a human adding or removing an emoji reaction on a message in a thread that already has a session delivers a short prompt to that session, for example `[Slack reaction] Ada reacted :white_check_mark: to your message in this thread`, followed by a quoted excerpt of the reacted message. This lets you approve or acknowledge an agent's reply without typing.
+With **Reactions in session threads** on (`config.inbound_reactions: true`, off by default), a human adding or removing an emoji reaction on a message in a thread that already has a session delivers a short prompt to that session, for example `[Slack reaction] Ada reacted :white_check_mark: to your message in this thread`, followed by a quoted excerpt of the reacted message. This lets you approve or acknowledge an agent's reply without typing.
 
 - A reaction never starts a session. Reactions in threads with no session, on surfaces the channel doesn't listen on, or outside `allowed_channel_ids` are ignored.
 - The bot's own reactions (including ones agents add with the reaction tools) are ignored. Reactors go through the same identity checks as messages (Slack user alignment or the fixed run-as user, plus branch prompt permission). Rejected reactions are dropped silently, without a notice in the thread.

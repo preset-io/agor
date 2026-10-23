@@ -47,6 +47,17 @@ export interface SlackWizardOptions {
   agentTools: SlackAgentToolsConfig;
 }
 
+/** Guided-setup defaults (Add Channel wizard, manifest MCP tool); stored configs and raw creates keep omitted surfaces off. */
+export const SLACK_SETUP_DEFAULTS = {
+  publicChannels: true,
+  privateChannels: true,
+  groupDms: true,
+  alignUsers: true,
+  outbound: false,
+  ingestFiles: false,
+  inboundReactions: false,
+} as const satisfies Omit<SlackWizardOptions, 'appName' | 'botDisplayName' | 'agentTools'>;
+
 /**
  * Slack OAuth bot scopes each agent-tool capability requires. The single
  * source of truth tying a capability toggle to the scopes its MCP tool needs:
