@@ -6,6 +6,7 @@ import {
   sanitizeZoneOrder,
   ZONE_GRID_HEADER,
   ZONE_GRID_PADDING,
+  ZONE_MIN_HEIGHT,
   zoneGridColumns,
   zoneGridDropIndex,
   zoneGridWidthOnSwitch,
@@ -95,8 +96,10 @@ describe('planZoneGrid', () => {
     expect(plan.contentHeight).toBe(400);
   });
 
-  it('keeps the header and padding for an empty zone', () => {
-    expect(planZoneGrid('grid', 1060, []).contentHeight).toBe(100);
+  it('keeps room for one card in an empty or short zone', () => {
+    expect(ZONE_MIN_HEIGHT).toBe(300);
+    expect(planZoneGrid('grid', 1060, []).contentHeight).toBe(ZONE_MIN_HEIGHT);
+    expect(planZoneGrid('row', 1060, items([120])).contentHeight).toBe(ZONE_MIN_HEIGHT);
   });
 
   it('treats unusable heights as zero', () => {

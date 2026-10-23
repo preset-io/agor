@@ -69,9 +69,15 @@ describe('applyZoneGridLayouts', () => {
     expect(byId(tall).get('zone-1')?.style?.height).toBe(500);
 
     const roomy = layout([zone('zone-1', 'column', 600, 900), branch('a', 'zone-1')], {
+      a: { width: 500, height: 240 },
+    });
+    expect(byId(roomy).get('zone-1')?.style?.height).toBe(340);
+
+    // Never shorter than one branch card under the header.
+    const short = layout([zone('zone-1', 'column', 600, 900), branch('a', 'zone-1')], {
       a: { width: 500, height: 100 },
     });
-    expect(byId(roomy).get('zone-1')?.style?.height).toBe(200);
+    expect(byId(short).get('zone-1')?.style?.height).toBe(300);
   });
 
   it('fits a row zone to its cards side by side, stretched up to the maximum width', () => {
