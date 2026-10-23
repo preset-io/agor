@@ -164,26 +164,15 @@ function formatDuration(milliseconds: number): string {
   return hours > 0 ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 
-export const TimerPill: React.FC<TimerPillProps> = ({
+/** Elapsed time for a task, ticking each second while it is active. */
+export function useElapsedDuration({
   status,
   startedAt,
   endedAt,
   durationMs,
-  lastExecutorHeartbeatAt,
-  latestExecutorPulse,
-  style,
-}) => {
-  const { token } = theme.useToken();
+}: Pick<TimerPillProps, 'status' | 'startedAt' | 'endedAt' | 'durationMs'>) {
   const startMs = useMemo(() => parseTimestamp(startedAt), [startedAt]);
   const endMs = useMemo(() => parseTimestamp(endedAt), [endedAt]);
-  const heartbeatMs = useMemo(
-    () => parseTimestamp(lastExecutorHeartbeatAt ?? undefined),
-    [lastExecutorHeartbeatAt]
-  );
-  const pulseMs = useMemo(
-    () => parseTimestamp(latestExecutorPulse?.observed_at),
-    [latestExecutorPulse?.observed_at]
-  );
 
   const fixedDuration = useMemo(() => {
     if (typeof durationMs === 'number' && durationMs >= 0) {
@@ -238,6 +227,40 @@ export const TimerPill: React.FC<TimerPillProps> = ({
 
     return () => window.clearInterval(interval);
   }, [startMs, status]);
+
+  return {
+    startMs,
+    endMs,
+    elapsedMs,
+    hasTiming: Boolean(startMs) || fixedDuration !== null,
+    label: formatDuration(elapsedMs),
+  };
+}
+
+/** Started, ended, duration, heartbeat and pulse for a task: the timer's details. */
+export const TimerDetails: React.FC<Omit<TimerPillProps, 'style'>> = ({
+  status,
+  startedAt,
+  endedAt,
+  durationMs,
+  lastExecutorHeartbeatAt,
+  latestExecutorPulse,
+}) => {
+  const { token } = theme.useToken();
+  const { startMs, endMs, elapsedMs, hasTiming } = useElapsedDuration({
+    status,
+    startedAt,
+    endedAt,
+    durationMs,
+  });
+  const heartbeatMs = useMemo(
+    () => parseTimestamp(lastExecutorHeartbeatAt ?? undefined),
+    [lastExecutorHeartbeatAt]
+  );
+  const pulseMs = useMemo(
+    () => parseTimestamp(latestExecutorPulse?.observed_at),
+    [latestExecutorPulse?.observed_at]
+  );
 
   const isActive = ACTIVE_STATUSES.includes(status);
 
@@ -313,7 +336,27 @@ export const TimerPill: React.FC<TimerPillProps> = ({
     );
   }, [startMs, endMs, isActive, elapsedMs, heartbeatMs, pulseMs, latestExecutorPulse, token]);
 
-  if (!startMs && fixedDuration === null) {
+  return hasTiming ? popoverContent : null;
+};
+
+export const TimerPill: React.FC<TimerPillProps> = ({
+  status,
+  startedAt,
+  endedAt,
+  durationMs,
+  lastExecutorHeartbeatAt,
+  latestExecutorPulse,
+  style,
+}) => {
+  const { token } = theme.useToken();
+  const { elapsedMs, hasTiming } = useElapsedDuration({
+    status,
+    startedAt,
+    endedAt,
+    durationMs,
+  });
+
+  if (!hasTiming) {
     return null;
   }
 
@@ -327,7 +370,19 @@ export const TimerPill: React.FC<TimerPillProps> = ({
   );
 
   return (
-    <Popover content={popoverContent} placement="bottom">
+    <Popover
+      content={
+        <TimerDetails
+          status={status}
+          startedAt={startedAt}
+          endedAt={endedAt}
+          durationMs={durationMs}
+          lastExecutorHeartbeatAt={lastExecutorHeartbeatAt}
+          latestExecutorPulse={latestExecutorPulse}
+        />
+      }
+      placement="bottom"
+    >
       {tag}
     </Popover>
   );

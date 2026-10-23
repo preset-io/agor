@@ -1,5 +1,5 @@
 import type { AgorClient, Session, Task } from '@agor-live/client';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from 'antd';
 import { afterEach, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
@@ -119,10 +119,20 @@ function fixture(status: Session['status'] = 'running') {
       }),
   };
 }
+const queueSection = () => screen.getByRole('region', { name: 'Queued messages' });
+// Row text in display order, read from the expanded "Queued messages" list.
 const order = () =>
-  Array.from(
-    screen.getByRole('region', { name: 'Queued task list' }).querySelectorAll('.ant-typography')
-  ).map((label) => label.textContent);
+  within(queueSection())
+    .queryAllByRole('listitem')
+    .map((row) => row.textContent);
+// The queue folds to "{n} queued" above the composer; expand it to read rows.
+// The header's name also carries its chevron icon's label, so match the count only.
+async function openQueue(count: number) {
+  const header = await screen.findByRole('button', { name: new RegExp(`^${count} queued\\b`) });
+  if (header.getAttribute('aria-expanded') !== 'true') await userEvent.click(header);
+  await waitFor(() => expect(header).toHaveAttribute('aria-expanded', 'true'));
+  await waitFor(() => expect(order()).toHaveLength(count));
+}
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -133,7 +143,7 @@ it.each(['running', 'failed'] as const)(
   async (status) => {
     const f = fixture(status);
     const { unmount } = render(f.panel());
-    await screen.findByText('Queued tasks (2)');
+    await openQueue(2);
     expect(order()).toEqual([
       expect.stringContaining('Queue A'),
       expect.stringContaining('Queue B'),
@@ -156,11 +166,14 @@ it.each(['running', 'failed'] as const)(
     expect(order()).toHaveLength(2);
     expect(f.patch).not.toHaveBeenCalled();
     expect(screen.getByText('Transcript active')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Copy queued task 1' }));
-    expect(copyToClipboard).toHaveBeenLastCalledWith('Queue B');
+    await userEvent.click(screen.getByRole('button', { name: 'More actions, message 1' }));
+    const menu = await screen.findByRole('dialog', { name: 'Message 1' });
+    const copy = within(menu).getByRole('button', { name: 'Copy, message 1' });
+    await userEvent.click(copy);
+    await waitFor(() => expect(copyToClipboard).toHaveBeenLastCalledWith('Queue B'));
     if (status === 'failed') {
       const runNext = screen.getByRole('button', { name: 'Run next' });
-      expect(runNext.parentElement?.parentElement?.parentElement).toHaveTextContent('Queue B');
+      expect(runNext.closest('li')).toHaveTextContent('Queue B');
       expect(screen.getByRole('button', { name: 'Resume queue' })).toBeVisible();
       await userEvent.click(runNext);
       expect(f.patch).toHaveBeenCalledExactlyOnceWith(session.session_id, {
@@ -194,7 +207,7 @@ it.each(['running', 'failed'] as const)(
 it('does not resurrect a removed task when an older reorder patch arrives', async () => {
   const f = fixture();
   render(f.panel());
-  await screen.findByText('Queued tasks (2)');
+  await openQueue(2);
   f.setRows([a]);
   f.emit('removed', b);
   expect(order()).toEqual([expect.stringContaining('Queue A')]);
@@ -205,15 +218,15 @@ it('does not resurrect a removed task when an older reorder patch arrives', asyn
 it('does not roll back a newer reorder when older patches arrive last', async () => {
   const f = fixture('failed');
   render(f.panel());
-  await screen.findByText('Queued tasks (2)');
+  await openQueue(2);
   f.setRows([{ ...b, queue_position: 0 }, a]);
   await act(async () => f.emit('patched', { ...b, queue_position: 0 }));
   await waitFor(() => expect(order()[0]).toContain('Queue B'));
   await act(async () => f.emit('patched', b));
   expect(order()[0]).toContain('Queue B');
-  expect(
-    screen.getByRole('button', { name: 'Run next' }).parentElement?.parentElement?.parentElement
-  ).toHaveTextContent('Queue B');
+  expect(screen.getByRole('button', { name: 'Run next' }).closest('li')).toHaveTextContent(
+    'Queue B'
+  );
 });
 
 function deferredQueue() {
@@ -229,7 +242,7 @@ it.each(['removed', 'patched'] as const)(
   async (event) => {
     const f = fixture();
     render(f.panel());
-    await screen.findByText('Queued tasks (2)');
+    await openQueue(2);
     const old = deferredQueue();
     const fresh = deferredQueue();
     const before = f.queueFind.mock.calls.length;
@@ -265,7 +278,7 @@ it.each(['removed', 'patched'] as const)(
 it('never resurrects a started task from delayed admission or reorder events', async () => {
   const f = fixture();
   render(f.panel());
-  await screen.findByText('Queued tasks (2)');
+  await openQueue(2);
   const running = { ...b, status: 'running' as const, queue_position: undefined };
   f.setRows([a, running]);
   f.emit('patched', running);
@@ -279,7 +292,7 @@ it('never resurrects a started task from delayed admission or reorder events', a
 it('fences session replacement and unmount while queue reads are pending', async () => {
   const f = fixture();
   const view = render(f.panel());
-  await screen.findByText('Queued tasks (2)');
+  await openQueue(2);
   const old = deferredQueue();
   const before = f.queueFind.mock.calls.length;
   f.queueFind.mockImplementationOnce(() => old.promise);
@@ -288,6 +301,7 @@ it('fences session replacement and unmount while queue reads are pending', async
   const other = { ...c, session_id: 'session-2' as Task['session_id'] };
   f.setRows([other]);
   view.rerender(f.panel({ ...session, session_id: other.session_id }));
+  await openQueue(1);
   await screen.findByText('Queue C');
   await act(async () => old.resolve({ data: [a, b] }));
   expect(order()).toEqual([expect.stringContaining('Queue C')]);
@@ -314,7 +328,7 @@ it('fences session replacement and unmount while queue reads are pending', async
 it('refreshes missed admission/removal/reorder on reconnect and fences the pre-disconnect read', async () => {
   const f = fixture();
   render(f.panel());
-  await screen.findByText('Queued tasks (2)');
+  await openQueue(2);
   const old = deferredQueue();
   const before = f.queueFind.mock.calls.length;
   f.queueFind.mockImplementationOnce(() => old.promise);
@@ -335,7 +349,7 @@ it('refreshes missed admission/removal/reorder on reconnect and fences the pre-d
 it('keeps confirmed rows on a failed reconciliation and recovers on a later invalidation', async () => {
   const f = fixture();
   render(f.panel());
-  await screen.findByText('Queued tasks (2)');
+  await openQueue(2);
   f.queueFind.mockRejectedValueOnce(new Error('temporary queue outage'));
   await act(async () => f.emit('patched', a));
   expect(order()).toEqual([expect.stringContaining('Queue A'), expect.stringContaining('Queue B')]);
