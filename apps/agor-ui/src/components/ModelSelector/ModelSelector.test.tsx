@@ -1,8 +1,12 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Button, Popover } from 'antd';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ModelSelector } from './ModelSelector';
+
+// Visible option rows only; antd also renders labels in a hidden a11y list.
+const optionRows = () => Array.from(document.querySelectorAll('.ant-select-item-option-content'));
+const shownOptions = () => optionRows().map((node) => node.textContent?.trim());
 
 describe('ModelSelector (Claude)', () => {
   it('renders aliases by display name and offers a pin affordance', () => {
@@ -90,6 +94,109 @@ describe('ModelSelector (Claude)', () => {
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(onChange).not.toHaveBeenCalled();
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it('shows every model when opening an exact picker, filtering only after typing', async () => {
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'exact', model: 'claude-sonnet-5-5' }}
+      />
+    );
+
+    const input = screen.getByRole('combobox');
+    expect(input).toHaveValue('claude-sonnet-5-5');
+    // rc-select closes on keyCode 27 and defers the close to a macrotask, so
+    // wait for it before reopening (an early reopen cancels the pending close).
+    const closeDropdown = async () => {
+      fireEvent.keyDown(input, { key: 'Escape', keyCode: 27, which: 27 });
+      await waitFor(() => expect(input).toHaveAttribute('aria-expanded', 'false'));
+    };
+
+    // The current exact ID fills the input, but must not narrow the list on open.
+    fireEvent.mouseDown(input);
+    expect(shownOptions()).toEqual(
+      expect.arrayContaining([
+        'Claude Sonnet 5.5 · 1M',
+        'Claude Fable 5 · 1M',
+        'Claude Opus 5.5 · 1M',
+      ])
+    );
+
+    fireEvent.change(input, { target: { value: 'opus' } });
+    expect(shownOptions()).toContain('Claude Opus 5.5 · 1M');
+    expect(shownOptions()).not.toContain('Claude Sonnet 5.5 · 1M');
+    expect(shownOptions()).not.toContain('Claude Fable 5 · 1M');
+
+    // Reopening starts unfiltered again, like the alias Select.
+    await closeDropdown();
+    fireEvent.mouseDown(input);
+    expect(shownOptions()).toEqual(
+      expect.arrayContaining(['Claude Sonnet 5.5 · 1M', 'Claude Fable 5 · 1M'])
+    );
+
+    // Typing into a closed input opens it already filtered.
+    await closeDropdown();
+    fireEvent.change(input, { target: { value: 'fable' } });
+    expect(shownOptions()).toContain('Claude Fable 5 · 1M');
+    expect(shownOptions()).not.toContain('Claude Sonnet 5.5 · 1M');
+  });
+
+  it('commits a different model picked from the unfiltered exact list', () => {
+    const onChange = vi.fn();
+    const onCommit = vi.fn();
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'exact', model: 'claude-sonnet-5-5' }}
+        onChange={onChange}
+        onCommit={onCommit}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    const fable = optionRows().find((node) => node.textContent?.trim() === 'Claude Fable 5 · 1M');
+    expect(fable).toBeDefined();
+    fireEvent.click(fable as Element);
+
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith({ mode: 'exact', model: 'claude-fable-5' });
+    expect(screen.getByRole('combobox')).toHaveValue('claude-fable-5');
+  });
+
+  it('shows every model when the exact picker opens from the keyboard', () => {
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'exact', model: 'claude-sonnet-5-5' }}
+      />
+    );
+
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'ArrowDown', keyCode: 40, which: 40 });
+    expect(shownOptions()).toEqual(
+      expect.arrayContaining(['Claude Sonnet 5.5 · 1M', 'Claude Fable 5 · 1M'])
+    );
+  });
+
+  it('shows every model after switching an alias selection to a pinned version', () => {
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'alias', model: 'claude-sonnet-5-5' }}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pin a specific version…' }));
+    const input = screen.getByRole('combobox');
+    expect(input).toHaveValue('claude-sonnet-5-5');
+    fireEvent.mouseDown(input);
+    expect(shownOptions()).toEqual(
+      expect.arrayContaining(['Claude Sonnet 5.5 · 1M', 'Claude Fable 5 · 1M'])
+    );
   });
 
   it('updates exact model text without committing until selection or blur', () => {
@@ -515,5 +622,14 @@ describe('ModelSelector (Codex)', () => {
     fireEvent.mouseDown(screen.getByRole('combobox'));
 
     expect(screen.getAllByText('account-dependent').length).toBeGreaterThan(0);
+  });
+
+  it('shows every model when opening a pinned Codex picker', () => {
+    render(<ModelSelector agentic_tool="codex" value={{ mode: 'exact', model: 'gpt-6-sol' }} />);
+
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    expect(shownOptions()).toEqual(
+      expect.arrayContaining(['GPT-6 Sol', 'GPT-6 Astra (Recommended)', 'GPT-6 Luna'])
+    );
   });
 });
