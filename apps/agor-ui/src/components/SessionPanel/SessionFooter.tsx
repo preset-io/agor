@@ -180,6 +180,8 @@ const formatTokenCount = (count: number) =>
 
 /** Visible size of the phone circle; its touch target stays 44px. */
 const CIRCLE_VISUAL_COMPACT = 36;
+// The queued count badge: 12px digits in a 16px pill.
+const QUEUED_BADGE_SIZE = 16;
 
 const PINNABLE_ACTIONS = ['upload', 'advanced-upload', 'fork', 'btw-fork', 'spawn', 'mcp'];
 
@@ -379,6 +381,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       : { color: 'primary', variant: 'solid' };
 
   const controlSize = isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight;
+  const circleFillInset = isMobile ? (MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2 : 0;
   const rowButtonStyle: React.CSSProperties = {
     minWidth: controlSize,
     height: controlSize,
@@ -1731,18 +1734,19 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               <Badge
                 count={queuedCount}
                 size="small"
-                offset={
-                  isMobile ? [-(MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2, 4] : [-2, 2]
-                }
+                // Centred 2px in from the fill's top-right corner, so it overhangs the button by
+                // 2px and stays inside the card's padding. Phones inset the fill in its 44px target.
+                offset={[-(circleFillInset + QUEUED_BADGE_SIZE / 2 - 2), circleFillInset + 2]}
                 styles={{
                   root: { display: 'inline-flex', flexShrink: 0 },
                   indicator: {
                     fontSize: token.fontSizeSM,
-                    height: token.fontSizeSM + 4,
-                    minWidth: token.fontSizeSM + 4,
-                    lineHeight: `${token.fontSizeSM + 4}px`,
-                    background: token.colorTextSecondary,
-                    color: token.colorBgContainer,
+                    height: QUEUED_BADGE_SIZE,
+                    minWidth: QUEUED_BADGE_SIZE,
+                    lineHeight: `${QUEUED_BADGE_SIZE}px`,
+                    // Opaque neutral, so the teal fill doesn't show through.
+                    background: token.colorBorder,
+                    color: token.colorText,
                     boxShadow: `0 0 0 ${token.lineWidth}px ${token.colorBgContainer}`,
                   },
                 }}
@@ -1808,7 +1812,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                         // Phones: a 36px fill inside the 44px target keeps the circle clear of the card edge.
                         ...(isMobile && {
                           border: 'none',
-                          padding: (MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2,
+                          padding: circleFillInset,
                           backgroundClip: 'content-box',
                         }),
                         transition: reducedMotion ? 'none' : undefined,

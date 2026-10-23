@@ -4,7 +4,7 @@ import { App, ConfigProvider, theme } from 'antd';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { makeSession } from '../../test/harness';
-import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { isMobileViewport, MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { SessionFooter, type SessionFooterProps } from './SessionFooter';
 
 const originalViewport = { width: window.innerWidth, height: window.innerHeight };
@@ -534,3 +534,46 @@ it('keeps the advisor and exact-version picker one drill-in from the model chip'
   await userEvent.click(within(menu).getByRole('button', { name: 'Back to model' }));
   expect(await within(menu).findByRole('radiogroup', { name: 'Model' })).toBeVisible();
 });
+
+it.each([
+  [390, true],
+  [390, false],
+  [1280, true],
+  [1280, false],
+])(
+  'keeps the queued count inside the card, on the button corner, at %dpx (draft=%s)',
+  async (width, hasInput) => {
+    await page.viewport(width, 900);
+    const queuedTasks = [{ task_id: 'q1' }, { task_id: 'q2' }] as Task[];
+    render(
+      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+        <App>
+          <SessionFooter {...props} hasInput={hasInput} queuedTasks={queuedTasks} />
+        </App>
+      </ConfigProvider>
+    );
+    const badge = screen
+      .getByTestId('composer-queued-badge')
+      .querySelector<HTMLElement>('.ant-badge-count')!;
+    await waitFor(() => expect(badge).toHaveTextContent('2'));
+    const card = screen.getByTestId('composer-card');
+    const cardStyle = getComputedStyle(card);
+    const box = card.getBoundingClientRect();
+    const count = badge.getBoundingClientRect();
+    // The 1px ring counts, and nothing touches the card border.
+    expect(count.right + 1).toBeLessThan(box.right - Number.parseFloat(cardStyle.borderRightWidth));
+    expect(count.top - 1).toBeGreaterThan(box.top + Number.parseFloat(cardStyle.borderTopWidth));
+    // It sits on the visible fill's top-right corner.
+    const button = screen.getByTestId('composer-circle');
+    // Phones clip the fill to the content box, inset in the 44px target.
+    const inset = isMobileViewport() ? Number.parseFloat(getComputedStyle(button).paddingRight) : 0;
+    const fill = button.getBoundingClientRect();
+    const corner = { x: fill.right - inset, y: fill.top + inset };
+    expect(count.left).toBeLessThan(corner.x);
+    expect(count.right).toBeGreaterThan(corner.x);
+    expect(count.top).toBeLessThan(corner.y);
+    expect(count.bottom).toBeGreaterThan(corner.y);
+    // An opaque neutral, so the teal fill doesn't show through.
+    expect(getComputedStyle(badge).backgroundColor).toMatch(/^rgb\(/);
+  }
+);
