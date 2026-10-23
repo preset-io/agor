@@ -624,6 +624,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       : hasTurns
         ? ''
         : 'No usage yet';
+  const usageExpandable = (usage && usage.total > 0) || !!usageError;
   const emptyContextLimit = getModelContextLimit(session.agentic_tool, effectiveModel);
   const contextValue =
     contextPercent !== null
@@ -754,8 +755,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             label="Usage"
             icon={<NumberOutlined />}
             value={usageValue}
-            expanded={usage || usageError ? detailsExpanded === 'usage' : undefined}
-            onClick={usage || usageError ? () => toggleExpanded('usage') : undefined}
+            expanded={usageExpandable ? detailsExpanded === 'usage' : undefined}
+            onClick={usageExpandable ? () => toggleExpanded('usage') : undefined}
             trailing={infoPin('tokens', 'usage')}
           />
           {detailsExpanded === 'usage' && (
@@ -823,6 +824,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       <ComposerMenuRow
         label="Copy session ID"
         value={shortId(session.session_id)}
+        valueEllipsis
         ariaLabel={`Copy session ID ${session.session_id}`}
         icon={<CopyOutlined />}
         onClick={copyId(session.session_id, 'Session ID')}
@@ -831,6 +833,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         <ComposerMenuRow
           label="Copy agent session ID"
           value={shortId(session.sdk_session_id)}
+          valueEllipsis
           ariaLabel={`Copy agent session ID ${session.sdk_session_id}`}
           icon={<CopyOutlined />}
           onClick={copyId(session.sdk_session_id, 'Agent session ID')}

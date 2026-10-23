@@ -217,6 +217,8 @@ interface ComposerMenuRowProps {
   hint?: string;
   /** Current value, shown at the end of the row. */
   value?: React.ReactNode;
+  /** A long value (such as an ID) clips instead of the label. */
+  valueEllipsis?: boolean;
   onClick?: () => void;
   disabled?: boolean;
   /** Radio rows show a check instead of colour alone. */
@@ -236,6 +238,7 @@ export function ComposerMenuRow({
   icon,
   hint,
   value,
+  valueEllipsis,
   onClick,
   disabled,
   checked,
@@ -249,7 +252,7 @@ export function ComposerMenuRow({
   const rowHeight = useRowHeight();
   const body = (
     <Flex align="center" gap={token.marginXS} style={{ flex: 1, minWidth: 0 }}>
-      <Flex vertical style={{ flex: 1, minWidth: 0 }}>
+      <Flex vertical style={valueEllipsis ? { flexShrink: 0 } : { flex: 1, minWidth: 0 }}>
         <Typography.Text ellipsis style={{ color: 'inherit' }}>
           {label}
         </Typography.Text>
@@ -260,7 +263,11 @@ export function ComposerMenuRow({
         )}
       </Flex>
       {value !== undefined && (
-        <Typography.Text type="secondary" style={{ flexShrink: 0 }}>
+        <Typography.Text
+          type="secondary"
+          ellipsis={valueEllipsis}
+          style={valueEllipsis ? { flex: 1, minWidth: 0, textAlign: 'end' } : { flexShrink: 0 }}
+        >
           {value}
         </Typography.Text>
       )}

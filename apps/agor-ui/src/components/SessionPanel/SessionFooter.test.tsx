@@ -881,6 +881,8 @@ describe('empty states', () => {
       details.querySelector(`[data-detail-row="${key}"]`)!.textContent ?? '';
     expect(value('timer')).toContain('Not started');
     expect(value('usage')).toContain('No usage yet');
+    // Nothing to break down yet, so no chevron.
+    expect(details.querySelector('[data-detail-row="usage"] [aria-expanded]')).toBeNull();
     expect(value('context')).toMatch(/0% of \d+(\.\d+)?[kM]/);
     expect(value('tools')).toContain('None attached');
     // The chevron still opens the attach panel.
