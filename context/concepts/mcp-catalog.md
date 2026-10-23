@@ -122,7 +122,11 @@ to whatever a redirect names.
   rollout before connecting those providers.
 - **Admin-allowlisted callbacks.** `oauth.redirect_allowlist: true` (Datadog,
   incident.io) only makes readiness return the daemon's direct callback for the
-  drawer to show; the flow, DCR and authorize redirect are unchanged. The loader
+  drawer to show; the flow, DCR and authorize redirect are unchanged. The direct
+  callback is resolved per flow by `resolveMCPOAuthRedirectUri(tenantId)`: the
+  startup URL on static deployments, the tenant's launch-observed
+  `public_base_url` origin in `required_from_auth` (startup URL if none). Flows
+  store it, so grants and DCR clients keep their original value. The loader
   refuses it with `configured_client` or `stable_callback`. An entry-level
   `setup_hint` states the provider-side setup and is shown above Connect.
 - **GitHub** uses its documented PAT bearer route as a reviewed exception to its

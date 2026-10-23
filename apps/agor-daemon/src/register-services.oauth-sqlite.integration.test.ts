@@ -1,5 +1,5 @@
 import http, { type Server as HttpServer } from 'node:http';
-import { resolveMcpOAuthCallbackOrigin } from '@agor/core/config';
+import { getBaseUrl, resolveMcpOAuthCallbackOrigin } from '@agor/core/config';
 import {
   AppVariableRepository,
   BranchRepository,
@@ -16,6 +16,7 @@ import {
   RepoRepository,
   runMigrations,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   SessionMCPServerRepository,
   SessionRepository,
   setMCPEgressGatewayMode,
@@ -23,6 +24,7 @@ import {
   setMcpMemberPolicy,
   shortId,
   TaskRepository,
+  TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
@@ -58,8 +60,10 @@ import type {
 } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import type { OutboundDnsLookup } from '@agor/core/utils/safe-outbound-fetch';
+import { getMcpOAuthReturnUrl } from '@agor/core/utils/url';
 import { type Socket as ClientSocket, io as createSocketClient } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { hostedTenantRouting } from '../test/hosted-tenant-routing-fixture.js';
 import { RuntimeJWTStrategy } from './auth/runtime-jwt-strategy.js';
 import {
   issueRuntimeToken,
@@ -570,6 +574,11 @@ type SQLiteHarness = {
   nextAuthorizationUrl: () => Promise<string>;
   callback: (state: string) => Promise<{ status: number; body: string }>;
   deny: (state: string) => Promise<{ status: number; body: string }>;
+  /** The raw provider redirect only; nothing is completed. */
+  providerRedirect: (
+    query: Record<string, string>,
+    headers?: Record<string, string>
+  ) => Promise<{ status: number; body: string; location?: string }>;
   liveSocket: {
     id: string;
     feathers: AuthenticatedParams;
@@ -592,6 +601,8 @@ async function createHarness(
     outboundDnsLookup?: OutboundDnsLookup;
     requireAuth?: RegisterServicesContext['requireAuth'];
     deployment?: RegisterServicesContext['deployment'];
+    /** Startup config; defaults to an empty (static, self-hosted) config. */
+    config?: RegisterServicesContext['config'];
     /**
      * Arm the daemon's tenant database scope guard for this harness.
      *
@@ -717,7 +728,7 @@ async function createHarness(
   const { oauthCallbackHandler } = await registerMCPServices({
     db,
     app,
-    config: {} as RegisterServicesContext['config'],
+    config: options.config ?? ({} as RegisterServicesContext['config']),
     jwtSecret: 'test-jwt',
     daemonUrl: 'http://127.0.0.1:3030',
     bundledUiAvailable: false,
@@ -778,10 +789,12 @@ async function createHarness(
   } as never);
 
   const invokeCallback = async (
-    query: Record<string, string>
-  ): Promise<{ status: number; body: string }> => {
+    query: Record<string, string>,
+    headers: Record<string, string> = {}
+  ): Promise<{ status: number; body: string; location?: string }> => {
     let status = 200;
     let body = '';
+    let location: string | undefined;
     const response = {
       setHeader: vi.fn(),
       status(code: number) {
@@ -792,12 +805,37 @@ async function createHarness(
         body = value;
         return this;
       },
+      redirect(code: number, url: string) {
+        status = code;
+        location = url;
+        return this;
+      },
     };
     await (oauthCallbackHandler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { query },
+      { query, headers },
       response
     );
-    return { status, body };
+    return { status, body, location };
+  };
+  // The browser path: the provider redirect lands on the callback, which
+  // forwards to the UI; the signed-in initiator then finishes it.
+  const callbackAndComplete = async (
+    query: Record<string, string>
+  ): Promise<{ status: number; body: string }> => {
+    const forwarded = await invokeCallback(query);
+    if (forwarded.status !== 303 || !forwarded.location) return forwarded;
+    const fragment = Object.fromEntries(
+      new URLSearchParams(new URL(forwarded.location).hash.slice(1))
+    );
+    const result = (await app
+      .service('mcp-servers/oauth-complete')
+      .create(fragment as never, paramsFor({ liveSocket } as SQLiteHarness))) as {
+      success: boolean;
+    };
+    return {
+      status: result.success ? 200 : fragment.error ? 400 : 409,
+      body: JSON.stringify(result),
+    };
   };
 
   return {
@@ -815,8 +853,9 @@ async function createHarness(
       return value;
     },
     callback: (state: string) =>
-      invokeCallback({ code: 'authorization-code', state, iss: provider.baseUrl }),
-    deny: (state: string) => invokeCallback({ error: 'access_denied', state }),
+      callbackAndComplete({ code: 'authorization-code', state, iss: provider.baseUrl }),
+    deny: (state: string) => callbackAndComplete({ error: 'access_denied', state }),
+    providerRedirect: invokeCallback,
     liveSocket,
   } satisfies SQLiteHarness;
 }
@@ -2710,6 +2749,61 @@ describe('real Feathers Socket.IO request authority', () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it('finishes a provider redirect only for the user who started the flow', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+      success: boolean;
+      authorizationUrl: string;
+    };
+    expect(started.success).toBe(true);
+    const state = new URL(started.authorizationUrl).searchParams.get('state')!;
+    const providerResponse = { code: 'authorization-code', state, iss: provider.baseUrl };
+
+    // The redirect forwards to the configured UI, whatever host the request
+    // names, and completes nothing on its own.
+    const forwarded = await harness.providerRedirect(providerResponse, {
+      host: 'other.example.test',
+      'x-forwarded-host': 'other.example.test',
+    });
+    expect(forwarded.status).toBe(303);
+    const location = new URL(forwarded.location!);
+    expect(`${location.origin}${location.pathname}`).toBe(
+      getMcpOAuthReturnUrl(await getBaseUrl(harness.db))
+    );
+    expect(Object.fromEntries(new URLSearchParams(location.hash.slice(1)))).toEqual(
+      providerResponse
+    );
+    expect(provider.requests.map((request) => request.path)).not.toContain('/token');
+
+    // Another signed-in user cannot finish it, and the attempt stays usable.
+    const other = await new UsersRepository(harness.rawDb).create({
+      email: `${crypto.randomUUID()}@example.test`,
+      name: 'Other user',
+    });
+    await expect(
+      harness.app.service('mcp-servers/oauth-complete').create(providerResponse, {
+        ...paramsFor(harness),
+        user: { ...harness.liveSocket.feathers.user, user_id: other.user_id },
+      } as AuthenticatedParams)
+    ).resolves.toMatchObject({ success: false });
+    expect(provider.requests.map((request) => request.path)).not.toContain('/token');
+    const tokens = new UserMCPOAuthTokenRepository(harness.rawDb);
+    await expect(
+      tokens.getToken(other.user_id as UserID, harness.server.mcp_server_id as MCPServerID)
+    ).resolves.toBeNull();
+
+    // The user who started it still finishes it.
+    expect((await harness.callback(state)).status).toBe(200);
+    await expect(
+      tokens.getToken(harness.user.user_id as UserID, harness.server.mcp_server_id as MCPServerID)
+    ).resolves.not.toBeNull();
+  });
+
   it.each([
     [new FailedRefreshError(), 'token_refresh_failed'],
     [new AmbiguousRefreshError(), 'token_refresh_failed'],
@@ -3773,6 +3867,68 @@ describe('SQLite saved-row OAuth authority', () => {
     };
     return { harness, started };
   };
+
+  it('starts a hosted direct-callback flow only when the workspace address is known', async () => {
+    // Real hosted config (required_from_auth) with no tenant routing yet.
+    const hosted = await hostedTenantRouting({ tenantId: 'default' });
+    try {
+      const provider = await createTestProvider({ serveDynamicRegistration: true });
+      providers.push(provider);
+      const catalogEntry = dcrCatalogEntry('test/hosted-workspace-url', provider.savedMcpUrl);
+      const catalogMock = vi.mocked(loadCatalog);
+      const previousImplementation = catalogMock.getMockImplementation();
+      catalogMock.mockResolvedValue([catalogEntry]);
+      onTestFinished(() => {
+        catalogMock.mockReset();
+        if (previousImplementation) catalogMock.mockImplementation(previousImplementation);
+      });
+      const harness = await createHarness(provider, undefined, { catalogEntry });
+      databases.push(harness.rawDb);
+      const start = () =>
+        harness.app
+          .service('mcp-servers/oauth-start')
+          .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness)) as Promise<{
+          success: boolean;
+          authorizationUrl?: string;
+          recovery?: { category: string; action: string };
+        }>;
+
+      // Refused before any provider side effect: no DCR, no authorization.
+      await expect(start()).resolves.toMatchObject({
+        success: false,
+        recovery: { category: 'configuration_required', action: 'retry' },
+      });
+      expect(
+        provider.requests.some(({ path }) => ['/register', '/authorize', '/token'].includes(path))
+      ).toBe(false);
+
+      // Once a verified launch records the workspace origin, the callback
+      // hands off to it, never to the cell origin or the request host.
+      await runWithTenantDatabaseTransaction(harness.rawDb, 'default', (scoped) =>
+        new TenantPublicRoutingRepository(scoped).observeVerifiedLaunch({
+          public_base_url: 'https://tenant-a.example.test',
+          assertion_issued_at: 100,
+        })
+      );
+      const started = await start();
+      expect(started).toMatchObject({ success: true });
+      // The same start does register a client once the address is known.
+      expect(provider.requests.some(({ path }) => path === '/register')).toBe(true);
+      const state = new URL(started.authorizationUrl!).searchParams.get('state')!;
+      const cellHost = new URL(hosted.cellBaseUrl).host;
+      const forwarded = await harness.providerRedirect(
+        { code: 'authorization-code', state, iss: provider.baseUrl },
+        { host: cellHost }
+      );
+      expect(forwarded.status).toBe(303);
+      const location = new URL(forwarded.location!);
+      expect(`${location.origin}${location.pathname}`).toBe(
+        'https://tenant-a.example.test/ui/connect/mcp/return'
+      );
+    } finally {
+      await hosted.cleanup();
+    }
+  });
 
   it('registers under the deployed client name, and the front channel accepts that client', async () => {
     const provider = await createTestProvider({ serveDynamicRegistration: true });
@@ -5965,5 +6121,152 @@ describe('SQLite saved-row OAuth authority', () => {
       grant_generation: 3,
       oauth_access_token: 'sqlite-access-token-2',
     });
+  });
+});
+
+describe('per-workspace direct OAuth callback', () => {
+  const CELL_CALLBACK = 'https://agor.example.test/mcp-servers/oauth-callback';
+  const WORKSPACE_CALLBACK = 'https://acme.example.test/mcp-servers/oauth-callback';
+  const hostedConfig = {
+    multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+  } as RegisterServicesContext['config'];
+
+  const observeLaunch = (harness: SQLiteHarness, tenantId: string, origin: string) =>
+    runWithTenantDatabaseTransaction(harness.rawDb, tenantId, (scoped) =>
+      new TenantPublicRoutingRepository(scoped).observeVerifiedLaunch({
+        public_base_url: origin,
+        assertion_issued_at: 100,
+      })
+    );
+
+  const createCatalogHarness = async (
+    provider: TestProvider,
+    config?: RegisterServicesContext['config']
+  ) => {
+    const catalogEntry = {
+      name: 'test/per-workspace-callback',
+      title: 'Per-workspace callback fixture',
+      category: 'developer-tools',
+      capabilities: ['testing'],
+      benefit: 'Exercises the direct callback origin.',
+      starter_prompt: 'Exercise the callback.',
+      permission_disclosure: 'Fixture only.',
+      popularity_rank: 999_989,
+      transport: 'streamable-http',
+      remote_url: provider.savedMcpUrl,
+      has_remote: true,
+      has_package: false,
+      auth_type: 'oauth',
+    } as MCPCatalogEntry;
+    const catalogMock = vi.mocked(loadCatalog);
+    const previousImplementation = catalogMock.getMockImplementation();
+    catalogMock.mockResolvedValue([catalogEntry]);
+    onTestFinished(() => {
+      catalogMock.mockReset();
+      if (previousImplementation) catalogMock.mockImplementation(previousImplementation);
+    });
+    const harness = await createHarness(provider, undefined, { catalogEntry, config });
+    databases.push(harness.rawDb);
+    return harness;
+  };
+
+  /** Start, pass the provider's front channel, and complete the callback. */
+  const connect = async (harness: SQLiteHarness, params = paramsFor(harness)) => {
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, params)) as {
+      success: boolean;
+      authorizationUrl?: string;
+    };
+    expect(started).toMatchObject({ success: true });
+    const authorizationUrl = new URL(started.authorizationUrl!);
+    const authorize = await fetch(authorizationUrl, { redirect: 'manual' });
+    expect(authorize.status).toBe(302);
+    expect((await harness.callback(authorizationUrl.searchParams.get('state')!)).status).toBe(200);
+    return authorizationUrl;
+  };
+
+  const forceRefresh = (harness: SQLiteHarness) =>
+    harness.app
+      .service('mcp-servers/oauth-auth-headers')
+      .create({ mcp_server_ids: [harness.server.mcp_server_id], force_refresh: true }, {
+        provider: undefined,
+        user: harness.user,
+        tenant: { tenant_id: 'default', source: 'static' },
+        authentication: { _isServiceAccount: true },
+      } as unknown as AuthenticatedParams);
+
+  const storedGrant = (harness: SQLiteHarness) =>
+    runWithTenantDatabaseScope(harness.db, 'default', (scoped) =>
+      new UserMCPOAuthTokenRepository(scoped, process.env.AGOR_MASTER_SECRET).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    );
+
+  const tokenRedirectUris = (provider: TestProvider, grantType: string) =>
+    provider.requests
+      .filter((entry) => entry.path === '/token')
+      .filter((entry) => entry.formBody?.get('grant_type') === grantType)
+      .map((entry) => entry.formBody?.get('redirect_uri'));
+
+  it("uses the tenant's launch-observed origin for DCR, authorize, token, and refresh", async () => {
+    const provider = await createTestProvider({ serveDynamicRegistration: true });
+    providers.push(provider);
+    const harness = await createCatalogHarness(provider, hostedConfig);
+    await observeLaunch(harness, 'default', 'https://acme.example.test');
+
+    // Request headers are not an input: only the stored routing row is.
+    const params = {
+      ...paramsFor(harness),
+      headers: { host: 'attacker.example.test', 'x-forwarded-host': 'attacker.example.test' },
+    } as AuthenticatedParams;
+    const authorizationUrl = await connect(harness, params);
+
+    const registered = provider.registeredClients.get(
+      authorizationUrl.searchParams.get('client_id')!
+    );
+    expect(registered?.redirectUris).toEqual([WORKSPACE_CALLBACK]);
+    expect(authorizationUrl.searchParams.get('redirect_uri')).toBe(WORKSPACE_CALLBACK);
+    expect(tokenRedirectUris(provider, 'authorization_code')).toEqual([WORKSPACE_CALLBACK]);
+    expect((await storedGrant(harness))?.oauth_redirect_uri).toBe(WORKSPACE_CALLBACK);
+
+    await forceRefresh(harness);
+    expect(tokenRedirectUris(provider, 'refresh_token')).toEqual([WORKSPACE_CALLBACK]);
+  });
+
+  it('keeps refreshing an existing grant with its stored callback; new flows move to the workspace', async () => {
+    const provider = await createTestProvider({ serveDynamicRegistration: true });
+    providers.push(provider);
+    const harness = await createCatalogHarness(provider, hostedConfig);
+
+    // Only another tenant's routing is stored: never used for this tenant,
+    // which keeps the startup (cell) callback, as before.
+    await observeLaunch(harness, 'globex', 'https://globex.example.test');
+    const first = await connect(harness);
+    expect(first.searchParams.get('redirect_uri')).toBe(CELL_CALLBACK);
+    expect((await storedGrant(harness))?.oauth_redirect_uri).toBe(CELL_CALLBACK);
+
+    await observeLaunch(harness, 'default', 'https://acme.example.test');
+    await forceRefresh(harness);
+    expect(tokenRedirectUris(provider, 'refresh_token')).toEqual([CELL_CALLBACK]);
+
+    const second = await connect(harness);
+    expect(second.searchParams.get('redirect_uri')).toBe(WORKSPACE_CALLBACK);
+    expect(
+      provider.registeredClients.get(second.searchParams.get('client_id')!)?.redirectUris
+    ).toEqual([WORKSPACE_CALLBACK]);
+    expect((await storedGrant(harness))?.oauth_redirect_uri).toBe(WORKSPACE_CALLBACK);
+  });
+
+  it('ignores tenant routing on a static (self-hosted) deployment', async () => {
+    const provider = await createTestProvider({ serveDynamicRegistration: true });
+    providers.push(provider);
+    const harness = await createCatalogHarness(provider);
+    await observeLaunch(harness, 'default', 'https://acme.example.test');
+
+    const authorizationUrl = await connect(harness);
+    expect(authorizationUrl.searchParams.get('redirect_uri')).toBe(CELL_CALLBACK);
+    expect(tokenRedirectUris(provider, 'authorization_code')).toEqual([CELL_CALLBACK]);
   });
 });
