@@ -13,6 +13,8 @@ import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 
 const MENU_WIDTH = 300;
+/** On a short window the popover keeps this many rows, scrolling the rest. */
+const MENU_MIN_ROWS = 4;
 
 const ComposerMenuDensity = React.createContext<{ sheet: boolean }>({ sheet: false });
 
@@ -50,22 +52,28 @@ export function ComposerMenu({
 }: ComposerMenuProps) {
   const { token } = theme.useToken();
   const reducedMotion = usePrefersReducedMotion();
+  const rowHeight = useRowHeight();
   const anchorRef = React.useRef<HTMLSpanElement>(null);
   // Distance from the trigger's top up to the card's top, so the popover clears the card.
   const [lift, setLift] = React.useState(0);
   // Room between the popover's bottom and the top of the panel, below the app header.
   const [maxHeight, setMaxHeight] = React.useState<number | undefined>(undefined);
+  // When that room is under the minimum, the popover slides down over the card instead.
+  const [drop, setDrop] = React.useState(0);
   const measureLift = React.useCallback(() => {
     const trigger = anchorRef.current?.getBoundingClientRect();
+    if (!trigger) return;
     const card = above?.current?.getBoundingClientRect();
-    setLift(trigger && card ? Math.max(0, trigger.top - card.top) : 0);
-    const bottom = (card ?? trigger)?.top;
-    if (bottom === undefined) return;
+    const nextLift = card ? Math.max(0, trigger.top - card.top) : 0;
+    setLift(nextLift);
+    // The popover's bottom: above the card, or above a trigger that sits over the card.
+    const bottom = trigger.top - token.sizeXS - nextLift;
     const bounds = anchorRef.current?.closest('[data-composer-bounds]')?.getBoundingClientRect();
-    const room =
-      bottom - token.sizeXS - (bounds?.top ?? 0) - token.paddingXS - token.paddingXXS * 2;
-    setMaxHeight(room > 0 ? room : undefined);
-  }, [above, token.sizeXS, token.paddingXS, token.paddingXXS]);
+    const room = bottom - (bounds?.top ?? 0) - token.paddingXS - token.paddingXXS * 2;
+    const minHeight = rowHeight * MENU_MIN_ROWS;
+    setMaxHeight(Math.max(room, minHeight));
+    setDrop(Math.max(0, minHeight - room));
+  }, [above, rowHeight, token.sizeXS, token.paddingXS, token.paddingXXS]);
   React.useLayoutEffect(() => {
     if (open && !sheet) measureLift();
   }, [open, sheet, measureLift]);
@@ -134,7 +142,7 @@ export function ComposerMenu({
       onOpenChange={onOpenChange}
       trigger="click"
       placement="topLeft"
-      align={{ offset: [0, -(token.sizeXS + lift)] }}
+      align={{ offset: [0, drop - (token.sizeXS + lift)] }}
       arrow={false}
       destroyOnHidden
       styles={{

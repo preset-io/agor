@@ -235,23 +235,37 @@ it('opens desktop menus above the card, anchored to their trigger', async () => 
   }
 });
 
-it('keeps Session details below the app header, scrolling inside when the window is short', async () => {
-  if (isMobileViewport()) return;
-  await page.viewport(1280, 480);
-  // An app header above the panel.
-  render(<div style={{ paddingTop: 120 }}>{panel(SessionStatus.IDLE, false, 360)}</div>);
-  await userEvent.click(screen.getByRole('button', { name: 'Session details' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Session details' });
-  const bounds = document.querySelector('[data-composer-bounds]')!.getBoundingClientRect();
-  await waitFor(() => {
-    const popup = dialog.closest('.ant-popover')!.getBoundingClientRect();
-    expect(popup.top).toBeGreaterThanOrEqual(bounds.top);
-    expect(popup.bottom).toBeLessThanOrEqual(card().getBoundingClientRect().top);
-  });
-  // The rows scroll inside the capped popover.
-  expect(dialog.scrollHeight).toBeGreaterThan(dialog.clientHeight);
-  expect(getComputedStyle(dialog).overflowY).toBe('auto');
-});
+it.each([
+  [120, 360, true],
+  [300, 180, false],
+])(
+  'keeps Session details below a %ipx app header, scrolling inside a %ipx panel (above the card: %s)',
+  async (header, height, aboveCard) => {
+    if (isMobileViewport()) return;
+    await page.viewport(1280, 480);
+    render(<div style={{ paddingTop: header }}>{panel(SessionStatus.IDLE, false, height)}</div>);
+    await userEvent.click(screen.getByRole('button', { name: 'Session details' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Session details' });
+    const popover = dialog.closest<HTMLElement>('.ant-popover')!;
+    const bounds = document.querySelector('[data-composer-bounds]')!.getBoundingClientRect();
+    const minHeight = (theme.getDesignToken().controlHeightLG - theme.getDesignToken().sizeXXS) * 4;
+    await waitFor(() => {
+      // Measure the settled popover, not its scaled-down zoom-in.
+      expect(popover.className).not.toMatch(/-appear/);
+      expect(popover.getAnimations({ subtree: true })).toHaveLength(0);
+      const popup = popover.getBoundingClientRect();
+      const cardTop = card().getBoundingClientRect().top;
+      expect(popup.top).toBeGreaterThanOrEqual(bounds.top);
+      // With room, it sits above the card; without, it keeps a usable height over the card.
+      if (aboveCard) expect(popup.bottom).toBeLessThanOrEqual(cardTop);
+      else expect(popup.bottom).toBeGreaterThan(cardTop);
+      expect(dialog.clientHeight).toBeGreaterThanOrEqual(minHeight);
+    });
+    // The rows scroll inside the capped popover.
+    expect(dialog.scrollHeight).toBeGreaterThan(dialog.clientHeight);
+    expect(getComputedStyle(dialog).overflowY).toBe('auto');
+  }
+);
 
 it('retains the bottom inset when resizing from mobile to desktop', async () => {
   await page.viewport(390, 700);
