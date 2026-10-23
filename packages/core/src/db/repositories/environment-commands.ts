@@ -7,6 +7,7 @@ import {
   type EnvironmentCommandAction,
   type EnvironmentCommandReport,
   EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+  EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
   environmentStartConfirmation,
   hasActiveEnvironmentCommand,
   type UserID,
@@ -275,13 +276,13 @@ export class EnvironmentCommandRepository {
   }
 
   /**
-   * `launch_refused`: an opted-in launcher refused admission before creating
-   * anything, so the unclaimed attempt failed rather than ended unknown.
+   * `launch_refused` / `launch_restricted`: an opted-in launcher refused admission
+   * before creating anything, so the unclaimed attempt failed rather than ended unknown.
    */
   async dispatchFailed(
     branchId: BranchID,
     attemptId: string,
-    cause: 'unknown' | 'launch_refused' = 'unknown'
+    cause: 'unknown' | 'launch_refused' | 'launch_restricted' = 'unknown'
   ): Promise<void> {
     return this.mutate(branchId, false, (environment, now) => {
       const attempt = environment.command_attempt;
@@ -293,12 +294,19 @@ export class EnvironmentCommandRepository {
         environment:
           cause === 'launch_refused'
             ? settleEnvironmentCommand(environment, 'failed', EXECUTOR_LAUNCH_REFUSED_MESSAGE, now)
-            : settleEnvironmentCommand(
-                environment,
-                'unknown',
-                'Launch handoff failed or timed out. Remote outcome is unknown; output may be missing. No automatic retry.',
-                now
-              ),
+            : cause === 'launch_restricted'
+              ? settleEnvironmentCommand(
+                  environment,
+                  'failed',
+                  EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
+                  now
+                )
+              : settleEnvironmentCommand(
+                  environment,
+                  'unknown',
+                  'Launch handoff failed or timed out. Remote outcome is unknown; output may be missing. No automatic retry.',
+                  now
+                ),
       };
     });
   }

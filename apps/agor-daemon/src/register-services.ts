@@ -431,7 +431,12 @@ import {
   readSocketAuthorityId,
 } from './utils/socket-request-authority.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
-import { classifyExecutorExit, executorExitTermination } from './utils/task-launch-state.js';
+import {
+  classifyExecutorExit,
+  type ExecutorExitDisposition,
+  executorExitTermination,
+  isLaunchRefusal,
+} from './utils/task-launch-state.js';
 import { withFreshTenantWrite } from './utils/tenant-db-scope.js';
 import type { OAuthWidgetParams } from './widgets/oauth/index.js';
 
@@ -1943,14 +1948,15 @@ export function createExecuteHandler(
 
         let templatedLauncherAbsenceVerified = false;
         let launchRefused = false;
+        let disposition: ExecutorExitDisposition = 'authoritative';
         if (spawnContext.mode === 'templated') {
-          const disposition = classifyExecutorExit({
+          disposition = classifyExecutorExit({
             mode: spawnContext.mode,
             code,
             nonzeroMayHaveDispatched:
               config.execution?.executor_command_nonzero_may_have_dispatched === true,
           });
-          launchRefused = disposition === 'refused';
+          launchRefused = isLaunchRefusal(disposition);
           if (disposition !== 'authoritative' && !launchRefused) {
             if (disposition === 'ambiguous') {
               try {
@@ -1977,7 +1983,7 @@ export function createExecuteHandler(
         }
 
         try {
-          const { cause, errorMessage } = executorExitTermination(code, launchRefused);
+          const { cause, errorMessage } = executorExitTermination(code, disposition);
           const termination = await requestExecutorTermination({
             app,
             taskId,
@@ -1989,7 +1995,13 @@ export function createExecuteHandler(
             // launch path that can prove no remote executor was created.
             absenceVerified: templatedLauncherAbsenceVerified,
             sdkFailure: {
-              reason: cause,
+              // A restricted refusal stops as a suspension; its diagnosis keeps the absence proof.
+              reason:
+                disposition === 'restricted'
+                  ? 'launch_restricted'
+                  : launchRefused
+                    ? 'launch_refused'
+                    : 'heartbeat_lost',
               detected_at: new Date().toISOString(),
               tool: session.agentic_tool,
               termination: 'requested',

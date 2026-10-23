@@ -497,6 +497,20 @@ describe('describeTurnOutcome v3', () => {
       expect(describe3({ ...fields, status: TaskStatus.TIMED_OUT })).toEqual(refused);
     });
 
+    it.each(['tenant_suspension', 'user_stop'])(
+      'reads a launch refused for a suspension as a stop, not a limit (cause %s)',
+      (winning) => {
+        expect(
+          describe3({
+            ...refusedTask,
+            status: TaskStatus.STOPPED,
+            ...cause(winning),
+            sdk_failure: sdkFailure({ reason: 'launch_restricted' }),
+          })?.cause
+        ).toBe('stopped');
+      }
+    );
+
     it('keeps never_started for a launch that was not refused', () => {
       expect(
         describe3({ ...refusedTask, ...cause('heartbeat_lost'), sdk_failure: sdkFailure() })?.cause

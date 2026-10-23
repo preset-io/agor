@@ -397,8 +397,11 @@ async function runContainment(
   // An opted-in launcher refused admission before creating anything, so there
   // is no provider work to quiesce. Every other cause keeps the safeguard.
   // Key on the caller's cause: a Stop that arrived first keeps the persisted
-  // `user_stop` cause even though the refusal proved absence.
-  const launchRefused = input.absenceVerified === true && input.cause === 'launch_refused';
+  // `user_stop` cause even though the refusal proved absence. A restricted
+  // refusal persists `tenant_suspension`; absence is still the launcher's proof.
+  const launchRefused =
+    input.absenceVerified === true &&
+    (input.cause === 'launch_refused' || input.cause === 'tenant_suspension');
   const descriptorUnverifiedReason =
     isAgenticToolName(tool) && !hostedOpenCodeQuiesced && !launchRefused
       ? getAgenticToolIntegration(tool).unverifiedTerminationReason

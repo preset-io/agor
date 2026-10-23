@@ -7164,22 +7164,35 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   };
 
   // Liveness (/livez) and readiness (/readyz) probes — see health/routes.ts.
-  registerHealthProbeRoutes(app, db, [
-    ...(realtimeRuntime ? [{ name: 'redis', isReady: () => realtimeRuntime.isReady() }] : []),
-    ...(deployment.mode === 'ha'
-      ? [
-          {
-            name: 'environment-health-monitor',
-            isReady: () => {
-              const monitor = app.get('environmentHealthMonitor') as
-                | { isReady?: () => boolean }
-                | undefined;
-              return monitor?.isReady?.() === true;
+  // The controller report lets Agor Cloud refuse a suspension this Cell could not deliver.
+  const readinessReport = isPostgresDatabaseHandle(db)
+    ? {
+        tenant_restriction: {
+          controller_id: externalLaunchProvider.restrictionControllerId ?? null,
+        },
+      }
+    : {};
+  registerHealthProbeRoutes(
+    app,
+    db,
+    [
+      ...(realtimeRuntime ? [{ name: 'redis', isReady: () => realtimeRuntime.isReady() }] : []),
+      ...(deployment.mode === 'ha'
+        ? [
+            {
+              name: 'environment-health-monitor',
+              isReady: () => {
+                const monitor = app.get('environmentHealthMonitor') as
+                  | { isReady?: () => boolean }
+                  | undefined;
+                return monitor?.isReady?.() === true;
+              },
             },
-          },
-        ]
-      : []),
-  ]);
+          ]
+        : []),
+    ],
+    readinessReport
+  );
 
   // ============================================================================
   // MCP routes
