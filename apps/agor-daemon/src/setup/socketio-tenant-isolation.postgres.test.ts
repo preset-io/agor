@@ -11,6 +11,7 @@
 import type { Server as HttpServer } from 'node:http';
 import { type AgorClient, createClient } from '@agor/core/api';
 import {
+  applyTenantRestrictionIntent,
   BoardRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -19,6 +20,8 @@ import {
   generateId,
   initializeDatabase,
   isPostgresDatabase,
+  readTenantRestrictionState,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   sql,
   type TenantScopeAwareDatabase,
@@ -39,7 +42,10 @@ import {
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
 } from '../auth/runtime-tokens.js';
+import { assertRuntimeTenantAccess, readRequestTenantRestriction } from '../auth/tenant-access.js';
+import { readTenantCredentialEpoch } from '../auth/tenant-credential-epoch.js';
 import { terminalChannelName } from '../realtime/routing.js';
+import { generateTerminalExecutorToken } from '../utils/spawn-executor.js';
 import { configureChannels, createSocketIOConfig } from './socketio.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -264,6 +270,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       app.use('authentication', authentication);
 
       const socketConfig = createSocketIOConfig(app as never, {
+        assertTenantAccess: (tenantId, payload) =>
+          assertRuntimeTenantAccess(db, tenantId, { payload }, readRequestTenantRestriction),
+        readTenantRestriction: (tenantId) => readTenantRestrictionState(db, tenantId),
         corsOrigin: '*',
         credentialsAllowed: false,
         workIdentity: { instanceId: 'socket-test', bootId: 'socket-test-boot' },
@@ -476,6 +485,147 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await waitForConnect(clientA);
       await expect(watchBoard(clientA, sharedA.board_id)).resolves.toEqual({ ok: true });
       await expect(watchBoard(clientA, sharedB.board_id)).resolves.toEqual({ ok: false });
+
+      await applyTenantRestrictionIntent(db, tenantA, {
+        version: 1,
+        controllerId: 'socket-test',
+        placementId: 'cell-a',
+        operationId: 'suspend',
+        revision: 1,
+        action: 'restrict',
+      });
+      await expect.poll(() => clientA.io.connected, { timeout: 4000 }).toBe(false);
+      expect(clientB.io.connected).toBe(true);
+      const rejected = new Promise<Error>((resolve) => clientA.io.once('connect_error', resolve));
+      clientA.io.connect();
+      await expect(rejected).resolves.toBeInstanceOf(Error);
+      expect(clientA.io.connected).toBe(false);
+      expect(clientB.io.connected).toBe(true);
+    }, 30_000);
+
+    it('accepts and keeps a fresh terminal-executor socket after a restrict/release cycle, refusing a pre-restriction token', async () => {
+      const tenant = `socket-terminal-${generateId()}`;
+      const app = feathersExpress(feathers());
+      app.use('users', {
+        async get(): Promise<User> {
+          throw new Error('Terminal executors never load a user');
+        },
+      });
+      app.use('terminals', {
+        async find(): Promise<never[]> {
+          return [];
+        },
+        matchesOwnedAttachment(): boolean {
+          return true;
+        },
+      });
+      const multiTenancy = {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+        trusted_header: 'x-agor-tenant-id',
+      } as const;
+      app.set('authentication', {
+        secret: JWT_SECRET,
+        entity: 'user',
+        entityId: 'user_id',
+        service: 'users',
+        authStrategies: ['jwt'],
+        jwtOptions: {
+          audience: RUNTIME_JWT_AUDIENCE,
+          issuer: RUNTIME_JWT_ISSUER,
+          algorithm: 'HS256',
+        },
+      });
+      const authentication = new AuthenticationService(app);
+      authentication.register('jwt', new RuntimeJWTStrategy({ multiTenancy }));
+      app.use('authentication', authentication);
+      let monitorReads = 0;
+      const socketConfig = createSocketIOConfig(app as never, {
+        assertTenantAccess: (tenantId, payload) =>
+          assertRuntimeTenantAccess(db, tenantId, { payload }, readRequestTenantRestriction),
+        readTenantRestriction: (tenantId) => {
+          monitorReads++;
+          return readTenantRestrictionState(db, tenantId);
+        },
+        corsOrigin: '*',
+        credentialsAllowed: false,
+        webTerminalEnabled: true,
+        workIdentity: { instanceId: 'socket-terminal-test', bootId: 'terminal-boot' },
+        multiTenancy,
+      });
+      app.configure(socketio(socketConfig.serverOptions, socketConfig.callback));
+      configureChannels(app as never);
+      const terminalServer = await new Promise<HttpServer>((resolve) => {
+        const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+      });
+      const terminalClients: AgorClient[] = [];
+      try {
+        const address = terminalServer.address();
+        if (!address || typeof address === 'string') throw new Error('Expected a TCP server');
+        const url = `http://127.0.0.1:${address.port}`;
+        const mintTerminalToken = async () =>
+          runWithTenantContext(tenant, async () =>
+            generateTerminalExecutorToken(
+              { settings: { authentication: { secret: JWT_SECRET } } },
+              {
+                terminal_user_id: generateId(),
+                terminal_id: generateId(),
+                terminal_branch_id: generateId(),
+                terminal_owner_boot_id: 'terminal-boot',
+              },
+              '5m',
+              await readTenantCredentialEpoch(db, tenant)
+            )
+          );
+        const connectTerminal = (token: string) => {
+          const client = createClient(url, false, { reconnectionAttempts: 0, ackTimeout: 2_000 });
+          terminalClients.push(client);
+          client.io.auth = { token };
+          client.io.connect();
+          return client;
+        };
+
+        const preRestrictionToken = await mintTerminalToken();
+        const intent = (revision: number, action: 'restrict' | 'prepare_release' | 'activate') =>
+          applyTenantRestrictionIntent(db, tenant, {
+            version: 1,
+            controllerId: 'socket-terminal-test',
+            placementId: 'cell-t',
+            operationId: `operation-${revision}`,
+            revision,
+            action,
+          });
+        await intent(1, 'restrict');
+        await intent(2, 'prepare_release');
+        await intent(2, 'activate');
+
+        const fresh = connectTerminal(await mintTerminalToken());
+        await waitForConnect(fresh);
+
+        const stale = connectTerminal(preRestrictionToken);
+        const staleRejection = await waitForConnect(stale).catch(
+          (error: Error & { data?: unknown }) => error
+        );
+        expect(staleRejection).toBeInstanceOf(Error);
+        expect((staleRejection as { data?: unknown }).data).toEqual({
+          code: 401,
+          className: 'not-authenticated',
+        });
+
+        // Two full monitor observations of the reopened tenant leave the fresh terminal socket attached.
+        const readsBefore = monitorReads;
+        await expect
+          .poll(() => monitorReads - readsBefore, { timeout: 5_000, interval: 50 })
+          .toBeGreaterThanOrEqual(2);
+        await delay(100);
+        expect(fresh.io.connected).toBe(true);
+      } finally {
+        for (const client of terminalClients) client.io.close();
+        await new Promise<void>((resolve, reject) =>
+          terminalServer.close((error) => (error ? reject(error) : resolve()))
+        );
+      }
     }, 30_000);
   }
 );

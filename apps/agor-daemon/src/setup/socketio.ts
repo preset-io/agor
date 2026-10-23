@@ -1,3 +1,29 @@
+import type { TenantRestrictionState } from '@agor/core/db';
+import {
+  createSharedTenantRestrictionObservation,
+  endTenantRestrictionRequest,
+  shareTenantRestrictionRead,
+  TENANT_RESTRICTION_OBSERVATION_MS,
+  withTenantRestrictionRequest,
+} from '../auth/tenant-access.js';
+import {
+  assertTenantCredentialEpochValue,
+  tenantCredentialEpoch,
+} from '../auth/tenant-credential-epoch.js';
+import {
+  admitTenantSocketPacket,
+  createOrderedTenantPacketGate,
+  createRateLimitedSocketWarning,
+  createRejectedPacketLog,
+  isStreamingRelayPacket,
+  isTenantSocketPacketRejection,
+  missingSocketTenant,
+  rejectTenantSocketPacket,
+  restrictedSocketHandshakeError,
+  TenantSocketRestrictionMonitor,
+  tenantSocketPacketNeedsAdmission,
+  unavailableSocketHandshakeError,
+} from '../auth/tenant-socket-admission.js';
 /**
  * Socket.io Configuration
  *
@@ -21,7 +47,7 @@ import {
   SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
 } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, getServiceOptions } from '@agor/core/feathers';
 import {
   type Board,
   type BoardID,
@@ -43,6 +69,7 @@ import {
 import type { Server, ServerOptions, Socket } from 'socket.io';
 import {
   getAuthenticatedConnectionAuthority,
+  getAuthenticatedConnectionCredentialPayload,
   isAuthenticatedConnectionAuthorityCurrent,
   retireAuthenticatedConnectionAuthority,
 } from '../auth/authenticated-connection-authority.js';
@@ -133,6 +160,10 @@ function retireSocketConnectionAuthority(app: Application, connection: unknown):
 }
 
 export interface SocketIOOptions {
+  /** Access plus credential generation, one read per handshake/packet; executors retain only guarded safety RPC transport. */
+  assertTenantAccess?: (tenantId: string, credentialPayload: unknown) => Promise<void>;
+  /** Fresh state for the per-replica monitor (retires sockets only on a positive observation) and the shared executor relay read. */
+  readTenantRestriction?: (tenantId: string) => Promise<TenantRestrictionState>;
   /** CORS origin configuration */
   corsOrigin: CorsOrigin;
   /**
@@ -519,6 +550,9 @@ export function createSocketIOConfig(
   const { corsOrigin, credentialsAllowed, buildInfo } = options;
   const multiTenancy = options.multiTenancy;
   const executorRevocationFence = getOrCreateExecutorConnectionRevocationFence(app);
+  const streamingRelayObservation = options.readTenantRestriction
+    ? createSharedTenantRestrictionObservation(options.readTenantRestriction)
+    : undefined;
   // Default ON to mirror the daemon-wide default (see register-hooks.ts).
   const webTerminalEnabled = options.webTerminalEnabled !== false;
 
@@ -555,6 +589,7 @@ export function createSocketIOConfig(
     // Intentionally system-global: the aggregate keeps only a saturated count,
     // never socket, user, tenant, channel, or client metadata.
     let authenticationFailures = 0;
+    const logUnavailableHandshake = createRateLimitedSocketWarning('socket handshake unavailable');
     // Machine and impersonation sockets are bounded capabilities and retire at
     // their verified bearer expiry. Ordinary user sockets keep the immutable
     // identity accepted at the handshake until disconnect or explicit
@@ -743,7 +778,7 @@ export function createSocketIOConfig(
     // type, user, tenant-claim, executor-authority, and revocation validation;
     // this transport boundary only extracts the bearer and commits the
     // strategy result to the Feathers connection.
-    io.use(async (socket, next) => {
+    const authenticateHandshake = async (socket: Socket, next: (err?: Error) => void) => {
       const fs = socket as FeathersSocket;
       try {
         const connection = bindServerSocketAuthority(fs);
@@ -799,6 +834,14 @@ export function createSocketIOConfig(
           throw new Error('Authentication token expired during connection setup');
         }
 
+        if (options.assertTenantAccess && authority.principal.kind !== 'executor') {
+          if (!authority.tenant?.tenant_id) throw missingSocketTenant();
+          await options.assertTenantAccess(
+            authority.tenant.tenant_id,
+            getAuthenticatedConnectionCredentialPayload(fs.feathers)
+          );
+        }
+
         logAuthenticated(
           socket,
           authority.principal.kind === 'user' ? authority.principal.userId : undefined
@@ -816,6 +859,24 @@ export function createSocketIOConfig(
           message?: string;
           data?: { name?: string };
         };
+        // A restricted tenant's credential is valid: send the stable code, not a refreshable 401, and skip the failure gauge.
+        const restricted = restrictedSocketHandshakeError(error);
+        if (restricted) {
+          console.warn(
+            `WebSocket handshake rejected for ${socket.id}: tenant access is restricted`
+          );
+          retireSocketConnectionAuthority(app, fs.feathers);
+          next(restricted);
+          return;
+        }
+        // An unreadable restriction/generation is transient: no refreshable 401, no failure gauge, one warning per minute.
+        const unavailable = unavailableSocketHandshakeError(error);
+        if (unavailable) {
+          logUnavailableHandshake(socket.id);
+          retireSocketConnectionAuthority(app, fs.feathers);
+          next(unavailable);
+          return;
+        }
         const expected =
           err?.code === 401 ||
           err?.className === 'not-authenticated' ||
@@ -843,7 +904,16 @@ export function createSocketIOConfig(
         publicError.data = { code: 401, className: 'not-authenticated' };
         next(publicError);
       }
-    });
+    };
+    // The strategy's generation check and tenant admission share one read; the connection handler never inherits it.
+    io.use((socket, next) =>
+      withTenantRestrictionRequest(() =>
+        authenticateHandshake(socket, (error) => {
+          endTenantRestrictionRequest();
+          next(error);
+        })
+      )
+    );
 
     // One input-target executor socket per process-local terminal attachment.
     // This registry is intentionally not shared through Redis: losing this
@@ -964,8 +1034,13 @@ export function createSocketIOConfig(
     });
     io.on(HA_EXECUTOR_TOKEN_INVALIDATION_EVENT, evictRevokedExecutorSockets);
 
+    // Monotonic admission time, so a monitor read that began earlier never retires the socket.
+    const socketAdmittedAt = new WeakMap<Socket, number>();
+    const logRejectedPacket = createRejectedPacketLog();
+
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
+      socketAdmittedAt.set(socket, performance.now());
       const feathersSocket = socket as FeathersSocket;
       bindServerSocketAuthority(feathersSocket);
       const authority = getAuthenticatedConnectionAuthority(feathersSocket.feathers);
@@ -976,6 +1051,58 @@ export function createSocketIOConfig(
         retireSocketConnectionAuthority(app, feathersSocket.feathers);
         socket.disconnect(true);
         return;
+      }
+      const assertTenantAccess = options.assertTenantAccess;
+      if (assertTenantAccess) {
+        // Feathers dispatches exactly these event names to services; everything else is raw realtime traffic.
+        const serviceMethods = new Set(
+          Object.keys(app.services).flatMap((path) => getServiceOptions(app.service(path)).methods)
+        );
+        const executorSocket = authority?.principal.kind === 'executor';
+        const gate = createOrderedTenantPacketGate({
+          // Raw terminal/presence packets never read; the monitor retires a restricted tenant's sockets.
+          needsAdmission: (packet) =>
+            tenantSocketPacketNeedsAdmission({
+              executor: executorSocket,
+              serviceCall: serviceMethods.has(packet[0] as string),
+              packet,
+            }),
+          // Executor raw frames have no service hook, so a burst shares whichever read is still in flight.
+          coalesce: (packet) => !serviceMethods.has(packet[0] as string),
+          // Each admitted packet opens its own read scope; the service hook and strategy reuse its one read.
+          scope: withTenantRestrictionRequest,
+          onOverflow: () => socket.disconnect(true),
+          admit: async (packet) => {
+            const current = getAuthenticatedConnectionAuthority(feathersSocket.feathers);
+            const tenantId = current?.tenant?.tenant_id;
+            if (!tenantId) throw missingSocketTenant();
+            // Per-chunk relays share one read per tenant per tick; every other executor RPC still reads per call.
+            if (
+              streamingRelayObservation &&
+              current.principal.kind === 'executor' &&
+              isStreamingRelayPacket(packet)
+            ) {
+              shareTenantRestrictionRead(tenantId, streamingRelayObservation);
+            }
+            await admitTenantSocketPacket({
+              tenantId,
+              executor: current.principal.kind === 'executor',
+              packet,
+              assertAccess: (id) =>
+                assertTenantAccess(
+                  id,
+                  getAuthenticatedConnectionCredentialPayload(feathersSocket.feathers)
+                ),
+            });
+          },
+        });
+        socket.use((packet, next) => {
+          // A retired or unscoped connection never dispatches, read or not.
+          if (!getAuthenticatedConnectionAuthority(feathersSocket.feathers)?.tenant?.tenant_id) {
+            return rejectTenantSocketPacket(packet, next);
+          }
+          gate(packet, next);
+        });
       }
       activeConnections++;
       const recordClientDisconnect =
@@ -1986,8 +2113,77 @@ export function createSocketIOConfig(
 
       // Handle socket errors
       socket.on('error', (error) => {
+        // Refused packets flood during an outage, so they share one rate-limited line.
+        if (isTenantSocketPacketRejection(error)) return logRejectedPacket(socket.id);
         console.error(`❌ Socket.io error on ${socket.id}:`, error);
       });
+    });
+
+    // Each replica checks its own sockets against durable state; no permissive cache or Redis notification.
+    let checkingRestrictions = false;
+    let monitoredSockets = new Map<string, Socket[]>();
+    const retire = (socket: Socket) => {
+      retireSocketConnectionAuthority(app, (socket as FeathersSocket).feathers);
+      socket.disconnect(true);
+    };
+    const readTenantRestriction = options.readTenantRestriction;
+    const restrictionMonitor = readTenantRestriction
+      ? new TenantSocketRestrictionMonitor(async (tenantId) => {
+          const startedAt = performance.now();
+          const state = await readTenantRestriction(tenantId);
+          // A late read may predate a socket admitted after reactivation; only sockets admitted before it began are judged.
+          const sockets = (monitoredSockets.get(tenantId) ?? []).filter(
+            (socket) => (socketAdmittedAt.get(socket) ?? Number.NEGATIVE_INFINITY) <= startedAt
+          );
+          if (state.closed) {
+            for (const socket of sockets) retire(socket);
+            return;
+          }
+          const epoch = tenantCredentialEpoch(state, tenantId);
+          for (const socket of sockets) {
+            const connection = (socket as FeathersSocket).feathers;
+            try {
+              assertTenantCredentialEpochValue(
+                epoch,
+                getAuthenticatedConnectionCredentialPayload(connection)
+              );
+            } catch {
+              retire(socket);
+            }
+          }
+        })
+      : undefined;
+    const restrictionInterval = restrictionMonitor
+      ? setInterval(async () => {
+          if (checkingRestrictions) return;
+          checkingRestrictions = true;
+          try {
+            const tenants = new Map<string, Socket[]>();
+            for (const socket of io.sockets.sockets.values()) {
+              const authority = getAuthenticatedConnectionAuthority(
+                (socket as FeathersSocket).feathers
+              );
+              // Only narrowly guarded executor reports/recovery must survive Stop.
+              if (authority?.principal.kind === 'executor') continue;
+              const tenantId = authority?.tenant?.tenant_id;
+              if (!tenantId) {
+                socket.disconnect(true);
+                continue;
+              }
+              const group = tenants.get(tenantId) ?? [];
+              group.push(socket);
+              tenants.set(tenantId, group);
+            }
+            monitoredSockets = tenants;
+            await restrictionMonitor.check(tenants.keys());
+          } finally {
+            checkingRestrictions = false;
+          }
+        }, TENANT_RESTRICTION_OBSERVATION_MS)
+      : undefined;
+    restrictionInterval?.unref();
+    io.engine.once('close', () => {
+      if (restrictionInterval) clearInterval(restrictionInterval);
     });
 
     // Emit a fixed-key gauge on a steady cadence so log collectors can parse it

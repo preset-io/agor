@@ -34,6 +34,7 @@ import type {
   TenantID,
 } from '@agor/core/types';
 import { getSessionUrl } from '@agor/core/utils/url';
+import { isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
 import { isBrowserReachableUrl } from '../utils/browser-reachable-url.js';
 import { type TeamsSendConnector, teamsConnectorCache } from '../utils/teams-connector-cache.js';
 import {
@@ -229,6 +230,8 @@ export class TeamsMessageDeliveryWorker {
   }
 
   private async processRef(ref: TeamsMessageDeliveryDiscoveryRef): Promise<void> {
+    // Hold a closed tenant's outbox; delivery resumes after reactivation.
+    if (!(await isCurrentTenantRuntimeActive(this.db).catch(() => false))) return;
     const claim = await this.deliveryRepo.claim(ref.delivery_id, generateId(), DELIVERY_LEASE_MS);
     if (!claim) return;
     try {

@@ -13,8 +13,13 @@ import type {
   ThreadSessionMap,
 } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
 import type { TeamsSendConnector } from '../utils/teams-connector-cache.js';
 import { planTeamsChunks, TeamsMessageDeliveryWorker } from './teams-message-delivery-worker.js';
+
+vi.mock('../auth/tenant-access.js', () => ({
+  isCurrentTenantRuntimeActive: vi.fn(async () => true),
+}));
 
 const DELIVERY_ID = '018f5f63-0fd1-7c2e-9e7d-8fb27d4a7e1a' as TeamsMessageDeliveryID;
 const NOW = new Date('2026-10-07T12:00:00.000Z');
@@ -320,6 +325,14 @@ describe('TeamsMessageDeliveryWorker chunking', () => {
       'receipt:2',
     ]);
     expect(setup.repository.row.status).toBe('completed');
+  });
+
+  it('holds a closed tenant’s delivery without claiming or posting it', async () => {
+    const setup = harness();
+    vi.mocked(isCurrentTenantRuntimeActive).mockResolvedValueOnce(false);
+    await setup.worker.checkOnce();
+    expect(setup.sent).toEqual([]);
+    expect(setup.repository.row.status).toBe('pending');
   });
 
   it('delivers replies in a seeded thread and with proactive sends off', async () => {

@@ -1,8 +1,24 @@
 import type { AgorConfig } from '@agor/core/config';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Unavailable } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Session, UserID } from '@agor/core/types';
+import {
+  isTenantRestrictedRejection,
+  readAdmittedTenantRestriction,
+} from '../auth/tenant-access.js';
+import { hasTerminationReadAuthority } from '../auth/termination-read-authority.js';
 import { generateSessionToken } from '../mcp/tokens.js';
 import { canReceiveMcpTokenForSession } from './mcp-token-authorization.js';
+
+const NO_MCP_TOKEN = Symbol('no-mcp-token');
+
+/** Server-side reads that never hand the session to an agent keep the caller's provider and auth but mint no MCP token. */
+export function withoutSessionMcpToken<P extends object>(params: P): P {
+  return { ...params, [NO_MCP_TOKEN]: true };
+}
+
+export function skipsSessionMcpToken(params: object | undefined): boolean {
+  return (params as { [NO_MCP_TOKEN]?: true } | undefined)?.[NO_MCP_TOKEN] === true;
+}
 
 export interface SessionMcpTokenHookOptions {
   app: Application;
@@ -26,6 +42,7 @@ export interface SessionMcpTokenAfterHooksOptions
 export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
   return async (context: HookContext): Promise<HookContext> => {
     if (options.config.daemon?.mcpEnabled === false) return context;
+    if (skipsSessionMcpToken(context.params)) return context;
 
     const callerUser = (context.params as AuthenticatedParams).user;
     if (
@@ -46,7 +63,27 @@ export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
     }
 
     const session = context.result as Session;
-    const mcpToken = await generateSessionToken(options.app, session.session_id, userId as UserID);
+    let mcpToken: string;
+    try {
+      mcpToken = await generateSessionToken(
+        options.app,
+        session.session_id,
+        userId as UserID,
+        readAdmittedTenantRestriction
+      );
+    } catch (error) {
+      // A closed tenant mints no MCP credential; the session read itself still succeeds.
+      if (isTenantRestrictedRejection(error)) return context;
+      if (!(error instanceof Unavailable)) throw error;
+      // A failed read (codeless 503) fails only a transport get visibly, so no agent starts without MCP; internal, create and termination reads go on without a token.
+      if (
+        context.method !== 'get' ||
+        !context.params.provider ||
+        hasTerminationReadAuthority(context)
+      )
+        return context;
+      throw new Unavailable('Tenant access cannot be verified');
+    }
 
     context.result = { ...session, mcp_token: mcpToken };
     options.onAttached?.(session);
