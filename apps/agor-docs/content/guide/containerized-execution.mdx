@@ -486,6 +486,10 @@ it creates anything:
   file, git and environment requests fail immediately with the same message
   instead of waiting for their timeout. Without it, `75` is an ordinary
   non-zero exit, including for `executor_command_nonzero_may_have_dispatched`.
+- **Suspended-workspace exit code.** A launcher that also refuses work for a
+  suspended workspace exits `76`, under the same nothing-created rule and its
+  own opt-in `AGOR_EXECUTOR_LAUNCH_RESTRICTED_EXIT=76`. A refused prompt then
+  ends as stopped, and other requests fail with "This workspace is suspended".
 - **Admission class.** Every templated payload carries a top-level
   `admissionClass` of `agent` (prompts, auxiliary agent calls, terminals, and
   any unknown command) or `utility` (git, files, artifacts, knowledge, uploads,

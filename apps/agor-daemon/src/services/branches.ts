@@ -553,7 +553,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         new EnvironmentCommandRepository(this.db).dispatchFailed(
           branch.branch_id,
           attemptId,
-          refused ? 'launch_refused' : 'unknown'
+          refused ? (error.restricted ? 'launch_restricted' : 'launch_refused') : 'unknown'
         )
       );
     }

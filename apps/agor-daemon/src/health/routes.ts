@@ -3,8 +3,8 @@
  *
  * Raw Express routes, not Feathers services, so we control the status code
  * (Feathers `find` is always 200; readiness needs 503). Both are unauthenticated
- * like `/health` and expose only { ok, latencyMs } — safe for public k8s probes
- * and the #1735 watchdog.
+ * like `/health` and expose only { ok, latencyMs } plus a ready-only, non-secret
+ * capability report — safe for public k8s probes and the #1735 watchdog.
  *
  * The split is load-bearing: point a `livenessProbe` at a DB check and a DB
  * outage restarts every pod (fleet-wide crash loop). Liveness MUST stay
@@ -28,10 +28,16 @@ export interface ReadinessDependency {
   isReady: () => boolean;
 }
 
+/** Non-secret facts a ready daemon reports, e.g. the restriction controller it enforces. */
+export interface ReadinessReport {
+  tenant_restriction?: { controller_id: string | null };
+}
+
 export function registerHealthProbeRoutes(
   app: ProbeRouteApp,
   db: Database,
-  dependencies: readonly ReadinessDependency[] = []
+  dependencies: readonly ReadinessDependency[] = [],
+  report: ReadinessReport = {}
 ): void {
   // Liveness: trivial in-process 200, no DB. If this can't answer, the event
   // loop is wedged and a restart is the right remedy.
@@ -72,6 +78,7 @@ export function registerHealthProbeRoutes(
     res.status(200).json({
       status: 'ok',
       db: { ok: true, latencyMs: dbProbe.latencyMs },
+      ...report,
     });
   });
 }
