@@ -4,7 +4,14 @@ import type {
   CodexSandboxMode,
   PermissionMode,
 } from '@agor-live/client';
-import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
+import {
+  getClaudeContextWindowLimit,
+  getCodexContextWindowLimit,
+  getCopilotContextWindowLimit,
+  getDefaultPermissionMode,
+  getGeminiContextWindowLimit,
+  mapToCodexPermissionConfig,
+} from '@agor-live/client';
 
 /** Below this card width the row shortens the model chip and keeps at most `NARROW_PIN_LIMIT` pins. */
 export const NARROW_COMPOSER_WIDTH = 480;
@@ -12,6 +19,25 @@ export const NARROW_COMPOSER_WIDTH = 480;
 export const NARROW_PIN_LIMIT = 3;
 
 export type ComposerCircleState = 'send' | 'stop' | 'queue';
+
+/** The model's context window before the first turn reports one; undefined when unknown. */
+export function getModelContextLimit(
+  tool: AgenticToolName,
+  model: string | undefined
+): number | undefined {
+  switch (tool) {
+    case 'claude-code':
+      return getClaudeContextWindowLimit(model);
+    case 'codex':
+      return getCodexContextWindowLimit(model);
+    case 'gemini':
+      return getGeminiContextWindowLimit(model);
+    case 'copilot':
+      return getCopilotContextWindowLimit(model);
+    default:
+      return undefined;
+  }
+}
 
 /** The one primary button: Send, Stop with an empty box, or Queue while it runs. */
 export function getComposerCircleState({

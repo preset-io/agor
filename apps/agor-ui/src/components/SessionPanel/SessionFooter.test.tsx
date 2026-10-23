@@ -867,6 +867,66 @@ describe('Session details keeps what the old footer popovers showed', () => {
   });
 });
 
+describe('empty states', () => {
+  const infoButtons = () =>
+    within(screen.getByTestId('composer-info-line'))
+      .getAllByRole('button')
+      .map((button) => button.getAttribute('aria-label'));
+
+  it('a new session shows Not started, No usage yet, 0% of its limit and None attached', async () => {
+    renderFooter({ footerTimerTask: null, latestContextWindow: null, sessionMcpServerIds: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'Session details' }));
+    const details = await screen.findByRole('dialog', { name: 'Session details' });
+    const value = (key: string) =>
+      details.querySelector(`[data-detail-row="${key}"]`)!.textContent ?? '';
+    expect(value('timer')).toContain('Not started');
+    expect(value('usage')).toContain('No usage yet');
+    expect(value('context')).toMatch(/0% of \d+(\.\d+)?[kM]/);
+    expect(value('tools')).toContain('None attached');
+    // The chevron still opens the attach panel.
+    fireEvent.click(details.querySelector('[data-detail-row="tools"] button')!);
+    expect(await within(details).findByText('Session MCP servers')).toBeInTheDocument();
+  });
+
+  it('leaves out items with no data, so a new session shows only "›"', () => {
+    renderFooter({ footerTimerTask: null, latestContextWindow: null });
+    expect(infoButtons()).toEqual(['Session details']);
+  });
+
+  it('shows only "›" when nothing is pinned', () => {
+    localStorage.setItem('agor-footer-prefs', JSON.stringify({ pinnedChips: [] }));
+    renderFooter({
+      footerTimerTask: {
+        task_id: 't1',
+        status: 'completed',
+        created_at: '2026-01-01T00:00:00Z',
+        completed_at: '2026-01-01T00:02:14Z',
+        duration_ms: 134_000,
+      } as unknown as Task,
+      latestContextWindow: { used: 36_000, limit: 200_000, taskMetadata: null },
+    });
+    expect(infoButtons()).toEqual(['Session details']);
+  });
+
+  it('shows the ring and the time from the first turn, and usage only once known', () => {
+    renderFooter({
+      footerTimerTask: {
+        task_id: 't1',
+        status: 'completed',
+        created_at: '2026-01-01T00:00:00Z',
+        completed_at: '2026-01-01T00:02:14Z',
+        duration_ms: 134_000,
+      } as unknown as Task,
+      latestContextWindow: { used: 36_000, limit: 200_000, taskMetadata: null },
+    });
+    const labels = infoButtons();
+    expect(labels[0]).toMatch(/^Context 18% used/);
+    expect(labels.some((label) => label?.startsWith('Turn time'))).toBe(true);
+    expect(labels.some((label) => label?.startsWith('Usage'))).toBe(false);
+    expect(labels.at(-1)).toBe('Session details');
+  });
+});
+
 describe('MCP notice', () => {
   const server = (id: string, displayName: string) =>
     ({ mcp_server_id: id, name: id, display_name: displayName }) as MCPServer;

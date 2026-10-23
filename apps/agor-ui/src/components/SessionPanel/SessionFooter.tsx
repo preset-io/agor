@@ -91,6 +91,7 @@ import {
 } from './ComposerMenu';
 import {
   getComposerCircleState,
+  getModelContextLimit,
   isPermissionNonDefault,
   NARROW_COMPOSER_WIDTH,
   NARROW_PIN_LIMIT,
@@ -612,7 +613,26 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         ? `${unauthedMcpServers.length} MCP servers need sign-in`
         : null;
   const mcpWarning = sessionMcpLoadFailed ? "MCP tools didn't load" : signInWarning;
-  const usageValue = usage ? `${formatTokenCount(usage.total)} tokens` : usageLoading ? '…' : '';
+  // Before the first turn there is nothing to measure yet.
+  const hasTurns = !!footerTimerTask;
+  const usageValue = usage
+    ? usage.total > 0
+      ? `${formatTokenCount(usage.total)} tokens`
+      : 'No usage yet'
+    : usageLoading
+      ? '…'
+      : hasTurns
+        ? ''
+        : 'No usage yet';
+  const emptyContextLimit = getModelContextLimit(session.agentic_tool, effectiveModel);
+  const contextValue =
+    contextPercent !== null
+      ? `${contextPercent}% of ${formatTokenCount(contextLimit)}`
+      : hasTurns
+        ? 'Unknown'
+        : emptyContextLimit
+          ? `0% of ${formatTokenCount(emptyContextLimit)}`
+          : '0%';
 
   const infoPin = (id: string, name: string) => {
     const pinned = pinnedChips.includes(id);
@@ -686,7 +706,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         <ComposerMenuRow
           label="MCP tools"
           icon={<ApiOutlined />}
-          value={String(mcpSummary.attachedCount)}
+          value={mcpSummary.attachedCount > 0 ? String(mcpSummary.attachedCount) : 'None attached'}
           drill
           onClick={() => setDetailsPage('mcp')}
           trailing={infoPin('tools', 'MCP tools')}
@@ -762,11 +782,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           <ComposerMenuRow
             label="Context"
             icon={<PieChartOutlined />}
-            value={
-              contextPercent === null
-                ? 'Unknown'
-                : `${contextPercent}% of ${formatTokenCount(contextLimit)}`
-            }
+            value={contextValue}
             expanded={contextPercent !== null ? detailsExpanded === 'context' : undefined}
             onClick={contextPercent !== null ? () => toggleExpanded('context') : undefined}
             trailing={infoPin('context', 'context')}
@@ -899,7 +915,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       tooltip: 'MCP tools',
     });
   }
-  if (pinnedChips.includes('tokens') && knownUsageTotal !== undefined) {
+  if (pinnedChips.includes('tokens') && knownUsageTotal) {
     const tokens = `${formatTokenCount(knownUsageTotal)} tokens`;
     infoSegments.push({
       key: 'tokens',
