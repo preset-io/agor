@@ -25,6 +25,21 @@ set `NEXT_PUBLIC_ANALYTICS_DEBUG=true`; use a test property or block collection 
 Google Analytics sends one explicit `page_view` for the initial URL and each client-side
 App Router navigation. Its automatic page view is disabled to prevent duplicates.
 
+It also gets these events, sent with `gtag` directly so they don't depend on Tag Manager
+(the container has no GA4 tags, so nothing counts twice). They share the GA4 property with
+console.agor.cloud, whose waitlist also sends `generate_lead`; `form_name` tells them apart.
+
+| Event                  | When                                  | Parameters                                  |
+| ---------------------- | ------------------------------------- | ------------------------------------------- |
+| `agor_cloud_cta_click` | an Agor Cloud CTA is clicked          | `source_page`, `cloud_cta_variant`          |
+| `generate_lead`        | the HubSpot sign-up form is submitted | `form_name: agor_cloud_beta`, `source_page` |
+| `demo_scheduler_open`  | the "Book a demo" scheduler is shown  | `form_name: agor_cloud_demo`                |
+| `demo_booked`          | a demo is booked in the scheduler     | `form_name: agor_cloud_demo`                |
+
+The form and booking listeners are in `lib/hubspotTracking.ts`. They also keep pushing
+`hubspot_interest_form_success` and `hubspot_meeting_booked` to `dataLayer` for Tag
+Manager's Google Ads triggers. Parameters never carry what the visitor typed.
+
 ### Cookie consent and trackers
 
 Every tracker runs behind the cookie banner (`components/CookieConsent.tsx`, logic in
