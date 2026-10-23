@@ -1,5 +1,5 @@
 import type { AgorClient, Session, Task } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App } from 'antd';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionQueue, type SessionQueueProps } from './SessionQueue';
@@ -116,13 +116,43 @@ describe('SessionQueue', () => {
     );
   });
 
-  it('Edit in composer removes the message and puts its text back', async () => {
+  it('Edit in composer, one click from the row, removes the message and puts its text back', async () => {
     const { remove, onEdit } = setup();
     expand();
-    await openRowMenu(1);
     fireEvent.click(screen.getByLabelText('Edit in composer, message 1'));
     await waitFor(() => expect(onEdit).toHaveBeenCalledWith('Update the docs'));
     expect(remove).toHaveBeenCalledWith('a');
+  });
+
+  it('keeps Edit and Remove on the row, and Copy and reordering in its menu', async () => {
+    setup();
+    expand();
+    await openRowMenu(2);
+    const menu = screen.getByRole('dialog', { name: 'Message 2' });
+    expect(within(menu).getByLabelText('Copy, message 2')).toBeInTheDocument();
+    expect(within(menu).getByLabelText('Move up, message 2')).toBeInTheDocument();
+    expect(within(menu).getByLabelText('Move down, message 2')).toBeInTheDocument();
+    expect(within(menu).queryByLabelText('Edit in composer, message 2')).toBeNull();
+    expect(within(menu).queryByLabelText('Remove from queue, message 2')).toBeNull();
+  });
+
+  it('shows the first row icons on desktop, and the rest on hover or focus', () => {
+    // A mouse: the primary pointer can hover.
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...matchMedia(query),
+      matches: query === '(hover: hover)',
+    }));
+    setup();
+    expand();
+    const icons = (n: number) =>
+      screen.getByLabelText(`Edit in composer, message ${n}`).parentElement!;
+    expect(icons(1)).toHaveStyle({ opacity: '1' });
+    expect(icons(2)).toHaveStyle({ opacity: '0' });
+    // Send now stays visible on every row.
+    expect(screen.getByLabelText('Send now, message 2')).toBeVisible();
+    fireEvent.mouseEnter(screen.getByText('Run the e2e suite').closest('li')!);
+    expect(icons(2)).toHaveStyle({ opacity: '1' });
   });
 
   it('removes a message', async () => {

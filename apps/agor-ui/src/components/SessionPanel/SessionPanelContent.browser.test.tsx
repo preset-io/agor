@@ -353,11 +353,12 @@ it.each([390, 220])(
     // (Phones fold the queue while the text field has focus, so it unfolds
     // again once focus leaves the composer.)
     act(() => composer.blur());
-    const lastRemove = await screen.findByRole('button', {
-      name: 'Remove from queue, message 30',
+    // The row's last control is its ⋯ menu, after Edit and Remove.
+    const lastControl = await screen.findByRole('button', {
+      name: 'More actions, message 30',
     });
     const statusRow = screen.getByTestId('composer-status-row');
-    act(() => lastRemove.focus());
+    act(() => lastControl.focus());
     for (let stop = 0; stop < 10 && document.activeElement !== composer; stop++) {
       await userEvent.keyboard('{Tab}');
       if (document.activeElement !== composer) {

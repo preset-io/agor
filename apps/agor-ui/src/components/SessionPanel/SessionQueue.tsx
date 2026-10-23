@@ -8,7 +8,7 @@ import {
   RightOutlined,
   UpOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, ConfigProvider, Flex, Typography, theme } from 'antd';
+import { Alert, Button, ConfigProvider, Flex, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useCanHover } from '../../hooks/useCanHover';
 import { useComposerFocused } from '../../hooks/useComposerFocus';
@@ -103,6 +103,12 @@ export function SessionQueue({
       else if (heldByFailure) await resumeQueue();
     });
 
+  const edit = (task: Task) =>
+    run(task, 'edit the queued message', async () => {
+      await remove(task);
+      onEdit(task.full_prompt);
+    });
+
   const fromMenu = (action: () => unknown) => () => {
     setMenuTaskId(null);
     void action();
@@ -111,17 +117,6 @@ export function SessionQueue({
     const n = index + 1;
     return (
       <>
-        <ComposerMenuRow
-          label="Edit in composer"
-          ariaLabel={`Edit in composer, message ${n}`}
-          icon={<EditOutlined />}
-          onClick={fromMenu(() =>
-            run(task, 'edit the queued message', async () => {
-              await remove(task);
-              onEdit(task.full_prompt);
-            })
-          )}
-        />
         <ComposerMenuRow
           label="Copy"
           ariaLabel={`Copy, message ${n}`}
@@ -227,7 +222,8 @@ export function SessionQueue({
         >
           {queuedTasks.map((task, index) => {
             const n = index + 1;
-            const showActions = !canHover || isMobile || activeRow === task.task_id;
+            // Touch shows every action; desktop keeps the first row's, and reveals the rest on hover or focus.
+            const showIcons = !canHover || isMobile || index === 0 || activeRow === task.task_id;
             const busy = busyTaskId === task.task_id;
             return (
               <li
@@ -264,12 +260,7 @@ export function SessionQueue({
                 <Flex
                   align="center"
                   gap={token.marginXXS}
-                  style={{
-                    flexShrink: 0,
-                    marginInlineStart: 'auto',
-                    // Hidden actions stay in the tab order so focus reveals them.
-                    opacity: showActions ? 1 : 0,
-                  }}
+                  style={{ flexShrink: 0, marginInlineStart: 'auto' }}
                 >
                   {heldByFailure && index === 0 && (
                     <Button
@@ -292,37 +283,52 @@ export function SessionQueue({
                   >
                     Send now
                   </Button>
-                  {/* Phones get a bottom sheet, like every composer menu; desktop a popover. */}
-                  <ComposerMenu
-                    sheet={isMobile}
-                    title={`Message ${n}`}
-                    open={menuTaskId === task.task_id}
-                    onOpenChange={(next) => setMenuTaskId(next ? task.task_id : null)}
-                    content={rowMenu(task, index)}
-                  >
-                    <Button
-                      type="text"
-                      aria-label={`More actions, message ${n}`}
-                      aria-haspopup="dialog"
-                      aria-expanded={menuTaskId === task.task_id}
-                      icon={<EllipsisOutlined />}
-                      disabled={!client || busyTaskId !== null}
-                      onClick={isMobile ? () => setMenuTaskId(task.task_id) : undefined}
-                      style={iconButtonStyle}
-                    />
-                  </ComposerMenu>
-                  <Button
-                    type="text"
-                    aria-label={`Remove from queue, message ${n}`}
-                    icon={<CloseOutlined />}
-                    disabled={!client || busyTaskId !== null}
-                    onClick={() =>
-                      run(task, 'remove the queued message', async () => {
-                        await remove(task);
-                      })
-                    }
-                    style={iconButtonStyle}
-                  />
+                  {/* Hidden icons stay in the tab order, so focus reveals them. */}
+                  <Flex align="center" gap={token.marginXXS} style={{ opacity: showIcons ? 1 : 0 }}>
+                    <Tooltip title="Edit in composer">
+                      <Button
+                        type="text"
+                        aria-label={`Edit in composer, message ${n}`}
+                        icon={<EditOutlined />}
+                        disabled={!client || busyTaskId !== null}
+                        onClick={() => edit(task)}
+                        style={iconButtonStyle}
+                      />
+                    </Tooltip>
+                    <Tooltip title="Remove from queue">
+                      <Button
+                        type="text"
+                        aria-label={`Remove from queue, message ${n}`}
+                        icon={<CloseOutlined />}
+                        disabled={!client || busyTaskId !== null}
+                        onClick={() =>
+                          run(task, 'remove the queued message', async () => {
+                            await remove(task);
+                          })
+                        }
+                        style={iconButtonStyle}
+                      />
+                    </Tooltip>
+                    {/* Phones get a bottom sheet, like every composer menu; desktop a popover. */}
+                    <ComposerMenu
+                      sheet={isMobile}
+                      title={`Message ${n}`}
+                      open={menuTaskId === task.task_id}
+                      onOpenChange={(next) => setMenuTaskId(next ? task.task_id : null)}
+                      content={rowMenu(task, index)}
+                    >
+                      <Button
+                        type="text"
+                        aria-label={`More actions, message ${n}`}
+                        aria-haspopup="dialog"
+                        aria-expanded={menuTaskId === task.task_id}
+                        icon={<EllipsisOutlined />}
+                        disabled={!client || busyTaskId !== null}
+                        onClick={isMobile ? () => setMenuTaskId(task.task_id) : undefined}
+                        style={iconButtonStyle}
+                      />
+                    </ComposerMenu>
+                  </Flex>
                 </Flex>
               </li>
             );
