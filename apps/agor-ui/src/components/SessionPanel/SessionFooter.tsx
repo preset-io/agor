@@ -1748,71 +1748,92 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 }}
                 data-testid="composer-queued-badge"
               >
-                <Tooltip title={circleTooltip}>
-                  <Button
-                    {...circleVariant}
-                    // Queue is a labelled pill, so it reads differently from Send at a glance.
-                    shape={circleState === 'queue' ? 'round' : 'circle'}
-                    aria-label={circleLabel}
-                    aria-disabled={circleDisabled || undefined}
-                    aria-busy={circleState === 'stop' ? stopBusy : undefined}
-                    loading={circleState === 'stop' && stopBusy}
-                    icon={
-                      circleState === 'stop' ? (
+                {/* White 14px text needs 4.5:1, which colorPrimary misses (3.4 light, 4.4 dark).
+                    The Queue pill uses the active shade, 5.6 light and 6.2 dark; the icon-only
+                    Send circle keeps colorPrimary, which clears the 3:1 graphics minimum.
+                    The theme is always set, so switching states never remounts the button. */}
+                <ConfigProvider
+                  theme={{
+                    components: {
+                      Button:
+                        circleState === 'queue'
+                          ? {
+                              colorPrimary: token.colorPrimaryActive,
+                              colorPrimaryHover: token.colorPrimaryActive,
+                              colorPrimaryActive: token.colorPrimaryActive,
+                              primaryColor: token.colorTextLightSolid,
+                            }
+                          : {},
+                    },
+                  }}
+                >
+                  <Tooltip title={circleTooltip}>
+                    <Button
+                      {...circleVariant}
+                      // Queue is a labelled pill, so it reads differently from Send at a glance.
+                      shape={circleState === 'queue' ? 'round' : 'circle'}
+                      aria-label={circleLabel}
+                      aria-disabled={circleDisabled || undefined}
+                      aria-busy={circleState === 'stop' ? stopBusy : undefined}
+                      loading={circleState === 'stop' && stopBusy}
+                      icon={
+                        circleState === 'stop' ? (
+                          <span
+                            aria-hidden
+                            style={{
+                              display: 'inline-block',
+                              width: token.sizeXS + 2,
+                              height: token.sizeXS + 2,
+                              borderRadius: token.borderRadiusXS,
+                              background: 'currentColor',
+                            }}
+                          />
+                        ) : circleState === 'queue' ? undefined : (
+                          <ArrowUpOutlined />
+                        )
+                      }
+                      // Keep the keyboard up on phones and focus in the text after a tap.
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={
+                        circleDisabled ? undefined : circleState === 'stop' ? onStop : onSendPrompt
+                      }
+                      style={{
+                        width: circleState === 'queue' ? undefined : controlSize,
+                        height: controlSize,
+                        minWidth: controlSize,
+                        flexShrink: 0,
+                        boxShadow: 'none',
+                        ...(circleState === 'queue' &&
+                          !isMobile && { paddingInline: token.paddingSM }),
+                        // Phones: a 36px fill inside the 44px target keeps the circle clear of the card edge.
+                        ...(isMobile && {
+                          border: 'none',
+                          padding: (MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2,
+                          backgroundClip: 'content-box',
+                        }),
+                        transition: reducedMotion ? 'none' : undefined,
+                        cursor: circleDisabled ? 'not-allowed' : undefined,
+                      }}
+                      data-testid="composer-circle"
+                    >
+                      {circleState === 'queue' && (
+                        // Phones clip the fill to the content box, so the label carries its own padding.
                         <span
-                          aria-hidden
                           style={{
-                            display: 'inline-block',
-                            width: token.sizeXS + 2,
-                            height: token.sizeXS + 2,
-                            borderRadius: token.borderRadiusXS,
-                            background: 'currentColor',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: token.marginXXS,
+                            paddingInline: isMobile ? token.paddingSM : 0,
+                            color: token.colorTextLightSolid,
                           }}
-                        />
-                      ) : circleState === 'queue' ? undefined : (
-                        <ArrowUpOutlined />
-                      )
-                    }
-                    // Keep the keyboard up on phones and focus in the text after a tap.
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={
-                      circleDisabled ? undefined : circleState === 'stop' ? onStop : onSendPrompt
-                    }
-                    style={{
-                      width: circleState === 'queue' ? undefined : controlSize,
-                      height: controlSize,
-                      minWidth: controlSize,
-                      flexShrink: 0,
-                      boxShadow: 'none',
-                      ...(circleState === 'queue' &&
-                        !isMobile && { paddingInline: token.paddingSM }),
-                      // Phones: a 36px fill inside the 44px target keeps the circle clear of the card edge.
-                      ...(isMobile && {
-                        border: 'none',
-                        padding: (MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2,
-                        backgroundClip: 'content-box',
-                      }),
-                      transition: reducedMotion ? 'none' : undefined,
-                      cursor: circleDisabled ? 'not-allowed' : undefined,
-                    }}
-                    data-testid="composer-circle"
-                  >
-                    {circleState === 'queue' && (
-                      // Phones clip the fill to the content box, so the label carries its own padding.
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: token.marginXXS,
-                          paddingInline: isMobile ? token.paddingSM : 0,
-                        }}
-                      >
-                        Queue
-                        <ArrowUpOutlined aria-hidden />
-                      </span>
-                    )}
-                  </Button>
-                </Tooltip>
+                        >
+                          Queue
+                          <ArrowUpOutlined aria-hidden />
+                        </span>
+                      )}
+                    </Button>
+                  </Tooltip>
+                </ConfigProvider>
               </Badge>
             </Flex>
           </ConfigProvider>
