@@ -35,6 +35,64 @@ catalog. With `mcp_tool_search` enabled, Agor therefore still exposes only
 facade. This preserves domain filtering and concise schemas without reaching
 into SDK-private registration state.
 
+## Token-bound execution identity
+
+`agor_execution_get_current` takes no identity arguments. It returns fresh
+tenant/user/session/task/branch facts only for an MCP credential derived by the
+session after-hook from an authenticated task executor. Its `execution_id` comes
+from that executor credential's issuer-generated `jti`; `observed_at` and
+`valid_until` bound the observation to at most 30 seconds and the source expiry.
+Revocation can invalidate authority sooner. The source bearer and authority fingerprint
+are never returned. These facts authenticate execution, not a review policy,
+posting grant, role identity asserted in a prompt, or permission to activate a
+teammate. Resolve the expected role-home branch and primary KB independently
+against trusted deployment context.
+
+Personal keys with session headers and ordinary tokens returned by user session
+lookups cannot satisfy this tool. Taskless command credentials do not become
+task credentials. Reading another session through a task credential yields its
+ordinary session token, never an execution binding for that other session.
+Malformed/tampered task bindings refuse authentication; they never downgrade to
+ordinary session identity.
+
+The existing task runtime authority owns revocation. Both token issuance (even
+on a signing-cache hit) and every task-bound MCP request recheck task ownership,
+current principal/prompt capability, branch/filesystem launch floor, active
+execution state and the exact source-token authority. The identity tool rechecks
+again when invoked. PostgreSQL uses the durable tenant-scoped authority row, so
+a peer/restarted daemon can validate and revoke the same execution. Standalone
+SQLite uses its existing process-local authority; after its loss, old credentials
+fail closed. Checks do not stamp a heartbeat or alter task lifecycle. An
+observation is not an atomic fence around a later external action: reauthorize
+at that action's own boundary.
+
+## Atomic Knowledge task claims
+
+`agor_kb_claim({namespace, path, content, visibility: "private", editPolicy: "owner"})`
+requires current executor identity and reserves an absent
+document path using the native transactional repository boundary. A successful
+claim creates exactly one immutable version and a stable document ID. A competing
+or repeated claim raises a conflict (409 service error, MCP tool error) without replacing content, privacy, ownership
+or history. Archived documents still reserve their path. Authorization runs
+before reporting an existing claim; foreign/private rows do not become readable.
+The operation carries the authenticated tenant through service and repository
+work. It needs no new database table or migration.
+
+The claim tool requires explicit private/owner policy, fixes status to draft and
+rejects identity assertions, document IDs, version guards and missing content.
+It returns the created document with a stable reference and a freshly observed
+writer snapshot. That snapshot is not a portable credential or future grant.
+A distinct tool and service method (`claimDocument`) prevent older daemons or
+services from silently stripping a flag and performing an upsert; no fallback is
+allowed. Recovery after a lost response reads the same canonical path, verifies
+private/owner policy and reconciles the stable document/version before deciding
+what happened. Subsequent state changes use the normal `expectedVersion` guard
+and explicit privacy/read-back checks. Ordinary `agor_kb_put` remains an upsert.
+
+This is a first-writer claim for task state stored in Knowledge, separate from
+Agor's prompt/executor task queue. It is not a lease, automatic takeover,
+exactly-once external effect, worker dispatch, approval or activation grant.
+
 ## Three workflow tools
 
 1. **`agor_sessions_prompt`** — continue, fork, or spawn from an existing session. `mode: 'continue' | 'fork' | 'subsession'`.

@@ -104,6 +104,7 @@ type KnowledgeDocumentWriteData = (CreateKnowledgeDocumentInput | UpdateKnowledg
   create_namespace?: boolean;
   namespace_display_name?: string | null;
   expected_version?: string | number;
+  create_only?: boolean;
   expected_archived?: boolean;
 };
 
@@ -312,6 +313,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     }
     delete prepared.first_line_is_title;
     delete prepared.expected_version;
+    delete prepared.create_only;
     delete prepared.create_namespace;
     delete prepared.namespace_display_name;
     return prepared;
@@ -670,11 +672,35 @@ export class KnowledgeDocumentsService extends DrizzleService<
     return result;
   }
 
+  /** Distinct capability: older services cannot mistake a claim for an upsert. */
+  async claimDocument(
+    data: KnowledgeDocumentWriteData,
+    params?: KnowledgeDocumentParams
+  ): Promise<KnowledgeDocument> {
+    if (data.visibility !== 'private' || data.edit_policy !== 'owner') {
+      throw new BadRequest('Claims require explicit private visibility and owner edit policy');
+    }
+    return this.putDocument({ ...data, create_only: true }, params);
+  }
+
   private async writePutDocument(
     data: KnowledgeDocumentWriteData,
     params?: KnowledgeDocumentParams
   ): Promise<KnowledgeDocument> {
     const userId = this.attributionUserId(params, data.created_by);
+    if (data.create_only !== undefined && typeof data.create_only !== 'boolean') {
+      throw new BadRequest('create_only must be a boolean');
+    }
+    if (
+      data.create_only &&
+      (data.document_id ||
+        data.expected_version !== undefined ||
+        typeof data.content_text !== 'string')
+    ) {
+      throw new BadRequest(
+        'Create-only requires namespace + path and content, without documentId or expectedVersion'
+      );
+    }
 
     const parsed = parseKnowledgeUri(data.uri);
     const namespaceSlug = data.namespace_slug ?? parsed?.namespace_slug;
@@ -687,6 +713,12 @@ export class KnowledgeDocumentsService extends DrizzleService<
     });
 
     if (existing) {
+      if (data.create_only) {
+        if (!(await this.canEdit(existing, params?.user as User | undefined))) {
+          throw new Forbidden('You do not have permission to claim this knowledge path');
+        }
+        throw new Conflict('Knowledge path is already claimed');
+      }
       await this.assertActiveDocument(existing);
       this.assertCanChangeGovernance(existing, data, params?.user as User | undefined);
       if (!(await this.canEdit(existing, params?.user as User | undefined))) {

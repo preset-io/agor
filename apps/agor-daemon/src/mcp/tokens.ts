@@ -13,13 +13,13 @@
  * - `exp`  — unix seconds, enforced by `jsonwebtoken.verify`
  * - `jti`  — per-issuance UUID (useful for log correlation)
  *
- * No revocation mechanics. Tokens are minted lazily and cached briefly per
- * `(tenant,session,user)` so high-frequency `session.get` calls don't perform
- * redundant JWT signing and session-existence probes. Tokens carry a short
- * `exp` (default 24h); any suspected
- * compromise is addressed by rotating the JWT signing secret or letting the
- * token expire. MCP is internal-only (loopback) — if/when it goes external
- * we'd design auth from scratch (OAuth / API keys) rather than extending this.
+ * Ordinary session tokens retain their historical expiration-based contract;
+ * they do not attest runtime execution. A verified executor's session lookup
+ * instead derives a task-bound credential with a lifetime capped by its source
+ * bearer. Every task-bound request rechecks the existing runtime authority:
+ * current task/principal/branch binding, RBAC, filesystem floor and revocation.
+ * Signing caches never cache that authorization decision. PostgreSQL authority
+ * is durable across daemons; missing standalone authority fails closed.
  *
  * A session-existence check is still performed during validation so tokens
  * for deleted sessions are rejected even if they haven't yet hit their `exp`.
@@ -44,11 +44,13 @@ import type { Application } from '@agor/core/feathers';
 import {
   MCP_TOKEN_AUDIENCE,
   MCP_TOKEN_ISSUER,
+  type McpTaskTokenBinding,
   type SessionID,
   type TenantID,
   type UserID,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
+import { assertMcpTaskAuthority, type McpTaskAuthorityStore } from './execution-authority.js';
 
 const DEBUG_MCP_TOKENS =
   process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');
@@ -75,6 +77,7 @@ interface McpTokenPayload {
   iat?: number;
   exp?: number;
   jti?: string;
+  execution?: McpTaskTokenBinding;
 }
 
 export interface McpTokenContext {
@@ -82,6 +85,8 @@ export interface McpTokenContext {
   userId: UserID;
   tenantId: TenantID;
   jti: string;
+  expiresAt: number;
+  execution?: McpTaskTokenBinding;
 }
 
 export interface McpTokenInitOptions {
@@ -95,6 +100,7 @@ export interface McpTokenInitOptions {
   expirationMs?: number;
   /** Override `Date.now()` for tests. */
   now?: () => number;
+  taskAuthorityStore?: McpTaskAuthorityStore;
 }
 
 // ============================================================================
@@ -109,6 +115,7 @@ interface ModuleState {
   now: () => number;
   tokenCache: Map<string, CachedMcpToken>;
   lastCachePruneAtMs: number;
+  taskAuthorityStore?: McpTaskAuthorityStore;
 }
 
 interface CachedMcpToken {
@@ -147,6 +154,7 @@ export function initMcpTokens(options: McpTokenInitOptions): void {
     now,
     tokenCache: new Map(),
     lastCachePruneAtMs: 0,
+    taskAuthorityStore: options.taskAuthorityStore,
   };
 
   console.log(`[mcp-tokens] initialized: exp=${expirationMs}ms`);
@@ -210,7 +218,8 @@ function resolveIssuanceTenantId(state: ModuleState): TenantID {
 export async function generateSessionToken(
   app: Application,
   sessionId: SessionID,
-  userId: UserID
+  userId: UserID,
+  execution?: McpTaskTokenBinding
 ): Promise<string> {
   const s = requireState();
   const jwtSecret = app.settings.authentication?.secret;
@@ -220,6 +229,15 @@ export async function generateSessionToken(
 
   const nowMs = s.now();
   const tenantId = resolveIssuanceTenantId(s);
+  if (execution) {
+    await assertMcpTaskAuthority(
+      s.db,
+      s.taskAuthorityStore,
+      { tenantId, sessionId, userId },
+      execution
+    );
+    if (execution.expiresAt <= nowMs) throw new Error('Executor MCP authority expired');
+  }
   if (nowMs - s.lastCachePruneAtMs > 5 * 60 * 1000) {
     for (const [key, entry] of s.tokenCache) {
       if (entry.expiresAtMs <= nowMs) {
@@ -229,7 +247,7 @@ export async function generateSessionToken(
     s.lastCachePruneAtMs = nowMs;
   }
 
-  const cacheKey = `${tenantId}:${sessionId}:${userId}`;
+  const cacheKey = `${tenantId}:${sessionId}:${userId}:${execution?.executionId ?? ''}:${execution?.tokenFingerprint ?? ''}`;
   const cached = s.tokenCache.get(cacheKey);
   // Keep a buffer so callers never receive a token that is about to expire.
   const refreshBufferMs = Math.min(5 * 60 * 1000, Math.max(30 * 1000, s.expirationMs * 0.1));
@@ -249,7 +267,9 @@ export async function generateSessionToken(
   }
 
   const nowSec = Math.floor(nowMs / 1000);
-  const expSec = nowSec + Math.floor(s.expirationMs / 1000);
+  const expSec = Math.floor(
+    Math.min(nowMs + s.expirationMs, execution?.expiresAt ?? Infinity) / 1000
+  );
   const expiresAtMs = expSec * 1000;
   const jti = generateId();
 
@@ -262,6 +282,7 @@ export async function generateSessionToken(
     iat: nowSec,
     exp: expSec,
     jti,
+    ...(execution ? { execution } : {}),
   };
 
   const token = jwt.sign(payload, jwtSecret, { algorithm: 'HS256' });
@@ -304,7 +325,8 @@ export type McpTokenRejectionReason =
   | 'invalid_jwt'
   | 'verify_error'
   | 'missing_identity'
-  | 'missing_lifetime';
+  | 'missing_lifetime'
+  | 'invalid_execution';
 
 type McpTokenVerification =
   | { context: McpTokenContext; reason?: never }
@@ -362,12 +384,44 @@ export function verifySessionTokenDetailed(app: Application, token: string): Mcp
   // no `exp` would otherwise pass verify and be valid forever. Enforce both
   // `jti` and `exp` explicitly so a forged but signature-valid token without
   // `exp` cannot be minted and replayed indefinitely.
-  if (!payload.jti || payload.exp === undefined) {
+  if (
+    typeof payload.jti !== 'string' ||
+    !payload.jti ||
+    typeof payload.exp !== 'number' ||
+    !Number.isFinite(payload.exp)
+  ) {
     return { context: null, reason: 'missing_lifetime' };
   }
 
+  const execution = payload.execution;
+  if (
+    execution !== undefined &&
+    (!execution ||
+      typeof execution !== 'object' ||
+      Array.isArray(execution) ||
+      typeof execution.executionId !== 'string' ||
+      !execution.executionId ||
+      typeof execution.taskId !== 'string' ||
+      !execution.taskId ||
+      typeof execution.branchId !== 'string' ||
+      !execution.branchId ||
+      typeof execution.tokenFingerprint !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(execution.tokenFingerprint) ||
+      typeof execution.expiresAt !== 'number' ||
+      !Number.isFinite(execution.expiresAt) ||
+      payload.exp * 1000 > execution.expiresAt)
+  )
+    return { context: null, reason: 'invalid_execution' };
+
   return {
-    context: { sessionId, userId, tenantId: tenantId.trim() as TenantID, jti: payload.jti },
+    context: {
+      sessionId,
+      userId,
+      tenantId: tenantId.trim() as TenantID,
+      jti: payload.jti,
+      expiresAt: payload.exp * 1000,
+      ...(execution ? { execution } : {}),
+    },
   };
 }
 
@@ -392,6 +446,14 @@ export async function validateVerifiedSessionToken(
   );
   if (!sessionExists) {
     return null;
+  }
+
+  if (context.execution) {
+    try {
+      await assertMcpTaskAuthority(s.db, s.taskAuthorityStore, context, context.execution);
+    } catch {
+      return null;
+    }
   }
 
   return context;

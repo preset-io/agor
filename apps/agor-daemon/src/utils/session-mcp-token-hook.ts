@@ -1,6 +1,7 @@
 import type { AgorConfig } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Session, UserID } from '@agor/core/types';
+import { taskMcpBindingFromParams } from '../mcp/execution-authority.js';
 import { generateSessionToken } from '../mcp/tokens.js';
 import { canReceiveMcpTokenForSession } from './mcp-token-authorization.js';
 
@@ -46,7 +47,13 @@ export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
     }
 
     const session = context.result as Session;
-    const mcpToken = await generateSessionToken(options.app, session.session_id, userId as UserID);
+    const execution = taskMcpBindingFromParams(context.params as AuthenticatedParams, session);
+    const mcpToken = await generateSessionToken(
+      options.app,
+      session.session_id,
+      userId as UserID,
+      execution
+    );
 
     context.result = { ...session, mcp_token: mcpToken };
     options.onAttached?.(session);

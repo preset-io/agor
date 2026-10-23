@@ -567,6 +567,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     db,
     multiTenancy: resolveMultiTenancyConfig(config),
     expirationMs: config.execution?.mcp_token_expiration_ms,
+    taskAuthorityStore: sessionTokenService,
   });
 
   // ============================================================================

@@ -33,6 +33,8 @@ import {
 import type { Application } from '@agor/core/feathers';
 import {
   MCP_CLIENT_HINT_HEADER,
+  MCP_EXECUTION_AUTHENTICATION_KIND,
+  type McpExecutionIdentity,
   PERSONAL_API_KEY_PREFIX,
   type Session,
   type SessionID,
@@ -50,7 +52,11 @@ import type { McpPromptProvenanceStamp } from '../utils/prompt-provenance.js';
 import { createMcpAuthRejectionLogger } from './auth-rejection-log.js';
 import { ToolDispatcher, toolDispatcherProxy } from './register-tool-proxy.js';
 import { tenantScopedToolProxy } from './tenant-scope.js';
-import { validateVerifiedSessionToken, verifySessionTokenDetailed } from './tokens.js';
+import {
+  type McpTokenContext,
+  validateVerifiedSessionToken,
+  verifySessionTokenDetailed,
+} from './tokens.js';
 import { formatDomainDescriptionsForInstructions, ToolRegistry } from './tool-registry.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
 import { registerArtifactTools } from './tools/artifacts.js';
@@ -59,6 +65,7 @@ import { registerBranchTools } from './tools/branches.js';
 import { registerCardTypeTools } from './tools/card-types.js';
 import { registerCardTools } from './tools/cards.js';
 import { registerEnvironmentTools } from './tools/environment.js';
+import { registerExecutionTools } from './tools/execution.js';
 import { registerGatewayChannelTools } from './tools/gateway-channels.js';
 import { registerKnowledgeTools } from './tools/knowledge.js';
 import { registerMcpServerTools } from './tools/mcp-servers.js';
@@ -74,6 +81,10 @@ import { createMcpTracing } from './tracing.js';
 
 const DEBUG_MCP_REQUESTS =
   process.env.AGOR_DEBUG_MCP_REQUESTS === '1' || process.env.DEBUG?.includes('mcp-requests');
+
+// Observations expire quickly even when their source credential has hours left.
+// A later revocation can invalidate authority sooner; this is not a lease.
+const EXECUTION_IDENTITY_MAX_AGE_MS = 30_000;
 
 function mcpRequestDebug(...args: unknown[]): void {
   if (DEBUG_MCP_REQUESTS) {
@@ -95,7 +106,9 @@ export interface McpContext {
   userId: UserID;
   /** Current Agor session context, when the caller supplied or authenticated with one. */
   sessionId?: SessionID;
-  /** Freshly authorized Session identity available to session-aware tool boundaries. */
+  /** Available only for a task-bound credential; rechecks revocation on every use. */
+  getExecutionIdentity?: () => Promise<McpExecutionIdentity | null>;
+  /** Authorized Session context; personal keys can select it, so it is not execution proof. */
   authenticatedSession?: Pick<Session, 'session_id' | 'agentic_tool' | 'branch_id'>;
   authenticatedUser: AuthenticatedUser;
   /**
@@ -237,6 +250,7 @@ const DOMAIN_TOOL_REGISTRARS: DomainToolRegistrar[] = [
     domain: 'sessions',
     register: (server, ctx) => {
       registerSessionTools(server, ctx);
+      registerExecutionTools(server, ctx);
       registerTaskTools(server, ctx);
       registerMessageTools(server, ctx);
     },
@@ -637,6 +651,7 @@ export function setupMCPRoutes(
       let userId: UserID;
       let sessionId: SessionID | undefined;
       let tenant: TenantContext;
+      let executionTokenContext: McpTokenContext | undefined;
       const isPersonalApiKey = credential.startsWith(PERSONAL_API_KEY_PREFIX);
 
       if (isPersonalApiKey) {
@@ -752,6 +767,14 @@ export function setupMCPRoutes(
 
         userId = context.userId;
         sessionId = context.sessionId;
+        if (context.execution) {
+          if (requestedSessionId && requestedSessionId !== context.sessionId) {
+            return res
+              .status(403)
+              .json(jsonRpcError(req, -32003, 'Forbidden: executor session binding mismatch'));
+          }
+          executionTokenContext = context;
+        }
 
         try {
           authenticatedUser = await runWithTenantContext(tenant.tenant_id, () =>
@@ -849,6 +872,29 @@ export function setupMCPRoutes(
           authenticatedSession,
           authenticatedUser,
           baseServiceParams,
+          ...(executionTokenContext
+            ? {
+                getExecutionIdentity: async () => {
+                  const current = await validateVerifiedSessionToken(executionTokenContext);
+                  if (!current?.execution || Date.now() >= current.expiresAt) return null;
+                  const observedAt = Date.now();
+                  return {
+                    schema_version: 1,
+                    authentication_kind: MCP_EXECUTION_AUTHENTICATION_KIND,
+                    execution_id: current.execution.executionId,
+                    tenant_id: current.tenantId,
+                    user_id: current.userId,
+                    session_id: current.sessionId,
+                    task_id: current.execution.taskId,
+                    branch_id: current.execution.branchId,
+                    observed_at: new Date(observedAt).toISOString(),
+                    valid_until: new Date(
+                      Math.min(current.expiresAt, observedAt + EXECUTION_IDENTITY_MAX_AGE_MS)
+                    ).toISOString(),
+                  };
+                },
+              }
+            : {}),
         };
 
         // A valid legacy Mcp-Session-Id is deliberately discarded before the

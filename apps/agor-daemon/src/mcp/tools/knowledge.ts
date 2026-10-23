@@ -78,7 +78,7 @@ import {
   sessionContextRequiredResult,
   textResult,
 } from '../server.js';
-import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
+import { runWithMcpTenantDatabaseScope, runWithMcpTenantDatabaseWrite } from '../tenant-scope.js';
 
 const KnowledgeDocumentKindSchema = z.enum(KNOWLEDGE_DOCUMENT_KINDS);
 const KnowledgeDocumentStatusSchema = z.enum(KNOWLEDGE_DOCUMENT_STATUSES);
@@ -1877,7 +1877,7 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     'agor_kb_put',
     {
       description:
-        'Create or update a markdown Knowledge document. Archived paths remain reserved: restore with agor_kb_archive first; ordinary upsert never restores. Idempotent upsert keyed by documentId, URI, or namespace + path when the backend implements putDocument. To build the knowledge graph, embed links to other KB docs in the markdown — each resolvable link becomes a "references" edge automatically on save. Prefer the rename-proof form [label](agor://kb/document/<documentId>); [label](agor://kb/<namespace>/<path>) also works but breaks if the target moves. Get a doc\'s reference_uri from agor_kb_search or agor_kb_get.',
+        'Create or update a markdown Knowledge document. Use agor_kb_claim for atomic private task claims; this tool is an upsert. Archived paths remain reserved: restore with agor_kb_archive first; ordinary upsert never restores. Idempotent upsert keyed by documentId, URI, or namespace + path when the backend implements putDocument. To build the knowledge graph, embed links to other KB docs in the markdown — each resolvable link becomes a "references" edge automatically on save. Prefer the rename-proof form [label](agor://kb/document/<documentId>); [label](agor://kb/<namespace>/<path>) also works but breaks if the target moves. Get a doc\'s reference_uri from agor_kb_search or agor_kb_get.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         documentId: mcpOptionalId('documentId', 'Existing Knowledge document'),
@@ -2015,6 +2015,54 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
         'kb/documents.patch',
         'kb/documents.create',
       ]);
+    }
+  );
+
+  server.registerTool(
+    'agor_kb_claim',
+    {
+      description:
+        'Atomically claim an absent private Knowledge namespace/path for the authenticated executor. Requires current task-bound execution identity and explicit private/owner policy. A reserved path conflicts without changing it; after an ambiguous outcome read that same canonical path. No upsert fallback, lease, task dispatch or publication grant.',
+      annotations: { idempotentHint: true },
+      inputSchema: z
+        .object({
+          namespace: mcpRequiredString('namespace', 'Target Knowledge namespace'),
+          path: mcpRequiredString('path', 'Stable task document path'),
+          content: z.string(),
+          visibility: z.literal('private'),
+          editPolicy: z.literal('owner'),
+        })
+        .strict(),
+    },
+    async (args) => {
+      const writer = await ctx.getExecutionIdentity?.();
+      if (!writer)
+        return {
+          ...textResult({ status: 'unavailable', reason_code: 'EXECUTOR_TASK_IDENTITY_REQUIRED' }),
+          isError: true,
+        };
+      const service = getOptionalService(ctx, 'kb/documents');
+      if (!service)
+        return knowledgeNotImplementedResult('agor_kb_claim', ['kb/documents.claimDocument']);
+      const params = await knowledgeWriteParams(ctx);
+      const result = await runWithMcpTenantDatabaseWrite(ctx, () =>
+        callCustomMethod(
+          service,
+          'claimDocument',
+          {
+            namespace_slug: args.namespace,
+            path: args.path,
+            content_text: args.content,
+            visibility: 'private',
+            edit_policy: 'owner',
+            status: 'draft',
+          },
+          params
+        )
+      );
+      if (result === undefined)
+        return knowledgeNotImplementedResult('agor_kb_claim', ['kb/documents.claimDocument']);
+      return textResult({ status: 'created', document: enrichWithReferenceUri(result), writer });
     }
   );
 

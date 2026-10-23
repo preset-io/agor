@@ -12,7 +12,7 @@ import { SessionStatus, TaskStatus } from '@agor/core/types';
 import type { RegisterHooksContext } from '../src/register-hooks.js';
 import { boardMetadataTestApp } from './board-metadata-app.js';
 
-export async function seedQueue(db: Database) {
+export async function seedQueue(db: Database, options: { bindLaunchAuthority?: boolean } = {}) {
   const owner = await new UsersRepository(db).create({
     email: `${generateId()}@queue.test`,
     role: 'member',
@@ -56,6 +56,7 @@ export async function seedQueue(db: Database) {
   await tasks.claimDispatchAndProjectSession(active.task_id, TaskStatus.QUEUED, {
     status: TaskStatus.DISPATCHING,
   });
+  if (options.bindLaunchAuthority) await tasks.bindExecutorLaunchAuthority(active.task_id);
   await tasks.connectExecutor(active.task_id);
   const queued = [];
   for (const prompt of ['a', 'b', 'c']) queued.push(await enqueue(prompt));

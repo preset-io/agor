@@ -14,6 +14,13 @@ vi.mock('@agor/core/db', () => ({
   getCurrentTenantId: () => 'default',
 }));
 
+vi.mock('../tenant-scope.js', () => ({
+  runWithMcpTenantDatabaseScope: async (ctx: { db: unknown }, work: (db: unknown) => unknown) =>
+    work(ctx.db),
+  runWithMcpTenantDatabaseWrite: async (ctx: { db: unknown }, work: (db: unknown) => unknown) =>
+    work(ctx.db),
+}));
+
 vi.mock('@agor/core/feathers', () => ({
   NotFound: class NotFound extends Error {},
 }));
@@ -1112,6 +1119,82 @@ describe('Knowledge MCP branch executor commands', () => {
       }),
       expect.any(Object)
     );
+  });
+});
+
+describe('Knowledge create-only MCP contracts', () => {
+  it('forwards a private claim through its distinct service capability and trusted caller params', async () => {
+    const claimDocument = vi.fn().mockResolvedValue({ document_id: 'stable-claim' });
+    const baseServiceParams = { user: { user_id: 'owner' }, tenant: { tenant_id: 'tenant-a' } };
+    const writer = { execution_id: 'native-execution' };
+    const tools = await captureKnowledgeTools(
+      { 'kb/documents': { claimDocument } },
+      {
+        baseServiceParams,
+        getExecutionIdentity: async () => writer,
+      }
+    );
+    const args = {
+      namespace: 'primary',
+      path: 'tasks/stable.md',
+      content: 'private state',
+      visibility: 'private',
+      editPolicy: 'owner',
+    };
+    expect(tools.agor_kb_claim.cfg.inputSchema?.safeParse(args).success).toBe(true);
+    const result = textResultJson(await tools.agor_kb_claim.handler!(args));
+    expect(result).toMatchObject({
+      status: 'created',
+      writer,
+      document: { reference_uri: 'agor://kb/document/stable-claim' },
+    });
+    expect(claimDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        namespace_slug: 'primary',
+        path: 'tasks/stable.md',
+        visibility: 'private',
+        edit_policy: 'owner',
+      }),
+      baseServiceParams
+    );
+  });
+
+  it('refuses missing identity, legacy upsert fallback and malformed creation', async () => {
+    const create = vi.fn();
+    const patch = vi.fn();
+    const putDocument = vi.fn();
+    const tools = await captureKnowledgeTools(
+      { 'kb/documents': { create, patch, putDocument } },
+      {
+        getExecutionIdentity: async () => ({ execution_id: 'native-execution' }),
+      }
+    );
+    const args = {
+      namespace: 'primary',
+      path: 'tasks/stable.md',
+      content: 'state',
+      visibility: 'private',
+      editPolicy: 'owner',
+    };
+    expect(((await tools.agor_kb_claim.handler!(args)) as { isError: boolean }).isError).toBe(true);
+    for (const invalid of [
+      { ...args, documentId: 'existing' },
+      { ...args, expectedVersion: 1 },
+      { ...args, content: undefined },
+      { ...args, visibility: 'public' },
+      { ...args, editPolicy: 'public' },
+    ]) {
+      expect(tools.agor_kb_claim.cfg.inputSchema?.safeParse(invalid).success).toBe(false);
+    }
+    const unauthorized = await captureKnowledgeTools({
+      'kb/documents': { create, patch, putDocument },
+    });
+    expect(
+      ((await unauthorized.agor_kb_claim.handler!(args)) as { isError: boolean }).isError
+    ).toBe(true);
+    expect(create).not.toHaveBeenCalled();
+    expect(patch).not.toHaveBeenCalled();
+    expect(putDocument).not.toHaveBeenCalled();
   });
 });
 

@@ -6,7 +6,34 @@
 //
 // See: apps/agor-docs/pages/guide/internal-mcp.mdx for the user-facing reference
 
-import type { MessageID, SessionID, UserID, UUID } from './id';
+import type { BranchID, MessageID, SessionID, TaskID, UserID, UUID } from './id';
+import type { TenantID } from './tenant';
+
+export const MCP_EXECUTION_AUTHENTICATION_KIND = 'executor-task' as const;
+
+/** Server-derived binding carried only inside a signed task MCP credential. */
+export interface McpTaskTokenBinding {
+  executionId: string;
+  taskId: TaskID;
+  branchId: BranchID;
+  /** Private authority lookup key; never return it in identity tool results. */
+  tokenFingerprint: string;
+  expiresAt: number;
+}
+
+/** Fresh request-local authentication facts, not a review or publication grant. */
+export interface McpExecutionIdentity {
+  schema_version: 1;
+  authentication_kind: typeof MCP_EXECUTION_AUTHENTICATION_KIND;
+  execution_id: string;
+  tenant_id: TenantID;
+  user_id: UserID;
+  session_id: SessionID;
+  task_id: TaskID;
+  branch_id: BranchID;
+  observed_at: string;
+  valid_until: string;
+}
 
 /**
  * MCP Server ID (branded UUID)
