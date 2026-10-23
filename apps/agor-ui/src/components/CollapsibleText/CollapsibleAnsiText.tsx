@@ -1,8 +1,8 @@
-import { theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 import { TEXT_TRUNCATION } from '../../constants/ui';
 import { Ansi } from '../AnsiText';
+import { ShowMoreFade } from './ShowMoreFade';
 
 interface CollapsibleAnsiTextProps {
   children: string;
@@ -27,7 +27,6 @@ export const CollapsibleAnsiText: React.FC<CollapsibleAnsiTextProps> = ({
   className,
   style,
 }) => {
-  const { token } = theme.useToken();
   const [expanded, setExpanded] = useState(false);
 
   const lines = children.split('\n');
@@ -50,43 +49,15 @@ export const CollapsibleAnsiText: React.FC<CollapsibleAnsiTextProps> = ({
   }
 
   const displayContent = expanded ? children : lines.slice(0, maxLines).join('\n');
-  const lineCount = lines.length;
-
   return (
-    <div className={className}>
-      <div style={contentStyle}>
-        <Ansi>{displayContent}</Ansi>
-      </div>
-
-      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {!expanded && (
-          <div
-            style={{
-              fontStyle: 'italic',
-              opacity: 0.6,
-              fontSize: token.fontSizeSM,
-              color: token.colorTextTertiary,
-            }}
-          >
-            ... ({lineCount - maxLines} more lines)
-          </div>
-        )}
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          style={{
-            fontSize: token.fontSizeSM,
-            cursor: 'pointer',
-            alignSelf: 'flex-start',
-            color: token.colorLink,
-            background: 'none',
-            border: 'none',
-            padding: 0,
-          }}
-        >
-          {expanded ? 'show less' : 'show more'}
-        </button>
-      </div>
-    </div>
+    <ShowMoreFade
+      className={className}
+      style={contentStyle}
+      collapsed={!expanded}
+      onToggle={() => setExpanded(!expanded)}
+      moreLabel={`Show all ${lines.length} lines`}
+    >
+      <Ansi>{displayContent}</Ansi>
+    </ShowMoreFade>
   );
 };

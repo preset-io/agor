@@ -360,7 +360,7 @@ export const AgentChain = React.memo<AgentChainProps>(
             <TranscriptTruncationNotice truncations={[item.transcript_truncation]} />
             <ToolBlock
               icon={<BulbOutlined style={{ fontSize: 14 }} />}
-              name="Thinking"
+              name="Thought"
               description={oneLine || undefined}
               status="success"
             >

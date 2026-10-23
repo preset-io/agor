@@ -239,8 +239,8 @@ it('renders a real tool event before persistence and hands it to the recorded gr
 it('removes the standalone live spinner while retaining startup, stopping and approval feedback', () => {
   const { container, rerender } = render(view({ task: { ...task, status: TaskStatus.RUNNING } }));
   expect(container.querySelector('[data-task-block] > .ant-spin')).toBeNull();
-  // The response bubble still supplies progress before the first tool/text arrives.
-  expect(container.querySelector('.ant-bubble')).not.toBeNull();
+  // The working line still supplies progress before the first tool/text arrives.
+  expect(screen.getByText('Working…')).toBeVisible();
   rerender(view({ task: { ...task, status: TaskStatus.DISPATCHING } }));
   expect(screen.queryByText('Starting turn…')).toBeNull();
   rerender(view({ task: { ...task, status: TaskStatus.STOPPING } }));
@@ -252,7 +252,69 @@ it('removes the standalone live spinner while retaining startup, stopping and ap
       latestActivity: { toolUseId: 'pending', toolName: 'Read', status: 'executing' },
     })
   );
+  // Name the ask, statically.
+  expect(screen.getByText('Waiting for approval')).toBeVisible();
   expect(container.querySelector('.ant-thought-chain-motion-blink')).toBeNull();
+});
+
+it("lets the working line carry a running turn's timer, then shows the turn duration", () => {
+  const timed = {
+    ...task,
+    started_at: '2026-09-01T00:00:00.000Z',
+    completed_at: '2026-09-01T00:00:20.000Z',
+  };
+  const { rerender } = render(view({ task: { ...timed, status: TaskStatus.RUNNING } }));
+  expect(screen.getByText('Working…')).toBeVisible();
+  expect(screen.queryByText('00:20')).toBeNull();
+  expect(document.querySelector('[data-task-block] .anticon-hourglass')).toBeNull();
+  rerender(view({ task: timed }));
+  expect(screen.queryByText('Working…')).toBeNull();
+  expect(screen.getByText('00:20')).toBeVisible();
+});
+
+it('keeps one live line: the running tool, or live thinking instead of the working line', () => {
+  const running = { ...task, status: TaskStatus.RUNNING };
+  const tool = message(2, MessageRole.ASSISTANT, [
+    { type: 'tool_use', id: 'live-read', name: 'Read', input: {} },
+  ]);
+  const { container, rerender } = render(
+    view({
+      task: running,
+      taskMessages: [...messages, tool],
+      taskMessagesLoaded: true,
+      latestActivity: { toolUseId: 'live-read', toolName: 'Read', status: 'executing' },
+    })
+  );
+  const shimmers = container.querySelectorAll('.ant-thought-chain-motion-blink');
+  expect(shimmers).toHaveLength(1);
+  expect(shimmers[0].closest('[role="status"]')).toHaveTextContent('Running: Read');
+
+  const thinking = {
+    message_id: generateId(),
+    session_id: task.session_id,
+    task_id: task.task_id,
+    role: 'assistant' as const,
+    content: '',
+    thinkingContent: 'Weighing options',
+    timestamp: task.created_at,
+    isStreaming: true,
+    isThinking: true,
+    thinkingStartedAt: Date.now(),
+  };
+  rerender(
+    view({
+      task: running,
+      taskMessages: [...messages, tool],
+      taskMessagesLoaded: true,
+      streamingMessages: new Map([[thinking.message_id, thinking]]),
+    })
+  );
+  expect(screen.queryByText('Working…')).toBeNull();
+  const live = container.querySelectorAll('.ant-thought-chain-motion-blink');
+  expect(live).toHaveLength(1);
+  expect(screen.getByRole('button', { name: 'Thinking…', expanded: false })).toContainElement(
+    live[0] as HTMLElement
+  );
 });
 
 it('uses only verified recorded counts, never legacy zero; streamed tools override snapshots', () => {
@@ -662,7 +724,7 @@ it('remounts message blocks once when cached detail is evicted, not on live upda
   const block = (text: string) => screen.getByText(text).closest('[data-conversation-block]');
   const prompt = block('Retained prompt');
   const answer = block('Visible answer');
-  expect(screen.getByText('Extended Thinking')).toBeVisible();
+  expect(screen.getByText('Thought for a while')).toBeVisible();
 
   // A live update that still carries detail keeps the mounted block.
   rerender(render_([messages[0], { ...full }], true));
@@ -672,13 +734,13 @@ it('remounts message blocks once when cached detail is evicted, not on live upda
   rerender(render_([messages[0], evicted], false));
   await waitFor(() => expect(block('Visible answer')).not.toBe(answer));
   expect(block('Retained prompt')).toBe(prompt);
-  expect(screen.queryByText('Extended Thinking')).toBeNull();
+  expect(screen.queryByText('Thought for a while')).toBeNull();
   expect(screen.getByRole('button', { name: 'Reasoning' })).toBeVisible();
   const remounted = block('Visible answer');
 
   // Reloading persisted detail restores reasoning without another remount.
   rerender(render_([messages[0], full], true));
-  expect(screen.getByText('Extended Thinking')).toBeVisible();
+  expect(screen.getByText('Thought for a while')).toBeVisible();
   expect(block('Visible answer')).toBe(remounted);
 });
 

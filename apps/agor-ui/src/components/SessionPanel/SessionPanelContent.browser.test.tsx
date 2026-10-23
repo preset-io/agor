@@ -113,10 +113,7 @@ function Harness({
                 client={client}
                 session={failed ? { ...session, status: 'failed' } : session}
                 queuedTasks={queue}
-                scrollToBottom={null}
-                scrollToTop={null}
                 setScrollToBottom={noop}
-                setScrollToTop={noop}
                 spawnModalOpen={false}
                 setSpawnModalOpen={noop}
                 onSpawnModalConfirm={async () => {}}

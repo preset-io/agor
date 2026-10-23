@@ -14,11 +14,9 @@ import {
   ToolOutlined,
   UpOutlined,
 } from '@ant-design/icons';
-import { ThoughtChain } from '@ant-design/x';
 import { Button, Tag, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
-import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { useRetainTaskDetailsWhile } from '../../hooks/useTaskDetailRetention';
 
 /** Shared disclosure for both lazy task hydration and already-loaded tool groups.
@@ -38,10 +36,10 @@ export function ToolDisclosureHeader({
   expanded: boolean;
   onClick: () => void;
   loading?: boolean;
+  /** Busy for assistive tech; the turn's working line carries the shimmer. */
   executing?: boolean;
 }) {
   const { token } = theme.useToken();
-  const reducedMotion = usePrefersReducedMotion();
   return (
     <Button
       type="text"
@@ -88,15 +86,7 @@ export function ToolDisclosureHeader({
           textAlign: 'left',
         }}
       >
-        <ThoughtChain.Item
-          title={label}
-          variant="text"
-          blink={executing && !reducedMotion}
-          style={{ padding: 0, fontSize: token.fontSizeSM, color: 'inherit' }}
-          styles={{
-            title: { fontSize: 'inherit', fontWeight: 'inherit', color: 'inherit' },
-          }}
-        />
+        {label}
       </span>
       {expanded ? (
         <UpOutlined style={{ flexShrink: 0, fontSize: '0.75em' }} />
@@ -110,7 +100,7 @@ export function ToolDisclosureHeader({
 export interface ToolBlockProps {
   /** Tool/block icon (Ant Design icon element) */
   icon: React.ReactNode;
-  /** Tool display name (e.g. "Edit", "Bash", "Thinking") */
+  /** Tool display name (e.g. "Edit", "Bash", "Thought") */
   name: string;
   /** Short description shown after name — truncated with ellipsis in collapsed header */
   description?: string;
