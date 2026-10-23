@@ -643,9 +643,9 @@ describe('HomePage', () => {
     });
     renderHome({ recentBoardIds: ['b-a', 'b-b'] });
     const recentBoards = screen.getByRole('group', { name: 'Recent boards' });
-    expect(
-      within(recentBoards).getByRole('button', { name: 'Launch board, needs you' })
-    ).toBeInTheDocument();
+    const ready = within(recentBoards).getByRole('button', { name: 'Launch board, needs you' });
+    // A long name shrinks, never the dot.
+    expect(ready.querySelector<HTMLElement>('.ant-badge')?.style.flexShrink).toBe('0');
     expect(within(recentBoards).getByRole('button', { name: 'Team board' })).toBeInTheDocument();
   });
 

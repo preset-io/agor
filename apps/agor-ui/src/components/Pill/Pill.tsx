@@ -30,6 +30,7 @@ import { resolveContextWindowPercentage } from '../../utils/contextWindow';
 import { parseGitStateSha } from '../../utils/gitState';
 import type { SessionStatusInput } from '../../utils/sessionStatus';
 import { NeutralBoardIcon } from '../BoardTile/BoardTile';
+import { FadeText } from '../FadeText';
 import { type SessionForIds, SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
 import { getModelDisplayName } from './modelDisplay';
@@ -862,7 +863,8 @@ export const EntityPill: React.FC<EntityPillProps> = ({
       icon={emoji ? undefined : icon}
       color={quiet ? undefined : color}
       variant={quiet ? 'filled' : undefined}
-      title={title}
+      // Compact labels show the full text in FadeText's tooltip while clipped.
+      title={compact ? undefined : title}
       aria-label={resolvedAriaLabel}
       role={interactive ? 'button' : undefined}
       tabIndex={interactive ? 0 : undefined}
@@ -876,24 +878,38 @@ export const EntityPill: React.FC<EntityPillProps> = ({
       }}
       onClick={onClick}
     >
-      {hasLabel && (
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: emoji ? 4 : undefined,
-            maxWidth: compact ? maxWidth : undefined,
-            overflow: compact ? 'hidden' : undefined,
-            textOverflow: compact ? 'ellipsis' : undefined,
-            whiteSpace: compact ? 'nowrap' : undefined,
-            verticalAlign: compact ? 'bottom' : undefined,
-            fontFamily: code ? token.fontFamilyCode : token.fontFamily,
-          }}
-        >
-          {emoji && <span style={{ fontFamily: token.fontFamily }}>{emoji}</span>}
-          {label}
-        </span>
-      )}
+      {hasLabel &&
+        (compact ? (
+          <FadeText
+            dense
+            fullText={title ?? (typeof label === 'string' ? label : undefined)}
+            style={{
+              display: 'inline-block',
+              maxWidth,
+              verticalAlign: 'bottom',
+              color: 'inherit',
+              lineHeight: 'inherit',
+              fontFamily: code ? token.fontFamilyCode : token.fontFamily,
+            }}
+          >
+            {emoji && (
+              <span style={{ fontFamily: token.fontFamily, marginInlineEnd: 4 }}>{emoji}</span>
+            )}
+            {label}
+          </FadeText>
+        ) : (
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: emoji ? 4 : undefined,
+              fontFamily: code ? token.fontFamilyCode : token.fontFamily,
+            }}
+          >
+            {emoji && <span style={{ fontFamily: token.fontFamily }}>{emoji}</span>}
+            {label}
+          </span>
+        ))}
     </Tag>
   );
 };
