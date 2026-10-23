@@ -768,7 +768,37 @@ describe('Session details keeps what the old footer popovers showed', () => {
     return screen.findByRole('dialog', { name: 'Session details' });
   };
 
-  it('shows the estimated cost and token breakdown from the usage snapshot', async () => {
+  const row = (details: HTMLElement, key: string) =>
+    details.querySelector<HTMLElement>(`[data-detail-row="${key}"]`)!;
+  const contextWindow = {
+    used: 36_000,
+    limit: 200_000,
+    taskMetadata: {
+      normalized_sdk_response: {
+        tokenUsage: { inputTokens: 30_000, outputTokens: 1_200, totalTokens: 31_200 },
+      },
+    },
+  };
+  const finishedTask = {
+    task_id: 't1',
+    status: 'completed',
+    created_at: '2026-01-01T00:00:00Z',
+    completed_at: '2026-01-01T00:02:14Z',
+    duration_ms: 134_000,
+  } as unknown as Task;
+
+  it('opens with one-line rows, every breakdown collapsed', async () => {
+    renderFooter({ footerTimerTask: finishedTask, latestContextWindow: contextWindow });
+    const details = await openDetails();
+    expect(within(row(details, 'timer')).getByRole('button', { name: /Timer/ })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+    expect(within(details).queryByText('Started')).toBeNull();
+    expect(within(details).queryByText('Context Window Usage')).toBeNull();
+  });
+
+  it('shows the estimated cost and token breakdown, with a Refresh', async () => {
     const get = vi.fn().mockResolvedValue({
       usage_summary: {
         total: 24_100,
@@ -782,52 +812,58 @@ describe('Session details keeps what the old footer popovers showed', () => {
     const client = { service: () => ({ get }) } as unknown as SessionFooterProps['client'];
     renderFooter({ client });
     const details = await openDetails();
-    expect(await within(details).findByText('$0.1234')).toBeInTheDocument();
-    expect(within(details).getByText('Estimated cost')).toBeInTheDocument();
-    expect(within(details).getByText('20,000')).toBeInTheDocument();
-  });
-
-  it('shows when the turn started and how long it took, under Timer', async () => {
-    const task = {
-      task_id: 't1',
-      status: 'completed',
-      created_at: '2026-01-01T00:00:00Z',
-      completed_at: '2026-01-01T00:02:14Z',
-      duration_ms: 134_000,
-    } as unknown as Task;
-    renderFooter({ footerTimerTask: task });
-    const details = await openDetails();
-    const timer = details.querySelector('[data-detail-row="timer"]')!.parentElement!;
-    expect(within(timer).getByText('Started')).toBeInTheDocument();
-    expect(within(timer).getByText('Duration')).toBeInTheDocument();
-  });
-
-  it('drills from Context into the full breakdown', async () => {
-    renderFooter({
-      latestContextWindow: {
-        used: 36_000,
-        limit: 200_000,
-        taskMetadata: {
-          normalized_sdk_response: {
-            tokenUsage: { inputTokens: 30_000, outputTokens: 1_200, totalTokens: 31_200 },
-          },
-        },
-      },
+    const usage = await within(row(details, 'usage')).findByRole('button', {
+      name: /Usage.*24.1k tokens/,
     });
-    const details = await openDetails();
-    fireEvent.click(within(details).getByRole('button', { name: /Context 18% of 200k/ }));
-    expect(await within(details).findByText('Context Window Usage')).toBeInTheDocument();
-    expect(within(details).getByText('Token Breakdown')).toBeInTheDocument();
-    expect(within(details).getByLabelText('Back to session details')).toBeInTheDocument();
+    fireEvent.click(usage);
+    expect(usage).toHaveAttribute('aria-expanded', 'true');
+    expect(within(details).getByText('$0.1234')).toBeInTheDocument();
+    // The colon sits right after the label.
+    expect(within(details).getByText('Estimated cost:')).toBeInTheDocument();
+    expect(within(details).getByText('20,000')).toBeInTheDocument();
+    expect(within(details).queryByText(/Reopen to refresh/)).toBeNull();
+    fireEvent.click(within(details).getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
   });
 
-  it('shows the full IDs on the copy rows', async () => {
+  it('expands when the turn started and how long it took, under Timer', async () => {
+    renderFooter({ footerTimerTask: finishedTask });
+    const details = await openDetails();
+    fireEvent.click(within(row(details, 'timer')).getByRole('button', { name: /Timer/ }));
+    expect(within(row(details, 'timer')).getByText('Started')).toBeInTheDocument();
+    expect(within(row(details, 'timer')).getByText('Duration')).toBeInTheDocument();
+  });
+
+  it('expands Context inline, one breakdown at a time', async () => {
+    renderFooter({ footerTimerTask: finishedTask, latestContextWindow: contextWindow });
+    const details = await openDetails();
+    fireEvent.click(within(row(details, 'timer')).getByRole('button', { name: /Timer/ }));
+    fireEvent.click(within(details).getByRole('button', { name: /Context 18% of 200k/ }));
+    expect(within(details).getByText('Context Window Usage')).toBeInTheDocument();
+    expect(within(details).getByText('Token Breakdown')).toBeInTheDocument();
+    expect(within(details).queryByLabelText('Back to session details')).toBeNull();
+    // Opening Context closed Timer.
+    expect(within(details).queryByText('Started')).toBeNull();
+  });
+
+  it('opens from an info item with that row expanded', async () => {
+    renderFooter({ latestContextWindow: contextWindow });
+    fireEvent.click(screen.getByRole('button', { name: /^Context 18% used/ }));
+    const details = await screen.findByRole('dialog', { name: 'Session details' });
+    expect(within(details).getByRole('button', { name: /Context 18% of 200k/ })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    );
+    expect(within(details).getByText('Context Window Usage')).toBeInTheDocument();
+  });
+
+  it('copies the full IDs from one-line rows', async () => {
     renderFooter({
       session: { ...baseSession, sdk_session_id: 'sdk-1234' } as SessionFooterProps['session'],
     });
     const details = await openDetails();
-    expect(within(details).getByText('test-session-123')).toBeInTheDocument();
-    expect(within(details).getByText('sdk-1234')).toBeInTheDocument();
+    expect(within(details).getByLabelText('Copy session ID test-session-123')).toBeInTheDocument();
+    expect(within(details).getByLabelText('Copy agent session ID sdk-1234')).toBeInTheDocument();
   });
 });
 

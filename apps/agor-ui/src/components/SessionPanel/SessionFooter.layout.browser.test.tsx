@@ -52,7 +52,7 @@ afterEach(async () => {
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
-function panel(status: Session['status'], embedded: boolean) {
+function panel(status: Session['status'], embedded: boolean, height = window.innerHeight) {
   return (
     <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
       {/* Apply the app's actual reduced-motion rules without fetching web fonts. */}
@@ -73,7 +73,7 @@ function panel(status: Session['status'], embedded: boolean) {
               data-testid="panel"
               style={{
                 width: embedded ? Math.min(420, window.innerWidth) : '100%',
-                height: window.innerHeight,
+                height,
                 overflow: 'hidden',
                 borderRadius: 12,
               }}
@@ -233,6 +233,24 @@ it('opens desktop menus above the card, anchored to their trigger', async () => 
     await userEvent.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog', { name })).toBeNull());
   }
+});
+
+it('keeps Session details below the app header, scrolling inside when the window is short', async () => {
+  if (isMobileViewport()) return;
+  await page.viewport(1280, 480);
+  // An app header above the panel.
+  render(<div style={{ paddingTop: 120 }}>{panel(SessionStatus.IDLE, false, 360)}</div>);
+  await userEvent.click(screen.getByRole('button', { name: 'Session details' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Session details' });
+  const bounds = document.querySelector('[data-composer-bounds]')!.getBoundingClientRect();
+  await waitFor(() => {
+    const popup = dialog.closest('.ant-popover')!.getBoundingClientRect();
+    expect(popup.top).toBeGreaterThanOrEqual(bounds.top);
+    expect(popup.bottom).toBeLessThanOrEqual(card().getBoundingClientRect().top);
+  });
+  // The rows scroll inside the capped popover.
+  expect(dialog.scrollHeight).toBeGreaterThan(dialog.clientHeight);
+  expect(getComputedStyle(dialog).overflowY).toBe('auto');
 });
 
 it('retains the bottom inset when resizing from mobile to desktop', async () => {

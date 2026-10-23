@@ -1,5 +1,6 @@
 import {
   CheckOutlined,
+  DownOutlined,
   LeftOutlined,
   PushpinFilled,
   PushpinOutlined,
@@ -52,11 +53,19 @@ export function ComposerMenu({
   const anchorRef = React.useRef<HTMLSpanElement>(null);
   // Distance from the trigger's top up to the card's top, so the popover clears the card.
   const [lift, setLift] = React.useState(0);
+  // Room between the popover's bottom and the top of the panel, below the app header.
+  const [maxHeight, setMaxHeight] = React.useState<number | undefined>(undefined);
   const measureLift = React.useCallback(() => {
     const trigger = anchorRef.current?.getBoundingClientRect();
     const card = above?.current?.getBoundingClientRect();
     setLift(trigger && card ? Math.max(0, trigger.top - card.top) : 0);
-  }, [above]);
+    const bottom = (card ?? trigger)?.top;
+    if (bottom === undefined) return;
+    const bounds = anchorRef.current?.closest('[data-composer-bounds]')?.getBoundingClientRect();
+    const room =
+      bottom - token.sizeXS - (bounds?.top ?? 0) - token.paddingXS - token.paddingXXS * 2;
+    setMaxHeight(room > 0 ? room : undefined);
+  }, [above, token.sizeXS, token.paddingXS, token.paddingXXS]);
   React.useLayoutEffect(() => {
     if (open && !sheet) measureLift();
   }, [open, sheet, measureLift]);
@@ -141,7 +150,13 @@ export function ComposerMenu({
             event.stopPropagation();
             close();
           }}
-          style={{ width: MENU_WIDTH, maxWidth: `calc(100vw - ${token.paddingLG}px)` }}
+          style={{
+            width: MENU_WIDTH,
+            maxWidth: `calc(100vw - ${token.paddingLG}px)`,
+            maxHeight,
+            overflowY: 'auto',
+            overscrollBehaviorY: 'contain',
+          }}
         >
           {body}
         </div>
@@ -208,6 +223,8 @@ interface ComposerMenuRowProps {
   checked?: boolean;
   /** Drill-in rows end in a chevron. */
   drill?: boolean;
+  /** Rows that expand inline end in a down chevron that turns up when open. */
+  expanded?: boolean;
   ariaLabel?: string;
   /** A sibling control, such as a pin toggle. */
   trailing?: React.ReactNode;
@@ -223,6 +240,7 @@ export function ComposerMenuRow({
   disabled,
   checked,
   drill,
+  expanded,
   ariaLabel,
   trailing,
   testId,
@@ -248,6 +266,12 @@ export function ComposerMenuRow({
       )}
       {checked && <CheckOutlined style={{ color: token.colorPrimary, flexShrink: 0 }} />}
       {drill && <RightOutlined style={{ color: token.colorTextTertiary, flexShrink: 0 }} />}
+      {expanded !== undefined && (
+        <DownOutlined
+          rotate={expanded ? 180 : 0}
+          style={{ color: token.colorTextTertiary, flexShrink: 0 }}
+        />
+      )}
     </Flex>
   );
   return (
@@ -258,6 +282,7 @@ export function ComposerMenuRow({
           block
           role={checked === undefined ? undefined : 'radio'}
           aria-checked={checked}
+          aria-expanded={expanded}
           aria-label={ariaLabel}
           disabled={disabled}
           onClick={onClick}

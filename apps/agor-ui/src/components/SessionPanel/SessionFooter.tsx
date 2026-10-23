@@ -161,6 +161,10 @@ export interface SessionFooterProps {
 type ComposerMenuId = 'plus' | 'model' | 'permissions' | 'details' | 'mcp';
 /** Session details rows an info-line segment can open on. */
 type DetailRow = 'timer' | 'tools' | 'usage' | 'context' | 'session-ids';
+/** Session details rows whose breakdown expands inline. */
+type ExpandableRow = 'timer' | 'usage' | 'context';
+const isExpandableRow = (row: DetailRow | null): row is ExpandableRow =>
+  row === 'timer' || row === 'usage' || row === 'context';
 interface InfoSegment {
   key: string;
   row: DetailRow | null;
@@ -543,7 +547,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     setOpenMenu(null);
     action();
   };
-  const [detailsPage, setDetailsPage] = React.useState<'main' | 'mcp' | 'context'>('main');
+  const [detailsPage, setDetailsPage] = React.useState<'main' | 'mcp'>('main');
+  // One breakdown open at a time; opening from an info item expands that item's row.
+  const [detailsExpanded, setDetailsExpanded] = React.useState<ExpandableRow | null>(null);
+  const toggleExpanded = (row: ExpandableRow) =>
+    setDetailsExpanded((current) => (current === row ? null : row));
   const detailsOpen = openMenu === 'details';
   // Which info-line segment Session details is anchored to, and the row it opens on.
   const [detailsAnchor, setDetailsAnchor] = React.useState<string>('more');
@@ -552,6 +560,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     usage,
     loading: usageLoading,
     error: usageError,
+    retry: refreshUsage,
   } = useSessionUsage(
     client,
     session.session_id,
@@ -636,36 +645,41 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     padding: `0 ${token.paddingSM}px ${token.paddingXS}px`,
     fontSize: token.fontSizeSM,
   };
+  const timerDetails = footerTimerTask && elapsed.hasTiming && (
+    <div style={detailBlockStyle}>
+      <TimerDetails
+        status={footerTimerTask.status}
+        startedAt={footerTimerTask.message_range?.start_timestamp || footerTimerTask.created_at}
+        endedAt={footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at}
+        durationMs={footerTimerTask.duration_ms}
+        lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
+        latestExecutorPulse={footerTimerTask.latest_executor_pulse}
+      />
+    </div>
+  );
   const detailsMain = (
     <>
       {!isMobile && <ComposerMenuSection>Session details</ComposerMenuSection>}
       <ComposerMenuNote>Choose what shows above the composer</ComposerMenuNote>
       {detailRow(
         'timer',
-        <ComposerMenuRow
-          label="Timer"
-          icon={<ClockCircleOutlined />}
-          value={
-            !elapsed.hasTiming
-              ? 'Not started'
-              : showStop
-                ? `Running ${elapsed.label}`
-                : elapsed.label
-          }
-          trailing={infoPin('timer', 'timer')}
-        />
-      )}
-      {footerTimerTask && elapsed.hasTiming && (
-        <div style={detailBlockStyle}>
-          <TimerDetails
-            status={footerTimerTask.status}
-            startedAt={footerTimerTask.message_range?.start_timestamp || footerTimerTask.created_at}
-            endedAt={footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at}
-            durationMs={footerTimerTask.duration_ms}
-            lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
-            latestExecutorPulse={footerTimerTask.latest_executor_pulse}
+        <>
+          <ComposerMenuRow
+            label="Timer"
+            icon={<ClockCircleOutlined />}
+            value={
+              !elapsed.hasTiming
+                ? 'Not started'
+                : showStop
+                  ? `Running ${elapsed.label}`
+                  : elapsed.label
+            }
+            expanded={timerDetails ? detailsExpanded === 'timer' : undefined}
+            onClick={timerDetails ? () => toggleExpanded('timer') : undefined}
+            trailing={infoPin('timer', 'timer')}
           />
-        </div>
+          {detailsExpanded === 'timer' && timerDetails}
+        </>
       )}
       {detailRow(
         'tools',
@@ -715,18 +729,32 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       ))}
       {detailRow(
         'usage',
-        <ComposerMenuRow
-          label="Usage"
-          icon={<NumberOutlined />}
-          value={usageValue}
-          hint={usageError}
-          trailing={infoPin('tokens', 'usage')}
-        />
-      )}
-      {usage && (
-        <div style={detailBlockStyle}>
-          <SessionUsageSummary usage={usage} />
-        </div>
+        <>
+          <ComposerMenuRow
+            label="Usage"
+            icon={<NumberOutlined />}
+            value={usageValue}
+            expanded={usage || usageError ? detailsExpanded === 'usage' : undefined}
+            onClick={usage || usageError ? () => toggleExpanded('usage') : undefined}
+            trailing={infoPin('tokens', 'usage')}
+          />
+          {detailsExpanded === 'usage' && (
+            <div style={detailBlockStyle}>
+              {usage ? (
+                <SessionUsageSummary usage={usage} onRefresh={refreshUsage} />
+              ) : (
+                <Flex align="center" gap={token.marginXS}>
+                  <Typography.Text type="secondary" style={{ flex: 1, fontSize: 'inherit' }}>
+                    {usageError}
+                  </Typography.Text>
+                  <Button type="text" size="small" onClick={refreshUsage}>
+                    Refresh
+                  </Button>
+                </Flex>
+              )}
+            </div>
+          )}
+        </>
       )}
       {detailRow(
         'context',
@@ -739,18 +767,30 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 ? 'Unknown'
                 : `${contextPercent}% of ${formatTokenCount(contextLimit)}`
             }
-            drill={contextPercent !== null}
-            onClick={contextPercent === null ? undefined : () => setDetailsPage('context')}
+            expanded={contextPercent !== null ? detailsExpanded === 'context' : undefined}
+            onClick={contextPercent !== null ? () => toggleExpanded('context') : undefined}
             trailing={infoPin('context', 'context')}
           />
-          {contextPercent !== null && (
-            <div style={{ paddingInline: token.paddingSM }}>
+          {detailsExpanded === 'context' && latestContextWindow && contextPercent !== null && (
+            <div style={detailBlockStyle}>
               <Progress
                 percent={contextPercent}
                 showInfo={false}
                 size="small"
                 strokeColor={contextColor}
                 aria-label={`Context ${contextPercent}% used`}
+              />
+              <ContextWindowPopoverContent
+                used={contextSnapshot?.totalTokens ?? latestContextWindow.used}
+                limit={contextLimit}
+                percentage={contextPercent}
+                taskMetadata={
+                  latestContextWindow.taskMetadata as React.ComponentProps<
+                    typeof ContextWindowPopoverContent
+                  >['taskMetadata']
+                }
+                onEscape={() => setDetailsExpanded(null)}
+                width="100%"
               />
             </div>
           )}
@@ -766,14 +806,16 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       )}
       <ComposerMenuRow
         label="Copy session ID"
-        hint={session.session_id}
+        value={shortId(session.session_id)}
+        ariaLabel={`Copy session ID ${session.session_id}`}
         icon={<CopyOutlined />}
         onClick={copyId(session.session_id, 'Session ID')}
       />
       {session.sdk_session_id && (
         <ComposerMenuRow
           label="Copy agent session ID"
-          hint={session.sdk_session_id}
+          value={shortId(session.sdk_session_id)}
+          ariaLabel={`Copy agent session ID ${session.sdk_session_id}`}
           icon={<CopyOutlined />}
           onClick={copyId(session.sdk_session_id, 'Agent session ID')}
         />
@@ -805,29 +847,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         <ComposerMenuBack label="Session details" onBack={() => setDetailsPage('main')} />
         {mcpPanel}
       </>
-    ) : detailsPage === 'context' && latestContextWindow && contextPercent !== null ? (
-      <>
-        <ComposerMenuBack label="Session details" onBack={() => setDetailsPage('main')} />
-        <div style={detailBlockStyle}>
-          <ContextWindowPopoverContent
-            used={contextSnapshot?.totalTokens ?? latestContextWindow.used}
-            limit={contextLimit}
-            percentage={contextPercent}
-            taskMetadata={
-              latestContextWindow.taskMetadata as React.ComponentProps<
-                typeof ContextWindowPopoverContent
-              >['taskMetadata']
-            }
-            onEscape={() => setDetailsPage('main')}
-            width="100%"
-          />
-        </div>
-      </>
     ) : (
       detailsMain
     );
   const openDetailsAt = (segment: InfoSegment) => {
     setDetailsPage('main');
+    setDetailsExpanded(isExpandableRow(segment.row) ? segment.row : null);
     setDetailsAnchor(segment.key);
     setDetailsFocus(segment.row);
     setOpenMenu('details');
@@ -1149,6 +1174,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         drill
         onClick={() => {
           setDetailsPage('main');
+          setDetailsExpanded(null);
           setPlusPage('details');
         }}
       />

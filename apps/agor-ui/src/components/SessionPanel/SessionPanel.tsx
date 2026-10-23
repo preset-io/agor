@@ -1560,6 +1560,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   return (
     <div
+      // Composer popovers stay inside the panel, below the app header.
+      data-composer-bounds
       style={{
         width: '100%',
         height: '100%',
