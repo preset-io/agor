@@ -20,19 +20,19 @@ describe('executor exit termination tenant scope', () => {
     );
   });
 
-  it('terminates a refused templated launch as launch_refused with verified absence', () => {
+  it('terminates a refused or restricted templated launch with verified absence', () => {
     const source = readFileSync(new URL('./register-services.ts', import.meta.url), 'utf8');
     const onExit = source.slice(
       source.indexOf('onExit: async (code, spawnContext) => {'),
       source.indexOf('if (executorLaunch?.requiresLocalContainment)')
     );
 
-    expect(onExit).toContain("launchRefused = disposition === 'refused';");
+    expect(onExit).toContain('launchRefused = isLaunchRefusal(disposition);');
     expect(onExit).toContain("if (disposition !== 'authoritative' && !launchRefused)");
-    expect(onExit).toContain('executorExitTermination(code, launchRefused)');
+    expect(onExit).toContain('executorExitTermination(code, disposition)');
     expect(onExit).toMatch(/cause,\s+errorMessage,/);
     expect(onExit).toContain('absenceVerified: templatedLauncherAbsenceVerified');
-    expect(onExit).toContain('reason: cause');
+    expect(onExit).toMatch(/disposition === 'restricted'\s+\? 'launch_restricted'/);
     // A refusal drops only the status fence, so it settles a Stop that came
     // first; a connected executor still wins the race.
     expect(onExit).toMatch(

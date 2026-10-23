@@ -12,6 +12,10 @@
 export const EXECUTOR_LAUNCH_REFUSED_MESSAGE =
   'Your team has reached its limit of work running at once. Wait for something to finish, then try again.';
 
+/** A templated launcher refused the run because the workspace is suspended; nothing was created. */
+export const EXECUTOR_LAUNCH_RESTRICTED_MESSAGE =
+  'This workspace is suspended. Contact your administrator.';
+
 export const DAEMON_RESTART_RELEASED_MESSAGE =
   'Daemon restart released this Task without verifying executor termination.';
 

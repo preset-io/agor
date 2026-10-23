@@ -43,7 +43,11 @@ import {
   EXECUTOR_RESPONSE_PROTOCOL,
   type ExecutorCommandResult,
 } from '@agor/core/executor-protocol';
-import { EXECUTOR_LAUNCH_REFUSED_MESSAGE, executorAdmissionClassFor } from '@agor/core/types';
+import {
+  EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+  EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
+  executorAdmissionClassFor,
+} from '@agor/core/types';
 import { isValidExecutionHomeKey } from '@agor/core/unix';
 import { getCurrentLogLevel } from '@agor/core/utils/logger';
 import type { SignOptions } from 'jsonwebtoken';
@@ -63,7 +67,7 @@ import {
 } from '../executor-tracking.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
 import { buildSandboxWrap, type SandboxRuntimePaths } from './sandbox-wrap.js';
-import { classifyExecutorExit } from './task-launch-state.js';
+import { classifyExecutorExit, isLaunchRefusal } from './task-launch-state.js';
 import { buildTrustedLauncherEnvironment } from './trusted-launcher-environment.js';
 
 let configuredDaemonUrl: string | null = null;
@@ -1462,14 +1466,19 @@ function requestExecutorWithTemplate(
   child.on('exit', (code) => {
     // An opted-in launcher refused admission before creating anything, so no
     // executor will ever answer: fail now instead of waiting for the timeout.
-    if (
-      classifyExecutorExit({ mode: 'templated', code, nonzeroMayHaveDispatched: false }) ===
-      'refused'
-    ) {
+    const disposition = classifyExecutorExit({
+      mode: 'templated',
+      code,
+      nonzeroMayHaveDispatched: false,
+    });
+    if (isLaunchRefusal(disposition)) {
       console.error(`${logPrefix} Executor launcher refused admission`);
       response.fail({
         success: false,
-        error: { code: 'EXECUTOR_LAUNCH_REFUSED', message: EXECUTOR_LAUNCH_REFUSED_MESSAGE },
+        error:
+          disposition === 'restricted'
+            ? { code: 'EXECUTOR_LAUNCH_RESTRICTED', message: EXECUTOR_LAUNCH_RESTRICTED_MESSAGE }
+            : { code: 'EXECUTOR_LAUNCH_REFUSED', message: EXECUTOR_LAUNCH_REFUSED_MESSAGE },
       });
       return;
     }

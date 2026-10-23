@@ -68,7 +68,8 @@ export type SdkFailureReason =
   | 'heartbeat_lost'
   | 'executor_interrupted'
   | 'termination_unverified'
-  | 'launch_refused';
+  | 'launch_refused'
+  | 'launch_restricted';
 
 /**
  * Reserved exit code (sysexits `EX_TEMPFAIL`) of a templated launcher that
@@ -76,6 +77,13 @@ export type SdkFailureReason =
  * daemon env opts in with `AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT=75`.
  */
 export const EXECUTOR_LAUNCH_REFUSED_EXIT_CODE = 75;
+
+/**
+ * Reserved exit code of a templated launcher refused because the tenant is suspended or
+ * reactivating; nothing was created. Read only when the daemon env opts in with
+ * `AGOR_EXECUTOR_LAUNCH_RESTRICTED_EXIT=76`.
+ */
+export const EXECUTOR_LAUNCH_RESTRICTED_EXIT_CODE = 76;
 
 export interface SdkFailure {
   reason: SdkFailureReason;

@@ -182,6 +182,16 @@ an explicit mapping-review point.
   the refusal settles it `stopped` with verified absence. Only that verified
   path persists `launch_refused`, so the reconciler resumes a stranded
   `launch_refused` request after a daemon restart with the same absence proof.
+- With `AGOR_EXECUTOR_LAUNCH_RESTRICTED_EXIT=76`, a templated launcher exit `76`
+  means admission was refused because the tenant is suspended or reactivating,
+  before the runtime applied the restriction, and nothing was created. It is
+  contained exactly like `75`, but the prompt requests cause `tenant_suspension`
+  with an `sdk_failure.reason` of `launch_restricted`, so the task settles
+  `stopped`. The reconciler resumes that pair with the same absence proof; a
+  `tenant_suspension` request without the diagnosis keeps the safeguard. When
+  the runtime's own suspension Stop claimed first, the diagnosis is not stored,
+  so a restart before settlement resumes without that proof, as for a Stop that
+  preceded a `75` refusal.
 - Connected active tasks heartbeat every 10 seconds by default. A scoped
   executor continues heartbeat and pulse telemetry while `stopping` until its
   provider cleanup returns and it reports quiescence.

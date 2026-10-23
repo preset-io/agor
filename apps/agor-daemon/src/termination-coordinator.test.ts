@@ -2,6 +2,7 @@ import { runWithTenantContext } from '@agor/core/db';
 import {
   AGENTIC_TOOL_NAMES,
   EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+  EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
   type Task,
   TaskStatus,
 } from '@agor/core/types';
@@ -683,6 +684,56 @@ describe('termination coordinator', () => {
           outcome: 'verified_absent',
           errorMessage: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
         }),
+        expect.anything()
+      );
+      expect(containExecutorProcess).not.toHaveBeenCalled();
+    }
+  );
+
+  // The same refusal when Cloud refused because the tenant is suspended (launcher exit 76).
+  const restrictedDispatch = () =>
+    task(TaskStatus.STOPPING, {
+      executor_mode: 'templated',
+      started_at: '2026-01-01T00:00:00.500Z',
+      termination_request: {
+        cause: 'tenant_suspension',
+        requested_at: '2026-01-01T00:00:01.000Z',
+        error_message: EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
+      },
+      sdk_failure: { reason: 'launch_restricted', termination: 'requested' },
+    });
+
+  it.each(AGENTIC_TOOL_NAMES)(
+    'settles a restricted templated launch of %s as verified absent',
+    async (tool) => {
+      const state = appDouble(tool);
+      state.claim(restrictedDispatch());
+      state.settle(
+        task(TaskStatus.STOPPED, {
+          termination_request: restrictedDispatch().termination_request,
+          sdk_failure: { reason: 'launch_restricted', termination: 'verified' },
+        })
+      );
+
+      await expect(
+        requestExecutorTermination({
+          app: state.app,
+          taskId,
+          cause: 'tenant_suspension',
+          errorMessage: EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
+          absenceVerified: true,
+          sdkFailure: {
+            reason: 'launch_restricted',
+            detected_at: '2026-01-01T00:00:01.000Z',
+            tool,
+            termination: 'requested',
+          },
+          requireExecutorDisconnected: true,
+          runInFreshTenantWriteDatabase,
+        })
+      ).resolves.toMatchObject({ status: 'terminal', task: { status: TaskStatus.STOPPED } });
+      expect(state.settleTermination).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId, outcome: 'verified_absent' }),
         expect.anything()
       );
       expect(containExecutorProcess).not.toHaveBeenCalled();

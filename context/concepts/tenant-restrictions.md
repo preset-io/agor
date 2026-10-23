@@ -220,6 +220,15 @@ re-probes on that schedule; `App` renders the suspended state from either half,
 ahead of the sign-in gate. The browser state is a presentation of the last
 answer the daemon gave, not evidence of containment.
 
+On PostgreSQL a ready `GET /readyz` also reports
+`tenant_restriction: { controller_id }`, the configured
+`external_launch.restriction_controller_id` or `null`. Agor Cloud records it from
+the Cell's provisioning probe and refuses to suspend a Team with a Workspace on a
+Cell that did not report its controller, because that Cell could neither apply
+nor release the restriction. A launch Cloud refuses between accepting a
+suspension and the runtime applying it ends with launcher exit `76`; see the
+restricted launch exit in `task-runtime-state.md`.
+
 `auth/termination-read-authority.ts` issues single-call, server-owned read grants
 bound to tenant/path/method/resource for coordinator reads. The minimal executor
 `tasks.getTerminationState` projection exposes only task status and the fields

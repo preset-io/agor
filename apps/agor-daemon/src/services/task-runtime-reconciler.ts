@@ -382,8 +382,11 @@ export class TaskRuntimeReconciler {
       cause: request.cause,
       errorMessage: request.error_message ?? 'Resuming durable executor termination.',
       params,
-      // Only a verified templated-launcher refusal persists `launch_refused`.
-      absenceVerified: request.cause === 'launch_refused',
+      // Only a verified templated-launcher refusal persists `launch_refused`; a
+      // restricted refusal persists `tenant_suspension` with a `launch_restricted` diagnosis.
+      absenceVerified:
+        request.cause === 'launch_refused' ||
+        (request.cause === 'tenant_suspension' && task.sdk_failure?.reason === 'launch_restricted'),
       ...(awaitingRemoteExecutor ? { remoteConnectDeadlineExpired: true } : {}),
       allowUnownedLocalContainment: localMode && !ownsLocalHandle,
       ...(localMode && !ownsLocalHandle
