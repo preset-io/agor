@@ -41,6 +41,7 @@ import {
 } from '@ant-design/icons';
 import type { ButtonProps } from 'antd';
 import {
+  Badge,
   Button,
   ConfigProvider,
   Divider,
@@ -343,8 +344,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     session.status === SessionStatus.RUNNING && !stopRequestInFlight && !connectionDisabled;
 
   const circleState = getComposerCircleState({ stopAvailable: showStop, isRunning, hasInput });
-  const circleLabel =
-    circleState === 'stop' ? 'Stop' : circleState === 'queue' ? 'Queue message' : 'Send';
+  const queuedCount = queuedTasks.length;
+  const circleLabel = `${
+    circleState === 'stop' ? 'Stop' : circleState === 'queue' ? 'Queue message' : 'Send'
+  }${queuedCount > 0 ? `, ${queuedCount} queued` : ''}`;
   const circleDisabled = circleState === 'stop' ? stopDisabled : sendDisabled;
   const circleTooltip =
     circleState === 'stop' ? (
@@ -1669,54 +1672,76 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               {modelChip}
               {permissionChip}
               <span style={{ flex: 1 }} />
-              <Tooltip title={circleTooltip}>
-                <Button
-                  {...circleVariant}
-                  shape="circle"
-                  aria-label={circleLabel}
-                  aria-disabled={circleDisabled || undefined}
-                  aria-busy={circleState === 'stop' ? stopBusy : undefined}
-                  loading={circleState === 'stop' && stopBusy}
-                  icon={
-                    circleState === 'stop' ? (
-                      <span
-                        aria-hidden
-                        style={{
-                          display: 'inline-block',
-                          width: token.sizeXS + 2,
-                          height: token.sizeXS + 2,
-                          borderRadius: token.borderRadiusXS,
-                          background: 'currentColor',
-                        }}
-                      />
-                    ) : (
-                      // Queue reads as Send: same arrow and colour, only the label differs.
-                      <ArrowUpOutlined />
-                    )
-                  }
-                  // Keep the keyboard up on phones and focus in the text after a tap.
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={
-                    circleDisabled ? undefined : circleState === 'stop' ? onStop : onSendPrompt
-                  }
-                  style={{
-                    width: controlSize,
-                    height: controlSize,
-                    minWidth: controlSize,
-                    flexShrink: 0,
-                    boxShadow: 'none',
-                    // Phones: a 36px fill inside the 44px target keeps the circle clear of the card edge.
-                    ...(isMobile && {
-                      border: 'none',
-                      padding: (MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2,
-                      backgroundClip: 'content-box',
-                    }),
-                    transition: reducedMotion ? 'none' : undefined,
-                    cursor: circleDisabled ? 'not-allowed' : undefined,
-                  }}
-                  data-testid="composer-circle"
-                />
-              </Tooltip>
+              {/* The queued count rides on the round button in every state, as on main. */}
+              <Badge
+                count={queuedCount}
+                size="small"
+                offset={
+                  isMobile ? [-(MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2, 4] : [-2, 2]
+                }
+                styles={{
+                  root: { display: 'inline-flex', flexShrink: 0 },
+                  indicator: {
+                    fontSize: token.fontSizeSM,
+                    height: token.fontSizeSM + 4,
+                    minWidth: token.fontSizeSM + 4,
+                    lineHeight: `${token.fontSizeSM + 4}px`,
+                    background: token.colorTextSecondary,
+                    color: token.colorBgContainer,
+                    boxShadow: `0 0 0 ${token.lineWidth}px ${token.colorBgContainer}`,
+                  },
+                }}
+                data-testid="composer-queued-badge"
+              >
+                <Tooltip title={circleTooltip}>
+                  <Button
+                    {...circleVariant}
+                    shape="circle"
+                    aria-label={circleLabel}
+                    aria-disabled={circleDisabled || undefined}
+                    aria-busy={circleState === 'stop' ? stopBusy : undefined}
+                    loading={circleState === 'stop' && stopBusy}
+                    icon={
+                      circleState === 'stop' ? (
+                        <span
+                          aria-hidden
+                          style={{
+                            display: 'inline-block',
+                            width: token.sizeXS + 2,
+                            height: token.sizeXS + 2,
+                            borderRadius: token.borderRadiusXS,
+                            background: 'currentColor',
+                          }}
+                        />
+                      ) : (
+                        // Queue reads as Send: same arrow and colour, only the label differs.
+                        <ArrowUpOutlined />
+                      )
+                    }
+                    // Keep the keyboard up on phones and focus in the text after a tap.
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={
+                      circleDisabled ? undefined : circleState === 'stop' ? onStop : onSendPrompt
+                    }
+                    style={{
+                      width: controlSize,
+                      height: controlSize,
+                      minWidth: controlSize,
+                      flexShrink: 0,
+                      boxShadow: 'none',
+                      // Phones: a 36px fill inside the 44px target keeps the circle clear of the card edge.
+                      ...(isMobile && {
+                        border: 'none',
+                        padding: (MOBILE_TOUCH_TARGET - CIRCLE_VISUAL_COMPACT) / 2,
+                        backgroundClip: 'content-box',
+                      }),
+                      transition: reducedMotion ? 'none' : undefined,
+                      cursor: circleDisabled ? 'not-allowed' : undefined,
+                    }}
+                    data-testid="composer-circle"
+                  />
+                </Tooltip>
+              </Badge>
             </Flex>
           </ConfigProvider>
         </div>

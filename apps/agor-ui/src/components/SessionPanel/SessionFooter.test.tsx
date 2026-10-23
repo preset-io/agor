@@ -178,6 +178,23 @@ describe('composer circle', () => {
     }
   );
 
+  it.each([
+    ['Send', { isRunning: false, hasInput: true }],
+    ['Queue message', { isRunning: true, hasInput: true }],
+    ['Stop', { isRunning: true, hasInput: false }],
+  ] as const)('shows the queued count on %s', (label, state) => {
+    const queuedTasks = [{ task_id: 'q1' }, { task_id: 'q2' }] as Task[];
+    renderFooter({ ...state, queuedTasks });
+    expect(circle()).toHaveAccessibleName(`${label}, 2 queued`);
+    expect(screen.getByTestId('composer-queued-badge')).toHaveTextContent('2');
+  });
+
+  it('shows no count with nothing queued', () => {
+    renderFooter({ isRunning: true, hasInput: true });
+    expect(circle()).toHaveAccessibleName('Queue message');
+    expect(screen.getByTestId('composer-queued-badge')).toHaveTextContent(/^$/);
+  });
+
   it('is Queue while running with text, and Stop moves to the working line', () => {
     const onStop = vi.fn();
     const onSendPrompt = vi.fn();
