@@ -1,6 +1,6 @@
 import { BranchRepository, CapabilityPolicyRepository } from '@agor/core/db';
 import { Forbidden, feathers } from '@agor/core/feathers';
-import type { Branch, BranchPermissionLevel } from '@agor/core/types';
+import type { Branch, BranchID, BranchPermissionLevel } from '@agor/core/types';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport, McpServer, type ServerContext } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -633,7 +633,7 @@ describe('agor_branches_create', () => {
       ...options.observed,
     };
     const createBranch = vi.fn(async () => creating);
-    const branchesGet = vi.fn(async () => observed);
+    const branchesGet = vi.fn(async (_id: string, _params?: unknown) => observed);
     const app = {
       get: () => ({}),
       service(name: string) {
@@ -2290,7 +2290,7 @@ describe('agor_branches_cleanup_candidates', () => {
     vi.spyOn(CapabilityPolicyRepository.prototype, 'getBranchSharingModes').mockResolvedValue(
       new Map(
         branches.map((value) => {
-          const branch = value as { branch_id: string };
+          const branch = value as { branch_id: BranchID };
           return [branch.branch_id, branch.branch_id === 'private' ? 'private' : 'shared'];
         })
       )
@@ -2620,7 +2620,7 @@ describe('agor_teammates_list', () => {
     };
     const findTeammateBranches = vi
       .spyOn(BranchRepository.prototype, 'findTeammateBranches')
-      .mockResolvedValue([hodorLikeBranch] as Awaited<
+      .mockResolvedValue([hodorLikeBranch] as unknown as Awaited<
         ReturnType<BranchRepository['findTeammateBranches']>
       >);
     const app = {
@@ -2832,7 +2832,11 @@ describe('agor_branches_clean', () => {
         throw new Error(path);
       },
     };
-    const clean = registerAndCaptureHandler('agor_branches_clean', { app, baseServiceParams });
+    const clean = registerAndCaptureHandler('agor_branches_clean', {
+      app,
+      userId: 'manager',
+      baseServiceParams,
+    });
     const result = await clean({ branchId });
     expect(create).toHaveBeenCalledWith({}, { ...baseServiceParams, route: { id: branchId } });
     expect(JSON.stringify(result)).toContain('accepted');
@@ -2893,4 +2897,86 @@ it('MCP branch get preserves server runtime support separately from permissions'
     maintenance_capabilities: capabilities,
   });
   expect(get).toHaveBeenCalledWith('branch-1', expect.objectContaining(baseServiceParams));
+});
+
+describe('explicit branch zone placement', () => {
+  it.each([
+    { position: 'bottom-right', expected: { x: 420, y: 520 } },
+    { position: { x: 10, y: 10 }, expected: { x: 10, y: 10 } },
+  ])('forwards $position on set_zone and create', async ({ position, expected }) => {
+    const board = {
+      board_id: 'board-1',
+      objects: {
+        review: {
+          type: 'zone',
+          x: 2000,
+          y: 3000,
+          width: 1000,
+          height: 800,
+          label: 'Review',
+        },
+      },
+    };
+    const branch = {
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+      name: 'feature',
+      base_ref: 'main',
+      base_sha: 'a'.repeat(40),
+    };
+    const patch = vi.fn().mockResolvedValue({ object_id: 'object-1' });
+    const createBranch = vi.fn().mockResolvedValue(branch);
+    const baseServiceParams = { provider: 'mcp', tenant: { tenant_id: 'tenant-a' } };
+    const app = {
+      get: () => ({}),
+      service(name: string) {
+        if (name === 'boards') return { get: async () => board };
+        if (name === 'branches') return { get: async () => branch };
+        if (name === 'repos')
+          return { get: async () => ({ repo_id: 'repo-1', default_branch: 'main' }), createBranch };
+        if (name === 'board-objects')
+          return { findByBranchId: async () => ({ object_id: 'object-1' }), patch };
+        throw new Error(`Unexpected service: ${name}`);
+      },
+    };
+    await registerAndCaptureHandler('agor_branches_set_zone', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    })({ branchId: 'branch-1', zoneId: 'review', position });
+    expect(patch).toHaveBeenCalledWith(
+      'object-1',
+      { zone_id: 'review', position: expected },
+      baseServiceParams
+    );
+    const create = registerAndCaptureHandler('agor_branches_create', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+    await create({
+      repoId: 'repo-1',
+      boardId: 'board-1',
+      branchName: 'feature',
+      autoSuffix: false,
+      zoneId: 'review',
+      position,
+    });
+    expect(createBranch).toHaveBeenCalledWith(
+      'repo-1',
+      expect.objectContaining({ zoneId: 'review', position: expected }),
+      baseServiceParams
+    );
+    createBranch.mockClear();
+    await expect(
+      create({
+        repoId: 'repo-1',
+        boardId: 'board-1',
+        branchName: 'feature',
+        autoSuffix: false,
+        position,
+      })
+    ).rejects.toThrow('position requires zoneId');
+    expect(createBranch).not.toHaveBeenCalled();
+  });
 });

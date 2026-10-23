@@ -5,11 +5,17 @@ import {
   BRANCH_PERMISSION_LEVELS,
   OWNERSHIP_TRANSFER_SERVICES,
 } from '@agor/core/types';
+import {
+  CARD_HEIGHT,
+  CARD_WIDTH,
+  resolveZoneRelativePosition,
+} from '@agor/core/utils/board-placement';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { BoardsServiceImpl } from '../../declarations.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import { boardCapabilityPoliciesSchema } from '../capability-policy-schema.js';
+import { mcpPlacement } from '../placement-schema.js';
 import {
   mcpListLimit,
   mcpOffset,
@@ -40,6 +46,44 @@ function filterBoardCanvasObjects(board: Board, objectTypes?: BoardObjectType[])
 }
 
 export function registerBoardTools(server: McpServer, ctx: McpContext): void {
+  server.registerTool(
+    'agor_boards_set_position',
+    {
+      description:
+        'Reposition an existing branch or card without changing its zone or running zone triggers. Use the object_id from agor_boards_get(includeEntities:true), or a branch board_object_id. position is zone-relative {x,y} or an anchor when pinned; otherwise it must be absolute canvas {x,y}.',
+      annotations: { idempotentHint: true },
+      inputSchema: z.object({
+        objectId: mcpRequiredString('objectId', 'Board object ID to reposition'),
+        position: mcpPlacement,
+      }),
+    },
+    async (args) => {
+      // Use the same hooked patch path as set_zone/UI drags, not a direct
+      // repository/custom-method write: tenant scope, board capabilities and
+      // realtime delivery stay owned by the existing service boundary.
+      const boardObjectsService = ctx.app.service('board-objects');
+      const object = await boardObjectsService.get(args.objectId, ctx.baseServiceParams);
+      let position = args.position;
+      if (object.zone_id) {
+        const board = await ctx.app.service('boards').get(object.board_id, ctx.baseServiceParams);
+        const zone = board.objects?.[object.zone_id];
+        if (zone?.type !== 'zone') throw new Error('The current zone no longer exists');
+        position = resolveZoneRelativePosition(
+          zone,
+          position,
+          object.entity_type === 'card'
+            ? { entityWidth: CARD_WIDTH, entityHeight: CARD_HEIGHT, desiredPadding: 60 }
+            : undefined
+        );
+      } else if (typeof position === 'string') {
+        throw new Error('An anchor requires a zone; use absolute {x,y} for an unpinned entity');
+      }
+      return textResult(
+        await boardObjectsService.patch(object.object_id, { position }, ctx.baseServiceParams)
+      );
+    }
+  );
+
   // Tool 1: agor_boards_get
   server.registerTool(
     'agor_boards_get',
