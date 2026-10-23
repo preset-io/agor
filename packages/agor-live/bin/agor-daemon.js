@@ -8,9 +8,10 @@
  */
 
 // Check Node.js version requirement before loading any dependencies
-import { checkNodeVersion } from './version-check.js';
+import { checkNodeVersion, warnUnpatchedNode } from './version-check.js';
 
 checkNodeVersion();
+warnUnpatchedNode();
 
 const { readFileSync } = await import('node:fs');
 const { dirname: pathDirname, join: pathJoin } = await import('node:path');

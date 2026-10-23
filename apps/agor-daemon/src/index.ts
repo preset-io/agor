@@ -93,6 +93,7 @@ import { initializeDatabase } from './setup/database.js';
 import { initializeDistributedWorkIdentity } from './setup/distributed-work-identity.js';
 import { warnDeprecatedConfig } from './setup/first-run-admin.js';
 import { resolveMasterSecretIntoEnv } from './setup/master-secret.js';
+import { rejectBrotliRequestBodies } from './setup/request-encoding.js';
 import { securityHeaders } from './setup/security-headers.js';
 import { configureChannels, createSocketIOConfig } from './setup/socketio.js';
 import { setBundledUiFallbackHeaders, setBundledUiStaticHeaders } from './setup/static-assets.js';
@@ -565,6 +566,9 @@ async function startDaemonWithOwnedMetrics(
   // Security headers (CSP, X-Frame-Options, nosniff, Referrer-Policy, HSTS).
   // Must run after CORS so preflights still get the Access-Control-* headers.
   app.use(securityHeaders({ csp: resolvedSecurity.csp }) as never);
+
+  // Must run before every body parser below.
+  app.use(rejectBrotliRequestBodies() as never);
 
   // CSP violation reporting endpoint. Only mounted when operators opt in via
   // `security.csp.report_uri`. Handler is deliberately minimal: accept POSTs
