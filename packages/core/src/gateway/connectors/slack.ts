@@ -2179,7 +2179,7 @@ export class SlackConnector implements GatewayConnector {
    *
    * Cast to a minimal local shape because `@slack/web-api`'s `uploadV2`
    * argument type is a discriminated union that doesn't narrow cleanly over
-   * a conditionally-spread object; the runtime response carries `files[0]`
+   * a conditionally-spread object; the runtime response carries `files[0].files[0]`
    * with the uploaded file's id/permalink/name.
    */
   async uploadFile(req: {
@@ -2193,7 +2193,7 @@ export class SlackConnector implements GatewayConnector {
       uploadV2: (args: Record<string, unknown>) => Promise<{
         ok?: boolean;
         error?: string;
-        files?: Array<{ id?: string; permalink?: string; name?: string }>;
+        files?: Array<{ files?: Array<{ id?: string; permalink?: string; name?: string }> }>;
       }>;
     };
     const result = await files.uploadV2({
@@ -2206,7 +2206,7 @@ export class SlackConnector implements GatewayConnector {
     if (!result.ok) {
       throw slackProviderFailure('Slack API error', result.error ?? 'unknown error');
     }
-    const uploaded = result.files?.[0];
+    const uploaded = result.files?.[0]?.files?.[0];
     if (!uploaded?.id) {
       throw new Error('Slack API error: upload response missing file id');
     }

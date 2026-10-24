@@ -1707,8 +1707,8 @@ const slackFileUploadSchema = z.strictObject({
   ),
   threadTs: slackOptionalTimestampSchema(
     'threadTs',
-    'Optional Slack thread timestamp to upload the file as a reply into.'
-  ),
+    'Slack thread timestamp to reply into. Defaults to the calling session thread in its own channel. Pass "" to post at the top level.'
+  ).or(z.literal('')),
   source: z.discriminatedUnion('kind', [
     z.strictObject({
       kind: z.literal('upload'),
@@ -1983,7 +1983,12 @@ async function resolveGatewaySlackToolTarget(
   ctx: McpContext,
   args: { gatewayChannelId?: string; slackChannelId?: string },
   capability: SlackAgentToolCapability
-): Promise<{ channel: GatewayChannel; branch: Branch | null; slackChannelId: string }> {
+): Promise<{
+  channel: GatewayChannel;
+  branch: Branch | null;
+  slackChannelId: string;
+  sessionThreadTs?: string;
+}> {
   const { channel, branch, gatewaySource } = await resolveGatewaySlackChannelTarget(
     ctx,
     args,
@@ -2011,7 +2016,9 @@ async function resolveGatewaySlackToolTarget(
     );
   }
 
-  return { channel, branch, slackChannelId };
+  const sessionThreadTs =
+    slackChannelId === gatewaySource?.slack_channel_id ? gatewaySource.slack_root_ts : undefined;
+  return { channel, branch, slackChannelId, sessionThreadTs };
 }
 
 /**
@@ -2939,6 +2946,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     },
     async (args) => {
       const target = await resolveGatewaySlackToolTarget(ctx, args, 'file_upload');
+      args.threadTs ??= target.sessionThreadTs;
       const branch = target.branch;
       if (!branch) throw new Error('Gateway target branch is unavailable');
       if (args.source.kind === 'branch') {
