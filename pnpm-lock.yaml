@@ -278,8 +278,8 @@ importers:
         specifier: ^0.2.2
         version: 0.2.2
       '@modelcontextprotocol/client':
-        specifier: 2.2.0
-        version: 2.2.0
+        specifier: 2.3.0
+        version: 2.3.0
       '@octokit/auth-app':
         specifier: ^8.3.1
         version: 8.3.1
@@ -700,7 +700,7 @@ importers:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.293
-        version: 0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.5))(zod@4.6.5)
+        version: 0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.7))(zod@4.6.5)
     devDependencies:
       '@types/node':
         specifier: ^24.6.0
@@ -3027,16 +3027,16 @@ packages:
       '@opentelemetry/api-logs':
         optional: true
 
-  '@modelcontextprotocol/client@2.2.0':
-    resolution: {integrity: sha512-LxCou/CSYQ6dwEnjhLZY0KnEuc8V4UJ3IEQCl/uR2yHobSQIEdJKUlKLRYRF5i5FqRGHy1eK7une3aAWDHLtig==}
+  '@modelcontextprotocol/client@2.3.0':
+    resolution: {integrity: sha512-pbHtGj6EeFCHngFE8gtNPaKrsj8Mb1IMw45BLcaPML/m2WTxI7pyYmeNQvaux88Lw8BSO5r7nyRbUyIkICmGrg==}
     engines: {node: '>=20'}
 
   '@modelcontextprotocol/core@2.0.0':
     resolution: {integrity: sha512-pJCEwGG7Lfr/+PQp9ZTwKXNeO5wzbfKL7H3MYpCorM4oFBoQrdjnBgEoqG+RjhsvS1FKrDbKux+M1HhlnGWqcA==}
     engines: {node: '>=20'}
 
-  '@modelcontextprotocol/core@2.2.0':
-    resolution: {integrity: sha512-iLhmprRmWI8EcosOA3wVvww22z02NkgqhV4fBH6f/odQBsi7xnJc0HGmi21yWO+/iKw2yzqVE127Zhna5/+JXw==}
+  '@modelcontextprotocol/core@2.3.0':
+    resolution: {integrity: sha512-09BHFaNVBe5pB2AhzCfLj0cqmsKLERvZQ4FblzP90UMGLaXVqdZPByFjURwsUYCmxonUW2yAwgTTvle+8O2/8w==}
     engines: {node: '>=20'}
 
   '@modelcontextprotocol/node@2.0.0':
@@ -7712,6 +7712,9 @@ packages:
   jose@6.2.12:
     resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
 
+  jose@6.2.13:
+    resolution: {integrity: sha512-7TIg10ZE1x82YediN+lcrPNvGMKge9yFHQD+Qho/b8y2adfugU3AsvvHfxV0fzyFllT6l9xCjf4RWY9g/Z9PJQ==}
+
   jose@6.2.3:
     resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
 
@@ -10848,6 +10851,9 @@ packages:
   zod@4.6.5:
     resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
+
   zustand@4.5.7:
     resolution: {integrity: sha512-CHOUy7mu3lbD6o6LJLfllpjkzhHXSBlX8B9+qPddUsIfeF5S/UZ5q0kmCsnRqT1UHFQZchNFDDzMbQsuesHWlw==}
     engines: {node: '>=12.7.0'}
@@ -11086,12 +11092,34 @@ snapshots:
       '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.293
       '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.293
 
+  '@anthropic-ai/claude-agent-sdk@0.3.293(@anthropic-ai/sdk@0.125.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.7))(zod@4.6.5)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.125.0(zod@4.6.7)
+      '@modelcontextprotocol/sdk': 1.30.0(supports-color@8.1.1)(zod@4.6.7)
+      zod: 4.6.5
+    optionalDependencies:
+      '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.293
+      '@anthropic-ai/claude-agent-sdk-darwin-x64': 0.3.293
+      '@anthropic-ai/claude-agent-sdk-linux-arm64': 0.3.293
+      '@anthropic-ai/claude-agent-sdk-linux-arm64-musl': 0.3.293
+      '@anthropic-ai/claude-agent-sdk-linux-x64': 0.3.293
+      '@anthropic-ai/claude-agent-sdk-linux-x64-musl': 0.3.293
+      '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.293
+      '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.293
+
   '@anthropic-ai/sdk@0.125.0(zod@4.6.5)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
     optionalDependencies:
       zod: 4.6.5
+
+  '@anthropic-ai/sdk@0.125.0(zod@4.6.7)':
+    dependencies:
+      json-schema-to-ts: 3.1.1
+      standardwebhooks: 1.0.0
+    optionalDependencies:
+      zod: 4.6.7
 
   '@asamuzakjp/css-color@4.0.5':
     dependencies:
@@ -13055,23 +13083,23 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@modelcontextprotocol/client@2.2.0':
+  '@modelcontextprotocol/client@2.3.0':
     dependencies:
-      '@modelcontextprotocol/core': 2.2.0
+      '@modelcontextprotocol/core': 2.3.0
       cross-spawn: 7.0.6
       eventsource: 3.0.7
       eventsource-parser: 3.1.1
-      jose: 6.2.12
+      jose: 6.2.13
       pkce-challenge: 5.0.1
-      zod: 4.6.5
+      zod: 4.6.7
 
   '@modelcontextprotocol/core@2.0.0':
     dependencies:
       zod: 4.6.5
 
-  '@modelcontextprotocol/core@2.2.0':
+  '@modelcontextprotocol/core@2.3.0':
     dependencies:
-      zod: 4.6.5
+      zod: 4.6.7
 
   '@modelcontextprotocol/node@2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.1)':
     dependencies:
@@ -13121,6 +13149,28 @@ snapshots:
       raw-body: 3.0.2
       zod: 4.6.5
       zod-to-json-schema: 3.25.2(zod@4.6.5)
+    transitivePeerDependencies:
+      - supports-color
+
+  '@modelcontextprotocol/sdk@1.30.0(supports-color@8.1.1)(zod@4.6.7)':
+    dependencies:
+      '@hono/node-server': 1.19.14(hono@4.13.1)
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
+      content-type: 1.0.5
+      cors: 2.8.6
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.1
+      express: 5.2.1(supports-color@8.1.1)
+      express-rate-limit: 8.7.0(express@5.2.1(supports-color@8.1.1))(supports-color@8.1.1)
+      hono: 4.13.1
+      jose: 6.2.3
+      json-schema-typed: 8.0.2
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 4.6.7
+      zod-to-json-schema: 3.25.2(zod@4.6.7)
     transitivePeerDependencies:
       - supports-color
 
@@ -14607,7 +14657,7 @@ snapshots:
       set-cookie-parser: 3.1.0
       vue: 3.5.42(typescript@6.0.3)
       yaml: 2.9.1
-      zod: 4.6.5
+      zod: 4.6.7
     transitivePeerDependencies:
       - '@vue/composition-api'
       - async-validator
@@ -14827,7 +14877,7 @@ snapshots:
       '@scalar/helpers': 0.11.3
       nanoid: 3.3.19
       type-fest: 5.9.0
-      zod: 4.6.5
+      zod: 4.6.7
 
   '@scalar/use-codemirror@0.14.15(typescript@6.0.3)':
     dependencies:
@@ -16482,7 +16532,7 @@ snapshots:
     dependencies:
       devtools-protocol: 0.0.1367902
       mitt: 3.0.1
-      zod: 4.6.5
+      zod: 4.6.7
 
   cjs-module-lexer@2.2.0: {}
 
@@ -18533,6 +18583,8 @@ snapshots:
   jiti@2.7.0: {}
 
   jose@6.2.12: {}
+
+  jose@6.2.13: {}
 
   jose@6.2.3: {}
 
@@ -22611,11 +22663,17 @@ snapshots:
     dependencies:
       zod: 4.6.5
 
+  zod-to-json-schema@3.25.2(zod@4.6.7):
+    dependencies:
+      zod: 4.6.7
+
   zod@3.25.76: {}
 
   zod@4.1.12: {}
 
   zod@4.6.5: {}
+
+  zod@4.6.7: {}
 
   zustand@4.5.7(@types/react@19.3.0)(immer@11.1.18)(react@19.3.0):
     dependencies:
