@@ -1,7 +1,7 @@
 'use client';
 
 import { Outfit } from 'next/font/google';
-import { Fragment } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { trackEvent } from '../../lib/analytics';
 import styles from './SocialProofBand.module.css';
 
@@ -15,7 +15,7 @@ import styles from './SocialProofBand.module.css';
  * permission.
  */
 
-// Only this section uses Outfit, so it loads here (home page only).
+// Only this section uses Outfit, so it loads here (home page and /teams).
 const outfit = Outfit({ subsets: ['latin'], weight: ['200', '700'], display: 'swap' });
 
 /** The decorative opening mark on each quote. */
@@ -71,8 +71,29 @@ function renderSegment(segment: Segment, key: number) {
   );
 }
 
-export function SocialProofBand() {
-  const { quotes } = SOURCE;
+interface SocialProofBandProps {
+  /** Which of the source's quotes to show, by index (default: all). */
+  only?: number[];
+  /** Replaces the "Takeaways from the <source>" label; must still name and link the source. */
+  attribution?: ReactNode;
+}
+
+/** Link to the quoted source, tracked like the band's own label link. */
+export function SourceLink({ children }: { children: ReactNode }) {
+  return (
+    <a
+      href={SOURCE.href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={() => trackEvent('social_proof_click', { source: SOURCE.id })}
+    >
+      {children}
+    </a>
+  );
+}
+
+export function SocialProofBand({ only, attribution }: SocialProofBandProps = {}) {
+  const quotes = only ? only.map((index) => SOURCE.quotes[index]) : SOURCE.quotes;
   return (
     <section
       className={`${styles.section} ${outfit.className}`}
@@ -82,15 +103,11 @@ export function SocialProofBand() {
       <p className={styles.label}>
         <span className={styles.labelRule} aria-hidden="true" />
         <span>
-          Takeaways from the{' '}
-          <a
-            href={SOURCE.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={() => trackEvent('social_proof_click', { source: SOURCE.id })}
-          >
-            {SOURCE.name}
-          </a>
+          {attribution ?? (
+            <>
+              Takeaways from the <SourceLink>{SOURCE.name}</SourceLink>
+            </>
+          )}
         </span>
       </p>
       <div className={styles.row}>
