@@ -184,7 +184,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(JSON.stringify(stored)).not.toContain(context.pkceVerifier);
       expect(JSON.stringify(stored)).not.toContain(context.clientSecret);
 
-      const claimed = await authorityB.claimForCallback(context.state);
+      const claimed = await authorityB.claimForUser(bound.tenantId, bound.userId, context.state);
       if (claimed.outcome !== 'claimed') throw new Error('Expected peer callback claim');
       if (!isMCPOAuthGrantBindingVersion(claimed.flow.configFingerprintVersion)) {
         throw new Error('Expected a supported grant binding version');
@@ -358,7 +358,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         // The routing is sealed, not stored in the clear beside the row.
         expect(JSON.stringify(stored)).not.toContain('widget-connect-binding');
 
-        const claimed = await authorityB.claimForCallback(context.state);
+        const claimed = await authorityB.claimForUser(bound.tenantId, bound.userId, context.state);
         if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
         const opened = authorityB.openClaim(claimed.flow, context.state);
         expect(opened.slackConnect).toEqual(slackConnect);
@@ -378,7 +378,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         expect(material.relay).toEqual(context.relay);
         return { ...material };
       });
-      const claimed = await authorityB.claimForCallback(context.state);
+      const claimed = await authorityB.claimForUser(bound.tenantId, bound.userId, context.state);
       if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
       expect(authorityB.openClaim(claimed.flow, context.state).context.relay).toEqual(
         context.relay
@@ -394,7 +394,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         expect(material).not.toHaveProperty('relay');
         return { ...material };
       });
-      const claimed = await authorityB.claimForCallback(context.state);
+      const claimed = await authorityB.claimForUser(bound.tenantId, bound.userId, context.state);
       if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
       expect(authorityB.openClaim(claimed.flow, context.state).context.relay).toBeUndefined();
     });
@@ -410,7 +410,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         return { ...rest, version: 2 };
       });
 
-      const claimed = await authorityB.claimForCallback(context.state);
+      const claimed = await authorityB.claimForUser(bound.tenantId, bound.userId, context.state);
       if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
       const opened = authorityB.openClaim(claimed.flow, context.state);
       expect(opened.context.pkceVerifier).toBe(context.pkceVerifier);
@@ -491,13 +491,56 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const attemptId = await startFlow(bound, context);
       await resealMaterial(bound, attemptId, mutate);
 
-      const claimed = await authorityB.claimForCallback(context.state);
+      const claimed = await authorityB.claimForUser(bound.tenantId, bound.userId, context.state);
       if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
       // Fail closed: an envelope this daemon does not fully understand is never
       // opened, so no provider exchange can proceed on an unverified binding.
       expect(() => authorityB.openClaim(claimed.flow, context.state)).toThrow(
         /material is invalid/i
       );
+    });
+
+    it('finds the callback tenant read-only and claims only for the initiating user', async () => {
+      const bound = await seed('callback-lookup');
+      const other = await seed('callback-lookup-other');
+      const context = flowContext(crypto.randomUUID());
+      await startFlow(bound, context);
+
+      await expect(authorityB.findForCallback(context.state)).resolves.toEqual({
+        tenantId: bound.tenantId,
+        status: 'pending',
+      });
+      await expect(authorityB.findForCallback('state-never-issued')).resolves.toBeNull();
+
+      // Another workspace's user holding the state cannot claim it, and the
+      // initiator's attempt is left untouched.
+      await expect(
+        authorityB.claimForUser(other.tenantId, other.userId, context.state)
+      ).resolves.toEqual({ outcome: 'not_claimed', flow: null });
+      await expect(authorityA.findForCallback(context.state)).resolves.toMatchObject({
+        status: 'pending',
+      });
+
+      // Nor can a different user of the SAME workspace.
+      const colleague = await runWithTenantDatabaseScope(dbA, bound.tenantId, (scoped) =>
+        new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          name: 'OAuth colleague',
+        })
+      );
+      await expect(
+        authorityB.claimForUser(bound.tenantId, colleague.user_id as UserID, context.state)
+      ).resolves.toEqual({ outcome: 'not_claimed', flow: null });
+      await expect(authorityA.findForCallback(context.state)).resolves.toMatchObject({
+        status: 'pending',
+      });
+
+      await expect(
+        authorityB.claimForUser(bound.tenantId, bound.userId, context.state)
+      ).resolves.toMatchObject({ outcome: 'claimed' });
+      await expect(authorityA.findForCallback(context.state)).resolves.toMatchObject({
+        status: 'exchanging',
+      });
     });
 
     it('rejects cross-tenant/user reads and database-level cross-tenant bindings', async () => {
@@ -636,8 +679,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
 
       const results = await Promise.all([
-        authorityA.claimForCallback(context.state),
-        authorityB.claimForCallback(context.state),
+        authorityA.claimForUser(bound.tenantId, bound.userId, context.state),
+        authorityB.claimForUser(bound.tenantId, bound.userId, context.state),
       ]);
       expect(results.filter((result) => result.outcome === 'claimed')).toHaveLength(1);
       expect(results.filter((result) => result.outcome === 'not_claimed')).toHaveLength(1);
@@ -695,7 +738,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauthMode: 'per_user',
         configFingerprint: 'c'.repeat(64),
       });
-      const claimed = await authorityB.claimForCallback(context.state);
+      const claimed = await authorityB.claimForUser(bound.tenantId, bound.userId, context.state);
       if (claimed.outcome !== 'claimed') throw new Error('Expected callback claim');
 
       await expect(
@@ -747,7 +790,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           )
         )
       ).resolves.toBeNull();
-      await expect(authorityA.claimForCallback(context.state)).resolves.toMatchObject({
+      await expect(
+        authorityA.claimForUser(bound.tenantId, bound.userId, context.state)
+      ).resolves.toMatchObject({
         outcome: 'not_claimed',
         flow: { status: 'exchanging' },
       });
@@ -791,11 +836,15 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         sealedMaterial: null,
         failureCode: 'superseded_by_newer_attempt',
       });
-      await expect(authorityA.claimForCallback(olderContext.state)).resolves.toMatchObject({
+      await expect(
+        authorityA.claimForUser(bound.tenantId, bound.userId, olderContext.state)
+      ).resolves.toMatchObject({
         outcome: 'not_claimed',
         flow: { status: 'failed', isCurrent: false },
       });
-      await expect(authorityB.claimForCallback(newerContext.state)).resolves.toMatchObject({
+      await expect(
+        authorityB.claimForUser(bound.tenantId, bound.userId, newerContext.state)
+      ).resolves.toMatchObject({
         outcome: 'claimed',
         flow: { attemptId: newer.attemptId, isCurrent: true },
       });
@@ -893,7 +942,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauthMode: 'per_user',
         configFingerprint: 'a'.repeat(64),
       });
-      const firstClaim = await authorityB.claimForCallback(firstContext.state);
+      const firstClaim = await authorityB.claimForUser(
+        bound.tenantId,
+        bound.userId,
+        firstContext.state
+      );
       if (firstClaim.outcome !== 'claimed') throw new Error('Expected first claim');
       expect(await authorityB.finish(firstClaim.flow, 'succeeded')).toBe(true);
 
@@ -924,7 +977,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauthMode: 'per_user',
         configFingerprint: 'a'.repeat(64),
       });
-      const claimed = await authorityB.claimForCallback(context.state);
+      const claimed = await authorityB.claimForUser(bound.tenantId, bound.userId, context.state);
       expect(claimed.outcome).toBe('claimed');
 
       await expect(authorityA.invalidateForServer(bound.tenantId, bound.serverId)).resolves.toBe(1);
@@ -936,7 +989,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         sealedMaterial: null,
         failureCode: 'server_configuration_changed',
       });
-      await expect(authorityA.claimForCallback(context.state)).resolves.toMatchObject({
+      await expect(
+        authorityA.claimForUser(bound.tenantId, bound.userId, context.state)
+      ).resolves.toMatchObject({
         outcome: 'not_claimed',
         flow: { status: 'ambiguous' },
       });
@@ -1058,7 +1113,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         );
       });
 
-      await expect(authorityB.claimForCallback(context.state)).resolves.toMatchObject({
+      await expect(
+        authorityB.claimForUser(bound.tenantId, bound.userId, context.state)
+      ).resolves.toMatchObject({
         outcome: 'not_claimed',
         flow: { status: 'expired', sealedMaterial: null },
       });
@@ -1079,7 +1136,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauthMode: 'per_user',
         configFingerprint: 'a'.repeat(64),
       });
-      const claimed = await authorityB.claimForCallback(context.state);
+      const claimed = await authorityB.claimForUser(bound.tenantId, bound.userId, context.state);
       expect(claimed.outcome).toBe('claimed');
 
       // Simulate daemon B dying after the provider may have consumed the code
@@ -1100,7 +1157,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         sealedMaterial: null,
         failureCode: 'exchange_owner_lost',
       });
-      await expect(authorityB.claimForCallback(context.state)).resolves.toMatchObject({
+      await expect(
+        authorityB.claimForUser(bound.tenantId, bound.userId, context.state)
+      ).resolves.toMatchObject({
         outcome: 'not_claimed',
         flow: { status: 'ambiguous' },
       });
@@ -1116,7 +1175,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauthMode: 'per_user',
         configFingerprint: 'a'.repeat(64),
       });
-      const claimed = await authorityB.claimForCallback(context.state);
+      const claimed = await authorityB.claimForUser(bound.tenantId, bound.userId, context.state);
       if (claimed.outcome !== 'claimed') throw new Error('Expected claim');
       await authorityB.finish(claimed.flow, 'failed', 'provider_rejected');
       await runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {

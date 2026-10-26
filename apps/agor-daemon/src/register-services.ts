@@ -23,6 +23,7 @@ import {
 } from '@agor/core/codex/credential-file';
 import {
   type AgorConfig,
+  getBaseUrl,
   getBranchHomePath,
   isDeploymentAgenticToolAvailable,
   MESSAGE_PAGINATION,
@@ -31,6 +32,7 @@ import {
   resolveClaudeOAuthCapability,
   resolveDeploymentAgenticToolPolicy,
   resolveExecutionSecurityMode,
+  resolveMcpOAuthCallbackUrlsForOrigin,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
@@ -70,6 +72,7 @@ import {
   shortId,
   TaskRepository,
   TeamsMessageDeliveryRepository,
+  TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   ThreadSessionMapRepository,
@@ -162,6 +165,7 @@ import {
 import type { UnixUserMode } from '@agor/core/unix';
 import { runWithLogContext } from '@agor/core/utils/log-context';
 import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
+import { getMcpOAuthReturnUrl } from '@agor/core/utils/url';
 import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
@@ -288,6 +292,7 @@ import {
   classifyMCPAuthRecovery,
   MCPCloudIdentityRequiredError,
   MCPLinkAdmissionError,
+  MCPOAuthWorkspaceUrlUnavailableError,
   recoveryForOAuthAttemptFailure,
 } from './services/mcp-auth-recovery.js';
 import { createMCPCatalogService } from './services/mcp-catalog.js';
@@ -2220,7 +2225,7 @@ export async function registerMCPServices(
     /**
      * Resolver wired up by `startTwoPhaseMCPOAuthFlowAndAwaitToken` when the
      * caller wants to block on token acquisition (discover / test-oauth).
-     * The daemon-side `oauthCallbackHandler` calls these after the token has
+     * `oauth-complete` (and relay delivery) call these after the token has
      * been exchanged + persisted so the original HTTP request can complete.
      */
     tokenResolve?: (tokenResponse: OAuthTokenResponse) => void;
@@ -2382,7 +2387,7 @@ export async function registerMCPServices(
    *     daemon emits a tenant-qualified `oauth:completed` latency hint; the
    *     UI refetches durable attempt/grant state for correctness.
    *   - {@link startTwoPhaseMCPOAuthFlowAndAwaitToken} — blocks on a Promise
-   *     that resolves once `oauthCallbackHandler` finishes exchanging + persisting
+   *     that resolves once `oauth-complete` finishes exchanging + persisting
    *     the token. Used by `discover` and `test-oauth start_browser_flow`,
    *     which need to return the token-validation result in the same HTTP
    *     response. Bounded by {@link AWAIT_TOKEN_TIMEOUT_MS}.
@@ -2399,13 +2404,63 @@ export async function registerMCPServices(
     '(3) /.well-known/oauth-authorization-server at MCP origin (RFC 8414), ' +
     '(4) /.well-known/openid-configuration at MCP origin (OIDC).';
 
-  async function resolveMCPOAuthRedirectUri(): Promise<string> {
+  /**
+   * The trusted UI address where the initiator finishes a direct-callback
+   * flow: tenant routing in hosted mode, deployment config otherwise. Never
+   * derived from a request. Shared by the start precheck and the callback.
+   */
+  async function resolveMcpOAuthReturnUrl(tenantId: string | undefined): Promise<string> {
+    const url = getMcpOAuthReturnUrl(
+      await runInOAuthTenantScope(db, tenantId, () => getBaseUrl(db))
+    );
+    if (!url) {
+      throw new MCPOAuthWorkspaceUrlUnavailableError(
+        'The workspace public URL is not known, so a direct MCP OAuth callback cannot be finished.'
+      );
+    }
+    return url;
+  }
+
+  const hostedTenantOAuthCallbacks =
+    resolveMultiTenancyConfig(ctx.config).mode === 'required_from_auth';
+
+  /**
+   * The direct callback a new flow registers, authorizes, and exchanges with.
+   * Flows store it (`context.redirectUri`, then `oauth_redirect_uri`), so
+   * existing grants and pending flows keep their original value. Hosted
+   * tenants use their launch-observed public URL; a tenant without one, and
+   * every static deployment, uses the startup URL.
+   */
+  async function resolveMCPOAuthRedirectUri(tenantId: string | undefined): Promise<string> {
     if (!ctx.mcpOAuthCallbackUrl) {
       throw new PublicBaseUrlNotConfiguredError(
         'The effective startup configuration does not provide a safe browser-reachable OAuth callback URL.'
       );
     }
-    return ctx.mcpOAuthCallbackUrl;
+    if (!hostedTenantOAuthCallbacks) return ctx.mcpOAuthCallbackUrl;
+    if (!tenantId) {
+      throw new PublicBaseUrlNotConfiguredError(
+        'MCP OAuth requires trusted tenant identity to resolve its callback URL.'
+      );
+    }
+    const routing = await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+      new TenantPublicRoutingRepository(scoped).find()
+    );
+    if (!routing) {
+      console.warn('[MCP OAuth] callback_tenant_routing_missing');
+      return ctx.mcpOAuthCallbackUrl;
+    }
+    const tenantCallback = resolveMcpOAuthCallbackUrlsForOrigin(routing.public_base_url);
+    const callbackUrl =
+      ctx.deployment.mode === 'ha'
+        ? tenantCallback.haCallbackUrl
+        : tenantCallback.standaloneCallbackUrl;
+    if (!callbackUrl) {
+      throw new PublicBaseUrlNotConfiguredError(
+        'The workspace public URL is not a safe browser-reachable OAuth callback URL.'
+      );
+    }
+    return callbackUrl;
   }
 
   type OAuthBrowserReservationClaim = {
@@ -2542,9 +2597,8 @@ export async function registerMCPServices(
     );
 
     // Strict public base URL — see oauth-start endpoint for the rationale.
-    const redirectUri = await runWithinOAuthAuthority(
-      assertFlowAuthority,
-      resolveMCPOAuthRedirectUri
+    const redirectUri = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+      resolveMCPOAuthRedirectUri(opts.tenantId)
     );
 
     const hasRfc9728 = !!opts.resourceMetadataUrl;
@@ -2642,6 +2696,13 @@ export async function registerMCPServices(
     // providers (stable_callback) use the hosted relay; DCR then registers the
     // relay callback. Every other flow keeps the daemon's direct callback.
     const relayFlow = Boolean(oauthRelay && relayIssuer);
+    // A direct callback hands the flow to its workspace UI. Refuse now, before
+    // discovery, DCR or authorization, if that address cannot be resolved.
+    if (!relayFlow) {
+      await runWithinOAuthAuthority(assertFlowAuthority, () =>
+        resolveMcpOAuthReturnUrl(opts.tenantId ?? getCurrentTenantId())
+      );
+    }
 
     // Local reservations are attempt-aware, so establish identity before
     // allocating a generation. PostgreSQL obtains its durable attempt ID from
@@ -4030,34 +4091,111 @@ export async function registerMCPServices(
     res.status(status).send(page.html);
   };
 
-  // Set the OAuth callback handler
+  /**
+   * Direct provider redirect. It never completes the flow itself: it hands the
+   * provider response to the flow tenant's UI, where the signed-in user who
+   * started the flow finishes it through `mcp-servers/oauth-complete`
+   * (`claimForUser`). The UI origin comes from trusted tenant routing or
+   * deployment config, never from this request.
+   */
+  const handleDirectOAuthCallback = async (req: express.Request, res: express.Response) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const param = (name: string): string | undefined => {
+        const value = req.query[name];
+        return typeof value === 'string' && value ? value : undefined;
+      };
+      const state = param('state');
+      const code = param('code');
+      const error = param('error');
+      if (!state || (!code && !error)) {
+        sendOAuthResultPage(res, false, 'Missing code or state parameter', 400);
+        return;
+      }
+
+      const local = durableOAuthFlows ? undefined : pendingOAuthFlows.get(state);
+      const flow = durableOAuthFlows
+        ? await durableOAuthFlows.findForCallback(state)
+        : local
+          ? { tenantId: local.tenantId, status: 'pending' as const }
+          : null;
+      if (!flow) {
+        sendOAuthResultPage(
+          res,
+          false,
+          'OAuth flow expired or not found. Please start the flow again.',
+          400
+        );
+        return;
+      }
+      if (flow.status !== 'pending') {
+        const succeeded = flow.status === 'succeeded';
+        sendOAuthResultPage(
+          res,
+          succeeded,
+          terminalMessageForStatus(flow.status),
+          succeeded ? 200 : 409
+        );
+        return;
+      }
+      let returnUrl: string;
+      try {
+        returnUrl = await resolveMcpOAuthReturnUrl(flow.tenantId);
+      } catch (error) {
+        if (!(error instanceof MCPOAuthWorkspaceUrlUnavailableError)) throw error;
+        // Backstop only: starts are refused when this address is unknown.
+        sendOAuthResultPage(
+          res,
+          false,
+          'Open your Agor workspace and start the connection again.',
+          409
+        );
+        return;
+      }
+      const forwarded = new URLSearchParams({ state });
+      if (code) forwarded.set('code', code);
+      const issuer = param('iss');
+      if (issuer) forwarded.set('iss', issuer);
+      if (error) forwarded.set('error', error);
+      // Fragment, not query: it is never sent to a server or kept in logs.
+      res.redirect(303, `${returnUrl}#${forwarded.toString()}`);
+    } catch (err) {
+      externalFailure('OAuth Callback', 'oauth_callback', err);
+      sendOAuthResultPage(
+        res,
+        false,
+        'Authentication could not be completed. Please start a new OAuth flow.',
+        500
+      );
+    }
+  };
+
+  // Hosted relay delivery. The signed delivery binds the tenant and user.
   const handleOAuthCallback = async (
-    req: express.Request,
+    _req: express.Request,
     res: express.Response,
-    delivery?: MCPOAuthRelayCallback
+    delivery: MCPOAuthRelayCallback
   ) => {
     const sendResult = (
       res: express.Response,
       success: boolean,
-      message: string,
+      _message: string,
       status = 200
     ): void => {
-      if (delivery) {
-        res
-          .status(success ? 200 : status === 500 || status === 409 ? 409 : 200)
-          .json({ outcome: success ? 'connected' : 'failed' });
-      } else sendOAuthResultPage(res, success, message, status);
+      res
+        .status(success ? 200 : status === 500 || status === 409 ? 409 : 200)
+        .json({ outcome: success ? 'connected' : 'failed' });
     };
     const claim = (state: string) =>
-      delivery
-        ? durableOAuthFlows!.claimForUser(
-            delivery.workspace_id,
-            delivery.runtime_user_id as UserID,
-            state
-          )
-        : durableOAuthFlows!.claimForCallback(state);
+      durableOAuthFlows!.claimForUser(
+        delivery.workspace_id,
+        delivery.runtime_user_id as UserID,
+        state
+      );
     const bindDelivery = (pending: PendingOAuthFlow): void => {
-      if (!delivery) return;
       if (
         !pending.context.relay ||
         pending.context.relay.cellId !== oauthRelay?.cellId ||
@@ -4077,10 +4215,7 @@ export async function registerMCPServices(
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
     try {
-      const code = (delivery ? delivery.code : req.query.code) as string | undefined;
-      const state = (delivery ? delivery.state : req.query.state) as string | undefined;
-      const issuer = (delivery ? delivery.iss : req.query.iss) as string | undefined;
-      const error = (delivery ? delivery.error : req.query.error) as string | undefined;
+      const { code, state, iss: issuer, error } = delivery;
 
       if (error) {
         console.warn('[OAuth Callback] Provider authorization was not completed');
@@ -4155,22 +4290,7 @@ export async function registerMCPServices(
       if (durableOAuthFlows) {
         const claimed = await claim(state);
         if (claimed.outcome === 'not_claimed') {
-          if (delivery) {
-            sendResult(res, false, 'OAuth callback already consumed', 409);
-            return;
-          }
-          if (claimed.flow?.status === 'succeeded') {
-            sendResult(res, true, terminalMessageForStatus('succeeded'));
-            return;
-          }
-          sendResult(
-            res,
-            false,
-            claimed.flow
-              ? terminalMessageForStatus(claimed.flow.status)
-              : 'OAuth flow expired or not found. Please start the flow again.',
-            409
-          );
+          sendResult(res, false, 'OAuth callback already consumed', 409);
           return;
         }
         try {
@@ -4353,7 +4473,7 @@ export async function registerMCPServices(
   };
 
   const oauthCallbackHandler = (req: express.Request, res: express.Response) =>
-    handleOAuthCallback(req, res);
+    handleDirectOAuthCallback(req, res);
   (app as unknown as Record<string, unknown>).mcpOAuthRelayCallbackHandler = async (
     req: express.Request,
     res: express.Response
@@ -4546,14 +4666,21 @@ export async function registerMCPServices(
   app.use(
     '/mcp-catalog/readiness',
     new MCPCatalogReadinessService(app, {
-      redirectUri: (entry) => {
+      redirectUri: async (entry, params) => {
         const issuer = catalogRelayIssuer(entry);
         if (issuer && oauthRelay) return oauthRelay.redirectUri(issuer);
         // The direct callback: a customer app's without the relay, or the one a
         // provider admin allowlists (the flow itself is unchanged).
-        return entry.oauth?.configured_client || entry.oauth?.redirect_allowlist
-          ? ctx.mcpOAuthCallbackUrl
-          : undefined;
+        if (!entry.oauth?.configured_client && !entry.oauth?.redirect_allowlist) return undefined;
+        // Show nothing when a direct flow would be refused (no workspace
+        // address yet), so an admin never allowlists a URL no flow will use.
+        const tenantId = tenantIdFromParams(params);
+        try {
+          await resolveMcpOAuthReturnUrl(tenantId);
+          return await resolveMCPOAuthRedirectUri(tenantId);
+        } catch {
+          return undefined;
+        }
       },
       listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
       // Readiness is advisory and may not open credential material merely to
@@ -6096,7 +6223,23 @@ export async function registerMCPServices(
         // discovery. The flow helper validates it again at the side-effect
         // boundary; this earlier check ensures a missing/unsafe deployment
         // origin cannot trigger discovery or DCR first.
-        await runWithinOAuthAuthority(assertRequestAuthority, resolveMCPOAuthRedirectUri);
+        await runWithinOAuthAuthority(assertRequestAuthority, () =>
+          resolveMCPOAuthRedirectUri(tenantId)
+        );
+        // A direct (non-relay) flow finishes on its workspace UI; refuse here,
+        // before discovery, when that address is unknown. A relay recipe, or
+        // a recipe the flow helper will refuse on its own, skips this.
+        const startRelayIssuer =
+          oauthRelay && savedServer
+            ? await runWithinOAuthAuthority(assertRequestAuthority, () =>
+                catalogInstallRelayIssuer(savedServer, true)
+              ).catch(() => null)
+            : undefined;
+        if (startRelayIssuer === undefined) {
+          await runWithinOAuthAuthority(assertRequestAuthority, () =>
+            resolveMcpOAuthReturnUrl(tenantId)
+          );
+        }
 
         let probeResponse = await runStartPhase('probe', () =>
           oauthFetch(
@@ -6414,9 +6557,8 @@ export async function registerMCPServices(
             preliminaryRecovery.category === 'client_registration_failed'
           ) {
             try {
-              redirectUri = await runWithinOAuthAuthority(
-                assertRequestAuthority,
-                resolveMCPOAuthRedirectUri
+              redirectUri = await runWithinOAuthAuthority(assertRequestAuthority, () =>
+                resolveMCPOAuthRedirectUri(tenantIdFromParams(params))
               );
             } catch {
               assertRequestAuthority?.();
@@ -6472,7 +6614,9 @@ export async function registerMCPServices(
   };
   app.use('/mcp-servers/oauth-complete', {
     async create(
-      data: { callback_url: string } | { code: string; state: string; iss?: string },
+      data:
+        | { callback_url: string }
+        | { code?: string; state: string; iss?: string; error?: string },
       params?: AuthenticatedParams
     ) {
       let pendingFlow: PendingOAuthFlow | undefined;
@@ -6493,9 +6637,17 @@ export async function registerMCPServices(
           issuer = parsed.issuer;
           authorizationRejected = parsed.authorizationRejected;
         } else {
-          code = data.code;
+          code = data.code ?? '';
           state = data.state;
           issuer = data.iss;
+          authorizationRejected = !!data.error;
+        }
+        if (!state || (!code && !authorizationRejected)) {
+          return oauthCompletionFailure(
+            'authorization_failed',
+            undefined,
+            'Missing code or state parameter'
+          );
         }
 
         const activeTenantId = tenantIdFromParams(params);
@@ -6527,7 +6679,8 @@ export async function registerMCPServices(
               'OAuth flow belongs to a different tenant. Please restart the OAuth flow.'
             );
           }
-          if (pendingFlow.userId && activeUserId && pendingFlow.userId !== activeUserId) {
+          // Only the user who started the flow may complete it.
+          if (!activeUserId || pendingFlow.userId !== activeUserId) {
             return oauthCompletionFailure(
               'permission_changed',
               pendingFlow.mcpServerId,
@@ -6554,7 +6707,21 @@ export async function registerMCPServices(
           } else {
             markLocalOAuthAttempt(pendingFlow, 'failed', 'authorization_denied');
           }
-          emitOAuthCompletion(pendingFlow, false);
+          const denied = pendingFlow;
+          await preserveCommittedOAuthResult(undefined, [
+            {
+              code: 'slack_recovery_failure_projection',
+              run: () => projectSlackRecoveryOAuthResult(denied, false),
+            },
+            {
+              code: 'slack_connect_failure_projection',
+              run: () => projectSlackConnectOAuthResult(denied, false),
+            },
+            {
+              code: 'failure_notification',
+              run: () => emitOAuthCompletion(denied, false),
+            },
+          ]);
           pendingFlow.tokenReject?.(new Error('Authorization was not completed'));
           return oauthCompletionFailure('authorization_denied', pendingFlow.mcpServerId);
         }
@@ -6624,6 +6791,10 @@ export async function registerMCPServices(
             {
               code: 'completion_notification',
               run: () => emitOAuthCompletion(completedFlow, true),
+            },
+            {
+              code: 'completion_waiter',
+              run: () => completedFlow.tokenResolve?.(tokenResponse),
             },
           ]
         );
