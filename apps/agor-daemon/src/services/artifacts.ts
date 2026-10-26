@@ -1420,7 +1420,10 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const { grants, artifact, userId } = input;
 
     if (grants.agor_api_url) {
-      out[GRANT_ENV_VAR_NAMES.agor_api_url] = await getDaemonBaseUrl();
+      // Tenant-scoped in hosted mode: the viewer's API key only authenticates
+      // against their own workspace's host. A hosted tenant with no routing
+      // yet resolves to '' — the key is emitted empty, never the cell origin.
+      out[GRANT_ENV_VAR_NAMES.agor_api_url] = await getDaemonBaseUrl(this.dbRef);
     }
     if (grants.agor_user_email && userId) {
       try {

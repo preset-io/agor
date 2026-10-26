@@ -2102,17 +2102,28 @@ function resolveBaseUrl(
  * Distinct from {@link getDaemonUrl}, which uses `DAEMON_URL` for internal
  * backend-to-backend communication.
  *
- * Resolution order:
+ * Hosted (`required_from_auth`): delegates to {@link getBaseUrl}, i.e. the
+ * current trusted tenant's durable public origin, or `''` before its first
+ * verified launch. The API is tenant-scoped there — personal API keys resolve
+ * to a tenant by request Host — so a cell-wide origin would point a workspace
+ * at another workspace's API. `db` is required for the same reason as on
+ * {@link getBaseUrl}: no caller can forget the tenant read.
+ *
+ * Static/local resolution order (the handle is untouched):
  * 1. AGOR_BASE_URL environment variable (highest priority)
  * 2. daemon.base_url from config.yaml
  * 3. ui.base_url from legacy one-origin configs
  * 4. Default daemon host and port
  */
-export async function getDaemonBaseUrl(): Promise<string> {
+export async function getDaemonBaseUrl(db: Database): Promise<string> {
+  const config = await loadConfig();
+  if (config.multi_tenancy?.mode === 'required_from_auth') {
+    return getBaseUrl(db);
+  }
   if (process.env.AGOR_BASE_URL) {
     return validateBaseUrl(process.env.AGOR_BASE_URL);
   }
-  return resolveBaseUrl(await loadConfig(), 'daemon');
+  return resolveBaseUrl(config, 'daemon');
 }
 
 /**
