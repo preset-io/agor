@@ -12,6 +12,7 @@ function client(result: unknown): { agor: AgorClient; create: ReturnType<typeof 
 
 afterEach(() => {
   window.history.replaceState({}, '', '/ui/');
+  window.sessionStorage.clear();
 });
 
 describe('MCP OAuth return surface', () => {
@@ -58,5 +59,22 @@ describe('MCP OAuth return surface', () => {
 
     expect(await screen.findByText('Nothing to finish here')).toBeVisible();
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('shows connection copy, not the identity message, when the call is rejected', async () => {
+    window.history.replaceState({}, '', '/ui/connect/mcp/return#state=state-4&code=code-4');
+    const create = vi.fn(async () => {
+      throw new Error('socket disconnected');
+    });
+    const agor = { service: vi.fn(() => ({ create })) } as unknown as AgorClient;
+    render(<MCPOAuthReturnPage client={agor} />);
+
+    expect(
+      await screen.findByText("Couldn't reach Agor. Check the connection status, or start again.")
+    ).toBeVisible();
+    expect(screen.queryByText(/finished by the Agor user who started it/)).toBeNull();
+    // Not retried: the exchange outcome is unknown, and the code is single-use.
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(window.sessionStorage.length).toBe(0);
   });
 });

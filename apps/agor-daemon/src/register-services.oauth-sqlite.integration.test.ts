@@ -2797,11 +2797,27 @@ describe('SQLite saved-row OAuth authority', () => {
       tokens.getToken(other.user_id as UserID, harness.server.mcp_server_id as MCPServerID)
     ).resolves.toBeNull();
 
+    // Nor can they deny it: a forwarded provider error from a non-initiator
+    // leaves the initiator's attempt pending.
+    await expect(
+      harness.app.service('mcp-servers/oauth-complete').create({ state, error: 'access_denied' }, {
+        ...paramsFor(harness),
+        user: { ...harness.liveSocket.feathers.user, user_id: other.user_id },
+      } as AuthenticatedParams)
+    ).resolves.toMatchObject({ success: false });
+
     // The user who started it still finishes it.
     expect((await harness.callback(state)).status).toBe(200);
     await expect(
       tokens.getToken(harness.user.user_id as UserID, harness.server.mcp_server_id as MCPServerID)
     ).resolves.not.toBeNull();
+
+    // A second authenticated completion of the same response is refused and
+    // never reaches the token endpoint again.
+    await expect(
+      harness.app.service('mcp-servers/oauth-complete').create(providerResponse, paramsFor(harness))
+    ).resolves.toMatchObject({ success: false });
+    expect(provider.requests.filter((request) => request.path === '/token')).toHaveLength(1);
   });
 
   it.each([
@@ -3874,7 +3890,11 @@ describe('SQLite saved-row OAuth authority', () => {
     try {
       const provider = await createTestProvider({ serveDynamicRegistration: true });
       providers.push(provider);
-      const catalogEntry = dcrCatalogEntry('test/hosted-workspace-url', provider.savedMcpUrl);
+      // An admin-allowlisted entry, so readiness shows the direct callback.
+      const catalogEntry = {
+        ...dcrCatalogEntry('test/hosted-workspace-url', provider.savedMcpUrl),
+        oauth: { redirect_allowlist: true as const },
+      } as MCPCatalogEntry;
       const catalogMock = vi.mocked(loadCatalog);
       const previousImplementation = catalogMock.getMockImplementation();
       catalogMock.mockResolvedValue([catalogEntry]);
@@ -3882,7 +3902,12 @@ describe('SQLite saved-row OAuth authority', () => {
         catalogMock.mockReset();
         if (previousImplementation) catalogMock.mockImplementation(previousImplementation);
       });
-      const harness = await createHarness(provider, undefined, { catalogEntry });
+      const harness = await createHarness(provider, undefined, {
+        catalogEntry,
+        config: {
+          multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        } as RegisterServicesContext['config'],
+      });
       databases.push(harness.rawDb);
       const start = () =>
         harness.app
@@ -3893,14 +3918,21 @@ describe('SQLite saved-row OAuth authority', () => {
           recovery?: { category: string; action: string };
         }>;
 
-      // Refused before any provider side effect: no DCR, no authorization.
+      const readinessRedirect = async () =>
+        (
+          (await runWithTenantDatabaseScope(harness.db, 'default', () =>
+            harness.app.service('mcp-catalog/readiness').get(catalogEntry.name, paramsFor(harness))
+          )) as { redirect_uri?: string }
+        ).redirect_uri;
+
+      // Refused before any provider contact: no probe, discovery, DCR or
+      // authorization. The drawer shows no callback no flow would use.
       await expect(start()).resolves.toMatchObject({
         success: false,
         recovery: { category: 'configuration_required', action: 'retry' },
       });
-      expect(
-        provider.requests.some(({ path }) => ['/register', '/authorize', '/token'].includes(path))
-      ).toBe(false);
+      expect(provider.requests).toEqual([]);
+      expect(await readinessRedirect()).toBeUndefined();
 
       // Once a verified launch records the workspace origin, the callback
       // hands off to it, never to the cell origin or the request host.
@@ -3909,6 +3941,9 @@ describe('SQLite saved-row OAuth authority', () => {
           public_base_url: 'https://tenant-a.example.test',
           assertion_issued_at: 100,
         })
+      );
+      expect(await readinessRedirect()).toBe(
+        'https://tenant-a.example.test/mcp-servers/oauth-callback'
       );
       const started = await start();
       expect(started).toMatchObject({ success: true });

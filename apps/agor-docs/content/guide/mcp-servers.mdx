@@ -400,7 +400,8 @@ HubSpot), and refreshes the same way.
 After you approve access at the provider, the browser returns to the daemon's
 OAuth callback, which hands it to your Agor workspace (`/ui/connect/mcp/return`)
 to finish connecting. Only the Agor user who started the connection can finish
-it, signed in to that workspace. Self-hosted installs use the same workspace
+it, signed in to that workspace. If you are signed out when you return, sign in
+in the same browser tab and the connection finishes afterwards. Self-hosted installs use the same workspace
 address as other Agor links (`AGOR_BASE_URL`, then `ui.base_url`, then
 `daemon.base_url`); if the UI runs on its own origin, such as a separate dev
 server, point `ui.base_url` at it.

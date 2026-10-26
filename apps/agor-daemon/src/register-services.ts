@@ -4672,7 +4672,15 @@ export async function registerMCPServices(
         // The direct callback: a customer app's without the relay, or the one a
         // provider admin allowlists (the flow itself is unchanged).
         if (!entry.oauth?.configured_client && !entry.oauth?.redirect_allowlist) return undefined;
-        return resolveMCPOAuthRedirectUri(tenantIdFromParams(params)).catch(() => undefined);
+        // Show nothing when a direct flow would be refused (no workspace
+        // address yet), so an admin never allowlists a URL no flow will use.
+        const tenantId = tenantIdFromParams(params);
+        try {
+          await resolveMcpOAuthReturnUrl(tenantId);
+          return await resolveMCPOAuthRedirectUri(tenantId);
+        } catch {
+          return undefined;
+        }
       },
       listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
       // Readiness is advisory and may not open credential material merely to
@@ -6218,6 +6226,20 @@ export async function registerMCPServices(
         await runWithinOAuthAuthority(assertRequestAuthority, () =>
           resolveMCPOAuthRedirectUri(tenantId)
         );
+        // A direct (non-relay) flow finishes on its workspace UI; refuse here,
+        // before discovery, when that address is unknown. A relay recipe, or
+        // a recipe the flow helper will refuse on its own, skips this.
+        const startRelayIssuer =
+          oauthRelay && savedServer
+            ? await runWithinOAuthAuthority(assertRequestAuthority, () =>
+                catalogInstallRelayIssuer(savedServer, true)
+              ).catch(() => null)
+            : undefined;
+        if (startRelayIssuer === undefined) {
+          await runWithinOAuthAuthority(assertRequestAuthority, () =>
+            resolveMcpOAuthReturnUrl(tenantId)
+          );
+        }
 
         let probeResponse = await runStartPhase('probe', () =>
           oauthFetch(

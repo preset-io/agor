@@ -521,6 +521,20 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         status: 'pending',
       });
 
+      // Nor can a different user of the SAME workspace.
+      const colleague = await runWithTenantDatabaseScope(dbA, bound.tenantId, (scoped) =>
+        new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          name: 'OAuth colleague',
+        })
+      );
+      await expect(
+        authorityB.claimForUser(bound.tenantId, colleague.user_id as UserID, context.state)
+      ).resolves.toEqual({ outcome: 'not_claimed', flow: null });
+      await expect(authorityA.findForCallback(context.state)).resolves.toMatchObject({
+        status: 'pending',
+      });
+
       await expect(
         authorityB.claimForUser(bound.tenantId, bound.userId, context.state)
       ).resolves.toMatchObject({ outcome: 'claimed' });

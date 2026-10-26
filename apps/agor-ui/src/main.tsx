@@ -5,6 +5,7 @@ import './index.css';
 import { installClipboardPolyfill } from './utils/clipboard-polyfill';
 import { preventIosInputZoom } from './utils/deviceDetection';
 import { captureMcpConnectIntent } from './utils/mcpConnectIntent';
+import { captureMcpOAuthReturn } from './utils/mcpOAuthReturn';
 
 declare global {
   interface Window {
@@ -21,6 +22,9 @@ preventIosInputZoom();
 
 // Before any router can canonicalize the query away.
 captureMcpConnectIntent();
+// Before the auth gate: a signed-out login screen copies the address into its
+// launch `return_to`, which must never carry the provider response.
+captureMcpOAuthReturn();
 
 // Cleanup WebSocket connections on Vite HMR
 if (import.meta.hot) {
