@@ -47,6 +47,7 @@ import {
 } from './marketplaceOAuthLaunch';
 import type { MarketplaceOAuthPopup } from './marketplaceOAuthPopup';
 import { marketplaceCredentialIsUsable } from './marketplacePresentation';
+import { useAddCustomMcpServer } from './useAddCustomMcpServer';
 import { useCatalogReadiness } from './useCatalogReadiness';
 import {
   CATALOG_PAGE_SIZE,
@@ -131,6 +132,8 @@ export interface CatalogTabProps {
   /** Refresh the shared four-tab projection after durable OAuth confirmation. */
   onOpenSession?: (sessionId: SessionID) => void;
   refreshMarketplaceOverview?: () => Promise<unknown>;
+  /** Runs when the "Add custom server" form closes after adding a server. */
+  onCustomServerCreated?: (serverId: string) => void;
 }
 
 const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
@@ -143,6 +146,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   currentUser,
   refreshMarketplaceOverview,
   onOpenSession,
+  onCustomServerCreated,
 }) => {
   const handoff = context?.mode === 'handoff' ? context : undefined;
   const returnTarget = handoff?.returnTo ?? 'the conversation';
@@ -263,6 +267,17 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       memberPolicy.canConfigure,
     ]
   );
+  const addCustom = useAddCustomMcpServer({
+    client,
+    currentUser,
+    authGeneration,
+    capability: connectCapability,
+    policyState: { pending: policyPending, hint: policyPendingHint },
+    onClose: (created) => {
+      void refreshMarketplaceOverview?.();
+      if (created) onCustomServerCreated?.(created.mcp_server_id);
+    },
+  });
   const operationGuard = useAuthorityOperationGuard(
     active && connectionReady && currentUser?.user_id && currentUser.role && !policyPending
       ? [
@@ -840,6 +855,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           onCapabilityChange={onCapabilityChange}
           onSortChange={onSortChange}
           matchSummary={matchSummary}
+          action={addCustom.button}
         />
       </div>
 
@@ -886,7 +902,16 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         // nothing filtering there is nothing to have excluded, so an empty read
         // means the daemon could not read its catalog at all.
         isFilterActive(filters) ? (
-          <Empty description="No servers match" />
+          <Empty
+            description={
+              <Flex vertical>
+                <span>No servers match</span>
+                <span>Can't find it? Add a custom server.</span>
+              </Flex>
+            }
+          >
+            {addCustom.button}
+          </Empty>
         ) : (
           <Empty description="No servers in the catalog yet">
             <Button onClick={retry}>Check again</Button>
@@ -909,6 +934,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       )}
 
       {drawers}
+      {addCustom.modal}
     </Flex>
   );
 };

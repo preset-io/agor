@@ -91,7 +91,7 @@ describe('MCP Catalog real Chromium flows', () => {
     await userEvent.click(within(disclosure).getByRole('button', { name: 'Open MCP Catalog' }));
     expect(screen.queryByRole('dialog', { name: 'Session MCP servers' })).not.toBeInTheDocument();
     let modal = await findCatalogModal();
-    await activateTab(/Sessions/);
+    await activateTab(/My Servers/);
     await userEvent.click(within(modal).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(trigger).toHaveFocus());
     await userEvent.keyboard('{Enter}');
@@ -148,27 +148,6 @@ describe('MCP Catalog real Chromium flows', () => {
     expect(document.querySelector('.ant-drawer')).toBeNull();
     expect(api.listenerCount()).toBe(0);
     expect(api.connect).toHaveBeenCalledOnce();
-  });
-
-  it('Sessions tab handoff also tears down the owner', async () => {
-    const api = makeCatalogClient();
-    render(<CatalogHarness client={api.client} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Open MCP Catalog' }));
-    const modal = await findCatalogModal();
-    await screen.findByRole('button', { name: 'Open DeepWiki' });
-    await waitFor(() =>
-      expect(modal.getAnimations().some((animation) => animation.playState === 'running')).toBe(
-        false
-      )
-    );
-    await activateTab(/Sessions/);
-    const destination = await screen.findByRole('button', {
-      name: 'Open session Catalog destination',
-    });
-    await userEvent.click(destination);
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(api.listenerCount()).toBe(0);
-    await waitFor(() => expect(screen.getByTestId('route').textContent).toMatch(/^\/s\//));
   });
 
   it.each(['/catalog/sessions', '/marketplace/credentials'])(

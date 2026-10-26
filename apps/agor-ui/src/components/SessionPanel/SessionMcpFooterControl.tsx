@@ -1,7 +1,7 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
 import { ROLES } from '@agor-live/client';
 import { ApiOutlined, ShopOutlined } from '@ant-design/icons';
-import { Tag as AntTag, Button, Flex, Space, Tooltip, Typography, theme } from 'antd';
+import { Tag as AntTag, Button, Flex, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
 import { useMCPCatalogModal } from '@/contexts/MCPCatalogModalContext';
@@ -289,15 +289,14 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
               Session MCP servers
             </Typography.Text>
             {catalog && (
-              <Tooltip title="Open MCP Catalog">
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<ShopOutlined />}
-                  aria-label="Open MCP Catalog"
-                  onClick={handleBrowseCatalog}
-                />
-              </Tooltip>
+              <Button
+                size="small"
+                icon={<ShopOutlined />}
+                aria-label="Open MCP Catalog"
+                onClick={handleBrowseCatalog}
+              >
+                Browse catalog
+              </Button>
             )}
           </Flex>
           <Typography.Paragraph type="secondary" style={{ margin: `${token.sizeUnit}px 0 0` }}>

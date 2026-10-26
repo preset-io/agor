@@ -57,6 +57,33 @@ describe('MCPServerFormFields OAuth start', () => {
     expect(screen.queryByText('Installation ownership')).not.toBeInTheDocument();
   });
 
+  it.each([
+    { values: { oauth_mode: 'per_user' }, shown: false },
+    { values: {}, shown: false },
+    { values: { oauth_mode: 'shared' }, shown: true },
+    { values: { oauth_mode: 'per_user', headers: '{"X-Api-Key":"k"}' }, shown: true },
+  ])('shared OAuth with $values shows the credential warning: $shown', ({ values, shown }) => {
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form} initialValues={values}>
+          <MCPServerFormFields
+            mode="edit"
+            savedOwnership="shared"
+            transport="http"
+            authType="oauth"
+            form={form}
+            client={null}
+            authorityKey="admin:1"
+            onPrepareOAuthStart={vi.fn()}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(screen.queryByText('Shared configuration can share credentials') !== null).toBe(shown);
+  });
+
   it.each(['create', 'edit'] as const)('explains private/global reach in %s mode', (mode) => {
     const Harness = () => {
       const [form] = Form.useForm();

@@ -183,16 +183,13 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const reducedMotion = usePrefersReducedMotion();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
-  // Role gate — MCP Servers and Gateway Channels are global admin-managed
-  // configuration (credentials, webhook URLs, env vars). The daemon enforces
-  // ADMIN role on writes for both services (see register-hooks.ts); hiding
-  // the menu entries here avoids showing members a tab where every action
-  // would 403.
+  // Role gate — Gateway Channels are global admin-managed configuration
+  // (credentials, webhook URLs). The daemon enforces ADMIN role on writes (see
+  // register-hooks.ts); hiding the menu entry here avoids showing members a tab
+  // where every action would 403.
   //
-  // The MCP Servers tab is offered to everyone. What a member may do there is
-  // the tenant's `mcp_member_policy`, which members may read precisely so a
-  // refusal is legible to the person it refuses; the tab shows them that
-  // policy and the servers they can already use.
+  // MCP servers are not configured here at all: everyone manages them in the
+  // MCP Catalog's My Servers tab, under the tenant's `mcp_member_policy`.
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
   // The daemon serves the user roster to members

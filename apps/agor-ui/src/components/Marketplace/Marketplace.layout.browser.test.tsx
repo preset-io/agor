@@ -31,7 +31,6 @@ import {
 } from './marketplaceLayout';
 import { marketplaceCredentialPresentation } from './marketplacePresentation';
 import { ServerSettingsDrawer } from './ServerSettingsDrawer';
-import { SessionsTab } from './SessionsTab';
 
 // Themed toasts read the antd App context, as in production.
 const render = (ui: React.ReactElement, options?: RenderOptions) =>
@@ -310,61 +309,6 @@ describe('Catalog responsive layout (real browser)', () => {
     );
     expect(rect.left).toBeGreaterThanOrEqual(-1);
     expect(rect.right).toBeLessThanOrEqual(window.innerWidth + 1);
-  });
-
-  it('uses two session-card columns only on wide screens', () => {
-    const sessionOverview = {
-      servers: [],
-      credentials: [],
-      attachments: [
-        {
-          session_id: 'session-1',
-          mcp_server_id: 'server-1',
-          enabled: true,
-          added_at: '2026-08-21T12:34:56.000Z',
-          session_title: 'First session',
-          session_status: 'idle',
-          agentic_tool: 'claude-code',
-          branch_id: 'branch-1',
-          branch_name: 'main',
-        },
-        {
-          session_id: 'session-2',
-          mcp_server_id: 'server-2',
-          enabled: true,
-          added_at: '2026-08-21T12:34:56.000Z',
-          session_title: 'Second session',
-          session_status: 'idle',
-          agentic_tool: 'claude-code',
-          branch_id: 'branch-1',
-          branch_name: 'main',
-        },
-      ],
-      generated_at: '2026-08-21T12:34:56.000Z',
-    } as unknown as MCPMarketplaceOverview;
-    render(
-      <MemoryRouter>
-        <SessionsTab
-          client={null}
-          authorityKey={null}
-          overview={sessionOverview}
-          loading={false}
-          error={null}
-          refresh={vi.fn(async () => undefined)}
-        />
-      </MemoryRouter>
-    );
-
-    const card = screen.getByText('First session').closest('.ant-card') as HTMLElement | null;
-    const column = card?.parentElement as HTMLElement | null;
-    const row = column?.parentElement as HTMLElement | null;
-    expect(column && row).toBeTruthy();
-    if (!column || !row) return;
-    const expectedFraction = window.innerWidth >= 992 ? 1 / 2 : 1;
-    expect(column.getBoundingClientRect().width / row.getBoundingClientRect().width).toBeCloseTo(
-      expectedFraction,
-      1
-    );
   });
 
   it('keeps the primary Credentials action directly reachable on a phone', async () => {
