@@ -29,7 +29,7 @@ import {
 import { sanitizeDbError } from '../sanitize-error';
 // This repository is intentionally PostgreSQL-only. Import the concrete table
 // rather than the dialect union so tenant_id remains part of the static type.
-import { mcpOauthPendingFlows } from '../schema.postgres';
+import { mcpOauthPendingFlows, users } from '../schema.postgres';
 import { assertAuthorityFailureCode, lockTenantAuthoritySubject } from './authority-primitives';
 import { RepositoryError } from './base';
 
@@ -227,6 +227,21 @@ export class MCPOAuthPendingFlowRepository {
       // indexes remain the final invariant; this lock makes simultaneous
       // starts deterministic rather than returning a uniqueness race.
       await this.lockGrantSubject(input);
+      // Lock order: subject advisory lock -> initiating user KEY SHARE ->
+      // pending-flow rows, as in UserMCPOAuthTokenRepository.saveToken().
+      // DELETE users locks the user before its FK cascade reaches these rows,
+      // so taking the user first (rather than via the insert's FK check after
+      // the supersede UPDATE) avoids a user/child-row inversion. A committed
+      // deletion fails closed here, as the FK check would.
+      const initiator = await executeRaw(
+        this.db,
+        sql`SELECT user_id FROM ${users}
+            WHERE user_id = ${input.userId} AND tenant_id = ${input.tenantId}
+            FOR KEY SHARE`
+      );
+      if (rawRows(initiator).length !== 1) {
+        throw new RepositoryError('MCP OAuth initiating user is no longer available');
+      }
       // Latest attempt wins for a grant subject. An older exchange may already
       // have consumed a provider code, so it becomes ambiguous rather than
       // replayable. No terminal row retains sealed material.
