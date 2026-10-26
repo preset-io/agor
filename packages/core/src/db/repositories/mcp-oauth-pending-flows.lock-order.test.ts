@@ -14,7 +14,7 @@ describe('MCP OAuth pending-flow create() lock order', () => {
     const positions = [
       body.indexOf('await this.lockGrantSubject(input);'),
       body.indexOf('FOR KEY SHARE'),
-      body.indexOf('UPDATE ${mcpOauthPendingFlows}'),
+      body.search(/UPDATE \$\{mcpOauthPendingFlows\}/),
       body.indexOf('await insert(this.db, mcpOauthPendingFlows)'),
     ];
     expect(start).toBeGreaterThan(-1);
