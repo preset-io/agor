@@ -26,6 +26,7 @@ import {
   sessions,
   shortId,
 } from '@agor/core/db';
+import { NotAuthenticated } from '@agor/core/feathers';
 import type { SessionID, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, vi } from 'vitest';
@@ -226,6 +227,18 @@ describe('generateSessionToken', () => {
       generateSessionToken(makeApp(), sessionId, 'u1' as UserID, reader)
     );
     expect(epochReads.calls.at(-1)).toEqual([db, 'tenant-a', reader]);
+  });
+
+  dbTest('mints nothing for a caller credential from another generation', async ({ db }) => {
+    initTestMcpTokens(db);
+    const sessionId = await seedSession(db);
+    const stale = { payload: { tenant_credential_epoch: 'a'.repeat(64) } };
+    const mint = (credential: { payload: unknown }) =>
+      runWithTenantContext('tenant-a', () =>
+        generateSessionToken(makeApp(), sessionId, 'u1' as UserID, undefined, credential)
+      );
+    await expect(mint(stale)).rejects.toBeInstanceOf(NotAuthenticated);
+    await expect(mint({ payload: {} })).resolves.toEqual(expect.any(String));
   });
 
   dbTest('uses a custom configured static tenant without ambient scope', async ({ db }) => {

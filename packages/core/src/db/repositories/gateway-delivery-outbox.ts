@@ -515,6 +515,37 @@ export async function claimWithLease(
   return null;
 }
 
+/** Move an unclaimed due row's next attempt out without claiming it, so a held row leaves discovery. */
+export async function deferDue(
+  outbox: DeliveryOutbox,
+  db: Database,
+  input: { deliveryId: string; delayMs: number; now?: Date }
+): Promise<boolean> {
+  if (!Number.isSafeInteger(input.delayMs) || input.delayMs < 1) {
+    throw new RepositoryError(`${outbox.label} deferral must be a positive integer`);
+  }
+  return runDatabaseTransaction(
+    db,
+    async (tx) => {
+      const row = await lockAndLoad(outbox, db, tx, input.deliveryId);
+      if (!row) return false;
+      const now = await rowClock(outbox, tx, input.deliveryId, input.now);
+      const lapsed =
+        row.status === 'processing' &&
+        (!row.claim_expires_at || new Date(row.claim_expires_at) <= now);
+      if (new Date(row.next_attempt_at) > now || !(row.status === 'pending' || lapsed)) {
+        return false;
+      }
+      await update(tx, outbox.table)
+        .set({ next_attempt_at: new Date(now.getTime() + input.delayMs), updated_at: now })
+        .where(byId(outbox, input.deliveryId))
+        .run();
+      return true;
+    },
+    { sqliteImmediate: true }
+  );
+}
+
 /** Reload a claim in a short tenant transaction before provider work. */
 export async function reloadClaim(
   outbox: DeliveryOutbox,

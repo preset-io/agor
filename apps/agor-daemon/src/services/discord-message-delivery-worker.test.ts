@@ -112,6 +112,12 @@ class FakeDeliveryRepository {
       : [];
   }
 
+  async deferDue(deliveryId: DiscordMessageDeliveryID, delayMs: number, now = new Date()) {
+    if (deliveryId !== this.row.delivery_id) return false;
+    this.row = { ...this.row, next_attempt_at: new Date(now.getTime() + delayMs).toISOString() };
+    return true;
+  }
+
   async claim(
     deliveryId: DiscordMessageDeliveryID,
     claimToken: string,
@@ -630,7 +636,11 @@ describe('DiscordMessageDeliveryWorker', () => {
     await harness.makeWorker().checkOnce();
 
     expect(harness.sendMessage).not.toHaveBeenCalled();
-    expect(harness.repository.row.status).toBe('pending');
+    expect(harness.repository.row).toMatchObject({ status: 'pending', attempt_count: 0 });
+    // Deferred off discovery, so a page of held rows cannot starve other tenants.
+    expect(await harness.repository.findDueRefs(undefined as never, { now: harness.now })).toEqual(
+      []
+    );
   });
 
   it('reclaims a lease after a crash before the provider call', async () => {

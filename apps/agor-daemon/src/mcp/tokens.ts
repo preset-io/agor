@@ -51,6 +51,7 @@ import {
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import {
+  assertTenantCredentialEpochValue,
   readTenantCredentialEpoch,
   type TenantRestrictionReader,
   tenantCredentialEpochClaims,
@@ -219,7 +220,8 @@ export async function generateSessionToken(
   app: Application,
   sessionId: SessionID,
   userId: UserID,
-  readRestriction?: TenantRestrictionReader
+  readRestriction?: TenantRestrictionReader,
+  credential?: { payload: unknown }
 ): Promise<string> {
   const s = requireState();
   const jwtSecret = app.settings.authentication?.secret;
@@ -240,6 +242,8 @@ export async function generateSessionToken(
 
   // Bind the generation current at issuance; a closed tenant or failed read mints nothing.
   const epoch = await readTenantCredentialEpoch(s.db, tenantId, readRestriction);
+  // A caller's JWT must still match: a generation that moved mid-request mints nothing.
+  if (credential) assertTenantCredentialEpochValue(epoch, credential.payload);
   const cacheKey = `${tenantId}:${sessionId}:${userId}:${epoch ?? ''}`;
   const cached = s.tokenCache.get(cacheKey);
   // Keep a buffer so callers never receive a token that is about to expire.
