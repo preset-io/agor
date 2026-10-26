@@ -438,6 +438,33 @@ describe('GatewayChannelsTable Slack create wizard', () => {
     });
   });
 
+  it('resets the channel limit when creation is cancelled', async () => {
+    renderTable(makeClient().client);
+    clickButton(/Add Channel/);
+    await advanceToOptions();
+
+    fireEvent.click(screen.getByText('Limit to specific channels'));
+    await waitFor(() => expect(document.querySelector('#allowed_channel_ids')).not.toBeNull());
+    const idInput = document.querySelector('#allowed_channel_ids') as HTMLInputElement;
+    fireEvent.change(idInput, { target: { value: 'C01LIMIT' } });
+    fireEvent.keyDown(idInput, { key: 'Enter', code: 'Enter', keyCode: 13 });
+    const limitTags = () => document.querySelectorAll('.ant-select-selection-item-content');
+    await waitFor(() => expect(limitTags()).toHaveLength(1));
+
+    clickButton(/^Cancel$/);
+    await waitFor(() => expect(queryButton(/^Discard$/)).toBeDefined());
+    clickButton(/^Discard$/);
+    await waitFor(() => expect(queryButton(/Add Channel/)).toBeDefined());
+    clickButton(/Add Channel/);
+    await advanceToOptions();
+
+    expect(document.querySelector('#slack_limit_channels')).not.toBeChecked();
+    expect(document.querySelector('#allowed_channel_ids')).toBeNull();
+    fireEvent.click(screen.getByText('Limit to specific channels'));
+    await waitFor(() => expect(document.querySelector('#allowed_channel_ids')).not.toBeNull());
+    expect(limitTags()).toHaveLength(0);
+  });
+
   it('runs the connection probe and renders team/bot/notVerifiable honestly', async () => {
     const result = {
       ok: true,

@@ -59,6 +59,17 @@ export const SLACK_SETUP_DEFAULTS = {
 } as const satisfies Omit<SlackWizardOptions, 'appName' | 'botDisplayName' | 'agentTools'>;
 
 /**
+ * Normalize an `allowed_channel_ids` config value (which may be a string,
+ * array, or malformed) into a clean `string[]`. Shared by the connector and
+ * the settings UI, so it lives here rather than in the SDK-bearing connector.
+ */
+export function normalizeAllowedChannelIds(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === 'string');
+  if (typeof raw === 'string' && raw) return [raw];
+  return [];
+}
+
+/**
  * Slack OAuth bot scopes each agent-tool capability requires. The single
  * source of truth tying a capability toggle to the scopes its MCP tool needs:
  * `requiredBotScopes` consumes it, so enabling a capability in the wizard and

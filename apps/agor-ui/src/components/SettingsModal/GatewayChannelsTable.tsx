@@ -13,6 +13,7 @@ import {
 } from '@agor/core/gateway/discord-setup';
 import {
   buildSlackManifest,
+  normalizeAllowedChannelIds,
   requiredBotEvents,
   requiredBotScopes,
   SLACK_APPS_URL,
@@ -1187,13 +1188,6 @@ const SLACK_CREATE_FORM_DEFAULTS: SlackFormDefaults = {
   outbound_enabled: SLACK_SETUP_DEFAULTS.outbound,
 };
 
-/** Mirrors the connector, which also accepts a whitelist persisted as one string. */
-function normalizeSlackChannelIds(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw.filter((id): id is string => typeof id === 'string');
-  if (typeof raw === 'string' && raw) return [raw];
-  return [];
-}
-
 /** The whitelist applies only while "Limit to specific channels" is checked. */
 function slackAllowedChannelIds(values: Record<string, unknown>): string[] {
   if (values.slack_limit_channels === false) return [];
@@ -1305,7 +1299,7 @@ const SlackListeningFields: React.FC<{ defaults?: SlackFormDefaults }> = ({ defa
         <SlackOptionCheckbox
           name="slack_limit_channels"
           label="Limit to specific channels"
-          caption="Applies to channels and group DMs, outbound sends, agent posts, file downloads, and channel history reads. Direct messages still reach the bot."
+          caption="Applies to channels, group DMs, outbound sends, agent posts, file downloads, and whole-conversation history reads. DMs are exempt everywhere except whole-conversation history reads."
           defaults={defaults}
         />
         {limitChannels && (
@@ -2543,7 +2537,7 @@ const ChannelFormFields: React.FC<{
   // falling back to the stored channel name.
   const channelName = (Form.useWatch('name', form) as string | undefined) ?? editingChannel?.name;
 
-  const storedAllowedChannelIds = normalizeSlackChannelIds(slackConfig?.allowed_channel_ids);
+  const storedAllowedChannelIds = normalizeAllowedChannelIds(slackConfig?.allowed_channel_ids);
   const limitSlackChannels = Boolean(
     Form.useWatch('slack_limit_channels', form) ?? storedAllowedChannelIds.length > 0
   );
@@ -4816,7 +4810,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.enable_mpim = config?.enable_mpim ?? false;
       formValues.require_mention = true;
       formValues.align_slack_users = config?.align_slack_users ?? false;
-      formValues.allowed_channel_ids = normalizeSlackChannelIds(config?.allowed_channel_ids);
+      formValues.allowed_channel_ids = normalizeAllowedChannelIds(config?.allowed_channel_ids);
       formValues.slack_limit_channels = (formValues.allowed_channel_ids as string[]).length > 0;
       formValues.outbound_enabled = config?.outbound_enabled ?? false;
       formValues.default_outbound_target = config?.default_outbound_target;

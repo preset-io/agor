@@ -1323,7 +1323,7 @@ const slackManifestGenerateSchema = z.strictObject({
     .array(z.string().min(1))
     .optional()
     .describe(
-      'Slack channel ID whitelist for public channels, private channels, and group DMs, also applied to outbound sends, agent posts, file downloads, and channel history reads (DM history included); inbound DMs are never limited. Maps to config.allowed_channel_ids when you call agor_gateway_channels_create; it does NOT change the manifest scopes or events.'
+      'Slack channel ID whitelist for public channels, private channels, and group DMs, also applied to outbound sends, agent posts, file downloads, and whole-conversation history reads. DMs are exempt everywhere except whole-conversation history reads; thread history follows the thread mapping instead. Maps to config.allowed_channel_ids when you call agor_gateway_channels_create; it does NOT change the manifest scopes or events.'
     ),
 });
 

@@ -111,6 +111,7 @@ export type {
 } from './connectors/slack-manifest';
 export {
   buildSlackManifest,
+  normalizeAllowedChannelIds,
   requiredBotEvents,
   requiredBotScopes,
   SLACK_AGENT_TOOL_SCOPES,
