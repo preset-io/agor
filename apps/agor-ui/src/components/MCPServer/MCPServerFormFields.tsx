@@ -28,6 +28,7 @@ import { useThemedMessage } from '@/utils/message';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { CompactNotice, type CompactNoticeProps } from '../CompactNotice';
 import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
+import { MCPOAuthRedirectUri } from './MCPOAuthRedirectUri';
 import { describeMissingForOAuth, missingMCPFieldLabels } from './mcp-form-requirements';
 import {
   extractOAuthConfigForTesting,
@@ -633,6 +634,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               <Select.Option value="oauth">OAuth 2.1</Select.Option>
             </Select>
           </Form.Item>
+
+          {authType === 'oauth' && <MCPOAuthRedirectUri client={client} />}
 
           {authType === 'bearer' && (
             <Form.Item

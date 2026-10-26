@@ -3924,6 +3924,13 @@ describe('SQLite saved-row OAuth authority', () => {
             harness.app.service('mcp-catalog/readiness').get(catalogEntry.name, paramsFor(harness))
           )) as { redirect_uri?: string }
         ).redirect_uri;
+      // The custom server form reads the same callback from oauth-status.
+      const statusRedirect = async () =>
+        (
+          (await runWithTenantDatabaseScope(harness.db, 'default', () =>
+            harness.app.service('mcp-servers/oauth-status').find(paramsFor(harness))
+          )) as { redirect_uri?: string }
+        ).redirect_uri;
 
       // Refused before any provider contact: no probe, discovery, DCR or
       // authorization. The drawer shows no callback no flow would use.
@@ -3933,6 +3940,7 @@ describe('SQLite saved-row OAuth authority', () => {
       });
       expect(provider.requests).toEqual([]);
       expect(await readinessRedirect()).toBeUndefined();
+      expect(await statusRedirect()).toBeUndefined();
 
       // Once a verified launch records the workspace origin, the callback
       // hands off to it, never to the cell origin or the request host.
@@ -3943,6 +3951,9 @@ describe('SQLite saved-row OAuth authority', () => {
         })
       );
       expect(await readinessRedirect()).toBe(
+        'https://tenant-a.example.test/mcp-servers/oauth-callback'
+      );
+      expect(await statusRedirect()).toBe(
         'https://tenant-a.example.test/mcp-servers/oauth-callback'
       );
       const started = await start();
@@ -5902,9 +5913,9 @@ describe('SQLite saved-row OAuth authority', () => {
         user: b,
         connection: undefined,
       };
-      expect(await harness.app.service('mcp-servers/oauth-status').find(statusParams)).toEqual({
-        authenticated_server_ids: [],
-      });
+      expect(
+        await harness.app.service('mcp-servers/oauth-status').find(statusParams)
+      ).toMatchObject({ authenticated_server_ids: [] });
     }
   );
 
@@ -6294,6 +6305,28 @@ describe('per-workspace direct OAuth callback', () => {
     expect((await storedGrant(harness))?.oauth_redirect_uri).toBe(WORKSPACE_CALLBACK);
   });
 
+  it("tells the custom server form its own workspace's callback", async () => {
+    const provider = await createTestProvider({ serveDynamicRegistration: true });
+    providers.push(provider);
+    const harness = await createCatalogHarness(provider, hostedConfig);
+    const statusRedirect = async () =>
+      (
+        (await harness.app.service('mcp-servers/oauth-status').find(paramsFor(harness))) as {
+          redirect_uri?: string;
+        }
+      ).redirect_uri;
+
+    // Without routing a new flow uses the startup callback, so that is shown;
+    // another workspace's routing is never used for this one.
+    expect(await statusRedirect()).toBe(CELL_CALLBACK);
+    await observeLaunch(harness, 'globex', 'https://globex.example.test');
+    expect(await statusRedirect()).toBe(CELL_CALLBACK);
+    await observeLaunch(harness, 'default', 'https://acme.example.test');
+    expect(await statusRedirect()).toBe(WORKSPACE_CALLBACK);
+    // Matches what the next flow actually registers.
+    expect((await connect(harness)).searchParams.get('redirect_uri')).toBe(WORKSPACE_CALLBACK);
+  });
+
   it('ignores tenant routing on a static (self-hosted) deployment', async () => {
     const provider = await createTestProvider({ serveDynamicRegistration: true });
     providers.push(provider);
@@ -6303,5 +6336,8 @@ describe('per-workspace direct OAuth callback', () => {
     const authorizationUrl = await connect(harness);
     expect(authorizationUrl.searchParams.get('redirect_uri')).toBe(CELL_CALLBACK);
     expect(tokenRedirectUris(provider, 'authorization_code')).toEqual([CELL_CALLBACK]);
+    expect(
+      await harness.app.service('mcp-servers/oauth-status').find(paramsFor(harness))
+    ).toMatchObject({ redirect_uri: CELL_CALLBACK });
   });
 });

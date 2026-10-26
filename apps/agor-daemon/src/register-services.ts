@@ -2463,6 +2463,20 @@ export async function registerMCPServices(
     return callbackUrl;
   }
 
+  /**
+   * The direct callback to show an admin, or undefined when a direct flow
+   * would be refused (no workspace address yet), so nobody allowlists a URL
+   * no flow will use.
+   */
+  async function displayMCPOAuthRedirectUri(tenantId: string | undefined) {
+    try {
+      await resolveMcpOAuthReturnUrl(tenantId);
+      return await resolveMCPOAuthRedirectUri(tenantId);
+    } catch {
+      return undefined;
+    }
+  }
+
   type OAuthBrowserReservationClaim = {
     reservationToken: string;
     /** Immutable deadline retained after the one-shot map entry is consumed. */
@@ -4672,15 +4686,7 @@ export async function registerMCPServices(
         // The direct callback: a customer app's without the relay, or the one a
         // provider admin allowlists (the flow itself is unchanged).
         if (!entry.oauth?.configured_client && !entry.oauth?.redirect_allowlist) return undefined;
-        // Show nothing when a direct flow would be refused (no workspace
-        // address yet), so an admin never allowlists a URL no flow will use.
-        const tenantId = tenantIdFromParams(params);
-        try {
-          await resolveMcpOAuthReturnUrl(tenantId);
-          return await resolveMCPOAuthRedirectUri(tenantId);
-        } catch {
-          return undefined;
-        }
+        return displayMCPOAuthRedirectUri(tenantIdFromParams(params));
       },
       listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
       // Readiness is advisory and may not open credential material merely to
@@ -6999,6 +7005,11 @@ export async function registerMCPServices(
     async find(params?: AuthenticatedParams) {
       const userId = params?.user?.user_id;
       if (!userId) return { authenticated_server_ids: [] };
+      // The callback a custom server's direct flow would register, for the
+      // server form to show; omitted when none can be resolved.
+      const redirect = displayMCPOAuthRedirectUri(tenantIdFromParams(params)).then(
+        (redirect_uri) => (redirect_uri ? { redirect_uri } : {})
+      );
       try {
         const userTokenRepo = new UserMCPOAuthTokenRepository(db);
         const serverRepo = new MCPServerRepository(db);
@@ -7011,10 +7022,10 @@ export async function registerMCPServices(
           isGrantBoundToServer: (server, grant) =>
             isMCPOAuthGrantAuthorizedForServer(db, server, grant),
         });
-        return { authenticated_server_ids: authenticatedServerIds };
+        return { authenticated_server_ids: authenticatedServerIds, ...(await redirect) };
       } catch (error) {
         externalFailure('OAuth Status', 'oauth', error);
-        return { authenticated_server_ids: [] };
+        return { authenticated_server_ids: [], ...(await redirect) };
       }
     },
   });

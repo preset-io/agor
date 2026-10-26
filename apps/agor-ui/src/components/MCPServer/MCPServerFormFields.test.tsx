@@ -463,3 +463,51 @@ describe('MCPServerFormFields Test Authentication results', () => {
     expect(showError).not.toHaveBeenCalled();
   });
 });
+
+describe('MCPServerFormFields OAuth callback URL', () => {
+  const CALLBACK = 'https://cell.example.test/mcp-servers/oauth-callback';
+  const renderWith = (authType: 'oauth' | 'bearer', status: Record<string, unknown>) => {
+    const find = vi.fn().mockResolvedValue(status);
+    const client = {
+      service: vi.fn((path: string) =>
+        path === 'mcp-servers/oauth-status' ? { find } : { create: vi.fn() }
+      ),
+    } as unknown as AgorClient;
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form} initialValues={{ auth_type: authType }}>
+          <MCPServerFormFields
+            mode="create"
+            transport="http"
+            authType={authType}
+            form={form}
+            client={client}
+            authorityKey="admin:1"
+            onPrepareOAuthStart={vi.fn()}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    return find;
+  };
+
+  it('shows the daemon-resolved callback for OAuth', async () => {
+    renderWith('oauth', { authenticated_server_ids: [], redirect_uri: CALLBACK });
+    expect(await screen.findByText(CALLBACK)).toBeInTheDocument();
+    expect(screen.getByText('Add this redirect URL to your OAuth app.')).toBeInTheDocument();
+  });
+
+  it('shows nothing when the daemon resolves no callback', async () => {
+    const find = renderWith('oauth', { authenticated_server_ids: [] });
+    await waitFor(() => expect(find).toHaveBeenCalled());
+    expect(screen.queryByText('Callback URL')).not.toBeInTheDocument();
+  });
+
+  it('does not ask for or show a callback for other auth types', () => {
+    const find = renderWith('bearer', { authenticated_server_ids: [], redirect_uri: CALLBACK });
+    expect(find).not.toHaveBeenCalled();
+    expect(screen.queryByText(CALLBACK)).not.toBeInTheDocument();
+  });
+});
