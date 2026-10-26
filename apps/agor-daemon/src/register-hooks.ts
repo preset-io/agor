@@ -535,6 +535,7 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'mcp-servers/oauth-disconnect',
   'mcp-servers/oauth-client-registration-reset',
   'mcp-servers/oauth-status',
+  'mcp-servers/oauth-redirect-uri',
   'mcp-catalog/readiness',
   'mcp-marketplace',
   'mcp-marketplace/remove-unattached',

@@ -1,4 +1,4 @@
-import type { MCPOAuthStatusResult } from '@agor/core/types';
+import type { MCPOAuthRedirectUriResult } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { Form, Typography } from 'antd';
 import { useEffect, useState } from 'react';
@@ -15,11 +15,11 @@ export function MCPOAuthRedirectUri({ client }: { client: AgorClient | null }) {
     setRedirectUri(undefined);
     if (!client) return;
     let current = true;
-    // Any failure, sync or async, shows nothing rather than a guessed URL.
-    Promise.resolve()
-      .then(() => client.service('mcp-servers/oauth-status').find())
-      .then((status) => {
-        if (current) setRedirectUri((status as Partial<MCPOAuthStatusResult>)?.redirect_uri);
+    client
+      .service('mcp-servers/oauth-redirect-uri')
+      .find()
+      .then((result) => {
+        if (current) setRedirectUri((result as MCPOAuthRedirectUriResult)?.redirect_uri);
       })
       .catch(() => {});
     return () => {
@@ -29,7 +29,10 @@ export function MCPOAuthRedirectUri({ client }: { client: AgorClient | null }) {
 
   if (!redirectUri) return null;
   return (
-    <Form.Item label="Callback URL" extra="Add this redirect URL to your OAuth app.">
+    <Form.Item
+      label="Callback URL"
+      extra="If you register an OAuth app or the provider requires an allowlist, allow this redirect URL."
+    >
       <Typography.Text code copyable>
         {redirectUri}
       </Typography.Text>

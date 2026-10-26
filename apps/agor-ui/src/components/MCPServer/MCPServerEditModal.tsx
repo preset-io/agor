@@ -666,6 +666,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
             }
             formRevision={formRevision}
             managedOAuthCompatibilityMode={managedOAuthCompatibilityMode}
+            catalogInstall={target?.source === 'catalog'}
           />
         </Form>
       </Modal>

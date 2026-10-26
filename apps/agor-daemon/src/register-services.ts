@@ -131,6 +131,7 @@ import type {
   MCPOAuthDCRMode,
   MCPOAuthEffectivePolicy,
   MCPOAuthPendingFlowStatus,
+  MCPOAuthRedirectUriResult,
   MCPOAuthRelayCallback,
   MCPOAuthRuntimeCompatibilityMode,
   MCPOAuthStartFailure,
@@ -2468,7 +2469,9 @@ export async function registerMCPServices(
    * would be refused (no workspace address yet), so nobody allowlists a URL
    * no flow will use.
    */
-  async function displayMCPOAuthRedirectUri(tenantId: string | undefined) {
+  async function displayMCPOAuthRedirectUri(
+    tenantId: string | undefined
+  ): Promise<string | undefined> {
     try {
       await resolveMcpOAuthReturnUrl(tenantId);
       return await resolveMCPOAuthRedirectUri(tenantId);
@@ -7005,11 +7008,6 @@ export async function registerMCPServices(
     async find(params?: AuthenticatedParams) {
       const userId = params?.user?.user_id;
       if (!userId) return { authenticated_server_ids: [] };
-      // The callback a custom server's direct flow would register, for the
-      // server form to show; omitted when none can be resolved.
-      const redirect = displayMCPOAuthRedirectUri(tenantIdFromParams(params)).then(
-        (redirect_uri) => (redirect_uri ? { redirect_uri } : {})
-      );
       try {
         const userTokenRepo = new UserMCPOAuthTokenRepository(db);
         const serverRepo = new MCPServerRepository(db);
@@ -7022,14 +7020,25 @@ export async function registerMCPServices(
           isGrantBoundToServer: (server, grant) =>
             isMCPOAuthGrantAuthorizedForServer(db, server, grant),
         });
-        return { authenticated_server_ids: authenticatedServerIds, ...(await redirect) };
+        return { authenticated_server_ids: authenticatedServerIds };
       } catch (error) {
         externalFailure('OAuth Status', 'oauth', error);
-        return { authenticated_server_ids: [], ...(await redirect) };
+        return { authenticated_server_ids: [] };
       }
     },
   });
   app.service('mcp-servers/oauth-status').hooks({ before: { find: [ctx.requireAuth] } });
+
+  // The direct callback a custom (non-Catalog) server's OAuth flow registers
+  // for the caller's workspace, for the server form to show. Omitted when none
+  // can be resolved.
+  app.use('/mcp-servers/oauth-redirect-uri', {
+    async find(params?: AuthenticatedParams): Promise<MCPOAuthRedirectUriResult> {
+      const redirectUri = await displayMCPOAuthRedirectUri(tenantIdFromParams(params));
+      return redirectUri ? { redirect_uri: redirectUri } : {};
+    },
+  });
+  app.service('mcp-servers/oauth-redirect-uri').hooks({ before: { find: [ctx.requireAuth] } });
 
   // Authoritative, user-bound pending-attempt status. The UI polls this after
   // opening the provider page; realtime completion is only a latency hint.
