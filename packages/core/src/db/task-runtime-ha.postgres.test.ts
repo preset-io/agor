@@ -146,6 +146,19 @@ function taskInput(seed: TenantSeed, status: TaskStatus, overrides: Record<strin
 
 describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQL)', () => {
   let db: Database;
+  const applyRestriction = (
+    tenantId: string,
+    revision: number,
+    action: 'restrict' | 'prepare_release' | 'activate'
+  ) =>
+    applyTenantRestrictionIntent(db, tenantId, {
+      version: 1,
+      controllerId: 'control-one',
+      placementId: 'placement-one',
+      operationId: action === 'restrict' ? 'suspend' : 'release',
+      revision,
+      action,
+    });
   let peerDb: Database;
 
   beforeAll(async () => {
@@ -541,15 +554,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
         ]);
       }
     );
-    const apply = (revision: number, action: 'restrict' | 'prepare_release' | 'activate') =>
-      applyTenantRestrictionIntent(db, seed.tenantId, {
-        version: 1,
-        controllerId: 'control-one',
-        placementId: 'placement-one',
-        operationId: action === 'restrict' ? 'suspend' : 'release',
-        revision,
-        action,
-      });
     const claim = (taskId: string) =>
       runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
         new TaskRepository(scoped).claimTermination({
@@ -559,13 +563,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
           requireTenantClosed: true,
         })
       );
-    await apply(1, 'restrict');
+    await applyRestriction(seed.tenantId, 1, 'restrict');
     await expect(claim(closedTask.task_id)).resolves.toMatchObject({
       outcome: 'claimed',
       task: { status: TaskStatus.STOPPING },
     });
-    await apply(2, 'prepare_release');
-    await apply(2, 'activate');
+    await applyRestriction(seed.tenantId, 2, 'prepare_release');
+    await applyRestriction(seed.tenantId, 2, 'activate');
     // A reconciler still holding its closed observation cannot stop the reopened tenant's task.
     await expect(claim(reopenedTask.task_id)).resolves.toMatchObject({
       outcome: 'condition_changed',
@@ -582,18 +586,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
           taskInput(seed, status, status === TaskStatus.QUEUED ? { queue_position: 1 } : {})
         )
       );
-      const apply = (revision: number, action: 'restrict' | 'prepare_release' | 'activate') =>
-        applyTenantRestrictionIntent(db, seed.tenantId, {
-          version: 1,
-          controllerId: 'control-one',
-          placementId: 'placement-one',
-          operationId: action === 'restrict' ? 'suspend' : 'release',
-          revision,
-          action,
-        });
-      await apply(1, 'restrict');
-      await apply(2, 'prepare_release');
-      await apply(2, 'activate');
+      await applyRestriction(seed.tenantId, 1, 'restrict');
+      await applyRestriction(seed.tenantId, 2, 'prepare_release');
+      await applyRestriction(seed.tenantId, 2, 'activate');
       await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
         const tasks = new TaskRepository(scoped);
         expect((await tasks.findById(held.task_id))?.tenant_restriction_hold?.reason).toBe(

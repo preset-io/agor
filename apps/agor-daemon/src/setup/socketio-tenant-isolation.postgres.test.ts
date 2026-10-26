@@ -11,7 +11,6 @@
 import type { Server as HttpServer } from 'node:http';
 import { type AgorClient, createClient } from '@agor/core/api';
 import {
-  applyTenantRestrictionIntent,
   BoardRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -44,6 +43,10 @@ import {
 } from '../auth/runtime-tokens.js';
 import { assertRuntimeTenantAccess, readRequestTenantRestriction } from '../auth/tenant-access.js';
 import { readTenantCredentialEpoch } from '../auth/tenant-credential-epoch.js';
+import {
+  applyTestRestriction,
+  releaseTestRestriction,
+} from '../auth/tenant-restriction.test-support.js';
 import { terminalChannelName } from '../realtime/routing.js';
 import { generateTerminalExecutorToken } from '../utils/spawn-executor.js';
 import { configureChannels, createSocketIOConfig } from './socketio.js';
@@ -486,14 +489,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await expect(watchBoard(clientA, sharedA.board_id)).resolves.toEqual({ ok: true });
       await expect(watchBoard(clientA, sharedB.board_id)).resolves.toEqual({ ok: false });
 
-      await applyTenantRestrictionIntent(db, tenantA, {
-        version: 1,
-        controllerId: 'socket-test',
-        placementId: 'cell-a',
-        operationId: 'suspend',
-        revision: 1,
-        action: 'restrict',
-      });
+      await applyTestRestriction(db, tenantA, 1, 'restrict');
       await expect.poll(() => clientA.io.connected, { timeout: 4000 }).toBe(false);
       expect(clientB.io.connected).toBe(true);
       const rejected = new Promise<Error>((resolve) => clientA.io.once('connect_error', resolve));
@@ -587,18 +583,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         };
 
         const preRestrictionToken = await mintTerminalToken();
-        const intent = (revision: number, action: 'restrict' | 'prepare_release' | 'activate') =>
-          applyTenantRestrictionIntent(db, tenant, {
-            version: 1,
-            controllerId: 'socket-terminal-test',
-            placementId: 'cell-t',
-            operationId: `operation-${revision}`,
-            revision,
-            action,
-          });
-        await intent(1, 'restrict');
-        await intent(2, 'prepare_release');
-        await intent(2, 'activate');
+        await applyTestRestriction(db, tenant, 1, 'restrict');
+        await releaseTestRestriction(db, tenant, 2);
 
         const fresh = connectTerminal(await mintTerminalToken());
         await waitForConnect(fresh);

@@ -715,6 +715,26 @@ describe('weak-network recovery', () => {
   });
 });
 
+const socketToken = () => {
+  const tokenSource = vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
+  return (tokenSource as () => string | null | undefined)();
+};
+const credentialRejection = () =>
+  Object.assign(new Error('Invalid or expired authentication token'), {
+    data: { code: 401, className: 'not-authenticated' },
+  });
+const mockRefresh = (accessToken: string) => {
+  const restClient = { service: vi.fn() };
+  vi.mocked(createRestClient).mockResolvedValue(restClient as never);
+  refreshTokensMock.mockResolvedValue({
+    accessToken,
+    refreshToken: 'next-refresh',
+    user: { user_id: 'u1' },
+  });
+  localStorage.setItem('agor-refresh-token', 'stored-refresh');
+  return restClient;
+};
+
 describe('useAgorClient unavailable handshake', () => {
   const unavailableHandshake = () =>
     Object.assign(new Error('Authentication cannot be verified right now'), {
@@ -770,9 +790,7 @@ describe('useAgorClient unavailable handshake', () => {
       expect(createRestClient).not.toHaveBeenCalled();
       expect(unrecoverable).not.toHaveBeenCalled();
       expect(localStorage.getItem('agor-refresh-token')).toBe('stored-refresh');
-      const tokenSource =
-        vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
-      expect((tokenSource as () => string | null | undefined)()).toBe('kept');
+      expect(socketToken()).toBe('kept');
     } finally {
       window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
     }
@@ -808,28 +826,16 @@ describe('useAgorClient unavailable handshake', () => {
     expect(result.current.error).toBeNull();
     expect(refreshTokensMock).not.toHaveBeenCalled();
     expect(localStorage.getItem('agor-refresh-token')).toBe('stored-refresh');
-    const tokenSource = vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
-    expect((tokenSource as () => string | null | undefined)()).toBe('kept');
+    expect(socketToken()).toBe('kept');
   });
 
   it('still refreshes over REST when a later handshake is a real 401', async () => {
     vi.useFakeTimers();
     const { client, io, rejectNextConnect } = makeSeamClient();
-    const restClient = { service: vi.fn() };
     vi.mocked(createClient).mockReturnValue(client as never);
-    vi.mocked(createRestClient).mockResolvedValue(restClient as never);
-    refreshTokensMock.mockResolvedValue({
-      accessToken: 'fresh-after-401',
-      refreshToken: 'next-refresh',
-      user: { user_id: 'u1' },
-    });
-    localStorage.setItem('agor-refresh-token', 'stored-refresh');
+    const restClient = mockRefresh('fresh-after-401');
     rejectNextConnect(unavailableHandshake());
-    rejectNextConnect(
-      Object.assign(new Error('Invalid or expired authentication token'), {
-        data: { code: 401, className: 'not-authenticated' },
-      })
-    );
+    rejectNextConnect(credentialRejection());
 
     const { result } = renderHook(() =>
       useAgorClient({ url: 'http://daemon.test', accessToken: 'stale', authorityGeneration: 1 })
@@ -841,27 +847,15 @@ describe('useAgorClient unavailable handshake', () => {
     expect(refreshTokensMock).toHaveBeenCalledExactlyOnceWith(restClient, 'stored-refresh');
     expect(io.connect).toHaveBeenCalledTimes(3);
     expect(result.current.connected).toBe(true);
-    const tokenSource = vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
-    expect((tokenSource as () => string | null | undefined)()).toBe('fresh-after-401');
+    expect(socketToken()).toBe('fresh-after-401');
   });
 
   it('backs off without an error when the handshake retried after a refresh is unavailable', async () => {
     vi.useFakeTimers();
     const { client, io, rejectNextConnect } = makeSeamClient();
-    const restClient = { service: vi.fn() };
     vi.mocked(createClient).mockReturnValue(client as never);
-    vi.mocked(createRestClient).mockResolvedValue(restClient as never);
-    refreshTokensMock.mockResolvedValue({
-      accessToken: 'fresh-after-401',
-      refreshToken: 'next-refresh',
-      user: { user_id: 'u1' },
-    });
-    localStorage.setItem('agor-refresh-token', 'stored-refresh');
-    rejectNextConnect(
-      Object.assign(new Error('Invalid or expired authentication token'), {
-        data: { code: 401, className: 'not-authenticated' },
-      })
-    );
+    const restClient = mockRefresh('fresh-after-401');
+    rejectNextConnect(credentialRejection());
     rejectNextConnect(unavailableHandshake());
     const errors: Array<string | null> = [];
 
@@ -884,8 +878,7 @@ describe('useAgorClient unavailable handshake', () => {
     expect(io.connect).toHaveBeenCalledTimes(3);
     expect(result.current.connected).toBe(true);
     expect(errors.every((error) => error === null)).toBe(true);
-    const tokenSource = vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
-    expect((tokenSource as () => string | null | undefined)()).toBe('fresh-after-401');
+    expect(socketToken()).toBe('fresh-after-401');
   });
 });
 
@@ -903,10 +896,10 @@ describe('useAgorClient suspended workspace lifecycle', () => {
     localStorage.clear();
   });
 
-  function renderRestricted() {
+  function renderClient(firstHandshake?: Error) {
     const seam = makeSeamClient();
     vi.mocked(createClient).mockReturnValue(seam.client as never);
-    seam.rejectNextConnect(restrictedHandshake());
+    if (firstHandshake) seam.rejectNextConnect(firstHandshake);
     const rendered = renderHook(() =>
       useAgorClient({
         url: 'http://daemon.test',
@@ -916,57 +909,33 @@ describe('useAgorClient suspended workspace lifecycle', () => {
     );
     return { ...seam, ...rendered };
   }
+  const renderRestricted = () => renderClient(restrictedHandshake());
+  const settle = () => act(() => vi.advanceTimersByTimeAsync(0));
 
-  it('re-probes on the documented schedule instead of reconnecting', () => {
+  it('enters the suspended state, stops the reconnect loop and re-probes at 30s, 1m then 2m', async () => {
+    // A long suspension settles on the 5m ceiling rather than growing unbounded.
     expect([...TENANT_RESTRICTION_PROBE_DELAYS_MS]).toEqual([
       30_000, 60_000, 120_000, 240_000, 300_000,
     ]);
-    // A long suspension settles on the ceiling rather than growing unbounded.
     expect(tenantRestrictionProbeDelay(4)).toBe(300_000);
     expect(tenantRestrictionProbeDelay(99)).toBe(300_000);
-  });
-
-  it('enters the suspended state and stops the reconnect loop', async () => {
     vi.useFakeTimers();
-    const { result, io } = renderRestricted();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    const { result, io, rejectNextConnect } = renderRestricted();
+    await settle();
 
     expect(result.current.tenantRestricted).toBe(true);
     expect(result.current.connected).toBe(false);
-    // Not "reconnecting": the socket is closed on purpose.
+    // Not "reconnecting": the socket is closed on purpose, which alone stops Socket.IO's own retry cadence.
     expect(result.current.connecting).toBe(false);
     expect(result.current.error).toBeNull();
-    // Only closing the socket stops Socket.IO's own retry cadence.
     expect(io.disconnect).toHaveBeenCalled();
-    const connectsOnRejection = io.connect.mock.calls.length;
-
-    // Socket.IO's own 1–5s retry cadence would have fired many times here.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(29_000);
-    });
-    expect(io.connect).toHaveBeenCalledTimes(connectsOnRejection);
-  });
-
-  it('backs off 30s, 1m then 2m while the workspace stays suspended', async () => {
-    vi.useFakeTimers();
-    const { result, io, rejectNextConnect } = renderRestricted();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
     const baseline = io.connect.mock.calls.length;
 
     for (const [index, delay] of [30_000, 60_000, 120_000].entries()) {
       rejectNextConnect(restrictedHandshake());
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(delay - 1);
-      });
+      await act(() => vi.advanceTimersByTimeAsync(delay - 1));
       expect(io.connect).toHaveBeenCalledTimes(baseline + index);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1);
-      });
+      await act(() => vi.advanceTimersByTimeAsync(1));
       expect(io.connect).toHaveBeenCalledTimes(baseline + index + 1);
       expect(result.current.tenantRestricted).toBe(true);
     }
@@ -975,15 +944,11 @@ describe('useAgorClient suspended workspace lifecycle', () => {
   it('leaves the suspended state on the first accepted probe without a refresh', async () => {
     vi.useFakeTimers();
     const { result, create } = renderRestricted();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await settle();
     expect(result.current.tenantRestricted).toBe(true);
 
     // Release recorded by the operator: the next handshake is accepted.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
-    });
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
 
     expect(result.current.tenantRestricted).toBe(false);
     expect(result.current.connected).toBe(true);
@@ -993,55 +958,32 @@ describe('useAgorClient suspended workspace lifecycle', () => {
   it('keeps the slow cadence when a probe fails for an unrelated reason', async () => {
     vi.useFakeTimers();
     const { result, io, rejectNextConnect } = renderRestricted();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await settle();
     const baseline = io.connect.mock.calls.length;
 
     rejectNextConnect(new Error('xhr poll error'));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
-    });
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
     expect(io.connect).toHaveBeenCalledTimes(baseline + 1);
     // An unreachable daemon neither overturns "restricted" nor restores the fast retry.
     expect(result.current.tenantRestricted).toBe(true);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(59_000);
-    });
+    await act(() => vi.advanceTimersByTimeAsync(59_000));
     expect(io.connect).toHaveBeenCalledTimes(baseline + 1);
   });
 
   it('recovers the credential when a probe is rejected rather than staying parked', async () => {
     vi.useFakeTimers();
-    const restClient = { service: vi.fn() };
-    vi.mocked(createRestClient).mockResolvedValue(restClient as never);
-    refreshTokensMock.mockResolvedValue({
-      accessToken: 'fresh-after-release',
-      refreshToken: 'next-refresh',
-      user: { user_id: 'u1' },
-    });
-    localStorage.setItem('agor-refresh-token', 'stored-refresh');
+    const restClient = mockRefresh('fresh-after-release');
     const { result, rejectNextConnect } = renderRestricted();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await settle();
     expect(result.current.tenantRestricted).toBe(true);
 
     // The credential epoch is checked first and moves on restrict, so an old token gets a credential rejection.
-    rejectNextConnect(
-      Object.assign(new Error('Invalid or expired authentication token'), {
-        data: { code: 401, className: 'not-authenticated' },
-      })
-    );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000);
-    });
+    rejectNextConnect(credentialRejection());
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
 
     // Recovery runs instead of parking, and an accepted handshake clears the state.
     expect(refreshTokensMock).toHaveBeenCalledWith(restClient, 'stored-refresh');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await settle();
     expect(result.current.tenantRestricted).toBe(false);
     expect(result.current.connected).toBe(true);
   });
@@ -1053,137 +995,72 @@ describe('useAgorClient suspended workspace lifecycle', () => {
     'keeps probing when $name reports the suspension after a 401 probe',
     async ({ refreshRestricted }) => {
       vi.useFakeTimers();
-      vi.mocked(createRestClient).mockResolvedValue({ service: vi.fn() } as never);
+      mockRefresh('fresh-still-suspended');
       if (refreshRestricted) refreshTokensMock.mockRejectedValue(restrictedHandshake());
-      else
-        refreshTokensMock.mockResolvedValue({
-          accessToken: 'fresh-still-suspended',
-          refreshToken: 'next-refresh',
-          user: { user_id: 'u1' },
-        });
-      localStorage.setItem('agor-refresh-token', 'stored-refresh');
       const { result, io, rejectNextConnect } = renderRestricted();
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      rejectNextConnect(
-        Object.assign(new Error('Invalid or expired authentication token'), {
-          data: { code: 401, className: 'not-authenticated' },
-        })
-      );
+      await settle();
+      rejectNextConnect(credentialRejection());
       if (!refreshRestricted) rejectNextConnect(restrictedHandshake());
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
-      });
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
       expect(refreshTokensMock).toHaveBeenCalledOnce();
       expect(result.current.tenantRestricted).toBe(true);
       expect(result.current.error).toBeNull();
       const afterRecovery = io.connect.mock.calls.length;
 
       // The next probe still fires on the slow schedule; the tab is never parked.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_PROBE_DELAYS_MS[1]!);
-      });
+      await act(() => vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_PROBE_DELAYS_MS[1]!));
       expect(io.connect.mock.calls.length).toBeGreaterThan(afterRecovery);
       expect(result.current.tenantRestricted).toBe(false);
       expect(result.current.connected).toBe(true);
     }
   );
 
-  it('enters the suspended state from a rejected service call', async () => {
-    vi.useFakeTimers();
-    const seam = makeSeamClient();
-    vi.mocked(createClient).mockReturnValue(seam.client as never);
-    const { result } = renderHook(() =>
-      useAgorClient({
-        url: 'http://daemon.test',
-        accessToken: 'access-token',
-        authorityGeneration: 1,
-      })
-    );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(result.current.connected).toBe(true);
+  it.each([403, 401])(
+    'enters the suspended state from a coded %s service-call rejection, never an ordinary one',
+    async (code) => {
+      vi.useFakeTimers();
+      const { result, client, io } = renderClient();
+      await settle();
+      expect(result.current.connected).toBe(true);
 
-    const observeError = vi.mocked(seam.client.hooks).mock.calls[0][0].error[0];
-    act(() => {
-      observeError({
-        error: Object.assign(new Error('Tenant access is restricted'), {
-          code: 403,
-          data: { code: 'tenant_restricted' },
-        }),
+      const observeError = vi.mocked(client.hooks).mock.calls[0][0].error[0];
+      act(() => {
+        observeError({ error: Object.assign(new Error('Not found'), { code: 404 }) });
+        observeError({ error: Object.assign(new Error('Forbidden'), { code: 403 }) });
       });
-    });
+      expect(result.current.tenantRestricted).toBe(false);
+      expect(result.current.connected).toBe(true);
 
-    expect(result.current.tenantRestricted).toBe(true);
-    expect(seam.io.disconnect).toHaveBeenCalled();
-  });
+      act(() => {
+        observeError({
+          error: Object.assign(new Error('Tenant access is restricted'), {
+            code,
+            data: { code: 'tenant_restricted' },
+          }),
+        });
+      });
+      expect(result.current.tenantRestricted).toBe(true);
+      expect(io.disconnect).toHaveBeenCalled();
+    }
+  );
 
   it('enters the suspended state from the coded 401 the credential check raises', async () => {
     // A closed workspace answers JWT paths with a coded 401; like the 403, it must never start a token refresh.
     vi.useFakeTimers();
     localStorage.setItem('agor-refresh-token', 'stored-refresh');
-    const seam = makeSeamClient();
-    vi.mocked(createClient).mockReturnValue(seam.client as never);
-    seam.rejectNextConnect(
+    const { result } = renderClient(
       Object.assign(new Error('Tenant credential cannot be verified'), {
         code: 401,
         className: 'not-authenticated',
         data: { code: 'tenant_restricted' },
       })
     );
-    const { result } = renderHook(() =>
-      useAgorClient({
-        url: 'http://daemon.test',
-        accessToken: 'access-token',
-        authorityGeneration: 1,
-      })
-    );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await settle();
 
     expect(result.current.tenantRestricted).toBe(true);
     expect(result.current.connecting).toBe(false);
     expect(result.current.error).toBeNull();
     expect(refreshTokensMock).not.toHaveBeenCalled();
-
-    const observeError = vi.mocked(seam.client.hooks).mock.calls[0][0].error[0];
-    act(() => {
-      observeError({
-        error: Object.assign(new Error('Tenant credential cannot be verified'), {
-          code: 401,
-          data: { code: 'tenant_restricted' },
-        }),
-      });
-    });
-    expect(result.current.tenantRestricted).toBe(true);
-  });
-
-  it('ignores an ordinary service failure', async () => {
-    vi.useFakeTimers();
-    const seam = makeSeamClient();
-    vi.mocked(createClient).mockReturnValue(seam.client as never);
-    const { result } = renderHook(() =>
-      useAgorClient({
-        url: 'http://daemon.test',
-        accessToken: 'access-token',
-        authorityGeneration: 1,
-      })
-    );
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-
-    const observeError = vi.mocked(seam.client.hooks).mock.calls[0][0].error[0];
-    act(() => {
-      observeError({ error: Object.assign(new Error('Not found'), { code: 404 }) });
-      observeError({ error: Object.assign(new Error('Forbidden'), { code: 403 }) });
-    });
-
-    expect(result.current.tenantRestricted).toBe(false);
-    expect(result.current.connected).toBe(true);
   });
 });
 

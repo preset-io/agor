@@ -6,9 +6,11 @@ import {
   TENANT_RESTRICTED_ERROR_CODE,
 } from '@agor/core/types';
 import {
+  createTenantReadCache,
   isTenantRestrictedRejection,
   TENANT_RESTRICTION_OBSERVATION_MS,
   TENANT_RESTRICTION_READ_TIMEOUT_MS,
+  type TenantReadEntry,
 } from './tenant-access.js';
 import { TENANT_SAFETY_TASK_METHODS } from './tenant-safety-settlement.js';
 
@@ -256,9 +258,8 @@ interface TenantSocketRestrictionMonitorOptions {
 
 /** Bounded per-tenant reads; sockets retire only on a positive observation, and a skipped tenant is read again next tick. */
 export class TenantSocketRestrictionMonitor {
-  private readonly pending = new Map<string, { startedAt: number; read: Promise<void> }>();
-  /** At most one abandoned read per tenant may still be running against the database. */
-  private readonly abandoned = new Map<string, Promise<void>>();
+  /** Shared in-flight read; a read pending past two timeouts is abandoned once, never stacked. */
+  private readonly readFor: (tenantId: string) => TenantReadEntry<void> | undefined;
   /** When each monitored tenant was last handed a read, so sweeps start with the longest-waiting ones. */
   private readonly lastReadAt = new Map<string, number>();
   private lastWarning?: { at: number; suppressed: number };
@@ -266,12 +267,21 @@ export class TenantSocketRestrictionMonitor {
   private readonly slowSweepMs: number;
   private readonly now: () => number;
   constructor(
-    private readonly observe: (tenantId: string) => Promise<void>,
+    observe: (tenantId: string) => Promise<void>,
     options: TenantSocketRestrictionMonitorOptions = {}
   ) {
     this.timeoutMs = options.timeoutMs ?? TENANT_RESTRICTION_READ_TIMEOUT_MS;
     this.slowSweepMs = options.slowSweepMs ?? 10 * TENANT_RESTRICTION_OBSERVATION_MS;
     this.now = options.now ?? (() => performance.now());
+    // Abandoned reads still hold a connection, so they count toward the concurrency bound.
+    this.readFor = createTenantReadCache(
+      (tenantId) => Promise.resolve().then(() => observe(tenantId)),
+      {
+        abandonAfterMs: 2 * this.timeoutMs,
+        maxRunning: TENANT_SOCKET_MONITOR_CONCURRENCY,
+        now: this.now,
+      }
+    );
   }
 
   async check(tenantIds: Iterable<string>): Promise<void> {
@@ -297,7 +307,7 @@ export class TenantSocketRestrictionMonitor {
   }
 
   private async checkOne(tenantId: string): Promise<void> {
-    const read = this.readFor(tenantId);
+    const read = this.readFor(tenantId)?.value;
     if (!read) return this.warn('skipped reason=saturated');
     this.lastReadAt.set(tenantId, this.now());
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -314,33 +324,6 @@ export class TenantSocketRestrictionMonitor {
     ]);
     clearTimeout(timer);
     if (skipped) this.warn(`skipped reason=${skipped}`);
-  }
-
-  /** Shared in-flight read; a read pending past two timeouts is abandoned once, never stacked. */
-  private readFor(tenantId: string): Promise<void> | undefined {
-    const at = this.now();
-    const current = this.pending.get(tenantId);
-    if (current) {
-      const wedged = at - current.startedAt >= 2 * this.timeoutMs;
-      if (!wedged || this.abandoned.has(tenantId)) return current.read;
-      this.pending.delete(tenantId);
-      this.abandoned.set(tenantId, current.read);
-      const forget = () => {
-        if (this.abandoned.get(tenantId) === current.read) this.abandoned.delete(tenantId);
-      };
-      void current.read.then(forget, forget);
-    }
-    // Abandoned reads still hold a connection, so they count toward the concurrency bound.
-    if (this.pending.size + this.abandoned.size >= TENANT_SOCKET_MONITOR_CONCURRENCY)
-      return undefined;
-    const read = Promise.resolve().then(() => this.observe(tenantId));
-    const entry = { startedAt: at, read };
-    this.pending.set(tenantId, entry);
-    const clear = () => {
-      if (this.pending.get(tenantId) === entry) this.pending.delete(tenantId);
-    };
-    void read.then(clear, clear);
-    return read;
   }
 
   private warn(detail: string): void {

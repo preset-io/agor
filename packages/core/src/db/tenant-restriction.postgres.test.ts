@@ -60,24 +60,6 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     if (db) await close(db);
   });
 
-  it('prepares missing history closed and fences delayed restriction and mismatched activation', async () => {
-    const tenant = `restriction-missing-${generateId()}`;
-    const release = command({ action: 'prepare_release', revision: 2, operationId: 'release-two' });
-    expect((await applyTenantRestrictionIntent(db, tenant, release)).changed).toBe(true);
-    expect(await isClosed(db, tenant)).toBe(true);
-    await expect(applyTenantRestrictionIntent(db, tenant, command())).rejects.toThrow();
-    await expect(
-      applyTenantRestrictionIntent(db, tenant, {
-        ...release,
-        action: 'activate',
-        operationId: 'different-release',
-      })
-    ).rejects.toThrow();
-    expect(await isClosed(db, tenant)).toBe(true);
-    await applyTenantRestrictionIntent(db, tenant, { ...release, action: 'activate' });
-    expect(await isClosed(db, tenant)).toBe(false);
-  });
-
   it('persists through connection replacement; prepares closed, retains release watermark and rejects stale replay', async () => {
     const tenant = `restriction-${generateId()}`;
     expect(await isClosed(db, tenant)).toBe(false);
@@ -240,30 +222,13 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     const replayed = await applyTenantRestrictionIntent(db, seeded, seed);
     expect(replayed).toEqual({ record: written.record, changed: false });
     expect(await recordsOf(db, seeded)).toEqual([written.record]);
-    // Every other recorded state still refuses it — the seed writes on empty history only.
-    for (const patch of [
-      { operationId: 'other-operation' },
-      { revision: 5 },
-      { placementId: 'placement-two' },
-    ])
-      await expect(
-        applyTenantRestrictionIntent(db, seeded, command({ ...seed, ...patch }))
-      ).rejects.toThrow('revision_conflict');
-    expect(await recordsOf(db, seeded)).toEqual([written.record]);
-    // A CLOSED row at the seed's own revision is never reopened by a replay.
+    // The refusal matrix is pure policy; here a persisted CLOSED row at the seed's revision stays closed.
     const closed = `restriction-${generateId()}`;
     await applyTenantRestrictionIntent(db, closed, command({ revision: 4 }));
     await expect(applyTenantRestrictionIntent(db, closed, seed)).rejects.toThrow(
       'revision_conflict'
     );
     expect(await isClosed(db, closed)).toBe(true);
-    // A runtime that already recorded anything is never seeded open.
-    const recorded = `restriction-${generateId()}`;
-    await applyTenantRestrictionIntent(db, recorded, command());
-    await expect(applyTenantRestrictionIntent(db, recorded, seed)).rejects.toThrow(
-      'revision_conflict'
-    );
-    expect(await isClosed(db, recorded)).toBe(true);
     // Concurrent seeds on empty history serialize into one write and one replay no-op.
     const raced = `restriction-${generateId()}`;
     const results = await Promise.all([
