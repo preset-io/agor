@@ -4,6 +4,7 @@ import type {
   MCPMarketplaceServer,
   MCPMarketplaceTool,
   MCPMarketplaceToolPermissionResult,
+  SessionID,
 } from '@agor/core/types';
 import type { AgorClient, MCPServer, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
@@ -37,6 +38,8 @@ import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { mcpServerRemoved } from '../../store/agorRealtimeActions';
 import { MCPServerEditModal } from '../MCPServer/MCPServerEditModal';
 import {
+  allowedMcpScopes,
+  allowedMcpTransports,
   canDeleteMcpServer,
   canEditMcpServer,
   canRefreshMcpServer,
@@ -115,6 +118,7 @@ export interface MyServersTabProps {
   error: string | null;
   refresh: () => Promise<unknown>;
   onBrowseCatalog?: () => void;
+  onOpenSession?: (sessionId: SessionID) => void;
   requestedServerId?: string | null;
   onRequestedServerOpened?: () => void;
 }
@@ -131,6 +135,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   error,
   refresh,
   onBrowseCatalog,
+  onOpenSession,
   requestedServerId,
   onRequestedServerOpened,
 }) => {
@@ -157,15 +162,31 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   const policyState = policyPendingState(memberPolicy);
   // A just-added server opens like a requested one once the refreshed overview lists it.
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
+  // Held until the form closes: the drawer must not open over a form mid-OAuth.
+  const addedServerId = useRef<string | null>(null);
   const addCustom = useAddCustomMcpServer({
     client,
     currentUser,
     authGeneration,
     capability,
     policyState,
-    onCreated: (server) => setCreatedServerId(server.mcp_server_id),
-    onClose: () => void refresh(),
+    onCreated: (server) => {
+      addedServerId.current = server.mcp_server_id;
+    },
+    onClose: () => {
+      setCreatedServerId(addedServerId.current);
+      addedServerId.current = null;
+      void refresh();
+    },
   });
+  const offeredTransports = useMemo(
+    () => allowedMcpTransports({ isAdmin: capability.isAdmin }),
+    [capability.isAdmin]
+  );
+  const offeredScopes = useMemo(
+    () => allowedMcpScopes({ isAdmin: capability.isAdmin, policy: capability.policy }),
+    [capability.isAdmin, capability.policy]
+  );
   const closeAddCustom = addCustom.close;
   const authorityFor = useCallback(
     (server: MCPMarketplaceServer) => ({
@@ -270,6 +291,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     setEditingServer(null);
     setEditingApp(null);
     closeAddCustom();
+    addedServerId.current = null;
     setCreatedServerId(null);
     setDiscoveryErrors(new Map());
   }, [active, clearRemovalFocusAuthority, closeAddCustom]);
@@ -357,6 +379,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   );
 
   const selectedAuthority = selectedServer ? authorityFor(selectedServer) : null;
+  // Catalog installs follow their recipe; only custom servers are reconfigured here.
+  const configurable = Boolean(selectedServer && selectedServer.source !== 'catalog');
   const canRefresh = Boolean(
     selectedAuthority && !policyState.pending && canRefreshMcpServer(selectedAuthority, capability)
   );
@@ -850,14 +874,12 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     </Button>
   );
 
-  // Every branch below renders this as the first child of a Flex root, so a
-  // list that appears mid-create (for example, during OAuth) keeps the form.
-  const createModal = addCustom.modal;
-
+  // Every branch below renders `addCustom.modal` as the first child of a Flex
+  // root, so a list that appears mid-create (for example, during OAuth) keeps the form.
   if (error && overview.servers.length === 0)
     return (
       <Flex vertical gap={token.margin}>
-        {createModal}
+        {addCustom.modal}
         <Alert
           type="error"
           showIcon
@@ -870,7 +892,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   if (!loading && overview.servers.length === 0)
     return (
       <Flex vertical gap={token.margin}>
-        {createModal}
+        {addCustom.modal}
         <section
           ref={inventoryFocusTarget}
           tabIndex={-1}
@@ -892,7 +914,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
 
   return (
     <Flex vertical gap={token.margin}>
-      {createModal}
+      {addCustom.modal}
       {error && (
         <Alert
           type="error"
@@ -1058,7 +1080,11 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           selectedServer && busy.has(`credential:${selectedServer.mcp_server_id}`)
         )}
         onEditCredential={
-          selectedCredential && selectedCredential.method !== 'oauth' && selectedServer
+          // Edit configuration opens the same editor; offer one entry point.
+          !configurable &&
+          selectedCredential &&
+          selectedCredential.method !== 'oauth' &&
+          selectedServer
             ? () => void openServerEditor(selectedServer, 'credential')
             : undefined
         }
@@ -1066,11 +1092,11 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           selectedServer && busy.has(`configuration:${selectedServer.mcp_server_id}`)
         )}
         onEditConfiguration={
-          // Catalog installs follow their recipe; only custom servers are reconfigured here.
-          selectedServer && selectedServer.source !== 'catalog'
+          configurable && selectedServer
             ? () => void openServerEditor(selectedServer, 'configuration')
             : undefined
         }
+        onOpenSession={onOpenSession}
         editingOAuthApp={Boolean(
           selectedServer && busy.has(`oauth-app:${selectedServer.mcp_server_id}`)
         )}
@@ -1140,8 +1166,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
             ? `${currentUser.user_id}:${currentUser.role}:${authGeneration}`
             : null
         }
-        offeredTransports={addCustom.offeredTransports}
-        offeredScopes={addCustom.offeredScopes}
+        offeredTransports={offeredTransports}
+        offeredScopes={offeredScopes}
         mutationAllowed={canChangeTools}
         onClose={() => {
           setEditingServer(null);

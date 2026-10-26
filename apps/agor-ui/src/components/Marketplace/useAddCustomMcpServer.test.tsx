@@ -30,7 +30,7 @@ const capability: MCPServerCapabilityContext = {
 };
 
 function Harness(props: Partial<UseAddCustomMcpServerOptions>) {
-  const { button, modal } = useAddCustomMcpServer({
+  const { button, iconButton, modal } = useAddCustomMcpServer({
     client: null,
     currentUser: { user_id: 'alice', role: 'member' } as never,
     authGeneration: 1,
@@ -42,6 +42,7 @@ function Harness(props: Partial<UseAddCustomMcpServerOptions>) {
     <>
       <div data-testid="toolbar">{button}</div>
       <div data-testid="empty">{button}</div>
+      <div data-testid="compact">{iconButton}</div>
       {modal}
     </>
   );
@@ -50,28 +51,25 @@ function Harness(props: Partial<UseAddCustomMcpServerOptions>) {
 const addButtons = () => screen.getAllByRole('button', { name: /Add custom server/ });
 
 describe('useAddCustomMcpServer', () => {
-  it('opens one form from any copy of the button and reports what it created on close', () => {
+  it('opens one form from any copy of the button and reports creation as it happens', () => {
     const onCreated = vi.fn();
     const onClose = vi.fn();
     render(<Harness onCreated={onCreated} onClose={onClose} />);
-    expect(addButtons()).toHaveLength(2);
-    fireEvent.click(addButtons()[1]);
+    // The compact copy is icon-only, named by its aria-label.
+    expect(addButtons()).toHaveLength(3);
+    expect(screen.getByTestId('compact').querySelector('button')).not.toHaveTextContent(
+      'Add custom server'
+    );
+    fireEvent.click(addButtons()[2]);
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
     // Members are held to remote transports.
     expect(screen.getByRole('dialog')).not.toHaveTextContent('stdio');
     fireEvent.click(screen.getByText('create'));
     expect(onCreated).toHaveBeenCalledWith({ mcp_server_id: 'new' });
+    expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('close'));
-    expect(onClose).toHaveBeenCalledWith({ mcp_server_id: 'new' });
+    expect(onClose).toHaveBeenCalledOnce();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-  });
-
-  it('reports no server when the form closes without adding one', () => {
-    const onClose = vi.fn();
-    render(<Harness onClose={onClose} />);
-    fireEvent.click(addButtons()[0]);
-    fireEvent.click(screen.getByText('close'));
-    expect(onClose).toHaveBeenCalledWith(null);
   });
 
   it.each([

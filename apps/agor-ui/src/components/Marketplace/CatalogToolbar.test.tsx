@@ -241,6 +241,19 @@ describe('Marketplace catalog toolbar in a narrow container', () => {
     expect(document.querySelector('.ant-badge-count')).toBeNull();
   });
 
+  it('shows the compact action, not the full one, so search keeps its width', () => {
+    render(
+      <CatalogToolbar
+        {...baseProps}
+        action={<button type="button">Add custom server</button>}
+        compactAction={<button type="button" aria-label="Add custom server" />}
+      />
+    );
+    const add = screen.getByRole('button', { name: 'Add custom server' });
+    expect(add).toBeEmptyDOMElement();
+    expect(screen.getByRole('textbox', { name: 'Search MCP servers' })).toBeVisible();
+  });
+
   it('opens the same filters in a bottom sheet and closes it on Show', async () => {
     const onCategoryChange = vi.fn();
     render(<CatalogToolbar {...baseProps} onCategoryChange={onCategoryChange} />);

@@ -1,7 +1,7 @@
-import type { AgorClient, MCPScope, MCPServer, MCPTransport, User } from '@agor-live/client';
+import type { AgorClient, MCPServer, User } from '@agor-live/client';
 import { PlusOutlined } from '@ant-design/icons';
 import { Button, Tooltip } from 'antd';
-import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useMemo, useState } from 'react';
 import { LOST_CONNECTION_TOOLTIP } from '@/utils/connectionErrors';
 import { MCPServerEditModal } from '../MCPServer/MCPServerEditModal';
 import {
@@ -13,6 +13,8 @@ import {
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
 
+const LABEL = 'Add custom server';
+
 export interface UseAddCustomMcpServerOptions {
   client: AgorClient | null;
   currentUser?: User | null;
@@ -20,17 +22,19 @@ export interface UseAddCustomMcpServerOptions {
   capability: MCPServerCapabilityContext;
   /** From `policyPendingState`: the member policy is not known yet. */
   policyState: { pending: boolean; hint: string };
-  /** Runs as soon as the form adds its row, which may be before the form closes (OAuth). */
+  /**
+   * Runs once, when the form first persists its row: on Create, or before an
+   * OAuth start, so a form cancelled after that still reports the server.
+   */
   onCreated?: (server: MCPServer) => void;
-  /** Runs when the form closes, with the server it added, if any. */
-  onClose?: (created: MCPServer | null) => void;
+  onClose?: () => void;
 }
 
 /**
  * The "Add custom server" button and its create form, behind the same gates as
  * the former Settings > MCP Servers create form. Render `modal` once, somewhere
- * that stays mounted while the form is open; `button` may appear in several
- * places and every copy opens that one form.
+ * that stays mounted while the form is open; `button` (or `iconButton`, for
+ * tight toolbars) may appear in several places and every copy opens that form.
  */
 export function useAddCustomMcpServer({
   client,
@@ -42,11 +46,9 @@ export function useAddCustomMcpServer({
   onClose,
 }: UseAddCustomMcpServerOptions): {
   button: ReactNode;
+  iconButton: ReactNode;
   modal: ReactNode;
   close: () => void;
-  /** What this caller may choose in any server form, not only this one. */
-  offeredTransports: MCPTransport[];
-  offeredScopes: MCPScope[];
 } {
   const canAdd = !policyState.pending && canAddMcpServer(capability);
   const addRestriction = !capability.connectionReady
@@ -65,34 +67,32 @@ export function useAddCustomMcpServer({
     [capability.isAdmin, capability.policy]
   );
   const [open, setOpen] = useState(false);
-  const created = useRef<MCPServer | null>(null);
   const close = useCallback(() => setOpen(false), []);
 
   // Stable across renders, so a memoized host (the Catalog toolbar) stays memoized.
-  const button = useMemo(
-    () =>
-      canAdd ? (
+  const [button, iconButton] = useMemo(() => {
+    const render = (iconOnly: boolean) => {
+      const control = (
         <Button
           icon={<PlusOutlined />}
-          onClick={() => {
-            created.current = null;
-            setOpen(true);
-          }}
+          disabled={!canAdd}
+          aria-label={iconOnly ? LABEL : undefined}
+          onClick={() => setOpen(true)}
         >
-          Add custom server
+          {iconOnly ? null : LABEL}
         </Button>
-      ) : (
-        // A disabled button can't host a tooltip of its own — hence the span.
-        <Tooltip title={addRestriction}>
-          <span>
-            <Button icon={<PlusOutlined />} disabled>
-              Add custom server
-            </Button>
-          </span>
+      );
+      const tooltip = canAdd ? (iconOnly ? LABEL : null) : addRestriction;
+      if (!tooltip) return control;
+      // A disabled button can't host a tooltip of its own — hence the span.
+      return (
+        <Tooltip title={tooltip}>
+          <span>{control}</span>
         </Tooltip>
-      ),
-    [canAdd, addRestriction]
-  );
+      );
+    };
+    return [render(false), render(true)];
+  }, [canAdd, addRestriction]);
 
   const modal = (
     <MCPServerEditModal
@@ -107,16 +107,13 @@ export function useAddCustomMcpServer({
       allowSharedOwnership={canAddSharedMcpServer(capability)}
       mutationAllowed={canAdd}
       mutationBlockedReason={addRestriction}
-      onCreated={(server) => {
-        created.current = server;
-        onCreated?.(server);
-      }}
+      onCreated={onCreated}
       onClose={() => {
         setOpen(false);
-        onClose?.(created.current);
+        onClose?.();
       }}
     />
   );
 
-  return { button, modal, close, offeredTransports, offeredScopes };
+  return { button, iconButton, modal, close };
 }

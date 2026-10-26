@@ -2,6 +2,7 @@ import type {
   MCPMarketplaceAttachment,
   MCPMarketplaceCredential,
   MCPMarketplaceServer,
+  SessionID,
 } from '@agor/core/types';
 import { DeleteOutlined, EditOutlined, KeyOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
@@ -61,6 +62,8 @@ export interface ServerSettingsDrawerProps {
   /** Present only for a custom (non-Catalog) server; opens the full server form. */
   onEditConfiguration?: () => void;
   editingConfiguration?: boolean;
+  /** Makes each session attachment a link to its session. */
+  onOpenSession?: (sessionId: SessionID) => void;
   /** Present only for a customer-owned OAuth app install the caller may edit. */
   onEditOAuthApp?: () => void;
   editingOAuthApp?: boolean;
@@ -96,6 +99,7 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
   onEditCredential,
   onEditConfiguration,
   editingConfiguration = false,
+  onOpenSession,
   onEditOAuthApp,
   editingOAuthApp = false,
   onRefreshTools,
@@ -370,15 +374,27 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
             </Title>
             {attachments.length ? (
               <Space wrap>
-                {attachments.map((attachment) => (
-                  <Tag
-                    key={attachment.session_id}
-                    color={attachment.enabled ? undefined : 'default'}
-                  >
-                    {marketplaceSessionTitle(attachment)}
-                    {!attachment.enabled && ' · Disabled'}
-                  </Tag>
-                ))}
+                {attachments.map((attachment) => {
+                  const label = `${marketplaceSessionTitle(attachment)}${attachment.enabled ? '' : ' · Disabled'}`;
+                  return onOpenSession ? (
+                    <Button
+                      key={attachment.session_id}
+                      size="small"
+                      type={attachment.enabled ? 'default' : 'dashed'}
+                      aria-label={`Open session ${label}`}
+                      onClick={() => onOpenSession(attachment.session_id)}
+                    >
+                      {label}
+                    </Button>
+                  ) : (
+                    <Tag
+                      key={attachment.session_id}
+                      color={attachment.enabled ? undefined : 'default'}
+                    >
+                      {label}
+                    </Tag>
+                  );
+                })}
               </Space>
             ) : (
               <Text type="secondary">

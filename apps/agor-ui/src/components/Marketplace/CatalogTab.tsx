@@ -129,8 +129,8 @@ export interface CatalogTabProps {
   authGeneration: number;
   /** Whose server-provided capability decides whether Connect is offered. */
   currentUser?: User | null;
-  /** Refresh the shared four-tab projection after durable OAuth confirmation. */
   onOpenSession?: (sessionId: SessionID) => void;
+  /** Refresh the shared Marketplace overview after durable OAuth confirmation. */
   refreshMarketplaceOverview?: () => Promise<unknown>;
   /** Runs when the "Add custom server" form closes after adding a server. */
   onCustomServerCreated?: (serverId: string) => void;
@@ -267,15 +267,22 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       memberPolicy.canConfigure,
     ]
   );
+  // Hand the added server to My Servers once its form closes, not mid-OAuth.
+  const customServerCreated = useRef<string | null>(null);
   const addCustom = useAddCustomMcpServer({
     client,
     currentUser,
     authGeneration,
     capability: connectCapability,
     policyState: { pending: policyPending, hint: policyPendingHint },
-    onClose: (created) => {
+    onCreated: (server) => {
+      customServerCreated.current = server.mcp_server_id;
+    },
+    onClose: () => {
       void refreshMarketplaceOverview?.();
-      if (created) onCustomServerCreated?.(created.mcp_server_id);
+      const serverId = customServerCreated.current;
+      customServerCreated.current = null;
+      if (serverId) onCustomServerCreated?.(serverId);
     },
   });
   const operationGuard = useAuthorityOperationGuard(
@@ -856,6 +863,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           onSortChange={onSortChange}
           matchSummary={matchSummary}
           action={addCustom.button}
+          compactAction={addCustom.iconButton}
         />
       </div>
 

@@ -176,7 +176,7 @@ function Location() {
   return <output data-testid="route">{useLocation().pathname}</output>;
 }
 
-/** Real header, picker, controller, lazy host and four tabs; only the API boundary is fake. */
+/** Real header, picker, controller, lazy host and the three tabs; only the API boundary is fake. */
 export function CatalogHarness({
   client,
   user = catalogUser,

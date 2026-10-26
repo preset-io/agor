@@ -351,6 +351,8 @@ describe('Marketplace server inventory and settings', () => {
   it('opens the existing secure credential editor even with no session attachments', async () => {
     const value: MCPMarketplaceOverview = {
       ...overview,
+      // A Catalog install: custom servers reach the same editor via Edit configuration.
+      servers: [{ ...overview.servers[0], source: 'catalog' }],
       credentials: [
         {
           ...overview.credentials[0],
@@ -379,6 +381,51 @@ describe('Marketplace server inventory and settings', () => {
     fireEvent.click(edit);
     await waitFor(() => expect(get).toHaveBeenCalledWith('server-1'));
     expect(await screen.findByText('Edit MCP Server')).toBeInTheDocument();
+  });
+
+  it('offers one editor entry point for a custom server with a stored credential', async () => {
+    renderTab({
+      ...overview,
+      credentials: [{ ...overview.credentials[0], method: 'bearer', status: 'configured' }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+    await screen.findByRole('button', { name: 'Edit GitHub configuration' });
+    expect(
+      screen.queryByRole('button', { name: 'Edit GitHub credential' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('links each session attachment to its session', async () => {
+    const onOpenSession = vi.fn();
+    const mocked = client();
+    render(
+      <MyServersTab
+        client={mocked.value}
+        connected
+        connecting={false}
+        authGeneration={1}
+        currentUser={{ user_id: 'alice', role: 'member' } as never}
+        overview={{
+          ...overview,
+          servers: [{ ...overview.servers[0], session_count: 1 }],
+          attachments: [
+            {
+              session_id: 'session-1',
+              mcp_server_id: 'server-1',
+              enabled: true,
+              session_title: 'Fix the build',
+            } as unknown as MCPMarketplaceOverview['attachments'][number],
+          ],
+        }}
+        loading={false}
+        error={null}
+        refresh={vi.fn(async () => undefined)}
+        onOpenSession={onOpenSession}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open session Fix the build' }));
+    expect(onOpenSession).toHaveBeenCalledWith('session-1');
   });
 
   it('does not offer Edit configuration for a Catalog install', async () => {

@@ -31,6 +31,7 @@ import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
 import { describeMissingForOAuth, missingMCPFieldLabels } from './mcp-form-requirements';
 import {
   extractOAuthConfigForTesting,
+  isTemplateValue,
   validateEnvJSON,
   validateHeadersJSON,
 } from './mcp-oauth-utils';
@@ -212,6 +213,19 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     isRemoteTransportValue(transport) &&
     typeof watchedHeaders === 'string' &&
     watchedHeaders.trim().length > 0;
+  // Only per-user OAuth with no literal client secret is user-specific. A secret
+  // (saved ones hydrate masked) is what a client-credentials grant mints machine
+  // tokens with; the form always carries that grant type, so the secret decides.
+  const hasLiteralClientSecret =
+    typeof watchedClientSecret === 'string' &&
+    watchedClientSecret.trim().length > 0 &&
+    !isTemplateValue(watchedClientSecret);
+  const configSharesCredential =
+    authType !== 'oauth' ||
+    watchedOauthMode === 'shared' ||
+    hasLiteralClientSecret ||
+    hasEnvConfigured ||
+    hasHeadersConfigured;
   const hasCustomizedAdvanced =
     [
       watchedAuthorizationUrl,
@@ -479,21 +493,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           />
         </Form.Item>
       )}
-      {(isCreate ? ownership : savedOwnership) === 'shared' &&
-        // Per-user OAuth (the default mode) shares no credential unless headers or env carry one.
-        !(
-          authType === 'oauth' &&
-          watchedOauthMode !== 'shared' &&
-          !hasEnvConfigured &&
-          !hasHeadersConfigured
-        ) && (
-          <Alert
-            type="warning"
-            showIcon
-            title="Shared configuration can share credentials"
-            description="Bearer tokens, custom headers, literal environment values, and shared OAuth grants can be used by everyone with access. Per-user OAuth requires each user to sign in separately; user environment references resolve for the acting user."
-          />
-        )}
+      {(isCreate ? ownership : savedOwnership) === 'shared' && configSharesCredential && (
+        <Alert
+          type="warning"
+          showIcon
+          title="Shared configuration can share credentials"
+          description="Bearer tokens, custom headers, literal environment values, and shared OAuth grants can be used by everyone with access. Per-user OAuth requires each user to sign in separately; user environment references resolve for the acting user."
+        />
+      )}
       <Row gutter={16}>
         <Col span={12}>
           <Form.Item
