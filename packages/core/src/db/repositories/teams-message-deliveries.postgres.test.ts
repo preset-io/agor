@@ -99,6 +99,50 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams message deliveries P
     ).toMatchObject({ status: 'ambiguous', ambiguous_chunk_index: 0 });
   });
 
+  it('lets a held tenant defer its due delivery off discovery so another tenant is found', async () => {
+    const held = `teams-held-${generateId()}` as TenantID;
+    const other = `teams-other-${generateId()}` as TenantID;
+    const enqueue = async (tenantId: TenantID) => {
+      const { session } = await seed(db, tenantId);
+      return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        const { deliveries, messages } = teamsDeliveryWriters(scoped);
+        const message = await messages.create(assistantMessage(session.session_id));
+        return (await deliveries.findByMessageId(message.message_id))!.delivery_id;
+      });
+    };
+    const heldId = await enqueue(held);
+    const otherId = await enqueue(other);
+    const discover = () =>
+      runWithSystemDatabaseScope(
+        db,
+        'Teams delivery PostgreSQL discovery',
+        (systemDb) => new TeamsMessageDeliveryRepository(systemDb).findDueRefs(systemDb),
+        { capability: 'teams_message_delivery_discovery' }
+      );
+    expect((await discover()).map((ref) => ref.delivery_id)).toContain(heldId);
+
+    // Another tenant cannot move the held row.
+    expect(
+      await runWithTenantDatabaseScope(db, other, (scoped) =>
+        new TeamsMessageDeliveryRepository(scoped).deferDue(heldId, 30_000)
+      )
+    ).toBe(false);
+    expect(
+      await runWithTenantDatabaseScope(db, held, (scoped) =>
+        new TeamsMessageDeliveryRepository(scoped).deferDue(heldId, 30_000)
+      )
+    ).toBe(true);
+
+    const refs = (await discover()).map((ref) => ref.delivery_id);
+    expect(refs).not.toContain(heldId);
+    expect(refs).toContain(otherId);
+    expect(
+      await runWithTenantDatabaseScope(db, held, (scoped) =>
+        new TeamsMessageDeliveryRepository(scoped).findById(heldId)
+      )
+    ).toMatchObject({ status: 'pending', attempt_count: 0 });
+  });
+
   it('does not let another tenant revoke an address by channel id', async () => {
     vi.stubEnv('AGOR_MASTER_SECRET', 'teams-address-pg-secret');
     try {

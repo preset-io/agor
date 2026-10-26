@@ -36,8 +36,38 @@ describe('sessions MCP-token hook restriction reads', () => {
       expect.anything(),
       'session-1',
       'user-1',
-      readAdmittedTenantRestriction
+      readAdmittedTenantRestriction,
+      undefined
     );
+  });
+
+  it('checks a JWT caller against the generation it was admitted with', async () => {
+    generateSessionToken.mockResolvedValueOnce('token');
+    const payload = { tenant_credential_epoch: 'a'.repeat(64) };
+    await hook({
+      method: 'get',
+      params: {
+        user: { user_id: 'user-1', role: 'member' },
+        provider: 'socketio',
+        authentication: { strategy: 'jwt', payload },
+      },
+      result: session,
+    } as never);
+    expect(generateSessionToken).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'session-1',
+      'user-1',
+      readAdmittedTenantRestriction,
+      { payload }
+    );
+  });
+
+  it('answers 401 when the caller generation moved mid-request, without a token elsewhere', async () => {
+    const stale = () => new NotAuthenticated('Tenant credential cannot be verified');
+    generateSessionToken.mockRejectedValueOnce(stale());
+    await expect(run()).rejects.toBeInstanceOf(NotAuthenticated);
+    generateSessionToken.mockRejectedValueOnce(stale());
+    expect((await run('create')).result).toBe(session);
   });
 
   it('fails an ordinary session read as unavailable instead of returning it without a token', async () => {

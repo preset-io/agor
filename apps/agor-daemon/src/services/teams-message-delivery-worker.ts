@@ -41,6 +41,7 @@ import {
   boundedBackoff,
   boundedProviderCall,
   DeliveryControlError,
+  deferHeldDelivery,
   discoverDueDeliveryRefs,
   GatewayDeliveryLoop,
 } from './gateway-delivery-loop.js';
@@ -62,6 +63,7 @@ type TeamsMessageDeliveryWorkerRepositories = {
   delivery: Pick<
     TeamsMessageDeliveryRepository,
     | 'findDueRefs'
+    | 'deferDue'
     | 'claim'
     | 'renewClaim'
     | 'recordChunkPlan'
@@ -230,8 +232,15 @@ export class TeamsMessageDeliveryWorker {
   }
 
   private async processRef(ref: TeamsMessageDeliveryDiscoveryRef): Promise<void> {
-    // Hold a closed tenant's outbox; delivery resumes after reactivation.
-    if (!(await isCurrentTenantRuntimeActive(this.db).catch(() => false))) return;
+    // Hold a closed tenant's outbox off discovery so it cannot starve other tenants; delivery resumes after reactivation.
+    if (!(await isCurrentTenantRuntimeActive(this.db).catch(() => false))) {
+      await deferHeldDelivery(
+        'distributed-work.teams-message-delivery',
+        ref.delivery_id,
+        (delayMs) => this.deliveryRepo.deferDue(ref.delivery_id, delayMs)
+      );
+      return;
+    }
     const claim = await this.deliveryRepo.claim(ref.delivery_id, generateId(), DELIVERY_LEASE_MS);
     if (!claim) return;
     try {
