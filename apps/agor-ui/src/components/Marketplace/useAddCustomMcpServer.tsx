@@ -74,7 +74,8 @@ export function useAddCustomMcpServer({
     const render = (iconOnly: boolean) => {
       const control = (
         <Button
-          icon={<PlusOutlined />}
+          // The label (text or aria-label) names the button, not the icon's "plus".
+          icon={<PlusOutlined aria-hidden />}
           disabled={!canAdd}
           aria-label={iconOnly ? LABEL : undefined}
           onClick={() => setOpen(true)}
