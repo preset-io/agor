@@ -136,6 +136,8 @@ export interface BranchSessionSectionsProps {
   /** The caller supplies a bounded flex-column container (not an auto-sized card). */
   fillAvailableHeight?: boolean;
   client: AgorClient | null;
+  /** Isolate tree navigation preferences from canvas cards and other users. */
+  preferenceScope?: string;
 }
 
 /** Wrapper that adds hover action buttons (settings + archive) overlay to session items */
@@ -388,6 +390,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   mode = 'card',
   fillAvailableHeight = false,
   client,
+  preferenceScope,
 }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
@@ -456,7 +459,10 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   });
   const [archivingSessionIds, setArchivingSessionIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
-  const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
+  const [sort, setSort] = useLocalStorage<SessionSort>(
+    preferenceScope ? `${preferenceScope}:sort` : SESSION_SORT_STORAGE_KEY,
+    'recent'
+  );
 
   const animatePanel = isPanel && token.motion !== false && !prefersReducedMotion;
   const fillPanel = isPanel && fillAvailableHeight;
@@ -467,20 +473,21 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   // to expanded; only user-collapsed exceptions are kept. Board cards persist
   // them per branch in the shared collapsedBranchNodes store; the teammate
   // panel is a transient surface and must not rewrite the board card's stored
-  // state, so it keeps ephemeral state instead.
+  // state, so it keeps ephemeral state unless given an explicit personal tree scope.
   const [storedCollapsedNodes, setStoredCollapsedNodes] = useLocalStorage<CollapsedBranchNodes>(
-    COLLAPSED_BRANCH_NODES_STORAGE_KEY,
+    preferenceScope ? `${preferenceScope}:collapsed` : COLLAPSED_BRANCH_NODES_STORAGE_KEY,
     EMPTY_COLLAPSED_BRANCH_NODES
   );
   const [panelCollapsedNode, setPanelCollapsedNode] = useState<CollapsedBranchNode>(
     EMPTY_COLLAPSED_BRANCH_NODE
   );
-  const collapsedNode = isPanel
+  const transientPanel = isPanel && !preferenceScope;
+  const collapsedNode = transientPanel
     ? panelCollapsedNode
     : (storedCollapsedNodes[branch.branch_id] ?? EMPTY_COLLAPSED_BRANCH_NODE);
   const updateCollapsedNode = useCallback(
     (updater: (node: CollapsedBranchNode) => CollapsedBranchNode) => {
-      if (isPanel) {
+      if (transientPanel) {
         setPanelCollapsedNode(updater);
         return;
       }
@@ -492,7 +499,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
         )
       );
     },
-    [branch.branch_id, isPanel, setStoredCollapsedNodes]
+    [branch.branch_id, transientPanel, setStoredCollapsedNodes]
   );
   const collapsedSections = collapsedNode.sections;
   const openSectionKeys = useMemo<CollapseKey[]>(

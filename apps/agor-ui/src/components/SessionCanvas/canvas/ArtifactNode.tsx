@@ -174,9 +174,11 @@ function CodeSandboxExporter({ artifactId }: { artifactId: string }) {
 export const ArtifactNode = ({
   data,
   selected,
+  embedded = false,
 }: {
   data: ArtifactNodeData;
   selected?: boolean;
+  embedded?: boolean;
 }) => {
   const { token } = theme.useToken();
   const mutationGate = useMutationGate();
@@ -477,7 +479,7 @@ export const ArtifactNode = ({
       ? token.colorPrimary
       : token.colorBorder;
   const cardOuterStyle = {
-    width: data.width,
+    width: embedded ? '100%' : data.width,
     height: data.height,
     background: token.colorBgContainer,
     border: `2px solid ${borderColor}`,
@@ -495,7 +497,7 @@ export const ArtifactNode = ({
   } as const;
 
   // Shared resizer — same across loading / error / normal states.
-  const resizer = (
+  const resizer = !embedded && (
     <NodeResizer
       isVisible={selected && !data.locked && !layoutMutationDisabled}
       minWidth={MIN_WIDTH}

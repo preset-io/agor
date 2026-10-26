@@ -532,6 +532,25 @@ describe('BranchSessionSections', () => {
     expect(readStoredCollapsedNodes()?.['branch-1']).toBeUndefined();
   });
 
+  it('persists a scoped tree panel without changing canvas or another user preferences', async () => {
+    const session = makeManualSession({ session_id: 'manual', title: 'Manual session' });
+    const scope = 'tree:user-a:board-a';
+    const first = renderSections({ sessions: [session], mode: 'panel', preferenceScope: scope });
+    fireEvent.click(screen.getByText('Sessions'));
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem(`${scope}:collapsed`)!)).toEqual({
+        'branch-1': { sections: ['sessions'] },
+      })
+    );
+    expect(readStoredCollapsedNodes()).toBeNull();
+    first.unmount();
+    const second = renderSections({ sessions: [session], mode: 'panel', preferenceScope: scope });
+    expect(screen.queryByText('Manual session')).not.toBeInTheDocument();
+    second.unmount();
+    renderSections({ sessions: [session], mode: 'panel', preferenceScope: 'tree:user-b:board-a' });
+    expect(screen.getByText('Manual session')).toBeVisible();
+  });
+
   it('does not persist section state in panel mode', () => {
     const manualSession = makeManualSession({
       session_id: 'session-manual',

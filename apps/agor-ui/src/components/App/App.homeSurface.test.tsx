@@ -20,6 +20,8 @@ import { agorStore } from '../../store/agorStore';
 import { USER_SCOPE_KEYS } from '../../store/scopeMerge';
 import { userScopeCoverage } from '../../test/userScopeCoverage';
 import { resetAccessCacheForTests } from '../../utils/accessCache';
+import { getRouterBasename } from '../../utils/uiRoutes';
+import { boardViewPreferenceKey } from '../BoardWorkspace/useBoardViewPreferences';
 import { App } from './App';
 
 const canvasCommit = vi.hoisted(() => vi.fn<(boardName: string | null) => void>());
@@ -317,6 +319,11 @@ async function pickBoardFromSwitcher(name: string) {
 
 beforeEach(() => {
   localStorage.clear();
+  for (const id of [BOARD_A, BOARD_B])
+    localStorage.setItem(
+      boardViewPreferenceKey(getRouterBasename(), USER_ID, id),
+      JSON.stringify({ view: 'board' })
+    );
   resetAccessCacheForTests();
   seedStore();
   canvasCommit.mockClear();

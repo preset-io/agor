@@ -19,7 +19,13 @@ interface MarkdownNodeData {
   beginBoardWrite?: () => BoardWriteTicket | null;
 }
 
-export const MarkdownNode = ({ data }: { data: MarkdownNodeData }) => {
+export const MarkdownNode = ({
+  data,
+  embedded = false,
+}: {
+  data: MarkdownNodeData;
+  embedded?: boolean;
+}) => {
   const { token } = theme.useToken();
   const { modal } = App.useApp();
   const mutationGate = useMutationGate();
@@ -68,13 +74,13 @@ export const MarkdownNode = ({ data }: { data: MarkdownNodeData }) => {
   return (
     <Card
       style={{
-        width: data.width,
+        width: embedded ? '100%' : data.width,
         minHeight: 100,
         background: token.colorBgContainer,
         border: `2px solid ${token.colorBorder}`,
         borderRadius: 8,
         boxShadow: token.boxShadowSecondary,
-        cursor: 'move',
+        cursor: embedded ? undefined : 'move',
       }}
       size="small"
       title={

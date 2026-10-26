@@ -123,8 +123,10 @@ export type BoardTeammatePanelTab =
   | 'all-branches'
   | 'comments';
 
-interface BoardTeammatePanelProps {
+export interface BoardTeammatePanelProps {
   board: Board | null;
+  /** Reuse primary lookup/setup without the legacy navigation tabs. */
+  teammateOnly?: boolean;
   /** Content of a "Board" tab after Teammate (the mobile board view). */
   boardTab?: React.ReactNode;
   showBranchesTab?: boolean;
@@ -178,6 +180,7 @@ interface BoardTeammatePanelProps {
 
 const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   board,
+  teammateOnly = false,
   boardTab,
   showBranchesTab = true,
   touch = false,
@@ -646,6 +649,8 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       </div>
     );
   })();
+
+  if (teammateOnly) return <div>{teammateContent}</div>;
 
   return (
     <div

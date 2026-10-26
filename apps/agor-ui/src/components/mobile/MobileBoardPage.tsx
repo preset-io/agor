@@ -9,10 +9,12 @@ import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../
 import { makeBranchesForBoardSelector } from '../../store/selectors';
 import { OPEN_BOARD_SWITCHER_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { BoardSwitcher } from '../BoardSwitcher';
-import { BoardTeammatePanel, type BoardTeammatePanelTab } from '../BoardTeammatePanel';
+import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { useBoardTeammatePanelData } from '../BoardTeammatePanel/useBoardTeammatePanelData';
+import { BoardWorkspace } from '../BoardWorkspace/BoardWorkspace';
 import type { BranchModalTab } from '../BranchModal';
 import { CompactNotice } from '../CompactNotice';
+import { BoardPartitionStatus } from '../SessionCanvas/BoardPartitionStatus';
 import { mobilePageStyle } from './constants';
 
 // React Flow stays out of the shell bundle until a board is opened.
@@ -20,10 +22,6 @@ const SessionCanvas = lazy(() => import('../SessionCanvas/SessionCanvas'));
 
 export const BOARD_UNAVAILABLE =
   "This board isn't available. It may have been deleted, or you may not have access.";
-
-// Teammate leads (and is the default), like the desktop panel; the view-only canvas is second.
-const BOARD_TABS: BoardTeammatePanelTab[] = ['teammate', 'board', 'all-sessions', 'comments'];
-const DEFAULT_BOARD_TAB: BoardTeammatePanelTab = 'teammate';
 
 /** Route state that opens the board switcher on arrival (Home's "All boards"). */
 export interface MobileBoardLocationState {
@@ -55,7 +53,7 @@ interface MobileBoardPageProps {
   settingsHydrated: boolean;
 }
 
-/** Board screen: board switcher, then the desktop board panel tabs with a view-only canvas second. */
+/** Board screen: the shared navigator, with full-screen session navigation on compact viewports. */
 export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   client,
   currentUser,
@@ -76,7 +74,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
 }) => {
   const { boardId = '' } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const { token } = theme.useToken();
   // Boards load with the first workspace read; until then a missing board may still arrive.
   const loading = useAgorStore((state) => state.loading);
@@ -101,10 +99,6 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   }, [openBoardSwitcher, navigate, pathname, search]);
 
   const tabParam = searchParams.get('tab') as BoardTeammatePanelTab | null;
-  const activeTab = tabParam && BOARD_TABS.includes(tabParam) ? tabParam : DEFAULT_BOARD_TAB;
-  const setActiveTab = useStableCallback((tab: BoardTeammatePanelTab) =>
-    setSearchParams(tab === DEFAULT_BOARD_TAB ? {} : { tab }, { replace: true })
-  );
 
   const boards = useMemo(() => Array.from(boardById.values()), [boardById]);
   // Shallow-equal like desktop: unrelated socket churn keeps the array, so the canvas stays put.
@@ -141,7 +135,15 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   const canvas = useMemo(
     () =>
       board ? (
-        <Suspense fallback={<Spin style={{ display: 'block', margin: token.marginLG }} />}>
+        <Suspense
+          fallback={
+            boardReady ? (
+              <Spin style={{ display: 'block', margin: token.marginLG }} />
+            ) : (
+              <BoardPartitionStatus boardId={board.board_id} />
+            )
+          }
+        >
           <SessionCanvas
             readOnly
             height="100%"
@@ -155,7 +157,17 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           />
         </Suspense>
       ) : null,
-    [board, client, boardBranches, primaryTeammateId, userId, openSession, openBranch, token]
+    [
+      board,
+      boardReady,
+      client,
+      boardBranches,
+      primaryTeammateId,
+      userId,
+      openSession,
+      openBranch,
+      token,
+    ]
   );
 
   return (
@@ -189,32 +201,39 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
         </Typography.Text>
       )}
       {board ? (
-        <div style={{ flex: 1, minHeight: 0 }}>
-          <BoardTeammatePanel
-            client={client}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+          <BoardWorkspace
+            key={`${userId}:${board.board_id}`}
             board={board}
-            boardTab={canvas}
-            showBranchesTab={false}
-            touch
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            primaryTeammateBranch={primaryTeammateBranch}
-            primaryTeammateRepo={primaryTeammateRepo}
-            primaryTeammateInaccessible={primaryTeammateInaccessible}
-            boardReady={boardReady}
-            currentUserId={userId}
-            unreadCommentsCount={unreadCommentsCount}
-            hasUserMentions={hasUserMentions}
-            onSessionClick={openSession}
-            onCreateSession={createSession}
-            onForkSession={forkSession}
-            onSpawnSession={spawnSession}
-            onOpenSettings={openBranch}
-            onSendComment={sendComment}
-            onReplyComment={replyComment}
-            onResolveComment={resolveComment}
-            onToggleReaction={toggleReaction}
-            onDeleteComment={deleteComment}
+            branches={boardBranches}
+            actions={{
+              client,
+              board,
+              primaryTeammateBranch,
+              primaryTeammateRepo,
+              primaryTeammateInaccessible,
+              boardReady,
+              currentUserId: userId,
+              unreadCommentsCount,
+              hasUserMentions,
+              onSessionClick: openSession,
+              onCreateSession: createSession,
+              onForkSession: forkSession,
+              onSpawnSession: spawnSession,
+              onOpenSettings: openBranch,
+              onSendComment: sendComment,
+              onReplyComment: replyComment,
+              onResolveComment: resolveComment,
+              onToggleReaction: toggleReaction,
+              onDeleteComment: deleteComment,
+            }}
+            canvas={canvas}
+            conversation={null}
+            conversationOpen={false}
+            compact
+            onBranchClick={openBranch}
+            initialTab={tabParam === 'comments' ? 'comments' : undefined}
+            initialView={tabParam === 'board' ? 'board' : tabParam ? 'tree' : undefined}
           />
         </div>
       ) : (

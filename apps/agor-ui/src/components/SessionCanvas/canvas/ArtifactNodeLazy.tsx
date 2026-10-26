@@ -24,7 +24,11 @@ const ArtifactNodeInner = lazy(() =>
   import('./ArtifactNode').then((m) => ({ default: m.ArtifactNode }))
 );
 
-export const ArtifactNode = (props: { data: ArtifactNodeData; selected?: boolean }) => {
+export const ArtifactNode = (props: {
+  data: ArtifactNodeData;
+  selected?: boolean;
+  embedded?: boolean;
+}) => {
   const ref = useRef<HTMLDivElement>(null);
   const seen = useInViewportOnce(ref);
   const placeholder = (

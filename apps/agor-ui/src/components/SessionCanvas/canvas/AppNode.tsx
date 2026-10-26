@@ -27,7 +27,15 @@ export interface AppNodeData {
 const MIN_WIDTH = 300;
 const MIN_HEIGHT = 200;
 
-export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: boolean }) => {
+export const AppNode = ({
+  data,
+  selected,
+  embedded = false,
+}: {
+  data: AppNodeData;
+  selected?: boolean;
+  embedded?: boolean;
+}) => {
   const { token } = theme.useToken();
   const mutationGate = useMutationGate();
   const layoutMutationDisabled = !mutationGate.canMutate || !data.canEdit;
@@ -72,17 +80,19 @@ export const AppNode = ({ data, selected }: { data: AppNodeData; selected?: bool
 
   return (
     <>
-      <NodeResizer
-        isVisible={selected && !layoutMutationDisabled}
-        minWidth={MIN_WIDTH}
-        minHeight={MIN_HEIGHT}
-        onResize={handleResize}
-        lineStyle={{ borderColor: token.colorPrimary }}
-        handleStyle={{ backgroundColor: token.colorPrimary, width: 8, height: 8 }}
-      />
+      {!embedded && (
+        <NodeResizer
+          isVisible={selected && !layoutMutationDisabled}
+          minWidth={MIN_WIDTH}
+          minHeight={MIN_HEIGHT}
+          onResize={handleResize}
+          lineStyle={{ borderColor: token.colorPrimary }}
+          handleStyle={{ backgroundColor: token.colorPrimary, width: 8, height: 8 }}
+        />
+      )}
       <Card
         style={{
-          width: data.width,
+          width: embedded ? '100%' : data.width,
           height: data.height,
           background: token.colorBgContainer,
           border: `2px solid ${selected ? token.colorPrimary : token.colorBorder}`,

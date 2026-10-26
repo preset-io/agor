@@ -21,7 +21,7 @@ import { NodeLoadingPlaceholder } from './NodeLoadingPlaceholder';
 
 const AppNodeInner = lazy(() => import('./AppNode').then((m) => ({ default: m.AppNode })));
 
-export const AppNode = (props: { data: AppNodeData; selected?: boolean }) => {
+export const AppNode = (props: { data: AppNodeData; selected?: boolean; embedded?: boolean }) => {
   const ref = useRef<HTMLDivElement>(null);
   const seen = useInViewportOnce(ref);
   const placeholder = (

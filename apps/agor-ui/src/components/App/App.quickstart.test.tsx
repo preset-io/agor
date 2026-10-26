@@ -46,6 +46,18 @@ vi.mock('../SessionPanel/PendingToolChoicePanel', () => ({
   ),
 }));
 
+vi.mock('../BoardWorkspace/BoardTreeNavigator', () => ({
+  BoardComments: () => null,
+  BoardTreeNavigator: ({ actions }: { actions: { onCreateSession?: (id: string) => void } }) => (
+    <button
+      type="button"
+      data-testid="quick-start"
+      onClick={() => actions.onCreateSession?.('wt-1')}
+    >
+      add session
+    </button>
+  ),
+}));
 vi.mock('../AppHeader', () => ({ AppHeader: () => null }));
 vi.mock('../BoardTeammatePanel', () => ({ BoardTeammatePanel: () => null }));
 vi.mock('../HomePage', () => ({ HomePage: () => null }));
@@ -258,22 +270,18 @@ describe('App quick-start — always shows the tool picker', () => {
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
-  it('keeps the session drawer mounted across the pick→open transition (no flash)', async () => {
+  it('keeps the conversation pane mounted across the pick→open transition (no flash)', async () => {
     // Exercises the REAL selection path, not a seeded shortcut: optimisticCreate
     // inserts the session exactly as the create seam does, and `useUrlState`
     // (wired inside App) derives `selectedSessionId` from the navigation — the
-    // test never sets selection directly. The drawer Panel must stay mounted the
-    // whole time. With URL-only selection there is a one-render frame where
-    // pending is cleared but `selectedSessionId` hasn't caught up, so the Panel
-    // unmounts and fades back in (the reported flash); this asserts it doesn't.
+    // test never sets selection directly. The conversation pane must stay mounted
+    // while the pending picker gives way to the routed session.
     const onCreateSession = optimisticCreate(SESSION_A);
     renderShell(USER, onCreateSession);
 
     fireEvent.click(await screen.findByTestId('quick-start'));
     await screen.findByTestId('tool-picker');
-    // Picker up → drawer Panel mounted once.
-    expect(screen.getByTestId('drawer-panel')).toBeInTheDocument();
-    const mountsWhilePicking = drawerPanel.mounts;
+    const conversationPane = screen.getByRole('region', { name: 'Board detail' });
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('tool-picker'));
@@ -283,10 +291,8 @@ describe('App quick-start — always shows the tool picker', () => {
     expect(screen.getByTestId('session-id')).toHaveTextContent(SESSION_A);
     expect(onCreateSession).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('tool-picker')).not.toBeInTheDocument();
-    // The drawer Panel never unmounted/remounted during the handoff.
-    expect(drawerPanel.unmounts).toBe(0);
-    expect(drawerPanel.mounts).toBe(mountsWhilePicking);
-    expect(screen.getByTestId('drawer-panel')).toBeInTheDocument();
+    // The conversation container stays mounted during the handoff.
+    expect(screen.getByRole('region', { name: 'Board detail' })).toBe(conversationPane);
   });
 
   it('does not resurrect the picker on Back after the session is shown', async () => {

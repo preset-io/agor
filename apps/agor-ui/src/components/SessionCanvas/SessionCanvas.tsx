@@ -23,6 +23,7 @@ import {
   FileMarkdownOutlined,
   MinusOutlined,
   PlusOutlined,
+  RobotOutlined,
   SelectOutlined,
   ZoomInOutlined,
 } from '@ant-design/icons';
@@ -59,6 +60,7 @@ import {
   ReactFlow,
   type ReactFlowInstance,
   useEdgesState,
+  useStore as useFlowStore,
   useNodesState,
   type Viewport,
 } from 'reactflow';
@@ -76,7 +78,13 @@ import {
   zoneGridWidthOnSwitch,
   zoneLayoutOf,
 } from '@agor/core/utils/zone-layout';
-import { boardCommentZoneParentObjectKey, hasMinimumRole, ROLES, shortId } from '@agor-live/client';
+import {
+  boardCommentZoneParentObjectKey,
+  getTeammateConfig,
+  hasMinimumRole,
+  ROLES,
+  shortId,
+} from '@agor-live/client';
 import { mapToArray } from '@/utils/mapHelpers';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import {
@@ -293,6 +301,7 @@ interface BranchNodeData {
   zoneColor?: string;
   selectedSessionId?: string | null;
   isActiveUrlTarget?: boolean;
+  isPrimaryTeammate?: boolean;
   showDragHandle: boolean;
   client: AgorClient | null;
 }
@@ -325,6 +334,31 @@ const CardNodeWrapper = React.memo(({ data }: { data: CardNodeData }) => {
 // only this card without rebuilding (and re-allocating) every branch's node
 // `data` in the parent `initialNodes` memo. EMPTY_SESSIONS keeps the prop
 // referentially stable for branches with no sessions.
+/** A screen-readable identity marker, not a second spatial object. */
+function PrimaryTeammateMarker({ branch }: { branch: Branch }) {
+  const { token } = theme.useToken();
+  const zoom = useFlowStore((state) => state.transform[2]);
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: -32,
+        left: 0,
+        zIndex: 1,
+        transformOrigin: 'bottom left',
+        transform: `scale(${Math.max(1, 0.65 / zoom)})`,
+        background: token.colorPrimaryBg,
+        color: token.colorPrimaryText,
+        border: `2px solid ${token.colorPrimary}`,
+        borderRadius: token.borderRadius,
+        padding: token.paddingXXS,
+      }}
+    >
+      <RobotOutlined /> {getTeammateConfig(branch)?.displayName ?? branch.name} · Primary teammate
+    </div>
+  );
+}
+
 const BranchNode = React.memo(
   ({ data }: { data: BranchNodeData }) => {
     const sessionsSelector = useMemo(
@@ -339,7 +373,8 @@ const BranchNode = React.memo(
     // affected cards without rebuilding every node's `data` on the board.
     const userById = useAgorStore(selectUserById);
     return (
-      <div className="branch-node">
+      <div className="branch-node" style={{ position: 'relative' }}>
+        {data.isPrimaryTeammate && <PrimaryTeammateMarker branch={data.branch} />}
         <BranchCard
           branch={data.branch}
           repo={data.repo}
@@ -388,6 +423,7 @@ const BranchNode = React.memo(
       p.currentUserId === n.currentUserId &&
       p.selectedSessionId === n.selectedSessionId &&
       p.isActiveUrlTarget === n.isActiveUrlTarget &&
+      p.isPrimaryTeammate === n.isPrimaryTeammate &&
       p.isPinned === n.isPinned &&
       p.zoneName === n.zoneName &&
       p.zoneColor === n.zoneColor &&
@@ -1415,10 +1451,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       const nodes: Node[] = [];
 
       branches.forEach((branch, index) => {
-        if (primaryTeammateId && branch.branch_id === primaryTeammateId) {
-          return;
-        }
-
         // Find board object for this branch (if positioned on this board)
         const boardObject = boardObjectByBranch.get(branch.branch_id);
 
@@ -1468,6 +1500,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             currentUserId,
             selectedSessionId,
             isActiveUrlTarget: branch.branch_id === activeUrlTargetBranchId,
+            isPrimaryTeammate: branch.branch_id === primaryTeammateId,
             onTaskClick,
             onSessionClick,
             onCreateSession: onCreateSessionForBranch,
@@ -3534,6 +3567,21 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
         {scopedCustomCss && <style>{scopedCustomCss}</style>}
         <BoardPartitionStatus boardId={board?.board_id} />
+        {primaryTeammateId && branches.some((b) => b.branch_id === primaryTeammateId) && (
+          <Button
+            icon={<RobotOutlined aria-hidden />}
+            style={{ position: 'absolute', top: 12, right: 12, zIndex: 20 }}
+            onClick={() =>
+              reactFlowInstanceRef.current?.fitView({
+                nodes: [{ id: primaryTeammateId }],
+                padding: 0.5,
+                maxZoom: 1,
+              })
+            }
+          >
+            Locate primary teammate
+          </Button>
+        )}
         <div
           ref={reactFlowWrapperRef}
           className={boardCssClass || undefined}

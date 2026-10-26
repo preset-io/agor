@@ -7,12 +7,12 @@ import { userEvent } from 'vitest/browser';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
-import { BoardTeammatePanel } from '../BoardTeammatePanel';
+import { isMobileViewport } from '../../utils/deviceDetection';
 import { makeTeammateBranch } from '../BranchModal/testUtils';
 import SessionCanvas from './SessionCanvas';
 
 afterEach(cleanup);
-it('board primary excluded from the canvas still exposes recovery in its panel', async () => {
+it('board primary has a visible canvas card with recovery and a locator', async () => {
   const branch = makeTeammateBranch(
     {
       branch_id: 'recovery-primary' as Branch['branch_id'],
@@ -59,6 +59,7 @@ it('board primary excluded from the canvas still exposes recovery in its panel',
       >
         <div style={{ height: 250 }}>
           <SessionCanvas
+            readOnly={isMobileViewport()}
             board={board}
             branches={[current]}
             primaryTeammateId={branch.branch_id}
@@ -66,19 +67,12 @@ it('board primary excluded from the canvas still exposes recovery in its panel',
             height={250}
           />
         </div>
-        <BoardTeammatePanel
-          board={board}
-          primaryTeammateBranch={current}
-          primaryTeammateRepo={repo}
-          primaryTeammateInaccessible={false}
-          onSessionClick={() => {}}
-          client={client}
-        />
       </ConnectionProvider>
     </App>
   );
   const view = render(compose(branch));
-  expect(view.container.querySelector(`[data-id="${branch.branch_id}"]`)).toBeNull();
+  expect(view.container.querySelector(`[data-id="${branch.branch_id}"]`)).not.toBeNull();
+  expect(screen.getByRole('button', { name: 'Locate primary teammate' })).toBeVisible();
   expect(
     await screen.findByText(
       "This branch's files aren't available. Restore them to start a session."

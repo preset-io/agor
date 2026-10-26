@@ -129,27 +129,25 @@ describe('MobileBoardPage', () => {
     expect(screen.getByText('Loading agentic tool availability')).toHaveAttribute('role', 'status');
   });
 
-  it('shows the board tabs, led by Teammate, with a read-only canvas of this board second', async () => {
+  it('shows the unified tree tabs and an alternative read-only board view', async () => {
     renderPage('/m/board/board-1');
     const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
-    expect(tabs).toEqual(['Teammate', 'Board', 'Sessions', 'Comments']);
-    expect(screen.getByRole('tab', { name: 'Teammate' })).toHaveAttribute('aria-selected', 'true');
-    fireEvent.click(screen.getByRole('tab', { name: 'Board' }));
+    expect(tabs).toEqual(['Sessions', 'Content', 'Comments']);
+    expect(screen.getByRole('tab', { name: 'Sessions' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('radio', { name: 'Board', exact: true }));
     expect(await screen.findByTestId('canvas')).toBeInTheDocument();
     expect(canvas.props?.readOnly).toBe(true);
     expect(canvas.props?.branches).toEqual([branch]);
     expect(screen.getByText('Delivery')).toBeInTheDocument();
   });
 
-  it('keeps the selected tab in the URL', () => {
+  it('honors legacy comment links, then switches views without changing entity selection', () => {
     renderPage('/m/board/board-1?tab=comments');
     expect(screen.getByRole('tab', { name: 'Comments' })).toHaveAttribute('aria-selected', 'true');
     fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }));
-    expect(location()).toBe('/m/board/board-1?tab=all-sessions');
-    fireEvent.click(screen.getByRole('tab', { name: 'Board' }));
-    expect(location()).toBe('/m/board/board-1?tab=board');
-    fireEvent.click(screen.getByRole('tab', { name: 'Teammate' }));
-    expect(location()).toBe('/m/board/board-1');
+    expect(screen.getByRole('tab', { name: 'Sessions' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('radio', { name: 'Board', exact: true }));
+    expect(location()).toBe('/m/board/board-1?tab=comments');
   });
 
   it('opens sessions and branches tapped on the canvas', async () => {
@@ -170,12 +168,11 @@ describe('MobileBoardPage', () => {
     expect(canvas.renders).toBe(renders);
   });
 
-  it('does not re-render the board panel when the shell re-renders with fresh handlers', async () => {
+  it('keeps the selected comments tab through shell updates', async () => {
     const { rerenderFromShell } = renderPage('/m/board/board-1?tab=comments');
     await screen.findByTestId('comments');
-    const renders = panel.renders;
     rerenderFromShell();
-    expect(panel.renders).toBe(renders);
+    expect(screen.getByRole('tab', { name: 'Comments' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('opens the board switcher once when arriving from All boards, then clears the request', () => {
