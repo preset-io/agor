@@ -370,6 +370,32 @@ describe('Marketplace server inventory and settings', () => {
     expect(await screen.findByText('Edit MCP Server')).toBeInTheDocument();
   });
 
+  it('opens the shared server editor from Edit configuration for a custom server', async () => {
+    const { get } = renderTab();
+    expect(screen.getByText('Private')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+    const edit = await screen.findByRole('button', { name: 'Edit GitHub configuration' });
+    await waitFor(() => expect(edit).toBeEnabled());
+    fireEvent.click(edit);
+    await waitFor(() => expect(get).toHaveBeenCalledWith('server-1'));
+    expect(await screen.findByText('Edit MCP Server')).toBeInTheDocument();
+  });
+
+  it('does not offer Edit configuration for a Catalog install', async () => {
+    renderTab({ ...overview, servers: [{ ...overview.servers[0], source: 'catalog' }] });
+    fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+    await screen.findByRole('button', { name: 'Refresh tools' });
+    expect(
+      screen.queryByRole('button', { name: 'Edit GitHub configuration' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('disables Edit configuration without edit permission', async () => {
+    renderTab(overview, { policy: 'use_existing_only', canConfigure: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+    expect(await screen.findByRole('button', { name: 'Edit GitHub configuration' })).toBeDisabled();
+  });
+
   it('gives each settings action a contextual accessible name', async () => {
     renderTab({
       ...overview,
@@ -1032,6 +1058,7 @@ describe('Marketplace server inventory and settings', () => {
   it('tags a Shared server and lets a member manage it under allow_crud', async () => {
     renderTab(sharedOverview, { policy: 'allow_crud' });
     expect(screen.getByText('Shared')).toBeInTheDocument();
+    expect(screen.queryByText('Private')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
     const remove = await screen.findByRole('button', { name: 'Remove GitHub server' });
     await waitFor(() => expect(remove).toBeEnabled());

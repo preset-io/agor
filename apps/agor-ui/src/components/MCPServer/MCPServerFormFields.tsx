@@ -479,14 +479,21 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           />
         </Form.Item>
       )}
-      {(isCreate ? ownership : savedOwnership) === 'shared' && (
-        <Alert
-          type="warning"
-          showIcon
-          title="Shared configuration can share credentials"
-          description="Bearer tokens, custom headers, literal environment values, and shared OAuth grants can be used by everyone with access. Per-user OAuth requires each user to sign in separately; user environment references resolve for the acting user."
-        />
-      )}
+      {(isCreate ? ownership : savedOwnership) === 'shared' &&
+        // Per-user OAuth (the default mode) shares no credential unless headers or env carry one.
+        !(
+          authType === 'oauth' &&
+          watchedOauthMode !== 'shared' &&
+          !hasEnvConfigured &&
+          !hasHeadersConfigured
+        ) && (
+          <Alert
+            type="warning"
+            showIcon
+            title="Shared configuration can share credentials"
+            description="Bearer tokens, custom headers, literal environment values, and shared OAuth grants can be used by everyone with access. Per-user OAuth requires each user to sign in separately; user environment references resolve for the acting user."
+          />
+        )}
       <Row gutter={16}>
         <Col span={12}>
           <Form.Item

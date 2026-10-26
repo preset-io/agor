@@ -6,7 +6,6 @@ import { useId, useState } from 'react';
 import { CatalogTab } from './CatalogTab';
 import { CredentialsTab } from './CredentialsTab';
 import { MyServersTab } from './MyServersTab';
-import { SessionsTab } from './SessionsTab';
 import { useMarketplaceOverview } from './useMarketplaceOverview';
 
 export interface MCPCatalogContentProps {
@@ -21,8 +20,8 @@ export interface MCPCatalogContentProps {
 }
 
 /**
- * The MCP Catalog / Marketplace inner content (Catalog, My Servers, Sessions,
- * Credentials tabs). Shared by the desktop MCPCatalogModal chrome and the mobile
+ * The MCP Catalog / Marketplace inner content (Catalog, My Servers, Credentials
+ * tabs). Shared by the desktop MCPCatalogModal chrome and the mobile
  * full-screen Marketplace route, so both browse/connect the same way.
  */
 export function MCPCatalogContent({
@@ -45,14 +44,13 @@ export function MCPCatalogContent({
     role: currentUser?.role,
   });
   const [requestedServerId, setRequestedServerId] = useState<string | null>(null);
-  const authorityKey =
+  const canManageCredentials = Boolean(
     client &&
-    connected &&
-    !connecting &&
-    currentUser?.user_id &&
-    hasMinimumRole(currentUser.role, ROLES.MEMBER)
-      ? ([currentUser.user_id, currentUser.role, authGeneration, client] as const)
-      : null;
+      connected &&
+      !connecting &&
+      currentUser?.user_id &&
+      hasMinimumRole(currentUser.role, ROLES.MEMBER)
+  );
 
   return (
     <>
@@ -77,6 +75,10 @@ export function MCPCatalogContent({
                 authGeneration={authGeneration}
                 currentUser={currentUser}
                 refreshMarketplaceOverview={overview.refresh}
+                onCustomServerCreated={(serverId) => {
+                  setRequestedServerId(serverId);
+                  setActiveTab('servers');
+                }}
               />
             ),
           },
@@ -99,25 +101,12 @@ export function MCPCatalogContent({
             ),
           },
           {
-            key: 'sessions',
-            label: `Sessions${overview.overview.attachments.length ? ` (${new Set(overview.overview.attachments.map((item) => item.session_id)).size})` : ''}`,
-            children: (
-              <SessionsTab
-                onOpenSession={onOpenSession}
-                client={client}
-                authorityKey={authorityKey}
-                {...overview}
-                onBrowseCatalog={() => setActiveTab('catalog')}
-              />
-            ),
-          },
-          {
             key: 'credentials',
             label: `Credentials${overview.overview.credentials.length ? ` (${overview.overview.credentials.length})` : ''}`,
             children: (
               <CredentialsTab
                 {...overview}
-                canManageCredentials={authorityKey !== null}
+                canManageCredentials={canManageCredentials}
                 onOpenServerSettings={(serverId) => {
                   setRequestedServerId(serverId);
                   setActiveTab('servers');

@@ -7,7 +7,7 @@ import type {
 } from '@agor/core/types';
 import type { AgorClient, MCPServer, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
+import { SettingOutlined } from '@ant-design/icons';
 import {
   Alert,
   Avatar,
@@ -31,21 +31,15 @@ import {
   type ActionErrorCopy,
   describeActionError,
   formatActionError,
-  LOST_CONNECTION_TOOLTIP,
 } from '@/utils/connectionErrors';
 import { useThemedMessage } from '@/utils/message';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { mcpServerRemoved } from '../../store/agorRealtimeActions';
 import { MCPServerEditModal } from '../MCPServer/MCPServerEditModal';
 import {
-  allowedMcpScopes,
-  allowedMcpTransports,
-  canAddMcpServer,
-  canAddSharedMcpServer,
   canDeleteMcpServer,
   canEditMcpServer,
   canRefreshMcpServer,
-  explainAddRestriction,
   explainManageRestriction,
   policyPendingState,
 } from '../MCPServer/memberPolicy';
@@ -62,6 +56,7 @@ import {
   marketplaceServerTitle,
 } from './marketplacePresentation';
 import { ServerSettingsDrawer } from './ServerSettingsDrawer';
+import { useAddCustomMcpServer } from './useAddCustomMcpServer';
 
 const { Text } = Typography;
 
@@ -160,26 +155,18 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     [connectionReady, currentUser, memberPolicy.canConfigure, memberPolicy.policy]
   );
   const policyState = policyPendingState(memberPolicy);
-  // Same gates as the former Settings > MCP Servers create form.
-  const canAdd = !policyState.pending && canAddMcpServer(capability);
-  const addRestriction = !connectionReady
-    ? LOST_CONNECTION_TOOLTIP
-    : policyState.pending
-      ? policyState.hint
-      : explainAddRestriction(capability);
-  const createAuthorityKey =
-    canAdd && currentUser ? `${currentUser.user_id}:${currentUser.role}:${authGeneration}` : null;
-  const offeredTransports = useMemo(
-    () => allowedMcpTransports({ isAdmin: capability.isAdmin }),
-    [capability.isAdmin]
-  );
-  const offeredScopes = useMemo(
-    () => allowedMcpScopes({ isAdmin: capability.isAdmin, policy: memberPolicy.policy }),
-    [capability.isAdmin, memberPolicy.policy]
-  );
-  const [createOpen, setCreateOpen] = useState(false);
   // A just-added server opens like a requested one once the refreshed overview lists it.
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
+  const addCustom = useAddCustomMcpServer({
+    client,
+    currentUser,
+    authGeneration,
+    capability,
+    policyState,
+    onCreated: (server) => setCreatedServerId(server.mcp_server_id),
+    onClose: () => void refresh(),
+  });
+  const closeAddCustom = addCustom.close;
   const authorityFor = useCallback(
     (server: MCPMarketplaceServer) => ({
       // The overview lists the caller's own rows plus Shared (ownerless) ones.
@@ -235,7 +222,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   );
   const autoDiscoveryAttempts = useRef(new Set<string>());
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
-  const [editingCredentialServer, setEditingCredentialServer] = useState<MCPServer | null>(null);
+  /** The full server open in the configuration/credential editor. */
+  const [editingServer, setEditingServer] = useState<MCPServer | null>(null);
   /** Catalog entry name -> its customer-owned app recipe (`null`: not one). */
   const [appRecipes, setAppRecipes] = useState<
     ReadonlyMap<string, { secretRequired: boolean } | null>
@@ -279,12 +267,12 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     drawerOpen.current = false;
     drawerTrigger.current = null;
     setSelectedServerId(null);
-    setEditingCredentialServer(null);
+    setEditingServer(null);
     setEditingApp(null);
-    setCreateOpen(false);
+    closeAddCustom();
     setCreatedServerId(null);
     setDiscoveryErrors(new Map());
-  }, [active, clearRemovalFocusAuthority]);
+  }, [active, clearRemovalFocusAuthority, closeAddCustom]);
 
   useLayoutEffect(() => {
     // The value is an authority generation key; any identity/capability change
@@ -775,17 +763,21 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     }
   };
 
-  const openCredentialEditor = async (server: MCPMarketplaceServer) => {
+  // The credential and configuration actions open the same full-server editor.
+  const openServerEditor = async (
+    server: MCPMarketplaceServer,
+    purpose: 'credential' | 'configuration'
+  ) => {
     const operation = guard.begin();
     if (!client || !canChangeTools || !operation.isCurrent()) return;
-    const key = `credential:${server.mcp_server_id}`;
+    const key = `${purpose}:${server.mcp_server_id}`;
     setBusy((current) => new Set(current).add(key));
     try {
       const fullServer = await client.service('mcp-servers').get(server.mcp_server_id);
-      if (operation.isCurrent()) setEditingCredentialServer(fullServer);
+      if (operation.isCurrent()) setEditingServer(fullServer);
     } catch (cause) {
       if (operation.isCurrent()) {
-        showError(formatActionError('open credential settings', cause, { idempotent: true }));
+        showError(formatActionError(`open ${purpose} settings`, cause, { idempotent: true }));
       }
     } finally {
       if (operation.isCurrent()) {
@@ -838,7 +830,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
             {server.source === 'catalog' ? 'Catalog' : 'Manual'}
           </Text>
-          {server.shared && <Tag>Shared</Tag>}
+          {server.shared ? <Tag>Shared</Tag> : <Tag>Private</Tag>}
           {!server.enabled && <Tag color="default">Disabled</Tag>}
         </Space>
       </Flex>
@@ -858,42 +850,9 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     </Button>
   );
 
-  const addCustomServerButton = canAdd ? (
-    <Button icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-      Add custom server
-    </Button>
-  ) : (
-    // A disabled button can't host a tooltip of its own — hence the span.
-    <Tooltip title={addRestriction}>
-      <span>
-        <Button icon={<PlusOutlined />} disabled>
-          Add custom server
-        </Button>
-      </span>
-    </Tooltip>
-  );
   // Every branch below renders this as the first child of a Flex root, so a
   // list that appears mid-create (for example, during OAuth) keeps the form.
-  const createModal = (
-    <MCPServerEditModal
-      server={null}
-      open={createOpen}
-      client={client}
-      identityKey={currentUser?.user_id ?? null}
-      authGeneration={authGeneration}
-      authorityKey={createAuthorityKey}
-      offeredTransports={offeredTransports}
-      offeredScopes={offeredScopes}
-      allowSharedOwnership={canAddSharedMcpServer(capability)}
-      mutationAllowed={canAdd}
-      mutationBlockedReason={addRestriction}
-      onCreated={(server) => setCreatedServerId(server.mcp_server_id)}
-      onClose={() => {
-        setCreateOpen(false);
-        void refresh();
-      }}
-    />
-  );
+  const createModal = addCustom.modal;
 
   if (error && overview.servers.length === 0)
     return (
@@ -924,7 +883,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
                   Browse catalog
                 </Button>
               )}
-              {addCustomServerButton}
+              {addCustom.button}
             </Space>
           </Empty>
         </section>
@@ -950,7 +909,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           title={policyState.pending ? policyState.hint : explainManageRestriction(capability)}
         />
       )}
-      <Flex justify="flex-end">{addCustomServerButton}</Flex>
+      <Flex justify="flex-end">{addCustom.button}</Flex>
       <section ref={inventoryFocusTarget} tabIndex={-1} aria-label="Installed MCP server inventory">
         {compact ? (
           <Spin spinning={loading}>
@@ -1100,7 +1059,16 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
         )}
         onEditCredential={
           selectedCredential && selectedCredential.method !== 'oauth' && selectedServer
-            ? () => void openCredentialEditor(selectedServer)
+            ? () => void openServerEditor(selectedServer, 'credential')
+            : undefined
+        }
+        editingConfiguration={Boolean(
+          selectedServer && busy.has(`configuration:${selectedServer.mcp_server_id}`)
+        )}
+        onEditConfiguration={
+          // Catalog installs follow their recipe; only custom servers are reconfigured here.
+          selectedServer && selectedServer.source !== 'catalog'
+            ? () => void openServerEditor(selectedServer, 'configuration')
             : undefined
         }
         editingOAuthApp={Boolean(
@@ -1162,8 +1130,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
         }}
       />
       <MCPServerEditModal
-        server={editingCredentialServer}
-        open={editingCredentialServer !== null}
+        server={editingServer}
+        open={editingServer !== null}
         client={client}
         identityKey={currentUser?.user_id ?? null}
         authGeneration={authGeneration}
@@ -1172,10 +1140,11 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
             ? `${currentUser.user_id}:${currentUser.role}:${authGeneration}`
             : null
         }
+        offeredTransports={addCustom.offeredTransports}
+        offeredScopes={addCustom.offeredScopes}
         mutationAllowed={canChangeTools}
-        mutationBlockedReason="You can no longer change this MCP server credential."
         onClose={() => {
-          setEditingCredentialServer(null);
+          setEditingServer(null);
           void refresh();
         }}
       />

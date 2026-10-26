@@ -65,3 +65,24 @@ describe('ServerSettingsDrawer OAuth app editing', () => {
     ).toHaveProperty('disabled', true);
   });
 });
+
+describe('ServerSettingsDrawer configuration editing', () => {
+  it('offers Edit configuration only when the owner passes a handler', () => {
+    const onEditConfiguration = vi.fn();
+    const view = render(<ServerSettingsDrawer {...props()} />);
+    expect(screen.queryByRole('button', { name: 'Edit HubSpot configuration' })).toBeNull();
+    view.rerender(<ServerSettingsDrawer {...props({ onEditConfiguration })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit HubSpot configuration' }));
+    expect(onEditConfiguration).toHaveBeenCalledOnce();
+  });
+
+  it('disables Edit configuration without edit permission', () => {
+    render(
+      <ServerSettingsDrawer {...props({ onEditConfiguration: vi.fn(), canChangeTools: false })} />
+    );
+    expect(screen.getByRole('button', { name: 'Edit HubSpot configuration' })).toHaveProperty(
+      'disabled',
+      true
+    );
+  });
+});

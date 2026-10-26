@@ -30,7 +30,7 @@ describe('app-owned MCP Catalog', () => {
       within(modal)
         .getAllByRole('tab')
         .map((tab) => tab.textContent)
-    ).toEqual(['Catalog', 'My Servers (1)', 'Sessions (1)', 'Credentials (1)']);
+    ).toEqual(['Catalog', 'My Servers (1)', 'Credentials (1)']);
     // Schedule realtime revalidation just before closing; teardown cancels it.
     act(() => api.emit('socket:marketplace:changed'));
     fireEvent.click(within(modal).getByRole('button', { name: 'Close' }));
@@ -81,7 +81,7 @@ describe('app-owned MCP Catalog', () => {
     ).toBeInTheDocument();
   });
 
-  // Real Select, Modal and Sessions-tab mounts can exceed 15s under CI CPU contention.
+  // Real Select, Modal and My Servers-tab mounts can exceed 15s under CI CPU contention.
   it('closes the session disclosure before Catalog and restores the stable MCP trigger', async () => {
     const api = makeCatalogClient();
     render(<CatalogHarness client={api.client} />);
@@ -97,7 +97,7 @@ describe('app-owned MCP Catalog', () => {
     );
     expect(screen.queryByRole('dialog', { name: 'Session MCP servers' })).not.toBeInTheDocument();
     const modal = await screen.findByRole('dialog', { name: 'MCP Catalog' });
-    fireEvent.click(within(modal).getByRole('tab', { name: /Sessions/ }));
+    fireEvent.click(within(modal).getByRole('tab', { name: /My Servers/ }));
     fireEvent.click(within(modal).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(trigger).toHaveFocus());
     expect(trigger).toHaveAttribute('aria-expanded', 'false');

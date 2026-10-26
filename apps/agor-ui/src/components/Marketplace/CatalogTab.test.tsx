@@ -402,6 +402,9 @@ describe('catalog browsing', () => {
 
     expect(await screen.findByText('No servers match')).toBeVisible();
     expect(screen.queryByText('No servers in the catalog yet')).not.toBeInTheDocument();
+    // The empty state and the toolbar both lead to a custom server, never a catalog card.
+    expect(screen.getByText("Can't find it? Add a custom server.")).toBeVisible();
+    expect(screen.getAllByRole('button', { name: /Add custom server/ })).toHaveLength(2);
   });
 
   it('picks the catalog back up once seeding finishes', async () => {

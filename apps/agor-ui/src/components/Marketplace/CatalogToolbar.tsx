@@ -15,7 +15,7 @@ import type { MCPCatalogCategory, MCPCatalogSort } from '@agor/core/types';
 import { FilterOutlined, SearchOutlined } from '@ant-design/icons';
 import { Badge, Button, Drawer, Flex, Input, type InputRef, Select, Typography, theme } from 'antd';
 import type { RefSelectProps } from 'antd/es/select';
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useElementWidth } from '../../hooks/useElementWidth';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
@@ -36,6 +36,7 @@ const { Text } = Typography;
 const SEARCH_MIN = 240;
 const FILTER_MIN = 180;
 const SORT_WIDTH = 150;
+const ACTION_WIDTH = 170;
 
 const CAPABILITY_OPTIONS = [
   { label: 'Any', value: ANY_CAPABILITY },
@@ -60,6 +61,8 @@ export interface CatalogToolbarProps {
   onSortChange: (value: MCPCatalogSort) => void;
   /** `null` until the catalog has loaded. */
   matchSummary: { matched: number; total: number } | null;
+  /** Trailing toolbar action, such as "Add custom server". */
+  action?: ReactNode;
 }
 
 const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
@@ -72,6 +75,7 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   onCapabilityChange,
   onSortChange,
   matchSummary,
+  action,
 }) => {
   const { token } = theme.useToken();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -82,7 +86,13 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   const width = useElementWidth(rootRef);
   // Unmeasured (0) keeps the full row.
   const compact =
-    width > 0 && width < SEARCH_MIN + 2 * FILTER_MIN + SORT_WIDTH + 3 * token.paddingSM;
+    width > 0 &&
+    width <
+      SEARCH_MIN +
+        2 * FILTER_MIN +
+        SORT_WIDTH +
+        3 * token.paddingSM +
+        (action ? ACTION_WIDTH + token.paddingSM : 0);
   const reducedMotion = usePrefersReducedMotion();
   const [filtersOpen, setFiltersOpen] = useState(false);
   // Mount the sheet on demand: left mounted while closed, it broke the host modal's Escape.
@@ -185,11 +195,13 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
               Filters
             </Button>
           </Badge>
+          {action}
         </Flex>
       ) : (
         <Flex gap={token.paddingSM} align="center">
           {searchInput}
           {selects}
+          {action}
         </Flex>
       )}
       {filtersMounted && (

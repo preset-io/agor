@@ -3,7 +3,7 @@ import type {
   MCPMarketplaceCredential,
   MCPMarketplaceServer,
 } from '@agor/core/types';
-import { DeleteOutlined, KeyOutlined, ReloadOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, KeyOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
   Alert,
   Avatar,
@@ -58,6 +58,9 @@ export interface ServerSettingsDrawerProps {
   onReconnectOAuth?: () => void;
   onDisconnectOAuth?: () => void;
   onEditCredential?: () => void;
+  /** Present only for a custom (non-Catalog) server; opens the full server form. */
+  onEditConfiguration?: () => void;
+  editingConfiguration?: boolean;
   /** Present only for a customer-owned OAuth app install the caller may edit. */
   onEditOAuthApp?: () => void;
   editingOAuthApp?: boolean;
@@ -91,6 +94,8 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
   onReconnectOAuth,
   onDisconnectOAuth,
   onEditCredential,
+  onEditConfiguration,
+  editingConfiguration = false,
   onEditOAuthApp,
   editingOAuthApp = false,
   onRefreshTools,
@@ -171,6 +176,18 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
               { key: 'sessions', label: 'Session attachments', children: server.session_count },
             ]}
           />
+          {onEditConfiguration && (
+            <Button
+              icon={<EditOutlined />}
+              disabled={!canChangeTools || toolWorkActive}
+              loading={editingConfiguration}
+              onClick={onEditConfiguration}
+              aria-label={`Edit ${marketplaceServerTitle(server)} configuration`}
+              style={{ alignSelf: 'flex-start' }}
+            >
+              Edit configuration
+            </Button>
+          )}
 
           <Flex vertical gap={token.marginXS}>
             <Title level={5} style={{ margin: 0 }}>
