@@ -16,7 +16,7 @@ configure({ asyncUtilTimeout: 10_000 });
 afterEach(cleanup);
 
 describe('app-owned MCP Catalog', () => {
-  it('mounts on demand, shares four tabs, releases subscriptions/timers and resets on reopen', async () => {
+  it('mounts on demand, shares three tabs, releases subscriptions/timers and resets on reopen', async () => {
     const api = makeCatalogClient();
     render(<CatalogHarness client={api.client} />);
     expect(api.listenerCount()).toBe(0);

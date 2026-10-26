@@ -289,12 +289,7 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
               Session MCP servers
             </Typography.Text>
             {catalog && (
-              <Button
-                size="small"
-                icon={<ShopOutlined />}
-                aria-label="Open MCP Catalog"
-                onClick={handleBrowseCatalog}
-              >
+              <Button size="small" icon={<ShopOutlined />} onClick={handleBrowseCatalog}>
                 Browse catalog
               </Button>
             )}

@@ -95,6 +95,7 @@ export function MCPCatalogContent({
                 currentUser={currentUser}
                 {...overview}
                 onBrowseCatalog={() => setActiveTab('catalog')}
+                onOpenSession={onOpenSession}
                 requestedServerId={requestedServerId}
                 onRequestedServerOpened={() => setRequestedServerId(null)}
               />

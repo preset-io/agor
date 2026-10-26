@@ -63,6 +63,8 @@ export interface CatalogToolbarProps {
   matchSummary: { matched: number; total: number } | null;
   /** Trailing toolbar action, such as "Add custom server". */
   action?: ReactNode;
+  /** The same action in compact form, so the search box keeps its width on a phone. */
+  compactAction?: ReactNode;
 }
 
 const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
@@ -76,6 +78,7 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   onSortChange,
   matchSummary,
   action,
+  compactAction = action,
 }) => {
   const { token } = theme.useToken();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -195,7 +198,7 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
               Filters
             </Button>
           </Badge>
-          {action}
+          {compactAction}
         </Flex>
       ) : (
         <Flex gap={token.paddingSM} align="center">

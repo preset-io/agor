@@ -88,7 +88,7 @@ describe('MCP Catalog real Chromium flows', () => {
     const trigger = screen.getByRole('button', { name: /^MCP servers\./ });
     await userEvent.click(trigger);
     let disclosure = screen.getByRole('dialog', { name: 'Session MCP servers' });
-    await userEvent.click(within(disclosure).getByRole('button', { name: 'Open MCP Catalog' }));
+    await userEvent.click(within(disclosure).getByRole('button', { name: 'Browse catalog' }));
     expect(screen.queryByRole('dialog', { name: 'Session MCP servers' })).not.toBeInTheDocument();
     let modal = await findCatalogModal();
     await activateTab(/My Servers/);

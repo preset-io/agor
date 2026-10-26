@@ -53,7 +53,10 @@ export interface MCPServerEditModalProps {
   offeredScopes?: MCPScope[];
   /** Create mode only: whether Shared (workspace) ownership may be chosen. */
   allowSharedOwnership?: boolean;
-  /** Create mode only: runs after Save with the server that was added. */
+  /**
+   * Create mode only: runs once, when the server is first persisted — on Save,
+   * or earlier, before an OAuth start — even if the form is then cancelled.
+   */
   onCreated?: (server: MCPServer) => void;
   /** Current server-side capability/connection decision from the owner. */
   mutationAllowed: boolean;
@@ -350,6 +353,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     if (!operation.isCurrent()) return null;
     configVersionRef.current = created.config_version ?? 1;
     setCreatedServer(created);
+    onCreated?.(created);
     return created;
   };
 
@@ -465,7 +469,6 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     if (saved) {
       if (!operation.isCurrent()) return;
       showSuccess(server ? 'MCP server saved.' : 'MCP server added.');
-      if (!server) onCreated?.(saved);
       closeAndReset();
     }
   };
