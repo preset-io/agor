@@ -515,6 +515,33 @@ describe('MCPServerFormFields OAuth callback URL', () => {
     expect(screen.queryByText('Callback URL')).not.toBeInTheDocument();
   });
 
+  it('keeps the form usable when the client cannot serve the read', () => {
+    const client = {
+      service: vi.fn(() => {
+        throw new Error('no such service');
+      }),
+    } as unknown as AgorClient;
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form} initialValues={{ auth_type: 'oauth' }}>
+          <MCPServerFormFields
+            mode="create"
+            transport="http"
+            authType="oauth"
+            form={form}
+            client={client}
+            authorityKey="admin:1"
+            onPrepareOAuthStart={vi.fn()}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(screen.getByText('Auth Type')).toBeInTheDocument();
+    expect(screen.queryByText('Callback URL')).not.toBeInTheDocument();
+  });
+
   it('does not ask for or show a callback for other auth types', () => {
     const find = renderWith('bearer', { redirect_uri: CALLBACK });
     expect(find).not.toHaveBeenCalled();

@@ -15,13 +15,19 @@ export function MCPOAuthRedirectUri({ client }: { client: AgorClient | null }) {
     setRedirectUri(undefined);
     if (!client) return;
     let current = true;
-    client
-      .service('mcp-servers/oauth-redirect-uri')
-      .find()
-      .then((result) => {
-        if (current) setRedirectUri((result as MCPOAuthRedirectUriResult)?.redirect_uri);
-      })
-      .catch(() => {});
+    // Advisory only: any failure, including a client that can't serve this
+    // read, shows nothing and never breaks the surrounding form.
+    try {
+      client
+        .service('mcp-servers/oauth-redirect-uri')
+        .find()
+        .then((result) => {
+          if (current) setRedirectUri((result as MCPOAuthRedirectUriResult)?.redirect_uri);
+        })
+        .catch(() => {});
+    } catch {
+      // Nothing to show.
+    }
     return () => {
       current = false;
     };
