@@ -660,6 +660,7 @@ const CompactAlert: React.FC<{
   style,
 }) => {
   const { token } = theme.useToken();
+  const headingLineHeight = Math.round(token.fontSizeSM * 1.4);
   const body =
     description == null ? undefined : expandable ? (
       <Typography.Paragraph
@@ -679,19 +680,25 @@ const CompactAlert: React.FC<{
       type={type}
       showIcon={showIcon}
       icon={icon}
-      title={
-        heading == null ? undefined : (
-          <span style={{ fontSize: token.fontSizeSM, fontWeight: 600, lineHeight: 1.4 }}>
-            {heading}
-          </span>
-        )
-      }
+      title={heading}
       description={body}
       style={style}
       styles={{
         root: { padding: '6px 10px', alignItems: heading == null ? 'center' : 'flex-start' },
-        icon: { fontSize: token.fontSizeSM, marginInlineEnd: 8 },
-        title: { marginBottom: body == null ? 0 : 2 },
+        // Center the icon on the first heading line instead of the alert's default line box.
+        icon: {
+          fontSize: token.fontSizeSM,
+          marginInlineEnd: 8,
+          ...(heading == null
+            ? {}
+            : { display: 'flex', alignItems: 'center', height: headingLineHeight }),
+        },
+        title: {
+          fontSize: token.fontSizeSM,
+          fontWeight: 600,
+          lineHeight: `${headingLineHeight}px`,
+          marginBottom: body == null ? 0 : 2,
+        },
       }}
     />
   );
