@@ -70,7 +70,8 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
       if (db) await (db as Database & { $client: { end: () => Promise<void> } }).$client.end();
     });
 
-    it('records restrict → prepare_release → activate, repeats as no-ops, and refuses a stale revision', async () => {
+    // Transition, replay and conflict rules are proven in core; this pins the process contract.
+    it('applies with exit 0 and one JSON line, replays as a no-op, and maps a conflict to exit 2', async () => {
       const tenant = `cli-restriction-${Date.now().toString(36)}`;
 
       const restricted = await apply(tenant, 'susp-1', 1, 'restrict');
@@ -96,111 +97,48 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
       expect(retried.code).toBe(0);
       expect((JSON.parse(retried.stdout) as ApplyPayload).changed).toBe(false);
 
-      const prepared = await apply(tenant, 'rel-2', 2, 'prepare_release');
-      expect(prepared.code).toBe(0);
-      const preparedPayload = JSON.parse(prepared.stdout) as ApplyPayload;
-      expect(preparedPayload.changed).toBe(true);
-      expect(preparedPayload.record.phase).toBe('release_prepared');
-      // Preparing a release does not open admission.
-      expect((await readTenantRestrictionState(db, tenant)).records).toEqual([
-        preparedPayload.record,
-      ]);
-
-      const activated = await apply(tenant, 'rel-2', 2, 'activate');
-      expect(activated.code).toBe(0);
-      const activatedPayload = JSON.parse(activated.stdout) as ApplyPayload;
-      expect(activatedPayload).toEqual({
-        record: {
-          version: 1,
-          controllerId: CONTROLLER,
-          placementId: PLACEMENT,
-          operationId: 'rel-2',
-          revision: 2,
-          phase: 'active',
-        },
-        changed: true,
-      });
-      expect((await readTenantRestrictionState(db, tenant)).records).toEqual([
-        activatedPayload.record,
-      ]);
-
-      // The activated revision is a watermark: a delayed older restrict gets a conflict code.
+      expect((await apply(tenant, 'rel-2', 2, 'prepare_release')).code).toBe(0);
       const stale = await apply(tenant, 'susp-1', 1, 'restrict');
       expect(stale.code).toBe(2);
       expect(stale.stdout).toBe('');
       expect(stale.stderr).toContain('{"error":"stale_revision"}');
-      expect((await readTenantRestrictionState(db, tenant)).records).toEqual([
-        activatedPayload.record,
-      ]);
 
       const inspected = await runTenantRestrictionCli(['inspect', '--tenant-id', tenant], jobEnv());
       expect(inspected.code).toBe(0);
-      expect(JSON.parse(inspected.stdout)).toEqual([activatedPayload.record]);
+      expect(JSON.parse(inspected.stdout)).toEqual([
+        {
+          ...restrictedPayload.record,
+          operationId: 'rel-2',
+          revision: 2,
+          phase: 'release_prepared',
+        },
+      ]);
       const cutoff = (await readTenantRestrictionState(db, tenant)).resumeAfter!;
       expect(inspected.stderr).toContain(
         `Event cutoff (latest update): ${new Date(cutoff).toISOString()}`
       );
     }, 180_000);
 
-    it('seeds a re-homed tenant, replays as a no-op, and refuses once the runtime moved on', async () => {
+    it('inspects an unrecorded tenant as [] without a row, then seeds it with a warning only when changed', async () => {
       const tenant = `cli-restriction-seed-${Date.now().toString(36)}`;
+      const empty = await runTenantRestrictionCli(['inspect', '--tenant-id', tenant], jobEnv());
+      expect(empty.code).toBe(0);
+      expect(JSON.parse(empty.stdout)).toEqual([]);
+      expect((await readTenantRestrictionState(db, tenant)).records).toEqual([]);
 
       const seeded = await apply(tenant, 'reactivate-4', 4, 'seed_active');
       expect(seeded.code).toBe(0);
-      const seededPayload = JSON.parse(seeded.stdout) as ApplyPayload;
       expect(seeded.stderr).toContain('credential generation changed');
-      expect(seededPayload).toEqual({
-        record: {
-          version: 1,
-          controllerId: CONTROLLER,
-          placementId: PLACEMENT,
-          operationId: 'reactivate-4',
-          revision: 4,
-          phase: 'active',
-        },
+      expect(JSON.parse(seeded.stdout)).toMatchObject({
+        record: { operationId: 'reactivate-4', revision: 4, phase: 'active' },
         changed: true,
       });
 
       // A rerun Job (lost report, expired or re-leased lease) must read as an accepted no-op.
       const replayed = await apply(tenant, 'reactivate-4', 4, 'seed_active');
       expect(replayed.code).toBe(0);
-      expect(JSON.parse(replayed.stdout)).toEqual({
-        record: seededPayload.record,
-        changed: false,
-      });
+      expect((JSON.parse(replayed.stdout) as ApplyPayload).changed).toBe(false);
       expect(replayed.stderr).not.toContain('credential generation changed');
-
-      // After a newer restriction the seed is refused, and inspect shows this controller moved past it.
-      expect((await apply(tenant, 'susp-5', 5, 'restrict')).code).toBe(0);
-      const stale = await apply(tenant, 'reactivate-4', 4, 'seed_active');
-      expect(stale.code).toBe(2);
-      expect(stale.stdout).toBe('');
-      expect(stale.stderr).toContain('{"error":"revision_conflict"}');
-      const inspected = await runTenantRestrictionCli(['inspect', '--tenant-id', tenant], jobEnv());
-      expect(JSON.parse(inspected.stdout)).toEqual([
-        { ...seededPayload.record, operationId: 'susp-5', revision: 5, phase: 'restricted' },
-      ]);
     }, 180_000);
-
-    it('reads an unrecorded tenant as an empty array without creating a row', async () => {
-      const tenant = `cli-restriction-empty-${Date.now().toString(36)}`;
-      const inspected = await runTenantRestrictionCli(['inspect', '--tenant-id', tenant], jobEnv());
-
-      expect(inspected.code).toBe(0);
-      expect(JSON.parse(inspected.stdout)).toEqual([]);
-      expect((await readTenantRestrictionState(db, tenant)).records).toEqual([]);
-    }, 60_000);
-
-    it('refuses a second controller identity for a recorded placement', async () => {
-      const tenant = `cli-restriction-identity-${Date.now().toString(36)}`;
-      expect((await apply(tenant, 'susp-1', 1, 'restrict')).code).toBe(0);
-
-      const mismatched = await apply(tenant, 'susp-2', 2, 'restrict', {
-        placementId: 'cell-other',
-      });
-
-      expect(mismatched.code).toBe(2);
-      expect(mismatched.stderr).toContain('{"error":"identity_mismatch"}');
-    }, 120_000);
   }
 );

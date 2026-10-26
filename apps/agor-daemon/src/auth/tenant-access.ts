@@ -91,6 +91,66 @@ export function createSharedTenantRestrictionObservation(
   };
 }
 
+/** One shared read; `until` stays infinite while it is pending, then marks the end of its reuse. */
+export interface TenantReadEntry<T> {
+  startedAt: number;
+  until: number;
+  value: Promise<T>;
+}
+
+/** Per-tenant single-flight read reused `reuseMs` from its start once settled; a read pending past `abandonAfterMs` is abandoned once, never stacked. */
+export function createTenantReadCache<T>(
+  read: (tenantId: string) => Promise<T>,
+  options: {
+    abandonAfterMs: number;
+    reuseMs?: number;
+    /** Running reads, abandoned ones included, past which a lookup starts none and returns undefined. */
+    maxRunning?: number;
+    now?: () => number;
+  }
+): (tenantId: string) => TenantReadEntry<T> | undefined {
+  const reuseMs = options.reuseMs ?? 0;
+  const now = options.now ?? (() => performance.now());
+  const entries = new Map<string, TenantReadEntry<T>>();
+  const abandoned = new Map<string, Promise<T>>();
+  let running = 0;
+  let nextEviction = 0;
+  return (tenantId) => {
+    // Monotonic, so a wall-clock step cannot abandon a read early or keep a wedged one forever.
+    const at = now();
+    if (at >= nextEviction) {
+      // Settled entries past their reuse are dropped; in-flight reads are only replaced on lookup.
+      for (const [id, stale] of entries) if (at >= stale.until) entries.delete(id);
+      nextEviction = at + TENANT_RESTRICTION_OBSERVATION_MS;
+    }
+    let current = entries.get(tenantId);
+    const wedged =
+      current?.until === Number.POSITIVE_INFINITY &&
+      at - current.startedAt >= options.abandonAfterMs;
+    if (current && wedged && !abandoned.has(tenantId)) {
+      const stale = current.value;
+      entries.delete(tenantId);
+      abandoned.set(tenantId, stale);
+      const forget = () => {
+        if (abandoned.get(tenantId) === stale) abandoned.delete(tenantId);
+      };
+      stale.then(forget, forget);
+      current = undefined;
+    }
+    if (current && at < current.until) return current;
+    if (options.maxRunning !== undefined && running >= options.maxRunning) return undefined;
+    const created = { startedAt: at, until: Number.POSITIVE_INFINITY, value: read(tenantId) };
+    running++;
+    const settle = () => {
+      running--;
+      created.until = created.startedAt + reuseMs;
+    };
+    created.value.then(settle, settle);
+    entries.set(tenantId, created);
+    return created;
+  };
+}
+
 /** Route this packet's checks, service hook included, through the shared observation: at most one read per tenant per tick, each under a tick old when used. */
 export function shareTenantRestrictionRead(
   tenantId: string,

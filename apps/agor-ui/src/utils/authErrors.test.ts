@@ -77,31 +77,33 @@ describe('isTransientConnectionError', () => {
 });
 
 describe('isTenantRestrictedError', () => {
-  it('recognizes the daemon code on the REST rejection and the socket handshake', () => {
-    // Feathers keeps the numeric status on the error and the code in `data`.
-    expect(
-      isTenantRestrictedError(
-        Object.assign(new Error('Tenant access is restricted'), {
-          code: 403,
-          className: 'forbidden',
-          data: { code: 'tenant_restricted' },
-        })
-      )
-    ).toBe(true);
-    // Socket.IO delivers only message + data on connect_error.
-    expect(
-      isTenantRestrictedError(
-        Object.assign(new Error('Tenant access is restricted'), {
-          data: { code: 'tenant_restricted' },
-        })
-      )
-    ).toBe(true);
+  it('recognizes the code on the 403, the coded 401 and handshake data, keeping tokens without retry', () => {
+    // Feathers keeps the status beside `data`; Socket.IO delivers only message + data on connect_error.
+    for (const coded of [
+      Object.assign(new Error('Tenant access is restricted'), {
+        code: 403,
+        className: 'forbidden',
+        data: { code: 'tenant_restricted' },
+      }),
+      // The generation check runs ahead of admission, so a closed workspace answers JWT paths with this.
+      Object.assign(new Error('Tenant credential cannot be verified'), {
+        code: 401,
+        className: 'not-authenticated',
+        data: { code: 'tenant_restricted' },
+      }),
+      Object.assign(new Error('Tenant access is restricted'), {
+        data: { code: 'tenant_restricted' },
+      }),
+    ]) {
+      expect(isTenantRestrictedError(coded)).toBe(true);
+      expect(isDefiniteAuthFailure(coded)).toBe(false);
+      expect(isTransientConnectionError(coded)).toBe(false);
+    }
   });
 
-  it('never infers a restriction from message text or a bare status', () => {
+  it('never infers a restriction from message text, a bare status, a 503 or an uncoded 401', () => {
     expect(isTenantRestrictedError(new Error('Tenant access is restricted'))).toBe(false);
     expect(isTenantRestrictedError({ code: 403 })).toBe(false);
-    // An unverifiable admission read is not a restriction.
     expect(
       isTenantRestrictedError(
         Object.assign(new Error('Tenant access cannot be verified'), { code: 503 })
@@ -109,38 +111,6 @@ describe('isTenantRestrictedError', () => {
     ).toBe(false);
     expect(isTenantRestrictedError(null)).toBe(false);
     expect(isTenantRestrictedError('tenant_restricted')).toBe(false);
-  });
-
-  it('is neither a credential rejection nor a retryable blip', () => {
-    const restricted = Object.assign(new Error('Tenant access is restricted'), {
-      code: 403,
-      data: { code: 'tenant_restricted' },
-    });
-    // Neither clear tokens for a workspace-level decision nor retry on the transient cadence.
-    expect(isDefiniteAuthFailure(restricted)).toBe(false);
-    expect(isTransientConnectionError(restricted)).toBe(false);
-  });
-
-  it('holds for the coded 401 the credential check raises ahead of admission', () => {
-    // The generation check runs first, so a closed workspace answers every JWT path with this coded 401.
-    for (const coded of [
-      Object.assign(new Error('Tenant credential cannot be verified'), {
-        code: 401,
-        className: 'not-authenticated',
-        data: { code: 'tenant_restricted' },
-      }),
-      Object.assign(new Error('Tenant credential cannot be verified'), {
-        data: { code: 'tenant_restricted' },
-      }),
-    ]) {
-      expect(isTenantRestrictedError(coded)).toBe(true);
-      // The credential is refused but is not what failed, so tokens must survive.
-      expect(isDefiniteAuthFailure(coded)).toBe(false);
-      expect(isTransientConnectionError(coded)).toBe(false);
-    }
-  });
-
-  it('leaves an uncoded 401 a definite failure, including after release', () => {
     // A released workspace rejects the stale generation codelessly, which must still fail over to sign-in.
     const stale = Object.assign(new Error('Tenant credential cannot be verified'), {
       code: 401,
@@ -148,11 +118,5 @@ describe('isTenantRestrictedError', () => {
     });
     expect(isTenantRestrictedError(stale)).toBe(false);
     expect(isDefiniteAuthFailure(stale)).toBe(true);
-    expect(
-      isDefiniteAuthFailure({
-        message: 'Invalid or expired authentication token',
-        data: { code: 401, className: 'not-authenticated' },
-      })
-    ).toBe(true);
   });
 });

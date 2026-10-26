@@ -279,7 +279,7 @@ describe('socket restriction monitor', () => {
     }
   });
 
-  it('abandons a wedged read once after two timeouts and never stacks another behind it', async () => {
+  it('abandons a wedged read once after two monotonic timeouts and never stacks another behind it', async () => {
     vi.useFakeTimers();
     const warn = warnings();
     try {
@@ -289,28 +289,12 @@ describe('socket restriction monitor', () => {
         const checking = monitor.check(['a']);
         await vi.advanceTimersByTimeAsync(20);
         await checking;
+        // A wall-clock jump alone abandons nothing.
+        vi.setSystemTime(Date.now() + 3_600_000);
+        if (sweep === 1) expect(observe).toHaveBeenCalledOnce();
       }
       // The original read plus exactly one replacement; the abandoned one is still outstanding.
       expect(observe).toHaveBeenCalledTimes(2);
-    } finally {
-      warn.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it('times reads on a monotonic clock, so a wall-clock jump abandons nothing', async () => {
-    vi.useFakeTimers();
-    const warn = warnings();
-    try {
-      const observe = vi.fn(() => new Promise<void>(() => undefined));
-      const monitor = new TenantSocketRestrictionMonitor(observe, { timeoutMs: 20 });
-      for (let sweep = 0; sweep < 2; sweep++) {
-        const checking = monitor.check(['a']);
-        await vi.advanceTimersByTimeAsync(20);
-        await checking;
-        vi.setSystemTime(Date.now() + 3_600_000);
-      }
-      expect(observe).toHaveBeenCalledOnce();
     } finally {
       warn.mockRestore();
       vi.useRealTimers();

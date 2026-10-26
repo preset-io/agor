@@ -4,7 +4,6 @@ import type { Server as HttpServer } from 'node:http';
 import { type AgorClient, createClient } from '@agor/core/api';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
 import {
-  applyTenantRestrictionIntent,
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -80,6 +79,7 @@ import {
   readTenantCredentialEpoch,
   tenantCredentialEpochClaims,
 } from './tenant-credential-epoch.js';
+import { applyTestRestriction, releaseTestRestriction } from './tenant-restriction.test-support.js';
 import { authCredentialGenerationClaim, authTokenIssuedAtClaim } from './token-invalidation.js';
 
 const url = process.env.AGOR_TEST_POSTGRES_URL;
@@ -158,29 +158,33 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         return { user, branch, session, task, queued };
       });
 
-    type IntentAction = 'restrict' | 'prepare_release' | 'activate';
     const intent = (
       tenantId: string,
       revision: number,
-      action: IntentAction,
-      database: Parameters<typeof applyTenantRestrictionIntent>[0] = raw
-    ) =>
-      applyTenantRestrictionIntent(database, tenantId, {
-        version: 1,
-        controllerId: 'controller',
-        placementId: 'placement',
-        operationId: `operation-${revision}`,
-        revision,
-        action,
-      });
-    const release = async (
-      tenantId: string,
-      revision: number,
-      database: Parameters<typeof applyTenantRestrictionIntent>[0] = raw
-    ) => {
-      await intent(tenantId, revision, 'prepare_release', database);
-      await intent(tenantId, revision, 'activate', database);
+      action: 'restrict' | 'prepare_release' | 'activate'
+    ) => applyTestRestriction(raw, tenantId, revision, action);
+    const release = (tenantId: string, revision: number) =>
+      releaseTestRestriction(raw, tenantId, revision);
+    const executorTokens = (secret: string) => {
+      const tokens = new SessionTokenService(
+        { expiration_ms: 60_000, max_uses: -1 },
+        { db, startCleanupTimer: false }
+      );
+      tokens.setJwtSecret(secret);
+      return tokens;
     };
+    // An executor-session token for the seeded running task, issued in the tenant's scope.
+    const issueExecutorToken = (
+      tokens: SessionTokenService,
+      tenantId: string,
+      seeded: Awaited<ReturnType<typeof seedTenant>>
+    ) =>
+      runWithTenantDatabaseScope(raw, tenantId, () =>
+        tokens.generateToken(seeded.session.session_id, seeded.user.user_id, {
+          taskId: seeded.task.task_id,
+          branchId: seeded.branch.branch_id,
+        })
+      );
     const findTask = (tenantId: string, taskId: string) =>
       runWithTenantDatabaseScope(raw, tenantId, (scoped) =>
         new TaskRepository(scoped).findById(taskId)
@@ -365,18 +369,8 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const tenantId = `bearer-generation-${randomUUID()}`;
       const seeded = await seedTenant(tenantId);
       const jwtSecret = 'disposable-bearer-generation-secret';
-      const tokenService = new SessionTokenService(
-        { expiration_ms: 60_000, max_uses: -1 },
-        { db, startCleanupTimer: false }
-      );
-      tokenService.setJwtSecret(jwtSecret);
-      const issue = () =>
-        runWithTenantDatabaseScope(raw, tenantId, () =>
-          tokenService.generateToken(seeded.session.session_id, seeded.user.user_id, {
-            taskId: seeded.task.task_id,
-            branchId: seeded.branch.branch_id,
-          })
-        );
+      const tokenService = executorTokens(jwtSecret);
+      const issue = () => issueExecutorToken(tokenService, tenantId, seeded);
       const started = await startAdmissionApp({
         name: 'bearer-generation',
         jwtSecret,
@@ -428,17 +422,8 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const tenantId = `socket-safety-${generateId()}`;
       const seeded = await seedTenant(tenantId);
       const jwtSecret = 'disposable-restricted-executor-socket-secret';
-      const tokenService = new SessionTokenService(
-        { expiration_ms: 60_000, max_uses: -1 },
-        { db, startCleanupTimer: false }
-      );
-      tokenService.setJwtSecret(jwtSecret);
-      const token = await runWithTenantDatabaseScope(raw, tenantId, () =>
-        tokenService.generateToken(seeded.session.session_id, seeded.user.user_id, {
-          taskId: seeded.task.task_id,
-          branchId: seeded.branch.branch_id,
-        })
-      );
+      const tokenService = executorTokens(jwtSecret);
+      const token = await issueExecutorToken(tokenService, tenantId, seeded);
       const started = await startAdmissionApp({
         name: 'socket-safety',
         jwtSecret,
@@ -644,11 +629,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           result: { user: seeded.user, authentication: { strategy: 'jwt', payload: oldPayload } },
         })
       ).rejects.toMatchObject({ code: 401 });
-      const commandTokens = new SessionTokenService(
-        { expiration_ms: 60_000, max_uses: -1 },
-        { db, startCleanupTimer: false }
-      );
-      commandTokens.setJwtSecret(secret);
+      const commandTokens = executorTokens(secret);
       const commandToken = (commandId: string, issuance?: 'safety-recovery') =>
         runWithTenantDatabaseScope(raw, tenantId, () =>
           commandTokens.generateCommandToken(
@@ -900,7 +881,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         });
         expect((await tasks.getNextQueued(seeded.session.session_id))?.task_id).toBe(fresh.task_id);
         // prepare_release itself is a legal closing transition from active.
-        await release(tenantId, 3, scoped);
+        await releaseTestRestriction(scoped, tenantId, 3);
         expect((await tasks.findById(fresh.task_id))?.tenant_restriction_hold?.reason).toBe(
           'tenant_restricted'
         );

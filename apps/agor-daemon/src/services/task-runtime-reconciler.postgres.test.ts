@@ -5,7 +5,6 @@
 
 import { createHash } from 'node:crypto';
 import {
-  applyTenantRestrictionIntent,
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -24,6 +23,7 @@ import type { HookContext, Params, SessionID, TaskID, TenantID, UUID } from '@ag
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { assertRuntimeTenantRequestAccess } from '../auth/tenant-access.js';
+import { applyTestRestriction } from '../auth/tenant-restriction.test-support.js';
 import type { Application } from '../declarations.js';
 import { prepareTaskRuntimeStartup, type StartupContext } from '../startup.js';
 import { TaskRuntimeReconciler } from './task-runtime-reconciler.js';
@@ -294,14 +294,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
     it('recovers a stale heartbeat while the tenant is restricted', async () => {
       const seeded = await seed(db);
-      await applyTenantRestrictionIntent(db, seeded.tenantId, {
-        version: 1,
-        controllerId: 'control-one',
-        placementId: 'placement-one',
-        operationId: 'suspend-one',
-        revision: 1,
-        action: 'restrict',
-      });
+      await applyTestRestriction(db, seeded.tenantId, 1, 'restrict');
       const scoped = createTenantScopedDatabaseProxy(db, {
         requireScope: true,
         label: 'restricted task runtime',

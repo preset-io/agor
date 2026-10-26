@@ -2934,42 +2934,46 @@ describe('configureRealtimePublish default-deny allowlist', () => {
 });
 
 describe('publication restriction observation', () => {
-  it('shares one epoch read per tenant per tick, stops a closed tenant within it, and keeps termination', async () => {
-    vi.useFakeTimers();
-    const read = vi.mocked(readTenantCredentialEpoch);
-    try {
-      const member = { user: user('member') };
-      const executor = { user: user('executor') };
-      let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
-      const relay = {
+  const relayHarness = (channels: Record<string, unknown[]> = {}) => {
+    const member = { user: user('member') };
+    let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+    const app = makeApp([member], {}, { 'tenant:tenant-a': [member], ...channels });
+    configureRealtimePublish({
+      app,
+      db: scopeOnlyDb,
+      multiTenancy: {
+        mode: 'required_from_auth',
+        static_tenant_id: 'unused' as never,
+        auth_claim: 'tenant_id',
+      },
+      realtimeRelay: {
         relay: vi.fn(),
         setRelayHandler: vi.fn((handler) => {
           remoteHandler = handler;
         }),
-      };
-      const room = executorTaskChannelName('tenant-a', 'task-1');
-      const app = makeApp([member], {}, { 'tenant:tenant-a': [member], [room]: [executor] });
-      configureRealtimePublish({
-        app,
-        db: scopeOnlyDb,
-        multiTenancy: {
-          mode: 'required_from_auth',
-          static_tenant_id: 'unused' as never,
-          auth_claim: 'tenant_id',
-        },
-        realtimeRelay: relay,
-        ...repos({ branch: branch('unused'), permissions: {}, boardPermissions: { member: true } }),
+      },
+      ...repos({ branch: branch('unused'), permissions: {}, boardPermissions: { member: true } }),
+    });
+    const relayBoard = async () =>
+      remoteHandler?.({
+        version: REALTIME_RELAY_VERSION,
+        tenantId: 'tenant-a',
+        path: 'boards',
+        event: 'patched',
+        method: 'patch',
+        id: 'board-a',
+        data: { board_id: 'board-a', tenant_id: 'tenant-a' },
       });
-      const relayBoard = () =>
-        remoteHandler?.({
-          version: REALTIME_RELAY_VERSION,
-          tenantId: 'tenant-a',
-          path: 'boards',
-          event: 'patched',
-          method: 'patch',
-          id: 'board-a',
-          data: { board_id: 'board-a', tenant_id: 'tenant-a' },
-        });
+    return { app, relayBoard };
+  };
+
+  it('shares one epoch read per tenant per tick, stops a closed tenant within it, and keeps termination', async () => {
+    vi.useFakeTimers();
+    const read = vi.mocked(readTenantCredentialEpoch);
+    try {
+      const executor = { user: user('executor') };
+      const room = executorTaskChannelName('tenant-a', 'task-1');
+      const { app, relayBoard } = relayHarness({ [room]: [executor] });
       const terminate = () =>
         app.runPublish(
           { task_id: 'task-1', status: 'stopping' },
@@ -3020,35 +3024,7 @@ describe('publication restriction observation', () => {
     vi.useFakeTimers();
     const read = vi.mocked(readTenantCredentialEpoch);
     try {
-      const member = { user: user('member') };
-      let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
-      const app = makeApp([member], {}, { 'tenant:tenant-a': [member] });
-      configureRealtimePublish({
-        app,
-        db: scopeOnlyDb,
-        multiTenancy: {
-          mode: 'required_from_auth',
-          static_tenant_id: 'unused' as never,
-          auth_claim: 'tenant_id',
-        },
-        realtimeRelay: {
-          relay: vi.fn(),
-          setRelayHandler: vi.fn((handler) => {
-            remoteHandler = handler;
-          }),
-        },
-        ...repos({ branch: branch('unused'), permissions: {}, boardPermissions: { member: true } }),
-      });
-      const relayBoard = async () =>
-        remoteHandler?.({
-          version: REALTIME_RELAY_VERSION,
-          tenantId: 'tenant-a',
-          path: 'boards',
-          event: 'patched',
-          method: 'patch',
-          id: 'board-a',
-          data: { board_id: 'board-a', tenant_id: 'tenant-a' },
-        });
+      const { app, relayBoard } = relayHarness();
 
       const stuck = Promise.withResolvers<string | undefined>();
       read.mockImplementation(() => stuck.promise);
@@ -3085,35 +3061,7 @@ describe('publication restriction observation', () => {
     vi.useFakeTimers();
     const read = vi.mocked(readTenantCredentialEpoch);
     try {
-      const member = { user: user('member') };
-      let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
-      const app = makeApp([member], {}, { 'tenant:tenant-a': [member] });
-      configureRealtimePublish({
-        app,
-        db: scopeOnlyDb,
-        multiTenancy: {
-          mode: 'required_from_auth',
-          static_tenant_id: 'unused' as never,
-          auth_claim: 'tenant_id',
-        },
-        realtimeRelay: {
-          relay: vi.fn(),
-          setRelayHandler: vi.fn((handler) => {
-            remoteHandler = handler;
-          }),
-        },
-        ...repos({ branch: branch('unused'), permissions: {}, boardPermissions: { member: true } }),
-      });
-      const relayBoard = async () =>
-        remoteHandler?.({
-          version: REALTIME_RELAY_VERSION,
-          tenantId: 'tenant-a',
-          path: 'boards',
-          event: 'patched',
-          method: 'patch',
-          id: 'board-a',
-          data: { board_id: 'board-a', tenant_id: 'tenant-a' },
-        });
+      const { app, relayBoard } = relayHarness();
       const stuck: Array<PromiseWithResolvers<string | undefined>> = [];
       read.mockImplementation(() => {
         const pending = Promise.withResolvers<string | undefined>();

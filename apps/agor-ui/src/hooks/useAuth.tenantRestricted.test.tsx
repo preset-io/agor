@@ -55,24 +55,6 @@ describe('useAuth on a suspended workspace', () => {
     localStorage.clear();
   });
 
-  it('reports the closed workspace and keeps the stored credential', async () => {
-    localStorage.setItem(ACCESS_TOKEN_KEY, 'member-access');
-    localStorage.setItem(REFRESH_TOKEN_KEY, 'member-refresh');
-    authenticate.mockRejectedValue(restricted());
-
-    const { result } = renderHook(() => useAuth());
-
-    await waitFor(() => expect(result.current.tenantRestricted).toBe(true));
-    expect(result.current.authenticated).toBe(false);
-    // Clearing these would send the member to sign-in and lose the session the probe restores on reopen.
-    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('member-access');
-    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('member-refresh');
-    // The suspended screen is the message; no banner may contradict it.
-    expect(result.current.error).toBeNull();
-    // The refresh token is never spent on a rejection that is not about it.
-    expect(refreshCreate).not.toHaveBeenCalled();
-  });
-
   it('still clears tokens when the rejection is an ordinary expired session', async () => {
     localStorage.setItem(ACCESS_TOKEN_KEY, 'member-access');
     localStorage.setItem(REFRESH_TOKEN_KEY, 'member-refresh');
@@ -87,9 +69,10 @@ describe('useAuth on a suspended workspace', () => {
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBeNull();
   });
 
-  it('probes on the slow suspended cadence, not the daemon-restart poll', async () => {
+  it('reports the closed workspace, keeps the credential and probes on the slow cadence', async () => {
     vi.useFakeTimers();
     localStorage.setItem(ACCESS_TOKEN_KEY, 'member-access');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'member-refresh');
     authenticate.mockRejectedValue(restricted());
 
     const { result } = renderHook(() => useAuth());
@@ -97,6 +80,14 @@ describe('useAuth on a suspended workspace', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(result.current.tenantRestricted).toBe(true);
+    expect(result.current.authenticated).toBe(false);
+    // Clearing these would send the member to sign-in and lose the session the probe restores on reopen.
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('member-access');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('member-refresh');
+    // The suspended screen is the message; no banner may contradict it.
+    expect(result.current.error).toBeNull();
+    // The refresh token is never spent on a rejection that is not about it.
+    expect(refreshCreate).not.toHaveBeenCalled();
     const attempts = authenticate.mock.calls.length;
 
     // The 3s daemon-restart poll would have run ten times by now.

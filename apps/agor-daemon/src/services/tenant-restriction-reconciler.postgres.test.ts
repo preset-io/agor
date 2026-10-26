@@ -1,6 +1,5 @@
 /** Routing-only restriction discovery against real RLS: only closed tenants' live tasks are paged. */
 import {
-  applyTenantRestrictionIntent,
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -20,6 +19,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 const begin = vi.hoisted(() => vi.fn(async (_input: { taskId: string }) => ({})));
 vi.mock('../termination-coordinator.js', () => ({ beginExecutorTermination: begin }));
 
+import { applyTestRestriction } from '../auth/tenant-restriction.test-support.js';
 import { TenantRestrictionReconciler } from './tenant-restriction-reconciler.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -97,14 +97,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       expect(stoppedBefore).not.toContain(open.taskId);
       expect(stoppedBefore).not.toContain(closed.taskId);
 
-      await applyTenantRestrictionIntent(db, closed.tenantId, {
-        version: 1,
-        controllerId: 'control-one',
-        placementId: 'placement-one',
-        operationId: 'suspend-one',
-        revision: 1,
-        action: 'restrict',
-      });
+      await applyTestRestriction(db, closed.tenantId, 1, 'restrict');
       begin.mockClear();
       const stats = await reconciler.checkOnce();
 

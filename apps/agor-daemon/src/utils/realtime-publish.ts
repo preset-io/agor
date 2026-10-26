@@ -38,6 +38,7 @@ import {
 } from '@agor/core/types';
 import { getAuthenticatedConnectionCredentialPayload } from '../auth/authenticated-connection-authority.js';
 import {
+  createTenantReadCache,
   TENANT_RESTRICTION_OBSERVATION_MS,
   TENANT_RESTRICTION_READ_TIMEOUT_MS,
 } from '../auth/tenant-access.js';
@@ -942,52 +943,18 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
   } = options;
 
   // Per-tenant single-flight epoch read: a publication observes state at most one monitor tick old.
-  const epochReads = new Map<
-    string,
-    { startedAt: number; until: number; epoch: Promise<string | undefined> }
-  >();
-  const abandonedEpochReads = new Map<string, Promise<string | undefined>>();
-  let nextEviction = 0;
-  const readPublicationEpoch = (
-    database: TenantScopeAwareDatabase,
-    tenantId: string
-  ): Promise<string | undefined> => {
-    // Monotonic, so a wall-clock step cannot abandon a read early or keep a wedged one forever.
+  const epochReads = db
+    ? createTenantReadCache((tenantId) => readTenantCredentialEpoch(db, tenantId), {
+        // A read that never settles is abandoned after two timeouts so one wedged read cannot suppress delivery forever.
+        abandonAfterMs: 2 * TENANT_RESTRICTION_READ_TIMEOUT_MS,
+        reuseMs: TENANT_RESTRICTION_OBSERVATION_MS,
+      })
+    : undefined;
+  const readPublicationEpoch = (tenantId: string): Promise<string | undefined> => {
     const now = performance.now();
-    if (now >= nextEviction) {
-      // Settled entries past their tick are dropped; in-flight reads are only replaced on lookup.
-      for (const [id, stale] of epochReads) if (now >= stale.until) epochReads.delete(id);
-      nextEviction = now + TENANT_RESTRICTION_OBSERVATION_MS;
-    }
-    let entry = epochReads.get(tenantId);
-    // A read that never settles is abandoned after two timeouts so one wedged read cannot suppress delivery forever.
-    const wedged =
-      entry?.until === Number.POSITIVE_INFINITY &&
-      now - entry.startedAt >= 2 * TENANT_RESTRICTION_READ_TIMEOUT_MS;
-    // At most one abandoned read per tenant: while it is outstanding the wedged entry stays and delivery stays suppressed.
-    const abandon = wedged && !abandonedEpochReads.has(tenantId);
-    if (abandon && entry) {
-      const stale = entry.epoch;
-      abandonedEpochReads.set(tenantId, stale);
-      const forget = () => {
-        if (abandonedEpochReads.get(tenantId) === stale) abandonedEpochReads.delete(tenantId);
-      };
-      stale.then(forget, forget);
-    }
-    if (!entry || now >= entry.until || abandon) {
-      const created = {
-        startedAt: now,
-        until: Number.POSITIVE_INFINITY,
-        epoch: readTenantCredentialEpoch(database, tenantId),
-      };
-      const expire = () => {
-        created.until = created.startedAt + TENANT_RESTRICTION_OBSERVATION_MS;
-      };
-      created.epoch.then(expire, expire);
-      epochReads.set(tenantId, created);
-      entry = created;
-    }
-    if (entry.until !== Number.POSITIVE_INFINITY) return entry.epoch;
+    // Without a running bound the cache always returns an entry.
+    const entry = epochReads!(tenantId)!;
+    if (entry.until !== Number.POSITIVE_INFINITY) return entry.value;
     // A stuck shared read suppresses this tick's delivery instead of holding it until statement_timeout.
     const timeout = new Error('Publication restriction read timed out');
     const remaining = entry.startedAt + TENANT_RESTRICTION_READ_TIMEOUT_MS - now;
@@ -996,7 +963,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     const timedOut = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(timeout), remaining);
     });
-    return Promise.race([entry.epoch, timedOut]).finally(() => clearTimeout(timer));
+    return Promise.race([entry.value, timedOut]).finally(() => clearTimeout(timer));
   };
 
   const resolveLocalDelivery = async (data: unknown, context: HookContext) => {
@@ -1043,7 +1010,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       !(context.path === 'tasks' && context.event === 'termination_requested')
     ) {
       try {
-        const epoch = await readPublicationEpoch(db, tenantId);
+        const epoch = await readPublicationEpoch(tenantId);
         credentialAdmitted = (connection: unknown) => {
           try {
             assertTenantCredentialEpochValue(

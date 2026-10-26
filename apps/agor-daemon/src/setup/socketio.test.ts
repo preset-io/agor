@@ -3441,7 +3441,8 @@ describe('tenant restriction socket monitor', () => {
     }
   });
 
-  it('keeps sockets through read errors and stalls, retiring only on a positive observation', async () => {
+  // Read errors keeping sockets are proven in the monitor unit and the real-socket packet suite.
+  it('keeps sockets through stalls, retiring only on a positive observation', async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
@@ -3450,14 +3451,6 @@ describe('tenant restriction socket monitor', () => {
       const socket = makeSocket('monitored', io);
       asUser(socket, ALICE);
       connect(io, socket);
-
-      readTenantRestriction.mockRejectedValue(new Error('private database address'));
-      await vi.advanceTimersByTimeAsync(3000);
-      expect(socket.connected).toBe(true);
-      // Rate-limited: one bounded line for repeated skips, never the error text.
-      expect(warn.mock.calls.filter(([line]) => String(line).includes('reason=error'))).toEqual([
-        ['[tenant.restriction] socket observation skipped reason=error suppressed=0'],
-      ]);
 
       readTenantRestriction.mockResolvedValue({ records: [], closed: false });
       await vi.advanceTimersByTimeAsync(1000);

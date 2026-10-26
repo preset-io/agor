@@ -4,7 +4,6 @@
 
 import { type AgorConfig, resolveExternalLaunchSettings } from '@agor/core/config';
 import {
-  applyTenantRestrictionIntent,
   boards,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -26,6 +25,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { authenticatedHealthInstance } from '../health/instance.js';
 import { UsersService } from '../services/users.js';
 import { createLaunchAuthService } from './launch-auth.js';
+import { applyTestRestriction, releaseTestRestriction } from './tenant-restriction.test-support.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -164,14 +164,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           return Response.json({ assertion: assertions.get(body.launch_code) });
         })
       );
-      await applyTenantRestrictionIntent(dbB, tenantId, {
-        version: 1,
-        controllerId: 'launch-test',
-        placementId: 'placement-one',
-        operationId: 'suspend-one',
-        revision: 1,
-        action: 'restrict',
-      });
+      await applyTestRestriction(dbB, tenantId, 1, 'restrict', { controllerId: 'launch-test' });
       await expect(service(dbA).create({ launchCode: tenantId })).rejects.toThrow(
         'Invalid one-time launch assertion'
       );
@@ -192,20 +185,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         'fetch',
         vi.fn(async () => Response.json({ assertion }))
       );
-      for (const [revision, action] of [
-        [1, 'restrict'],
-        [2, 'prepare_release'],
-        [2, 'activate'],
-      ] as const) {
-        await applyTenantRestrictionIntent(dbB, tenantId, {
-          version: 1,
-          controllerId: 'launch-test',
-          placementId: 'placement-one',
-          operationId: revision === 1 ? 'suspend' : 'reactivate',
-          revision,
-          action,
-        });
-      }
+      await applyTestRestriction(dbB, tenantId, 1, 'restrict', { controllerId: 'launch-test' });
+      await releaseTestRestriction(dbB, tenantId, 2, { controllerId: 'launch-test' });
       for (const restriction of [
         undefined,
         { controllerId: 'launch-test', revision: 0 },
@@ -253,14 +234,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await expect(
         service(dbA, { controllerId: 'launch-test' }).create({ launchCode: 'unseeded' })
       ).rejects.toMatchObject({ code: 401 });
-      await applyTenantRestrictionIntent(dbB, tenantId, {
-        version: 1,
-        controllerId: 'launch-test',
-        placementId: 'placement-destination',
-        operationId: 'reactivate-five',
-        revision: 5,
-        action: 'seed_active',
-      });
+      await applyTestRestriction(dbB, tenantId, 5, 'seed_active', { controllerId: 'launch-test' });
       const launched = await service(dbA, { controllerId: 'launch-test' }).create({
         launchCode: 'seeded',
       });
