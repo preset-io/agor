@@ -225,7 +225,16 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
           ...overrides,
           popup: {
             ...overrides?.popup,
-            root: { ...(ownsPopup ? popup.style : undefined), ...overrides?.popup?.root },
+            root: {
+              // This picker usually opens over a popover or modal that shares
+              // colorBgElevated, and the dark-theme shadow is near-transparent;
+              // the border is what keeps the list reading as its own layer.
+              background: token.colorBgElevated,
+              boxShadow: token.boxShadowSecondary,
+              border: `${token.lineWidth}px ${token.lineType} ${token.colorBorder}`,
+              ...(ownsPopup ? popup.style : undefined),
+              ...overrides?.popup?.root,
+            },
           },
         };
       }}
