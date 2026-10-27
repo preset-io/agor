@@ -2,7 +2,7 @@ import { type Repo, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor-live/client';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { ConfigProvider, theme } from 'antd';
 import { afterEach, expect, it, vi } from 'vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { OnboardingWizard } from './OnboardingWizard';
@@ -122,4 +122,26 @@ it('hides the public-starter disclosure when onboarding uses a private framework
   await screen.findByLabelText('Teammate name');
   expect(screen.getByRole('group', { name: 'Teammate template' })).toBeInTheDocument();
   expect(screen.queryByText(/With the public starter, home files stay/)).not.toBeInTheDocument();
+});
+
+it('settles at the bottom when collapsing the title would make the cards fit', async () => {
+  // Without the disclosure, collapsing the title at 1280x800 leaves no overflow.
+  await page.viewport(1280, 800);
+  seedFrameworkRepo(
+    'acme/agor-teammate-private',
+    'https://github.com/acme/agor-teammate-private.git'
+  );
+  renderTeammateStep();
+  await screen.findByLabelText('Teammate name');
+  const scroller = screen.getByRole('group', { name: 'Teammate template' }).parentElement!;
+  expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
+
+  await userEvent.wheel(scroller, { delta: { y: 120 }, times: 10 });
+  const samples: number[] = [];
+  for (let index = 0; index < 10; index++) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    samples.push(scroller.scrollTop);
+  }
+  expect(new Set(samples).size, samples.join(',')).toBe(1);
+  expect(samples[0]).toBeCloseTo(scroller.scrollHeight - scroller.clientHeight, 0);
 });
