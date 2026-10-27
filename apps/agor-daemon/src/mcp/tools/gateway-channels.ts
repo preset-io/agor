@@ -1,4 +1,3 @@
-import { assertManagedBranchPath } from '@agor/core/config';
 import {
   BranchRepository,
   GatewayChannelRepository,
@@ -95,6 +94,7 @@ import {
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
+import { assertManagedBranchPath } from '../../utils/managed-branch-path.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import {
   listTeamsAnchoredChannels,

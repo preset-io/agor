@@ -82,6 +82,15 @@ describe('assertBranchPathCanonicallyContained', () => {
     ).toThrow(/resolves outside the managed branch directory/);
   });
 
+  it('still canonicalizes slugs that begin with two dots', async () => {
+    const parent = join(worktrees, '..org', 'repo', 'parent');
+    await mkdir(parent, { recursive: true });
+    await symlink(join(root, 'tenants', 'globex', 'worktrees', 'victim'), join(parent, 'link'));
+    expect(() => assertBranchPathCanonicallyContained(join(parent, 'link'), worktrees)).toThrow(
+      /resolves outside the managed branch directory/
+    );
+  });
+
   it('accepts a symlinked worktrees root whose branch stays inside it', async () => {
     const alias = join(root, 'alias-worktrees');
     await symlink(worktrees, alias);

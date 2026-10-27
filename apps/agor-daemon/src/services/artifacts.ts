@@ -14,12 +14,7 @@
 
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
-import {
-  assertManagedBranchPath,
-  getDaemonBaseUrl,
-  PAGINATION,
-  resolveUserEnvironment,
-} from '@agor/core/config';
+import { getDaemonBaseUrl, PAGINATION, resolveUserEnvironment } from '@agor/core/config';
 import {
   type ArtifactListProjection,
   ArtifactRepository,
@@ -79,6 +74,7 @@ import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
+import { assertManagedBranchPath } from '../utils/managed-branch-path.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import {
   detectLegacyFormat,

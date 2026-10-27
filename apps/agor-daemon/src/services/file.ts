@@ -1,7 +1,6 @@
 /**
  * Read-only branch file browser. Tenant filesystem access is delegated to the executor.
  */
-import { assertManagedBranchPath } from '@agor/core/config';
 import {
   type BranchRepository,
   requireCurrentTenantId,
@@ -29,6 +28,7 @@ import {
 } from '../utils/branch-executor-sandbox.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
+import { assertManagedBranchPath } from '../utils/managed-branch-path.js';
 import { getDaemonUrl, requestExecutor } from '../utils/spawn-executor.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
 

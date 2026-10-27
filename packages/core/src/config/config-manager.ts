@@ -2591,18 +2591,6 @@ export function isManagedBranchPath(branchPath: unknown, branchesRoot: string): 
 }
 
 /**
- * Revalidate a persisted branch path before it reaches any filesystem sink.
- * Stored rows are not trusted: the path must sit below the caller tenant's
- * branches root, so a historical or tampered row fails closed.
- */
-export function assertManagedBranchPath(branchPath: unknown, tenantId?: string): string {
-  if (!isManagedBranchPath(branchPath, getBranchesDir(tenantId))) {
-    throw new Error("Branch workspace path is outside this tenant's managed branch directory");
-  }
-  return branchPath as string;
-}
-
-/**
  * Get the on-disk root for per-branch SDK homes.
  *
  * Returns: $AGOR_DATA_HOME/branch-homes

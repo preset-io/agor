@@ -145,6 +145,7 @@ beforeEach(() => {
   executorMocks.spawnExecutorFireAndForget.mockReset();
   delegatedHomeMocks.resolve.mockReset().mockResolvedValue(undefined);
   sandboxMountMocks.resolve.mockReset().mockResolvedValue({});
+  repositoryMocks.findAllBranchesByRepoId.mockReset().mockResolvedValue([]);
   repositoryMocks.resolveBranchUserAccess.mockReset().mockResolvedValue({
     can: 'all',
     fs_access: 'write',
@@ -400,6 +401,53 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
   // row even once archived, whose checkout lifecycle cleanup still preserves.
   // Creating a second row against that same path would give two branches one
   // workspace, so archiving/deleting either could damage the other.
+  it.each([
+    ['inside', 'parent', 'parent/link/new'],
+    ['containing', 'parent/child', 'parent'],
+  ])(
+    'refuses a branch whose workspace would be nested %s another branch',
+    async (_relation, existingName, newName) => {
+      const branches = { create: vi.fn(), find: vi.fn(async () => []) };
+      const app = {
+        get: () => ({}),
+        sessionTokenService: { generateCommandToken: vi.fn(async () => 'token') },
+        settings: { authentication: { secret: 'test-secret' } },
+        service: vi.fn((name: string) => {
+          if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
+          if (name === 'branches') return branches;
+          throw new Error(`Unexpected service: ${name}`);
+        }),
+      } as unknown as Application;
+      const service = new ReposService({} as never, app);
+      vi.spyOn(service, 'get').mockResolvedValue({
+        repo_id: '550e8400-e29b-41d4-a716-446655440001',
+        slug: 'preset-io/agor',
+        local_path: '/managed/repos/agor',
+        default_branch: 'main',
+      } as never);
+      repositoryMocks.findAllBranchesByRepoId.mockResolvedValueOnce([
+        { name: existingName, path: getBranchPath('preset-io/agor', existingName) },
+      ]);
+
+      await expect(
+        service.createBranch(
+          '550e8400-e29b-41d4-a716-446655440001',
+          {
+            name: newName,
+            ref: newName,
+            createBranch: true,
+            sourceBranch: 'main',
+            boardId: '550e8400-e29b-41d4-a716-446655440003',
+            storage_mode: 'worktree',
+          },
+          { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+        )
+      ).rejects.toThrow(/would share a workspace with branch/);
+      expect(branches.create).not.toHaveBeenCalled();
+      expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+    }
+  );
+
   it('refuses to create a branch whose deterministic path an archived branch still owns', async () => {
     const branches = { create: vi.fn(), find: vi.fn(async () => []) };
     const app = {

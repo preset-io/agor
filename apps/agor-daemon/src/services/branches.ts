@@ -15,7 +15,6 @@ import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   assertAsyncEnvironmentCommandConfig,
-  assertManagedBranchPath,
   branchMaintenanceCapabilities,
   createUserProcessEnvironment,
   ENVIRONMENT,
@@ -155,6 +154,7 @@ import {
   ExecutorLaunchRefusedError,
 } from '../utils/environment-command-dispatch.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
+import { assertManagedBranchPath } from '../utils/managed-branch-path.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
@@ -1019,6 +1019,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: Partial<Branch> | Partial<Branch>[],
     params?: BranchParams
   ): Promise<Branch | Branch[]> {
+    // Branch rows own filesystem workspaces. External callers must go through
+    // repos.createBranch, which checks name collisions and materializes files.
+    if (params?.provider && !params[BRANCH_MATERIALIZATION_INTENT]) {
+      throw new BadRequest('Create branches through repos.createBranch.');
+    }
     const assertHasBoard = (item: Partial<Branch>) => {
       if (!item.board_id) {
         throw new BadRequest('board_id is required when creating a branch');

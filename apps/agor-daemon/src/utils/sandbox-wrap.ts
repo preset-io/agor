@@ -22,7 +22,7 @@
  */
 
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES } from '@agor/core/codex/credential-file';
 import {
   type AgorSandboxSettings,
@@ -55,7 +55,7 @@ function canonicalizeExistingPath(path: string): string {
 
 function isWithinDirectory(path: string, root: string): boolean {
   const rel = relative(root, path);
-  return !!rel && !rel.startsWith('..') && !isAbsolute(rel);
+  return !!rel && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
 /**

@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { assertManagedBranchPath } from '@agor/core/config';
 import { BranchRepository, KnowledgeNamespaceRepository } from '@agor/core/db';
 import { NotFound } from '@agor/core/feathers';
 import type {
@@ -57,6 +56,7 @@ import {
 } from '../../services/teammate-knowledge.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
+import { assertManagedBranchPath } from '../../utils/managed-branch-path.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import { resolveMcpCallerSandboxMounts } from '../caller-sandbox-mounts.js';
 import { resolveBranchId } from '../resolve-ids.js';

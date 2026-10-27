@@ -23,7 +23,6 @@ import {
 } from '@agor/core/codex/credential-file';
 import {
   type AgorConfig,
-  assertManagedBranchPath,
   getBaseUrl,
   getBranchHomePath,
   isDeploymentAgenticToolAvailable,
@@ -395,6 +394,7 @@ import { requireMinimumRole } from './utils/authorization.js';
 import { scopeFindToAccessibleBranchesSql } from './utils/branch-authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { renderOAuthResultPage } from './utils/html.js';
+import { assertManagedBranchPath } from './utils/managed-branch-path.js';
 import { emitMarketplaceChanged } from './utils/marketplace-invalidation.js';
 import { createAuthorityGuardedMCPFetch } from './utils/mcp-authority-fetch.js';
 import {

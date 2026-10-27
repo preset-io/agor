@@ -423,6 +423,7 @@ describe('GitBranchAddPayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        branchesRoot: '/data/tenants/acme/worktrees',
       },
     };
 
@@ -432,6 +433,19 @@ describe('GitBranchAddPayloadSchema', () => {
     expect(result.params.branchId).toBe('550e8400-e29b-41d4-a716-446655440002');
   });
 
+  it('requires the server-derived branches root', () => {
+    expect(() =>
+      GitBranchAddPayloadSchema.parse({
+        command: 'git.branch.add',
+        sessionToken: 'jwt-token-here',
+        params: {
+          branchId: '550e8400-e29b-41d4-a716-446655440002',
+          repoId: '550e8400-e29b-41d4-a716-446655440003',
+        },
+      })
+    ).toThrow();
+  });
+
   it('strips duplicated materialization facts and retains operational intent', () => {
     const result = GitBranchAddPayloadSchema.parse({
       command: 'git.branch.add',
@@ -439,6 +453,7 @@ describe('GitBranchAddPayloadSchema', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        branchesRoot: '/data/tenants/acme/worktrees',
         branch: 'untrusted',
         storageMode: 'worktree',
         cloneDepth: 100,
@@ -706,6 +721,7 @@ describe('Type guards', () => {
       params: {
         branchId: '550e8400-e29b-41d4-a716-446655440002',
         repoId: '550e8400-e29b-41d4-a716-446655440003',
+        branchesRoot: '/data/tenants/acme/worktrees',
       },
     };
     expect(isGitBranchAddPayload(payload)).toBe(true);

@@ -346,6 +346,9 @@ export const GitBranchAddPayloadSchema = BasePayloadSchema.extend({
 
     /** Whether clone mode may use the tenant-fetched repo path as an object-cache hint. */
     useReference: z.boolean().optional().default(false),
+
+    /** Server-derived tenant branch root that must contain the workspace without symlinks. */
+    branchesRoot: z.string().min(1),
   }),
 });
 

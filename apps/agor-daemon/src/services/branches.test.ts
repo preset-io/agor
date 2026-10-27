@@ -3245,6 +3245,27 @@ describe('BranchesService.create server-derived workspace path', () => {
   }
   const external = { provider: 'rest', user: { user_id: 'caller' as UserID, role: 'member' } };
 
+  it('rejects direct external creation, including arrays and forged intent keys', async () => {
+    const get = vi.fn(async () => ({ repo_id: 'repo', slug: 'org/repo' }));
+    const app = { get: () => ({}), service: () => ({ get }) } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    const persist = vi.spyOn(DrizzleService.prototype, 'create');
+    const input = { repo_id: 'repo' as UUID, name: 'victim', board_id: 'board' as BoardID };
+    const params = {
+      ...external,
+      branchMaterializationIntent: true,
+      BRANCH_MATERIALIZATION_INTENT: true,
+    } as never;
+    for (const payload of [input, [input]]) {
+      await expect(service.create(payload, params)).rejects.toMatchObject({
+        code: 400,
+        message: 'Create branches through repos.createBranch.',
+      });
+    }
+    expect(get).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it('replaces a client-supplied path with the derived tenant workspace', async () => {
     const { internal, get } = harness();
     const result = await internal.applyBranchCreateDefaults(
@@ -3332,7 +3353,10 @@ describe('server-selected local teammate homes', () => {
     }
     // The same boundary protects in-process metadata callers; provider is not authority.
     await expect(service.create(input)).rejects.toThrow('through repos.createBranch');
-    expect(get).toHaveBeenCalledWith(input.repo_id, expect.objectContaining(params));
+    // External calls stop at the direct-create gate; the in-process call
+    // reaches the teammate materialization check.
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith(input.repo_id, undefined);
     expect(persist).not.toHaveBeenCalled();
     expect(input).toMatchObject({ path: '/existing/shared-worktree', storage_mode: 'worktree' });
     expect(input.custom_context).not.toHaveProperty('teammate.localHome');

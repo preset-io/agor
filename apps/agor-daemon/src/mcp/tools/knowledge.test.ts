@@ -8,7 +8,7 @@ const branchCommandMocks = vi.hoisted(() => ({
   assertManagedBranchPath: vi.fn((branchPath: unknown) => branchPath as string),
 }));
 
-vi.mock('@agor/core/config', () => ({
+vi.mock('../../utils/managed-branch-path.js', () => ({
   assertManagedBranchPath: branchCommandMocks.assertManagedBranchPath,
 }));
 

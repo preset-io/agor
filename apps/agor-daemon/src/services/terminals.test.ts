@@ -51,8 +51,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('@agor/core/config', async (importOriginal) => ({
-  assertManagedBranchPath: (await importOriginal<typeof import('@agor/core/config')>())
-    .assertManagedBranchPath,
+  ...(await importOriginal<typeof import('@agor/core/config')>()),
   createUserProcessEnvironment: mocks.createUserProcessEnvironment,
 }));
 

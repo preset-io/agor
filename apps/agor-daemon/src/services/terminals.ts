@@ -9,11 +9,7 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import {
-  type AgorConfig,
-  assertManagedBranchPath,
-  createUserProcessEnvironment,
-} from '@agor/core/config';
+import { type AgorConfig, createUserProcessEnvironment } from '@agor/core/config';
 import {
   BranchRepository,
   getCurrentTenantId,
@@ -45,6 +41,7 @@ import {
 } from '../terminal-socket-connection.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 import { isSuperAdmin } from '../utils/branch-authorization.js';
+import { assertManagedBranchPath } from '../utils/managed-branch-path.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import {
   generateTerminalExecutorToken,

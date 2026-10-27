@@ -12,7 +12,6 @@ import { BRANCH_FILESYSTEM_ACTIONS } from '@agor/core/types';
 
 import path from 'node:path';
 import {
-  assertManagedBranchPath,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
@@ -84,6 +83,7 @@ import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
+import { assertManagedBranchPath } from '../utils/managed-branch-path.js';
 import {
   getDaemonUrl,
   requestExecutor,
@@ -848,6 +848,20 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     } catch (error) {
       throw new BadRequest(error instanceof Error ? error.message : String(error));
     }
+    // A workspace nested in (or containing) another branch's workspace would
+    // let that branch's writers plant symlinks along this one's path.
+    const overlapping = (await branchRepo.findAllByRepoId(repo.repo_id as UUID)).find(
+      ({ path: existing }) =>
+        !!existing &&
+        (existing === branchPath ||
+          existing.startsWith(`${branchPath}${path.sep}`) ||
+          branchPath.startsWith(`${existing}${path.sep}`))
+    );
+    if (overlapping) {
+      throw new Conflict(
+        `Branch name '${data.name}' would share a workspace with branch '${overlapping.name}'. Choose a name that is not a parent or child path of an existing branch.`
+      );
+    }
 
     // Path existence + branch-in-use checks have moved to the executor /
     // core git helpers — see the "filesystem preflights" note above. Both
@@ -878,9 +892,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // 1. Create git branch on filesystem
     // 2. Render environment templates with the materialized branch context
     // 3. Patch branch to 'ready' with rendered templates
-    const branchCreateParams: BranchParams | undefined = localHome
-      ? { ...params, [BRANCH_MATERIALIZATION_INTENT]: true }
-      : params;
+    const branchCreateParams: BranchParams = { ...params, [BRANCH_MATERIALIZATION_INTENT]: true };
     let branch = (await branchesService.create(
       {
         repo_id: repo.repo_id,
@@ -1078,7 +1090,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     const attemptId = branch.provisioning_attempt_id;
     try {
       // Historical rows may predate server-derived paths; never materialize them.
-      assertManagedBranchPath(branch.path, tenantId ?? params?.tenant?.tenant_id);
+      const branchesTenantId = tenantId ?? params?.tenant?.tenant_id;
+      assertManagedBranchPath(branch.path, branchesTenantId);
+      const branchesRoot = getBranchesDir(branchesTenantId);
       const sessionToken = await issueExecutorCommandToken(
         this.app,
         'git.branch.add',
@@ -1107,6 +1121,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             params: {
               branchId: branch.branch_id,
               repoId: repo.repo_id,
+              branchesRoot,
               userId: userId as string | undefined,
               principalBranchAccess: 'write',
               // Echoed back on the executor's terminal patch so a superseded

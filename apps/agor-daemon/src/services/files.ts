@@ -6,7 +6,6 @@
  * managed branch checkout.
  */
 
-import { assertManagedBranchPath } from '@agor/core/config';
 import {
   BranchRepository,
   requireCurrentTenantId,
@@ -26,6 +25,7 @@ import type {
 import { resolveBranchExecutorSandboxMounts } from '../utils/branch-executor-sandbox.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
+import { assertManagedBranchPath } from '../utils/managed-branch-path.js';
 import { getDaemonUrl, requestExecutor } from '../utils/spawn-executor.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
 

@@ -38,6 +38,7 @@ import { issueExecutorCommandToken } from '../../services/session-token-service.
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
+import { assertManagedBranchPath } from '../../utils/managed-branch-path.js';
 import { withPromptProvenanceTool } from '../../utils/prompt-provenance.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import {
@@ -529,7 +530,20 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             ctx.userId
           ),
           daemonUrl: getDaemonUrl(),
-          params: { branchIds: branches.map((branch) => branch.branch_id) },
+          // Rows whose stored path fails containment are never probed; they
+          // report pathExists=false instead of acting as a filesystem oracle.
+          params: {
+            branchIds: branches
+              .filter((branch) => {
+                try {
+                  assertManagedBranchPath(branch.path, ctx.baseServiceParams.tenant?.tenant_id);
+                  return true;
+                } catch {
+                  return false;
+                }
+              })
+              .map((branch) => branch.branch_id),
+          },
         },
         {
           logPrefix: '[MCP branches.cleanupCandidates.status]',

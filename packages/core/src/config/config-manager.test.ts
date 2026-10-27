@@ -11,7 +11,6 @@ import type { Database } from '../db/client';
 import {
   __resetConfigCacheForTests,
   AtomicConfigPublicationUnsupportedError,
-  assertManagedBranchPath,
   assertValidEffectiveExecutionConfig,
   assertValidRawConfig,
   ConfigAlreadyExistsError,
@@ -2522,48 +2521,6 @@ describe('managed branch path containment', () => {
     ['a non-string', 42],
   ])('rejects %s', (_label, branchPath) => {
     expect(isManagedBranchPath(branchPath, root)).toBe(false);
-  });
-});
-
-describe('assertManagedBranchPath', () => {
-  let tempDir: string;
-  let originalEnv: NodeJS.ProcessEnv;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-managed-path-test-'));
-    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
-    originalEnv = { ...process.env };
-    delete process.env.AGOR_DATA_HOME;
-    __resetConfigCacheForTests();
-    const agorDir = path.join(tempDir, '.agor');
-    await fs.mkdir(agorDir, { recursive: true });
-    await fs.writeFile(
-      path.join(agorDir, 'config.yaml'),
-      yaml.dump({ multi_tenancy: { filesystem_isolation_enabled: true } }),
-      'utf-8'
-    );
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-    vi.restoreAllMocks();
-    process.env = originalEnv;
-    __resetConfigCacheForTests();
-  });
-
-  it('accepts the derived path for the same tenant', () => {
-    const branchPath = getBranchPath('org/repo', 'feature', 'acme');
-    expect(assertManagedBranchPath(branchPath, 'acme')).toBe(branchPath);
-  });
-
-  it("rejects another tenant's derived path", () => {
-    const branchPath = getBranchPath('org/repo', 'victim-private', 'globex');
-    expect(() => assertManagedBranchPath(branchPath, 'acme')).toThrow(/outside this tenant/);
-  });
-
-  it('fails closed without a tenant when filesystem isolation is enabled', () => {
-    const branchPath = getBranchPath('org/repo', 'feature', 'acme');
-    expect(() => assertManagedBranchPath(branchPath, undefined)).toThrow();
   });
 });
 

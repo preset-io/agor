@@ -1,3 +1,4 @@
+import { mkdtempSync } from 'node:fs';
 import { mkdir, mkdtemp, realpath, rm, stat, symlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -7,6 +8,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   createExecutorClient: vi.fn(),
+  // Synthetic branch paths live outside any real root; the containment walk
+  // itself is covered against the filesystem in its own test below.
+  resolveManagedBranchDeletionPath: vi.fn(async (branchPath: string) => branchPath),
   diagnoseGit: vi.fn(),
   parseAgorYml: vi.fn(),
   writeAgorYml: vi.fn(),
@@ -85,7 +89,11 @@ vi.mock('../git/index.js', async () => {
 
 vi.mock('@agor/git', async () => {
   const actual = await vi.importActual<typeof import('@agor/git')>('@agor/git');
-  return { ...actual, diagnoseGit: mocks.diagnoseGit };
+  return {
+    ...actual,
+    diagnoseGit: mocks.diagnoseGit,
+    resolveManagedBranchDeletionPath: mocks.resolveManagedBranchDeletionPath,
+  };
 });
 
 vi.mock('../services/feathers-client.js', () => ({
@@ -107,6 +115,8 @@ import {
 const repoId = '550e8400-e29b-41d4-a716-446655440001';
 const branchId = '550e8400-e29b-41d4-a716-446655440002';
 const deleteRoots = { reposRoot: '/safe/repos', branchesRoot: '/safe/worktrees' };
+// Provisioning creates its server-derived root before containment; keep it real and writable.
+const BRANCHES_ROOT = mkdtempSync(join(tmpdir(), 'agor-branches-root-'));
 
 function createClient(records: {
   gitEnv?: UserGitEnvironment;
@@ -392,6 +402,7 @@ describe('managed executor git/fs commands', () => {
             command: 'git.branch.add',
             sessionToken: 'tenant-token',
             params: {
+              branchesRoot: BRANCHES_ROOT,
               branchId,
               repoId,
               allowExistingCheckout: false,
@@ -444,6 +455,7 @@ describe('managed executor git/fs commands', () => {
             command: 'git.branch.add',
             sessionToken: 'tenant-token',
             params: {
+              branchesRoot: BRANCHES_ROOT,
               branchId,
               repoId,
               allowExistingCheckout: false,
@@ -470,6 +482,52 @@ describe('managed executor git/fs commands', () => {
       }
     }
   );
+
+  it('refuses to materialize a stored path that fails root containment', async () => {
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://example.test/r.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: join(BRANCHES_ROOT, 'org', 'repo', 'parent', 'link', 'new'),
+        name: 'parent/link/new',
+        ref: 'main',
+        new_branch: false,
+        ref_type: 'branch',
+        storage_mode: 'clone',
+      },
+      patchedBranches,
+      renderedBranches: [],
+    });
+    mocks.resolveManagedBranchDeletionPath.mockRejectedValueOnce(
+      new Error('Safety check failed: Branch deletion path contains a symlink')
+    );
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: { branchesRoot: BRANCHES_ROOT, branchId, repoId },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(false);
+    expect(mocks.createBranch).not.toHaveBeenCalled();
+    expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+    expect(mocks.writeFile).not.toHaveBeenCalled();
+    expect(patchedBranches).toContainEqual(
+      expect.objectContaining({
+        filesystem_status: 'failed',
+        error_message: expect.stringContaining('failed containment'),
+      })
+    );
+  });
 
   it('resolves trusted repo metadata just-in-time inside git.branch.add', async () => {
     const patchedBranches: Array<Record<string, unknown>> = [];
@@ -507,6 +565,7 @@ describe('managed executor git/fs commands', () => {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
         params: {
+          branchesRoot: BRANCHES_ROOT,
           branchId,
           repoId,
           allowExistingCheckout: false,
@@ -517,6 +576,10 @@ describe('managed executor git/fs commands', () => {
     );
 
     expect(result.success).toBe(true);
+    expect(mocks.resolveManagedBranchDeletionPath).toHaveBeenCalledWith(
+      '/trusted/branch',
+      BRANCHES_ROOT
+    );
     expect(mocks.createBranchAsClone).toHaveBeenCalledWith(
       expect.objectContaining({
         remoteUrl: 'https://github.com/preset-io/agor-teammate.git',
@@ -575,7 +638,13 @@ describe('managed executor git/fs commands', () => {
         {
           command: 'git.branch.add',
           sessionToken: 'fixture',
-          params: { branchId, repoId, allowExistingCheckout: false, useReference: false },
+          params: {
+            branchesRoot: BRANCHES_ROOT,
+            branchId,
+            repoId,
+            allowExistingCheckout: false,
+            useReference: false,
+          },
         },
         {}
       );
@@ -625,7 +694,13 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, allowExistingCheckout: false, useReference: false },
+        params: {
+          branchesRoot: BRANCHES_ROOT,
+          branchId,
+          repoId,
+          allowExistingCheckout: false,
+          useReference: false,
+        },
       },
       {}
     );
@@ -717,6 +792,7 @@ describe('managed executor git/fs commands', () => {
             command: 'git.branch.add',
             sessionToken: 'tenant-token',
             params: {
+              branchesRoot: BRANCHES_ROOT,
               branchId,
               repoId,
               allowExistingCheckout: false,
@@ -751,6 +827,7 @@ describe('managed executor git/fs commands', () => {
                   command: 'git.branch.add',
                   sessionToken: 'tenant-token',
                   params: {
+                    branchesRoot: BRANCHES_ROOT,
                     branchId,
                     repoId,
                     allowExistingCheckout: false,
@@ -817,7 +894,13 @@ describe('managed executor git/fs commands', () => {
         const payload = {
           command: 'git.branch.add' as const,
           sessionToken: 'tenant-token',
-          params: { branchId, repoId, allowExistingCheckout: false, useReference: true },
+          params: {
+            branchesRoot: BRANCHES_ROOT,
+            branchId,
+            repoId,
+            allowExistingCheckout: false,
+            useReference: true,
+          },
         };
         expect((await handleGitBranchAdd(payload, {})).success).toBe(true);
         const provenance = patchedBranches.find((patch) => 'base_ref' in patch);
@@ -878,6 +961,7 @@ describe('managed executor git/fs commands', () => {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
         params: {
+          branchesRoot: BRANCHES_ROOT,
           branchId,
           repoId,
           allowExistingCheckout: false,
@@ -932,6 +1016,7 @@ describe('managed executor git/fs commands', () => {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
         params: {
+          branchesRoot: BRANCHES_ROOT,
           branchId,
           repoId,
           allowExistingCheckout: false,
@@ -980,6 +1065,7 @@ describe('managed executor git/fs commands', () => {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
         params: {
+          branchesRoot: BRANCHES_ROOT,
           branchId,
           repoId,
           allowExistingCheckout: false,
@@ -1023,7 +1109,7 @@ describe('managed executor git/fs commands', () => {
         {
           command: 'git.branch.add',
           sessionToken: 'tenant-token',
-          params: { branchId, repoId },
+          params: { branchesRoot: BRANCHES_ROOT, branchId, repoId },
         },
         {}
       );
@@ -1062,7 +1148,13 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, allowExistingCheckout: false, useReference: false },
+        params: {
+          branchesRoot: BRANCHES_ROOT,
+          branchId,
+          repoId,
+          allowExistingCheckout: false,
+          useReference: false,
+        },
       },
       {}
     );
@@ -1088,6 +1180,7 @@ describe('managed executor git/fs commands', () => {
         command: 'git.branch.add',
         sessionToken: 'other-tenant-token',
         params: {
+          branchesRoot: BRANCHES_ROOT,
           branchId,
           repoId,
           allowExistingCheckout: false,
@@ -1669,6 +1762,7 @@ describe('local teammate materialization', () => {
             command: 'git.branch.add',
             sessionToken: 'tenant-token',
             params: {
+              branchesRoot: BRANCHES_ROOT,
               branchId,
               repoId,
               allowExistingCheckout: false,

@@ -77,6 +77,7 @@ beforeEach(async () => {
     params: {
       branchId: branch.branch_id,
       repoId: repo.repo_id,
+      branchesRoot: root,
       provisioningAttemptId: 'attempt',
       allowExistingCheckout: false,
       useReference: false,

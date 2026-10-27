@@ -83,6 +83,7 @@ async function fixture(options: { rollback?: boolean; storageMode?: 'clone' | 'w
   };
   vi.spyOn(BranchRepository.prototype, 'findByRepoAndName').mockResolvedValue(null);
   vi.spyOn(BranchRepository.prototype, 'getAllUsedUniqueIds').mockResolvedValue([]);
+  vi.spyOn(BranchRepository.prototype, 'findAllByRepoId').mockResolvedValue([]);
   vi.spyOn(BoardObjectRepository.prototype, 'create').mockImplementation(async (data) => {
     placement = {
       ...data,
