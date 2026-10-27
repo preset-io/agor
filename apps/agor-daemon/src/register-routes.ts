@@ -3,9 +3,16 @@ import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
 import {
   BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
   PRODUCT_ANALYTICS_SERVICE,
+  RELEASE_NOTES_MARK_SEEN_SERVICE,
+  RELEASE_NOTES_SERVICE,
 } from '@agor/core/types';
 import { BranchWorkspaceNotificationService } from './services/branch-workspace-notification';
 import { ProductAnalyticsService } from './services/product-analytics.js';
+import {
+  createReleaseNotesProvider,
+  ReleaseNotesMarkSeenService,
+  ReleaseNotesService,
+} from './services/release-notes';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
@@ -1090,6 +1097,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     config,
     jwtSecret,
   });
+
+  // One provider per daemon replica; `cloud` polls on its own timer.
+  const releaseNotesProvider = createReleaseNotesProvider(config);
 
   const registerLongAuthenticatedRoute: typeof registerAuthenticatedRouteUnscoped = (
     routeApp,
@@ -4532,6 +4542,25 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     { create: { role: ROLES.VIEWER, action: 'dismiss branch workspace notifications' } },
     requireAuth
   );
+  // What's new: notes are platform content held in memory; the only tenant
+  // data read or written is the caller's own users row.
+  const releaseNotesUsers = new UsersRepository(db);
+  const releaseNotesFeed = new ReleaseNotesService(releaseNotesProvider, releaseNotesUsers);
+  registerAuthenticatedRoute(
+    app,
+    RELEASE_NOTES_SERVICE,
+    releaseNotesFeed,
+    { find: { role: ROLES.VIEWER, action: 'read release notes' } },
+    requireAuth
+  );
+  registerAuthenticatedRoute(
+    app,
+    RELEASE_NOTES_MARK_SEEN_SERVICE,
+    new ReleaseNotesMarkSeenService(releaseNotesFeed, releaseNotesUsers, app),
+    { create: { role: ROLES.VIEWER, action: 'mark release notes seen' } },
+    requireAuth
+  );
+
   app.service(BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE).hooks({
     after: {
       create: [
@@ -6896,6 +6925,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           : { required: false, ready: true },
         features: {
           environmentDisclaimerMarkdown: config.environment_disclaimer_markdown,
+          releaseNotes: releaseNotesProvider.source,
           environmentCommands: environmentCommandCapabilities(config),
           permanentBranchDeletion: permanentBranchDeletionCapability(config),
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),

@@ -12,6 +12,8 @@ import {
   MCP_OAUTH_RELAY,
   OWNERSHIP_TRANSFER_SERVICES,
   PRODUCT_ANALYTICS_SERVICE,
+  RELEASE_NOTES_MARK_SEEN_SERVICE,
+  RELEASE_NOTES_SERVICE,
 } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
@@ -175,6 +177,11 @@ describe('source scan: every registered path is declared', () => {
         /\bBRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE\b/g,
         JSON.stringify(BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE)
       )
+      .replace(
+        /\bRELEASE_NOTES_MARK_SEEN_SERVICE\b/g,
+        JSON.stringify(RELEASE_NOTES_MARK_SEEN_SERVICE)
+      )
+      .replace(/\bRELEASE_NOTES_SERVICE\b/g, JSON.stringify(RELEASE_NOTES_SERVICE))
       .replace(/\bKNOWLEDGE_TRANSFER\.path\b/g, JSON.stringify(KNOWLEDGE_TRANSFER.path))
       .split('\n');
     const found: Array<{ path: string; line: number }> = [];

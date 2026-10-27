@@ -1,0 +1,15 @@
+{
+  "items": {
+    "3135": {
+      "tier": "major",
+      "title": "Zones can arrange your cards",
+      "subtitle": "Pick a row, a column or a grid and cards snap into place.",
+      "agent_brief": "Zones have a layout: Free, Row, Column or Grid. In Row, Column and Grid, cards keep their order and snap into place, and a card dropped into the zone joins at the end. Suggest it when the user tidies a board by hand or wants a kanban-style column. Set it with the layout button in the zone toolbar, or with agor_boards_update (layout: free, row, column or grid).",
+      "docs_url": "https://agor.live/guide/boards#zone-layout",
+      "visual_url": "https://agor.live/whats-new/zone-layouts-light.svg",
+      "visual_url_dark": "https://agor.live/whats-new/zone-layouts-dark.svg",
+      "cta_label": "See it on my board",
+      "cta_path": "/b/:currentBoard/"
+    }
+  }
+}

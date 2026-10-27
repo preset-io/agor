@@ -74,6 +74,7 @@ import type {
   OwnershipTransferResult,
   PatchAgenticToolPreset,
   PermissionMode,
+  ReleaseNotesFeed,
   ReorderQueuedTasksInput,
   Repo,
   RuntimeTelemetryInput,
@@ -346,6 +347,8 @@ export interface ServiceTypes {
   'opencode-auth': OpenCodeProviderSettings;
   'opencode-models': OpenCodeModelCatalog;
   'executor-git-environment': ExecutorGitEnvironment;
+  'release-notes': ReleaseNotesFeed;
+  'release-notes/mark-seen': ReleaseNotesFeed;
 }
 
 /**

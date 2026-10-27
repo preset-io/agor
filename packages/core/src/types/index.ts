@@ -34,6 +34,7 @@ export * from './presence';
 export * from './product-analytics.js';
 export * from './provider-oauth';
 export * from './realtime';
+export * from './release-notes';
 export * from './repo';
 export * from './report';
 export * from './schedule';

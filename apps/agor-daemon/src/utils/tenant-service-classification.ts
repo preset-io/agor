@@ -1,6 +1,8 @@
 import {
   BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
   PRODUCT_ANALYTICS_SERVICE,
+  RELEASE_NOTES_MARK_SEEN_SERVICE,
+  RELEASE_NOTES_SERVICE,
 } from '@agor/core/types';
 import {
   TENANT_IDENTITY_ONLY_SERVICE_PATHS,
@@ -131,6 +133,14 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   [BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE]: {
     scopeClass: 'scoped',
     why: 'Registered through the tenant-scoped authenticated route registrar; metadata-only acknowledgement.',
+  },
+  [RELEASE_NOTES_SERVICE]: {
+    scopeClass: 'scoped',
+    why: 'Tenant-scoped authenticated route; notes are in-memory platform content and the only tenant read is the caller users row.',
+  },
+  [RELEASE_NOTES_MARK_SEEN_SERVICE]: {
+    scopeClass: 'scoped',
+    why: 'Tenant-scoped authenticated route; writes only the caller users.preferences.releaseNotes through users.patch.',
   },
   // --------------------------------------------------------------------------
   // The two Slack lanes' browser preflights. Registered with a bare `app.use`

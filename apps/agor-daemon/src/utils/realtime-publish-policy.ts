@@ -7,6 +7,8 @@ import {
   MCP_OAUTH_RELAY,
   OWNERSHIP_TRANSFER_SERVICES,
   PRODUCT_ANALYTICS_SERVICE,
+  RELEASE_NOTES_MARK_SEEN_SERVICE,
+  RELEASE_NOTES_SERVICE,
   type UserRole,
 } from '@agor/core/types';
 
@@ -284,6 +286,14 @@ export const REALTIME_PUBLISH_POLICY = {
   [BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE]: {
     audience: 'none',
     why: 'Acknowledgement response; updated branch publishes through branches.',
+  },
+  [RELEASE_NOTES_SERVICE]: {
+    audience: 'none',
+    why: 'Per-caller feed; notes are read on demand and seen state is per user.',
+  },
+  [RELEASE_NOTES_MARK_SEEN_SERVICE]: {
+    audience: 'none',
+    why: 'Per-caller feed reply; the preference change publishes through users.',
   },
   'branches/:id/clean': {
     audience: 'none',

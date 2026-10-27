@@ -1,6 +1,7 @@
 import type { CodexApprovalPolicy, CodexNetworkAccess, CodexSandboxMode } from './agentic-tool';
 import { type AgenticToolName, DEFAULT_AGENTIC_TOOL_NAME, isAgenticToolName } from './agentic-tool';
 import type { BranchID, UserID } from './id';
+import type { ReleaseNotesPreferences } from './release-notes';
 import type { EffortLevel, PermissionMode } from './session';
 
 /** Canonical syntax for the transitional delegated execution-home key. */
@@ -492,6 +493,8 @@ export interface UserPreferences {
   use_slack_avatar?: boolean;
   /** Home "My work" layout. Undefined defaults to list. */
   homeWorkView?: HomeWorkView;
+  /** What's new: drawer and modal seen state, merged server-side by `release-notes/mark-seen`. */
+  releaseNotes?: ReleaseNotesPreferences;
   // Future preferences can be added here
   [key: string]: unknown;
 }

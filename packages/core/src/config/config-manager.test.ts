@@ -882,6 +882,18 @@ describe('loadConfig', () => {
     }
   );
 
+  it('accepts release note sources and rejects unknown ones', () => {
+    for (const source of ['bundled', 'cloud', 'off'] as const) {
+      expect(() => assertValidRawConfig({ release_notes: { source } })).not.toThrow();
+    }
+    expect(() =>
+      assertValidRawConfig({ release_notes: { source: 'github' } } as unknown as AgorConfig)
+    ).toThrow(/release_notes.source must be one of bundled, cloud, off/);
+    expect(() =>
+      assertValidRawConfig({ release_notes: { url: 'https://x' } } as unknown as AgorConfig)
+    ).toThrow(/release_notes.url/);
+  });
+
   it('rejects invalid managed environment execution modes', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');
