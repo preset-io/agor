@@ -154,7 +154,7 @@ import {
   ExecutorLaunchRefusedError,
 } from '../utils/environment-command-dispatch.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
-import { assertManagedBranchPath } from '../utils/managed-branch-path.js';
+import { assertManagedBranchPath, removalBranchesRoot } from '../utils/managed-branch-path.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
@@ -2124,7 +2124,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
                     removal: {
                       branchPath: branch.path,
                       repoPath: repo.local_path!,
-                      branchesRoot: getBranchesDir(tenantId),
+                      branchesRoot: removalBranchesRoot(branch.path, tenantId),
                       storageMode: branch.storage_mode ?? 'worktree',
                     },
                   }
@@ -2255,7 +2255,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               generation: admission.claim.generation,
               executionId,
               branchPath: branch.path,
-              branchesRoot: getBranchesDir(tenantId),
+              // Delegated mounts are verified at the exact tenant root.
+              branchesRoot: externalExecutor
+                ? getBranchesDir(tenantId)
+                : removalBranchesRoot(branch.path, tenantId),
               repoPath: repo.local_path,
               branchHome: getBranchHomePath(branch.branch_id, tenantId),
               tenantDataRoot: getTenantDataRoot(tenantId),

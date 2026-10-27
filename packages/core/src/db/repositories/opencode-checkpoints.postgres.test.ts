@@ -51,7 +51,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         name: 'checkpoints',
         ref: 'main',
         branch_unique_id: Math.floor(Math.random() * 1_000_000),
-        path: '/tmp/checkpoints/branch',
+        path: `/tmp/checkpoints/${repo.repo_id}/branch`,
         created_by: owner.user_id,
       });
       const session = await new SessionRepository(scoped).create({

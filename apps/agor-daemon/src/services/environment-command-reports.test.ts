@@ -39,7 +39,7 @@ afterEach(() => vi.clearAllMocks());
 const tenantId = 'environment-service-test' as TenantID;
 const seedManagedBranch = (db: Parameters<typeof seedEnvironmentCommandBranch>[0]) =>
   seedEnvironmentCommandBranch(db, {
-    path: join(getBranchesDir(), 'fixture-repo', `env-${generateId()}`),
+    path: join(getBranchesDir(), 'fixture', 'repo', `env-${generateId()}`),
   });
 const config = {
   deployment: { mode: 'ha', ha: { execution_topology: 'external' } },

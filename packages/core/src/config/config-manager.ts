@@ -2587,7 +2587,8 @@ export function isManagedBranchPath(branchPath: unknown, branchesRoot: string): 
   const relative = path.relative(path.resolve(branchesRoot), branchPath);
   if (!relative || path.isAbsolute(relative)) return false;
   const segments = relative.split(path.sep);
-  return segments.length >= 2 && segments.every((segment) => segment && segment !== '..');
+  // `<org>/<repo>/<branch...>`: a repo directory holds every branch of that repo.
+  return segments.length >= 3 && segments.every((segment) => segment && segment !== '..');
 }
 
 /**

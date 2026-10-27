@@ -14,6 +14,7 @@ import { boards, branches } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardObjectRepository } from './board-objects';
+import { BranchWorkspaceOverlapError } from './branch-path-overlap';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
@@ -353,6 +354,46 @@ describe('BranchRepository.create', () => {
     const fetched = await wtRepo.findById(created.branch_id);
     expect(fetched?.storage_mode).toBe('clone');
     expect(fetched?.clone_depth).toBe(100);
+  });
+
+  // A renamed repo slug can derive another repo's workspace path, so the
+  // fence spans every repo and lifecycle state, not just the creating repo.
+  dbTest.for([
+    ['the same workspace', '/w/org/v/feature'],
+    ['a workspace nested inside it', '/w/org/v/feature/x'],
+    ['a workspace containing it', '/w/org/v'],
+  ] as const)('refuses %s across repos', async ([, path], { db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const victim = await repoRepo.create(createRepoData({ slug: 'org/v' }));
+    const renamed = await repoRepo.create(createRepoData({ slug: 'org/r1' }));
+    await branchRepo.create(
+      createBranchData({
+        repo_id: victim.repo_id,
+        name: 'feature',
+        path: '/w/org/v/feature',
+        archived: true,
+      })
+    );
+
+    await expect(
+      branchRepo.create(createBranchData({ repo_id: renamed.repo_id, name: 'attacker', path }))
+    ).rejects.toBeInstanceOf(BranchWorkspaceOverlapError);
+    expect(await branchRepo.findAllByRepoId(renamed.repo_id as UUID)).toEqual([]);
+  });
+
+  dbTest('treats LIKE metacharacters in paths literally', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'org/repo' }));
+    await branchRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'a_b', path: '/w/org/repo/a_b' })
+    );
+    await expect(
+      branchRepo.create(
+        createBranchData({ repo_id: repo.repo_id, name: 'axb', path: '/w/org/repo/axb/c' })
+      )
+    ).resolves.toBeDefined();
   });
 
   // Note: storage_mode enum validation is enforced at the application
@@ -843,6 +884,7 @@ describe('BranchRepository.findByRepoAndName', () => {
       repo_id: repo2.repo_id,
       name: 'feature',
       branch_unique_id: 2,
+      path: '/home/user/.agor/repos/repo-2/feature',
     });
 
     await wtRepo.create(data1);

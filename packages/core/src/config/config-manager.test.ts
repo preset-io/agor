@@ -2502,7 +2502,7 @@ describe('managed branch path containment', () => {
 
   it.each([
     '/data/tenants/acme/worktrees/org/repo/feature',
-    '/data/tenants/acme/worktrees/org/feature',
+    '/data/tenants/acme/worktrees/org/repo/feature/x',
   ])('accepts %s', (branchPath) => {
     expect(isManagedBranchPath(branchPath, root)).toBe(true);
   });
@@ -2511,7 +2511,8 @@ describe('managed branch path containment', () => {
     ['another tenant', '/data/tenants/globex/worktrees/victim-private'],
     ['the filesystem root', '/'],
     ['the branches root', root],
-    ['a repository directory', `${root}/org`],
+    ['an org directory', `${root}/org`],
+    ['a repository directory', `${root}/org/repo`],
     ['a relative path', 'org/repo/feature'],
     ['a traversal', `${root}/org/../../../globex/worktrees/x/y`],
     ['a non-normalized path', `${root}/org//repo/feature`],

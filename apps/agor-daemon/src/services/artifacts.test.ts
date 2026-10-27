@@ -255,7 +255,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
         filesystem_home: '/srv/external-homes/artifact-collaborator',
       });
       await seedUser(db, 'user-owner');
-      const branchPath = '/srv/agor-tenants/tenant-a/worktrees/org/artifact-branch';
+      const branchPath = '/srv/agor-tenants/tenant-a/worktrees/org/repo/artifact-branch';
       const branch = await seedRepoAndBranch(db, branchPath);
       const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
       const serviceBranchRepo = (service as unknown as { branchRepo: BranchRepository }).branchRepo;
@@ -315,7 +315,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
       await seedUser(db, 'user-owner');
       const branch = await seedRepoAndBranch(
         db,
-        '/srv/agor-tenants/tenant-a/worktrees/org/canonical-artifact-branch'
+        '/srv/agor-tenants/tenant-a/worktrees/org/repo/canonical-artifact-branch'
       );
       const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
       vi.mocked(requestExecutor).mockReset();
@@ -352,7 +352,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
       await seedUser(db, 'user-owner');
       const branch = await seedRepoAndBranch(
         db,
-        '/srv/agor-tenants/tenant-a/worktrees/org/missing-tenant-artifact-branch'
+        '/srv/agor-tenants/tenant-a/worktrees/org/repo/missing-tenant-artifact-branch'
       );
       const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
       vi.mocked(requestExecutor).mockReset();
@@ -372,7 +372,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
     await seedUser(db, 'user-owner');
     const branch = await seedRepoAndBranch(
       db,
-      '/srv/agor-tenants/tenant-a/worktrees/org/conflicting-tenant-artifact-branch'
+      '/srv/agor-tenants/tenant-a/worktrees/org/repo/conflicting-tenant-artifact-branch'
     );
     const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
     vi.mocked(requestExecutor).mockReset();
@@ -396,7 +396,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
     await seedUser(db, 'user-owner');
     const branch = await seedRepoAndBranch(
       db,
-      '/srv/agor-tenants/tenant-a/worktrees/org/clone-artifact-branch',
+      '/srv/agor-tenants/tenant-a/worktrees/org/repo/clone-artifact-branch',
       { storageMode: 'clone' }
     );
     const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));

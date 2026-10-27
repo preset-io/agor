@@ -3,7 +3,11 @@ import os from 'node:os';
 import { join } from 'node:path';
 import { __resetConfigCacheForTests, getBranchesDir, getBranchPath } from '@agor/core/config';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { assertManagedBranchPath } from './managed-branch-path.js';
+import {
+  assertManagedBranchPath,
+  managedBranchesRoot,
+  removalBranchesRoot,
+} from './managed-branch-path.js';
 
 describe('assertManagedBranchPath', () => {
   let home: string;
@@ -39,7 +43,8 @@ describe('assertManagedBranchPath', () => {
     ['another tenant', () => getBranchPath('org/repo', 'victim', 'globex')],
     ['the filesystem root', () => '/'],
     ['the tenant branches root', () => getBranchesDir('acme')],
-    ['a repository directory', () => join(getBranchesDir('acme'), 'org')],
+    ['an org directory', () => join(getBranchesDir('acme'), 'org')],
+    ['a repository directory', () => join(getBranchesDir('acme'), 'org', 'repo')],
     ['a relative path', () => 'org/repo/feature'],
     ['a traversal', () => `${getBranchesDir('acme')}/org/../../globex/worktrees/org/repo`],
     ['a non-string', () => 42],
@@ -70,19 +75,55 @@ describe('assertManagedBranchPath', () => {
     expect(() => assertManagedBranchPath(alias, 'acme')).toThrow(/traverses a symlink/);
   });
 
-  it('accepts historical paths through a migrated root alias', async () => {
+  describe('migrated root alias', () => {
     // Documented migration: move worktrees to a new data home and keep the old
     // location as a symlink. Historical rows still name the old location.
-    const dataHome = join(home, 'data');
-    await writeConfig(`paths:\n  data_home: ${dataHome}\n`);
-    const branchPath = getBranchPath('org/repo', 'feature');
-    await mkdir(branchPath, { recursive: true });
-    await symlink(join(dataHome, 'worktrees'), join(home, '.agor', 'worktrees'));
-    const historical = join(home, '.agor', 'worktrees', 'org', 'repo', 'feature');
-    expect(assertManagedBranchPath(historical)).toBe(historical);
-    await mkdir(join(home, 'elsewhere', 'org', 'repo'), { recursive: true });
-    expect(() => assertManagedBranchPath(join(home, 'elsewhere', 'org', 'repo'))).toThrow(
-      /outside this tenant/
-    );
+    let dataHome: string;
+    let legacyRoot: string;
+
+    beforeEach(async () => {
+      dataHome = join(home, 'data');
+      await writeConfig(`paths:\n  data_home: ${dataHome}\n`);
+      await mkdir(getBranchPath('org/repo', 'feature'), { recursive: true });
+      legacyRoot = join(home, '.agor', 'worktrees');
+      await symlink(join(dataHome, 'worktrees'), legacyRoot);
+    });
+
+    it('accepts historical paths and walks them from the alias root', () => {
+      const historical = join(legacyRoot, 'org', 'repo', 'feature');
+      expect(assertManagedBranchPath(historical)).toBe(historical);
+      expect(managedBranchesRoot(historical)).toBe(legacyRoot);
+      expect(managedBranchesRoot(getBranchPath('org/repo', 'feature'))).toBe(getBranchesDir());
+    });
+
+    it('hands removal walks the alias root, and the current root for invalid rows', () => {
+      expect(removalBranchesRoot(join(legacyRoot, 'org', 'repo', 'feature'))).toBe(legacyRoot);
+      expect(removalBranchesRoot(join(home, 'elsewhere', 'org', 'repo', 'x'))).toBe(
+        getBranchesDir()
+      );
+    });
+
+    it('rejects any other symlink to the root', async () => {
+      const planted = join(home, 'planted');
+      await symlink(join(dataHome, 'worktrees'), planted);
+      expect(() => assertManagedBranchPath(join(planted, 'org', 'repo', 'feature'))).toThrow(
+        /outside this tenant/
+      );
+    });
+
+    it('rejects a symlink below the alias', async () => {
+      const neighbor = getBranchPath('org/repo', 'neighbor');
+      await mkdir(neighbor, { recursive: true });
+      await symlink(neighbor, getBranchPath('org/repo', 'alias'));
+      expect(() => assertManagedBranchPath(join(legacyRoot, 'org', 'repo', 'alias'))).toThrow(
+        /traverses a symlink/
+      );
+    });
+
+    it('rejects a repository directory through the alias', () => {
+      expect(() => assertManagedBranchPath(join(legacyRoot, 'org', 'repo'))).toThrow(
+        /outside this tenant/
+      );
+    });
   });
 });

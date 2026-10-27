@@ -60,7 +60,7 @@ dbTest(
         name,
         ref: 'main',
         branch_unique_id: uniqueId,
-        path: process.cwd(),
+        path: uniqueId === 1 ? process.cwd() : `${process.cwd()}-${name}`,
         base_ref: 'main',
         new_branch: false,
         created_by: user.user_id,

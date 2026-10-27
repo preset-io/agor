@@ -66,7 +66,7 @@ describePostgres('ThreadSessionMapRepository.claimMetadataFlag (PostgreSQL)', ()
         name: 'main',
         ref: 'refs/heads/main',
         branch_unique_id: 1,
-        path: '/tmp/thread-map-test-repo/main',
+        path: `/tmp/thread-map-test-repo/${repo.repo_id}/main`,
         created_by: owner.user_id as UUID,
       });
       const session = await new SessionRepository(scoped).create({

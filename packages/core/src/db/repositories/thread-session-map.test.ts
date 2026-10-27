@@ -38,7 +38,7 @@ async function seedMapping(db: Database, metadata: Record<string, unknown> = {})
     name: 'main',
     ref: 'refs/heads/main',
     branch_unique_id: 1,
-    path: '/tmp/thread-map-test-repo/main',
+    path: `/tmp/thread-map-test-repo/${generateId()}/main`,
     created_by: 'test-user' as UUID,
   });
   const session = await new SessionRepository(db).create({

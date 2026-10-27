@@ -81,7 +81,7 @@ async function seedChannel(db: Database, extraConfig: Record<string, unknown> = 
     name: 'main',
     ref: 'refs/heads/main',
     branch_unique_id: 1,
-    path: '/tmp/teams-http-fixture/main',
+    path: `/tmp/teams-http-fixture/${repo.repo_id}/main`,
     created_by: 'test-user' as UUID,
   });
   return new GatewayChannelRepository(db).create({

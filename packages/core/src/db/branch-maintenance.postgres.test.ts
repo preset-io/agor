@@ -11,6 +11,7 @@ import { BranchMaintenanceRepository } from './repositories/branch-maintenance';
 import { BranchWorkspaceOperationRepository } from './repositories/branch-workspace-operations';
 import { BranchRepository } from './repositories/branches';
 import {
+  createBranchAtPathForTest,
   seedEnvironmentCommandBranch,
   setBranchPathForTest,
 } from './repositories/environment-commands.test-support';
@@ -200,7 +201,7 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const tenantB = `archive-b-${generateId()}`;
       const { branch, claim } = await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
         const { branch, user } = await seedEnvironmentCommandBranch(scoped);
-        await new BranchRepository(scoped).create({
+        await createBranchAtPathForTest(scoped, {
           repo_id: branch.repo_id,
           name: 'overlap',
           ref: 'overlap',

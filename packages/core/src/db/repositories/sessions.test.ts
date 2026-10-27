@@ -64,7 +64,7 @@ async function createTestBranch(db: any, overrides?: { branch_id?: UUID; repo_id
     name: 'main',
     ref: 'main',
     branch_unique_id: Math.floor(Math.random() * 1000000), // Auto-assigned sequential ID
-    path: '/tmp/test-repo',
+    path: `/tmp/test-repo/worktrees/${repo.repo_id}/main`,
     base_ref: 'main',
     new_branch: false,
     created_by: 'test-user' as UUID,

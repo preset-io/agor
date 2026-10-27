@@ -34,7 +34,7 @@ vi.mock('../utils/spawn-executor', () => ({
   getDaemonUrl: () => 'http://127.0.0.1:3030',
 }));
 const tenant = { tenant_id: 'default' as TenantID, source: 'explicit' as const };
-const managedBranchPath = (name: string) => join(getBranchesDir(), 'fixture-repo', name);
+const managedBranchPath = (name: string) => join(getBranchesDir(), 'fixture', 'repo', name);
 const seedManagedBranch = (db: Database) =>
   seedEnvironmentCommandBranch(db, { path: managedBranchPath(`env-${generateId()}`) });
 beforeEach(() => {

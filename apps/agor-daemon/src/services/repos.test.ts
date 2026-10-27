@@ -2,11 +2,12 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getBranchesDir, getBranchPath } from '@agor/core/config';
 import {
+  BranchWorkspaceOverlapError,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithTenantContext,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Conflict } from '@agor/core/feathers';
 import type { AuthenticatedParams, Branch } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BranchesService, type BranchParams } from './branches';
@@ -397,56 +398,49 @@ describe('ReposService.addLocalRepository executor boundary', () => {
 });
 
 describe('ReposService.createBranch Git lifecycle execution', () => {
-  // The workspace path is derived from the branch name and stays owned by the
-  // row even once archived, whose checkout lifecycle cleanup still preserves.
-  // Creating a second row against that same path would give two branches one
-  // workspace, so archiving/deleting either could damage the other.
-  it.each([
-    ['inside', 'parent', 'parent/link/new'],
-    ['containing', 'parent/child', 'parent'],
-  ])(
-    'refuses a branch whose workspace would be nested %s another branch',
-    async (_relation, existingName, newName) => {
-      const branches = { create: vi.fn(), find: vi.fn(async () => []) };
-      const app = {
-        get: () => ({}),
-        sessionTokenService: { generateCommandToken: vi.fn(async () => 'token') },
-        settings: { authentication: { secret: 'test-secret' } },
-        service: vi.fn((name: string) => {
-          if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
-          if (name === 'branches') return branches;
-          throw new Error(`Unexpected service: ${name}`);
-        }),
-      } as unknown as Application;
-      const service = new ReposService({} as never, app);
-      vi.spyOn(service, 'get').mockResolvedValue({
-        repo_id: '550e8400-e29b-41d4-a716-446655440001',
-        slug: 'preset-io/agor',
-        local_path: '/managed/repos/agor',
-        default_branch: 'main',
-      } as never);
-      repositoryMocks.findAllBranchesByRepoId.mockResolvedValueOnce([
-        { name: existingName, path: getBranchPath('preset-io/agor', existingName) },
-      ]);
+  // The repository fences overlapping workspaces tenant-wide (across repos,
+  // so a renamed slug cannot reuse another repo's paths) under a lock.
+  it('maps a workspace overlap to 409 without provisioning', async () => {
+    const branches = {
+      create: vi.fn(async () => {
+        throw new BranchWorkspaceOverlapError('feature/x', 'feature');
+      }),
+      find: vi.fn(async () => []),
+    };
+    const app = {
+      get: () => ({}),
+      sessionTokenService: { generateCommandToken: vi.fn(async () => 'token') },
+      settings: { authentication: { secret: 'test-secret' } },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return { get: vi.fn(async () => ({ objects: {} })) };
+        if (name === 'branches') return branches;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'org/v',
+      local_path: '/managed/repos/v',
+      default_branch: 'main',
+    } as never);
 
-      await expect(
-        service.createBranch(
-          '550e8400-e29b-41d4-a716-446655440001',
-          {
-            name: newName,
-            ref: newName,
-            createBranch: true,
-            sourceBranch: 'main',
-            boardId: '550e8400-e29b-41d4-a716-446655440003',
-            storage_mode: 'worktree',
-          },
-          { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
-        )
-      ).rejects.toThrow(/would share a workspace with branch/);
-      expect(branches.create).not.toHaveBeenCalled();
-      expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
-    }
-  );
+    const result = service.createBranch(
+      '550e8400-e29b-41d4-a716-446655440001',
+      {
+        name: 'feature/x',
+        ref: 'feature/x',
+        createBranch: true,
+        sourceBranch: 'main',
+        boardId: '550e8400-e29b-41d4-a716-446655440003',
+        storage_mode: 'worktree',
+      },
+      { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+    );
+    await expect(result).rejects.toBeInstanceOf(Conflict);
+    await expect(result).rejects.toThrow(/would share a workspace with branch 'feature'/);
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
 
   it('refuses to create a branch whose deterministic path an archived branch still owns', async () => {
     const branches = { create: vi.fn(), find: vi.fn(async () => []) };

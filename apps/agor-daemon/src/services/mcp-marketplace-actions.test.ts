@@ -246,7 +246,7 @@ async function sessionFor(db: Parameters<typeof dbTest>[0]['db'], owner = ALICE)
     name: 'fixture',
     ref: 'main',
     branch_unique_id: Math.floor(Math.random() * 1000000),
-    path: '/tmp/mcp-delete',
+    path: `/tmp/mcp-delete/${repo.repo_id}`,
     created_by: owner,
   });
   return new SessionRepository(db).create({

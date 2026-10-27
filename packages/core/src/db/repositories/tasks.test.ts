@@ -83,7 +83,7 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
     name: 'test-branch',
     ref: 'main',
     branch_unique_id: branchCounter++,
-    path: '/tmp/test/branch',
+    path: `/tmp/test/${generateId()}/branch`,
     created_by: 'test-user' as UUID,
   });
 

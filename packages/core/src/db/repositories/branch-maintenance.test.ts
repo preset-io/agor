@@ -13,6 +13,7 @@ import {
 import { BranchRepository } from './branches';
 import { EnvironmentCommandRepository } from './environment-commands';
 import {
+  createBranchAtPathForTest,
   seedEnvironmentCommandBranch,
   setBranchPathForTest,
 } from './environment-commands.test-support';
@@ -100,18 +101,23 @@ test('known unfinished tasks prevent claiming maintenance without changing branc
 });
 
 for (const status of ['failed', 'cleaned', 'deleted', 'ready', 'creating'] as const) {
-  for (const path of ['/tmp/environment-test', '/tmp/environment-test/child', '/tmp']) {
-    test(`overlap guard protects ${status} sibling at ${path} for every filesystem claim`, async ({
+  for (const relation of ['equal', 'child', 'ancestor'] as const) {
+    test(`overlap guard protects ${status} ${relation} sibling for every filesystem claim`, async ({
       db,
     }) => {
       const { branch, user } = await seedEnvironmentCommandBranch(db);
       const branches = new BranchRepository(db);
-      await branches.create({
+      await createBranchAtPathForTest(db, {
         repo_id: branch.repo_id,
         name: 'sibling',
         ref: 'sibling',
         branch_unique_id: 9600001,
-        path,
+        path:
+          relation === 'equal'
+            ? branch.path
+            : relation === 'child'
+              ? `${branch.path}/child`
+              : '/tmp',
         created_by: user.user_id,
         filesystem_status: status,
         archived: true,
@@ -143,7 +149,6 @@ for (const literal of ['percent%', 'under_score', 'escape!', 'back\\slash']) {
   ] as const) {
     test(`overlap treats ${literal} literally for ${relation} paths`, async ({ db }) => {
       const { branch, user } = await seedEnvironmentCommandBranch(db);
-      const repo = new BranchRepository(db);
       const path = `/tmp/${literal}`;
       const lookalike = path
         .replace('%', 'wildcard')
@@ -159,7 +164,7 @@ for (const literal of ['percent%', 'under_score', 'escape!', 'back\\slash']) {
             ? `${lookalike}/child`
             : path
       );
-      await repo.create({
+      await createBranchAtPathForTest(db, {
         repo_id: branch.repo_id,
         name: 'literal-sibling',
         ref: 'literal-sibling',
@@ -529,7 +534,7 @@ for (const [guard, message] of [
         await maintenance.claim(branch.branch_id, 'workspace_write');
         break;
     }
-    await repo.create({
+    await createBranchAtPathForTest(db, {
       repo_id: branch.repo_id,
       name: 'guard-sibling',
       ref: 'guard-sibling',

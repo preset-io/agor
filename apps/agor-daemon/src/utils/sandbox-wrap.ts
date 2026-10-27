@@ -59,14 +59,13 @@ function isWithinDirectory(path: string, root: string): boolean {
 }
 
 /**
- * A branch path below the worktrees root must stay there after symlink
+ * A branch path must resolve below the worktrees root after symlink
  * resolution; otherwise bubblewrap would mount the symlink target.
  */
 export function assertBranchPathCanonicallyContained(
   branchPath: string,
   worktreesRoot: string
 ): void {
-  if (!isWithinDirectory(resolve(branchPath), resolve(worktreesRoot))) return;
   if (
     !isWithinDirectory(
       canonicalizeProspectivePath(branchPath),

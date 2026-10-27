@@ -86,7 +86,7 @@ async function createSessionForUser(db: any, userId: UserID): Promise<SessionID>
     name: 'main',
     ref: 'main',
     branch_unique_id: Math.floor(Math.random() * 1_000_000),
-    path: '/tmp/test-repo',
+    path: `/tmp/test-repo/worktrees/${repo.repo_id}/main`,
     base_ref: 'main',
     new_branch: false,
     created_by: userId,

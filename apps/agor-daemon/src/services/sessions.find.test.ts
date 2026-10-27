@@ -74,7 +74,7 @@ async function createBranchOnBoard(
     name: 'feature',
     ref: 'feature',
     branch_unique_id: Math.floor(Math.random() * 1_000_000),
-    path: '/tmp/test-repo',
+    path: `/tmp/test-repo/${repo.repo_id}`,
     base_ref: 'main',
     new_branch: false,
     created_by: createdBy,

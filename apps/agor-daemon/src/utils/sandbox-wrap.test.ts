@@ -91,6 +91,24 @@ describe('assertBranchPathCanonicallyContained', () => {
     );
   });
 
+  it('rejects a branch path outside the worktrees root', () => {
+    expect(() =>
+      assertBranchPathCanonicallyContained(
+        join(root, 'tenants', 'globex', 'worktrees', 'victim'),
+        worktrees
+      )
+    ).toThrow(/resolves outside the managed branch directory/);
+  });
+
+  it('judges an out-of-root spelling by where it resolves', async () => {
+    // The daemon decides which alias spellings are valid; bubblewrap mounts the target.
+    const alias = join(root, 'legacy-worktrees');
+    await symlink(worktrees, alias);
+    expect(() =>
+      assertBranchPathCanonicallyContained(join(alias, 'org', 'repo', 'feature'), worktrees)
+    ).not.toThrow();
+  });
+
   it('accepts a symlinked worktrees root whose branch stays inside it', async () => {
     const alias = join(root, 'alias-worktrees');
     await symlink(worktrees, alias);
