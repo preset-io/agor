@@ -3,11 +3,12 @@ import type { MCPMarketplaceOverview, MCPMarketplaceServer, MCPServerID } from '
 import type { AgorClient, MCPMemberPolicy, MCPServer } from '@agor-live/client';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { checkBrowserSanity } from '../../test/browserSanity';
 import { MyServersTab } from './MyServersTab';
+import { useAddCustomMcpServer } from './useAddCustomMcpServer';
 
 checkBrowserSanity();
 beforeEach(() => {
@@ -136,19 +137,45 @@ function Harness({
       ],
     }));
   controls.refresh = refresh;
+  // As MCPCatalogContent does: the tab bar owns the add action and hands the
+  // new server to My Servers once its form closes.
+  const currentUser = { user_id: 'member-a', role } as never;
+  const [requestedServerId, setRequestedServerId] = useState<string | null>(null);
+  const added = useRef<string | null>(null);
+  const addCustom = useAddCustomMcpServer({
+    client,
+    connected: true,
+    connecting: false,
+    authGeneration: 1,
+    currentUser,
+    onCreated: (server) => {
+      added.current = server.mcp_server_id;
+    },
+    onClose: () => {
+      void refresh();
+      setRequestedServerId(added.current);
+      added.current = null;
+    },
+  });
   return (
-    <MyServersTab
-      client={client}
-      connected
-      connecting={false}
-      authGeneration={1}
-      currentUser={{ user_id: 'member-a', role } as never}
-      overview={overview}
-      loading={false}
-      error={null}
-      refresh={refresh}
-      onBrowseCatalog={() => undefined}
-    />
+    <>
+      {addCustom.modal}
+      {addCustom.button}
+      <MyServersTab
+        client={client}
+        connected
+        connecting={false}
+        authGeneration={1}
+        currentUser={currentUser}
+        overview={overview}
+        loading={false}
+        error={null}
+        refresh={refresh}
+        onBrowseCatalog={() => undefined}
+        requestedServerId={requestedServerId}
+        onRequestedServerOpened={() => setRequestedServerId(null)}
+      />
+    </>
   );
 }
 
@@ -243,7 +270,7 @@ async function expectAddRestriction(button: HTMLElement, text: RegExp) {
   expect(await screen.findByText(text)).toBeInTheDocument();
 }
 
-it('adds a custom HTTP server from the empty state and opens it', async () => {
+it('adds a custom HTTP server while nothing is installed and opens it', async () => {
   const { create } = mount(emptyOverview);
   expect(await screen.findByRole('button', { name: 'Browse catalog' })).toBeVisible();
   const dialog = await openCreateDialog();
@@ -363,7 +390,7 @@ it('leaves a shared-mode OAuth grant to admins on a Shared server a member manag
   expect(screen.getByLabelText('Disconnect Existing OAuth connection')).toBeDisabled();
 });
 
-it('opens from the toolbar and resets the draft after cancel', async () => {
+it('opens from the tab bar and resets the draft after cancel', async () => {
   const { create } = mount({ ...emptyOverview, servers: [existing] });
   let dialog = await openCreateDialog();
   await fillHttpBearer(dialog);
@@ -392,7 +419,7 @@ it('keeps a failed create visible in the form', async () => {
   expect(within(dialog).getByLabelText('URL')).toHaveValue('https://mcp.example.com/mcp');
 });
 
-it('tells a member who cannot configure why the toolbar add is off', async () => {
+it('tells a member who cannot configure why the tab-bar add is off', async () => {
   mount({ ...emptyOverview, servers: [existing] }, { policy: 'use_existing_only' });
   expect(
     await screen.findByText("Your workspace's MCP policy doesn't let you change this server.")
@@ -403,7 +430,7 @@ it('tells a member who cannot configure why the toolbar add is off', async () =>
   );
 });
 
-it('tells a member who cannot configure why the empty-state add is off', async () => {
+it('tells a member who cannot configure why add is off while nothing is installed', async () => {
   mount(emptyOverview, { policy: 'use_existing_only' });
   await screen.findByRole('button', { name: 'Browse catalog' });
   // The policy reason only replaces the pending hint once the answer has landed.

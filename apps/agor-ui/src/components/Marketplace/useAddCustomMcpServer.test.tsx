@@ -1,9 +1,16 @@
 import type { MCPServer } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { McpMemberPolicyState } from '../../hooks/useMcpMemberPolicy';
 import type { MCPServerEditModalProps } from '../MCPServer/MCPServerEditModal';
-import type { MCPServerCapabilityContext } from '../MCPServer/memberPolicy';
 import { type UseAddCustomMcpServerOptions, useAddCustomMcpServer } from './useAddCustomMcpServer';
+
+const memberPolicy = vi.hoisted(() => ({
+  current: {} as Partial<McpMemberPolicyState>,
+}));
+vi.mock('../../hooks/useMcpMemberPolicy', () => ({
+  useMcpMemberPolicy: () => memberPolicy.current,
+}));
 
 vi.mock('../MCPServer/MCPServerEditModal', () => ({
   MCPServerEditModal: ({ open, onCreated, onClose, offeredTransports }: MCPServerEditModalProps) =>
@@ -20,27 +27,25 @@ vi.mock('../MCPServer/MCPServerEditModal', () => ({
     ) : null,
 }));
 
-const capability: MCPServerCapabilityContext = {
-  connectionReady: true,
-  role: 'member',
-  isAdmin: false,
+const READY: Partial<McpMemberPolicyState> = {
   policy: 'allow_private_only',
-  userId: 'alice',
   canConfigure: true,
+  loading: false,
+  error: null,
 };
 
 function Harness(props: Partial<UseAddCustomMcpServerOptions>) {
   const { button, iconButton, modal } = useAddCustomMcpServer({
     client: null,
-    currentUser: { user_id: 'alice', role: 'member' } as never,
+    connected: true,
+    connecting: false,
     authGeneration: 1,
-    capability,
-    policyState: { pending: false, hint: '' },
+    currentUser: { user_id: 'alice', role: 'member' } as never,
     ...props,
   });
   return (
     <>
-      <div data-testid="toolbar">{button}</div>
+      <div data-testid="tab-bar">{button}</div>
       <div data-testid="empty">{button}</div>
       <div data-testid="compact">{iconButton}</div>
       {modal}
@@ -48,15 +53,20 @@ function Harness(props: Partial<UseAddCustomMcpServerOptions>) {
   );
 }
 
-const addButtons = () => screen.getAllByRole('button', { name: /Add custom server/ });
+const addButtons = () => screen.getAllByRole('button', { name: 'Add custom server' });
 
 describe('useAddCustomMcpServer', () => {
+  beforeEach(() => {
+    memberPolicy.current = READY;
+  });
+
   it('opens one form from any copy of the button and reports creation as it happens', () => {
     const onCreated = vi.fn();
     const onClose = vi.fn();
     render(<Harness onCreated={onCreated} onClose={onClose} />);
-    // The compact copy is icon-only, named by its aria-label.
+    // A primary action; the compact copy is icon-only, named by its aria-label.
     expect(addButtons()).toHaveLength(3);
+    for (const button of addButtons()) expect(button).toHaveClass('ant-btn-primary');
     expect(screen.getByTestId('compact').querySelector('button')).not.toHaveTextContent(
       'Add custom server'
     );
@@ -73,14 +83,12 @@ describe('useAddCustomMcpServer', () => {
   });
 
   it.each([
-    { name: 'policy refuses', options: { capability: { ...capability, canConfigure: false } } },
-    { name: 'policy is pending', options: { policyState: { pending: true, hint: 'Loading' } } },
-    {
-      name: 'connection is lost',
-      options: { capability: { ...capability, connectionReady: false } },
-    },
-  ])('disables the button when the $name', ({ options }) => {
-    render(<Harness {...options} />);
+    { name: 'policy refuses', policy: { ...READY, canConfigure: false }, props: {} },
+    { name: 'policy is pending', policy: { ...READY, loading: true }, props: {} },
+    { name: 'connection is lost', policy: READY, props: { connecting: true } },
+  ])('disables the button when the $name', ({ policy, props }) => {
+    memberPolicy.current = policy;
+    render(<Harness {...props} />);
     for (const button of addButtons()) expect(button).toBeDisabled();
   });
 });

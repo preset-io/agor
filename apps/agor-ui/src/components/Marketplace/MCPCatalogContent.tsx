@@ -1,11 +1,12 @@
 import type { SessionID, User } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { Tabs, Typography } from 'antd';
-import { useId, useState } from 'react';
+import { Grid, Tabs, Typography } from 'antd';
+import { useId, useRef, useState } from 'react';
 import { CatalogTab } from './CatalogTab';
 import { CredentialsTab } from './CredentialsTab';
 import { MyServersTab } from './MyServersTab';
+import { useAddCustomMcpServer } from './useAddCustomMcpServer';
 import { useMarketplaceOverview } from './useMarketplaceOverview';
 
 export interface MCPCatalogContentProps {
@@ -51,16 +52,45 @@ export function MCPCatalogContent({
       currentUser?.user_id &&
       hasMinimumRole(currentUser.role, ROLES.MEMBER)
   );
+  const openServerSettings = (serverId: string) => {
+    setRequestedServerId(serverId);
+    setActiveTab('servers');
+  };
+  // Held until the form closes: My Servers must not open its drawer over a form mid-OAuth.
+  const addedServerId = useRef<string | null>(null);
+  const addCustom = useAddCustomMcpServer({
+    client,
+    connected,
+    connecting,
+    authGeneration,
+    currentUser,
+    onCreated: (server) => {
+      addedServerId.current = server.mcp_server_id;
+    },
+    onClose: () => {
+      void overview.refresh();
+      const serverId = addedServerId.current;
+      addedServerId.current = null;
+      if (serverId) openServerSettings(serverId);
+    },
+  });
+  const screens = Grid.useBreakpoint();
+  const narrow = screens.xs === true && screens.sm !== true;
 
   return (
     <>
       <Typography.Paragraph type="secondary">
         Attach tools to your agents — browse, review permissions, connect.
       </Typography.Paragraph>
+      {addCustom.modal}
       <Tabs
         id={tabsId}
         activeKey={activeTab}
         onChange={setActiveTab}
+        // One spot for the primary action, apart from the Catalog's filters.
+        tabBarExtraContent={
+          activeTab === 'credentials' ? undefined : narrow ? addCustom.iconButton : addCustom.button
+        }
         items={[
           {
             key: 'catalog',
@@ -75,10 +105,7 @@ export function MCPCatalogContent({
                 authGeneration={authGeneration}
                 currentUser={currentUser}
                 refreshMarketplaceOverview={overview.refresh}
-                onCustomServerCreated={(serverId) => {
-                  setRequestedServerId(serverId);
-                  setActiveTab('servers');
-                }}
+                addCustomServerAction={addCustom.button}
               />
             ),
           },
@@ -108,10 +135,7 @@ export function MCPCatalogContent({
               <CredentialsTab
                 {...overview}
                 canManageCredentials={canManageCredentials}
-                onOpenServerSettings={(serverId) => {
-                  setRequestedServerId(serverId);
-                  setActiveTab('servers');
-                }}
+                onOpenServerSettings={openServerSettings}
                 onBrowseCatalog={() => setActiveTab('catalog')}
               />
             ),

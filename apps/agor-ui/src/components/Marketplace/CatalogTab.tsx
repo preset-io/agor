@@ -21,7 +21,7 @@ import { readCredentialRequirement } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES, sessionPath } from '@agor-live/client';
 import { Alert, Button, Card, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import {
@@ -47,7 +47,6 @@ import {
 } from './marketplaceOAuthLaunch';
 import type { MarketplaceOAuthPopup } from './marketplaceOAuthPopup';
 import { marketplaceCredentialIsUsable } from './marketplacePresentation';
-import { useAddCustomMcpServer } from './useAddCustomMcpServer';
 import { useCatalogReadiness } from './useCatalogReadiness';
 import {
   CATALOG_PAGE_SIZE,
@@ -132,8 +131,8 @@ export interface CatalogTabProps {
   onOpenSession?: (sessionId: SessionID) => void;
   /** Refresh the shared Marketplace overview after durable OAuth confirmation. */
   refreshMarketplaceOverview?: () => Promise<unknown>;
-  /** Runs when the "Add custom server" form closes after adding a server. */
-  onCustomServerCreated?: (serverId: string) => void;
+  /** The "Add custom server" action, offered when a search finds nothing. */
+  addCustomServerAction?: ReactNode;
 }
 
 const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
@@ -146,7 +145,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   currentUser,
   refreshMarketplaceOverview,
   onOpenSession,
-  onCustomServerCreated,
+  addCustomServerAction,
 }) => {
   const handoff = context?.mode === 'handoff' ? context : undefined;
   const returnTarget = handoff?.returnTo ?? 'the conversation';
@@ -267,24 +266,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       memberPolicy.canConfigure,
     ]
   );
-  // Hand the added server to My Servers once its form closes, not mid-OAuth.
-  const customServerCreated = useRef<string | null>(null);
-  const addCustom = useAddCustomMcpServer({
-    client,
-    currentUser,
-    authGeneration,
-    capability: connectCapability,
-    policyState: { pending: policyPending, hint: policyPendingHint },
-    onCreated: (server) => {
-      customServerCreated.current = server.mcp_server_id;
-    },
-    onClose: () => {
-      void refreshMarketplaceOverview?.();
-      const serverId = customServerCreated.current;
-      customServerCreated.current = null;
-      if (serverId) onCustomServerCreated?.(serverId);
-    },
-  });
   const operationGuard = useAuthorityOperationGuard(
     active && connectionReady && currentUser?.user_id && currentUser.role && !policyPending
       ? [
@@ -862,8 +843,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           onCapabilityChange={onCapabilityChange}
           onSortChange={onSortChange}
           matchSummary={matchSummary}
-          action={addCustom.button}
-          compactAction={addCustom.iconButton}
         />
       </div>
 
@@ -914,11 +893,11 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
             description={
               <Flex vertical>
                 <span>No servers match</span>
-                <span>Can't find it? Add a custom server.</span>
+                {addCustomServerAction && <span>Can't find it? Add a custom server.</span>}
               </Flex>
             }
           >
-            {addCustom.button}
+            {addCustomServerAction}
           </Empty>
         ) : (
           <Empty description="No servers in the catalog yet">
@@ -942,7 +921,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       )}
 
       {drawers}
-      {addCustom.modal}
     </Flex>
   );
 };

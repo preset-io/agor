@@ -180,12 +180,14 @@ function renderTab({
   connecting = false,
   authGeneration = 1,
   currentUser = DEFAULT_ADMIN,
+  addCustomServerAction,
 }: {
   active?: boolean;
   connected?: boolean;
   connecting?: boolean;
   authGeneration?: number;
   currentUser?: User | null;
+  addCustomServerAction?: React.ReactNode;
 } = {}) {
   return render(
     <MemoryRouter>
@@ -196,6 +198,7 @@ function renderTab({
         connecting={connecting}
         authGeneration={authGeneration}
         currentUser={currentUser}
+        addCustomServerAction={addCustomServerAction}
       />
     </MemoryRouter>
   );
@@ -393,7 +396,7 @@ describe('catalog browsing', () => {
   });
 
   it('still blames the filters when the filters are to blame', async () => {
-    renderTab();
+    renderTab({ addCustomServerAction: <button type="button">Add custom server</button> });
     await findCard('DeepWiki');
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Search MCP servers' }), {
@@ -402,9 +405,9 @@ describe('catalog browsing', () => {
 
     expect(await screen.findByText('No servers match')).toBeVisible();
     expect(screen.queryByText('No servers in the catalog yet')).not.toBeInTheDocument();
-    // The empty state and the toolbar both lead to a custom server, never a catalog card.
+    // No results lead to a custom server, never a catalog card; the toolbar has no action.
     expect(screen.getByText("Can't find it? Add a custom server.")).toBeVisible();
-    expect(screen.getAllByRole('button', { name: /Add custom server/ })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Add custom server' })).toHaveLength(1);
   });
 
   it('picks the catalog back up once seeding finishes', async () => {
