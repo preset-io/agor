@@ -134,6 +134,11 @@ it('shows unseen majors as one carousel and marks every slide seen on Not now', 
   // Text queries: role queries compute styles jsdom cannot parse for default antd buttons.
   expect(screen.getByText('See it on my board')).toBeInTheDocument();
 
+  // Next moves the counter and swaps in the second slide's actions.
+  fireEvent.click(screen.getByText('Next'));
+  await waitFor(() => expect(screen.getByText('2 of 2')).toBeInTheDocument());
+  expect(screen.queryByText('See it on my board')).not.toBeInTheDocument();
+
   fireEvent.click(screen.getByText('Not now'));
 
   expect(create).toHaveBeenCalledWith({ scope: 'major', itemIds: ['zones', 'search'] });

@@ -120,9 +120,12 @@ export const WhatsNewModal: React.FC<{ user: User | null; suppressed: boolean }>
         <Carousel
           ref={carousel}
           dots={slides.length > 1}
+          // Fade keeps a neighbour's visual from bleeding in; a text-only slide stays short.
+          effect="fade"
+          adaptiveHeight
           infinite={false}
           speed={reducedMotion ? 0 : 300}
-          afterChange={setIndex}
+          beforeChange={(_from, to) => setIndex(to)}
           style={{ paddingBottom: slides.length > 1 ? token.paddingLG : 0 }}
         >
           {slides.map((item) => (
