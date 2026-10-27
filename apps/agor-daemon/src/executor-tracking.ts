@@ -203,6 +203,23 @@ function readBootIdentity(): string | undefined {
 type GroupInspection = 'present' | 'absent' | 'unverified';
 type GroupInspector = (pgid: number, signal?: 0 | NodeJS.Signals) => GroupInspection;
 
+/** macOS only: explains an EPERM group signal from member states; fails closed. */
+function inspectUnsignalableDarwinGroup(pgid: number): GroupInspection {
+  let states: string[];
+  try {
+    states = execFileSync('/bin/ps', ['-axo', 'pgid=,stat='], { encoding: 'utf8' })
+      .split('\n')
+      .map((row) => row.trim().split(/\s+/))
+      .filter(([group]) => Number(group) === pgid)
+      .map(([, stat]) => stat ?? '');
+  } catch {
+    return 'unverified';
+  }
+  // Only exiting (E) and zombie (Z) members refuse signals; anything else stays unexplained.
+  if (states.some((stat) => !stat.includes('E') && !stat.includes('Z'))) return 'unverified';
+  return states.some((stat) => stat.includes('E')) ? 'present' : 'absent';
+}
+
 function inspectGroup(pgid: number, signal: 0 | NodeJS.Signals = 0): GroupInspection {
   try {
     process.kill(-pgid, signal);
@@ -210,6 +227,10 @@ function inspectGroup(pgid: number, signal: 0 | NodeJS.Signals = 0): GroupInspec
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ESRCH') return 'absent';
+    // macOS answers EPERM, not ESRCH, while the remaining members are exiting or unreaped.
+    if (code === 'EPERM' && process.platform === 'darwin') {
+      return inspectUnsignalableDarwinGroup(pgid);
+    }
     const stderr = (error as { stderr?: Buffer | string }).stderr;
     if (stderr && /no such process/i.test(stderr.toString())) return 'absent';
     return 'unverified';

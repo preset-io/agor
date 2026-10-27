@@ -149,6 +149,25 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
       }
     });
 
+    it('verifies a group whose leader exited before the daemon reaped it', async () => {
+      const leader = spawn('/usr/bin/true', [], { detached: true, stdio: 'ignore' });
+      if (!leader.pid) throw new Error('leader PID missing');
+      trackExecutorProcess({ sessionId: 'session-zombie', taskId: 'task-zombie', pid: leader.pid });
+      try {
+        // Block the event loop so the exited leader stays an unreaped zombie.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+        await expect(
+          containExecutorProcess('session-zombie', 'task-zombie', {
+            termGraceMs: 50,
+            killGraceMs: 50,
+            pollMs: 10,
+          })
+        ).resolves.toEqual({ status: 'verified_absent' });
+      } finally {
+        untrackExecutorProcess('session-zombie');
+      }
+    });
+
     it('contains a managed nondetached server child after the executor leader exits', async () => {
       const script = `
         const { spawn } = require('node:child_process');
