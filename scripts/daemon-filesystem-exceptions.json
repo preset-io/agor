@@ -1036,6 +1036,20 @@
     "reviewDate": null
   },
   {
+    "id": "DAEMON-FS-CAP-DARWIN-GROUP-STATES",
+    "class": "A",
+    "file": "apps/agor-daemon/src/executor-tracking.ts",
+    "import": "node:child_process",
+    "symbol": "execFileSync",
+    "local": "execFileSync",
+    "operation": "call:execFileSync@inspectUnsignalableDarwinGroup#1",
+    "owner": "daemon local executor containment",
+    "boundary": "local process identity verification",
+    "rationale": "Reads macOS process-group member states through the fixed ps executable with constant arguments after a group signal returns EPERM.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
     "id": "DAEMON-FS-CAP-OPENCODE-007",
     "class": "A",
     "file": "apps/agor-daemon/src/executor-tracking.ts",
