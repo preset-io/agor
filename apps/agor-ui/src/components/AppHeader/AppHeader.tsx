@@ -23,6 +23,7 @@ import { ConnectionStatus } from '../ConnectionStatus';
 import { CreateMenu, type CreateModalKind } from '../CreateMenu';
 import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { ReleaseNotesBell } from '../ReleaseNotes';
 import { buildThemeMenuItems } from '../ThemeSwitcher';
 import { AppHeaderGlobalSearch } from './AppHeaderGlobalSearch';
 import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
@@ -406,6 +407,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             />
           </Tooltip>
         )}
+        <ReleaseNotesBell />
         <SettingsDropdown items={settingsItems} />
         <GlobalUserMenu
           user={user}

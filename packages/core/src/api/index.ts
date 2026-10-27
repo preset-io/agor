@@ -348,7 +348,6 @@ export interface ServiceTypes {
   'opencode-models': OpenCodeModelCatalog;
   'executor-git-environment': ExecutorGitEnvironment;
   'release-notes': ReleaseNotesFeed;
-  'release-notes/mark-seen': ReleaseNotesFeed;
 }
 
 /**
