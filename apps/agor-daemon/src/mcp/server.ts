@@ -63,6 +63,7 @@ import { registerGatewayChannelTools } from './tools/gateway-channels.js';
 import { registerKnowledgeTools } from './tools/knowledge.js';
 import { registerMcpServerTools } from './tools/mcp-servers.js';
 import { registerMessageTools } from './tools/messages.js';
+import { registerReleaseNotesTools } from './tools/release-notes.js';
 import { registerRepoTools } from './tools/repos.js';
 import { registerScheduleTools } from './tools/schedules.js';
 import { registerSearchTools } from './tools/search.js';
@@ -260,6 +261,7 @@ const DOMAIN_TOOL_REGISTRARS: DomainToolRegistrar[] = [
   { domain: 'gateway', register: registerGatewayChannelTools },
   { domain: 'knowledge', register: registerKnowledgeTools },
   { domain: 'schedules', register: registerScheduleTools },
+  { domain: 'release-notes', register: registerReleaseNotesTools },
 ];
 
 function registerDomainTools(

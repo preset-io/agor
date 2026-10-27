@@ -59,6 +59,7 @@ export const DOMAIN_DESCRIPTIONS: Record<string, string> = {
     'In-conversation interactive widgets — agents render small forms/buttons inline in the transcript to capture user input that never enters the LLM context',
   knowledge: 'DB-backed markdown knowledge documents, version history, search, and graph links',
   schedules: 'Cron-based branch schedules that create sessions from prompt templates',
+  'release-notes': 'Recent user-facing Agor features and fixes, with briefs for agents',
 };
 
 export function formatDomainDescriptionsForInstructions(): string {
