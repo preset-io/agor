@@ -137,7 +137,7 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
       'sdk_home_unsettled',
     ] as const) {
       const workspaceId = generateId();
-      const workspace = join(root, 'worktrees', workspaceId);
+      const workspace = join(root, 'worktrees', 'org', 'repo', workspaceId);
       const { branch, user } = await scoped((tx) =>
         seedEnvironmentCommandBranch(tx, { path: workspace })
       );
