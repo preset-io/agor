@@ -72,7 +72,7 @@ afterEach(() => {
 });
 
 function expectCompactLine() {
-  expect(screen.getByRole('link', { name: sender.title })).toHaveAttribute(
+  expect(screen.getByRole('link', { name: 'Open sender session' })).toHaveAttribute(
     'href',
     sessionPath(origin)
   );
@@ -148,16 +148,17 @@ describe('prompt provenance presentation', () => {
     act(() =>
       agorStore.setState({ sessionById: new Map([[origin, { ...sender, title: 'Updated plan' }]]) })
     );
-    expect(screen.getByRole('link', { name: 'Updated plan' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Open sender session' })).toHaveAttribute(
       'href',
       sessionPath(origin)
     );
-    expect(screen.queryByRole('link', { name: sender.title })).not.toBeInTheDocument();
+    expect(screen.queryByText('Sent by Release planning')).not.toBeInTheDocument();
   });
 
   it('drops the title and link when the sender leaves the viewer session map', () => {
     render(<MessageBlock message={message(`${block}\n\nship the branch`)} />);
-    expect(screen.getByRole('link', { name: sender.title })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Open sender session' })).toBeVisible();
+    expect(screen.getByText('Sent by Release planning')).toBeVisible();
     act(() => agorStore.setState({ sessionById: new Map() }));
     expect(screen.getByText('Sent by another session')).toBeVisible();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
@@ -203,7 +204,7 @@ describe('prompt provenance presentation', () => {
     window.history.replaceState(null, '', '/ui/');
     try {
       render(<MessageBlock message={message(`${block}\n\nship the branch`)} />);
-      expect(screen.getByRole('link', { name: sender.title })).toHaveAttribute(
+      expect(screen.getByRole('link', { name: 'Open sender session' })).toHaveAttribute(
         'href',
         `/ui${sessionPath(origin)}`
       );

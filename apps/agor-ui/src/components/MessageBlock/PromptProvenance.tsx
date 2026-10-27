@@ -4,12 +4,13 @@ import {
   stripPromptProvenanceBlock,
 } from '@agor/core/templates/prompt-provenance';
 import { type Message, type SessionID, sessionPath } from '@agor-live/client';
-import { Collapse, Flex, Typography, theme } from 'antd';
+import { Button, theme } from 'antd';
 import { useMemo } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { makeSessionSelector } from '../../store/selectors';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { uiRouteHref } from '../../utils/uiRoutes';
+import { ExpandableAlert } from '../ExpandableAlert';
 
 interface Provenance {
   block: string;
@@ -65,41 +66,30 @@ export function PromptProvenance({ provenance }: { provenance: Provenance }) {
   );
   const senderTitle = sender?.title?.trim() ? getSessionDisplayTitle(sender) : undefined;
   return (
-    <Flex vertical gap={token.sizeUnit / 2}>
-      <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-        Sent by{' '}
-        {senderTitle && provenance.sessionId ? (
-          <Typography.Link href={uiRouteHref(sessionPath(provenance.sessionId))}>
-            {senderTitle}
-          </Typography.Link>
-        ) : (
-          'another session'
-        )}
-      </Typography.Text>
-      <Collapse
-        ghost
-        size="small"
-        style={{ color: token.colorTextSecondary, fontSize: token.fontSizeSM }}
-        items={[
-          {
-            key: 'provenance',
-            label: 'Details',
-            styles: { header: { padding: 0 }, body: { padding: token.paddingXS } },
-            children: (
-              <pre
-                style={{
-                  margin: 0,
-                  whiteSpace: 'pre-wrap',
-                  overflowWrap: 'anywhere',
-                  fontFamily: token.fontFamilyCode,
-                }}
-              >
-                {provenance.block}
-              </pre>
-            ),
-          },
-        ]}
-      />
-    </Flex>
+    <ExpandableAlert
+      type="info"
+      title={`Sent by ${senderTitle && provenance.sessionId ? senderTitle : 'another session'}`}
+      expandLabel="Details"
+      collapseLabel="Hide details"
+      action={
+        senderTitle && provenance.sessionId ? (
+          <Button size="small" href={uiRouteHref(sessionPath(provenance.sessionId))}>
+            Open sender session
+          </Button>
+        ) : undefined
+      }
+    >
+      <pre
+        style={{
+          margin: 0,
+          whiteSpace: 'pre-wrap',
+          overflowWrap: 'anywhere',
+          fontSize: token.fontSizeSM,
+          fontFamily: token.fontFamilyCode,
+        }}
+      >
+        {provenance.block}
+      </pre>
+    </ExpandableAlert>
   );
 }

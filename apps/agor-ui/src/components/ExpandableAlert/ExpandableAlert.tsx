@@ -21,6 +21,8 @@ export interface ExpandableAlertProps {
   title: ReactNode;
   /** Optional one-line summary shown next to the title, before the toggle. */
   summary?: ReactNode;
+  /** Optional action (e.g. a button) rendered at the trailing edge of the alert. */
+  action?: ReactNode;
   /** Detailed content revealed when expanded. */
   children: ReactNode;
   /** Visual variant. Defaults to `info`. */
@@ -36,6 +38,7 @@ export interface ExpandableAlertProps {
 export const ExpandableAlert = ({
   title,
   summary,
+  action,
   children,
   type = 'info',
   defaultExpanded = false,
@@ -84,6 +87,7 @@ export const ExpandableAlert = ({
     <Alert
       type={type}
       showIcon
+      action={action}
       style={style}
       className={className}
       // Tame the slot's default font-size — AntD bumps the title up when a
