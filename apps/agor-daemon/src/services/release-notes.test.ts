@@ -213,6 +213,7 @@ describe('CloudReleaseNotesPoller', () => {
         issuer: 'agor-cell:cell-1',
       })
     ).toMatchObject({ cell_id: 'cell-1', credential_id: 'cred-1', scope: 'release_notes:read' });
+    expect(jwt.decode(token)).not.toHaveProperty('body_sha256');
 
     await poller.refresh();
     await poller.refresh();

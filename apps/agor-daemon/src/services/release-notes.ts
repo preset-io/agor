@@ -171,7 +171,6 @@ export class CloudReleaseNotesPoller implements ReleaseNotesProvider {
         headers: {
           Authorization: `Bearer ${signCloudRuntimeAssertion(this.credential, {
             scope: CLOUD_RELEASE_NOTES_SCOPE,
-            body: '',
           })}`,
         },
         redirect: 'error',

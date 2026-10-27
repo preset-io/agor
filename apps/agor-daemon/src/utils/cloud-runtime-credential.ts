@@ -54,17 +54,20 @@ export function loadCloudRuntimeCredential(
   return { cellId, credentialId, keyId, privateKey };
 }
 
-/** One short-lived, single-use RS256 assertion bound to a scope and the exact request body. */
+/**
+ * One short-lived, single-use RS256 assertion bound to a scope and, for
+ * requests with a body, the exact body. Bodiless GETs carry no body hash.
+ */
 export function signCloudRuntimeAssertion(
   credential: CloudRuntimeCredential,
-  { scope, body }: { scope: string; body: string }
+  { scope, body }: { scope: string; body?: string }
 ): string {
   return jwt.sign(
     {
       cell_id: credential.cellId,
       credential_id: credential.credentialId,
       scope,
-      body_sha256: sha256Hex(body),
+      ...(body === undefined ? {} : { body_sha256: sha256Hex(body) }),
     },
     credential.privateKey,
     {
