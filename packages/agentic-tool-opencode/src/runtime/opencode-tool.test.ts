@@ -6,7 +6,13 @@ import type { EffortLevel, SessionID } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenCodeCleanupUnverifiedError } from './managed-server.js';
-import { type OpenCodeRetryBudget, OpenCodeTool } from './opencode-tool.js';
+import {
+  type OpenCodeCanUseToolCallback,
+  OpenCodeInteractionTimeoutError,
+  type OpenCodeRetryBudget,
+  OpenCodeTool,
+  openCodePartialMessage,
+} from './opencode-tool.js';
 
 type AbortResponse = { data: boolean; error: undefined } | { data: undefined; error: unknown };
 
@@ -430,5 +436,306 @@ describe('OpenCodeTool provider failures', () => {
     await expect(result).rejects.toThrow(
       'OpenCode prompt failed for any-provider/any-model: model not found'
     );
+  });
+});
+
+describe('OpenCodeTool permission rejections', () => {
+  const SESSION = 'opencode-session-1';
+  const MCP_TOOL = 'agor_session1_server1_github_delete_repo';
+  const assistant = {
+    type: 'message.updated',
+    properties: { info: { id: 'a-1', sessionID: SESSION, role: 'assistant' } },
+  };
+  const part = (id: string, type: 'text' | 'reasoning') => ({
+    type: 'message.part.updated',
+    properties: { part: { id, sessionID: SESSION, messageID: 'a-1', type, text: '' } },
+  });
+  const delta = (partID: string, value: string) => ({
+    type: 'message.part.delta',
+    properties: { sessionID: SESSION, messageID: 'a-1', partID, field: 'text', delta: value },
+  });
+  const asked = (id: string, permission: string) => ({
+    type: 'permission.asked',
+    properties: {
+      id,
+      sessionID: SESSION,
+      permission,
+      patterns: ['*'],
+      // Tool input: must never reach a log line or the feedback.
+      metadata: { command: 'echo do-not-log-this-argument' },
+    },
+  });
+  const idle = { type: 'session.idle', properties: { sessionID: SESSION } };
+
+  /**
+   * Drive one turn. After each permission request the stream waits for Agor's
+   * reply before going on, the way OpenCode's agent loop does, so a turn that
+   * reaches idle has carried on past the rejection.
+   */
+  function permissionTurn(options: {
+    permission: string;
+    permissionMode?: string;
+    canUseTool?: OpenCodeCanUseToolCallback;
+    mcpToolPermissions?: ReadonlyMap<string, 'allow' | 'ask' | 'deny'>;
+  }) {
+    const replied = deferred<void>();
+    const reply = vi.fn(async (_request: Record<string, unknown>) => {
+      replied.resolve();
+      return { data: true, error: undefined };
+    });
+    const stream = (async function* () {
+      yield assistant;
+      yield part('r-1', 'reasoning');
+      yield delta('r-1', 'Thinking about it.');
+      yield asked('per-1', options.permission);
+      await replied.promise;
+      yield part('t-1', 'text');
+      yield delta('t-1', 'Carrying on without it.');
+      yield idle;
+    })();
+    // What OpenCode records once the model has read the rejection and moved on.
+    const transcript = [
+      {
+        info: { id: 'a-1', sessionID: SESSION, role: 'assistant' },
+        parts: [
+          {
+            id: 'tool-1',
+            type: 'tool',
+            callID: 'call-1',
+            tool: options.permission,
+            state: { status: 'error', input: {}, error: 'The user rejected permission…' },
+          },
+          { id: 't-1', type: 'text', text: 'Carrying on without it.' },
+        ],
+      },
+    ];
+    const client = {
+      event: { subscribe: vi.fn(async () => ({ stream })) },
+      session: {
+        messages: vi
+          .fn()
+          .mockResolvedValueOnce({ data: [], error: undefined })
+          .mockResolvedValue({ data: transcript, error: undefined }),
+        prompt: vi.fn(async () => ({ data: {}, error: undefined })),
+      },
+    };
+    const runtime = new OpenCodeTool({
+      createPermissionCallback: () => options.canUseTool,
+    }) as unknown as { executeTask(...args: unknown[]): Promise<unknown> };
+    const result = runtime.executeTask(
+      client,
+      {
+        agorSessionId: 'session-1',
+        taskId: 'task-1',
+        prompt: 'hi',
+        agorAssistantMessageId: 'message-1',
+        permissionMode: options.permissionMode,
+        signal: new AbortController().signal,
+        title: 'Test',
+        directory: '/workspace',
+        persistOpenCodeSessionId: vi.fn(),
+      },
+      {
+        opencodeSessionId: SESSION,
+        provider: 'zai-coding-plan',
+        model: 'glm-5.3',
+        branchPath: '/workspace',
+        mcpToolPermissions: options.mcpToolPermissions,
+      },
+      undefined,
+      () => undefined,
+      {
+        text: (value: string) => value,
+        error: (value: unknown) => (value instanceof Error ? value : new Error(String(value))),
+      },
+      { permission: { reply } }
+    ) as Promise<{
+      finalMessage: { content: string };
+      permissionRejections: Array<{ permission: string; reason: string }>;
+    }>;
+    return { result, reply };
+  }
+
+  it.each([
+    {
+      name: 'an MCP tool denied by tool_permissions in yolo',
+      permission: MCP_TOOL,
+      permissionMode: 'yolo',
+      mcpToolPermissions: new Map([[MCP_TOOL, 'deny' as const]]),
+      reason: 'tool_permissions_deny',
+      feedback: /blocked `agor_session1_server1_github_delete_repo`.*deny in tool_permissions/,
+    },
+    {
+      name: 'an MCP tool set to ask in yolo, which nobody can approve',
+      permission: MCP_TOOL,
+      permissionMode: 'yolo',
+      mcpToolPermissions: new Map([[MCP_TOOL, 'ask' as const]]),
+      reason: 'tool_permissions_ask_unavailable',
+      feedback: /requires approval in tool_permissions/,
+    },
+    {
+      name: 'the disabled question tool',
+      permission: 'question',
+      permissionMode: 'yolo',
+      reason: 'agor_disabled_tool',
+      feedback: /Agor disables `question`; ask the user in plain text/,
+    },
+    {
+      name: 'a user denial',
+      permission: 'bash',
+      permissionMode: 'default',
+      canUseTool: vi.fn(async () => ({ behavior: 'deny' as const })),
+      reason: 'user_denied',
+      feedback: /The user denied permission for `bash`/,
+    },
+    {
+      name: 'a request with no approval channel outside auto-allow modes',
+      permission: 'bash',
+      permissionMode: 'default',
+      reason: 'no_approval_channel',
+      feedback: /no approval channel/,
+    },
+  ])('rejects $name with feedback and lets the turn finish', async (testCase) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { result, reply } = permissionTurn(testCase);
+
+      const outcome = await result;
+      expect(outcome.finalMessage.content).toBe('Carrying on without it.');
+      expect(outcome.permissionRejections).toEqual([
+        { permission: testCase.permission, reason: testCase.reason },
+      ]);
+      expect(reply).toHaveBeenCalledOnce();
+      const request = reply.mock.calls[0]?.[0];
+      expect(request).toMatchObject({
+        requestID: 'per-1',
+        directory: '/workspace',
+        reply: 'reject',
+      });
+      // A `message` makes OpenCode raise a correctable tool error instead of
+      // stopping its loop; it must explain the rule without echoing tool input.
+      expect(request?.message).toMatch(testCase.feedback);
+      expect(request?.message).not.toContain('do-not-log-this-argument');
+
+      const logged = warn.mock.calls.map((call) => call.join(' ')).join('\n');
+      expect(logged).toContain(`"${testCase.permission}"`);
+      expect(logged).toContain(testCase.reason);
+      expect(logged).not.toContain('do-not-log-this-argument');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each(['yolo', 'bypassPermissions', 'allow-all'])(
+    'allows an ordinary permission once in %s without an approval channel',
+    async (mode) => {
+      const { result, reply } = permissionTurn({ permission: 'bash', permissionMode: mode });
+
+      await expect(result).resolves.toMatchObject({ permissionRejections: [] });
+      expect(reply).toHaveBeenCalledWith({
+        requestID: 'per-1',
+        directory: '/workspace',
+        reply: 'once',
+      });
+    }
+  );
+
+  it('still fails the turn on an approval timeout, naming the permission', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { result, reply } = permissionTurn({
+        permission: 'bash',
+        permissionMode: 'default',
+        canUseTool: vi.fn(async () => ({ behavior: 'deny' as const, timedOut: true })),
+      });
+
+      const failure = await result.catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(OpenCodeInteractionTimeoutError);
+      expect((failure as Error).message).toBe(
+        'OpenCode permission "bash" was rejected (approval_timed_out)'
+      );
+      expect(reply).toHaveBeenCalledWith(
+        expect.objectContaining({ requestID: 'per-1', reply: 'reject' })
+      );
+      // Reasoning streamed before the timeout survives the failure.
+      expect(openCodePartialMessage(failure)).toEqual({
+        content: '',
+        contentBlocks: [{ type: 'thinking', text: 'Thinking about it.' }],
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('keeps streamed reasoning and text on a failed turn, redacted', async () => {
+    const stream = (async function* () {
+      yield assistant;
+      yield part('r-1', 'reasoning');
+      yield delta('r-1', 'Weighing secret-token options.');
+      yield part('t-1', 'text');
+      yield delta('t-1', 'Partial answer');
+      yield {
+        type: 'session.error',
+        properties: { sessionID: SESSION, error: { name: 'APIError', data: { message: 'boom' } } },
+      };
+      await new Promise(() => undefined);
+    })();
+    const client = {
+      event: { subscribe: vi.fn(async () => ({ stream })) },
+      session: {
+        messages: vi.fn(async () => ({ data: [], error: undefined })),
+        prompt: vi.fn(() => new Promise(() => undefined)),
+      },
+    };
+    const runtime = new OpenCodeTool({}) as unknown as {
+      executeTask(...args: unknown[]): Promise<unknown>;
+    };
+    const failure = await runtime
+      .executeTask(
+        client,
+        {
+          agorSessionId: 'session-1',
+          taskId: 'task-1',
+          prompt: 'hi',
+          agorAssistantMessageId: 'message-1',
+          signal: new AbortController().signal,
+          title: 'Test',
+          directory: '/workspace',
+          persistOpenCodeSessionId: vi.fn(),
+        },
+        { opencodeSessionId: SESSION, provider: 'p', model: 'm', branchPath: '/workspace' },
+        undefined,
+        () => undefined,
+        {
+          text: (value: string) => value.replaceAll('secret-token', '[REDACTED]'),
+          error: (value: unknown) => (value instanceof Error ? value : new Error(String(value))),
+        },
+        { permission: { reply: vi.fn() } }
+      )
+      .catch((error: unknown) => error);
+
+    expect((failure as Error).message).toBe('OpenCode prompt failed for p/m: boom');
+    expect(openCodePartialMessage(failure)).toEqual({
+      content: 'Partial answer',
+      contentBlocks: [
+        { type: 'thinking', text: 'Weighing [REDACTED] options.' },
+        { type: 'text', text: 'Partial answer' },
+      ],
+    });
+  });
+});
+
+describe('OpenCodeTool protected invocation config', () => {
+  it('keeps the agent loop going on deny without dropping other experimental settings', () => {
+    const tool = new OpenCodeTool({}) as unknown as {
+      protectedInvocationConfig(config: Record<string, unknown>): Record<string, unknown>;
+    };
+
+    const config = tool.protectedInvocationConfig({
+      mcp: {},
+      experimental: { mcp_timeout: 5_000, continue_loop_on_deny: false },
+    });
+
+    expect(config.experimental).toEqual({ mcp_timeout: 5_000, continue_loop_on_deny: true });
   });
 });

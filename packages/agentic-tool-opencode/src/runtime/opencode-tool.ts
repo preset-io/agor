@@ -38,6 +38,7 @@ import {
   type ToolUse,
 } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
+import type { createOpencodeClient as createOpencodeClientV2 } from '@opencode-ai/sdk/v2';
 import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '../shared/index.js';
 import type { OpenCodeCommand } from './binary.js';
 import {
@@ -56,7 +57,7 @@ import {
   startManagedOpenCodeServer,
 } from './managed-server.js';
 import { type OpenCodeNativeStateLayout, sealOpenCodeCheckpoint } from './native-state.js';
-import { loadOpenCodeSdk } from './sdk-loader.js';
+import { loadOpenCodeSdk, loadOpenCodeSdkV2 } from './sdk-loader.js';
 
 export { resolvePackagedOpenCodeBinary };
 
@@ -84,10 +85,49 @@ const AGOR_PERMISSION_INTERCEPTION = {
 const AGOR_MANAGED_AGENT = 'agor-managed';
 
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>;
+/**
+ * Permission replies go through the v2 `/permission/:requestID/reply` route:
+ * unlike the legacy session route it forwards a `message`, and OpenCode turns a
+ * rejection that carries one into a tool error the model reads and works around
+ * instead of a stop of its agent loop.
+ */
+type OpenCodePermissionClient = Pick<ReturnType<typeof createOpencodeClientV2>, 'permission'>;
 
-export class OpenCodePermissionRejectedError extends Error {
-  override name = 'OpenCodePermissionRejectedError';
+/** A permission Agor refused. Logged and surfaced by name and category, never by tool input. */
+export type OpenCodePermissionRejection = {
+  permission: string;
+  reason:
+    | 'tool_permissions_deny'
+    | 'tool_permissions_ask_unavailable'
+    | 'agor_disabled_tool'
+    | 'no_approval_channel'
+    | 'user_denied'
+    | 'approval_timed_out';
+};
+
+/** Reasoning and text streamed before a turn failed, so the caller can keep them. */
+export type OpenCodePartialMessage = { content: string; contentBlocks: ContentBlock[] };
+
+const partialMessages = new WeakMap<Error, OpenCodePartialMessage>();
+
+/**
+ * The output a failed turn had already streamed. Kept beside the error rather
+ * than on it because every boundary rebuilds errors through the sanitizer.
+ */
+export function openCodePartialMessage(error: unknown): OpenCodePartialMessage | undefined {
+  return error instanceof Error ? partialMessages.get(error) : undefined;
 }
+
+function attachPartialMessage(error: Error, partial: OpenCodePartialMessage | undefined): Error {
+  if (partial) partialMessages.set(error, partial);
+  return error;
+}
+
+/**
+ * The only permission outcome that still ends the turn. By the time a timeout
+ * reaches here, the approval hook has already made the Task terminal and
+ * revoked its credential, so the turn cannot usefully go on.
+ */
 export class OpenCodeInteractionTimeoutError extends Error {
   override name = 'OpenCodeInteractionTimeoutError';
 }
@@ -121,6 +161,8 @@ export type OpenCodeTurnResult = {
   sessionWasCreated: boolean;
   /** Hosted turns only: the sealed checkpoint reported with completion. */
   checkpoint?: OpenCodeCheckpointManifest;
+  /** Permissions Agor refused during the turn; the model was told and the turn went on. */
+  permissionRejections: OpenCodePermissionRejection[];
   finalMessage: {
     content: string;
     contentBlocks: ContentBlock[];
@@ -183,6 +225,7 @@ export type OpenCodeToolDependencies = {
   resolveBinary?: () => Promise<string | OpenCodeCommand>;
   spawn?: (executable: string, args: readonly string[], options: SpawnOptions) => ManagedChild;
   createClient?: typeof createOpencodeClient;
+  createPermissionClient?: typeof createOpencodeClientV2;
   resolveInvocationConfig?: (input: RunOpenCodeTurnInput) => Promise<OpenCodeInvocationConfig>;
   resolveMcpServers?: (sessionId: SessionID) => Promise<MCPServerWithSource[]>;
   getDaemonUrl?: () => Promise<string>;
@@ -324,24 +367,49 @@ export function blockedByOpenCodeToolPermissions(input: {
 
 type OpenCodePermissionEffect = Extract<OpenCodeEventEffect, { type: 'permission' }>;
 
+/** What the model is told. Names the permission and the rule, never the tool's input. */
+function permissionRejectionFeedback({ permission, reason }: OpenCodePermissionRejection): string {
+  switch (reason) {
+    case 'tool_permissions_deny':
+      return `Agor blocked \`${permission}\`: this MCP tool is set to deny in tool_permissions. Do not retry it; continue without it.`;
+    case 'tool_permissions_ask_unavailable':
+      return `Agor blocked \`${permission}\`: this MCP tool requires approval in tool_permissions and nobody can approve it in this session's permission mode. Continue without it, or ask the user in plain text.`;
+    case 'agor_disabled_tool':
+      return permission === 'question'
+        ? 'Agor disables `question`; ask the user in plain text in your reply instead.'
+        : `Agor disables \`${permission}\`; do the work directly in this session instead.`;
+    case 'no_approval_channel':
+      return `Agor could not ask the user to approve \`${permission}\` because this session has no approval channel. Continue without it.`;
+    case 'user_denied':
+      return `The user denied permission for \`${permission}\`. Do not retry it; continue without it or ask the user how to proceed.`;
+    case 'approval_timed_out':
+      return `The approval request for \`${permission}\` timed out.`;
+  }
+}
+
+/**
+ * Answer one OpenCode permission request.
+ *
+ * A refusal is not a turn failure: it is replied as `reject` with feedback so
+ * the model learns why and carries on, and is returned for the caller to
+ * surface. Only an approval timeout still throws (see
+ * `OpenCodeInteractionTimeoutError`).
+ */
 async function applyPermissionEffect(input: {
-  client: OpenCodeClient;
+  permissionClient: OpenCodePermissionClient;
   turn: RunOpenCodeTurnInput;
   context: TurnContext;
   effect: OpenCodePermissionEffect;
   canUseTool?: OpenCodeCanUseToolCallback;
-}): Promise<void> {
-  const { client, turn, context, effect, canUseTool } = input;
+}): Promise<OpenCodePermissionRejection | undefined> {
+  const { permissionClient, turn, context, effect, canUseTool } = input;
+  const permission = effect.request.permission;
   let response: 'once' | 'always' | 'reject' = 'reject';
-  let handledByAgor = false;
-  let interactionTimedOut = false;
+  let reason: OpenCodePermissionRejection['reason'] | undefined;
 
   // `tool_permissions` is resolved before anything else can answer.
-  const configuredToolPermission = context.mcpToolPermissions?.get(effect.request.permission);
-  const modeWouldAutoAllow = automaticallyAllowsOpenCodePermission(
-    turn.permissionMode,
-    effect.request.permission
-  );
+  const configuredToolPermission = context.mcpToolPermissions?.get(permission);
+  const modeWouldAutoAllow = automaticallyAllowsOpenCodePermission(turn.permissionMode, permission);
   const blocking = blockedByOpenCodeToolPermissions({
     configured: configuredToolPermission,
     modeWouldAutoAllow,
@@ -349,52 +417,50 @@ async function applyPermissionEffect(input: {
   });
 
   if (blocking) {
-    console.warn(
-      `🛑 [OpenCode] MCP tool "${effect.request.permission}" blocked by tool_permissions (${blocking})`
-    );
-    handledByAgor = true;
-    response = 'reject';
-  } else if (effect.request.permission === 'question' || effect.request.permission === 'task') {
-    handledByAgor = true;
+    reason = blocking === 'deny' ? 'tool_permissions_deny' : 'tool_permissions_ask_unavailable';
+  } else if (permission === 'question' || permission === 'task') {
+    reason = 'agor_disabled_tool';
+  } else if (modeWouldAutoAllow) {
+    // Needs no approval channel: an `ask` tool was already refused above, so
+    // nothing reaching here is one that must be prompted for.
+    response = 'once';
   } else if (canUseTool) {
-    // An `ask` tool must reach the prompt rather than be waved through by the
-    // session's permission mode.
-    if (modeWouldAutoAllow && configuredToolPermission !== 'ask') {
-      response = 'once';
-    } else {
-      handledByAgor = true;
-      const decision = await canUseTool(
-        effect.request.permission,
-        { ...effect.request.metadata, patterns: effect.request.patterns },
-        { signal: turn.signal }
+    const decision = await canUseTool(
+      permission,
+      { ...effect.request.metadata, patterns: effect.request.patterns },
+      { signal: turn.signal }
+    );
+    if (decision.behavior === 'allow') {
+      const remembered = decision.updatedPermissions?.some(
+        (update) => update.destination !== 'session'
       );
-      if (decision.behavior === 'allow') {
-        const remembered = decision.updatedPermissions?.some(
-          (update) => update.destination !== 'session'
-        );
-        response = remembered && effect.request.patterns.length > 0 ? 'always' : 'once';
-      }
-      interactionTimedOut = decision.timedOut === true;
+      response = remembered && effect.request.patterns.length > 0 ? 'always' : 'once';
+    } else {
+      reason = decision.timedOut === true ? 'approval_timed_out' : 'user_denied';
     }
+  } else {
+    reason = 'no_approval_channel';
   }
 
-  const reply = await client.postSessionIdPermissionsPermissionId({
-    path: {
-      id: context.opencodeSessionId,
-      permissionID: effect.request.id,
-    },
-    query: { directory: context.branchPath },
-    body: { response },
-  });
-  if (reply.error) throw new Error('OpenCode failed to apply the permission decision');
-  if (response === 'reject') {
-    if (interactionTimedOut) {
-      throw new OpenCodeInteractionTimeoutError('OpenCode permission request timed out');
-    }
-    throw handledByAgor
-      ? new OpenCodePermissionRejectedError('OpenCode permission was rejected')
-      : new Error('OpenCode permission was rejected');
+  const rejection = reason ? { permission, reason } : undefined;
+  if (rejection) {
+    console.warn(`🛑 [OpenCode] permission "${permission}" rejected (${rejection.reason})`);
   }
+  const reply = await permissionClient.permission.reply({
+    requestID: effect.request.id,
+    directory: context.branchPath,
+    reply: response,
+    ...(rejection ? { message: permissionRejectionFeedback(rejection) } : {}),
+  });
+  if (reply.error) {
+    throw new Error(`OpenCode failed to apply the permission decision for "${permission}"`);
+  }
+  if (rejection?.reason === 'approval_timed_out') {
+    throw new OpenCodeInteractionTimeoutError(
+      `OpenCode permission "${permission}" was rejected (approval_timed_out)`
+    );
+  }
+  return rejection;
 }
 
 /** How long a turn waits out provider retries before failing with the provider's reason. */
@@ -416,7 +482,7 @@ function openCodeErrorMessage(error: unknown): string | undefined {
 }
 
 function createOpenCodeEffectConsumer(input: {
-  client: OpenCodeClient;
+  permissionClient: OpenCodePermissionClient;
   turn: RunOpenCodeTurnInput;
   context: TurnContext;
   streamingCallbacks?: OpenCodeStreamingCallbacks;
@@ -431,6 +497,9 @@ function createOpenCodeEffectConsumer(input: {
   let retryDeadline: ReturnType<typeof setTimeout> | undefined;
   let thinkingStarted = false;
   let sequence = 0;
+  let streamedText = '';
+  let streamedReasoning = '';
+  const permissionRejections: OpenCodePermissionRejection[] = [];
   // Model output ends a retry window; OpenCode reports `busy` before each retry, so that does not.
   const endRetryWindow = () => {
     clearTimeout(retryDeadline);
@@ -450,11 +519,23 @@ function createOpenCodeEffectConsumer(input: {
     get thinkingStarted() {
       return thinkingStarted;
     },
+    permissionRejections,
+    /** What a failed turn had streamed so far; undefined when nothing was. */
+    partialMessage(sanitize: (value: string) => string): OpenCodePartialMessage | undefined {
+      const contentBlocks: ContentBlock[] = [];
+      if (streamedReasoning) {
+        contentBlocks.push({ type: 'thinking', text: sanitize(streamedReasoning) });
+      }
+      const content = streamedText ? sanitize(streamedText) : '';
+      if (content) contentBlocks.push({ type: 'text', text: content });
+      return contentBlocks.length > 0 ? { content, contentBlocks } : undefined;
+    },
     async apply(effects: OpenCodeEventEffect[]): Promise<void> {
       for (const effect of effects) {
         if (RETRY_WINDOW_ENDERS.has(effect.type)) endRetryWindow();
         switch (effect.type) {
           case 'text-delta':
+            streamedText += effect.delta;
             input.streamingCallbacks?.onPulse?.('progress', 'message.text_delta');
             if (!input.streamingCallbacks) break;
             if (!textStarted) {
@@ -473,6 +554,7 @@ function createOpenCodeEffectConsumer(input: {
             );
             break;
           case 'reasoning-delta':
+            streamedReasoning += effect.delta;
             input.streamingCallbacks?.onPulse?.('progress', 'message.reasoning_delta');
             if (!input.streamingCallbacks?.onThinkingChunk) break;
             if (!thinkingStarted) {
@@ -497,16 +579,18 @@ function createOpenCodeEffectConsumer(input: {
                   : 'tool.update'
             );
             break;
-          case 'permission':
+          case 'permission': {
             input.streamingCallbacks?.onPulse?.('waiting', 'permission.request');
-            await applyPermissionEffect({
-              client: input.client,
+            const rejection = await applyPermissionEffect({
+              permissionClient: input.permissionClient,
               turn: input.turn,
               context: input.context,
               effect,
               canUseTool: input.canUseTool,
             });
+            if (rejection) permissionRejections.push(rejection);
             break;
+          }
           case 'runtime-activity':
             input.streamingCallbacks?.onPulse?.('sdk_started', effect.detail);
             break;
@@ -634,6 +718,7 @@ export class OpenCodeTool {
     | 'enrichContentBlocks'
   > & {
     createClient?: typeof createOpencodeClient;
+    createPermissionClient?: typeof createOpencodeClientV2;
     resolveInvocationConfig: (input: RunOpenCodeTurnInput) => Promise<OpenCodeInvocationConfig>;
     resolveMcpServers: NonNullable<OpenCodeToolDependencies['resolveMcpServers']>;
     getDaemonUrl: NonNullable<OpenCodeToolDependencies['getDaemonUrl']>;
@@ -648,6 +733,7 @@ export class OpenCodeTool {
       resolveBinary: dependencies.resolveBinary,
       spawn: dependencies.spawn,
       createClient: dependencies.createClient,
+      createPermissionClient: dependencies.createPermissionClient,
       resolveInvocationConfig:
         dependencies.resolveInvocationConfig ??
         ((input) =>
@@ -706,9 +792,17 @@ export class OpenCodeTool {
       typeof managedAgent.tools === 'object' && managedAgent.tools !== null
         ? managedAgent.tools
         : {};
+    const experimental =
+      typeof resolved.experimental === 'object' && resolved.experimental !== null
+        ? resolved.experimental
+        : {};
     return {
       ...resolved,
       permission: AGOR_PERMISSION_INTERCEPTION,
+      // Without this OpenCode stops its loop on any reject sent without
+      // feedback, including the ones it cascades onto other pending requests
+      // of the session when Agor rejects one.
+      experimental: { ...experimental, continue_loop_on_deny: true },
       tools: { ...resolved.tools, question: false, task: false },
       agent: {
         ...configuredAgents,
@@ -852,6 +946,14 @@ export class OpenCodeTool {
         directory: input.directory,
         headers: { Authorization: authorization },
       });
+      const createPermissionClient =
+        this.dependencies.createPermissionClient ??
+        (await loadOpenCodeSdkV2()).createOpencodeClient;
+      const permissionClient = createPermissionClient({
+        baseUrl,
+        directory: input.directory,
+        headers: { Authorization: authorization },
+      });
       await this.assertExplicitModelAvailable(
         client,
         input.directory,
@@ -865,7 +967,7 @@ export class OpenCodeTool {
       activeOpenCodeSessionId = openCodeSessionId;
       if (input.signal.aborted)
         throw new Error('OpenCode turn was aborted before prompt submission');
-      const finalMessage = await this.executeTask(
+      const { finalMessage, permissionRejections } = await this.executeTask(
         client,
         input,
         {
@@ -880,12 +982,13 @@ export class OpenCodeTool {
         (stop) => {
           stopEventCollector = stop;
         },
-        sanitizer
+        sanitizer,
+        permissionClient
       );
       turnCompleted = true;
-      outcome = { openCodeSessionId, sessionWasCreated, finalMessage };
+      outcome = { openCodeSessionId, sessionWasCreated, finalMessage, permissionRejections };
     } catch (error) {
-      turnFailure = sanitizer.error(error);
+      turnFailure = attachPartialMessage(sanitizer.error(error), openCodePartialMessage(error));
     }
 
     input.signal.removeEventListener('abort', abortHandler);
@@ -1129,8 +1232,9 @@ export class OpenCodeTool {
     context: TurnContext,
     streamingCallbacks: OpenCodeStreamingCallbacks | undefined,
     registerStopEventCollector: (stop: () => Promise<void>) => void,
-    sanitizer: OpenCodeSanitizer
-  ): Promise<OpenCodeTurnResult['finalMessage']> {
+    sanitizer: OpenCodeSanitizer,
+    permissionClient: OpenCodePermissionClient
+  ): Promise<Pick<OpenCodeTurnResult, 'finalMessage' | 'permissionRejections'>> {
     const promptFailure = (detail?: string): Error =>
       new Error(
         detail?.trim()
@@ -1189,7 +1293,7 @@ export class OpenCodeTool {
     if (input.signal.aborted) settleAbort();
 
     const effects = createOpenCodeEffectConsumer({
-      client,
+      permissionClient,
       turn: input,
       context,
       streamingCallbacks,
@@ -1251,9 +1355,12 @@ export class OpenCodeTool {
         await streamingCallbacks?.onThinkingEnd?.(input.agorAssistantMessageId);
       }
       if (effects.textStarted) await streamingCallbacks?.onStreamEnd(input.agorAssistantMessageId);
-      return finalMessage;
+      return { finalMessage, permissionRejections: effects.permissionRejections };
     } catch (error) {
-      const failure = sanitizer.error(error);
+      const failure = attachPartialMessage(
+        sanitizer.error(error),
+        effects.partialMessage(sanitizer.text)
+      );
       if (effects.textStarted) {
         await streamingCallbacks?.onStreamError(input.agorAssistantMessageId, failure);
       }

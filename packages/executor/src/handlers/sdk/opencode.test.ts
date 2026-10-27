@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
   runTurn: vi.fn(),
   createUserMessage: vi.fn(),
   messagesCreate: vi.fn(),
+  messagesRepoCreate: vi.fn(),
+  partialMessage: vi.fn(),
   taskMessagesFind: vi.fn(),
   nextMessageIndex: vi.fn(),
   branchFind: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
   discardOpenCodeScratch: mocks.discardScratch,
   isOpenCodeCleanupUnverifiedError: (error: unknown) =>
     error instanceof Error && error.name === 'OpenCodeCleanupUnverifiedError',
+  openCodePartialMessage: mocks.partialMessage,
   OpenCodeTool: class {
     constructor(options: unknown) {
       mocks.openCodeConstructor(options);
@@ -46,6 +49,7 @@ vi.mock('../../db/feathers-repositories.js', () => ({
     messages: {
       findInitialUserMessagesByTaskId: mocks.taskMessagesFind,
       getNextIndexBySessionId: mocks.nextMessageIndex,
+      create: mocks.messagesRepoCreate,
     },
     messagesService: { create: mocks.messagesCreate },
     sessionMCP: {},
@@ -133,7 +137,9 @@ beforeEach(() => {
       toolUses: [],
       metadata: {},
     },
+    permissionRejections: [],
   });
+  mocks.partialMessage.mockReturnValue(undefined);
   mocks.getMcpServersForSession.mockResolvedValue([]);
   mocks.tasksGet.mockResolvedValue({ created_by: 'task-creator' });
   mocks.sessionsGet.mockResolvedValue({ created_by: 'session-owner' });
@@ -209,6 +215,7 @@ describe('OpenCode executor adapter', () => {
           toolUses: [],
           metadata: {},
         },
+        permissionRejections: [],
       };
     });
 
@@ -253,6 +260,83 @@ describe('OpenCode executor adapter', () => {
       })
     );
     expect(order).toEqual(['message', 'task']);
+  });
+
+  it('completes a turn with rejected permissions and notes the ones Agor refused', async () => {
+    const state = client();
+    mocks.runTurn.mockResolvedValue({
+      finalMessage: {
+        content: 'done',
+        contentBlocks: [{ type: 'text', text: 'done' }],
+        toolUses: [],
+        metadata: {},
+      },
+      permissionRejections: [
+        { permission: 'question', reason: 'agor_disabled_tool' },
+        { permission: 'bash', reason: 'user_denied' },
+      ],
+    });
+
+    await execute(state.value);
+
+    expect(state.services.tasks.patch).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({ status: 'completed' })
+    );
+    // The user's own denial is already on its permission card.
+    expect(mocks.messagesRepoCreate).toHaveBeenCalledOnce();
+    expect(mocks.messagesRepoCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'system',
+        role: 'system',
+        task_id: taskId,
+        content_preview: 'OpenCode permission "question" rejected (agor_disabled_tool)',
+      })
+    );
+  });
+
+  it('keeps streamed output ahead of the failure notice when a turn fails', async () => {
+    const order: string[] = [];
+    const state = client();
+    const failure = new Error('OpenCode prompt failed for openai/gpt-test: boom');
+    mocks.runTurn.mockRejectedValue(failure);
+    mocks.partialMessage.mockImplementation((error: unknown) =>
+      error === failure
+        ? {
+            content: 'Partial answer',
+            contentBlocks: [
+              { type: 'thinking', text: 'Four minutes of reasoning' },
+              { type: 'text', text: 'Partial answer' },
+            ],
+          }
+        : undefined
+    );
+    mocks.messagesCreate.mockImplementation(async () => {
+      order.push('partial');
+      return {};
+    });
+    state.services.messages.create.mockImplementation(async () => {
+      order.push('failure-notice');
+      return {};
+    });
+
+    await expect(execute(state.value)).rejects.toBe(failure);
+
+    expect(mocks.messagesCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'assistant',
+        task_id: taskId,
+        content: [
+          { type: 'thinking', text: 'Four minutes of reasoning' },
+          { type: 'text', text: 'Partial answer' },
+        ],
+      })
+    );
+    expect(order).toEqual(['partial', 'failure-notice']);
+    expect(state.services.tasks.patch).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({ status: 'failed' })
+    );
   });
 
   it('rejects a missing exact pair before provider side effects', async () => {
@@ -369,6 +453,7 @@ describe('hosted OpenCode executor adapter', () => {
       openCodeSessionId: 'ses_accepted',
       checkpoint,
       finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+      permissionRejections: [],
     });
     const state = client({ sdk_session_id: 'stale-local-id', sdk_home_scope: 'branch' });
 
@@ -401,6 +486,7 @@ describe('hosted OpenCode executor adapter', () => {
     mocks.runTurn.mockResolvedValue({
       openCodeSessionId: 'ses_accepted',
       finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+      permissionRejections: [],
     });
     const state = client();
 
