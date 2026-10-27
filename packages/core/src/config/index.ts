@@ -41,6 +41,7 @@ export type {
 export {
   getDefaultGitConfigParameters,
   gitConfigParameterLooksSecret,
+  RELEASE_NOTES_CSP_IMG_SRC,
   redactUrlUserinfo,
   renderGitConfigParametersForLog,
   resolveGitConfigParameters,

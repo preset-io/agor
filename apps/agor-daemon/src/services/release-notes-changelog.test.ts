@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { RELEASE_NOTES_CSP_IMG_SRC } from '@agor/core/config';
 import { describe, expect, it } from 'vitest';
 import { parseReleaseNotes, RELEASE_NOTE_HIGHLIGHTS_PATH } from './release-notes';
-import { parseChangelogReleaseNotes } from './release-notes-changelog';
+import { parseChangelogReleaseNotes, type ReleaseNoteHighlight } from './release-notes-changelog';
 
 const CHANGELOG = `# Changelog
 
@@ -113,6 +114,13 @@ describe('parseChangelogReleaseNotes', () => {
     );
 
     expect(notes.length).toBeGreaterThan(0);
+    // Highlight visuals must load under the default CSP img-src.
+    const highlights = JSON.parse(readFileSync(join(root, RELEASE_NOTE_HIGHLIGHTS_PATH), 'utf8'));
+    for (const highlight of Object.values<ReleaseNoteHighlight>(highlights.items)) {
+      for (const url of [highlight.visual_url, highlight.visual_url_dark]) {
+        if (url) expect(new URL(url).origin).toBe(RELEASE_NOTES_CSP_IMG_SRC);
+      }
+    }
     expect(notes.every((note) => note.items.every((item) => item.title && item.body_md))).toBe(
       true
     );
