@@ -917,7 +917,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         branchCreateParams
       )
       .catch((error: unknown) => {
-        if (error instanceof BranchWorkspaceOverlapError) throw new Conflict(error.message);
+        if (error instanceof BranchWorkspaceOverlapError) {
+          console.warn(
+            `[repos.createBranch] ${repo.repo_id} branch '${error.branchName}' overlaps branch ${error.overlappingBranchId}`
+          );
+          throw new Conflict(error.message);
+        }
         throw error;
       })) as Branch;
 

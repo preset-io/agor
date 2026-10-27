@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   createExecutorClient: vi.fn(),
   // Synthetic branch paths live outside any real root; the containment walk
   // itself is covered against the filesystem in its own test below.
-  resolveManagedBranchDeletionPath: vi.fn(async (branchPath: string) => branchPath),
+  resolveManagedBranchWorkspacePath: vi.fn(async (branchPath: string) => branchPath),
   diagnoseGit: vi.fn(),
   parseAgorYml: vi.fn(),
   writeAgorYml: vi.fn(),
@@ -92,7 +92,7 @@ vi.mock('@agor/git', async () => {
   return {
     ...actual,
     diagnoseGit: mocks.diagnoseGit,
-    resolveManagedBranchDeletionPath: mocks.resolveManagedBranchDeletionPath,
+    resolveManagedBranchWorkspacePath: mocks.resolveManagedBranchWorkspacePath,
   };
 });
 
@@ -504,7 +504,7 @@ describe('managed executor git/fs commands', () => {
       patchedBranches,
       renderedBranches: [],
     });
-    mocks.resolveManagedBranchDeletionPath.mockRejectedValueOnce(
+    mocks.resolveManagedBranchWorkspacePath.mockRejectedValueOnce(
       new Error('Safety check failed: Branch deletion path contains a symlink')
     );
 
@@ -576,7 +576,7 @@ describe('managed executor git/fs commands', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(mocks.resolveManagedBranchDeletionPath).toHaveBeenCalledWith(
+    expect(mocks.resolveManagedBranchWorkspacePath).toHaveBeenCalledWith(
       '/trusted/branch',
       BRANCHES_ROOT
     );
@@ -1377,7 +1377,7 @@ describe('managed executor git/fs commands', () => {
   it('verifies workspace removal within the daemon-provided tenant root', async () => {
     const tenantRoot = await mkdtemp(join(tmpdir(), 'agor-tenant-removal-'));
     const branchesRoot = join(tenantRoot, 'worktrees');
-    const branchPath = join(branchesRoot, 'repo', 'feature');
+    const branchPath = join(branchesRoot, 'org', 'repo', 'feature');
     const repoPath = join(tenantRoot, 'repos', 'repo');
     await mkdir(branchPath, { recursive: true });
     await mkdir(repoPath, { recursive: true });

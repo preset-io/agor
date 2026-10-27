@@ -26,7 +26,7 @@ import {
   isCanonicalTeammateFrameworkRepo,
   TEAMMATE_FRAMEWORK_REPO_URL,
 } from '@agor/core/types';
-import { diagnoseGit, resolveManagedBranchDeletionPath } from '@agor/git';
+import { diagnoseGit, resolveManagedBranchWorkspacePath } from '@agor/git';
 import type { UserGitEnvironment } from '@agor/git/pure';
 import { cloneDiagnostic } from '../git/clone-diagnostic.js';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
@@ -930,7 +930,7 @@ export async function handleGitBranchAdd(
     // component below the tenant root may be a symlink planted by a writer
     // of a neighboring workspace. The root itself is server-derived.
     await mkdir(payload.params.branchesRoot, { recursive: true });
-    const branchPath = await resolveManagedBranchDeletionPath(
+    const branchPath = await resolveManagedBranchWorkspacePath(
       branchRecord.path,
       payload.params.branchesRoot
     ).catch((error: unknown) => {
@@ -1382,6 +1382,7 @@ export async function handleGitBranchRemove(
       branchesRoot,
       repoPath: payload.params.repoPath,
       storageMode,
+      branchId,
     });
     // Preserve the legacy caller's explicit ref policy outside workspace removal.
     // Permanent deletion retains shared Git refs and does not request this step.

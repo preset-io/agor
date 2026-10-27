@@ -315,7 +315,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
           await lockBranchWorkspacePaths(tx);
           if (insertData.data.path) {
             const overlap = await findOverlappingBranchPath(tx, insertData.data.path);
-            if (overlap) throw new BranchWorkspaceOverlapError(insertData.name, overlap.name);
+            if (overlap) throw new BranchWorkspaceOverlapError(insertData.name, overlap.branch_id);
           }
           await admitTeammateKnowledgeReferences(tx, branch.custom_context);
           const owner = await select(tx, { user_id: users.user_id })

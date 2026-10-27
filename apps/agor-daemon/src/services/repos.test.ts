@@ -403,7 +403,7 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
   it('maps a workspace overlap to 409 without provisioning', async () => {
     const branches = {
       create: vi.fn(async () => {
-        throw new BranchWorkspaceOverlapError('feature/x', 'feature');
+        throw new BranchWorkspaceOverlapError('feature/x', '550e8400-e29b-41d4-a716-446655440009');
       }),
       find: vi.fn(async () => []),
     };
@@ -438,9 +438,40 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
     );
     await expect(result).rejects.toBeInstanceOf(Conflict);
-    await expect(result).rejects.toThrow(/would share a workspace with branch 'feature'/);
+    await expect(result).rejects.toThrow(/would share a workspace path with another branch/);
     expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
+
+  // repos.createBranch is the only route that derives a branch workspace path.
+  it.each(['../../globex/worktrees/victim', '/abs', 'a/../b', 'a//b'])(
+    'rejects unsafe branch name %j before creating a row',
+    async (name) => {
+      const branches = { create: vi.fn(), find: vi.fn(async () => []) };
+      const app = {
+        get: () => ({}),
+        service: vi.fn((service: string) => {
+          if (service === 'branches') return branches;
+          throw new Error(`Unexpected service: ${service}`);
+        }),
+      } as unknown as Application;
+      const service = new ReposService({} as never, app);
+      vi.spyOn(service, 'get').mockResolvedValue({
+        repo_id: '550e8400-e29b-41d4-a716-446655440001',
+        slug: 'org/v',
+        local_path: '/managed/repos/v',
+        default_branch: 'main',
+      } as never);
+
+      await expect(
+        service.createBranch(
+          '550e8400-e29b-41d4-a716-446655440001',
+          { name, ref: 'main', createBranch: true, sourceBranch: 'main', storage_mode: 'worktree' },
+          { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+        )
+      ).rejects.toMatchObject({ code: 400 });
+      expect(branches.create).not.toHaveBeenCalled();
+    }
+  );
 
   it('refuses to create a branch whose deterministic path an archived branch still owns', async () => {
     const branches = { create: vi.fn(), find: vi.fn(async () => []) };

@@ -51,7 +51,7 @@ it.each([
   const worktrees = join(tenant, 'worktrees');
   const repos = join(tenant, 'repos');
   const homes = join(tenant, 'branch-homes');
-  const workspace = join(worktrees, 'repo', 'victim');
+  const workspace = join(worktrees, 'org', 'repo', 'victim');
   const home = join(homes, id);
   const retained = [
     join(worktrees, 'neighbor'),

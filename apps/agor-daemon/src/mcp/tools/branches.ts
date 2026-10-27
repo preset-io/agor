@@ -459,7 +459,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .boolean()
           .optional()
           .describe(
-            'Filter by whether the recorded branch path currently exists. This checks the exact stored path; it does not scan the filesystem.'
+            'Filter by whether the recorded branch path currently exists. This checks the exact stored path; it does not scan the filesystem. Rows whose stored path is outside the managed branch root report path_exists=null and match neither filter value.'
           ),
         limit: mcpLimit(50, 100),
         skip: mcpOptionalNonNegativeInt(
@@ -521,6 +521,19 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         })
       );
 
+      const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
+      const containedBranchIds = new Set(
+        branches
+          .filter((branch) => {
+            try {
+              assertManagedBranchPath(branch.path, tenantId);
+              return true;
+            } catch {
+              return false;
+            }
+          })
+          .map((branch) => branch.branch_id)
+      );
       const statusResult = await requestExecutor(
         {
           command: 'branch.filesystem.status',
@@ -530,20 +543,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             ctx.userId
           ),
           daemonUrl: getDaemonUrl(),
-          // Rows whose stored path fails containment are never probed; they
-          // report pathExists=false instead of acting as a filesystem oracle.
-          params: {
-            branchIds: branches
-              .filter((branch) => {
-                try {
-                  assertManagedBranchPath(branch.path, ctx.baseServiceParams.tenant?.tenant_id);
-                  return true;
-                } catch {
-                  return false;
-                }
-              })
-              .map((branch) => branch.branch_id),
-          },
+          // Rows whose stored path fails containment are never probed, so the
+          // tool is not a filesystem oracle; they report path_exists=null.
+          params: { branchIds: [...containedBranchIds] },
         },
         {
           logPrefix: '[MCP branches.cleanupCandidates.status]',
@@ -581,7 +583,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
 
       const filtered = branches
         .map((branch) => {
-          const pathExists = pathExistsByBranch.get(branch.branch_id) ?? false;
+          const pathExists = containedBranchIds.has(branch.branch_id)
+            ? (pathExistsByBranch.get(branch.branch_id) ?? false)
+            : null;
           return {
             branch,
             pathExists,
@@ -628,6 +632,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         storage_mode: branch.storage_mode ?? 'worktree',
         path: branch.path,
         path_exists: pathExists,
+        path_error: pathExists === null ? 'outside_managed_branch_root' : null,
         pull_request_url: branch.pull_request_url ?? null,
         issue_url: branch.issue_url ?? null,
         notes_preview: notesPreview(branch.notes),

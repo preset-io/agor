@@ -23,7 +23,6 @@ import {
   environmentCommandCapabilities,
   getBranchesDir,
   getBranchHomePath,
-  getBranchPath,
   getTenantDataRoot,
   PAGINATION,
   permanentBranchDeletionCapability,
@@ -490,6 +489,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           );
         }
       } else {
+        const managedPath = this.managedBranchPath(branch, params);
         const payload = {
           command: 'environment.lifecycle' as const,
           sessionToken: sessionToken!,
@@ -497,8 +497,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           env: context!.env,
           params: {
             branchId: branch.branch_id,
-            branchPath: this.managedBranchPath(branch, params),
-            cwd: this.managedBranchPath(branch, params),
+            branchPath: managedPath,
+            cwd: managedPath,
             principalBranchAccess: context!.branchFsAccess,
             ...context!.sandboxMounts,
             action,
@@ -786,6 +786,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const sessionToken = await this.withTenantDatabase(params, () =>
       issueExecutorCommandToken(this.app, 'environment-logs', executionUserId, branch.branch_id)
     );
+    const managedPath = this.managedBranchPath(branch, params);
     const result = await requestExecutor(
       {
         command: 'environment.logs',
@@ -794,8 +795,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         env,
         params: {
           branchId: branch.branch_id,
-          branchPath: this.managedBranchPath(branch, params),
-          cwd: this.managedBranchPath(branch, params),
+          branchPath: managedPath,
+          cwd: managedPath,
           principalBranchAccess: branchFsAccess,
           // Sandbox mount inputs consumed by spawn-executor → buildSandboxWrap.
           ...sandboxMounts,
@@ -963,17 +964,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           ...data.custom_context,
           teammate: { ...getTeammateConfig(data)!, localHome: true },
         };
-      }
-    }
-    if (params?.provider) {
-      // External callers never choose filesystem locations. Derive the
-      // workspace from trusted tenant, repository and branch identity.
-      if (!data.repo_id) throw new BadRequest('repo_id is required when creating a branch');
-      const repo = await this.app.service('repos').get(data.repo_id, params);
-      try {
-        withDefaults.path = getBranchPath(repo.slug, data.name ?? '', params.tenant?.tenant_id);
-      } catch (error) {
-        throw new BadRequest(error instanceof Error ? error.message : String(error));
       }
     }
     const { defaultMode } = resolveBranchStorageConfig(config);

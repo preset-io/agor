@@ -5,6 +5,8 @@ import { handleBranchDelete } from './branch-deletion';
 
 const storage = vi.hoisted(() => ({
   resolveManagedBranchDeletionPath: vi.fn().mockResolvedValue(undefined),
+  resolveManagedBranchWorkspacePath: vi.fn().mockResolvedValue(undefined),
+  assertBranchWorkspaceMarker: vi.fn().mockResolvedValue(undefined),
   removeBranchWorkspace: vi.fn().mockResolvedValue(undefined),
   deleteBranchDirectory: vi.fn().mockResolvedValue(undefined),
   prepareBranchDirectoryForRemoval: vi

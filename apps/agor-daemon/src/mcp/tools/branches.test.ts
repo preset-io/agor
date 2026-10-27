@@ -2404,7 +2404,23 @@ describe('agor_branches_cleanup_candidates', () => {
       expect.anything()
     );
     expect(parsed.candidates).toContainEqual(
-      expect.objectContaining({ branch_id: 'foreign', path_exists: false })
+      expect.objectContaining({
+        branch_id: 'foreign',
+        path_exists: null,
+        path_error: 'outside_managed_branch_root',
+      })
+    );
+    const deletable = JSON.parse(
+      (
+        await cleanupCandidates({
+          archivedOlderThanDays: 1,
+          filesystemStatuses: ['cleaned'],
+          pathExists: false,
+        })
+      ).content[0].text
+    );
+    expect(deletable.candidates.map((c: { branch_id: string }) => c.branch_id)).not.toContain(
+      'foreign'
     );
   });
 

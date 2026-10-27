@@ -2592,6 +2592,36 @@ export function isManagedBranchPath(branchPath: unknown, branchesRoot: string): 
 }
 
 /**
+ * The pre-`data_home` branches location. The documented local-to-containerized
+ * migration leaves it as a symlink to the new root, so older rows still name it.
+ */
+export function getLegacyBranchesDir(): string {
+  return path.join(getAgorHome(), 'worktrees');
+}
+
+/**
+ * Every stored spelling of one workspace: `branchPath` under the tenant root
+ * and under the legacy alias. Overlap checks compare strings, so they must try
+ * both; an alias that does not resolve to the root only over-refuses.
+ */
+export function branchPathSpellings(branchPath: string, tenantId?: string): string[] {
+  const roots = [getLegacyBranchesDir()];
+  try {
+    roots.unshift(getBranchesDir(tenantId));
+  } catch {
+    // Filesystem isolation without a tenant derives no root; sinks refuse such rows.
+  }
+  const spellings = new Set([branchPath]);
+  for (const root of roots) {
+    const relative = path.relative(root, branchPath);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`)) continue;
+    if (path.isAbsolute(relative)) continue;
+    for (const other of roots) spellings.add(path.join(other, relative));
+  }
+  return [...spellings];
+}
+
+/**
  * Get the on-disk root for per-branch SDK homes.
  *
  * Returns: $AGOR_DATA_HOME/branch-homes

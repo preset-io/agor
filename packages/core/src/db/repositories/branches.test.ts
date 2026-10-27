@@ -382,6 +382,67 @@ describe('BranchRepository.create', () => {
     expect(await branchRepo.findAllByRepoId(renamed.repo_id as UUID)).toEqual([]);
   });
 
+  // After the documented data_home migration, older rows name the legacy
+  // `<agor home>/worktrees` alias for the same directories new rows derive.
+  dbTest.for([
+    ['the same workspace', 'org/v/feature'],
+    ['a workspace nested inside it', 'org/v/feature/x'],
+    ['a workspace containing it', 'org/v'],
+  ] as const)('refuses %s spelled through the legacy alias', async ([, relative], { db }) => {
+    vi.stubEnv('AGOR_HOME', '/fictional/home/.agor');
+    vi.stubEnv('AGOR_DATA_HOME', '/fictional/data');
+    try {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const victim = await repoRepo.create(createRepoData({ slug: 'org/v' }));
+      const renamed = await repoRepo.create(createRepoData({ slug: 'org/r1' }));
+      await branchRepo.create(
+        createBranchData({
+          repo_id: victim.repo_id,
+          name: 'feature',
+          path: '/fictional/home/.agor/worktrees/org/v/feature',
+        })
+      );
+
+      await expect(
+        branchRepo.create(
+          createBranchData({
+            repo_id: renamed.repo_id,
+            name: 'attacker',
+            path: `/fictional/data/worktrees/${relative}`,
+          })
+        )
+      ).rejects.toBeInstanceOf(BranchWorkspaceOverlapError);
+      await expect(
+        branchRepo.create(
+          createBranchData({
+            repo_id: renamed.repo_id,
+            name: 'unrelated',
+            path: '/fictional/data/worktrees/org/v/other',
+          })
+        )
+      ).resolves.toBeDefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  dbTest('names no other branch in the overlap error', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'org/repo' }));
+    const hidden = await branchRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'hidden-name', path: '/w/org/repo/a' })
+    );
+    const attempt = branchRepo.create(
+      createBranchData({ repo_id: repo.repo_id, name: 'probe', path: '/w/org/repo/a/b' })
+    );
+    await expect(attempt).rejects.toMatchObject({
+      overlappingBranchId: hidden.branch_id,
+      message: expect.not.stringContaining('hidden-name'),
+    });
+  });
+
   dbTest('treats LIKE metacharacters in paths literally', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const branchRepo = new BranchRepository(db);

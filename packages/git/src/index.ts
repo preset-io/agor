@@ -2920,6 +2920,54 @@ export async function resolveManagedBranchDeletionPath(
 }
 
 /**
+ * {@link resolveManagedBranchDeletionPath} for a branch workspace, which is at
+ * least `<org>/<repo>/<branch>` below the root: never an org or repo directory.
+ */
+export async function resolveManagedBranchWorkspacePath(
+  branchPath: string,
+  branchesRoot: string
+): Promise<string> {
+  if (relative(resolve(branchesRoot), resolve(branchPath)).split(sep).length < 3) {
+    throw new Error(
+      `Safety check failed: Branch path must be at least <org>/<repo>/<branch> below ${branchesRoot}. Got: ${branchPath}`
+    );
+  }
+  return resolveManagedBranchDeletionPath(branchPath, branchesRoot);
+}
+
+/**
+ * Refuse a workspace whose `agor-branch-id` marker names another branch: a row
+ * that shares another branch's directory must never remove it. Workspaces
+ * materialized before markers existed have none, and stay removable.
+ */
+export async function assertBranchWorkspaceMarker(target: string, branchId: string): Promise<void> {
+  const { lstat, readFile } = await import('node:fs/promises');
+  const dotGit = join(target, '.git');
+  let gitDir: string;
+  try {
+    const info = await lstat(dotGit);
+    if (info.isDirectory()) gitDir = dotGit;
+    else if (info.isFile()) {
+      const pointer = /^gitdir:\s*(.+)$/m.exec(await readFile(dotGit, 'utf8'))?.[1]?.trim();
+      if (!pointer) return;
+      gitDir = resolve(target, pointer);
+    } else throw new Error('Safety check failed: Branch workspace .git is a symlink');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  let marker: string;
+  try {
+    marker = (await readFile(join(gitDir, 'agor-branch-id'), 'utf8')).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (marker !== branchId)
+    throw new Error('Safety check failed: Branch workspace belongs to another branch');
+}
+
+/**
  * Remove only a branch workspace, retaining SDK homes and database metadata.
  * Both archive and permanent deletion use this verified storage primitive.
  * Paths/mode must come from authoritative records, never the checkout's .git.
@@ -2930,9 +2978,12 @@ export async function removeBranchWorkspace(options: {
   branchesRoot: string;
   repoPath: string;
   storageMode: 'clone' | 'worktree';
+  /** Owner of the row being removed; a workspace marked for another branch is refused. */
+  branchId: string;
 }): Promise<void> {
-  const { branchPath, branchesRoot, repoPath, storageMode } = options;
-  const target = await resolveManagedBranchDeletionPath(branchPath, branchesRoot);
+  const { branchPath, branchesRoot, repoPath, storageMode, branchId } = options;
+  const target = await resolveManagedBranchWorkspacePath(branchPath, branchesRoot);
+  await assertBranchWorkspaceMarker(target, branchId);
   const { realpath } = await import('node:fs/promises');
   // A clone is self-contained, so its base checkout may be absent from an
   // external executor. Worktrees still require it to remove Git registration.

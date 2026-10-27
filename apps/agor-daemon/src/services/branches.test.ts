@@ -3230,19 +3230,7 @@ describe('BranchesService.patch provisioning attempt fence', () => {
   });
 });
 
-describe('BranchesService.create server-derived workspace path', () => {
-  function harness() {
-    const get = vi.fn(async () => ({ repo_id: 'repo', slug: 'org/repo' }));
-    const app = { get: () => ({}), service: () => ({ get }) } as unknown as Application;
-    const service = new BranchesService(createTenantScopeTestDb() as never, app);
-    const internal = service as unknown as {
-      applyBranchCreateDefaults: (
-        data: Partial<import('@agor/core/types').Branch>,
-        params?: unknown
-      ) => Promise<Partial<import('@agor/core/types').Branch>>;
-    };
-    return { internal, get };
-  }
+describe('BranchesService.create external callers', () => {
   const external = { provider: 'rest', user: { user_id: 'caller' as UserID, role: 'member' } };
 
   it('rejects direct external creation, including arrays and forged intent keys', async () => {
@@ -3265,30 +3253,6 @@ describe('BranchesService.create server-derived workspace path', () => {
     expect(get).not.toHaveBeenCalled();
     expect(persist).not.toHaveBeenCalled();
   });
-
-  it('replaces a client-supplied path with the derived tenant workspace', async () => {
-    const { internal, get } = harness();
-    const result = await internal.applyBranchCreateDefaults(
-      {
-        repo_id: 'repo' as UUID,
-        name: 'feature',
-        path: '/data/tenants/globex/worktrees/victim-private',
-      },
-      external
-    );
-    expect(get).toHaveBeenCalledWith('repo', external);
-    expect(result.path).toBe(getBranchPath('org/repo', 'feature'));
-  });
-
-  it.each(['../../globex/worktrees/victim', '/abs', 'a/../b', ''])(
-    'rejects unsafe branch name %j',
-    async (name) => {
-      const { internal } = harness();
-      await expect(
-        internal.applyBranchCreateDefaults({ repo_id: 'repo' as UUID, name }, external)
-      ).rejects.toMatchObject({ code: 400 });
-    }
-  );
 });
 
 describe('server-selected local teammate homes', () => {

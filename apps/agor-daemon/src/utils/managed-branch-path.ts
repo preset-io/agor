@@ -6,7 +6,7 @@
  */
 
 import { isAbsolute, join, relative } from 'node:path';
-import { getAgorHome, getBranchesDir, isManagedBranchPath } from '@agor/core/config';
+import { getBranchesDir, getLegacyBranchesDir, isManagedBranchPath } from '@agor/core/config';
 import { canonicalizeProspectivePath } from './sandbox-context.js';
 
 export function assertManagedBranchPath(branchPath: unknown, tenantId?: string): string {
@@ -26,7 +26,7 @@ export function managedBranchesRoot(branchPath: unknown, tenantId?: string): str
   // Documented storage migrations move worktrees to a new data home and keep
   // the old location as a symlink, so historical rows may name the alias. Only
   // that daemon-owned location may be the symlink; nothing below it may.
-  const legacyRoot = join(getAgorHome(), 'worktrees');
+  const legacyRoot = getLegacyBranchesDir();
   for (const candidate of [root, legacyRoot]) {
     if (!isManagedBranchPath(branchPath, candidate)) continue;
     if (candidate !== root && canonicalizeProspectivePath(candidate) !== canonicalRoot) continue;

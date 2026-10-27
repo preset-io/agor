@@ -32,6 +32,19 @@ describe('assertManagedBranchPath', () => {
     await rm(home, { recursive: true, force: true });
   });
 
+  // A dangling link is not "uncreated": its target could appear before a bind.
+  it.each([
+    ['the branch itself', ''],
+    ['a component below it', 'nested'],
+  ])('rejects a dangling symlink at %s', async (_label, below) => {
+    const branchPath = getBranchPath('org/repo', 'feature', 'acme');
+    await mkdir(join(branchPath, '..'), { recursive: true });
+    await symlink(join(home, 'not-yet-created'), branchPath);
+    expect(() => assertManagedBranchPath(join(branchPath, below), 'acme')).toThrow(
+      /dangling symlink/
+    );
+  });
+
   it('accepts the derived path for the same tenant, existing or not', async () => {
     const branchPath = getBranchPath('org/repo', 'feature', 'acme');
     expect(assertManagedBranchPath(branchPath, 'acme')).toBe(branchPath);

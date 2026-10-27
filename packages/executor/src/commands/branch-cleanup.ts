@@ -55,7 +55,7 @@ export async function runBranchWorkspaceFiles(
     // exactly like permanent deletion. No arbitrary command is allowed here.
     if (payload.command === BRANCH_CLEANUP_COMMAND) return 'failed';
     try {
-      await removeBranchWorkspace(p.removal);
+      await removeBranchWorkspace({ ...p.removal, branchId: p.branchId });
     } catch {
       return 'unknown';
     }

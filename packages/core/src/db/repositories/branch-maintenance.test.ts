@@ -139,6 +139,41 @@ for (const status of ['failed', 'cleaned', 'deleted', 'ready', 'creating'] as co
   }
 }
 
+// Rows from before the documented data_home migration name the legacy alias;
+// deleting a current-root row must still see them as the same workspace.
+for (const relation of ['equal', 'child', 'ancestor'] as const) {
+  test(`overlap guard sees a legacy-alias ${relation} sibling`, async ({ db }) => {
+    vi.stubEnv('AGOR_HOME', '/fictional/home/.agor');
+    vi.stubEnv('AGOR_DATA_HOME', '/fictional/data');
+    try {
+      const { branch, user } = await seedEnvironmentCommandBranch(db, {
+        path: '/fictional/data/worktrees/org/v/feature',
+      });
+      const legacy = '/fictional/home/.agor/worktrees/org/v';
+      await createBranchAtPathForTest(db, {
+        repo_id: branch.repo_id,
+        name: 'legacy-sibling',
+        ref: 'legacy-sibling',
+        branch_unique_id: 9600003,
+        path:
+          relation === 'equal'
+            ? `${legacy}/feature`
+            : relation === 'child'
+              ? `${legacy}/feature/child`
+              : legacy,
+        created_by: user.user_id,
+        archived: true,
+      });
+      const maintenance = new BranchMaintenanceRepository(db);
+      for (const kind of ['delete', 'cleanup', 'workspace_write'] as const) {
+        await expect(maintenance.claim(branch.branch_id, kind)).rejects.toThrow('overlaps');
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+}
+
 for (const literal of ['percent%', 'under_score', 'escape!', 'back\\slash']) {
   for (const relation of [
     'equal',
