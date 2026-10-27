@@ -283,6 +283,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // version, anything else is a discovered alias selection.
   const [pinned, setPinned] = useState(value?.mode === 'exact');
   const [pinnedModel, setPinnedModel] = useState(value?.model ?? '');
+  // The pin AutoComplete's input text is the value itself, so filter only once
+  // the user types after opening; otherwise the current ID hides every other model.
+  const [pinnedFilterActive, setPinnedFilterActive] = useState(false);
   const pinnedDirtyRef = useRef(false);
   const pinnedBaselineRef = useRef<PinnedEditBaseline>({
     mode: value?.mode === 'exact' ? 'exact' : 'alias',
@@ -369,6 +372,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       pinnedBaselineRef.current = { mode: 'exact', model: pinnedModel };
     }
     pinnedDirtyRef.current = true;
+    setPinnedFilterActive(true);
     setPinnedModel(model);
     onChange?.({ ...value, mode: 'exact', model });
   };
@@ -566,6 +570,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             value={pinnedModel}
             onChange={selectPinned}
             onSelect={commitPinned}
+            onOpenChange={(open) => {
+              // Reset on close (not open): typing into a closed input opens it,
+              // and that open must keep the user's filter.
+              if (!open) setPinnedFilterActive(false);
+            }}
             onKeyDown={(event) => {
               if (event.key !== 'Escape') return;
               if (!pinnedDirtyRef.current) return;
@@ -577,6 +586,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             }}
             options={pinOptions}
             filterOption={(input, option) =>
+              !pinnedFilterActive ||
               `${option?.value ?? ''} ${option?.label ?? ''}`
                 .toLowerCase()
                 .includes(input.toLowerCase())
