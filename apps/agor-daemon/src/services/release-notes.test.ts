@@ -1,5 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 import type { AgorConfig } from '@agor/core/config';
+import { UsersRepository } from '@agor/core/db';
 import type {
   AuthenticatedParams,
   ReleaseNoteDTO,
@@ -9,6 +10,7 @@ import type {
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it, vi } from 'vitest';
+import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   buildReleaseNotesFeed,
   CloudReleaseNotesPoller,
@@ -18,7 +20,9 @@ import {
   ReleaseNotesService,
   releaseNoteItemsForAgents,
   resolveReleaseNotesSource,
+  shortBrief,
 } from './release-notes';
+import { UsersService } from './users';
 
 const item = (id: string, overrides: Partial<ReleaseNoteItemDTO> = {}): ReleaseNoteItemDTO => ({
   id,
@@ -62,6 +66,9 @@ const member = (preferences: User['preferences'] = {}) => ({
   preferences,
 });
 
+/** Inside the first-visit window of every fixture note after the account existed. */
+const NOW = Date.parse('2026-10-21T00:00:00.000Z');
+
 describe('buildReleaseNotesFeed', () => {
   it('hides admin items from members and drops notes left empty', () => {
     const feed = buildReleaseNotesFeed(
@@ -70,18 +77,19 @@ describe('buildReleaseNotesFeed', () => {
         note('admin-only', '2026-10-21T00:00:00.000Z', [item('a', { audience: 'admin' })]),
         ...NOTES,
       ],
-      member()
+      member(),
+      NOW
     );
 
     expect(feed.notes.map((n) => n.id)).toEqual(['r3', 'r2', 'r1']);
     expect(feed.notes[0].items.map((i) => i.id)).toEqual(['r3-major']);
     expect(
-      buildReleaseNotesFeed('bundled', NOTES, { ...member(), role: 'admin' }).notes[0].items
+      buildReleaseNotesFeed('bundled', NOTES, { ...member(), role: 'admin' }, NOW).notes[0].items
     ).toHaveLength(2);
   });
 
   it('shows unseen majors newest first, never ones published before the account existed', () => {
-    const feed = buildReleaseNotesFeed('cloud', NOTES, member());
+    const feed = buildReleaseNotesFeed('cloud', NOTES, member(), NOW);
 
     expect(feed.unread_note_ids).toEqual(['r3', 'r2']);
     expect(feed.pending_major_items.map((i) => i.id)).toEqual(['r3-major', 'r2-major']);
@@ -92,7 +100,8 @@ describe('buildReleaseNotesFeed', () => {
       buildReleaseNotesFeed(
         'cloud',
         NOTES,
-        member({ releaseNotes: { seenMajorItemIds: ['r3-major'] } })
+        member({ releaseNotes: { seenMajorItemIds: ['r3-major'] } }),
+        NOW
       ).pending_major_items.map((i) => i.id)
     ).toEqual(['r2-major']);
 
@@ -104,6 +113,42 @@ describe('buildReleaseNotesFeed', () => {
     expect(opened.unread_note_ids).toEqual(['r3']);
     expect(opened.pending_major_items.map((i) => i.id)).toEqual(['r3-major']);
     expect(opened.last_seen_at).toBe('2026-10-15T00:00:00.000Z');
+  });
+
+  it('counts only recent notes until the drawer is first opened', () => {
+    const later = Date.parse('2026-11-01T00:00:00.000Z');
+    const fresh = buildReleaseNotesFeed('cloud', NOTES, member(), later);
+    expect(fresh.unread_note_ids).toEqual(['r3']);
+    expect(fresh.pending_major_items.map((i) => i.id)).toEqual(['r3-major']);
+
+    // A dismissed modal is not a drawer visit: older majors stay out of the modal.
+    expect(
+      buildReleaseNotesFeed(
+        'cloud',
+        NOTES,
+        member({ releaseNotes: { seenMajorItemIds: ['r3-major'] } }),
+        later
+      ).pending_major_items
+    ).toEqual([]);
+
+    // Once the drawer has been opened, its time is the only baseline.
+    expect(
+      buildReleaseNotesFeed(
+        'cloud',
+        NOTES,
+        member({ releaseNotes: { lastSeenAt: '2026-10-05T00:00:00.000Z' } }),
+        later
+      ).unread_note_ids
+    ).toEqual(['r3', 'r2']);
+  });
+
+  it('reports a source that has not answered yet as unavailable', () => {
+    expect(buildReleaseNotesFeed('cloud', null, member(), NOW)).toMatchObject({
+      available: false,
+      notes: [],
+      pending_major_items: [],
+    });
+    expect(buildReleaseNotesFeed('bundled', [], member(), NOW).available).toBe(true);
   });
 });
 
@@ -132,12 +177,31 @@ describe('parseReleaseNotes', () => {
   it.each([
     ['an external CTA', { cta_path: 'https://evil.example/' }],
     ['a protocol-relative CTA', { cta_path: '//evil.example/' }],
-    ['a plain-HTTP visual', { visual_url: 'http://agor.live/x.svg' }],
     ['an unknown tier', { tier: 'hidden' }],
   ])('rejects %s', (_label, overrides) => {
     expect(() =>
       parseReleaseNotes([note('r', '2026-10-01T00:00:00.000Z', [item('i', overrides as never)])])
     ).toThrow();
+  });
+
+  it('drops visuals the default CSP would block but keeps the note', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const [parsed] = parseReleaseNotes([
+      note('r', '2026-10-01T00:00:00.000Z', [
+        item('i', {
+          visual_url: 'https://cdn.example/x.svg',
+          visual_url_dark: 'https://agor.live/whats-new/x-dark.svg',
+        }),
+        item('j', { visual_url: 'http://agor.live/x.svg' }),
+      ]),
+    ]);
+
+    expect(parsed.items.map((i) => [i.visual_url, i.visual_url_dark])).toEqual([
+      [null, 'https://agor.live/whats-new/x-dark.svg'],
+      [null, null],
+    ]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 
   it('sorts newest first and drops notes without items', () => {
@@ -151,12 +215,22 @@ describe('parseReleaseNotes', () => {
   });
 });
 
+describe('shortBrief', () => {
+  it('keeps short briefs and cuts long ones on a word boundary', () => {
+    expect(shortBrief('Short brief.', 160)).toBe('Short brief.');
+    const cut = shortBrief('Zones have a layout, Free, Row, Column or Grid.', 30);
+    expect(cut).toBe('Zones have a layout, Free…');
+    expect(cut.length).toBeLessThanOrEqual(30);
+  });
+});
+
 describe('releaseNoteItemsForAgents', () => {
   it('flattens newest first with seen state, since and limit', () => {
     const feed = buildReleaseNotesFeed(
       'cloud',
       NOTES,
-      member({ releaseNotes: { lastSeenAt: '2026-10-15T00:00:00.000Z' } })
+      member({ releaseNotes: { lastSeenAt: '2026-10-15T00:00:00.000Z' } }),
+      NOW
     );
 
     expect(
@@ -198,6 +272,7 @@ describe('CloudReleaseNotesPoller', () => {
       );
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const poller = new CloudReleaseNotesPoller(CLOUD_ENV, fetchImpl);
+    expect(poller.notes()).toBeNull();
 
     await poller.refresh();
     expect(poller.notes().map((n) => n.id)).toEqual(['r3', 'r2', 'r1']);
@@ -232,50 +307,48 @@ describe('CloudReleaseNotesPoller', () => {
 });
 
 describe('ReleaseNotesMarkSeenService', () => {
-  const userId = 'user-1' as UserID;
-  const stored = {
-    user_id: userId,
-    role: 'member',
-    created_at: new Date('2026-09-15T00:00:00.000Z'),
-    preferences: { mainBoardId: 'board-1', releaseNotes: { seenMajorItemIds: ['r2-major'] } },
-  } as unknown as User;
-  const params = { user: { user_id: userId, role: 'member' } } as unknown as AuthenticatedParams;
+  const provider = { source: 'bundled' as const, notes: () => NOTES };
 
-  it('merges into the stored preferences and returns the refreshed feed', async () => {
-    const users = { findById: vi.fn(async () => stored) };
-    const patch = vi.fn(async (_id: UserID, data: Partial<User>) => {
-      Object.assign(stored, data);
-      return stored;
+  dbTest('merges concurrent writes inside users.patch without losing either', async ({ db }) => {
+    const users = new UsersService(db);
+    const created = await users.create({
+      email: 'release-notes-race@example.test',
+      password: 'a unique local test passphrase',
+      role: 'member',
     });
-    const provider = { source: 'bundled' as const, notes: () => NOTES };
+    const userId = created.user_id as UserID;
+    await users.patch(userId, { preferences: { homeWorkView: 'board' } });
+    const params = {
+      user: { user_id: userId, email: created.email, role: 'member' },
+    } as AuthenticatedParams;
     const service = new ReleaseNotesMarkSeenService(
-      new ReleaseNotesService(provider, users),
-      users,
-      { service: () => ({ patch }) }
+      new ReleaseNotesService(provider, new UsersRepository(db)),
+      { service: () => users }
     );
 
-    const feed = await service.create({ scope: 'major', itemIds: ['r3-major'] }, params);
+    // Interleave: every request starts before any write lands.
+    await Promise.all([
+      service.create({ scope: 'major', itemIds: ['r3-major'] }, params),
+      service.create({ scope: 'major', itemIds: ['r2-major'] }, params),
+      service.create({ scope: 'drawer' }, params),
+    ]);
 
-    expect(patch).toHaveBeenCalledWith(
-      userId,
-      {
-        preferences: {
-          mainBoardId: 'board-1',
-          releaseNotes: { seenMajorItemIds: ['r2-major', 'r3-major'] },
-        },
-      },
-      expect.objectContaining({ user: params.user, skipAvatarRefresh: true })
-    );
-    expect(feed.pending_major_items).toEqual([]);
+    const stored = await users.get(userId);
+    expect(stored.preferences?.homeWorkView).toBe('board');
+    expect(stored.preferences?.releaseNotes?.lastSeenAt).toEqual(expect.any(String));
+    expect([...(stored.preferences?.releaseNotes?.seenMajorItemIds ?? [])].sort()).toEqual([
+      'r2-major',
+      'r3-major',
+    ]);
   });
 
   it('rejects malformed requests and unauthenticated callers', async () => {
-    const users = { findById: vi.fn(async () => stored) };
-    const provider = { source: 'bundled' as const, notes: () => NOTES };
+    const userId = 'user-1' as UserID;
+    const params = { user: { user_id: userId, role: 'member' } } as unknown as AuthenticatedParams;
+    const patch = vi.fn();
     const service = new ReleaseNotesMarkSeenService(
-      new ReleaseNotesService(provider, users),
-      users,
-      { service: () => ({ patch: vi.fn() }) }
+      new ReleaseNotesService(provider, { findById: vi.fn() }),
+      { service: () => ({ patch }) }
     );
 
     await expect(service.create({ scope: 'major', itemIds: [] }, params)).rejects.toThrow();
@@ -283,5 +356,6 @@ describe('ReleaseNotesMarkSeenService', () => {
     await expect(service.create({ scope: 'drawer' }, {} as AuthenticatedParams)).rejects.toThrow(
       /Authentication/
     );
+    expect(patch).not.toHaveBeenCalled();
   });
 });

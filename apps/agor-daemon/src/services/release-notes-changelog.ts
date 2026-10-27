@@ -7,13 +7,12 @@
  * (next to the visuals in `apps/agor-docs/public/whats-new/`) can promote an
  * entry, keyed by PR number, to `major` with modal copy, visuals and a CTA.
  *
- * Runs at daemon build time (`scripts/build-release-notes.mjs`) and, in
- * source checkouts without a built file, once at startup.
+ * Runs once at daemon startup on the CHANGELOG copied into dist/ (or the
+ * repository copy in a source checkout).
  */
 
 import type { ReleaseNoteDTO, ReleaseNoteItemCategory, ReleaseNoteItemDTO } from '@agor/core/types';
 
-export const BUNDLED_RELEASE_NOTES_FILE = 'release-notes.json';
 export const BUNDLED_RELEASE_NOTE_VERSIONS = 10;
 
 const SECTION_CATEGORIES: Record<string, ReleaseNoteItemCategory> = {

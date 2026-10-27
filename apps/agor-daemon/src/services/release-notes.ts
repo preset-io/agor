@@ -8,7 +8,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AgorConfig } from '@agor/core/config';
+import { type AgorConfig, RELEASE_NOTES_CSP_IMG_SRC } from '@agor/core/config';
 import type { UsersRepository } from '@agor/core/db';
 import { BadRequest, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
@@ -37,10 +37,10 @@ import {
   signCloudRuntimeAssertion,
 } from '../utils/cloud-runtime-credential.js';
 import {
-  BUNDLED_RELEASE_NOTES_FILE,
   parseChangelogReleaseNotes,
   type ReleaseNoteHighlights,
 } from './release-notes-changelog.js';
+import { withPreferencesMerge } from './users.js';
 
 /** Contract endpoint, relative to `AGOR_CLOUD_API_BASE_URL` (which ends in `/api`). */
 const CLOUD_RELEASE_NOTES_PATH = '/internal/runtime/release-notes';
@@ -50,6 +50,8 @@ const CLOUD_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const CLOUD_MAX_NOTES = 50;
 /** Repository-relative location of the optional OSS highlights sidecar. */
 export const RELEASE_NOTE_HIGHLIGHTS_PATH = 'apps/agor-docs/public/whats-new/highlights.json';
+/** Its name when the daemon build copies it into dist/. */
+const RELEASE_NOTE_HIGHLIGHTS_FILE = 'highlights.json';
 
 const httpsUrl = z.url().refine((value) => value.startsWith('https://'));
 // In-app relative path only: one leading slash, never a protocol-relative URL.
@@ -65,8 +67,9 @@ const itemSchema = z.object({
   body_md: z.string().max(20_000),
   agent_brief: z.string().max(4_000),
   docs_url: httpsUrl.nullable(),
-  visual_url: httpsUrl.nullable(),
-  visual_url_dark: httpsUrl.nullable(),
+  // Checked against the CSP image origin after parsing; see allowedVisual.
+  visual_url: z.string().max(2_000).nullable(),
+  visual_url_dark: z.string().max(2_000).nullable(),
   cta_label: z.string().max(80).nullable(),
   cta_path: ctaPath.nullable(),
   pr_numbers: z.array(z.number().int().positive()),
@@ -81,12 +84,38 @@ const noteSchema = z.object({
   items: z.array(itemSchema),
 });
 
+/**
+ * The default CSP is the single source of truth for where visuals may load
+ * from; any other host would silently fail in the browser.
+ */
+function allowedVisual(url: string | null): boolean {
+  if (url === null) return true;
+  try {
+    return new URL(url).origin === RELEASE_NOTES_CSP_IMG_SRC;
+  } catch {
+    return false;
+  }
+}
+
 /** The one validation gate for both sources; anything the UI renders or navigates to passed it. */
 export function parseReleaseNotes(value: unknown): ReleaseNoteDTO[] {
-  return z
-    .array(noteSchema)
-    .max(CLOUD_MAX_NOTES)
-    .parse(value)
+  const notes = z.array(noteSchema).max(CLOUD_MAX_NOTES).parse(value);
+  let dropped = 0;
+  for (const item of notes.flatMap((note) => note.items)) {
+    // A visual is optional: drop one we could not load and keep the note.
+    for (const key of ['visual_url', 'visual_url_dark'] as const) {
+      if (!allowedVisual(item[key])) {
+        item[key] = null;
+        dropped++;
+      }
+    }
+  }
+  if (dropped > 0) {
+    console.warn(
+      `[release-notes] Dropped ${dropped} visual URL(s) outside ${RELEASE_NOTES_CSP_IMG_SRC}`
+    );
+  }
+  return notes
     .filter((note) => note.items.length > 0)
     .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
 }
@@ -102,7 +131,8 @@ export function resolveReleaseNotesSource(
 
 export interface ReleaseNotesProvider {
   readonly source: ReleaseNotesSource;
-  notes(): ReleaseNoteDTO[];
+  /** Null until the source has answered once; the UI shows nothing until then. */
+  notes(): ReleaseNoteDTO[] | null;
 }
 
 /** Walk up from this module to the first directory containing `relative`. */
@@ -117,17 +147,18 @@ function findUp(relative: string): string | undefined {
 }
 
 /**
- * Packaged daemons read `dist/release-notes.json` written at build time. A
- * source checkout (`pnpm dev`) has none, so it parses the repository
- * CHANGELOG once instead.
+ * The daemon build copies CHANGELOG.md and the highlights sidecar into dist/,
+ * so a packaged daemon finds them next to its modules; a source checkout
+ * finds the repository copies. Either way they are parsed once at startup.
  */
 export function loadBundledReleaseNotes(): ReleaseNoteDTO[] {
-  const built = findUp(BUNDLED_RELEASE_NOTES_FILE);
-  if (built) return parseReleaseNotes(JSON.parse(readFileSync(built, 'utf8')));
   const changelog = findUp('CHANGELOG.md');
   if (!changelog) return [];
-  const highlightsPath = join(dirname(changelog), RELEASE_NOTE_HIGHLIGHTS_PATH);
-  const highlights: ReleaseNoteHighlights = existsSync(highlightsPath)
+  const highlightsPath = [
+    join(dirname(changelog), RELEASE_NOTE_HIGHLIGHTS_FILE),
+    join(dirname(changelog), RELEASE_NOTE_HIGHLIGHTS_PATH),
+  ].find((path) => existsSync(path));
+  const highlights: ReleaseNoteHighlights = highlightsPath
     ? JSON.parse(readFileSync(highlightsPath, 'utf8'))
     : {};
   return parseReleaseNotes(parseChangelogReleaseNotes(readFileSync(changelog, 'utf8'), highlights));
@@ -136,7 +167,7 @@ export function loadBundledReleaseNotes(): ReleaseNoteDTO[] {
 /** Polls Agor Cloud; keeps the last good answer and stays quiet on failure. */
 export class CloudReleaseNotesPoller implements ReleaseNotesProvider {
   readonly source = 'cloud' as const;
-  private cached: ReleaseNoteDTO[] = [];
+  private cached: ReleaseNoteDTO[] | null = null;
   private failing = false;
   private readonly url: string;
   private readonly credential: CloudRuntimeCredential;
@@ -159,7 +190,7 @@ export class CloudReleaseNotesPoller implements ReleaseNotesProvider {
     return this;
   }
 
-  notes(): ReleaseNoteDTO[] {
+  notes(): ReleaseNoteDTO[] | null {
     return this.cached;
   }
 
@@ -207,7 +238,7 @@ export function createReleaseNotesProvider(
         '[release-notes] Cloud source unavailable; showing no release notes:',
         error instanceof Error ? error.message : String(error)
       );
-      return { source, notes: () => [] };
+      return { source, notes: () => null };
     }
   }
   let notes: ReleaseNoteDTO[] = [];
@@ -229,27 +260,34 @@ const time = (iso: string | Date | undefined) => (iso ? new Date(iso).getTime() 
 /** The caller's audience-filtered notes plus unread and modal state. */
 export function buildReleaseNotesFeed(
   source: ReleaseNotesSource,
-  allNotes: ReleaseNoteDTO[],
-  user: Pick<User, 'role' | 'created_at' | 'preferences'>
+  allNotes: ReleaseNoteDTO[] | null,
+  user: Pick<User, 'role' | 'created_at' | 'preferences'>,
+  now = Date.now()
 ): ReleaseNotesFeed {
   const isAdmin = hasMinimumRole(user.role, ROLES.ADMIN);
-  const notes = allNotes
+  const notes = (allNotes ?? [])
     .map((note) => ({
       ...note,
       items: note.items.filter((item) => item.audience === 'all' || isAdmin),
     }))
     .filter((note) => note.items.length > 0);
   const prefs = user.preferences?.releaseNotes ?? {};
-  const createdAt = time(user.created_at);
-  const seenBaseline = Math.max(createdAt, time(prefs.lastSeenAt));
+  // Majors published before the account existed are history, not news; until
+  // the drawer is first opened, neither is anything older than the window.
+  const seenBaseline = Math.max(
+    time(user.created_at),
+    prefs.lastSeenAt
+      ? time(prefs.lastSeenAt)
+      : now - RELEASE_NOTES_LIMITS.firstVisitWindowDays * 86_400_000
+  );
   const seenMajor = new Set(prefs.seenMajorItemIds ?? []);
   const unseen = notes.filter((note) => time(note.published_at) > seenBaseline);
   return {
     source,
+    available: allNotes !== null,
     notes,
     last_seen_at: prefs.lastSeenAt ?? null,
     unread_note_ids: unseen.map((note) => note.id),
-    // Majors published before the account existed are history, not news.
     pending_major_items: unseen
       .flatMap((note) => note.items)
       .filter((item) => item.tier === 'major' && !seenMajor.has(item.id)),
@@ -321,7 +359,6 @@ export class ReleaseNotesService {
 export class ReleaseNotesMarkSeenService {
   constructor(
     private readonly feed: ReleaseNotesService,
-    private readonly users: Pick<UsersRepository, 'findById'>,
     private readonly app: ReleaseNotesApp
   ) {}
 
@@ -331,29 +368,38 @@ export class ReleaseNotesMarkSeenService {
     if (!request.success) {
       throw new BadRequest("Expected { scope: 'drawer' } or { scope: 'major', itemIds }");
     }
-    const user = await this.users.findById(userId);
-    if (!user) throw new NotFound('User not found');
+    const now = new Date();
+    // The merge runs inside users.patch, against the row it reads under its
+    // per-user lock and compare-and-set write, so concurrent writes survive.
     await this.app.service('users').patch(
       userId,
-      {
-        preferences: {
-          ...user.preferences,
-          releaseNotes: mergeReleaseNotesSeen(
-            user.preferences?.releaseNotes,
-            request.data,
-            new Date()
-          ),
-        },
-      },
-      {
-        user: params?.user,
-        authenticated: true,
-        tenant: params?.tenant,
-        skipAvatarRefresh: true,
-      } as Params
+      {},
+      withPreferencesMerge(
+        {
+          user: params?.user,
+          authenticated: true,
+          tenant: params?.tenant,
+          skipAvatarRefresh: true,
+        } as Params,
+        (current) => ({
+          ...current,
+          releaseNotes: mergeReleaseNotesSeen(current?.releaseNotes, request.data, now),
+        })
+      )
     );
     return this.feed.feedFor(userId);
   }
+}
+
+/** Cut `text` to at most `max` characters on a word boundary, with an ellipsis. */
+export function shortBrief(
+  text: string,
+  max: number = RELEASE_NOTES_LIMITS.recentFeatureBriefChars
+) {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > 0 ? cut.slice(0, space) : cut).replace(/[\s,.;:]+$/, '')}…`;
 }
 
 /** Flat newest-first item view for agents (MCP tools and session context). */

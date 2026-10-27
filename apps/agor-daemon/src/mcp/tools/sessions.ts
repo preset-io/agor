@@ -37,7 +37,7 @@ import {
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
-import { releaseNoteItemsForAgents } from '../../services/release-notes.js';
+import { releaseNoteItemsForAgents, shortBrief } from '../../services/release-notes.js';
 import type { SessionBulkArchiveResult, SessionParams } from '../../services/sessions.js';
 import { requireActiveAgenticTool } from '../../utils/agentic-tool-runtime.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
@@ -608,12 +608,13 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const feed = (await ctx.app
           .service(RELEASE_NOTES_SERVICE)
           .find(ctx.baseServiceParams)) as ReleaseNotesFeed;
+        // Briefs stay short here; the full text is in agor_release_notes_list.
         const recent = releaseNoteItemsForAgents(feed, {
           since: new Date(Date.now() - RELEASE_NOTES_LIMITS.recentFeatureDays * 86_400_000),
           limit: RELEASE_NOTES_LIMITS.recentFeatureMax,
         }).map(({ title, agent_brief, docs_url, published_at, seen_by_user }) => ({
           title,
-          agent_brief,
+          agent_brief: shortBrief(agent_brief),
           docs_url,
           published_at,
           seen_by_user,

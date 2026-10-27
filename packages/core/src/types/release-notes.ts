@@ -76,15 +76,27 @@ export const RELEASE_NOTES_LIMITS = {
   /** `agor_sessions_get_current_context.recent_agor_features`. */
   recentFeatureDays: 14,
   recentFeatureMax: 5,
+  /** Characters of agent_brief in recent_agor_features; the full brief is in the MCP list. */
+  recentFeatureBriefChars: 160,
+  /**
+   * Until a user first opens the drawer, only notes from this many days count
+   * as unread or modal-eligible, so a first visit is not a backlog.
+   */
+  firstVisitWindowDays: 14,
 } as const;
 
 /** What the caller sees: audience-filtered notes plus their own seen state. */
 export interface ReleaseNotesFeed {
   source: ReleaseNotesSource;
+  /** False until the source has answered once (a Cloud cell before its first good poll). */
+  available: boolean;
   /** Newest first. */
   notes: ReleaseNoteDTO[];
   last_seen_at: string | null;
-  /** Notes published after the drawer was last opened (or the account was created). */
+  /**
+   * Notes published after the drawer was last opened (before the first visit:
+   * within `firstVisitWindowDays`), and never before the account was created.
+   */
   unread_note_ids: string[];
   /** Major items the modal should show, newest first. */
   pending_major_items: ReleaseNoteItemDTO[];

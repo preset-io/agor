@@ -4544,8 +4544,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
   // What's new: notes are platform content held in memory; the only tenant
   // data read or written is the caller's own users row.
-  const releaseNotesUsers = new UsersRepository(db);
-  const releaseNotesFeed = new ReleaseNotesService(releaseNotesProvider, releaseNotesUsers);
+  const releaseNotesFeed = new ReleaseNotesService(releaseNotesProvider, new UsersRepository(db));
   registerAuthenticatedRoute(
     app,
     RELEASE_NOTES_SERVICE,
@@ -4556,7 +4555,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   registerAuthenticatedRoute(
     app,
     RELEASE_NOTES_MARK_SEEN_SERVICE,
-    new ReleaseNotesMarkSeenService(releaseNotesFeed, releaseNotesUsers, app),
+    new ReleaseNotesMarkSeenService(releaseNotesFeed, app),
     { create: { role: ROLES.VIEWER, action: 'mark release notes seen' } },
     requireAuth
   );
