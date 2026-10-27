@@ -109,11 +109,8 @@ it.each([1440, 390])(
   }
 );
 
-/**
- * The toolbar is one control row that never overflows; returns which state it
- * is in: full, full with an icon-only action, or collapsed behind Filters.
- */
-function expectOneControlRow(): 'full' | 'full-icon' | 'collapsed' {
+/** The toolbar is one control row that never overflows; returns which of its two states it is in. */
+function expectOneControlRow(): 'full' | 'collapsed' {
   const search = screen
     .getByRole('textbox', { name: 'Search MCP servers' })
     .closest<HTMLElement>('.ant-input-affix-wrapper');
@@ -125,26 +122,18 @@ function expectOneControlRow(): 'full' | 'full-icon' | 'collapsed' {
     expect(Math.round(rect.top)).toBe(Math.round(rects[0].top));
   }
   expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
-  // Both states end with the Add custom server action (icon-only when collapsed).
-  const add = screen.getByRole('button', { name: 'Add custom server' });
-  expect(row).toContainElement(add);
-  if (rects.length === 3) {
+  if (rects.length === 2) {
     expect(row).toContainElement(screen.getByRole('button', { name: 'Filters' }));
-    expect(add).not.toHaveTextContent('Add custom server');
-    // The icon-only action leaves the search box room to type in.
-    expect(rects[0].width).toBeGreaterThanOrEqual(100);
     return 'collapsed';
   }
-  expect(rects).toHaveLength(5);
-  return add.textContent?.includes('Add custom server') ? 'full' : 'full-icon';
+  expect(rects).toHaveLength(4);
+  return 'full';
 }
 
 it.each([
   [1440, 'full'],
   [1024, 'full'],
-  // The Add custom server action costs the row its full form below ~830px of container.
-  [900, 'full-icon'],
-  [820, 'collapsed'],
+  [820, 'full'],
   [600, 'collapsed'],
   [390, 'collapsed'],
 ] as const)('keeps the catalog toolbar to one row at %ipx', async (width, state) => {

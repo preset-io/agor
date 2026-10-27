@@ -59,7 +59,6 @@ import {
   marketplaceServerTitle,
 } from './marketplacePresentation';
 import { ServerSettingsDrawer } from './ServerSettingsDrawer';
-import { useAddCustomMcpServer } from './useAddCustomMcpServer';
 
 const { Text } = Typography;
 
@@ -160,25 +159,6 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     [connectionReady, currentUser, memberPolicy.canConfigure, memberPolicy.policy]
   );
   const policyState = policyPendingState(memberPolicy);
-  // A just-added server opens like a requested one once the refreshed overview lists it.
-  const [createdServerId, setCreatedServerId] = useState<string | null>(null);
-  // Held until the form closes: the drawer must not open over a form mid-OAuth.
-  const addedServerId = useRef<string | null>(null);
-  const addCustom = useAddCustomMcpServer({
-    client,
-    currentUser,
-    authGeneration,
-    capability,
-    policyState,
-    onCreated: (server) => {
-      addedServerId.current = server.mcp_server_id;
-    },
-    onClose: () => {
-      setCreatedServerId(addedServerId.current);
-      addedServerId.current = null;
-      void refresh();
-    },
-  });
   const offeredTransports = useMemo(
     () => allowedMcpTransports({ isAdmin: capability.isAdmin }),
     [capability.isAdmin]
@@ -187,7 +167,6 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     () => allowedMcpScopes({ isAdmin: capability.isAdmin, policy: capability.policy }),
     [capability.isAdmin, capability.policy]
   );
-  const closeAddCustom = addCustom.close;
   const authorityFor = useCallback(
     (server: MCPMarketplaceServer) => ({
       // The overview lists the caller's own rows plus Shared (ownerless) ones.
@@ -290,11 +269,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     setSelectedServerId(null);
     setEditingServer(null);
     setEditingApp(null);
-    closeAddCustom();
-    addedServerId.current = null;
-    setCreatedServerId(null);
     setDiscoveryErrors(new Map());
-  }, [active, clearRemovalFocusAuthority, closeAddCustom]);
+  }, [active, clearRemovalFocusAuthority]);
 
   useLayoutEffect(() => {
     // The value is an authority generation key; any identity/capability change
@@ -430,7 +406,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     showWarning,
   });
 
-  const serverToOpen = requestedServerId ?? createdServerId;
+  const serverToOpen = requestedServerId;
   useEffect(() => {
     if (!serverToOpen) return;
     const requested = overview.servers.find((server) => server.mcp_server_id === serverToOpen);
@@ -442,9 +418,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
       ).find((element) => element.dataset.marketplaceSettingsServerId === serverToOpen) ??
       document.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
     setSelectedServerId(serverToOpen);
-    if (serverToOpen === createdServerId) setCreatedServerId(null);
-    else onRequestedServerOpened?.();
-  }, [createdServerId, onRequestedServerOpened, overview.servers, serverToOpen]);
+    onRequestedServerOpened?.();
+  }, [onRequestedServerOpened, overview.servers, serverToOpen]);
 
   const mutate = async (
     action: string,
@@ -874,12 +849,9 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     </Button>
   );
 
-  // Every branch below renders `addCustom.modal` as the first child of a Flex
-  // root, so a list that appears mid-create (for example, during OAuth) keeps the form.
   if (error && overview.servers.length === 0)
     return (
       <Flex vertical gap={token.margin}>
-        {addCustom.modal}
         <Alert
           type="error"
           showIcon
@@ -892,21 +864,17 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   if (!loading && overview.servers.length === 0)
     return (
       <Flex vertical gap={token.margin}>
-        {addCustom.modal}
         <section
           ref={inventoryFocusTarget}
           tabIndex={-1}
           aria-label="Installed MCP server inventory"
         >
           <Empty description="No MCP servers installed">
-            <Space wrap>
-              {onBrowseCatalog && (
-                <Button type="primary" onClick={onBrowseCatalog}>
-                  Browse catalog
-                </Button>
-              )}
-              {addCustom.button}
-            </Space>
+            {onBrowseCatalog && (
+              <Button type="primary" onClick={onBrowseCatalog}>
+                Browse catalog
+              </Button>
+            )}
           </Empty>
         </section>
       </Flex>
@@ -914,7 +882,6 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
 
   return (
     <Flex vertical gap={token.margin}>
-      {addCustom.modal}
       {error && (
         <Alert
           type="error"
@@ -931,7 +898,6 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           title={policyState.pending ? policyState.hint : explainManageRestriction(capability)}
         />
       )}
-      <Flex justify="flex-end">{addCustom.button}</Flex>
       <section ref={inventoryFocusTarget} tabIndex={-1} aria-label="Installed MCP server inventory">
         {compact ? (
           <Spin spinning={loading}>

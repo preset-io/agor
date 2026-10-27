@@ -1,8 +1,10 @@
 import type { AgorClient, MCPServer, User } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { PlusOutlined } from '@ant-design/icons';
 import { Button, Tooltip } from 'antd';
-import { type ReactNode, useCallback, useMemo, useState } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import { LOST_CONNECTION_TOOLTIP } from '@/utils/connectionErrors';
+import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { MCPServerEditModal } from '../MCPServer/MCPServerEditModal';
 import {
   allowedMcpScopes,
@@ -11,17 +13,17 @@ import {
   canAddSharedMcpServer,
   explainAddRestriction,
   type MCPServerCapabilityContext,
+  policyPendingState,
 } from '../MCPServer/memberPolicy';
 
 const LABEL = 'Add custom server';
 
 export interface UseAddCustomMcpServerOptions {
   client: AgorClient | null;
-  currentUser?: User | null;
+  connected: boolean;
+  connecting: boolean;
   authGeneration: number;
-  capability: MCPServerCapabilityContext;
-  /** From `policyPendingState`: the member policy is not known yet. */
-  policyState: { pending: boolean; hint: string };
+  currentUser?: User | null;
   /**
    * Runs once, when the form first persists its row: on Create, or before an
    * OAuth start, so a form cancelled after that still reports the server.
@@ -31,27 +33,41 @@ export interface UseAddCustomMcpServerOptions {
 }
 
 /**
- * The "Add custom server" button and its create form, behind the same gates as
+ * The "Add custom server" action and its create form, behind the same gates as
  * the former Settings > MCP Servers create form. Render `modal` once, somewhere
  * that stays mounted while the form is open; `button` (or `iconButton`, for
- * tight toolbars) may appear in several places and every copy opens that form.
+ * narrow layouts) may appear in several places and every copy opens that form.
  */
 export function useAddCustomMcpServer({
   client,
-  currentUser,
+  connected,
+  connecting,
   authGeneration,
-  capability,
-  policyState,
+  currentUser,
   onCreated,
   onClose,
 }: UseAddCustomMcpServerOptions): {
   button: ReactNode;
   iconButton: ReactNode;
   modal: ReactNode;
-  close: () => void;
 } {
+  const connectionReady = connected && !connecting;
+  const memberPolicy = useMcpMemberPolicy(client, {
+    connectionReady,
+    currentUser,
+    authGeneration,
+  });
+  const policyState = policyPendingState(memberPolicy);
+  const capability: MCPServerCapabilityContext = {
+    role: currentUser?.role,
+    isAdmin: hasMinimumRole(currentUser?.role, ROLES.ADMIN),
+    connectionReady,
+    policy: memberPolicy.policy,
+    userId: currentUser?.user_id,
+    canConfigure: memberPolicy.canConfigure,
+  };
   const canAdd = !policyState.pending && canAddMcpServer(capability);
-  const addRestriction = !capability.connectionReady
+  const addRestriction = !connectionReady
     ? LOST_CONNECTION_TOOLTIP
     : policyState.pending
       ? policyState.hint
@@ -67,13 +83,12 @@ export function useAddCustomMcpServer({
     [capability.isAdmin, capability.policy]
   );
   const [open, setOpen] = useState(false);
-  const close = useCallback(() => setOpen(false), []);
 
-  // Stable across renders, so a memoized host (the Catalog toolbar) stays memoized.
   const [button, iconButton] = useMemo(() => {
     const render = (iconOnly: boolean) => {
       const control = (
         <Button
+          type="primary"
           // The label (text or aria-label) names the button, not the icon's "plus".
           icon={<PlusOutlined aria-hidden />}
           disabled={!canAdd}
@@ -116,5 +131,5 @@ export function useAddCustomMcpServer({
     />
   );
 
-  return { button, iconButton, modal, close };
+  return { button, iconButton, modal };
 }

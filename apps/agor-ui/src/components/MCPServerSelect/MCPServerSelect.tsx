@@ -1,6 +1,5 @@
 import { type MCPServer, shortId } from '@agor-live/client';
-import { ShopOutlined } from '@ant-design/icons';
-import { Button, Empty, Select, type SelectProps } from 'antd';
+import { Button, Select, type SelectProps, theme } from 'antd';
 import type { RefSelectProps } from 'antd/es/select';
 import { type Ref, useImperativeHandle, useRef } from 'react';
 import { useAgorStore } from '../../store/agorStore';
@@ -122,6 +121,7 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
   // otherwise have to thread the same set through, and one that forgot would
   // quietly go back to showing an unfinished install as a working one.
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
+  const { token } = theme.useToken();
 
   // Filter servers by scope if specified
   const filteredServers = filterByScope
@@ -158,15 +158,9 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
       allowClear
       showSearch
       optionFilterProp="label"
-      notFoundContent={
-        onBrowseCatalog ? (
-          <Empty image={<ShopOutlined />} description="No matching MCP servers" />
-        ) : mcpServers.length === 0 ? (
-          'No MCP servers available'
-        ) : (
-          'No matching servers'
-        )
-      }
+      // One muted line (Select's own empty-item style), so the popup stays as
+      // short as its content; the browse action follows it in popupRender.
+      notFoundContent={mcpServers.length === 0 ? 'No MCP servers available' : 'No matching servers'}
       value={value}
       onChange={onChange}
       options={options}
@@ -193,6 +187,9 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
             <Button
               ref={browseRef}
               type="link"
+              size="small"
+              // Line up with the empty-state text and options above it.
+              style={{ paddingInline: token.paddingSM }}
               onClick={onBrowseCatalog}
               onKeyDown={(event) => {
                 if (event.key === 'Tab' && event.shiftKey) {
