@@ -1,4 +1,4 @@
-import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
+import { getBranchPath, isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
 import {
   BranchRepository,
   requireCurrentTenantId,
@@ -58,6 +58,10 @@ vi.mock('./oauth-executor.js', () => ({
   startOpenCodeOAuthExecutor: vi.fn(),
 }));
 
+// Managed paths below the test HOME's branch root so daemon containment passes.
+const BRANCH_PATH = getBranchPath('org/repo', 'branch-1', 'tenant-a');
+const TENANT_A_PATH = getBranchPath('org/repo', 'tenant-a', 'tenant-a');
+
 const startOAuth = vi.mocked(startOpenCodeOAuthExecutor);
 const enabled = vi.mocked(isTenantAgenticToolEnabled);
 const loadConfig = vi.mocked(loadConfigSync);
@@ -99,7 +103,7 @@ beforeEach(() => {
   } as never);
   branchRepository.mockImplementation(function repository() {
     return {
-      findById: vi.fn(async () => ({ id: 'branch-1', path: '/worktrees/branch-1' })),
+      findById: vi.fn(async () => ({ id: 'branch-1', path: BRANCH_PATH })),
       resolveUserAccess: vi.fn(async () => ({ can: 'view', fs_access: 'read' })),
     };
   } as never);
@@ -145,7 +149,7 @@ describe('OpenCode provider auth service', () => {
       expect.objectContaining({
         params: {
           tool: 'opencode',
-          request: { operation: 'discover', directory: '/worktrees/branch-1' },
+          request: { operation: 'discover', directory: BRANCH_PATH },
         },
       }),
       expect.any(Object)
@@ -158,7 +162,7 @@ describe('OpenCode provider auth service', () => {
     } as never);
     branchRepository.mockImplementationOnce(function repository() {
       return {
-        findById: vi.fn(async () => ({ id: 'branch-1', path: '/worktrees/branch-1' })),
+        findById: vi.fn(async () => ({ id: 'branch-1', path: BRANCH_PATH })),
         resolveUserAccess: vi.fn(async () => ({ can: 'none', fs_access: 'none' })),
       };
     } as never);
@@ -183,7 +187,7 @@ describe('OpenCode provider auth service', () => {
       return {
         findById: vi.fn(async () =>
           requireCurrentTenantId() === 'tenant-a'
-            ? { id: 'shared-id', path: '/worktrees/tenant-a' }
+            ? { id: 'shared-id', path: TENANT_A_PATH }
             : undefined
         ),
         resolveUserAccess: vi.fn(async () => ({

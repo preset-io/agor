@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import { getBranchPath } from '@agor/core/config';
 import {
   BranchRepository,
   GatewayChannelRepository,
@@ -200,10 +201,13 @@ const slackChannel = {
   last_message_at: null,
 };
 
+// A managed path below the test HOME's branch root so daemon containment passes.
+const BRANCH_PATH = getBranchPath('org/repo', 'branch-1', 'tenant-test');
+
 const branch = {
   branch_id: 'branch-1',
   name: 'slack-work',
-  path: '/tenant-test/branch-1',
+  path: BRANCH_PATH,
   primary_owner_user_id: 'branch-owner',
   others_can: 'view',
 };
@@ -2167,7 +2171,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
           command: 'branch.upload.materialize',
           params: expect.objectContaining({
             branchId: 'branch-1',
-            cwd: '/tenant-test/branch-1',
+            cwd: BRANCH_PATH,
             principalBranchAccess: 'write',
           }),
         }),
@@ -2397,7 +2401,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
             filePath: 'chart.png',
             gatewayChannelId: fileUploadEnabled.id,
             threadTs: '171234.000100',
-            cwd: '/tenant-test/branch-1',
+            cwd: BRANCH_PATH,
             principalBranchAccess: 'write',
           }),
         }),

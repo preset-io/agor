@@ -15,6 +15,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   assertAsyncEnvironmentCommandConfig,
+  assertManagedBranchPath,
   branchMaintenanceCapabilities,
   createUserProcessEnvironment,
   ENVIRONMENT,
@@ -23,6 +24,7 @@ import {
   environmentCommandCapabilities,
   getBranchesDir,
   getBranchHomePath,
+  getBranchPath,
   getTenantDataRoot,
   PAGINATION,
   permanentBranchDeletionCapability,
@@ -495,8 +497,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           env: context!.env,
           params: {
             branchId: branch.branch_id,
-            branchPath: branch.path,
-            cwd: branch.path,
+            branchPath: this.managedBranchPath(branch, params),
+            cwd: this.managedBranchPath(branch, params),
             principalBranchAccess: context!.branchFsAccess,
             ...context!.sandboxMounts,
             action,
@@ -767,6 +769,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     });
   }
 
+  /** Revalidate a stored branch path against the caller tenant's branch root. */
+  private managedBranchPath(branch: Branch, params?: BranchParams): string {
+    return assertManagedBranchPath(branch.path, params?.tenant?.tenant_id ?? getCurrentTenantId());
+  }
+
   private async fetchEnvironmentLogsViaExecutor(
     branch: Branch,
     logsCommand: string,
@@ -787,8 +794,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         env,
         params: {
           branchId: branch.branch_id,
-          branchPath: branch.path,
-          cwd: branch.path,
+          branchPath: this.managedBranchPath(branch, params),
+          cwd: this.managedBranchPath(branch, params),
           principalBranchAccess: branchFsAccess,
           // Sandbox mount inputs consumed by spawn-executor → buildSandboxWrap.
           ...sandboxMounts,
@@ -956,6 +963,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           ...data.custom_context,
           teammate: { ...getTeammateConfig(data)!, localHome: true },
         };
+      }
+    }
+    if (params?.provider) {
+      // External callers never choose filesystem locations. Derive the
+      // workspace from trusted tenant, repository and branch identity.
+      if (!data.repo_id) throw new BadRequest('repo_id is required when creating a branch');
+      const repo = await this.app.service('repos').get(data.repo_id, params);
+      try {
+        withDefaults.path = getBranchPath(repo.slug, data.name ?? '', params.tenant?.tenant_id);
+      } catch (error) {
+        throw new BadRequest(error instanceof Error ? error.message : String(error));
       }
     }
     const { defaultMode } = resolveBranchStorageConfig(config);
@@ -1479,6 +1497,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
     if (Object.hasOwn(data, 'base_remote_url')) {
       throw new BadRequest('base_remote_url is immutable after branch creation.');
+    }
+    if (Object.hasOwn(data, 'path')) {
+      throw new BadRequest('path is server-managed and cannot be changed through the Branch API.');
     }
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
@@ -2104,7 +2125,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
                   }
                 : {
                     filesystemAction: 'cleaned' as const,
-                    cwd: branch.path,
+                    cwd: this.managedBranchPath(branch, params),
                     principalBranchAccess: 'write' as const,
                     ...context!.sandboxMounts,
                     cleanup: { command: policy!.command },

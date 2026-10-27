@@ -179,9 +179,8 @@ for (const status of ['cleaned', 'failed'] as const) {
       await git.init();
       await git.add('tracked.txt');
       expect((await git.status()).not_added).toContain('untracked.txt');
-      const { branch, user } = await seedEnvironmentCommandBranch(db);
+      const { branch, user } = await seedEnvironmentCommandBranch(db, { path: root });
       const branches = new BranchRepository(db);
-      await branches.update(branch.branch_id, { path: root });
       const sibling = await branches.create({
         repo_id: branch.repo_id,
         name: 'retained',
@@ -232,9 +231,8 @@ test('a failed sibling retry is safe because shared-workspace deletion is never 
 }) => {
   const root = await mkdtemp(join(tmpdir(), 'agor-overlap-retry-'));
   try {
-    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const { branch, user } = await seedEnvironmentCommandBranch(db, { path: root });
     const branches = new BranchRepository(db);
-    await branches.update(branch.branch_id, { path: root });
     const sibling = await branches.create({
       repo_id: branch.repo_id,
       name: 'retry',

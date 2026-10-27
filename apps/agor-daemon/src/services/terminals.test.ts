@@ -50,9 +50,16 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock('@agor/core/config', () => ({
+vi.mock('@agor/core/config', async (importOriginal) => ({
+  assertManagedBranchPath: (await importOriginal<typeof import('@agor/core/config')>())
+    .assertManagedBranchPath,
   createUserProcessEnvironment: mocks.createUserProcessEnvironment,
 }));
+
+const actualConfig = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
+const BRANCH_PATH = actualConfig.getBranchPath('org/repo', 'feature-branch');
+const OTHER_BRANCH_PATH = actualConfig.getBranchPath('org/repo', 'other');
+mocks.branch.path = BRANCH_PATH;
 
 vi.mock('@agor/core/db', () => ({
   BranchRepository: class {
@@ -344,7 +351,7 @@ describe('process-affine attachment creation', () => {
         params: expect.objectContaining({
           terminalId: result.terminalId,
           channel: result.channel,
-          cwd: '/worktrees/feature-branch',
+          cwd: BRANCH_PATH,
         }),
       }),
       expect.anything()
@@ -503,7 +510,7 @@ describe('process-affine attachment creation', () => {
       ...mocks.branch,
       branch_id: 'branch-2',
       name: 'other',
-      path: '/worktrees/other',
+      path: OTHER_BRANCH_PATH,
     });
     const service = new TerminalsService(makeApp() as never, {} as never);
     const a = await service.create({ branchId: 'branch-1' as BranchID }, params as never);

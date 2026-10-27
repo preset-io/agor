@@ -1,6 +1,7 @@
 /**
  * Read-only branch file browser. Tenant filesystem access is delegated to the executor.
  */
+import { assertManagedBranchPath } from '@agor/core/config';
 import {
   type BranchRepository,
   requireCurrentTenantId,
@@ -189,7 +190,7 @@ export class FileService
       });
       return {
         branchId: branch.branch_id,
-        branchPath: branch.path,
+        branchPath: assertManagedBranchPath(branch.path, tenantId),
         delegatedHomeKey,
         fsAccess,
         userId,

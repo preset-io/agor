@@ -9,7 +9,11 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { type AgorConfig, createUserProcessEnvironment } from '@agor/core/config';
+import {
+  type AgorConfig,
+  assertManagedBranchPath,
+  createUserProcessEnvironment,
+} from '@agor/core/config';
 import {
   BranchRepository,
   getCurrentTenantId,
@@ -388,7 +392,7 @@ export class TerminalsService {
             terminalId,
             channel,
             sessionName,
-            cwd: branch.path,
+            cwd: assertManagedBranchPath(branch.path, tenantId),
             cols: data.cols || 160,
             rows: data.rows || 40,
             sandboxHomeStore: projection.sandboxHomeStore,

@@ -4,14 +4,17 @@ import { ownedDbTest as test } from '../test-helpers';
 import { BranchDeletionRepository } from './branch-deletion';
 import { BranchMaintenanceRepository } from './branch-maintenance';
 import { BranchRepository } from './branches';
-import { seedEnvironmentCommandBranch } from './environment-commands.test-support';
+import {
+  seedEnvironmentCommandBranch,
+  setBranchPathForTest,
+} from './environment-commands.test-support';
 
 test('finalization requires verified storage and drained data, and deletes branch only after final callback', async ({
   db,
 }) => {
   const { branch } = await seedEnvironmentCommandBranch(db);
   const { branch: neighbor } = await seedEnvironmentCommandBranch(db);
-  await new BranchRepository(db).update(neighbor.branch_id, { path: '/tmp/neighbor-fixture' });
+  await setBranchPathForTest(db, neighbor.branch_id, '/tmp/neighbor-fixture');
   const maintenance = new BranchMaintenanceRepository(db);
   const { claim } = await maintenance.claim(branch.branch_id, 'delete');
   const invocation = await maintenance.beginExecution(claim);

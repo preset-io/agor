@@ -27,7 +27,7 @@ export interface SandboxStoragePaths {
 }
 
 /** Canonicalize the deepest existing ancestor while retaining an uncreated suffix. */
-function canonicalizeProspectivePath(path: string): string {
+export function canonicalizeProspectivePath(path: string): string {
   let ancestor = resolve(path);
   const suffix: string[] = [];
   while (!existsSync(ancestor)) {

@@ -1,12 +1,15 @@
+import { eq } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { BranchID } from '../../types';
 import type { Database } from '../client';
+import { select, update } from '../database-wrapper';
+import { branches } from '../schema';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { UsersRepository } from './users';
 
 let unique = 9500000;
-export async function seedEnvironmentCommandBranch(db: Database) {
+export async function seedEnvironmentCommandBranch(db: Database, options: { path?: string } = {}) {
   const user = await new UsersRepository(db).create({
     email: `${generateId()}@example.test`,
     name: 'Environment test',
@@ -26,7 +29,7 @@ export async function seedEnvironmentCommandBranch(db: Database) {
     name: `env-${generateId()}`,
     ref: 'main',
     branch_unique_id: unique++,
-    path: '/tmp/environment-test',
+    path: options.path ?? '/tmp/environment-test',
     created_by: user.user_id,
     start_command: 'true',
     stop_command: 'true',
@@ -36,4 +39,14 @@ export async function seedEnvironmentCommandBranch(db: Database) {
     environment_instance: { status: 'stopped' },
   });
   return { branch, user };
+}
+
+/** Rewrite a stored branch path directly; BranchRepository keeps `path` immutable. */
+export async function setBranchPathForTest(db: Database, branchId: string, path: string) {
+  const row = await select(db).from(branches).where(eq(branches.branch_id, branchId)).one();
+  if (!row) throw new Error(`Branch not found: ${branchId}`);
+  await update(db, branches)
+    .set({ data: { ...row.data, path } })
+    .where(eq(branches.branch_id, branchId))
+    .run();
 }

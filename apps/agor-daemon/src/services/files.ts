@@ -6,6 +6,7 @@
  * managed branch checkout.
  */
 
+import { assertManagedBranchPath } from '@agor/core/config';
 import {
   BranchRepository,
   requireCurrentTenantId,
@@ -143,7 +144,7 @@ export class FilesService {
       });
       return {
         branchId: branch.branch_id,
-        branchPath: branch.path,
+        branchPath: assertManagedBranchPath(branch.path, tenantId),
         delegatedHomeKey,
         fsAccess,
         userId: currentUserId,

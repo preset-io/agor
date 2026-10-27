@@ -10,7 +10,10 @@ import { BranchDeletionRepository } from './repositories/branch-deletion';
 import { BranchMaintenanceRepository } from './repositories/branch-maintenance';
 import { BranchWorkspaceOperationRepository } from './repositories/branch-workspace-operations';
 import { BranchRepository } from './repositories/branches';
-import { seedEnvironmentCommandBranch } from './repositories/environment-commands.test-support';
+import {
+  seedEnvironmentCommandBranch,
+  setBranchPathForTest,
+} from './repositories/environment-commands.test-support';
 import { KnowledgeNamespaceRepository } from './repositories/knowledge';
 import { RepoRepository } from './repositories/repos';
 import { UsersRepository } from './repositories/users';
@@ -290,13 +293,13 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         const path = `/tmp/${generateId()}/${literal}`;
         await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
           const { branch } = await seedEnvironmentCommandBranch(scoped);
-          await new BranchRepository(scoped).update(branch.branch_id, { path });
+          await setBranchPathForTest(scoped, branch.branch_id, path);
         });
         await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
           const { branch, user } = await seedEnvironmentCommandBranch(scoped);
           const repo = new BranchRepository(scoped);
           const maintenance = new BranchMaintenanceRepository(scoped);
-          await repo.update(branch.branch_id, { path });
+          await setBranchPathForTest(scoped, branch.branch_id, path);
           // A foreign tenant's equal path must not affect admission.
           await maintenance.release((await maintenance.claim(branch.branch_id, 'cleanup')).claim);
           const lookalike = path
@@ -313,12 +316,12 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             created_by: user.user_id,
           });
           await maintenance.release((await maintenance.claim(branch.branch_id, 'cleanup')).claim);
-          await repo.update(branch.branch_id, { path: `${lookalike}/child` });
-          await repo.update(sibling.branch_id, { path });
+          await setBranchPathForTest(scoped, branch.branch_id, `${lookalike}/child`);
+          await setBranchPathForTest(scoped, sibling.branch_id, path);
           await maintenance.release((await maintenance.claim(branch.branch_id, 'cleanup')).claim);
           for (const siblingPath of [path, `${path}/child`, path.slice(0, path.lastIndexOf('/'))]) {
-            await repo.update(branch.branch_id, { path });
-            await repo.update(sibling.branch_id, { path: siblingPath });
+            await setBranchPathForTest(scoped, branch.branch_id, path);
+            await setBranchPathForTest(scoped, sibling.branch_id, siblingPath);
             await expect(maintenance.claim(branch.branch_id, 'cleanup')).rejects.toThrow(
               'overlaps'
             );

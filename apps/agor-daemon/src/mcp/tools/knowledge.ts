@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { assertManagedBranchPath } from '@agor/core/config';
 import { BranchRepository, KnowledgeNamespaceRepository } from '@agor/core/db';
 import { NotFound } from '@agor/core/feathers';
 import type {
@@ -748,7 +749,10 @@ async function runBranchKnowledgeCommand(
       daemonUrl: getDaemonUrl(),
       params: {
         ...params,
-        cwd: workspace.branch.path,
+        cwd: assertManagedBranchPath(
+          workspace.branch.path,
+          ctx.baseServiceParams.tenant?.tenant_id
+        ),
         principalBranchAccess: workspace.fsAccess,
         ...sandboxMounts,
       },

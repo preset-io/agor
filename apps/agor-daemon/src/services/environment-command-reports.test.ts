@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+import { getBranchesDir } from '@agor/core/config';
 import {
   BranchRepository,
   EnvironmentCommandRepository,
@@ -35,6 +37,10 @@ vi.mock('../utils/environment-command-dispatch.js', async (importOriginal) => ({
 }));
 afterEach(() => vi.clearAllMocks());
 const tenantId = 'environment-service-test' as TenantID;
+const seedManagedBranch = (db: Parameters<typeof seedEnvironmentCommandBranch>[0]) =>
+  seedEnvironmentCommandBranch(db, {
+    path: join(getBranchesDir(), 'fixture-repo', `env-${generateId()}`),
+  });
 const config = {
   deployment: { mode: 'ha', ha: { execution_topology: 'external' } },
   execution: {
@@ -47,7 +53,7 @@ const config = {
 
 describe('executor-owned command reports', () => {
   dbTest('uses the same attempt-scoped report protocol for a local executor', async ({ db }) => {
-    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const { branch, user } = await seedManagedBranch(db);
     const app = {
       get: () => ({
         deployment: { mode: 'single' },
@@ -111,7 +117,7 @@ describe('executor-owned command reports', () => {
   });
 
   dbTest('settles a JSON webhook through the same typed lifecycle result', async ({ db }) => {
-    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const { branch, user } = await seedManagedBranch(db);
     const app = {
       get: () => ({
         deployment: { mode: 'single' },
@@ -156,7 +162,7 @@ describe('executor-owned command reports', () => {
   dbTest(
     'records a refused launch as failed and unclaimed, and any other handoff failure as unknown',
     async ({ db }) => {
-      const { branch, user } = await seedEnvironmentCommandBranch(db);
+      const { branch, user } = await seedManagedBranch(db);
       const app = {
         get: () => config,
         sessionTokenService: { generateCommandToken: vi.fn(async () => 'test-credential') },
@@ -204,7 +210,7 @@ describe('executor-owned command reports', () => {
   dbTest(
     'returns admitted state without a claim/result waiter and settles through another service instance',
     async ({ db }) => {
-      const { branch, user } = await seedEnvironmentCommandBranch(db);
+      const { branch, user } = await seedManagedBranch(db);
       const emit = vi.fn();
       const instanceConfig = { ...config, execution: { ...config.execution } };
       const app = {
@@ -331,7 +337,7 @@ describe('executor-owned command reports', () => {
   dbTest(
     'rejects ordinary/task/foreign-scope credentials and untrusted or oversized report data',
     async ({ db }) => {
-      const { branch, user } = await seedEnvironmentCommandBranch(db);
+      const { branch, user } = await seedManagedBranch(db);
       const id = generateId();
       await new EnvironmentCommandRepository(db).admit({
         branch,

@@ -22,7 +22,13 @@ vi.mock('@agor/core/config', async (original) => ({
 vi.mock('@agor/core/db', async (original) => ({
   ...(await original<typeof import('@agor/core/db')>()),
   BranchRepository: class {
-    findById = async () => ({ path: '/tmp/branch', storage_mode: 'clone', sdk_home: null });
+    findById = async () => ({
+      path: (
+        await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config')
+      ).getBranchPath('org/repo', 'branch'),
+      storage_mode: 'clone',
+      sdk_home: null,
+    });
   },
   getMCPEgressGatewayMode: vi.fn(async () => 'off'),
 }));

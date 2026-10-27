@@ -11,6 +11,7 @@ import type { Database } from '../db/client';
 import {
   __resetConfigCacheForTests,
   AtomicConfigPublicationUnsupportedError,
+  assertManagedBranchPath,
   assertValidEffectiveExecutionConfig,
   assertValidRawConfig,
   ConfigAlreadyExistsError,
@@ -31,6 +32,7 @@ import {
   getReposDir,
   getTenantDataRoot,
   initConfig,
+  isManagedBranchPath,
   loadConfig,
   loadConfigSync,
   PublicBaseUrlNotConfiguredError,
@@ -2473,6 +2475,95 @@ describe('getBranchPath', () => {
 
     const branchPath = getBranchPath('org/repo', 'feature-branch');
     expect(branchPath).toBe('/env/data/worktrees/org/repo/feature-branch');
+  });
+
+  it.each([
+    ['org/repo', '../escape'],
+    ['org/repo', '/abs'],
+    ['org/repo', 'a//b'],
+    ['org/repo', 'a/./b'],
+    ['org/repo', 'a\\b'],
+    ['org/repo', 'a\0b'],
+    ['org/repo', ''],
+    ['../org', 'feature'],
+    ['/org/repo', 'feature'],
+  ])('rejects unsafe workspace segments %j / %j', (slug, name) => {
+    expect(() => getBranchPath(slug, name)).toThrow(/not a valid workspace path segment/);
+  });
+
+  it('allows slash-separated branch names', () => {
+    expect(getBranchPath('org/repo', 'feature/x')).toBe(
+      path.join(tempDir, '.agor', 'worktrees', 'org/repo', 'feature/x')
+    );
+  });
+});
+
+describe('managed branch path containment', () => {
+  const root = '/data/tenants/acme/worktrees';
+
+  it.each([
+    '/data/tenants/acme/worktrees/org/repo/feature',
+    '/data/tenants/acme/worktrees/org/feature',
+  ])('accepts %s', (branchPath) => {
+    expect(isManagedBranchPath(branchPath, root)).toBe(true);
+  });
+
+  it.each([
+    ['another tenant', '/data/tenants/globex/worktrees/victim-private'],
+    ['the filesystem root', '/'],
+    ['the branches root', root],
+    ['a repository directory', `${root}/org`],
+    ['a relative path', 'org/repo/feature'],
+    ['a traversal', `${root}/org/../../../globex/worktrees/x/y`],
+    ['a non-normalized path', `${root}/org//repo/feature`],
+    ['a trailing separator', `${root}/org/repo/feature/`],
+    ['a NUL byte', `${root}/org/repo/feat\0ure`],
+    ['a sibling prefix', '/data/tenants/acme/worktrees-evil/org/repo'],
+    ['a non-string', 42],
+  ])('rejects %s', (_label, branchPath) => {
+    expect(isManagedBranchPath(branchPath, root)).toBe(false);
+  });
+});
+
+describe('assertManagedBranchPath', () => {
+  let tempDir: string;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-managed-path-test-'));
+    vi.spyOn(os, 'homedir').mockReturnValue(tempDir);
+    originalEnv = { ...process.env };
+    delete process.env.AGOR_DATA_HOME;
+    __resetConfigCacheForTests();
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ multi_tenancy: { filesystem_isolation_enabled: true } }),
+      'utf-8'
+    );
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    process.env = originalEnv;
+    __resetConfigCacheForTests();
+  });
+
+  it('accepts the derived path for the same tenant', () => {
+    const branchPath = getBranchPath('org/repo', 'feature', 'acme');
+    expect(assertManagedBranchPath(branchPath, 'acme')).toBe(branchPath);
+  });
+
+  it("rejects another tenant's derived path", () => {
+    const branchPath = getBranchPath('org/repo', 'victim-private', 'globex');
+    expect(() => assertManagedBranchPath(branchPath, 'acme')).toThrow(/outside this tenant/);
+  });
+
+  it('fails closed without a tenant when filesystem isolation is enabled', () => {
+    const branchPath = getBranchPath('org/repo', 'feature', 'acme');
+    expect(() => assertManagedBranchPath(branchPath, undefined)).toThrow();
   });
 });
 

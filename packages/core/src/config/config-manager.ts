@@ -2550,7 +2550,56 @@ export function getBranchesDir(tenantId?: string): string {
  * @returns Absolute path to the branch
  */
 export function getBranchPath(repoSlug: string, branchName: string, tenantId?: string): string {
+  assertSafeWorkspaceSegments(repoSlug, 'Repository slug');
+  assertSafeWorkspaceSegments(branchName, 'Branch name');
   return path.join(getBranchesDir(tenantId), repoSlug, branchName);
+}
+
+/**
+ * Reject a relative path component sequence that could leave its parent once
+ * joined: absolute values, backslashes, NULs, and empty, `.` or `..` segments.
+ */
+export function assertSafeWorkspaceSegments(value: string, label: string): void {
+  if (
+    typeof value !== 'string' ||
+    !value ||
+    value.startsWith('/') ||
+    value.includes('\\') ||
+    value.includes('\0') ||
+    value.split('/').some((segment) => !segment || segment === '.' || segment === '..')
+  ) {
+    throw new Error(`${label} ${JSON.stringify(value)} is not a valid workspace path segment`);
+  }
+}
+
+/**
+ * Pure containment rule for a stored branch path: an absolute, normalized
+ * directory at least `<repoSlug>/<branchName>` deep below `branchesRoot`.
+ */
+export function isManagedBranchPath(branchPath: unknown, branchesRoot: string): boolean {
+  if (typeof branchPath !== 'string' || !path.isAbsolute(branchPath)) return false;
+  if (
+    branchPath.includes('\0') ||
+    branchPath.endsWith(path.sep) ||
+    path.normalize(branchPath) !== branchPath
+  )
+    return false;
+  const relative = path.relative(path.resolve(branchesRoot), branchPath);
+  if (!relative || path.isAbsolute(relative)) return false;
+  const segments = relative.split(path.sep);
+  return segments.length >= 2 && segments.every((segment) => segment && segment !== '..');
+}
+
+/**
+ * Revalidate a persisted branch path before it reaches any filesystem sink.
+ * Stored rows are not trusted: the path must sit below the caller tenant's
+ * branches root, so a historical or tampered row fails closed.
+ */
+export function assertManagedBranchPath(branchPath: unknown, tenantId?: string): string {
+  if (!isManagedBranchPath(branchPath, getBranchesDir(tenantId))) {
+    throw new Error("Branch workspace path is outside this tenant's managed branch directory");
+  }
+  return branchPath as string;
 }
 
 /**

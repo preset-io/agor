@@ -12,7 +12,10 @@ import {
 } from './branch-maintenance';
 import { BranchRepository } from './branches';
 import { EnvironmentCommandRepository } from './environment-commands';
-import { seedEnvironmentCommandBranch } from './environment-commands.test-support';
+import {
+  seedEnvironmentCommandBranch,
+  setBranchPathForTest,
+} from './environment-commands.test-support';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
@@ -147,14 +150,15 @@ for (const literal of ['percent%', 'under_score', 'escape!', 'back\\slash']) {
         .replace('_', 'X')
         .replace('!', '')
         .replace('\\', '');
-      await repo.update(branch.branch_id, {
-        path:
-          relation === 'parent'
-            ? `${path}/child`
-            : relation === 'unrelated-parent'
-              ? `${lookalike}/child`
-              : path,
-      });
+      await setBranchPathForTest(
+        db,
+        branch.branch_id,
+        relation === 'parent'
+          ? `${path}/child`
+          : relation === 'unrelated-parent'
+            ? `${lookalike}/child`
+            : path
+      );
       await repo.create({
         repo_id: branch.repo_id,
         name: 'literal-sibling',

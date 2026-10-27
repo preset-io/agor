@@ -19,6 +19,7 @@ vi.mock('@agor/core/unix', () => ({
 }));
 
 import {
+  assertBranchPathCanonicallyContained,
   buildSandboxWrap,
   type SandboxRuntimePaths,
   sandboxManagedCredentialIsolationAvailable,
@@ -37,6 +38,57 @@ const AUTHORITY_FILENAMES = [
 
 it('does not authorize managed runtime credentials when the live PID probe fails', () => {
   expect(sandboxManagedCredentialIsolationAvailable()).toBe(false);
+});
+
+describe('assertBranchPathCanonicallyContained', () => {
+  let root: string;
+  let worktrees: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'agor-branch-containment-'));
+    worktrees = join(root, 'tenants', 'acme', 'worktrees');
+    await mkdir(join(worktrees, 'org', 'repo', 'feature'), { recursive: true });
+    await mkdir(join(root, 'tenants', 'globex', 'worktrees', 'victim'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('accepts a real branch directory below the worktrees root', () => {
+    expect(() =>
+      assertBranchPathCanonicallyContained(join(worktrees, 'org', 'repo', 'feature'), worktrees)
+    ).not.toThrow();
+  });
+
+  it('accepts a missing branch directory whose ancestors stay inside the root', () => {
+    expect(() =>
+      assertBranchPathCanonicallyContained(join(worktrees, 'org', 'repo', 'pending'), worktrees)
+    ).not.toThrow();
+  });
+
+  it('rejects a branch path that is a symlink to another tenant', async () => {
+    const escapeLink = join(worktrees, 'org', 'repo', 'escape');
+    await symlink(join(root, 'tenants', 'globex', 'worktrees', 'victim'), escapeLink);
+    expect(() => assertBranchPathCanonicallyContained(escapeLink, worktrees)).toThrow(
+      /resolves outside the managed branch directory/
+    );
+  });
+
+  it('rejects a branch path below a symlinked ancestor that leaves the root', async () => {
+    await symlink(join(root, 'tenants', 'globex', 'worktrees'), join(worktrees, 'linked'));
+    expect(() =>
+      assertBranchPathCanonicallyContained(join(worktrees, 'linked', 'victim'), worktrees)
+    ).toThrow(/resolves outside the managed branch directory/);
+  });
+
+  it('accepts a symlinked worktrees root whose branch stays inside it', async () => {
+    const alias = join(root, 'alias-worktrees');
+    await symlink(worktrees, alias);
+    expect(() =>
+      assertBranchPathCanonicallyContained(join(alias, 'org', 'repo', 'feature'), alias)
+    ).not.toThrow();
+  });
 });
 
 async function waitForFile(path: string): Promise<void> {

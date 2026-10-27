@@ -1,4 +1,4 @@
-import type { AgorConfig } from '@agor/core/config';
+import { type AgorConfig, assertManagedBranchPath } from '@agor/core/config';
 import {
   BranchRepository,
   runWithTenantDatabaseScope,
@@ -54,6 +54,6 @@ export async function resolveOpenCodeConfigurationDirectory(input: {
     ) {
       throw new Forbidden('OpenCode configuration branch is not authorized.');
     }
-    return branch.path;
+    return assertManagedBranchPath(branch.path, input.context.tenantId);
   });
 }

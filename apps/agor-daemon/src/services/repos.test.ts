@@ -1,6 +1,6 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { getBranchesDir, getBranchPath } from '@agor/core/config';
 import {
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
@@ -12,15 +12,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BranchesService, type BranchParams } from './branches';
 import { ReposService } from './repos';
 
-/** Create a temp dir that looks like a materialized git checkout (has `.git`). */
+/** Create a managed branch dir that looks like a materialized git checkout (has `.git`). */
 function makeValidCheckout(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'agor-branch-'));
+  const parent = join(getBranchesDir(), 'acme/app');
+  mkdirSync(parent, { recursive: true });
+  const dir = mkdtempSync(join(parent, 'agor-branch-'));
   writeFileSync(join(dir, '.git'), 'gitdir: /somewhere/.git/worktrees/x');
   return dir;
 }
-/** A path guaranteed not to exist on disk. */
+/** A managed branch path guaranteed not to exist on disk. */
 function missingPath(): string {
-  return join(tmpdir(), `agor-missing-${Math.floor(performance.now())}-${process.pid}`);
+  return getBranchPath('acme/app', `agor-missing-${Math.floor(performance.now())}-${process.pid}`);
 }
 
 vi.mock('@agor/core/config', async (importOriginal) => {
@@ -194,7 +196,7 @@ describe('ReposService .agor.yml normalized branch access', () => {
     branch_id: '550e8400-e29b-41d4-a716-446655440002',
     repo_id: repo.repo_id,
     name: 'rbac-remodel',
-    path: '/managed/worktrees/preset-io/agor/rbac-remodel',
+    path: getBranchPath('preset-io/agor', 'rbac-remodel'),
   };
   const user = {
     user_id: '550e8400-e29b-41d4-a716-446655440004',
@@ -502,7 +504,7 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       branch_id: '550e8400-e29b-41d4-a716-446655440002',
       repo_id: repo.repo_id,
       name: 'dispatch-failure',
-      path: '/managed/worktrees/preset-io/agor/dispatch-failure',
+      path: getBranchPath('preset-io/agor', 'dispatch-failure'),
       filesystem_status: 'creating',
     };
     const failedBranch = {
@@ -575,7 +577,7 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       branch_id: '550e8400-e29b-41d4-a716-446655440002',
       repo_id: repo.repo_id,
       name: 'fix-lifecycle-identity',
-      path: '/managed/worktrees/preset-io/agor/fix-lifecycle-identity',
+      path: getBranchPath('preset-io/agor', 'fix-lifecycle-identity'),
       others_fs_access: 'read',
     };
     const branches = {
@@ -812,7 +814,7 @@ describe('ReposService.remove branch inventory', () => {
         branch_id: '550e8400-e29b-41d4-a716-446655440002',
         repo_id: repo.repo_id,
         name: 'feature',
-        path: '/managed/worktrees/preset-io/repo/feature',
+        path: getBranchPath('preset-io/repo', 'feature'),
       },
     ];
     repositoryMocks.findAllBranchesByRepoId.mockReset().mockResolvedValue(branches);

@@ -903,6 +903,19 @@ describe('BranchRepository.update', () => {
     });
   });
 
+  dbTest('never changes the server-derived workspace path', async ({ db }) => {
+    const repo = await new RepoRepository(db).create(createRepoData());
+    const branchRepo = new BranchRepository(db);
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+
+    await expect(
+      branchRepo.update(branch.branch_id, { path: '/data/tenants/globex/worktrees/victim' })
+    ).resolves.toMatchObject({ path: branch.path });
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+      path: branch.path,
+    });
+  });
+
   dbTest('adopts an SDK home stickily through the narrow transition', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const branchRepo = new BranchRepository(db);

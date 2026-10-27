@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type AgorClient, createClient } from '@agor/core/api';
-import { resolveMultiTenancyConfig } from '@agor/core/config';
+import { getBranchesDir, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   BoardRepository,
   BranchMaintenanceRepository,
@@ -88,7 +88,8 @@ for (const scenario of [
   dbTest(`archive clean → restore → new session: ${scenario}`, async ({ db: raw }) => {
     const root = await mkdtemp(join(tmpdir(), 'agor-restore-'));
     const base = join(root, 'base');
-    const path = join(root, 'home');
+    const path = join(getBranchesDir(), 'fixture/restore', `home-${generateId()}`);
+    await mkdir(join(path, '..'), { recursive: true });
     await mkdir(base);
     const { git } = createGit(base);
     await git.init(['--initial-branch=main']);
@@ -704,6 +705,7 @@ for (const scenario of [
       for (const client of observers) client.io.close();
       await server.close();
       await rm(root, { recursive: true, force: true });
+      await rm(path, { recursive: true, force: true });
     }
   });
 }

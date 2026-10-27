@@ -5,11 +5,11 @@
  * land (filesystem materialization, path-traversal defenses).
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 import { generateId } from '@agor/core';
-import { getDaemonBaseUrl } from '@agor/core/config';
+import { __resetConfigCacheForTests, getDaemonBaseUrl } from '@agor/core/config';
 import {
   ArtifactRepository,
   artifacts,
@@ -36,7 +36,7 @@ import type {
   SessionID,
   UUID,
 } from '@agor/core/types';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { hostedTenantRouting } from '../../test/hosted-tenant-routing-fixture';
 import { requestExecutor } from '../utils/spawn-executor';
@@ -229,6 +229,23 @@ describe('ArtifactsService executor sandbox ownership', () => {
   };
   const tenant = { tenant_id: 'tenant-a', source: 'auth_claim' } as const;
 
+  // Stored branch paths are revalidated against the deployment config file,
+  // so mirror the fake app's tenant storage layout there.
+  beforeEach(() => {
+    const agorHome = path.join(os.homedir(), '.agor');
+    mkdirSync(agorHome, { recursive: true });
+    writeFileSync(
+      path.join(agorHome, 'config.yaml'),
+      'multi_tenancy:\n  filesystem_isolation_enabled: true\n  tenants_base_folder: /srv/agor-tenants\n'
+    );
+    __resetConfigCacheForTests();
+  });
+
+  afterEach(() => {
+    rmSync(path.join(os.homedir(), '.agor', 'config.yaml'), { force: true });
+    __resetConfigCacheForTests();
+  });
+
   dbTest(
     'passes the authenticated actor home and tenant mounts to publish, validate, and land',
     async ({ db }) => {
@@ -238,7 +255,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
         filesystem_home: '/srv/external-homes/artifact-collaborator',
       });
       await seedUser(db, 'user-owner');
-      const branchPath = '/srv/agor-tenants/tenant-a/worktrees/artifact-branch';
+      const branchPath = '/srv/agor-tenants/tenant-a/worktrees/org/artifact-branch';
       const branch = await seedRepoAndBranch(db, branchPath);
       const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
       const serviceBranchRepo = (service as unknown as { branchRepo: BranchRepository }).branchRepo;
@@ -298,7 +315,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
       await seedUser(db, 'user-owner');
       const branch = await seedRepoAndBranch(
         db,
-        '/srv/agor-tenants/tenant-a/worktrees/canonical-artifact-branch'
+        '/srv/agor-tenants/tenant-a/worktrees/org/canonical-artifact-branch'
       );
       const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
       vi.mocked(requestExecutor).mockReset();
@@ -335,7 +352,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
       await seedUser(db, 'user-owner');
       const branch = await seedRepoAndBranch(
         db,
-        '/srv/agor-tenants/tenant-a/worktrees/missing-tenant-artifact-branch'
+        '/srv/agor-tenants/tenant-a/worktrees/org/missing-tenant-artifact-branch'
       );
       const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
       vi.mocked(requestExecutor).mockReset();
@@ -355,7 +372,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
     await seedUser(db, 'user-owner');
     const branch = await seedRepoAndBranch(
       db,
-      '/srv/agor-tenants/tenant-a/worktrees/conflicting-tenant-artifact-branch'
+      '/srv/agor-tenants/tenant-a/worktrees/org/conflicting-tenant-artifact-branch'
     );
     const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
     vi.mocked(requestExecutor).mockReset();
@@ -379,7 +396,7 @@ describe('ArtifactsService executor sandbox ownership', () => {
     await seedUser(db, 'user-owner');
     const branch = await seedRepoAndBranch(
       db,
-      '/srv/agor-tenants/tenant-a/worktrees/clone-artifact-branch',
+      '/srv/agor-tenants/tenant-a/worktrees/org/clone-artifact-branch',
       { storageMode: 'clone' }
     );
     const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));

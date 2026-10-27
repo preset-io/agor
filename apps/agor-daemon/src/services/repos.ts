@@ -12,6 +12,7 @@ import { BRANCH_FILESYSTEM_ACTIONS } from '@agor/core/types';
 
 import path from 'node:path';
 import {
+  assertManagedBranchPath,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   extractSlugFromUrl,
@@ -841,7 +842,12 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     }
 
     const tenantId = (params as AuthenticatedParams | undefined)?.tenant?.tenant_id;
-    const branchPath = getBranchPath(repo.slug, data.name, tenantId);
+    let branchPath: string;
+    try {
+      branchPath = getBranchPath(repo.slug, data.name, tenantId);
+    } catch (error) {
+      throw new BadRequest(error instanceof Error ? error.message : String(error));
+    }
 
     // Path existence + branch-in-use checks have moved to the executor /
     // core git helpers — see the "filesystem preflights" note above. Both
@@ -1071,6 +1077,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // late terminal patch may write over the newer attempt.
     const attemptId = branch.provisioning_attempt_id;
     try {
+      // Historical rows may predate server-derived paths; never materialize them.
+      assertManagedBranchPath(branch.path, tenantId ?? params?.tenant?.tenant_id);
       const sessionToken = await issueExecutorCommandToken(
         this.app,
         'git.branch.add',
@@ -1554,7 +1562,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         repoId: repo.repo_id,
         branchId: branch.branch_id,
         ...params,
-        cwd: branch.path,
+        cwd: assertManagedBranchPath(branch.path, tenantId),
         principalBranchAccess: branchFsAccess,
         ...sandboxMounts,
       },

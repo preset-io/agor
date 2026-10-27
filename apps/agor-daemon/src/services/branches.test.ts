@@ -1,3 +1,4 @@
+import { getBranchPath } from '@agor/core/config';
 import {
   BoardObjectRepository,
   BoardRepository,
@@ -562,7 +563,7 @@ describe('BranchesService environment start async behavior', () => {
       branch_id: 'wt-logs' as BranchID,
       repo_id: 'repo-1',
       name: 'wt-logs',
-      path: '/tmp/wt-logs',
+      path: getBranchPath('org/repo', 'wt-logs'),
       created_by: 'user-1' as UUID,
       primary_owner_user_id: 'owner-2' as UUID,
       branch_unique_id: 1,
@@ -627,7 +628,7 @@ describe('BranchesService environment start async behavior', () => {
       branch_id: 'wt-sbx' as BranchID,
       repo_id: 'repo-1',
       name: 'wt-sbx',
-      path: '/tmp/wt-sbx',
+      path: getBranchPath('org/repo', 'wt-sbx'),
       created_by: 'user-1' as UUID,
       primary_owner_user_id: 'owner-2' as UUID,
       branch_unique_id: 2,
@@ -683,7 +684,7 @@ describe('BranchesService environment start async behavior', () => {
       branch_id: 'wt-actor-env' as BranchID,
       repo_id: 'repo-1',
       name: 'wt-actor-env',
-      path: '/tmp/wt-actor-env',
+      path: getBranchPath('org/repo', 'wt-actor-env'),
       created_by: 'branch-owner' as UUID,
       branch_unique_id: 1,
       logs_command: 'docker compose logs --tail=100',
@@ -1050,6 +1051,28 @@ describe('BranchesService server-managed workspace fields', () => {
         });
       }
       expect(repository.findById).not.toHaveBeenCalled();
+      expect(repository.update).not.toHaveBeenCalled();
+    }
+  );
+});
+
+describe('BranchesService server-derived workspace path', () => {
+  it.each(['/data/tenants/globex/worktrees/victim-private', '/', '../escape'])(
+    'rejects path %j on patch and update for external and internal callers',
+    async (path) => {
+      const branchId = 'workspace-path' as BranchID;
+      const { service, repository } = createPatchHarness({
+        current: { branch_id: branchId },
+        updated: { branch_id: branchId },
+      });
+      for (const method of ['patch', 'update'] as const) {
+        for (const params of [{ provider: 'rest' }, undefined]) {
+          await expect(service[method](branchId, { path }, params)).rejects.toMatchObject({
+            code: 400,
+            message: 'path is server-managed and cannot be changed through the Branch API.',
+          });
+        }
+      }
       expect(repository.update).not.toHaveBeenCalled();
     }
   );
@@ -3205,6 +3228,46 @@ describe('BranchesService.patch provisioning attempt fence', () => {
     );
     expect(repository.update).not.toHaveBeenCalled();
   });
+});
+
+describe('BranchesService.create server-derived workspace path', () => {
+  function harness() {
+    const get = vi.fn(async () => ({ repo_id: 'repo', slug: 'org/repo' }));
+    const app = { get: () => ({}), service: () => ({ get }) } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    const internal = service as unknown as {
+      applyBranchCreateDefaults: (
+        data: Partial<import('@agor/core/types').Branch>,
+        params?: unknown
+      ) => Promise<Partial<import('@agor/core/types').Branch>>;
+    };
+    return { internal, get };
+  }
+  const external = { provider: 'rest', user: { user_id: 'caller' as UserID, role: 'member' } };
+
+  it('replaces a client-supplied path with the derived tenant workspace', async () => {
+    const { internal, get } = harness();
+    const result = await internal.applyBranchCreateDefaults(
+      {
+        repo_id: 'repo' as UUID,
+        name: 'feature',
+        path: '/data/tenants/globex/worktrees/victim-private',
+      },
+      external
+    );
+    expect(get).toHaveBeenCalledWith('repo', external);
+    expect(result.path).toBe(getBranchPath('org/repo', 'feature'));
+  });
+
+  it.each(['../../globex/worktrees/victim', '/abs', 'a/../b', ''])(
+    'rejects unsafe branch name %j',
+    async (name) => {
+      const { internal } = harness();
+      await expect(
+        internal.applyBranchCreateDefaults({ repo_id: 'repo' as UUID, name }, external)
+      ).rejects.toMatchObject({ code: 400 });
+    }
+  );
 });
 
 describe('server-selected local teammate homes', () => {

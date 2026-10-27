@@ -1,4 +1,6 @@
+import { join } from 'node:path';
 import { createClient } from '@agor/core/api';
+import { getBranchesDir } from '@agor/core/config';
 import {
   BoardRepository,
   BranchRepository,
@@ -68,7 +70,7 @@ dbTest(
       board_id: board.board_id,
       name: 'Fictional home',
       ref: 'home',
-      path: '/fictional/missing-home',
+      path: join(getBranchesDir(), 'fictional/template', 'missing-home'),
       branch_unique_id: 1,
       created_by: owner.user_id,
       archived: true,

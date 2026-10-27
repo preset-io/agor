@@ -23,6 +23,7 @@ import {
 } from '@agor/core/codex/credential-file';
 import {
   type AgorConfig,
+  assertManagedBranchPath,
   getBaseUrl,
   getBranchHomePath,
   isDeploymentAgenticToolAvailable,
@@ -1477,7 +1478,11 @@ export function createExecuteHandler(
           const repo = await new RepoRepository(tenantDb).findById(branch.repo_id);
           baseRepoPath = repo?.local_path ?? undefined;
         }
-        return { path: branch.path, baseRepoPath, sdkHome: branch.sdk_home ?? null };
+        return {
+          path: assertManagedBranchPath(branch.path, tenantId),
+          baseRepoPath,
+          sdkHome: branch.sdk_home ?? null,
+        };
       });
       if (!branchMounts)
         throw new Error(`Branch ${session.branch_id} not found for executor startup`);

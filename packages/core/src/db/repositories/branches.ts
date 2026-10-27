@@ -858,6 +858,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         ...updates,
         branch_id: current.branch_id, // Never change ID
         repo_id: current.repo_id, // Never change repo
+        path: current.path, // Server-derived at creation; filesystem sinks trust it
         created_at: current.created_at, // Never change created timestamp
         updated_at: options?.preserveUpdatedAt ? current.updated_at : new Date().toISOString(),
       });

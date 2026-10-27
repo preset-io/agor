@@ -85,6 +85,7 @@ Reuse these instead of adding local tenant plumbing:
 | Per-tenant erasure                                                                                                         | `packages/core/src/db/tenant-delete.ts` (combined proof) + `tenant-deletion.ts` (audited DB engine) + `tenant-filesystem.ts` (safe explicit-root primitives)          |
 | Per-tenant inspect/export/import/verify (portability)                                                                      | `packages/core/src/db/tenant-{catalog,portability-manifest,archive,database-io,filesystem,inspect,export,import,verify}.ts`                                           |
 | Per-tenant write gate (generation-bound, app-layer fail-closed gate — not a DB lock/fence; consistency relies on `verify`) | `packages/core/src/db/tenant-write-gate.ts`; enforced in `register-hooks.ts` (`writeGateBefore`) + `utils/tenant-db-scope.ts` + `utils/session-queue-tenant-scope.ts` |
+| Branch workspace paths (server-derived at creation, immutable, revalidated before every filesystem/executor sink)          | `getBranchPath` + `assertManagedBranchPath` in `packages/core/src/config/config-manager.ts`; symlink containment in `utils/sandbox-wrap.ts`                           |
 
 RLS protects database rows, not files, object storage, caches, tokens, realtime
 rooms, processes, or external side effects. Scope those at their own owner.

@@ -22,7 +22,7 @@
  */
 
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES } from '@agor/core/codex/credential-file';
 import {
   type AgorSandboxSettings,
@@ -30,6 +30,7 @@ import {
   type SandboxPathContext,
 } from '@agor/core/config';
 import { probeBwrapPidNamespace, probeBwrapSecurityBaseline } from '@agor/core/unix';
+import { canonicalizeProspectivePath } from './sandbox-context.js';
 
 export interface SandboxWrap {
   cmd: string;
@@ -50,6 +51,30 @@ export interface SandboxRuntimePaths {
 
 function canonicalizeExistingPath(path: string): string {
   return existsSync(path) ? realpathSync(path) : resolve(path);
+}
+
+function isWithinDirectory(path: string, root: string): boolean {
+  const rel = relative(root, path);
+  return !!rel && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * A branch path below the worktrees root must stay there after symlink
+ * resolution; otherwise bubblewrap would mount the symlink target.
+ */
+export function assertBranchPathCanonicallyContained(
+  branchPath: string,
+  worktreesRoot: string
+): void {
+  if (!isWithinDirectory(resolve(branchPath), resolve(worktreesRoot))) return;
+  if (
+    !isWithinDirectory(
+      canonicalizeProspectivePath(branchPath),
+      canonicalizeProspectivePath(worktreesRoot)
+    )
+  ) {
+    throw new Error('Branch workspace path resolves outside the managed branch directory');
+  }
 }
 
 // SECURITY + FUNCTIONAL availability: bwrap must be 0.12.0+ (safe sandbox
@@ -159,6 +184,8 @@ export function buildSandboxWrap(params: {
     console.warn(`[Sandbox] ${unavailableReason} — spawning executor UNSANDBOXED.`);
     return null;
   }
+
+  assertBranchPathCanonicallyContained(branchPath, worktreesRoot ?? runtimePaths.worktreesRoot);
 
   const home = runtimePaths.homeDir;
   const dataHome = runtimePaths.dataHome;

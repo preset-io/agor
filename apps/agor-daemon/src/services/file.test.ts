@@ -1,3 +1,4 @@
+import { getBranchPath } from '@agor/core/config';
 import {
   getCurrentTenantDatabaseScope,
   RepoRepository,
@@ -28,9 +29,11 @@ function createApp(config = {}) {
   } as never;
 }
 
+const BRANCH_PATH = getBranchPath('org/repo', 'branch-1');
+
 const branch = {
   branch_id: 'branch-1',
-  path: '/tenant-a/branch-1',
+  path: BRANCH_PATH,
   repo_id: 'repo-1',
   storage_mode: 'worktree',
   primary_owner_user_id: 'branch-owner',
@@ -205,7 +208,7 @@ describe('FileService executor failures', () => {
         expect.objectContaining({
           command,
           params: expect.objectContaining({
-            cwd: '/tenant-a/branch-1',
+            cwd: BRANCH_PATH,
             principalBranchAccess: 'read',
           }),
         }),
@@ -342,7 +345,7 @@ describe('FileService executor failures', () => {
     await runWithTenantContext('tenant-a', () =>
       service.find({
         query: { branch_id: 'branch-1' },
-        branch: { branch_id: 'branch-1', path: '/tenant-a/branch-1' },
+        branch: { branch_id: 'branch-1', path: BRANCH_PATH },
         user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
       } as never)
     );

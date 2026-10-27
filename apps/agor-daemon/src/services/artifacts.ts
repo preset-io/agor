@@ -14,7 +14,12 @@
 
 import { createHash } from 'node:crypto';
 import * as path from 'node:path';
-import { getDaemonBaseUrl, PAGINATION, resolveUserEnvironment } from '@agor/core/config';
+import {
+  assertManagedBranchPath,
+  getDaemonBaseUrl,
+  PAGINATION,
+  resolveUserEnvironment,
+} from '@agor/core/config';
 import {
   type ArtifactListProjection,
   ArtifactRepository,
@@ -327,6 +332,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * same mount family. Keep this caller-specific resolver local until a shared
    * helper can preserve each path's DB/tenant contract with integration tests.
    */
+  /** Revalidate the stored branch path against the active tenant's branch root. */
+  private branchWorkspacePath(branch: Branch, params: ArtifactParams): string {
+    const tenantId = getCurrentTenantId() ?? params.tenant?.tenant_id;
+    return assertManagedBranchPath(branch.path, tenantId ? String(tenantId) : undefined);
+  }
+
   private async resolveExecutorSandboxMounts(
     branch: Branch,
     userId: UserID,
@@ -621,7 +632,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           branchId: branch.branch_id,
           subpath: data.subpath,
           publishData: data,
-          cwd: branch.path,
+          cwd: this.branchWorkspacePath(branch, params),
           principalBranchAccess: branchFsAccess,
           ...sandboxMounts,
         },
@@ -1109,7 +1120,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           artifactId,
           subpath: options.subpath,
           overwrite: options.overwrite,
-          cwd: branch.path,
+          cwd: this.branchWorkspacePath(branch, params),
           principalBranchAccess: branchFsAccess,
           ...sandboxMounts,
         },
@@ -1850,7 +1861,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         params: {
           branchId: branch.branch_id,
           subpath: input.subpath,
-          cwd: branch.path,
+          cwd: this.branchWorkspacePath(branch, params),
           principalBranchAccess: branchFsAccess,
           ...sandboxMounts,
         },
