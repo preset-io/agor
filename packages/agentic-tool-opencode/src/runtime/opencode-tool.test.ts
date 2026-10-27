@@ -477,17 +477,25 @@ describe('OpenCodeTool permission rejections', () => {
     permissionMode?: string;
     canUseTool?: OpenCodeCanUseToolCallback;
     mcpToolPermissions?: ReadonlyMap<string, 'allow' | 'ask' | 'deny'>;
+    /** A parallel request OpenCode has already settled by the time Agor answers it. */
+    settledSibling?: string;
   }) {
     const replied = deferred<void>();
-    const reply = vi.fn(async (_request: Record<string, unknown>) => {
+    const reply = vi.fn(async (request: Record<string, unknown>) => {
       replied.resolve();
-      return { data: true, error: undefined };
+      return request.requestID === 'per-2'
+        ? {
+            data: undefined,
+            error: { _tag: 'PermissionNotFoundError', requestID: 'per-2', message: 'not found' },
+          }
+        : { data: true, error: undefined };
     });
     const stream = (async function* () {
       yield assistant;
       yield part('r-1', 'reasoning');
       yield delta('r-1', 'Thinking about it.');
       yield asked('per-1', options.permission);
+      if (options.settledSibling) yield asked('per-2', options.settledSibling);
       await replied.promise;
       yield part('t-1', 'text');
       yield delta('t-1', 'Carrying on without it.');
@@ -639,6 +647,30 @@ describe('OpenCodeTool permission rejections', () => {
       });
     }
   );
+
+  it('lets the turn finish when a parallel request was already settled by the rejection', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { result, reply } = permissionTurn({
+        permission: MCP_TOOL,
+        permissionMode: 'yolo',
+        mcpToolPermissions: new Map([[MCP_TOOL, 'deny' as const]]),
+        settledSibling: 'bash',
+      });
+
+      const outcome = await result;
+      expect(outcome.finalMessage.content).toBe('Carrying on without it.');
+      expect(outcome.permissionRejections).toEqual([
+        { permission: MCP_TOOL, reason: 'tool_permissions_deny' },
+      ]);
+      expect(reply).toHaveBeenCalledTimes(2);
+      expect(reply).toHaveBeenLastCalledWith(
+        expect.objectContaining({ requestID: 'per-2', reply: 'once' })
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
 
   it('still fails the turn on an approval timeout, naming the permission', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);

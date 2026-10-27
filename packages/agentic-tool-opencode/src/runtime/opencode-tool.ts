@@ -452,7 +452,9 @@ async function applyPermissionEffect(input: {
     reply: response,
     ...(rejection ? { message: permissionRejectionFeedback(rejection) } : {}),
   });
-  if (reply.error) {
+  // A reject (or `always`) settles the session's other pending requests too, so a queued one is gone.
+  const alreadySettled = reply.error?._tag === 'PermissionNotFoundError';
+  if (reply.error && !alreadySettled) {
     throw new Error(`OpenCode failed to apply the permission decision for "${permission}"`);
   }
   if (rejection?.reason === 'approval_timed_out') {
@@ -460,7 +462,7 @@ async function applyPermissionEffect(input: {
       `OpenCode permission "${permission}" was rejected (approval_timed_out)`
     );
   }
-  return rejection;
+  return alreadySettled ? undefined : rejection;
 }
 
 /** How long a turn waits out provider retries before failing with the provider's reason. */
