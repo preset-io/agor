@@ -23,7 +23,7 @@ interface ReleaseNotesController {
 
 const ReleaseNotesContext = createContext<ReleaseNotesController | null>(null);
 
-/** Null outside the provider or when the daemon has release notes turned off. */
+/** Null outside the provider, when release notes are off, or before the source first answers. */
 export const useReleaseNotes = () => useContext(ReleaseNotesContext);
 
 export function ReleaseNotesProvider({
@@ -106,10 +106,13 @@ export function ReleaseNotesProvider({
     [markSeen]
   );
 
+  // Nothing renders until the source has answered once, so a Cloud cell that
+  // ships before its release-notes endpoint shows no bell and no empty drawer.
+  const shown = active && !!feed?.available;
   const value = useMemo(
     () =>
-      active ? { feed, drawerOpen, newNoteIds, openDrawer, closeDrawer, markMajorsSeen } : null,
-    [active, feed, drawerOpen, newNoteIds, openDrawer, closeDrawer, markMajorsSeen]
+      shown ? { feed, drawerOpen, newNoteIds, openDrawer, closeDrawer, markMajorsSeen } : null,
+    [shown, feed, drawerOpen, newNoteIds, openDrawer, closeDrawer, markMajorsSeen]
   );
   return <ReleaseNotesContext.Provider value={value}>{children}</ReleaseNotesContext.Provider>;
 }

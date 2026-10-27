@@ -67,6 +67,7 @@ const notes: ReleaseNoteDTO[] = [
 
 const feed = (overrides: Partial<ReleaseNotesFeed> = {}): ReleaseNotesFeed => ({
   source: 'cloud',
+  available: true,
   notes,
   last_seen_at: null,
   unread_note_ids: ['r2', 'r1'],
@@ -156,6 +157,14 @@ it('falls back to text only when the visual fails to load', async () => {
 
   expect(document.querySelector('img')).toBeNull();
   expect(screen.getByText('Zones can arrange your cards')).toBeInTheDocument();
+});
+
+it('shows nothing until the source has answered once', async () => {
+  const { find } = setup(feed({ available: false, notes: [] }));
+
+  await waitFor(() => expect(find).toHaveBeenCalled());
+  expect(screen.queryByRole('button', { name: /What's new/ })).not.toBeInTheDocument();
+  expect(screen.queryByText('New in Agor')).not.toBeInTheDocument();
 });
 
 it('waits while onboarding is open', async () => {
