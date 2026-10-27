@@ -1,6 +1,7 @@
 import { getBranchPath } from '@agor/core/config';
 import {
   BoardRepository,
+  BranchMaintenanceRepository,
   createTenantScopedDatabaseProxy,
   RepoRepository,
   runWithTenantDatabaseScope,
@@ -9,7 +10,10 @@ import {
 import { Conflict } from '@agor/core/feathers';
 import type { TenantID } from '@agor/core/types';
 import { expect, vi } from 'vitest';
-import { setBranchPathForTest } from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
+import {
+  createBranchAtPathForTest,
+  setBranchPathForTest,
+} from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { boardMetadataTestApp } from '../../test/board-metadata-app';
 import type { RegisterHooksContext } from '../register-hooks';
@@ -108,6 +112,25 @@ dbTest.for([
       expect((await create(attacker.repo_id, 'other')).path).toBe(
         getBranchPath('org/v', 'other', 'slug-rename-test')
       );
+
+      // A pair that predates the fence (planted directly) must not let the
+      // attacker's row delete or rewrite the victim's directory either.
+      const planted = await scoped(() =>
+        createBranchAtPathForTest(db, {
+          repo_id: attacker.repo_id,
+          name: 'planted',
+          ref: 'planted',
+          branch_unique_id: 9700001,
+          path: getBranchPath('org/v', 'feature', 'slug-rename-test'),
+          created_by: owner.user_id,
+          archived: true,
+        })
+      );
+      for (const kind of ['delete', 'cleanup', 'workspace_write'] as const) {
+        await expect(
+          scoped(() => new BranchMaintenanceRepository(db).claim(planted.branch_id, kind))
+        ).rejects.toThrow('overlaps');
+      }
     } finally {
       await server.close();
       vi.unstubAllEnvs();
