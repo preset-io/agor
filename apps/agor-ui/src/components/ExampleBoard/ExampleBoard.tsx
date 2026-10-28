@@ -18,20 +18,23 @@ export const ExampleBoardBanner: React.FC<{ boardId: string }> = ({ boardId }) =
       type="info"
       showIcon
       banner
-      title="This is an example board with made-up data. Look around, nothing here runs."
-      action={
-        actions && (
-          <Flex gap="small" wrap>
-            {actions.makeYourOwn && (
-              <Button type="primary" size="small" onClick={() => actions.makeYourOwn?.('banner')}>
-                Make your own
+      // Buttons share the message row so they wrap below the text on phones instead of squeezing it.
+      title={
+        <Flex align="center" justify="space-between" gap="small" wrap>
+          <span>This is an example board with made-up data. Look around, nothing here runs.</span>
+          {actions && (
+            <Flex gap="small">
+              {actions.makeYourOwn && (
+                <Button type="primary" size="small" onClick={() => actions.makeYourOwn?.('banner')}>
+                  Make your own
+                </Button>
+              )}
+              <Button type="text" size="small" onClick={actions.hide}>
+                Hide example
               </Button>
-            )}
-            <Button type="text" size="small" onClick={actions.hide}>
-              Hide example
-            </Button>
-          </Flex>
-        )
+            </Flex>
+          )}
+        </Flex>
       }
       style={{ flexShrink: 0 }}
     />

@@ -318,7 +318,10 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     if (primaryTeammateBranch || primaryTeammateInaccessible) return [];
 
     return Array.from(branchById.values())
-      .filter((branch) => isTeammate(branch) && !branch.archived)
+      .filter(
+        (branch) =>
+          isTeammate(branch) && !branch.archived && !isExampleOwned(branch, exampleOwnerId)
+      )
       .sort((a, b) => {
         const aConfig = getTeammateConfig(a);
         const bConfig = getTeammateConfig(b);
@@ -336,7 +339,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           repo,
         };
       });
-  }, [branchById, primaryTeammateBranch, primaryTeammateInaccessible, repoById]);
+  }, [branchById, primaryTeammateBranch, primaryTeammateInaccessible, repoById, exampleOwnerId]);
   const [selectedTeammateId, setSelectedTeammateId] = useState<string | undefined>();
   const [assigningTeammate, setAssigningTeammate] = useState(false);
 

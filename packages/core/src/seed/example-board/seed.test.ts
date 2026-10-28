@@ -180,6 +180,14 @@ describe('example board exclusions', () => {
     ).toBeNull();
   });
 
+  dbTest('cannot become any board primary teammate', async ({ db }) => {
+    const { board_id } = await seedExampleBoard(db);
+    const wendy = (await new BranchRepository(db).findAll()).find((b) => isTeammate(b))!;
+    await expect(
+      new BoardRepository(db).setPrimaryTeammate(board_id!, wendy.branch_id)
+    ).rejects.toThrow('The example teammate cannot be a primary teammate');
+  });
+
   dbTest('cannot be a gateway target', async ({ db }) => {
     await seedExampleBoard(db);
     const [branch] = await new BranchRepository(db).findAll();
