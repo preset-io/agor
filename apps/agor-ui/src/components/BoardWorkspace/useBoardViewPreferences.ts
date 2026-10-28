@@ -11,6 +11,8 @@ export interface BoardViewPreferences {
   sort: BranchSort;
   expanded: Record<string, boolean>;
   scrollTop: number;
+  treeNavigatorSize: number;
+  boardCanvasSize: number;
 }
 const DEFAULTS: BoardViewPreferences = {
   view: 'tree',
@@ -18,6 +20,8 @@ const DEFAULTS: BoardViewPreferences = {
   sort: 'alpha',
   expanded: {},
   scrollTop: 0,
+  treeNavigatorSize: 32,
+  boardCanvasSize: 55,
 };
 const CHANGE_EVENT = 'agor:board-view-preferences';
 const memoryFallback = new Map<string, string>();
@@ -28,6 +32,11 @@ const memoryFallback = new Map<string, string>();
 export function boardViewPreferenceKey(workspace: string, userId: string, boardId: string) {
   return `agor:board-view:v1:${JSON.stringify([workspace, userId, boardId])}`;
 }
+function parseSplitSize(value: unknown, fallback: number) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(75, Math.max(25, value))
+    : fallback;
+}
 export function parseBoardViewPreferences(raw: unknown): BoardViewPreferences {
   if (!raw || typeof raw !== 'object') return DEFAULTS;
   const value = raw as Partial<BoardViewPreferences>;
@@ -35,6 +44,8 @@ export function parseBoardViewPreferences(raw: unknown): BoardViewPreferences {
     view: value.view === 'board' ? 'board' : 'tree',
     tab: value.tab === 'content' || value.tab === 'comments' ? value.tab : 'sessions',
     sort: value.sort === 'recent' ? 'recent' : 'alpha',
+    treeNavigatorSize: parseSplitSize(value.treeNavigatorSize, DEFAULTS.treeNavigatorSize),
+    boardCanvasSize: parseSplitSize(value.boardCanvasSize, DEFAULTS.boardCanvasSize),
     expanded: Object.fromEntries(
       Object.entries(value.expanded ?? {}).filter(([, v]) => typeof v === 'boolean')
     ),

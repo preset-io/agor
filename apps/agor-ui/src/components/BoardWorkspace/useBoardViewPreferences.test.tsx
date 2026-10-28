@@ -25,22 +25,62 @@ describe('board view preferences', () => {
       ({ user, board }) => useBoardViewPreferences(user, board),
       { initialProps: { user: 'a', board: 'one' } }
     );
-    act(() => result.current[1]({ view: 'board', expanded: { branch: true }, sort: 'recent' }));
+    act(() =>
+      result.current[1]({
+        view: 'board',
+        expanded: { branch: true },
+        sort: 'recent',
+        treeNavigatorSize: 40,
+        boardCanvasSize: 60,
+      })
+    );
     rerender({ user: 'b', board: 'one' });
-    expect(result.current[0]).toMatchObject({ view: 'tree', expanded: {}, sort: 'alpha' });
+    expect(result.current[0]).toMatchObject({
+      view: 'tree',
+      expanded: {},
+      sort: 'alpha',
+      treeNavigatorSize: 32,
+      boardCanvasSize: 55,
+    });
     act(() => result.current[1]({ tab: 'content' }));
     rerender({ user: 'a', board: 'two' });
-    expect(result.current[0]).toMatchObject({ view: 'tree', tab: 'sessions', expanded: {} });
+    expect(result.current[0]).toMatchObject({
+      view: 'tree',
+      tab: 'sessions',
+      expanded: {},
+      treeNavigatorSize: 32,
+      boardCanvasSize: 55,
+    });
     rerender({ user: 'a', board: 'one' });
     expect(result.current[0]).toMatchObject({
       view: 'board',
       sort: 'recent',
       expanded: { branch: true },
       tab: 'sessions',
+      treeNavigatorSize: 40,
+      boardCanvasSize: 60,
     });
     expect(boardViewPreferenceKey('/workspace-a', 'a', 'one')).not.toBe(
       boardViewPreferenceKey('/workspace-b', 'a', 'one')
     );
+  });
+  it('validates split sizes and supplies defaults for existing preferences', () => {
+    expect(parseBoardViewPreferences({ view: 'board' })).toMatchObject({
+      treeNavigatorSize: 32,
+      boardCanvasSize: 55,
+    });
+    expect(
+      parseBoardViewPreferences({ treeNavigatorSize: -20, boardCanvasSize: 200 })
+    ).toMatchObject({
+      treeNavigatorSize: 25,
+      boardCanvasSize: 75,
+    });
+    expect(
+      parseBoardViewPreferences({ treeNavigatorSize: NaN, boardCanvasSize: '60' })
+    ).toMatchObject({
+      treeNavigatorSize: 32,
+      boardCanvasSize: 55,
+    });
   });
   it('does not persist anonymous or boardless navigation', () => {
     const { result } = renderHook(() => useBoardViewPreferences(undefined, 'one'));

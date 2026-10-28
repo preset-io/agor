@@ -1,7 +1,13 @@
 import type { Board, Branch } from '@agor-live/client';
 import { ApartmentOutlined, AppstoreOutlined } from '@ant-design/icons';
 import { Button, Drawer, Empty, Flex, Segmented, Space, theme } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ImperativePanelGroupHandle,
+  Panel,
+  PanelGroup,
+  PanelResizeHandle,
+} from 'react-resizable-panels';
 import { useLocation } from 'react-router-dom';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useAgorStore } from '../../store/agorStore';
@@ -101,6 +107,32 @@ export function BoardWorkspace({
     (content?.route === location.key ? content.target : null) ?? artifactSelection;
   const detailOpen = Boolean(selectedContent || branch);
   const tree = preferences.view === 'tree';
+  const splitId = useId();
+  const splitRef = useRef<ImperativePanelGroupHandle>(null);
+  const draggingRef = useRef(false);
+  const keyboardResizeRef = useRef(false);
+  const showDetail = compact
+    ? conversationOpen || detailOpen
+    : tree || conversationOpen || detailOpen;
+  const showNavigator = !compact || !showDetail;
+  const split = showNavigator && showDetail;
+  const desiredSize = tree ? preferences.treeNavigatorSize : preferences.boardCanvasSize;
+  // Keep both panels (and the transcript) mounted across views. Only deliberate
+  // pointer/keyboard resizing writes local preferences; closing a pane or moving
+  // to the phone shell must not replace the saved desktop split with 0/100.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: navigation and identity changes end a resize gesture
+  useLayoutEffect(() => {
+    draggingRef.current = false;
+    keyboardResizeRef.current = false;
+  }, [preferences.view, compact, showDetail, actions.currentUserId, board.board_id]);
+  useEffect(() => {
+    const size = split ? desiredSize : showNavigator ? 100 : 0;
+    // The library's server build has no registered panels; defaults also cover
+    // the first render before the client group has finished registering them.
+    if (splitRef.current?.getLayout().length === 2) {
+      splitRef.current.setLayout([size, 100 - size]);
+    }
+  }, [desiredSize, split, showNavigator]);
   const changeView = (view: BoardView) => updatePreferences({ view });
   const openContent = (selection: BoardContentSelection) => {
     const object = board.objects?.[selection.id];
@@ -147,101 +179,130 @@ export function BoardWorkspace({
           </Space>
         )}
       </Flex>
-      <Flex style={{ flex: 1, minHeight: 0 }}>
-        {/* Keep the navigator's scroll position on view switches, without giving
-          Board a companion panel. Hidden children cannot take keyboard focus. */}
-        <nav
-          aria-label="Board navigator"
-          hidden={!tree || (compact && detailOpen)}
-          style={{
-            width: compact ? '100%' : 320,
-            minWidth: 280,
-            maxWidth: compact ? '100%' : '40%',
-            flexShrink: 0,
-            borderRight: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
-          }}
-        >
-          <BoardTreeNavigator
-            board={board}
-            branches={branches}
-            actions={{
-              ...actions,
-              onSessionClick: (id) => {
-                setContent(null);
-                actions.onSessionClick(id);
-              },
-            }}
-            preferences={preferences}
-            updatePreferences={updatePreferences}
-            onBranchClick={(id) => {
-              setContent(null);
-              (onBranchClick ?? navigation.goToBranch)(id);
-            }}
-            onContentClick={openContent}
-          />
-        </nav>
-        <div
-          hidden={tree || (compact && detailOpen)}
-          style={{ flex: 1, minWidth: 0, height: '100%', position: 'relative' }}
-        >
-          {(canvasVisited || !tree) && canvas}
-        </div>
-        <section
-          aria-label="Board detail"
-          hidden={
-            compact ? !conversationOpen && !detailOpen : !tree && !conversationOpen && !detailOpen
+      <PanelGroup
+        ref={splitRef}
+        direction="horizontal"
+        style={{ flex: 1, minHeight: 0 }}
+        onLayout={(sizes) => {
+          if (split && (draggingRef.current || keyboardResizeRef.current) && sizes.length === 2) {
+            updatePreferences(
+              tree ? { treeNavigatorSize: sizes[0] } : { boardCanvasSize: sizes[0] }
+            );
           }
-          style={{
-            flex: tree ? 1 : undefined,
-            width: compact ? '100%' : tree ? undefined : '45%',
-            minWidth: 0,
-            height: '100%',
-            borderLeft: !tree
-              ? `${token.lineWidth}px solid ${token.colorBorderSecondary}`
-              : undefined,
-          }}
+        }}
+      >
+        <Panel
+          id={`${splitId}-navigator`}
+          order={1}
+          defaultSize={desiredSize}
+          minSize={split ? 25 : showNavigator ? 100 : 0}
+          maxSize={split ? 75 : showNavigator ? 100 : 0}
+          style={{ display: showNavigator ? undefined : 'none' }}
         >
-          <div hidden={detailOpen} style={{ height: '100%' }}>
-            {conversationOpen ? (
-              conversation
-            ) : (
-              <Empty
-                style={{ marginTop: token.marginXL }}
-                description="Choose a session, or start one on a teammate or branch."
+          {/* Keep the navigator's scroll position on view switches, without giving
+          Board a companion panel. Hidden children cannot take keyboard focus. */}
+          <nav
+            aria-label="Board navigator"
+            hidden={!tree}
+            style={{
+              height: '100%',
+              minWidth: 0,
+            }}
+          >
+            <BoardTreeNavigator
+              board={board}
+              branches={branches}
+              actions={{
+                ...actions,
+                onSessionClick: (id) => {
+                  setContent(null);
+                  actions.onSessionClick(id);
+                },
+              }}
+              preferences={preferences}
+              updatePreferences={updatePreferences}
+              onBranchClick={(id) => {
+                setContent(null);
+                (onBranchClick ?? navigation.goToBranch)(id);
+              }}
+              onContentClick={openContent}
+            />
+          </nav>
+          <div hidden={tree} style={{ flex: 1, minWidth: 0, height: '100%', position: 'relative' }}>
+            {(canvasVisited || !tree) && canvas}
+          </div>
+        </Panel>
+        {split && (
+          <PanelResizeHandle
+            aria-label={tree ? 'Resize tree and detail' : 'Resize board and detail'}
+            hitAreaMargins={{ fine: 7, coarse: 17 }}
+            onDragging={(dragging) => {
+              draggingRef.current = dragging;
+            }}
+            onKeyDownCapture={(event) => {
+              keyboardResizeRef.current = ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(
+                event.key
+              );
+            }}
+            onKeyUpCapture={() => {
+              keyboardResizeRef.current = false;
+            }}
+            onBlur={() => {
+              keyboardResizeRef.current = false;
+            }}
+            style={{ width: 4, background: token.colorBorderSecondary }}
+          />
+        )}
+        <Panel
+          id={`${splitId}-detail`}
+          order={2}
+          minSize={split ? 25 : showDetail ? 100 : 0}
+          maxSize={split ? 75 : showDetail ? 100 : 0}
+          style={{ display: showDetail ? undefined : 'none' }}
+        >
+          <section aria-label="Board detail" style={{ minWidth: 0, height: '100%' }}>
+            <div hidden={detailOpen} style={{ height: '100%' }}>
+              {conversationOpen ? (
+                conversation
+              ) : (
+                <Empty
+                  style={{ marginTop: token.marginXL }}
+                  description="Choose a session, or start one on a teammate or branch."
+                />
+              )}
+            </div>
+            {selectedContent && (
+              <BoardContentDetail
+                key={`${selectedContent.kind}:${selectedContent.id}`}
+                board={board}
+                client={actions.client}
+                user={user}
+                selection={selectedContent}
+                onClose={() => {
+                  setContent(null);
+                  if (activeArtifactId) navigation.goToBoard(board.board_id);
+                }}
               />
             )}
-          </div>
-          {selectedContent && (
-            <BoardContentDetail
-              key={`${selectedContent.kind}:${selectedContent.id}`}
-              board={board}
-              client={actions.client}
-              user={user}
-              selection={selectedContent}
-              onClose={() => {
-                setContent(null);
-                if (activeArtifactId) navigation.goToBoard(board.board_id);
-              }}
-            />
-          )}
-          {!selectedContent && branch && (
-            <div style={{ height: '100%', overflow: 'auto', padding: token.padding }}>
-              <Flex justify="end" style={{ marginBottom: token.marginSM }}>
-                <Button onClick={() => navigation.goToBoard(board.board_id)}>Close branch</Button>
-              </Flex>
-              <BranchCard
-                {...actions}
-                branch={branch}
-                repo={repos.get(branch.repo_id)}
-                sessions={branchSessions ?? []}
-                userById={users}
-                onOpenSettings={actions.onOpenSettings}
-                panelMode
-              />
-            </div>
-          )}
-        </section>
-      </Flex>
+            {!selectedContent && branch && (
+              <div style={{ height: '100%', overflow: 'auto', padding: token.padding }}>
+                <Flex justify="end" style={{ marginBottom: token.marginSM }}>
+                  <Button onClick={() => navigation.goToBoard(board.board_id)}>Close branch</Button>
+                </Flex>
+                <BranchCard
+                  {...actions}
+                  branch={branch}
+                  repo={repos.get(branch.repo_id)}
+                  sessions={branchSessions ?? []}
+                  userById={users}
+                  onOpenSettings={actions.onOpenSettings}
+                  panelMode
+                />
+              </div>
+            )}
+          </section>
+        </Panel>
+      </PanelGroup>
       <Drawer
         open={teammateOpen}
         title="Primary teammate"

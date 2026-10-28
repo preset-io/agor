@@ -1,5 +1,5 @@
 import type { AgorClient, Board, Branch, Repo, Session, User } from '@agor-live/client';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App, ConfigProvider, Input, theme } from 'antd';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -9,7 +9,9 @@ import '../../index.css';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { getRouterBasename } from '../../utils/uiRoutes';
 import { BoardWorkspace } from './BoardWorkspace';
+import { boardViewPreferenceKey } from './useBoardViewPreferences';
 
 const board = {
   board_id: 'board-tree-test',
@@ -87,7 +89,7 @@ it.each(['light', 'dark'] as const)(
   'shows alternative navigation without overflow and preserves draft (%s)',
   async (mode) => {
     const compact = window.innerWidth < 700;
-    render(
+    const renderView = (conversationOpen = !compact, compactView = compact) => (
       <MemoryRouter>
         <ConfigProvider
           theme={{ algorithm: mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm }}
@@ -120,8 +122,8 @@ it.each(['light', 'dark'] as const)(
                   }}
                   canvas={<div>Shared canvas</div>}
                   conversation={<Draft />}
-                  conversationOpen={!compact}
-                  compact={compact}
+                  conversationOpen={conversationOpen}
+                  compact={compactView}
                 />
               </div>
             </ConnectionProvider>
@@ -129,6 +131,7 @@ it.each(['light', 'dark'] as const)(
         </ConfigProvider>
       </MemoryRouter>
     );
+    const view = render(renderView());
     expect(screen.getByRole('tab', { name: 'Sessions', exact: true })).toBeVisible();
     expect(screen.getByText('Atlas', { exact: true })).toBeVisible();
     await waitFor(() => expect(screen.getByText('Plan the next release')).toBeVisible());
@@ -136,15 +139,45 @@ it.each(['light', 'dark'] as const)(
     await page.screenshot({
       path: `../../../.vitest/attachments/agor-sessions-${mode}-${window.innerWidth}.png`,
     });
-    if (!compact)
+    let treeWidth = 0;
+    let boardWidth = 0;
+    if (!compact) {
       await userEvent.fill(screen.getByLabelText('Conversation draft'), 'Keep this draft');
+      const handle = screen.getByRole('separator', { name: 'Resize tree and detail' });
+      const navigator = screen.getByLabelText('Board navigator');
+      const before = navigator.clientWidth;
+      act(() => handle.focus());
+      await userEvent.keyboard('{ArrowRight}');
+      await waitFor(() => expect(navigator.clientWidth).toBeGreaterThan(before));
+      expect(handle).toHaveFocus();
+      expect(getComputedStyle(handle).outlineStyle).not.toBe('none');
+      treeWidth = navigator.clientWidth;
+    } else {
+      expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+    }
     await userEvent.click(screen.getByText('Board', { exact: true }));
     expect(screen.getByText('Shared canvas')).toBeVisible();
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
     expect(screen.getByLabelText('Board navigator')).not.toBeVisible();
-    await userEvent.click(screen.getByText('Tree', { exact: true }));
-    if (!compact)
+    if (!compact) {
+      const handle = screen.getByRole('separator', { name: 'Resize board and detail' });
+      const detail = screen.getByRole('region', { name: 'Board detail' });
+      const before = detail.clientWidth;
+      await userEvent.dragAndDrop(handle, detail, {
+        targetPosition: { x: 60, y: 80 },
+        force: true,
+      });
+      await waitFor(() => expect(detail.clientWidth).toBeLessThan(before));
+      boardWidth = detail.clientWidth;
       expect(screen.getByLabelText('Conversation draft')).toHaveValue('Keep this draft');
+    }
+    await userEvent.click(screen.getByText('Tree', { exact: true }));
+    if (!compact) {
+      expect(screen.getByLabelText('Conversation draft')).toHaveValue('Keep this draft');
+      await waitFor(() =>
+        expect(screen.getByLabelText('Board navigator').clientWidth).toBe(treeWidth)
+      );
+    }
     await userEvent.click(screen.getByRole('tab', { name: 'Content', exact: true }));
     await userEvent.click(screen.getByRole('button', { name: /Release plan/ }));
     expect(await screen.findByRole('heading', { name: 'Release plan' })).toBeVisible();
@@ -153,5 +186,31 @@ it.each(['light', 'dark'] as const)(
       path: `../../../.vitest/attachments/agor-board-tree-${mode}-${window.innerWidth}.png`,
     });
     fireEvent.click(screen.getByRole('button', { name: 'Close content' }));
+    if (!compact) {
+      // Remount models a reload: both view sizes survive independently.
+      view.unmount();
+      const restored = render(renderView());
+      await waitFor(() =>
+        expect(screen.getByLabelText('Board navigator').clientWidth).toBe(treeWidth)
+      );
+      await userEvent.click(screen.getByText('Board', { exact: true }));
+      await waitFor(() =>
+        expect(screen.getByRole('region', { name: 'Board detail' }).clientWidth).toBe(boardWidth)
+      );
+      // Opening/closing the inspector must not replace the saved split with 100%.
+      restored.rerender(renderView(false));
+      expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+      expect(screen.getByText('Shared canvas')).toBeVisible();
+      restored.rerender(renderView(false, true));
+      expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+      restored.rerender(renderView());
+      await waitFor(() =>
+        expect(screen.getByRole('region', { name: 'Board detail' }).clientWidth).toBe(boardWidth)
+      );
+      const key = boardViewPreferenceKey(getRouterBasename(), user.user_id, board.board_id);
+      const saved = JSON.parse(localStorage.getItem(key) ?? '{}');
+      expect(saved.treeNavigatorSize).toBeGreaterThan(32);
+      expect(saved.boardCanvasSize).toBeGreaterThan(55);
+    }
   }
 );
