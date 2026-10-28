@@ -9,6 +9,7 @@ import { getTeammateConfig, isGatewaySession, SessionStatus } from '@agor-live/c
 import { boardIdForSession } from '../utils/boardIdForSession';
 import { commentMentionsUser } from '../utils/commentMentions';
 import { getTimeMs } from '../utils/entityTime';
+import { isExampleOwned, selectExampleOwnerId } from '../utils/exampleBoard';
 import { isSessionFailed } from '../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../utils/sessionTitle';
 import type { AgorState } from './agorStore';
@@ -106,10 +107,10 @@ const updatedBefore = (a: Session, b: Session) => updatedAt(a) > updatedAt(b);
 /** Home's recent-boards row lists at most this many boards of my sessions. */
 export const HOME_RECENT_BOARDS = 5;
 
-type BoardMaps = Pick<AgorState, 'boardById' | 'branchById'>;
+type BoardMaps = Pick<AgorState, 'boardById' | 'branchById' | 'userById'>;
 const isLiveBoard = (s: BoardMaps, boardId: string) => {
   const board = s.boardById.get(boardId);
-  return !!board && !board.archived;
+  return !!board && !board.archived && !isExampleOwned(board, selectExampleOwnerId(s));
 };
 
 /** The ids of `boardIds` that name known, unarchived boards, in order. */
@@ -135,7 +136,7 @@ const latestBoards = (boardAt: Map<string, number>, limit: number) =>
  * with none, the boards of my latest sessions (as `boardIds` of the buckets).
  */
 export function homeRecentBoardIds(
-  s: Pick<AgorState, 'boardById' | 'branchById' | 'sessionById'>,
+  s: Pick<AgorState, 'boardById' | 'branchById' | 'sessionById' | 'userById'>,
   visitedIds: readonly string[],
   userId: string | undefined
 ): string[] {
@@ -591,14 +592,18 @@ export function makeTeammatesSelector(
   userId: string | undefined,
   whose: 'own' | 'shared'
 ): (s: AgorState) => Branch[] {
-  let source: [AgorState['branchById'], AgorState['boardById']] | null = null;
+  let source: [AgorState['branchById'], AgorState['boardById'], AgorState['userById']] | null =
+    null;
   let result: Branch[] = [];
   return (s) => {
-    if (source?.[0] === s.branchById && source[1] === s.boardById) return result;
-    source = [s.branchById, s.boardById];
+    if (source?.[0] === s.branchById && source[1] === s.boardById && source[2] === s.userById)
+      return result;
+    source = [s.branchById, s.boardById, s.userById];
     result = [];
+    const exampleOwnerId = selectExampleOwnerId(s);
     for (const branch of userId ? s.branchById.values() : []) {
       if (branch.archived || !getTeammateConfig(branch)) continue;
+      if (isExampleOwned(branch, exampleOwnerId)) continue;
       const own = (branch.primary_owner_user_id ?? branch.created_by) === userId;
       const board = branch.board_id ? s.boardById.get(branch.board_id) : undefined;
       if (whose === 'own' ? !own : own || !board || board.archived) continue;

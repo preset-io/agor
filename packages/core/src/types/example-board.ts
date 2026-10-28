@@ -10,3 +10,10 @@ export const EXAMPLE_BOARD_OWNER_NAME = 'Agor examples';
 export function isExampleBoardOwner(user: { email?: string } | null | undefined): boolean {
   return user?.email === EXAMPLE_BOARD_OWNER_EMAIL;
 }
+
+/** Repos carry no creator, so the example repo is marked by its reserved slug. */
+export const EXAMPLE_BOARD_REPO_SLUG = 'example-northwind-web';
+
+export function isExampleBoardRepo(repo: { slug?: string } | null | undefined): boolean {
+  return repo?.slug === EXAMPLE_BOARD_REPO_SLUG;
+}

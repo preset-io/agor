@@ -7,6 +7,7 @@
  * seeded. Bump `version` when the shape changes.
  */
 import type { BoardExportBlob } from '../../types/board';
+import { EXAMPLE_BOARD_REPO_SLUG } from '../../types/example-board';
 import type { ChannelType } from '../../types/gateway';
 
 export const EXAMPLE_BOARD_FIXTURE_VERSION = 1;
@@ -127,7 +128,7 @@ export const EXAMPLE_BOARD_FIXTURE: ExampleBoardFixture = {
     },
   },
   repo: {
-    slug: 'example-northwind-web',
+    slug: EXAMPLE_BOARD_REPO_SLUG,
     name: 'northwind/web',
     remote_url: 'https://github.com/northwind-example/web.git',
   },

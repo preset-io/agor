@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { useAgorStore } from '../../store/agorStore';
-import { selectBoardById, selectRepoById } from '../../store/selectors';
+import { selectBoardById } from '../../store/selectors';
+import { selectCreatableRepoById } from '../../utils/exampleBoard';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 import { BranchTab } from '../CreateDialog/tabs/BranchTab';
 import { CreateModalShell } from './CreateModalShell';
@@ -42,7 +43,7 @@ export const CreateBranchModal: React.FC<CreateBranchModalProps> = ({
   onCreateBranch,
   branchStorageConfig,
 }) => {
-  const repoById = useAgorStore(selectRepoById);
+  const repoById = useAgorStore(selectCreatableRepoById);
   const boardById = useAgorStore(selectBoardById);
   const [isValid, setIsValid] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
