@@ -102,8 +102,8 @@ describe('BoardSessionList', () => {
     );
 
     const branchText = screen.getByText('feature/panel-management');
-    const metadata = branchText.closest('[title]')!;
-    expect(metadata).toHaveAttribute('title', 'preset-io/agor / feature/panel-management');
+    // Fades like the title; the full repo / branch label is its clipped-text tooltip.
+    expect(branchText).toHaveAttribute('data-fade-text');
     expect(branchText.closest('.ant-tag')).toBeNull();
     // One row control; the branch is part of its accessible name, not a separate target.
     const row = screen.getByRole('button', { name: /^Open session / });

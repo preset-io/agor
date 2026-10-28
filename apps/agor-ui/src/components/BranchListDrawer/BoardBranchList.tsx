@@ -8,6 +8,7 @@ import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/tim
 import { BranchBoardLocatorIcon } from '../BranchBoardLocatorIcon';
 import { BranchStateTag } from '../BranchFilesystemRecovery';
 import { CompactNotice } from '../CompactNotice';
+import { FadeText } from '../FadeText';
 import { RepoPill } from '../Pill';
 
 /**
@@ -214,12 +215,9 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
                     minWidth: 0,
                   }}
                 >
-                  <Typography.Text
-                    ellipsis={{ tooltip: branchTitle }}
-                    style={{ flex: 1, minWidth: 0, fontWeight: 500 }}
-                  >
+                  <FadeText fullText={branchTitle} style={{ flex: 1, fontWeight: 500 }}>
                     {branch.name}
-                  </Typography.Text>
+                  </FadeText>
                   {branch.archived && (
                     <Tag color="default" style={{ marginInlineEnd: 0, flexShrink: 0 }}>
                       Archived

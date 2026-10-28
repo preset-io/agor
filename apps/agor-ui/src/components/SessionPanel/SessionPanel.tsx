@@ -89,9 +89,10 @@ import {
   savePromptDraft,
 } from '../../utils/promptDrafts';
 import { describeSessionStatus } from '../../utils/sessionStatus';
-import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
+import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { FadeText } from '../FadeText';
 import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
@@ -392,6 +393,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 }) => {
   const { token } = theme.useToken();
   const isMobileShell = useIsMobileViewport();
+  const touchInput = useIsTouchInput();
   // 44px touch targets for the header controls on the mobile full-screen shell.
   const mobileHeaderButtonStyle: React.CSSProperties | undefined = isMobileShell
     ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
@@ -429,6 +431,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // never accidentally "sets" a title from the first-prompt fallback text.
   const [editingTitle, setEditingTitle] = React.useState(false);
   const [titleHovered, setTitleHovered] = React.useState(false);
+  const [titleClipped, setTitleClipped] = React.useState(false);
   const [titleDraft, setTitleDraft] = React.useState('');
   const titleInputRef = React.useRef<InputRef | null>(null);
   const startEditingTitle = React.useCallback(() => {
@@ -1636,7 +1639,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                   }}
                 />
               ) : (
-                <Tooltip title="Click to rename">
+                <Tooltip title={titleClipped ? undefined : 'Click to rename'}>
                   <button
                     type="button"
                     onClick={startEditingTitle}
@@ -1659,26 +1662,28 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                       textAlign: 'left',
                     }}
                   >
-                    <Typography.Text
+                    <FadeText
                       strong
-                      style={{
-                        fontSize: token.fontSizeLG,
-                        ...getSessionTitleStyles(isMobileShell ? 1 : 2),
-                      }}
+                      lines={isMobileShell ? 1 : 2}
+                      onOverflowChange={setTitleClipped}
+                      style={{ fontSize: token.fontSizeLG }}
                     >
                       {session.title || session.description
                         ? getSessionDisplayTitle(session, { includeAgentFallback: false })
                         : 'Untitled session'}
-                    </Typography.Text>
-                    <EditOutlined
-                      style={{
-                        fontSize: 12,
-                        color: token.colorTextTertiary,
-                        opacity: titleHovered ? 1 : 0,
-                        transition: 'opacity 0.15s',
-                        flexShrink: 0,
-                      }}
-                    />
+                    </FadeText>
+                    {/* Hover-only hint; touch renames by tapping the title. */}
+                    {!touchInput && (
+                      <EditOutlined
+                        style={{
+                          fontSize: 12,
+                          color: token.colorTextTertiary,
+                          opacity: titleHovered ? 1 : 0,
+                          transition: 'opacity 0.15s',
+                          flexShrink: 0,
+                        }}
+                      />
+                    )}
                   </button>
                 </Tooltip>
               )}
