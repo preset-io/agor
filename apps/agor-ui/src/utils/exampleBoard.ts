@@ -22,3 +22,5 @@ export const selectCreatableRepoById = (s: Pick<AgorState, 'repoById'>) => {
   }
   return ownRepos;
 };
+
+export const EXAMPLE_NOT_AVAILABLE = 'Not available in the example';

@@ -3,6 +3,10 @@ import { requireCurrentTenantId } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
+  EXAMPLE_BOARD_ANALYTICS_DESTINATIONS,
+  EXAMPLE_BOARD_ANALYTICS_HIDE_ACTIONS,
+  EXAMPLE_BOARD_ANALYTICS_OBJECTS,
+  EXAMPLE_BOARD_ANALYTICS_SOURCES,
   ONBOARDING_ANALYTICS_ACTIONS,
   ONBOARDING_ANALYTICS_STEPS,
   PRODUCT_ANALYTICS_EVENTS,
@@ -17,6 +21,26 @@ const inputSchema = z.discriminatedUnion('event', [
       event: z.literal(PRODUCT_ANALYTICS_EVENTS.ONBOARDING_STEP),
       step: z.enum(ONBOARDING_ANALYTICS_STEPS),
       action: z.enum(ONBOARDING_ANALYTICS_ACTIONS),
+    })
+    .strict(),
+  z.object({ event: z.literal(PRODUCT_ANALYTICS_EVENTS.EXAMPLE_BOARD_OPENED) }).strict(),
+  z
+    .object({
+      event: z.literal(PRODUCT_ANALYTICS_EVENTS.EXAMPLE_BOARD_OBJECT_OPENED),
+      object: z.enum(EXAMPLE_BOARD_ANALYTICS_OBJECTS),
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal(PRODUCT_ANALYTICS_EVENTS.EXAMPLE_BOARD_MAKE_YOUR_OWN),
+      source: z.enum(EXAMPLE_BOARD_ANALYTICS_SOURCES),
+      destination: z.enum(EXAMPLE_BOARD_ANALYTICS_DESTINATIONS),
+    })
+    .strict(),
+  z
+    .object({
+      event: z.literal(PRODUCT_ANALYTICS_EVENTS.EXAMPLE_BOARD_HIDDEN),
+      action: z.enum(EXAMPLE_BOARD_ANALYTICS_HIDE_ACTIONS),
     })
     .strict(),
 ]);
@@ -39,10 +63,9 @@ export class ProductAnalyticsService {
       if ((isCompletion && !isFinalStep) || (input.action === 'skipped' && isFinalStep)) {
         throw new BadRequest('Invalid onboarding analytics transition');
       }
-      analyticsLogger.track(input.event, { step: input.step, action: input.action }, { userId });
-    } else {
-      analyticsLogger.track(input.event, {}, { userId });
     }
+    const { event, ...properties } = input;
+    analyticsLogger.track(event, properties, { userId });
     return { success: true };
   }
 }

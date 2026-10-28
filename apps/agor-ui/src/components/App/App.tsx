@@ -67,6 +67,7 @@ import {
 import { SharedUserSettingsModal } from '../../surfaces/SharedUserSettingsModal';
 import type { AgenticToolOption, CreateRepoOptions } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
+import { isExampleOwned, selectExampleOwnerId } from '../../utils/exampleBoard';
 import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
@@ -82,6 +83,7 @@ import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CreateModals } from '../CreateModals';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
+import { ExampleBoardBanner } from '../ExampleBoard/ExampleBoard';
 import { HomePage } from '../HomePage';
 import { NewSessionModal } from '../NewSessionModal';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
@@ -535,6 +537,7 @@ export const App: React.FC<AppProps> = ({
   const currentBoard = useAgorStore(
     useMemo(() => makeBoardSelector(currentBoardId), [currentBoardId])
   );
+  const exampleOwnerId = useAgorStore(selectExampleOwnerId);
   const isHomeSurface = isRootHomePath && !hasExplicitEntityTarget;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
@@ -1465,36 +1468,43 @@ export const App: React.FC<AppProps> = ({
                         onSeeAllTeammates={handleSeeAllTeammates}
                       />
                     ) : (
-                      <SessionCanvas
-                        ref={sessionCanvasRef}
-                        board={currentBoard || null}
-                        client={client}
-                        branches={boardBranches}
-                        primaryTeammateId={primaryTeammateId}
-                        currentUserId={user?.user_id}
-                        selectedSessionId={effectiveSelectedSessionId}
-                        activeUrlTargetBranchId={activeUrlTargetBranchId}
-                        activeUrlTargetArtifactId={activeUrlTargetArtifactId}
-                        availableAgents={availableAgents}
-                        onSessionClick={handleSessionClick}
-                        onSessionUpdate={stableOnSessionUpdate}
-                        onSessionDelete={stableOnSessionDelete}
-                        onForkSession={stableOnForkSession}
-                        onSpawnSession={stableOnSpawnSession}
-                        onUpdateSessionMcpServers={stableOnUpdateSessionMcpServers}
-                        onOpenSettings={setSessionSettingsId}
-                        onCreateSessionForBranch={handleQuickStartSession}
-                        onOpenBranch={setBranchModalBranchId}
-                        onArchiveOrDeleteBranch={stableOnArchiveOrDeleteBranch}
-                        onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
-                        onStartEnvironment={stableOnStartEnvironment}
-                        onStopEnvironment={stableOnStopEnvironment}
-                        onViewLogs={setLogsModalBranchId}
-                        onNukeEnvironment={stableOnNukeEnvironment}
-                        onOpenCommentsPanel={handleOpenCommentsPanel}
-                        onCommentHover={setHoveredCommentId}
-                        onCommentSelect={handleCommentSelect}
-                      />
+                      <Flex vertical style={{ height: '100%' }}>
+                        {isExampleOwned(currentBoard, exampleOwnerId) && currentBoard && (
+                          <ExampleBoardBanner boardId={currentBoard.board_id} />
+                        )}
+                        <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+                          <SessionCanvas
+                            ref={sessionCanvasRef}
+                            board={currentBoard || null}
+                            client={client}
+                            branches={boardBranches}
+                            primaryTeammateId={primaryTeammateId}
+                            currentUserId={user?.user_id}
+                            selectedSessionId={effectiveSelectedSessionId}
+                            activeUrlTargetBranchId={activeUrlTargetBranchId}
+                            activeUrlTargetArtifactId={activeUrlTargetArtifactId}
+                            availableAgents={availableAgents}
+                            onSessionClick={handleSessionClick}
+                            onSessionUpdate={stableOnSessionUpdate}
+                            onSessionDelete={stableOnSessionDelete}
+                            onForkSession={stableOnForkSession}
+                            onSpawnSession={stableOnSpawnSession}
+                            onUpdateSessionMcpServers={stableOnUpdateSessionMcpServers}
+                            onOpenSettings={setSessionSettingsId}
+                            onCreateSessionForBranch={handleQuickStartSession}
+                            onOpenBranch={setBranchModalBranchId}
+                            onArchiveOrDeleteBranch={stableOnArchiveOrDeleteBranch}
+                            onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
+                            onStartEnvironment={stableOnStartEnvironment}
+                            onStopEnvironment={stableOnStopEnvironment}
+                            onViewLogs={setLogsModalBranchId}
+                            onNukeEnvironment={stableOnNukeEnvironment}
+                            onOpenCommentsPanel={handleOpenCommentsPanel}
+                            onCommentHover={setHoveredCommentId}
+                            onCommentSelect={handleCommentSelect}
+                          />
+                        </div>
+                      </Flex>
                     )}
                   </div>
                 </Panel>

@@ -47,7 +47,24 @@ it.each(ONBOARDING_ANALYTICS_STEPS)('accepts the real normalized step %s', async
 });
 
 it.each([
+  [{ event: 'example_board.opened' }, {}],
+  [{ event: 'example_board.object_opened', object: 'session' }, { object: 'session' }],
+  [
+    { event: 'example_board.make_your_own', source: 'banner', destination: 'onboarding' },
+    { source: 'banner', destination: 'onboarding' },
+  ],
+  [{ event: 'example_board.hidden', action: 'restored' }, { action: 'restored' }],
+])('accepts the content-free example board event %j', async (data, properties) => {
+  await send(data);
+  expect(recorded).toHaveBeenCalledWith('tenant-a', data.event, properties, {
+    userId: user.user_id,
+  });
+});
+
+it.each([
   { event: 'auth.login_succeeded' },
+  { event: 'example_board.object_opened', object: 'session', session_id: 'secret' },
+  { event: 'example_board.make_your_own', source: 'banner', destination: 'https://x.test' },
   { event: 'home.viewed', userId: 'victim' },
   { event: 'home.viewed', tenant_id: 'tenant-b' },
   { event: 'home.viewed', context: { tenant_id: 'tenant-b' } },
