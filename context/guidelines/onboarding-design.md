@@ -74,6 +74,28 @@ Legacy `preferences.onboarding.goals` and `persona` stay untouched: no migration
   for MCP. Onboarding no longer offers Slack gateway setup; the teammate helps later, using one
   disabled draft and the secure gateway token widget.
 
+## Example board
+
+New workspaces can get a read-only example board ("Wendy's board") next to onboarding, never in
+front of it. Behind `teammates.example_board` (off by default); seeded only when the first-run
+path creates a workspace, never backfilled.
+
+- Content lives in one versioned fixture,
+  [`fixture.ts`](../../packages/core/src/seed/example-board/fixture.ts), shaped like the board
+  export (`board` is a `BoardExportBlob`) plus branches, sessions with transcripts, cards,
+  artifacts and disabled schedules. Made-up data only, one teammate, short session titles with
+  the full prompt as the first message.
+- Everything is created by the non-loginable "Agor examples" user
+  (`EXAMPLE_BOARD_OWNER_EMAIL`); `created_by` is the marker every filter uses. Others get viewer
+  access. Never make it anyone's primary teammate or show it in search, Home lists or counts,
+  totals, or gateway targets.
+- UI: "Example" tag in the board switcher, one slim banner, a read-only footer instead of the
+  composer. "Make your own" opens the onboarding wizard, or the person's own teammate board when
+  they have one. "Hide example" is per person (`preferences.exampleBoardHidden`) with undo.
+- **Keep it current.** Any change to onboarding, the board, the session panel, Home or Slack
+  flows checks the fixture still shows today's product, and updates it in the same PR.
+  `seed.test.ts` fails when the fixture drifts from current object kinds or types.
+
 ## Copy
 
 The product noun is **teammate**. Plain, second person, sentence case, no em dashes in UI copy.
