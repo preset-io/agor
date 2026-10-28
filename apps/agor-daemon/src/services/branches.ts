@@ -395,6 +395,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           : branch.nuke_command;
     if (!command) throw new BadRequest(`No ${action} command configured`);
     const execution = await this.resolveEnvironmentCommand(command, action);
+    // Refuse an uncontained row before admission so no attempt is recorded.
+    const managedPath =
+      execution.kind === 'command' ? this.managedBranchPath(branch, params) : undefined;
     const context =
       execution.kind === 'command'
         ? await this.resolveEnvironmentExecutorContext(branch, params)
@@ -489,7 +492,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           );
         }
       } else {
-        const managedPath = this.managedBranchPath(branch, params);
         const payload = {
           command: 'environment.lifecycle' as const,
           sessionToken: sessionToken!,
@@ -1972,6 +1974,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const reason = getBranchCleanupBlockReason(policy, branch.cleanup_protected ?? false);
       if (reason) throw new Conflict(reason);
     }
+    // Refuse an uncontained row before the claim; a post-dispatch throw would strand it.
+    const cleanCwd =
+      filesystemAction === 'cleaned' ? this.managedBranchPath(branch, params) : undefined;
     const admission = retireTeammate
       ? await runWithTenantDatabaseTransaction(this.db, tenantId, async (db) => {
           // Retirement clears User preferences under reference/Branch locks.
@@ -2120,7 +2125,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
                   }
                 : {
                     filesystemAction: 'cleaned' as const,
-                    cwd: this.managedBranchPath(branch, params),
+                    cwd: cleanCwd!,
                     principalBranchAccess: 'write' as const,
                     ...context!.sandboxMounts,
                     cleanup: { command: policy!.command },

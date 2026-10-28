@@ -330,7 +330,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    */
   /** Revalidate the stored branch path against the active tenant's branch root. */
   private branchWorkspacePath(branch: Branch, params: ArtifactParams): string {
-    const tenantId = getCurrentTenantId() ?? params.tenant?.tenant_id;
+    const tenantId = params.tenant?.tenant_id ?? getCurrentTenantId();
     return assertManagedBranchPath(branch.path, tenantId ? String(tenantId) : undefined);
   }
 

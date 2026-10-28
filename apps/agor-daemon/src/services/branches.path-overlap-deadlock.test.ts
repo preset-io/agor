@@ -1,10 +1,12 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getBranchesDir } from '@agor/core/config';
 import {
   BranchRepository,
   createTenantScopedDatabaseProxy,
   type Database,
+  generateId,
   RepoRepository,
   runWithTenantContext,
 } from '@agor/core/db';
@@ -174,7 +176,9 @@ for (const status of ['cleaned', 'failed'] as const) {
   test(`retained ${status} sibling files block deletion and archive filesystem operations`, async ({
     db,
   }) => {
-    const root = await mkdtemp(join(tmpdir(), 'agor-overlap-retained-'));
+    // Inside the managed root, so clean reaches the overlap fence rather than containment.
+    const root = join(getBranchesDir(), 'fixture', 'overlap', `retained-${generateId()}`);
+    await mkdir(root, { recursive: true });
     try {
       await writeFile(join(root, 'tracked.txt'), 'retained tracked content');
       await writeFile(join(root, 'untracked.txt'), 'retained ordinary untracked content');

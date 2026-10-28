@@ -145,6 +145,30 @@ test('clean rejects policy, protection, public overrides, and busy activity befo
   expect(spawnExecutor).toHaveBeenCalledOnce();
 });
 
+test('clean refuses an out-of-root row before claiming maintenance or probing the executor', async ({
+  db,
+}) => {
+  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const { service } = setup(db);
+  await new RepoRepository(db).update(branch.repo_id, {
+    cleanup_policy: { enabled: true, command: 'git clean -fdX', allow_branch_protection: true },
+  });
+  await expect(service.clean({ branchId: branch.branch_id }, { user, tenant })).rejects.toThrow(
+    'managed branch directory'
+  );
+  expect(requestExecutor).not.toHaveBeenCalled();
+  expect(spawnExecutor).not.toHaveBeenCalled();
+  const archiveParams = { user, tenant };
+  markBranchArchiveDeleteAuthorized(archiveParams, branch.branch_id, 'archive');
+  await expect(
+    service.archiveOrDelete(
+      branch.branch_id,
+      { metadataAction: 'archive', filesystemAction: 'preserved' },
+      archiveParams
+    )
+  ).resolves.toMatchObject({ archived: true, workspace_operation: { status: 'succeeded' } });
+});
+
 test('Collaborators and read-only Managers cannot clean; Preserve needs management but no filesystem grant', async ({
   db,
 }) => {
