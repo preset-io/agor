@@ -6,6 +6,7 @@ import {
   type AgorConfig,
   AgorRoleAuthority,
   AgorUserLifecycleAuthority,
+  isExampleBoardEnabled,
   type ResolvedExternalLaunchProvider,
   resolveIdentityAuthority,
   resolveMultiTenancyConfig,
@@ -20,6 +21,7 @@ import {
   isExecutionHomeKeyAvailable,
   reattributeLegacyAnonymousRows,
   runWithTenantContext,
+  runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   seedInitialDataInTransaction,
   select,
@@ -51,6 +53,7 @@ import {
 } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { lockTenantAuthorizationFence } from '../services/tenant-authorization-fence.js';
+import { seedExampleBoardForNewWorkspace } from '../setup/database.js';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
 import {
@@ -827,6 +830,7 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
         const provider = claims.provider || settings.providerId || claims.iss;
         const projectionKey = `${tenant.tenant_id}\0${provider}\0${claims.iss}\0${claims.sub}`;
         const projection = await serializeProjection(projectionKey, async () => {
+          let workspaceCreated = false;
           const projected = await runWithTenantDatabaseTransaction(
             options.db,
             tenant.tenant_id,
@@ -843,7 +847,7 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
               // Claim the default Board while the same tenant authority fence
               // still serializes first-user projection. Immutable ownership
               // can therefore never be won by a later concurrent launch.
-              await seedInitialDataInTransaction(scopedDb, current.userId);
+              workspaceCreated = (await seedInitialDataInTransaction(scopedDb, current.userId)) > 0;
               return current;
             }
           );
@@ -852,6 +856,12 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
             // Evict every socket that may still carry the previous role,
             // including this user's running agent executors.
             options.onAuthorizationInvalidated?.(tenant.tenant_id, projected.userId);
+          }
+          if (workspaceCreated && isExampleBoardEnabled(options.config)) {
+            // Outside the projection transaction so a failed seed never blocks login.
+            await runWithTenantDatabaseScope(options.db, tenant.tenant_id, () =>
+              seedExampleBoardForNewWorkspace(options.db)
+            );
           }
           return projected;
         });

@@ -48,6 +48,9 @@ vi.mock('@agor/core/config', async (importOriginal) => ({
 
 vi.mock('./first-run-admin.js', () => adminMocks);
 
+const exampleMocks = vi.hoisted(() => ({ seedExampleBoard: vi.fn() }));
+vi.mock('@agor/core/seed/example-board', () => exampleMocks);
+
 describe('initializeDatabase logging', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
 
@@ -66,7 +69,8 @@ describe('initializeDatabase logging', () => {
     dbMocks.runWithSystemDatabaseScope.mockImplementation(
       async (_db, _operation, run: () => Promise<void>) => run()
     );
-    dbMocks.seedInitialData.mockResolvedValue(undefined);
+    dbMocks.seedInitialData.mockResolvedValue(true);
+    exampleMocks.seedExampleBoard.mockResolvedValue({ seeded: true });
     adminMocks.runFirstRunAdminBootstrap.mockResolvedValue({
       createdAdmin: true,
       admin: { user_id: 'real-owner' },
@@ -152,6 +156,33 @@ describe('initializeDatabase logging', () => {
     expect(adminMocks.runFirstRunAdminBootstrap.mock.invocationCallOrder[0]).toBeLessThan(
       dbMocks.seedInitialData.mock.invocationCallOrder[0]
     );
+  });
+
+  it('seeds the example board only when this start created the workspace', async () => {
+    await initializeDatabase('file:/tmp/agor-new.db', { exampleBoard: true });
+    expect(exampleMocks.seedExampleBoard).toHaveBeenCalledOnce();
+
+    exampleMocks.seedExampleBoard.mockClear();
+    dbMocks.seedInitialData.mockResolvedValue(false);
+    await initializeDatabase('file:/tmp/agor-existing.db', { exampleBoard: true });
+    expect(exampleMocks.seedExampleBoard).not.toHaveBeenCalled();
+  });
+
+  it('never seeds the example board when the flag is off', async () => {
+    await initializeDatabase('file:/tmp/agor-new.db');
+    expect(exampleMocks.seedExampleBoard).not.toHaveBeenCalled();
+  });
+
+  it('starts the workspace even when the example seed fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    exampleMocks.seedExampleBoard.mockRejectedValue(new Error('SECRET_SENTINEL'));
+    await expect(
+      initializeDatabase('file:/tmp/agor-new.db', { exampleBoard: true })
+    ).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalledWith(
+      '[example_board.seed] failed code=seed_error retryable=false'
+    );
+    warn.mockRestore();
   });
 
   it('forwards configured PostgreSQL pool settings to the database client', async () => {

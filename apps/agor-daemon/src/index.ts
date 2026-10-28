@@ -41,6 +41,7 @@ import {
   assertValidEffectiveIdentityConfig,
   assertValidRawConfig,
   getConfigPath,
+  isExampleBoardEnabled,
   loadConfig,
   loadConfigFromFile,
   renderGitConfigParametersForLog,
@@ -832,6 +833,7 @@ async function startDaemonWithOwnedMetrics(
       ? { max: effectiveConfig.database.postgresql.pool.max }
       : undefined,
     traceServices: effectiveConfig.metrics?.apm?.trace_services ?? 'off',
+    exampleBoard: isExampleBoardEnabled(effectiveConfig),
   });
   configureUploadStagingStoreFromConfig(effectiveConfig, undefined, db);
 

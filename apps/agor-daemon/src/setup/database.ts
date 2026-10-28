@@ -24,6 +24,7 @@ import {
   seedInitialData,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { seedExampleBoard } from '@agor/core/seed/example-board';
 import { resolveDatadogTracer } from '@agor/core/tracing/datadog';
 import type { TenantID } from '@agor/core/types';
 import { extractDbFilePath } from '@agor/core/utils/path';
@@ -132,6 +133,8 @@ export async function initializeDatabase(
     pool?: { max: number };
     /** Shared custom APM tracing gate; `off` also disables PostgreSQL tracing. */
     traceServices?: ApmTraceServiceDepth;
+    /** Seed the example board when this start creates the workspace. */
+    exampleBoard?: boolean;
   } = {}
 ): Promise<DatabaseInitResult> {
   const dialect = detectDialectFromUrl(dbPath) ?? getDatabaseDialect();
@@ -184,7 +187,8 @@ export async function initializeDatabase(
         throw new Error('First-run setup could not resolve a primary owner for the default Board');
       }
       console.log('🌱 Seeding initial data...');
-      await seedInitialData(scopedDb, bootstrapResult.admin.user_id);
+      const created = await seedInitialData(scopedDb, bootstrapResult.admin.user_id);
+      if (created && options.exampleBoard) await seedExampleBoardForNewWorkspace(scopedDb);
     }
   };
 
@@ -197,4 +201,13 @@ export async function initializeDatabase(
   console.log('✅ Database ready');
 
   return { db: scopedDb };
+}
+
+/** Best effort: a failed example seed never blocks the workspace, and is not retried. */
+export async function seedExampleBoardForNewWorkspace(db: TenantScopeAwareDatabase) {
+  try {
+    if ((await seedExampleBoard(db)).seeded) console.log('[example_board.seed] seeded');
+  } catch {
+    console.warn('[example_board.seed] failed code=seed_error retryable=false');
+  }
 }
