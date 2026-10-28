@@ -1,8 +1,8 @@
-import { theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { getMarkdownPreview, isLongMarkdown } from './markdownPreview';
+import { ShowMoreFade } from './ShowMoreFade';
 
 interface CollapsibleMarkdownProps {
   children: string;
@@ -42,7 +42,6 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
   onExpandedChange,
   isStreaming = false,
 }) => {
-  const { token } = theme.useToken();
   const [localExpanded, setExpanded] = useState(defaultExpanded);
   const expanded = controlledExpanded ?? localExpanded;
 
@@ -59,7 +58,15 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
   const displayContent = expanded ? children : getMarkdownPreview(children);
 
   return (
-    <div className={className} style={style}>
+    <ShowMoreFade
+      className={className}
+      style={style}
+      collapsed={!expanded}
+      onToggle={() => {
+        setExpanded(!expanded);
+        onExpandedChange?.(!expanded);
+      }}
+    >
       <MarkdownRenderer
         content={displayContent}
         isStreaming={isStreaming}
@@ -68,40 +75,6 @@ export const CollapsibleMarkdown: React.FC<CollapsibleMarkdownProps> = ({
         // message copy action still owns the full source; expansion restores controls.
         showControls={expanded}
       />
-
-      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {!expanded && (
-          <div
-            style={{
-              fontStyle: 'italic',
-              opacity: 0.6,
-              fontSize: token.fontSizeSM,
-              color: token.colorTextTertiary,
-            }}
-          >
-            …
-          </div>
-        )}
-        <button
-          type="button"
-          aria-expanded={expanded}
-          onClick={() => {
-            setExpanded(!expanded);
-            onExpandedChange?.(!expanded);
-          }}
-          style={{
-            fontSize: token.fontSizeSM,
-            cursor: 'pointer',
-            alignSelf: 'flex-start',
-            color: token.colorLink,
-            background: 'none',
-            border: 'none',
-            padding: 0,
-          }}
-        >
-          {expanded ? 'show less' : 'show more'}
-        </button>
-      </div>
-    </div>
+    </ShowMoreFade>
   );
 };

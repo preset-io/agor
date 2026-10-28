@@ -151,6 +151,11 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+/** Streamed words fade in as separate spans; match an element's whole text. */
+const wholeText = (text: string) => (_: string, element: Element | null) =>
+  element?.textContent === text &&
+  !Array.from(element.children).some((child) => child.textContent === text);
+
 it('renders continuous history without detail fetching and anchors an upward page at every viewport', async () => {
   render(
     <div style={{ height: 'calc(100dvh - 32px)', display: 'flex', flexDirection: 'column' }}>
@@ -406,8 +411,11 @@ it('shows live tool events before persistence and preserves the group through co
   const activeHeader = screen.getByRole('button', { name: 'Running: Read', expanded: false });
   expect(activeHeader).toBeVisible();
   expect(activeHeader).toHaveAttribute('aria-busy', 'true');
-  const shimmer = activeHeader.querySelector('.ant-thought-chain-motion-blink')!;
-  expect(getComputedStyle(shimmer).animationName).not.toBe('none');
+  // The working line names the running tool and carries the turn's one shimmer.
+  const shimmers = document.querySelectorAll('.ant-thought-chain-motion-blink');
+  expect(shimmers).toHaveLength(1);
+  expect(shimmers[0].closest('[role="status"]')).toHaveTextContent('Running: Read');
+  expect(getComputedStyle(shimmers[0]).animationName).not.toBe('none');
   expect(document.querySelector('[data-task-block] > .ant-spin')).toBeNull();
   const tool: Message = {
     message_id: generateId(),
@@ -678,7 +686,7 @@ it('keeps history text choices, keyboard disclosure and scroll anchors with mult
       <ConversationView client={null} sessionId={sessionId} />
     </div>
   );
-  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(18);
+  expect(screen.getAllByRole('button', { name: 'Show more' })).toHaveLength(18);
   expect(screen.getByText('Tail 19-0')).toBeInTheDocument();
   expect(screen.getByText('Tail 19-1')).toBeInTheDocument();
   expect(screen.queryByText('Tail 10-0')).not.toBeInTheDocument();
@@ -694,7 +702,7 @@ it('keeps history text choices, keyboard disclosure and scroll anchors with mult
     viewport.scrollTop -= 100;
     fireEvent.scroll(viewport);
   });
-  const expand = screen.getAllByRole('button', { name: 'show more' })[0];
+  const expand = screen.getAllByRole('button', { name: 'Show more' })[0];
   expand.focus();
   await page.screenshot({ path: `./.vitest/history-collapsed-${window.innerWidth}.png` });
   await userEvent.keyboard('{Enter}');
@@ -800,9 +808,9 @@ it('follows a long live response without clamping the current prompt or losing p
         ]),
       })
     );
-    expect(screen.getByText(`Live answer ${length - 1}`)).toBeInTheDocument();
+    expect(await screen.findByText(wholeText(`Live answer ${length - 1}`))).toBeInTheDocument();
     expect(screen.getByText('Live prompt 19')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'show more' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
     await waitFor(
       () =>
         expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThan(24),
@@ -819,7 +827,7 @@ it('follows a long live response without clamping the current prompt or losing p
     })
   );
   expect(screen.getByText('Live answer 34')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'show more' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
   await page.screenshot({ path: `./.vitest/history-live-expanded-${window.innerWidth}.png` });
 });
 
@@ -860,14 +868,14 @@ it('bounds long code, tables and single-line prose previews while preserving ful
   expect(screen.queryByText('row-199')).not.toBeInTheDocument();
   expect(screen.queryByText('Wrapped prose '.repeat(200).trim())).not.toBeInTheDocument();
   expect(screen.getByText('Short message')).toBeInTheDocument();
-  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(3);
+  expect(screen.getAllByRole('button', { name: 'Show more' })).toHaveLength(3);
   expect(screen.queryByRole('button', { name: 'Download file' })).not.toBeInTheDocument();
-  await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+  await userEvent.click(screen.getAllByRole('button', { name: 'Show more' })[0]);
   expect(screen.getByText('After code fence')).toBeInTheDocument();
   expect(screen.getByText('code-line-199')).toBeInTheDocument();
-  await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+  await userEvent.click(screen.getAllByRole('button', { name: 'Show more' })[0]);
   expect(screen.getByText('row-199')).toBeInTheDocument();
-  await userEvent.click(screen.getByRole('button', { name: 'show more' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Show more' }));
   expect(screen.getByText('Wrapped prose '.repeat(200).trim())).toBeInTheDocument();
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth + 1);
 });
@@ -894,11 +902,11 @@ it('collapses tall low-character history and medium prose with shorter previews'
   expect(articles[0].textContent).not.toContain('Word10');
   expect(articles[0].getBoundingClientRect().height).toBeLessThan(300);
   expect(articles[1].textContent!.length).toBeLessThanOrEqual(700);
-  expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(2);
+  expect(screen.getAllByRole('button', { name: 'Show more' })).toHaveLength(2);
   await page.screenshot({ path: `./.vitest/history-dual-budget-${window.innerWidth}.png` });
-  await userEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+  await userEvent.click(screen.getAllByRole('button', { name: 'Show more' })[0]);
   expect(articles[0].textContent).toContain('Word49');
-  await userEvent.click(screen.getByRole('button', { name: 'show more' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Show more' }));
   expect(screen.getByText(prose)).toBeInTheDocument();
 });
 
@@ -949,16 +957,17 @@ it('keeps synthetic streamed and persisted text visible while settling the think
     const textId = generateId();
     emit('thinking:start', thoughtId);
     emit('thinking:chunk', thoughtId, { chunk: 'Invented violet pebble' });
-    // Thinking-only live payloads are not currently rendered by AgentChain /
-    // MessageBlock (empty text). This fixture proves client activity and the
-    // real transcript text handoff, not thinking-only UI visibility.
     expect(live.getStreamingMessage(thoughtId)?.isThinking).toBe(true);
     emit('thinking:end', thoughtId);
     expect(live.getStreamingMessage(thoughtId)?.isStreaming).toBe(false);
     render(<ConversationView client={null} sessionId={sessionId} />);
+    // Thinking-only activity renders as one collapsed line until the turn settles.
+    expect(
+      screen.getByRole('button', { name: /^Thought for \d+s$/, expanded: false })
+    ).toBeVisible();
     emit('streaming:start', textId);
     emit('streaming:chunk', textId, { chunk: 'Invented amber square' });
-    expect(screen.getByText('Invented amber square')).toBeVisible();
+    expect(await screen.findByText(wholeText('Invented amber square'))).toBeVisible();
     emit('streaming:end', textId);
     const message = {
       ...messages.get(task.task_id)![1],
@@ -969,8 +978,8 @@ it('keeps synthetic streamed and persisted text visible while settling the think
     act(() => handlers.get('messages:created')?.(message));
     act(() => handlers.get('tasks:patched')?.({ ...task, status: TaskStatus.COMPLETED }));
     expect(live.state.streamingMessages.size).toBe(0);
-    expect(screen.getByText('Invented amber square')).toBeVisible();
-    expect(screen.queryByText(/Extended Thinking/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/^Thought for/)).not.toBeInTheDocument());
+    expect(screen.getByText(wholeText('Invented amber square'))).toBeVisible();
     await page.screenshot({
       path: `./.vitest/synthetic-stream-lifecycle-${window.innerWidth}.png`,
     });
@@ -1026,9 +1035,9 @@ it('pins turn detail only while a reader expands it and releases on collapse and
   expect(retain).toHaveBeenCalledWith(tasks[0].task_id);
   await userEvent.click(chain);
   await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
-  await userEvent.click(screen.getByText('Extended Thinking'));
+  await userEvent.click(screen.getByText('Thought for a while'));
   await waitFor(() => expect(retain).toHaveBeenCalledTimes(2));
-  await userEvent.click(screen.getByText('Extended Thinking'));
+  await userEvent.click(screen.getByText('Thought for a while'));
   await waitFor(() => expect(release).toHaveBeenCalledTimes(2));
   // The default-open edit stays beside the answer with the chain collapsed.
   // Collapsing it pins nothing; a reader's reopening does.

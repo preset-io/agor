@@ -31,6 +31,7 @@ import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
 import { HistoryTextChoices, historyTextKeyTurn } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from '../TaskBlock';
+import { JumpToLatest, useNewMessageCount } from './JumpToLatest';
 import { isBottomLockEngaged, jumpToBottom, resetScrollBaseline } from './stickToBottomLock';
 
 const { Text } = Typography;
@@ -49,6 +50,19 @@ function firstVisibleTurn(viewport: HTMLElement): HTMLElement | undefined {
   return Array.from(viewport.querySelectorAll<HTMLElement>('[data-task-block]')).find(
     (element) => element.getBoundingClientRect().bottom >= top
   );
+}
+
+type ReaderAnchor = { current: { element: HTMLElement; offset: number } | null };
+const turnOffset = (viewport: HTMLElement, element: HTMLElement) =>
+  element.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+/** Layout keeps the visible turn in place; a reader scrolling up moves it down. */
+function readerMovedUp(anchor: ReaderAnchor, viewport: HTMLElement): boolean {
+  const seen = anchor.current;
+  return !!seen && seen.element.isConnected && turnOffset(viewport, seen.element) > seen.offset + 1;
+}
+function recordReader(anchor: ReaderAnchor, viewport: HTMLElement): void {
+  const element = firstVisibleTurn(viewport);
+  anchor.current = element ? { element, offset: turnOffset(viewport, element) } : null;
 }
 
 export interface ConversationViewProps {
@@ -85,7 +99,7 @@ export interface ConversationViewProps {
   /**
    * Callback to expose scroll functions to parent
    */
-  onScrollRef?: (scrollToBottom: () => void, scrollToTop: () => void) => void;
+  onScrollRef?: (scrollToBottom: () => void) => void;
 
   /**
    * Permission decision handler
@@ -197,6 +211,12 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // A queue/composer resize changes only the latter. Reconcile through the
     // same bottom lock so a scrolled-up reader is never pulled away.
     const viewportCleanupRef = useRef<(() => void) | null>(null);
+    // Where the first visible turn sat when the reader was last seen. The hook
+    // decides on an escape a moment after the scroll event, and a resize in
+    // between (an appended or trimmed turn) makes it ignore the scroll.
+    const readerAnchor = useRef<ReaderAnchor['current']>(null);
+    const trimDeferred = useRef(false);
+    const [trimRetry, setTrimRetry] = useState(0);
     const setScrollViewport = useCallback(
       (element: HTMLDivElement | null) => {
         viewportCleanupRef.current?.();
@@ -232,16 +252,29 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           }
         });
         observer.observe(element);
+        // Escape as the reader's scroll arrives, as the hook does for an upward wheel.
+        const escapeOnScrollAway = () => {
+          if (
+            isBottomLockEngaged(state) &&
+            !state.isNearBottom &&
+            readerMovedUp(readerAnchor, element)
+          ) {
+            stopScroll();
+          }
+          recordReader(readerAnchor, element);
+        };
+        element.addEventListener('scroll', escapeOnScrollAway, { capture: true, passive: true });
         viewportCleanupRef.current = () => {
           ++resizeGeneration;
+          element.removeEventListener('scroll', escapeOnScrollAway, { capture: true });
           observer.disconnect();
           if (state.resizeDifference === guardedDifference) state.resizeDifference = 0;
         };
       },
-      [scrollRef, scrollToBottom, state]
+      [scrollRef, scrollToBottom, state, stopScroll]
     );
 
-    // Public scroll-to-bottom exposed via onScrollRef (button clicks) and the
+    // Public scroll-to-bottom for the jump pill and, via onScrollRef, the
     // resume-on-send wiring in SessionPanel. Wrap to a plain `() => void` so we
     // don't leak the library's optional ScrollToBottom options to callers.
     const handleScrollToBottom = useCallback(
@@ -249,24 +282,12 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       [state, scrollToBottom]
     );
 
-    // Scroll to top. While content is still streaming/growing, the library's
-    // persistent observer can re-pin to the bottom before our scrollTop write
-    // takes effect, snapping the user right back down. `stopScroll()`
-    // synchronously releases the bottom lock (and cancels any in-flight scroll
-    // animation) so the scrollTop = 0 sticks.
-    const scrollToTop = useCallback(() => {
-      stopScroll();
-      if (scrollRef.current) {
-        scrollRef.current.scrollTop = 0;
-      }
-    }, [scrollRef, stopScroll]);
-
     // Expose scroll functions to parent
     useEffect(() => {
       if (onScrollRef) {
-        onScrollRef(handleScrollToBottom, scrollToTop);
+        onScrollRef(handleScrollToBottom);
       }
-    }, [onScrollRef, handleScrollToBottom, scrollToTop]);
+    }, [onScrollRef, handleScrollToBottom]);
 
     const { handle: reactiveSession, state: reactiveState } = useSharedReactiveSession(
       client,
@@ -300,6 +321,11 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     const allStreamingMessages =
       currentReactiveState?.streamingMessages || EMPTY_STREAMING_MESSAGES;
     const streamingMessagesByTask = useStreamingMessagesByTask(allStreamingMessages);
+    const newMessageCount = useNewMessageCount(
+      !isAtBottom,
+      currentReactiveState?.messagesByTask,
+      allStreamingMessages
+    );
 
     const [textChoices, setTextChoices] = useState(() => new Map<string, boolean>());
     const setTextChoice = useCallback((key: string, expanded: boolean) => {
@@ -437,7 +463,12 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // while the reader is scrolled up or paging. In-session search only walks
     // mounted turns, so a trimmed turn is found again once paged back in, like
     // any not-yet-loaded history.
-    const trimAnchor = useRef<{ element: HTMLElement; top: number; tasks: unknown } | null>(null);
+    const trimAnchor = useRef<{
+      element: HTMLElement;
+      top: number;
+      scrollTop: number;
+      tasks: unknown;
+    } | null>(null);
     // Declared before the trim so it sees the trim's own commit, not the one that requested it.
     useLayoutEffect(() => {
       const anchor = trimAnchor.current;
@@ -447,19 +478,23 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       // The browser may already have moved scrollTop (scroll anchoring or
       // clamping). With a turn appended in the same frame the content height
       // can net out, so no resize guards that scroll event. Share the hook's
-      // resize guard, as the viewport observer does, or it reads as the reader
-      // scrolling up and releases the bottom lock.
+      // resize guard, as the viewport observer does, and record the position as
+      // programmatic, or it reads as the reader scrolling up and releases the
+      // bottom lock. An unmoved position needs neither: guarding it would
+      // swallow a reader's scroll-up landing in the same frame.
       const shift = anchor.element.isConnected
         ? anchor.element.getBoundingClientRect().top - anchor.top
         : 0;
-      const guard = shift || -1;
-      state.resizeDifference = guard;
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          if (state.resizeDifference === guard) state.resizeDifference = 0;
-        }, 1);
-      });
-      if (shift) state.scrollTop = viewport.scrollTop + shift;
+      if (shift || viewport.scrollTop !== anchor.scrollTop) {
+        const guard = shift || -1;
+        state.resizeDifference = guard;
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            if (state.resizeDifference === guard) state.resizeDifference = 0;
+          }, 1);
+        });
+        state.scrollTop = viewport.scrollTop + shift;
+      }
       // Removal can outweigh a turn appended in the same frame; a negative resize
       // does not re-pin, so follow the lock explicitly.
       if (state.isAtBottom) void scrollToBottom({ animation: 'instant' });
@@ -468,7 +503,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // request, a settled turn) moves the first protected turn: trim again then,
     // without waiting for another turn to arrive.
     const firstProtectedTurn = currentReactiveState?.firstProtectedTaskId;
-    // biome-ignore lint/correctness/useExhaustiveDependencies: firstProtectedTurn and escapedFromLock only re-run the trim (protection released, a manual return to the bottom).
+    // biome-ignore lint/correctness/useExhaustiveDependencies: firstProtectedTurn, escapedFromLock and trimRetry only re-run the trim (protection released, a manual return to the bottom, a deferred trim).
     useLayoutEffect(() => {
       const viewport = scrollRef.current;
       if (
@@ -482,11 +517,26 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         !isBottomLockEngaged(state)
       )
         return;
+      // A reader's scroll whose event is still on its way: trimming now would
+      // guard it away and keep pinning them.
+      if (readerMovedUp(readerAnchor, viewport)) {
+        if (!trimDeferred.current) {
+          trimDeferred.current = true;
+          requestAnimationFrame(() =>
+            setTimeout(() => {
+              trimDeferred.current = false;
+              setTrimRetry((retry) => retry + 1);
+            }, 2)
+          );
+        }
+        return;
+      }
       const anchor = firstVisibleTurn(viewport);
       if (!anchor) return;
       trimAnchor.current = {
         element: anchor,
         top: anchor.getBoundingClientRect().top,
+        scrollTop: viewport.scrollTop,
         tasks: reactiveTasks,
       };
       if (!reactiveSession.trimOlderTasks(anchor.dataset.taskBlock)) trimAnchor.current = null;
@@ -500,7 +550,13 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       loadingOlder,
       scrollRef,
       state,
+      trimRetry,
     ]);
+    // Layout changes keep the reader's place; a pending scroll keeps its record.
+    useLayoutEffect(() => {
+      const viewport = scrollRef.current;
+      if (viewport && !readerMovedUp(readerAnchor, viewport)) recordReader(readerAnchor, viewport);
+    });
 
     // Streaming auto-scroll, manual scroll-away detection, and lazy-content
     // re-pinning are all handled by use-stick-to-bottom's persistent
@@ -671,42 +727,53 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
 
     return (
       <div
-        ref={setTurnsViewport}
-        data-testid="conversation-scroll-container"
-        onWheel={(event) => {
-          // At the top (including an underfilled page), upward intent cannot
-          // produce a scroll event. Fetch one page; loadOlder coalesces bursts.
-          if (event.deltaY < 0 && event.currentTarget.scrollTop <= 0) void loadOlder();
-        }}
-        onScroll={(event) => {
-          const top = event.currentTarget.scrollTop;
-          if (top < previousScrollTop.current && top < 80) void loadOlder();
-          previousScrollTop.current = top;
-        }}
         style={{
           flex: 1,
-          overflowY: 'auto',
-          padding: '12px 0',
           minHeight: 0,
-          // Contain absolute descendants so they cannot grow an outer scroller.
+          display: 'flex',
+          flexDirection: 'column',
           position: 'relative',
         }}
       >
-        <HistoryTextChoices.Provider value={textChoiceContext}>
-          <div ref={contentRef}>
-            {/* Genealogy Banner */}
-            <GenealogyBanner />
+        <div
+          ref={setTurnsViewport}
+          data-testid="conversation-scroll-container"
+          onWheel={(event) => {
+            // At the top (including an underfilled page), upward intent cannot
+            // produce a scroll event. Fetch one page; loadOlder coalesces bursts.
+            if (event.deltaY < 0 && event.currentTarget.scrollTop <= 0) void loadOlder();
+          }}
+          onScroll={(event) => {
+            const top = event.currentTarget.scrollTop;
+            if (top < previousScrollTop.current && top < 80) void loadOlder();
+            previousScrollTop.current = top;
+          }}
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '12px 0',
+            minHeight: 0,
+            // Contain absolute descendants so they cannot grow an outer scroller.
+            position: 'relative',
+          }}
+        >
+          <HistoryTextChoices.Provider value={textChoiceContext}>
+            <div ref={contentRef}>
+              {/* Genealogy Banner */}
+              <GenealogyBanner />
 
-            {error && <Alert type="error" title={error} />}
-            {currentReactiveState?.hasOlderTasks && (
-              <Button loading={loadingOlder} onClick={() => void loadOlder()}>
-                Load older history
-              </Button>
-            )}
-            {/* Task-organized conversation */}
-            {taskBlocks}
-          </div>
-        </HistoryTextChoices.Provider>
+              {error && <Alert type="error" title={error} />}
+              {currentReactiveState?.hasOlderTasks && (
+                <Button loading={loadingOlder} onClick={() => void loadOlder()}>
+                  Load older history
+                </Button>
+              )}
+              {/* Task-organized conversation */}
+              {taskBlocks}
+            </div>
+          </HistoryTextChoices.Provider>
+        </div>
+        {!isAtBottom && <JumpToLatest count={newMessageCount} onJump={handleScrollToBottom} />}
       </div>
     );
   }

@@ -151,10 +151,7 @@ function transport(persisted: number, failedTurns: number[] = [], { long = false
   return { client, addTurn, emitMessage };
 }
 
-async function mount(
-  client: AgorClient,
-  onScrollRef?: (scrollToBottom: () => void, scrollToTop: () => void) => void
-) {
+async function mount(client: AgorClient, onScrollRef?: (scrollToBottom: () => void) => void) {
   render(
     <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
       <App>
@@ -310,15 +307,12 @@ it('trims a parked reader once the last pending widget that held the window open
   await waitFor(() => expect(distanceFromBottom(viewport)).toBeLessThan(2), { timeout: 5_000 });
 });
 
-it('trims again once the reader returns with the jump-to-bottom button', async () => {
+it('trims again once the reader returns with the jump to latest pill', async () => {
   const { client, addTurn } = transport(10);
-  // The button (SessionPanelContent) calls exactly what onScrollRef hands out.
-  let jumpToBottom: (() => void) | undefined;
-  const viewport = await mount(client, (toBottom) => {
-    jumpToBottom = toBottom;
-  });
+  const viewport = await mount(client);
   for (let i = 0; i < 25; i++) await addTurn();
   await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(5, 34)));
+  expect(screen.queryByRole('button', { name: /Jump to latest/ })).toBeNull();
 
   // Scrolled up while turns arrive: nothing is trimmed under the reader.
   await scrollTo(viewport, Math.floor((viewport.scrollHeight - viewport.clientHeight) / 2));
@@ -326,7 +320,18 @@ it('trims again once the reader returns with the jump-to-bottom button', async (
   await screen.findByText(/Answer 49\./, undefined, { timeout: 5_000 });
   expect(mountedTurns(viewport)).toEqual(range(5, 49));
 
-  act(() => jumpToBottom!());
+  // Prompts and answers that landed after the reader left count; on a slow
+  // runner the first turn can land before the escape registers.
+  const pill = screen.getByRole('button', { name: /Jump to latest/ });
+  const count = Number(pill.textContent?.match(/(\d+) new/)?.[1]);
+  expect(count).toBeGreaterThanOrEqual(26);
+  expect(count).toBeLessThanOrEqual(30);
+  expect(screen.getByRole('status')).toHaveTextContent(`${count} new messages`);
+  const edge = viewport.getBoundingClientRect().bottom;
+  expect(pill.getBoundingClientRect().bottom).toBeLessThan(edge);
+  expect(pill.getBoundingClientRect().bottom).toBeGreaterThan(edge - 64);
+  act(() => pill.click());
+  await waitFor(() => expect(screen.queryByRole('button', { name: /Jump to latest/ })).toBeNull());
   await waitFor(() => expect(distanceFromBottom(viewport)).toBeLessThan(2), { timeout: 5_000 });
   for (let i = 0; i < 5; i++) await addTurn();
   await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(25, 54)), { timeout: 5_000 });
@@ -437,7 +442,7 @@ it('forgets the reading state of trimmed turns and keeps it for turns still load
   const toggle = (n: number) =>
     within(viewport.querySelector<HTMLElement>(`[data-task-block="${taskId(n)}"]`)!).getByRole(
       'button',
-      { name: /^show (more|less)$/ }
+      { name: /^Show (more|less)$/ }
     );
   // History arrives collapsed and the reader expands turn 5; turn 9 arrived
   // as the latest turn and stays expanded.

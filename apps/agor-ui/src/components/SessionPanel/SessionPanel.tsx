@@ -118,6 +118,7 @@ import {
   reconcileStopTransportFailure,
   requestSessionStop,
 } from './stopReconciliation';
+import { useBranchMenu } from './useBranchMenu';
 import { useComposerAttachments } from './useComposerAttachments';
 
 // Re-export PermissionMode from SDK for convenience
@@ -398,6 +399,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     : undefined;
   const { showInfo, showError, showWarning } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
+  const branchMenu = useBranchMenu(branch, connectionDisabled);
   const recenterMap = useRecenterMap();
 
   // Subscribe only to the entity families this panel needs via narrow store
@@ -552,7 +554,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     session?.model_config?.effort ?? toolCaps?.defaultReasoningEffort
   );
   const [scrollToBottom, setScrollToBottom] = React.useState<(() => void) | null>(null);
-  const [scrollToTop, setScrollToTop] = React.useState<(() => void) | null>(null);
   const [forkModalOpen, setForkModalOpen] = React.useState(false);
   const [spawnModalOpen, setSpawnModalOpen] = React.useState(false);
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
@@ -1020,7 +1021,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           },
         ]
       : []),
-    ...(hasBranchActions ? [{ type: 'divider' as const }] : []),
+    ...branchMenu.items,
+    ...(hasBranchActions || branchMenu.items.length ? [{ type: 'divider' as const }] : []),
     ...(onOpenSettings
       ? [
           {
@@ -1683,6 +1685,20 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 </Tooltip>
               )}
               <Flex align="center" gap={token.marginXXS} wrap>
+                {branch && (
+                  <>
+                    <Typography.Text
+                      type="secondary"
+                      ellipsis
+                      style={{ fontSize: token.fontSizeSM, maxWidth: '100%' }}
+                    >
+                      {branch.name}
+                    </Typography.Text>
+                    <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                      ·
+                    </Typography.Text>
+                  </>
+                )}
                 <Badge status={getStatusColor()} />
                 <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                   {describeSessionStatus(session).label}
@@ -1707,14 +1723,24 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           </div>
           <Space size={4}>
             <SessionAttachmentsDropdown items={attachmentItems} />
-            <Dropdown menu={{ items: moreMenuItems }} trigger={['click']} placement="bottomRight">
+            <Dropdown
+              menu={{ items: moreMenuItems, triggerSubMenuAction: 'click' }}
+              trigger={['click']}
+              placement="bottomRight"
+            >
               <Tooltip title="More actions">
-                <Button
-                  type="text"
-                  aria-label="More actions"
-                  icon={<EllipsisOutlined />}
-                  style={mobileHeaderButtonStyle}
-                />
+                <Badge dot={branchMenu.environmentFailed} offset={[-6, 6]}>
+                  <Button
+                    type="text"
+                    aria-label={
+                      branchMenu.environmentFailed
+                        ? 'More actions, environment failed'
+                        : 'More actions'
+                    }
+                    icon={<EllipsisOutlined />}
+                    style={mobileHeaderButtonStyle}
+                  />
+                </Badge>
               </Tooltip>
             </Dropdown>
             <Tooltip title="Search session">
@@ -1909,10 +1935,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             branch={branch}
             currentUserId={currentUserId}
             sessionMcpServerIds={sessionMcpServerIds}
-            scrollToBottom={scrollToBottom}
-            scrollToTop={scrollToTop}
             setScrollToBottom={setScrollToBottom}
-            setScrollToTop={setScrollToTop}
             queuedTasks={queuedTasks}
             spawnModalOpen={spawnModalOpen}
             setSpawnModalOpen={setSpawnModalOpen}
