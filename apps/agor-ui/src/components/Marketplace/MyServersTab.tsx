@@ -36,10 +36,7 @@ import {
 import { useThemedMessage } from '@/utils/message';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { mcpServerRemoved } from '../../store/agorRealtimeActions';
-import { MCPServerEditModal } from '../MCPServer/MCPServerEditModal';
 import {
-  allowedMcpScopes,
-  allowedMcpTransports,
   canDeleteMcpServer,
   canEditMcpServer,
   canRefreshMcpServer,
@@ -59,6 +56,7 @@ import {
   marketplaceServerTitle,
 } from './marketplacePresentation';
 import { ServerSettingsDrawer } from './ServerSettingsDrawer';
+import type { CustomServerEditPurpose } from './useCustomMcpServerEditor';
 
 const { Text } = Typography;
 
@@ -118,6 +116,8 @@ export interface MyServersTabProps {
   refresh: () => Promise<unknown>;
   onBrowseCatalog?: () => void;
   onOpenSession?: (sessionId: SessionID) => void;
+  /** Opens the host's editor for a server; without it, the drawer offers no edit actions. */
+  onEditServer?: (server: MCPServer, purpose: CustomServerEditPurpose) => void;
   requestedServerId?: string | null;
   onRequestedServerOpened?: () => void;
 }
@@ -135,6 +135,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   refresh,
   onBrowseCatalog,
   onOpenSession,
+  onEditServer,
   requestedServerId,
   onRequestedServerOpened,
 }) => {
@@ -159,14 +160,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     [connectionReady, currentUser, memberPolicy.canConfigure, memberPolicy.policy]
   );
   const policyState = policyPendingState(memberPolicy);
-  const offeredTransports = useMemo(
-    () => allowedMcpTransports({ isAdmin: capability.isAdmin }),
-    [capability.isAdmin]
-  );
-  const offeredScopes = useMemo(
-    () => allowedMcpScopes({ isAdmin: capability.isAdmin, policy: capability.policy }),
-    [capability.isAdmin, capability.policy]
-  );
+
   const authorityFor = useCallback(
     (server: MCPMarketplaceServer) => ({
       // The overview lists the caller's own rows plus Shared (ownerless) ones.
@@ -222,8 +216,6 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   );
   const autoDiscoveryAttempts = useRef(new Set<string>());
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
-  /** The full server open in the configuration/credential editor. */
-  const [editingServer, setEditingServer] = useState<MCPServer | null>(null);
   /** Catalog entry name -> its customer-owned app recipe (`null`: not one). */
   const [appRecipes, setAppRecipes] = useState<
     ReadonlyMap<string, { secretRequired: boolean } | null>
@@ -267,7 +259,6 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     drawerOpen.current = false;
     drawerTrigger.current = null;
     setSelectedServerId(null);
-    setEditingServer(null);
     setEditingApp(null);
     setDiscoveryErrors(new Map());
   }, [active, clearRemovalFocusAuthority]);
@@ -762,18 +753,19 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     }
   };
 
-  // The credential and configuration actions open the same full-server editor.
+  // The credential and configuration actions hand the full server to the
+  // host's in-place editor (no modal over the Catalog).
   const openServerEditor = async (
     server: MCPMarketplaceServer,
-    purpose: 'credential' | 'configuration'
+    purpose: CustomServerEditPurpose
   ) => {
     const operation = guard.begin();
-    if (!client || !canChangeTools || !operation.isCurrent()) return;
+    if (!client || !onEditServer || !canChangeTools || !operation.isCurrent()) return;
     const key = `${purpose}:${server.mcp_server_id}`;
     setBusy((current) => new Set(current).add(key));
     try {
       const fullServer = await client.service('mcp-servers').get(server.mcp_server_id);
-      if (operation.isCurrent()) setEditingServer(fullServer);
+      if (operation.isCurrent()) onEditServer(fullServer, purpose);
     } catch (cause) {
       if (operation.isCurrent()) {
         showError(formatActionError(`open ${purpose} settings`, cause, { idempotent: true }));
@@ -1047,6 +1039,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
         )}
         onEditCredential={
           // Edit configuration opens the same editor; offer one entry point.
+          onEditServer &&
           !configurable &&
           selectedCredential &&
           selectedCredential.method !== 'oauth' &&
@@ -1058,7 +1051,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           selectedServer && busy.has(`configuration:${selectedServer.mcp_server_id}`)
         )}
         onEditConfiguration={
-          configurable && selectedServer
+          onEditServer && configurable && selectedServer
             ? () => void openServerEditor(selectedServer, 'configuration')
             : undefined
         }
@@ -1119,25 +1112,6 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
             showSuccess('OAuth app updated. Users must reconnect.');
             void refresh();
           }
-        }}
-      />
-      <MCPServerEditModal
-        server={editingServer}
-        open={editingServer !== null}
-        client={client}
-        identityKey={currentUser?.user_id ?? null}
-        authGeneration={authGeneration}
-        authorityKey={
-          mutationAuthorityKey && currentUser
-            ? `${currentUser.user_id}:${currentUser.role}:${authGeneration}`
-            : null
-        }
-        offeredTransports={offeredTransports}
-        offeredScopes={offeredScopes}
-        mutationAllowed={canChangeTools}
-        onClose={() => {
-          setEditingServer(null);
-          void refresh();
         }}
       />
     </Flex>
