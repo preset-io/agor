@@ -1824,11 +1824,33 @@ describe('configureRealtimePublish', () => {
     configureRealtimePublish({ app, ...r });
 
     const channel = await app.runPublish(
-      { artifact_id: 'a1', branch_id: null, created_by: 'creator', public: false },
+      { artifact_id: 'a1', branch_id: null, created_by: 'creator', public: true },
       { path: 'artifacts', method: 'patch', event: 'patched' }
     );
 
     expect(channel.connections).toEqual([{ user: creator }, { user: admin }, service]);
+  });
+
+  it('sends private artifact events to the creator only, even on a visible branch', async () => {
+    const creator = user('creator');
+    const member = user('member');
+    const admin = user('admin', ROLES.ADMIN);
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp([{ user: creator }, { user: member }, { user: admin }, service]);
+    const r = repos({
+      branch: branch('b1', 'view'),
+      permissions: { creator: 'view', member: 'view', admin: 'view' },
+    });
+    configureRealtimePublish({ app, ...r });
+
+    // Covers a public->private patch: the emitted row is already private, so
+    // the old branch audience never receives it.
+    const channel = await app.runPublish(
+      { artifact_id: 'a1', branch_id: 'b1', created_by: 'creator', public: false },
+      { path: 'artifacts', method: 'patch', event: 'patched' }
+    );
+
+    expect(channel.connections).toEqual([{ user: creator }, service]);
   });
 
   it('fails closed for null-branch artifact events without a creator', async () => {

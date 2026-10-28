@@ -20,7 +20,7 @@ import type {
   SessionID,
   UUID,
 } from '@agor/core/types';
-import { and, eq, inArray, like, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, like, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId, isValidUUID } from '../../lib/ids';
 import { canonicalizeAgorGrants } from '../../types/artifact-grants';
@@ -47,6 +47,25 @@ function canonicalGrantsOrUndefined(input: unknown): AgorGrants | undefined {
 
 function canonicalGrantsOrNull(input: unknown): AgorGrants | null {
   return canonicalGrantsOrUndefined(input) ?? null;
+}
+
+/**
+ * Who may see an artifact's payload: anyone if it is public, else only the
+ * person who made it. No role bypasses it. `isArtifactVisibleTo` is the same
+ * rule for a row already read.
+ */
+export function visibleArtifactCondition(userId: string): SQL {
+  return or(eq(artifacts.public, true), eq(artifacts.created_by, userId)) as SQL;
+}
+
+/** `visibleArtifactCondition` for an artifact already read. */
+export function isArtifactVisibleTo(
+  artifact: Pick<Artifact, 'public' | 'created_by'>,
+  userId?: string
+): boolean {
+  if (artifact.public) return true;
+  if (!userId || !artifact.created_by) return false;
+  return artifact.created_by === userId;
 }
 
 export type ArtifactListProjection = 'full' | 'without-files' | 'metadata';
@@ -97,7 +116,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
   /**
    * Board-reference visibility only, after board authorization and inside the
    * caller's trusted tenant scope. Not a general artifact authorization API:
-   * preserves the board hook's legacy comparison for userless internal calls.
+   * applies `isArtifactVisibleTo`, so userless calls see public artifacts only.
    * External board calls must pass their authenticated user ID.
    * Never load source/runtime JSON or resolve share URLs. Resolve ambiguity
    * BEFORE visibility: a hidden second match must not authorize a prefix.
@@ -134,10 +153,12 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
       created_by: artifacts.created_by,
     };
     type VisibilityRow = Pick<ArtifactRow, 'artifact_id' | 'public' | 'created_by'>;
-    // Match rowToArtifact's null-to-undefined creator projection, including
-    // legacy internal calls without a user. This is not a new auth boundary.
+    // Not a new auth boundary: the shared rule over the minimal projection.
     const canSee = (row: VisibilityRow) =>
-      Boolean(row.public) || (row.created_by ?? undefined) === userId;
+      isArtifactVisibleTo(
+        { public: Boolean(row.public), created_by: (row.created_by ?? undefined) as UUID },
+        userId
+      );
     const readChunk = async <T>(work: () => Promise<T>): Promise<T | undefined> => {
       try {
         return await work();
@@ -351,6 +372,8 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    *   visible to this user under branch RBAC, pushed down as a correlated SQL
    *   EXISTS instead of a preloaded `branch_id IN (...)` list. Null-branch
    *   artifacts are excluded, matching the existing RBAC find-hook behavior.
+   * @param filter.readableBy - Only artifacts this user may see
+   *   (`visibleArtifactCondition`).
    * @param filter.projection - Exclude source/runtime JSON columns from the SQL
    *   select when a list caller explicitly requested a lean response.
    */
@@ -359,6 +382,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
     archived?: boolean;
     branchIds?: BranchID[];
     visibleToUserId?: UUID;
+    readableBy?: UUID;
     projection?: ArtifactListProjection;
   }): Promise<Artifact[]> {
     try {
@@ -383,6 +407,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
           visibleBranchReferenceAccessExists(this.db, filter.visibleToUserId, artifacts.branch_id)
         );
       }
+      if (filter?.readableBy) conditions.push(visibleArtifactCondition(filter.readableBy));
 
       const predicate = conditions.length > 0 ? and(...conditions) : undefined;
       const projection = filter?.projection ?? 'full';
@@ -412,9 +437,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    */
   async findVisible(userId: string, options?: { limit?: number }): Promise<Artifact[]> {
     try {
-      let query = select(this.db)
-        .from(artifacts)
-        .where(or(eq(artifacts.public, true), eq(artifacts.created_by, userId))!);
+      let query = select(this.db).from(artifacts).where(visibleArtifactCondition(userId));
 
       if (options?.limit) {
         query = query.limit(options.limit);
@@ -457,10 +480,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         conditions.push(eq(artifacts.archived, options.archived));
       }
 
-      // Visibility filtering: public artifacts + private artifacts owned by the user
-      if (options?.userId) {
-        conditions.push(or(eq(artifacts.public, true), eq(artifacts.created_by, options.userId))!);
-      }
+      if (options?.userId) conditions.push(visibleArtifactCondition(options.userId));
 
       let query = select(this.db)
         .from(artifacts)

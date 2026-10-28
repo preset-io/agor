@@ -267,6 +267,8 @@ type PublishScope =
   | { kind: 'branch'; branchId: BranchID | null }
   | { kind: 'branches'; branchIds: BranchID[] }
   | { kind: 'users'; userIds: Set<string> }
+  /** Exactly these users (plus service connections); no admin bypass. */
+  | { kind: 'usersOnly'; userIds: Set<string> }
   | { kind: 'serviceOnly' };
 
 /**
@@ -664,6 +666,16 @@ async function resolvePublishScope(
     }
 
     case 'artifact': {
+      // Private artifacts are readable only by their creator, with no role
+      // bypass (see `isArtifactVisibleTo`). A public->private patch therefore
+      // goes to the creator only; other clients keep their stale public copy
+      // until they reload, but never receive the private row.
+      if (asRecord(data)?.public === false) {
+        const creator = extractCreatedBy(data);
+        return creator
+          ? { kind: 'usersOnly', userIds: new Set([creator]) }
+          : { kind: 'serviceOnly' };
+      }
       const branchId = extractBranchId(data, context);
       if (branchId) return { kind: 'branch', branchId: branchId as BranchID };
 
@@ -1022,6 +1034,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       if (scope.kind === 'users') {
         return filterToUserIdsOrAdmins(tenantScoped, scope.userIds, allowSuperadmin);
       }
+      if (scope.kind === 'usersOnly') return filterToUserIdsOrServices(tenantScoped, scope.userIds);
       if (scope.kind === 'board') {
         if (!scope.boardId || !boardRepository) {
           return filterToServiceConnections(tenantScoped);

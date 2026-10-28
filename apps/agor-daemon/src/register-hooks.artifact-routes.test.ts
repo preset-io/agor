@@ -2,8 +2,10 @@ import type { Server } from 'node:http';
 import {
   ArtifactRepository,
   BoardRepository,
+  BranchRepository,
   createTenantScopedDatabaseProxy,
   generateId,
+  RepoRepository,
   UsersRepository,
 } from '@agor/core/db';
 import {
@@ -14,7 +16,7 @@ import {
   feathersExpress,
   rest,
 } from '@agor/core/feathers';
-import type { HookContext, UUID } from '@agor/core/types';
+import type { BranchID, HookContext, UUID } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { expect } from 'vitest';
@@ -96,6 +98,12 @@ dbTest(
       email: 'artifact-member@example.test',
       role: ROLES.MEMBER,
     });
+    const adminId = generateId() as UUID;
+    await users.create({
+      user_id: adminId,
+      email: 'artifact-admin@example.test',
+      role: ROLES.ADMIN,
+    });
     const board = await new BoardRepository(rawDb).create({
       name: 'Artifact custom route test board',
       created_by: ownerId,
@@ -111,6 +119,48 @@ dbTest(
       public: true,
       created_by: ownerId,
     });
+
+    const privateArtifact = await new ArtifactRepository(rawDb).create({
+      artifact_id: generateId(),
+      board_id: board.board_id,
+      name: 'Owner-only artifact',
+      template: 'static',
+      files: { '/index.html': '<h1>private</h1>' },
+      public: false,
+      created_by: ownerId,
+    });
+
+    const repo = await new RepoRepository(rawDb).create({
+      repo_id: generateId() as UUID,
+      slug: `artifact-route-${generateId()}`,
+      name: 'Artifact route repo',
+      repo_type: 'remote',
+      remote_url: 'https://github.com/test/repo.git',
+      local_path: '/tmp/artifact-route-repo',
+      default_branch: 'main',
+    });
+    const branch = await new BranchRepository(rawDb).create({
+      branch_id: generateId() as BranchID,
+      repo_id: repo.repo_id,
+      name: 'artifact-route-branch',
+      ref: 'refs/heads/artifact-route-branch',
+      branch_unique_id: 1,
+      path: '/tmp/artifact-route-repo/branch',
+      created_by: ownerId,
+    });
+    const branchArtifact = (isPublic: boolean) =>
+      new ArtifactRepository(rawDb).create({
+        artifact_id: generateId(),
+        board_id: board.board_id,
+        branch_id: branch.branch_id,
+        name: isPublic ? 'Public branch artifact' : 'Private branch artifact',
+        template: 'static',
+        files: { '/index.html': '<h1>branch</h1>' },
+        public: isPublic,
+        created_by: ownerId,
+      });
+    const publicOnBranch = await branchArtifact(true);
+    const privateOnBranch = await branchArtifact(false);
 
     // Production wraps the daemon handle with this guard. It is armed for
     // SQLite too, so an unscoped custom-route repository access fails exactly
@@ -164,7 +214,12 @@ dbTest(
       sessionsService: app.service('sessions') as never,
       messagesService: app.service('messages') as never,
       boardsService: undefined,
-      branchRepository: { findById: async () => null } as never,
+      // Everyone can view the seeded branch; only the private rule hides rows.
+      branchRepository: {
+        findById: async (id: string) => (id === branch.branch_id ? branch : null),
+        isOwner: async (_id: string, userId: string) => userId === ownerId,
+        resolveUserPermission: async () => 'view',
+      } as never,
       usersRepository: users,
       sessionsRepository: {} as never,
     });
@@ -245,6 +300,32 @@ dbTest(
         revoked: true,
         grantId: grantList[0]?.grant_id,
       });
+
+      // get, patch and remove apply the private rule with no role bypass,
+      // matching the payload route, so a write can never act as a read.
+      const call = (artifactId: string, userId: UUID, method = 'GET', body?: unknown) =>
+        fetch(`${baseUrl}/artifacts/${artifactId}`, {
+          method,
+          headers: { ...authHeaders(userId), 'content-type': 'application/json' },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+      expect((await call(privateArtifact.artifact_id, ownerId)).status).toBe(200);
+      expect((await call(privateArtifact.artifact_id, memberId)).status).toBe(404);
+      expect((await call(privateArtifact.artifact_id, adminId)).status).toBe(404);
+      expect((await call(privateOnBranch.artifact_id, adminId)).status).toBe(404);
+      expect((await call(privateOnBranch.artifact_id, adminId, 'PATCH', {})).status).toBe(404);
+      expect((await call(privateOnBranch.artifact_id, adminId, 'DELETE')).status).toBe(404);
+
+      // Owner-or-admin writes still work on artifacts the caller can see.
+      const adminPatch = await call(publicOnBranch.artifact_id, adminId, 'PATCH', {
+        name: 'Renamed by admin',
+      });
+      expect(adminPatch.status, await adminPatch.clone().text()).toBe(200);
+      const ownerPatch = await call(privateOnBranch.artifact_id, ownerId, 'PATCH', {
+        name: 'Renamed by owner',
+      });
+      expect(ownerPatch.status, await ownerPatch.clone().text()).toBe(200);
+      await expect(ownerPatch.json()).resolves.toMatchObject({ name: 'Renamed by owner' });
 
       const afterRevoke = await fetch(`${baseUrl}/me/artifact-trust-grants`, {
         headers: authHeaders(memberId),
