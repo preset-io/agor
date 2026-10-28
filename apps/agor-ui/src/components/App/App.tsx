@@ -1299,6 +1299,9 @@ export const App: React.FC<AppProps> = ({
           onCreate={createFlows.openCreate}
         />
         {topBanner}
+        {!isHomeSurface && !isTeammatesPath && isExampleOwned(currentBoard, exampleOwnerId) && (
+          <ExampleBoardBanner boardId={currentBoardId} />
+        )}
         <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
           <PanelGroup
             id="main-layout"
@@ -1468,43 +1471,36 @@ export const App: React.FC<AppProps> = ({
                         onSeeAllTeammates={handleSeeAllTeammates}
                       />
                     ) : (
-                      <Flex vertical style={{ height: '100%' }}>
-                        {isExampleOwned(currentBoard, exampleOwnerId) && currentBoard && (
-                          <ExampleBoardBanner boardId={currentBoard.board_id} />
-                        )}
-                        <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-                          <SessionCanvas
-                            ref={sessionCanvasRef}
-                            board={currentBoard || null}
-                            client={client}
-                            branches={boardBranches}
-                            primaryTeammateId={primaryTeammateId}
-                            currentUserId={user?.user_id}
-                            selectedSessionId={effectiveSelectedSessionId}
-                            activeUrlTargetBranchId={activeUrlTargetBranchId}
-                            activeUrlTargetArtifactId={activeUrlTargetArtifactId}
-                            availableAgents={availableAgents}
-                            onSessionClick={handleSessionClick}
-                            onSessionUpdate={stableOnSessionUpdate}
-                            onSessionDelete={stableOnSessionDelete}
-                            onForkSession={stableOnForkSession}
-                            onSpawnSession={stableOnSpawnSession}
-                            onUpdateSessionMcpServers={stableOnUpdateSessionMcpServers}
-                            onOpenSettings={setSessionSettingsId}
-                            onCreateSessionForBranch={handleQuickStartSession}
-                            onOpenBranch={setBranchModalBranchId}
-                            onArchiveOrDeleteBranch={stableOnArchiveOrDeleteBranch}
-                            onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
-                            onStartEnvironment={stableOnStartEnvironment}
-                            onStopEnvironment={stableOnStopEnvironment}
-                            onViewLogs={setLogsModalBranchId}
-                            onNukeEnvironment={stableOnNukeEnvironment}
-                            onOpenCommentsPanel={handleOpenCommentsPanel}
-                            onCommentHover={setHoveredCommentId}
-                            onCommentSelect={handleCommentSelect}
-                          />
-                        </div>
-                      </Flex>
+                      <SessionCanvas
+                        ref={sessionCanvasRef}
+                        board={currentBoard || null}
+                        client={client}
+                        branches={boardBranches}
+                        primaryTeammateId={primaryTeammateId}
+                        currentUserId={user?.user_id}
+                        selectedSessionId={effectiveSelectedSessionId}
+                        activeUrlTargetBranchId={activeUrlTargetBranchId}
+                        activeUrlTargetArtifactId={activeUrlTargetArtifactId}
+                        availableAgents={availableAgents}
+                        onSessionClick={handleSessionClick}
+                        onSessionUpdate={stableOnSessionUpdate}
+                        onSessionDelete={stableOnSessionDelete}
+                        onForkSession={stableOnForkSession}
+                        onSpawnSession={stableOnSpawnSession}
+                        onUpdateSessionMcpServers={stableOnUpdateSessionMcpServers}
+                        onOpenSettings={setSessionSettingsId}
+                        onCreateSessionForBranch={handleQuickStartSession}
+                        onOpenBranch={setBranchModalBranchId}
+                        onArchiveOrDeleteBranch={stableOnArchiveOrDeleteBranch}
+                        onOpenTerminal={canOpenTerminal ? handleOpenTerminal : undefined}
+                        onStartEnvironment={stableOnStartEnvironment}
+                        onStopEnvironment={stableOnStopEnvironment}
+                        onViewLogs={setLogsModalBranchId}
+                        onNukeEnvironment={stableOnNukeEnvironment}
+                        onOpenCommentsPanel={handleOpenCommentsPanel}
+                        onCommentHover={setHoveredCommentId}
+                        onCommentSelect={handleCommentSelect}
+                      />
                     )}
                   </div>
                 </Panel>

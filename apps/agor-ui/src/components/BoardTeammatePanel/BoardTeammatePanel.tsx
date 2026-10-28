@@ -36,6 +36,7 @@ import {
 } from '../../store/selectors';
 import { selectTeammatesLoaded } from '../../store/userScope';
 import { formatActionError } from '../../utils/connectionErrors';
+import { isExampleOwned, selectExampleOwnerId } from '../../utils/exampleBoard';
 import { mapToArray } from '../../utils/mapHelpers';
 import { useThemedMessage } from '../../utils/message';
 import { BranchSessionSections } from '../BranchCard';
@@ -223,7 +224,10 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   const commentById = useAgorStore(selectCommentById);
   const boardObjects = board?.objects;
   const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
-  const canEditBoard = useCanManageBoard(client, board ?? undefined, currentUser);
+  const exampleOwnerId = useAgorStore(selectExampleOwnerId);
+  const canEditBoard =
+    useCanManageBoard(client, board ?? undefined, currentUser) &&
+    !isExampleOwned(board, exampleOwnerId);
   const { lookup: teammateLookup, retry: retryTeammateLookup } = usePrimaryTeammateLookup(
     client,
     board?.primary_teammate_id,

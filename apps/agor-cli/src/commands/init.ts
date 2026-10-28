@@ -20,6 +20,7 @@ import {
   getConfigPath,
   getDaemonUrl,
   getDefaultConfig,
+  isExampleBoardEnabled,
   loadConfig,
   prepareInitialDeploymentConfig,
 } from '@agor/core/config';
@@ -32,6 +33,7 @@ import {
   runMigrations,
   seedInitialData,
 } from '@agor/core/db';
+import { seedExampleBoard } from '@agor/core/seed/example-board';
 import {
   AGOR_TELEMETRY_DOCS_URL,
   createOpenSourceTelemetryLogger,
@@ -657,8 +659,16 @@ export default class Init extends Command {
       try {
         this.log('');
         this.log('🌱 Seeding initial data...');
-        await seedInitialData(db, initialOwnerId);
+        const created = await seedInitialData(db, initialOwnerId);
         this.log(`${chalk.green('   ✓')} Created Main Board`);
+        if (created && isExampleBoardEnabled(await loadConfig().catch(() => ({})))) {
+          try {
+            await seedExampleBoard(db);
+            this.log(`${chalk.green('   ✓')} Added the example board`);
+          } catch {
+            this.log(chalk.yellow('   ⚠️  Could not add the example board. Agor works without it.'));
+          }
+        }
       } finally {
         this.closeSQLiteDatabase(db);
       }
