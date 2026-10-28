@@ -492,6 +492,8 @@ export interface UserPreferences {
   use_slack_avatar?: boolean;
   /** Home "My work" layout. Undefined defaults to list. */
   homeWorkView?: HomeWorkView;
+  /** Hides the example board for this user only. */
+  exampleBoardHidden?: boolean;
   // Future preferences can be added here
   [key: string]: unknown;
 }
