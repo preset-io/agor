@@ -469,4 +469,78 @@ describe('OpenCode transcript reconciliation', () => {
       contentBlocks: [{ type: 'thinking', text: 'reasoned answer' }],
     });
   });
+
+  describe('OpenCode 2.1 native event translation', () => {
+    it('translates 2.1 session.text.delta and reasoning.delta', () => {
+      const events = translator();
+      expect(
+        events.translate({
+          type: 'session.text.delta',
+          data: { sessionID: ACTIVE_SESSION, delta: 'Hello from 2.1' },
+        })
+      ).toEqual([{ type: 'text-delta', delta: 'Hello from 2.1' }]);
+
+      expect(
+        events.translate({
+          type: 'session.reasoning.delta',
+          data: { sessionID: ACTIVE_SESSION, delta: 'Thinking in 2.1' },
+        })
+      ).toEqual([{ type: 'reasoning-delta', delta: 'Thinking in 2.1' }]);
+    });
+
+    it('translates 2.1 tool events and execution lifecycle', () => {
+      const events = translator();
+      expect(
+        events.translate({
+          type: 'session.tool.called',
+          data: { sessionID: ACTIVE_SESSION, id: 'read_file' },
+        })
+      ).toEqual([{ type: 'tool-activity', tool: 'read_file', status: 'called' }]);
+
+      expect(
+        events.translate({
+          type: 'session.tool.success',
+          data: { sessionID: ACTIVE_SESSION, id: 'read_file' },
+        })
+      ).toEqual([{ type: 'tool-activity', tool: 'read_file', status: 'completed' }]);
+
+      // Marks activeAssistantSeen, so execution.succeeded emits idle
+      events.translate({
+        type: 'session.text.delta',
+        data: { sessionID: ACTIVE_SESSION, delta: 'Done' },
+      });
+      expect(
+        events.translate({
+          type: 'session.execution.succeeded',
+          data: { sessionID: ACTIVE_SESSION },
+        })
+      ).toEqual([{ type: 'idle' }]);
+    });
+
+    it('translates 2.1 permission.asked events with action and resources', () => {
+      const events = translator();
+      expect(
+        events.translate({
+          type: 'permission.asked',
+          data: {
+            id: 'perm-1',
+            sessionID: ACTIVE_SESSION,
+            action: 'read',
+            resources: ['/path/to/file.ts'],
+            metadata: { description: 'Read file' },
+          },
+        })
+      ).toEqual([
+        {
+          type: 'permission',
+          request: {
+            id: 'perm-1',
+            permission: 'read',
+            patterns: ['/path/to/file.ts'],
+            metadata: { description: 'Read file' },
+          },
+        },
+      ]);
+    });
+  });
 });

@@ -122,7 +122,7 @@ describe('managed OpenCode readiness', () => {
       {
         resolveBinary: async () => ({
           executable: process.execPath,
-          argsPrefix: ['/managed/opencode-ai/bin/opencode'],
+          argsPrefix: ['/managed/@opencode/cli/bin/opencode'],
         }),
         spawn,
         fetch: vi.fn(async () => new Response('{}', { status: 200 })),
@@ -133,7 +133,7 @@ describe('managed OpenCode readiness', () => {
 
     expect(spawn).toHaveBeenCalledWith(
       process.execPath,
-      ['/managed/opencode-ai/bin/opencode', 'serve', '--hostname=127.0.0.1', '--port=0'],
+      ['/managed/@opencode/cli/bin/opencode', 'serve', '--hostname=127.0.0.1', '--port=0'],
       expect.objectContaining({
         env: expect.objectContaining({
           XDG_DATA_HOME: dataHome,
@@ -184,7 +184,7 @@ describe('managed OpenCode readiness', () => {
 
     expect(fetchHealth).toHaveBeenCalledTimes(2);
     expect(fetchHealth).toHaveBeenLastCalledWith(
-      'http://127.0.0.1:43210/global/health',
+      'http://127.0.0.1:43210/api/info',
       expect.objectContaining({
         headers: { Authorization: server.authorization },
       })

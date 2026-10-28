@@ -8,7 +8,7 @@ describe('OpenCode known model catalog', () => {
       readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
     ) as { devDependencies: Record<string, string> };
 
-    expect(manifest.devDependencies['@opencode-ai/sdk']).toBe(OPENCODE_VERSION);
+    expect(manifest.devDependencies['@opencode/client']).toBe(OPENCODE_VERSION);
   });
 
   it('prefers the first provider with saved credentials', () => {

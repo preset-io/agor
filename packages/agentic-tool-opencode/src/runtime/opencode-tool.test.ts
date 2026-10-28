@@ -154,6 +154,29 @@ function assertExplicitModelAvailable(model: Record<string, unknown>, effort?: E
   ).assertExplicitModelAvailable(client, '/workspace', 'openai', 'gpt-test', effort);
 }
 
+function assertExplicitModelAvailableV2(model: Record<string, unknown>, effort?: EffortLevel) {
+  const tool = new OpenCodeTool({});
+  const client = {
+    model: {
+      list: vi.fn(async () => ({
+        data: [{ id: 'gpt-test', providerID: 'openai', ...model }],
+        error: undefined,
+      })),
+    },
+  };
+  return (
+    tool as unknown as {
+      assertExplicitModelAvailable(
+        client: unknown,
+        directory: string,
+        provider: string,
+        model: string,
+        effort?: EffortLevel
+      ): Promise<void>;
+    }
+  ).assertExplicitModelAvailable(client, '/workspace', 'openai', 'gpt-test', effort);
+}
+
 describe('OpenCodeTool abort cleanup', () => {
   it('keeps the managed server alive until active-session abort settles', async () => {
     const activeSessionAbort = deferred<void>();
@@ -218,6 +241,74 @@ describe('OpenCodeTool abort cleanup', () => {
   );
 });
 
+describe('OpenCodeTool session forking', () => {
+  it('forks from parentOpenCodeSessionId using native session.fork', async () => {
+    const fork = vi.fn(async ({ sessionID }: { sessionID: string }) => ({
+      id: `forked-from-${sessionID}`,
+    }));
+    const create = vi.fn();
+    const client = {
+      session: { fork, create },
+    };
+    const persistOpenCodeSessionId = vi.fn();
+    const tool = new OpenCodeTool({});
+    const runtime = tool as unknown as {
+      resolveSession(
+        client: unknown,
+        input: unknown
+      ): Promise<{ openCodeSessionId: string; sessionWasCreated: boolean }>;
+    };
+
+    const resolved = await runtime.resolveSession(client, {
+      parentOpenCodeSessionId: 'parent-opencode-1',
+      title: 'Forked Task',
+      directory: '/workspace',
+      persistOpenCodeSessionId,
+    });
+
+    expect(fork).toHaveBeenCalledWith({ sessionID: 'parent-opencode-1' });
+    expect(create).not.toHaveBeenCalled();
+    expect(persistOpenCodeSessionId).toHaveBeenCalledWith('forked-from-parent-opencode-1');
+    expect(resolved).toEqual({
+      openCodeSessionId: 'forked-from-parent-opencode-1',
+      sessionWasCreated: true,
+    });
+  });
+
+  it('falls back to session.create when parent session is empty and cannot be forked', async () => {
+    const fork = vi.fn(async () => {
+      throw new Error('Cannot fork empty session');
+    });
+    const create = vi.fn(async () => ({ id: 'new-session-fallback' }));
+    const client = {
+      session: { fork, create },
+    };
+    const persistOpenCodeSessionId = vi.fn();
+    const tool = new OpenCodeTool({});
+    const runtime = tool as unknown as {
+      resolveSession(
+        client: unknown,
+        input: unknown
+      ): Promise<{ openCodeSessionId: string; sessionWasCreated: boolean }>;
+    };
+
+    const resolved = await runtime.resolveSession(client, {
+      parentOpenCodeSessionId: 'empty-parent-1',
+      title: 'Forked Task',
+      directory: '/workspace',
+      persistOpenCodeSessionId,
+    });
+
+    expect(fork).toHaveBeenCalledWith({ sessionID: 'empty-parent-1' });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(persistOpenCodeSessionId).toHaveBeenCalledWith('new-session-fallback');
+    expect(resolved).toEqual({
+      openCodeSessionId: 'new-session-fallback',
+      sessionWasCreated: true,
+    });
+  });
+});
+
 describe('OpenCodeTool prompt variants', () => {
   it('sends fresh system identity on first/resumed requests without changing user text', async () => {
     const staticPrompt = await renderAgorSystemPrompt();
@@ -276,6 +367,41 @@ describe('OpenCodeTool prompt variants', () => {
     await expect(
       assertExplicitModelAvailable({ id: 'gpt-test', variants: { max: {} } }, 'max')
     ).resolves.toBeUndefined();
+  });
+
+  it('admits an effort exposed as an array variant in v2 model.list', async () => {
+    await expect(
+      assertExplicitModelAvailableV2(
+        { id: 'gpt-test', variants: [{ id: 'low' }, { id: 'high' }, { id: 'max' }] },
+        'high'
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it('admits an effort exposed as an object variant in v2 model.list', async () => {
+    await expect(
+      assertExplicitModelAvailableV2({ id: 'gpt-test', variants: { max: {} } }, 'max')
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects an effort not supported by model variants in v2 model.list', async () => {
+    const error = await assertExplicitModelAvailableV2(
+      { id: 'gpt-test', variants: [{ id: 'low' }, { id: 'high' }] },
+      'max'
+    ).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/reasoning effort.*not available/i);
+  });
+
+  it('rejects an effort when model variants are empty in v2 model.list', async () => {
+    const error = await assertExplicitModelAvailableV2(
+      { id: 'gpt-test', variants: [] },
+      'high'
+    ).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/reasoning effort.*not available/i);
   });
 
   it('rejects an unsupported effort before prompt submission without exposing catalog secrets', async () => {

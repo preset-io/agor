@@ -65,7 +65,7 @@ function probeOpenCodeVersion(command: OpenCodeCommand, env: NodeJS.ProcessEnv):
         reject(new Error(`OpenCode version check exited with code ${code}`));
         return;
       }
-      const version = output.match(/\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/)?.[0];
+      const version = output.match(/(?:^|[^\w])v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b/)?.[1];
       if (!version) {
         reject(
           new Error(`Could not parse OpenCode version from: ${output.trim() || '(no output)'}`)
@@ -94,7 +94,7 @@ export async function assertOpenCodeCommandCompatibility(
   return version;
 }
 
-/** Use the shipped native package without running opencode-ai's postinstall. */
+/** Use the shipped native package without running @opencode/cli's postinstall. */
 export function getOpenCodeNativePackageName(
   platform: NodeJS.Platform,
   arch: string,
@@ -105,7 +105,7 @@ export function getOpenCodeNativePackageName(
   }
   // The baseline build also works on AVX2 machines, without probing host CPU
   // features or executing platform helpers during a managed runtime lookup.
-  return `opencode-${platform === 'win32' ? 'windows' : platform}-${arch}${arch === 'x64' ? '-baseline' : ''}${platform === 'linux' && musl ? '-musl' : ''}`;
+  return `@opencode/cli-${platform === 'win32' ? 'windows' : platform}-${arch}${arch === 'x64' ? '-baseline' : ''}${platform === 'linux' && musl ? '-musl' : ''}`;
 }
 
 /** Resolve the user-installed OpenCode CLI without assuming how it was installed. */
@@ -124,15 +124,23 @@ export async function resolvePackagedOpenCodeBinary(): Promise<OpenCodeCommand> 
         'opencode',
         agorVersion,
         nativePackage,
-        'opencode-ai'
+        '@opencode/cli'
       );
-      const binary = join(
-        packageDirectory,
-        'bin',
-        process.platform === 'win32' ? 'opencode.exe' : 'opencode'
-      );
-      if (!(await isExecutable(binary)))
-        throw new Error(`managed OpenCode binary is not accessible: ${binary}`);
+      const binNames =
+        process.platform === 'win32'
+          ? ['opencode.exe', 'opencode.cmd']
+          : ['opencode', 'opencode.exe'];
+      let binary = '';
+      for (const name of binNames) {
+        const candidate = join(packageDirectory, 'bin', name);
+        if (await isExecutable(candidate)) {
+          binary = candidate;
+          break;
+        }
+      }
+      if (!binary) {
+        throw new Error(`managed OpenCode binary is not accessible in: ${packageDirectory}/bin`);
+      }
       const command = { executable: binary, argsPrefix: [] };
       await assertOpenCodeCommandCompatibility(command);
       return command;

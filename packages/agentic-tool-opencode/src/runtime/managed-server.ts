@@ -227,11 +227,23 @@ export async function verifyOpenCodeAuthFileBoundary(
   const boundary = resolveOpenCodeNativeBoundary(dataHome);
   await assertOwnedDirectoryChain(boundary.homeDir, join(boundary.dataHome, 'opencode'));
   const authPath = join(boundary.dataHome, 'opencode', 'auth.json');
+  const dbPath = join(boundary.dataHome, 'opencode', 'opencode.db');
   let entry: Awaited<ReturnType<typeof lstat>>;
   try {
     entry = await lstat(authPath);
   } catch (error) {
-    if (options.allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      try {
+        const dbEntry = await lstat(dbPath);
+        if (dbEntry.isFile()) {
+          assertOwnedPrivatePath(dbEntry, 0o600);
+          return;
+        }
+      } catch (dbError) {
+        if ((dbError as NodeJS.ErrnoException).code !== 'ENOENT') throw dbError;
+      }
+      if (options.allowMissing) return;
+    }
     throw error;
   }
   if (!entry.isFile()) throw new Error('OpenCode native auth path must be a regular file');
@@ -307,7 +319,7 @@ function waitForReadiness(
     const onData = (chunk: Buffer | string) => {
       output = `${output}${chunk.toString()}`.slice(-MAX_STARTUP_OUTPUT);
       const matches = [
-        ...output.matchAll(/(?:^|\n)opencode server listening on (https?:\/\/[^\s]+)/g),
+        ...output.matchAll(/(?:^|\n)(?:opencode )?server listening on (https?:\/\/[^\s]+)/g),
       ];
       const raw = matches.at(-1)?.[1]?.replace(/[),.;]+$/, '');
       if (!raw) return;
@@ -360,7 +372,7 @@ async function waitForAuthenticatedHealth(
       Math.min(HEALTH_REQUEST_TIMEOUT_MS, remainingMs)
     );
     try {
-      const response = await fetchHealth(`${baseUrl}/global/health`, {
+      const response = await fetchHealth(`${baseUrl}/api/info`, {
         headers: { Authorization: authorization },
         signal: controller.signal,
       });
@@ -428,7 +440,7 @@ export async function startManagedOpenCodeServer(
 
   const randomBytes = dependencies.randomBytes ?? nodeRandomBytes;
   const password = randomBytes(32).toString('base64url');
-  const username = 'agor';
+  const username = 'opencode';
   const authorization = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
   const environment = {
     ...(input.hostedLayout

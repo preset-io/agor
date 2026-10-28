@@ -148,7 +148,7 @@ FROM base AS development
 
 # Source mode resolves OpenCode from PATH; keep its exact development runtime
 # out of the shared production base.
-RUN sudo npm install -g opencode-ai@1.18.31
+RUN sudo npm install -g @opencode/cli@2.1.1
 
 # Copy package files for dependency installation (as root, then chown)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

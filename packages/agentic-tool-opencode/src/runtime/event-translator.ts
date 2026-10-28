@@ -141,9 +141,16 @@ export function createOpenCodeEventTranslator(input: {
   ): OpenCodeEventEffect[] => {
     if (string(properties.sessionID) !== input.sessionId) return [];
     const id = string(properties.id);
-    const permissionName = string(shape === 'asked' ? properties.permission : properties.type);
+    const permissionName = string(
+      shape === 'asked'
+        ? (properties.permission ?? properties.action)
+        : (properties.type ?? properties.action)
+    );
     if (!id || !permissionName) return compatibilityFailure(`permission.${shape}`);
-    const patternValue = shape === 'asked' ? properties.patterns : properties.pattern;
+    const patternValue =
+      shape === 'asked'
+        ? (properties.patterns ?? properties.resources)
+        : (properties.pattern ?? properties.resources);
     const patterns = Array.isArray(patternValue)
       ? patternValue.filter((value): value is string => typeof value === 'string')
       : typeof patternValue === 'string'
@@ -158,6 +165,65 @@ export function createOpenCodeEventTranslator(input: {
           patterns,
           metadata: record(properties.metadata) ?? {},
         },
+      },
+    ];
+  };
+
+  const sessionTextDelta = (payload: RecordValue): OpenCodeEventEffect[] => {
+    if (string(payload.sessionID) !== input.sessionId) return [];
+    const delta = string(payload.delta);
+    if (!delta) return [];
+    activeAssistantSeen = true;
+    return [{ type: 'text-delta', delta }];
+  };
+
+  const sessionReasoningDelta = (payload: RecordValue): OpenCodeEventEffect[] => {
+    if (string(payload.sessionID) !== input.sessionId) return [];
+    const delta = string(payload.delta);
+    if (!delta) return [];
+    activeAssistantSeen = true;
+    return [{ type: 'reasoning-delta', delta }];
+  };
+
+  const sessionToolCalled = (payload: RecordValue): OpenCodeEventEffect[] => {
+    if (string(payload.sessionID) !== input.sessionId) return [];
+    const tool = string(payload.id) ?? string(payload.tool) ?? 'tool';
+    return [{ type: 'tool-activity', tool, status: 'called' }];
+  };
+
+  const sessionToolSuccess = (payload: RecordValue): OpenCodeEventEffect[] => {
+    if (string(payload.sessionID) !== input.sessionId) return [];
+    const tool = string(payload.id) ?? string(payload.tool) ?? 'tool';
+    return [{ type: 'tool-activity', tool, status: 'completed' }];
+  };
+
+  const sessionToolFailed = (payload: RecordValue): OpenCodeEventEffect[] => {
+    if (string(payload.sessionID) !== input.sessionId) return [];
+    const tool = string(payload.id) ?? string(payload.tool) ?? 'tool';
+    return [{ type: 'tool-activity', tool, status: 'error' }];
+  };
+
+  const sessionExecutionSucceeded = (payload: RecordValue): OpenCodeEventEffect[] => {
+    if (string(payload.sessionID) !== input.sessionId) return [];
+    return activeAssistantSeen ? [{ type: 'idle' }] : [];
+  };
+
+  const sessionExecutionFailed = (payload: RecordValue): OpenCodeEventEffect[] => {
+    if (string(payload.sessionID) !== input.sessionId) return [];
+    const err = record(payload.error);
+    const message = string(err?.message) ?? 'OpenCode execution failed';
+    return [{ type: 'error', message }];
+  };
+
+  const sessionRetryScheduled = (payload: RecordValue): OpenCodeEventEffect[] => {
+    if (string(payload.sessionID) !== input.sessionId) return [];
+    const err = record(payload.error);
+    return [
+      {
+        type: 'provider-retry',
+        attempt: number(payload.attempt),
+        message: string(err?.message) ?? '',
+        next: number(payload.at),
       },
     ];
   };
@@ -195,6 +261,14 @@ export function createOpenCodeEventTranslator(input: {
     ['message.updated', messageUpdated],
     ['message.part.updated', partUpdated],
     ['message.part.delta', partDelta],
+    ['session.text.delta', sessionTextDelta],
+    ['session.reasoning.delta', sessionReasoningDelta],
+    ['session.tool.called', sessionToolCalled],
+    ['session.tool.success', sessionToolSuccess],
+    ['session.tool.failed', sessionToolFailed],
+    ['session.execution.succeeded', sessionExecutionSucceeded],
+    ['session.execution.failed', sessionExecutionFailed],
+    ['session.retry.scheduled', sessionRetryScheduled],
     ['permission.asked', (properties) => permission(properties, 'asked')],
     ['permission.updated', (properties) => permission(properties, 'updated')],
     ['permission.replied', () => []],
@@ -207,7 +281,7 @@ export function createOpenCodeEventTranslator(input: {
     translate(event: unknown): OpenCodeEventEffect[] {
       const root = record(event);
       const type = string(root?.type);
-      const properties = record(root?.properties);
+      const properties = record(root?.data) ?? record(root?.properties);
       if (!type || !properties) return [];
       const handler = handlers.get(type);
       if (handler) return handler(properties);
@@ -240,11 +314,13 @@ function collectAssistantParts(
   for (const value of messages) {
     const entry = record(value);
     const info = record(entry?.info);
-    const messageId = string(info?.id);
+    const messageId = string(info?.id) ?? string(entry?.id);
+    const sessionID = string(info?.sessionID) ?? string(entry?.sessionID) ?? input.sessionId;
+    const role = string(info?.role) ?? string(entry?.type) ?? string(entry?.role);
     if (
       !messageId ||
-      string(info?.sessionID) !== input.sessionId ||
-      info?.role !== 'assistant' ||
+      sessionID !== input.sessionId ||
+      role !== 'assistant' ||
       input.baselineMessageIds.has(messageId)
     ) {
       continue;
@@ -254,14 +330,22 @@ function collectAssistantParts(
       messageIds.push(messageId);
     }
 
-    const parts = entry?.parts;
+    if (entry?.cost !== undefined || entry?.tokens !== undefined) {
+      orderedParts.push({
+        type: 'step-finish',
+        cost: entry.cost,
+        tokens: entry.tokens,
+      });
+    }
+
+    const parts = entry?.content ?? entry?.parts;
     if (!Array.isArray(parts)) continue;
     for (const partValue of parts) {
       const part = record(partValue);
       if (!part) continue;
       const partType = string(part.type);
       const partId = string(part.id);
-      const callId = string(part.callID);
+      const callId = string(part.callID) ?? string(part.id);
       const key =
         partType === 'tool' && callId
           ? `tool:${callId}`
@@ -343,22 +427,34 @@ function reconcileParts(orderedParts: RecordValue[]): ReconciledParts {
     const state = record(part.state);
     const toolUse = {
       id: callId,
-      name: string(part.tool) ?? 'unknown',
-      input: record(state?.input) ?? {},
+      name: string(part.tool) ?? string(part.name) ?? 'unknown',
+      input: record(state?.input) ?? record(part.input) ?? {},
     };
     result.toolUses.push(toolUse);
     result.contentBlocks.push({ type: 'tool_use', ...toolUse });
-    if (state?.status === 'completed' && state.output !== undefined) {
+    const output =
+      state?.output !== undefined
+        ? state.output
+        : Array.isArray(part.content)
+          ? part.content
+              .map((c: unknown) =>
+                typeof c === 'object' && c !== null && 'text' in c
+                  ? String((c as { text: unknown }).text)
+                  : JSON.stringify(c)
+              )
+              .join('\n')
+          : part.content;
+    if ((state?.status === 'completed' || part.status === 'completed') && output !== undefined) {
       result.contentBlocks.push({
         type: 'tool_result',
         tool_use_id: callId,
-        content: state.output,
+        content: output,
       });
-    } else if (state?.status === 'error') {
+    } else if (state?.status === 'error' || part.status === 'error') {
       result.contentBlocks.push({
         type: 'tool_result',
         tool_use_id: callId,
-        content: string(state.error) ?? 'OpenCode tool failed',
+        content: string(state?.error) ?? string(part.error) ?? 'OpenCode tool failed',
         is_error: true,
       });
     }

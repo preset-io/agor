@@ -25,13 +25,16 @@ beforeEach(() => {
     gemini: '@google/gemini-cli-core',
     copilot: '@github/copilot-sdk',
     cursor: '@cursor/sdk',
-    opencode: '@opencode-ai/sdk',
+    opencode: '@opencode/client',
   };
   for (const [id, vendor] of Object.entries(vendors)) {
     write(`packages/agor-${id}/package.json`, {
       name: `@agor-live/${id}`,
       version: '1.0.0',
-      dependencies: { [vendor]: '1.2.3', ...(id === 'opencode' ? { 'opencode-ai': '1.2.3' } : {}) },
+      dependencies: {
+        [vendor]: '1.2.3',
+        ...(id === 'opencode' ? { '@opencode/cli': '1.2.3' } : {}),
+      },
     });
     write(`packages/agor-${id}/src/index.ts`, "export const AGOR_INTEGRATION_VERSION = '1.0.0';");
   }
@@ -52,7 +55,7 @@ beforeEach(() => {
   write('packages/agentic-tool-opencode/package.json', {
     name: '@agor/agentic-tool-opencode',
     private: true,
-    devDependencies: { '@opencode-ai/sdk': '1.2.3' },
+    devDependencies: { '@opencode/client': '1.2.3' },
   });
   write(
     'packages/agentic-tool-opencode/src/shared/known-models.ts',
@@ -60,9 +63,9 @@ beforeEach(() => {
   );
   write(
     'packages/agentic-tool-opencode/src/shared/index.ts',
-    "({ sdkVersion: '@opencode-ai/sdk@1.2.3' });"
+    "({ sdkVersion: '@opencode/client@1.2.3' });"
   );
-  write('docker/Dockerfile', 'RUN npm install -g opencode-ai@1.2.3');
+  write('docker/Dockerfile', 'RUN npm install -g @opencode/cli@1.2.3');
   mkdirSync(join(fixture, 'scripts'));
   cpSync(
     join(root, 'scripts/check-agentic-tool-packages.mjs'),
@@ -108,10 +111,10 @@ describe('agent SDK package alignment gate', () => {
   it('rejects an OpenCode SDK-only upgrade with an older binary', () => {
     const path = join(fixture, 'packages/agor-opencode/package.json');
     const pkg = JSON.parse(readFileSync(path, 'utf8'));
-    pkg.dependencies['@opencode-ai/sdk'] = '1.2.4';
+    pkg.dependencies['@opencode/client'] = '1.2.4';
     writeFileSync(path, JSON.stringify(pkg));
     const result = check();
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('OpenCode version drift: wrapper @opencode-ai/sdk is 1.2.4');
+    expect(result.stderr).toContain('OpenCode version drift: wrapper @opencode/client is 1.2.4');
   });
 });

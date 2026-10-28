@@ -117,6 +117,21 @@ export async function executeOpenCodeTask(params: {
 
     const assistantMessageId = generateId() as MessageID;
     const permissionLocks = new Map<SessionID, Promise<void>>();
+
+    let parentOpenCodeSessionId: string | undefined;
+    if (!managed && !session.sdk_session_id && session.genealogy?.forked_from_session_id) {
+      try {
+        const parentSession = await client
+          .service('sessions')
+          .get(session.genealogy.forked_from_session_id);
+        if (parentSession?.sdk_session_id) {
+          parentOpenCodeSessionId = parentSession.sdk_session_id;
+        }
+      } catch {
+        // Parent session not found or inaccessible; start fresh
+      }
+    }
+
     const tool = new OpenCodeTool({
       resolveMcpServers: async (targetSessionId) => {
         const reporter = collectWithheldMcpServers();
@@ -181,6 +196,7 @@ export async function executeOpenCodeTask(params: {
         existingOpenCodeSessionId: managed
           ? managed.input?.openCodeSessionId
           : session.sdk_session_id,
+        parentOpenCodeSessionId,
         title: session.title || `Task ${shortId(taskId)}`,
         directory: branch.path,
         provider: session.model_config.provider,

@@ -6,7 +6,6 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createOpencodeClient } from '@opencode-ai/sdk/v2';
 
 // Single-key SDKs in OpenCode's BUNDLED_PROVIDERS; anything else installs packages at turn time.
 const CORE_SDKS = new Set([
@@ -33,7 +32,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = resolve(root, '../..');
 const output = resolve(root, '../agentic-tool-opencode/src/daemon/hosted-providers.generated.ts');
 const require = createRequire(import.meta.url);
-const packagePath = require.resolve('opencode-ai/package.json');
+const packagePath = require.resolve('@opencode/cli/package.json');
 const pkg = JSON.parse(await readFile(packagePath, 'utf8'));
 const binary = resolve(
   dirname(packagePath),
@@ -63,7 +62,7 @@ const env = {
   OPENCODE_DISABLE_MODELS_FETCH: 'true',
   OPENCODE_TEST_HOME: dirs.home,
   OPENCODE_TEST_MANAGED_CONFIG_DIR: dirs.managed,
-  OPENCODE_SERVER_USERNAME: 'agor',
+  OPENCODE_SERVER_USERNAME: 'opencode',
   OPENCODE_SERVER_PASSWORD: crypto.randomUUID(),
 };
 const child = spawn(binary, ['serve', '--hostname=127.0.0.1', '--port=0'], {

@@ -121,7 +121,7 @@ export function OpenCodeProviderListItem({
       ? selectedMethodIndex
       : preferredOAuthMethodIndex(provider.authMethods);
   const method = provider.authMethods[methodIndex];
-  const apiKeyAvailable = method?.type === 'api' || !method;
+  const apiKeyAvailable = method?.type === 'api' || (method?.type as string) === 'key' || !method;
   const values = selected ? promptValues : {};
   const prompts = visibleAuthPrompts(method?.prompts, values);
   const promptsComplete = prompts.every((prompt) => values[prompt.key]?.trim());
