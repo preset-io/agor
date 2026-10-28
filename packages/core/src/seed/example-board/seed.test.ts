@@ -1,17 +1,23 @@
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
+import { select } from '../../db/database-wrapper';
+import { notExampleBoardOwned } from '../../db/example-board';
 import {
   ArtifactRepository,
   BoardObjectRepository,
   BoardRepository,
   BranchRepository,
   CapabilityPolicyRepository,
+  GatewayChannelRepository,
   MessagesRepository,
   ScheduleRepository,
   SessionRepository,
   TaskRepository,
+  UserPrimaryTeammateRepository,
   UsersRepository,
 } from '../../db/repositories';
 import { sanitizeImportedBoardObjects } from '../../db/repositories/boards';
+import { tasks, users } from '../../db/schema';
 import { dbTest } from '../../db/test-helpers';
 import {
   type BranchID,
@@ -19,6 +25,7 @@ import {
   getGatewaySource,
   isTeammate,
   type UserID,
+  type UUID,
 } from '../../types';
 import { EXAMPLE_BOARD_FIXTURE } from './fixture';
 import { seedExampleBoard } from './seed';
@@ -78,7 +85,11 @@ describe('seedExampleBoard', () => {
 
     const owner = await new UsersRepository(db).findByEmail(EXAMPLE_BOARD_OWNER_EMAIL);
     expect(owner?.role).toBe('viewer');
-    expect(owner?.password).toBeFalsy();
+    const credential = await select(db, { password: users.password })
+      .from(users)
+      .where(eq(users.email, EXAMPLE_BOARD_OWNER_EMAIL))
+      .one();
+    expect(credential?.password).toBe('');
 
     const boards = await new BoardRepository(db).findAll();
     expect(boards).toHaveLength(1);
@@ -145,5 +156,51 @@ describe('seedExampleBoard', () => {
       session_sdk_home_scope: 'branch',
     });
     expect(authority.allowed).toBe(false);
+  });
+});
+
+describe('example board exclusions', () => {
+  dbTest('is never a primary teammate candidate, even without access checks', async ({ db }) => {
+    await seedExampleBoard(db);
+    const member = await new UsersRepository(db).create({ email: 'm@example.test' });
+    const teammates = new UserPrimaryTeammateRepository(db);
+    const wendy = (await new BranchRepository(db).findAll()).find((b) => isTeammate(b))!;
+
+    expect(
+      await teammates.findEligiblePrimaryTeammates(member.user_id as UserID, {
+        enforceAccess: false,
+      })
+    ).toEqual([]);
+    expect(
+      await teammates.findEligiblePrimaryTeammate(
+        wendy.branch_id as BranchID,
+        member.user_id as UserID,
+        { enforceAccess: false }
+      )
+    ).toBeNull();
+  });
+
+  dbTest('cannot be a gateway target', async ({ db }) => {
+    await seedExampleBoard(db);
+    const [branch] = await new BranchRepository(db).findAll();
+    await expect(
+      new GatewayChannelRepository(db).create({
+        name: 'Example',
+        created_by: branch.created_by as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        enabled: false,
+        config: { bot_token: 'bot-test', app_token: 'app-test' },
+      })
+    ).rejects.toThrow('Example branches cannot be a gateway target');
+  });
+
+  dbTest('is left out of totals that use notExampleBoardOwned', async ({ db }) => {
+    await seedExampleBoard(db);
+    const counted = await select(db, { id: tasks.task_id })
+      .from(tasks)
+      .where(notExampleBoardOwned(tasks.created_by))
+      .all();
+    expect(counted).toEqual([]);
+    expect(await new TaskRepository(db).findAll()).not.toEqual([]);
   });
 });
