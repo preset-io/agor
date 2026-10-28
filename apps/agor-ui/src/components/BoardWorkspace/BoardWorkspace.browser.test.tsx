@@ -7,9 +7,12 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import '../../index.css';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { ThemeProvider } from '../../contexts/ThemeContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { getRouterBasename } from '../../utils/uiRoutes';
+import { AppHeader } from '../AppHeader';
+import { BoardViewSwitch } from './BoardViewSwitch';
 import { BoardWorkspace } from './BoardWorkspace';
 import { boardViewPreferenceKey } from './useBoardViewPreferences';
 
@@ -57,7 +60,9 @@ const session = {
 } as unknown as Session;
 const repo = { repo_id: primary.repo_id, name: 'Project', slug: 'team/project' } as Repo;
 const client = {
-  service: () => ({ find: async () => ({ can: 'session', capabilities: ['board.view'] }) }),
+  service: () => ({
+    find: async () => ({ can: 'session', capabilities: ['board.view', 'board.edit'] }),
+  }),
 } as unknown as AgorClient;
 beforeEach(() => {
   localStorage.clear();
@@ -89,49 +94,78 @@ it.each(['light', 'dark'] as const)(
   'shows alternative navigation without overflow and preserves draft (%s)',
   async (mode) => {
     const compact = window.innerWidth < 700;
+    const onCreateBranch = vi.fn();
     const renderView = (conversationOpen = !compact, compactView = compact) => (
       <MemoryRouter>
-        <ConfigProvider
-          theme={{ algorithm: mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm }}
-        >
-          <App>
-            <ConnectionProvider
-              value={{
-                connected: true,
-                connecting: false,
-                authGeneration: 1,
-                outOfSync: false,
-                capturedSha: null,
-                currentSha: null,
-              }}
-            >
-              <div style={{ height: '100vh', display: 'flex' }}>
-                <BoardWorkspace
-                  board={board}
-                  branches={[branch, primary]}
-                  actions={{
-                    client,
-                    board,
-                    boardReady: true,
-                    currentUserId: user.user_id,
-                    primaryTeammateBranch: primary,
-                    primaryTeammateRepo: repo,
-                    primaryTeammateInaccessible: false,
-                    onSessionClick: vi.fn(),
-                    onCreateSession: vi.fn(),
-                  }}
-                  canvas={<div>Shared canvas</div>}
-                  conversation={<Draft />}
-                  conversationOpen={conversationOpen}
-                  compact={compactView}
-                />
-              </div>
-            </ConnectionProvider>
-          </App>
-        </ConfigProvider>
+        <ThemeProvider>
+          <ConfigProvider
+            theme={{ algorithm: mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm }}
+          >
+            <App>
+              <ConnectionProvider
+                value={{
+                  connected: true,
+                  connecting: false,
+                  authGeneration: 1,
+                  outOfSync: false,
+                  capturedSha: null,
+                  currentSha: null,
+                }}
+              >
+                <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+                  {window.innerWidth >= 1000 ? (
+                    <AppHeader
+                      user={user}
+                      currentUserId={user.user_id}
+                      currentBoardId={board.board_id}
+                      boardViewBoardId={board.board_id}
+                      connected
+                      onCreate={vi.fn()}
+                      onCreateSession={vi.fn(async () => null)}
+                    />
+                  ) : (
+                    <header>
+                      <BoardViewSwitch userId={user.user_id} boardId={board.board_id} />
+                    </header>
+                  )}
+                  <BoardWorkspace
+                    board={board}
+                    viewSwitchInHeader
+                    onCreateBranch={onCreateBranch}
+                    branches={[branch, primary]}
+                    actions={{
+                      client,
+                      board,
+                      boardReady: true,
+                      currentUserId: user.user_id,
+                      primaryTeammateBranch: primary,
+                      primaryTeammateRepo: repo,
+                      primaryTeammateInaccessible: false,
+                      onSessionClick: vi.fn(),
+                      onCreateSession: vi.fn(),
+                    }}
+                    canvas={<div>Shared canvas</div>}
+                    conversation={<Draft />}
+                    conversationOpen={conversationOpen}
+                    compact={compactView}
+                  />
+                </div>
+              </ConnectionProvider>
+            </App>
+          </ConfigProvider>
+        </ThemeProvider>
       </MemoryRouter>
     );
     const view = render(renderView());
+    expect(screen.getAllByRole('radio', { name: 'Tree', exact: true })).toHaveLength(1);
+    expect(screen.getByRole('banner')).toContainElement(
+      screen.getByRole('radio', { name: 'Tree', exact: true })
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'New branch', exact: true })).toBeEnabled()
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'New branch', exact: true }));
+    expect(onCreateBranch).toHaveBeenCalledOnce();
     expect(screen.getByRole('tab', { name: 'Sessions', exact: true })).toBeVisible();
     expect(screen.getByText('Atlas', { exact: true })).toBeVisible();
     await waitFor(() => expect(screen.getByText('Plan the next release')).toBeVisible());
@@ -153,7 +187,7 @@ it.each(['light', 'dark'] as const)(
       expect(getComputedStyle(handle).outlineStyle).not.toBe('none');
       treeWidth = navigator.clientWidth;
     } else {
-      expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+      expect(screen.queryByRole('separator', { name: /^Resize/ })).not.toBeInTheDocument();
     }
     await userEvent.click(screen.getByText('Board', { exact: true }));
     expect(screen.getByText('Shared canvas')).toBeVisible();
@@ -199,10 +233,10 @@ it.each(['light', 'dark'] as const)(
       );
       // Opening/closing the inspector must not replace the saved split with 100%.
       restored.rerender(renderView(false));
-      expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+      expect(screen.queryByRole('separator', { name: /^Resize/ })).not.toBeInTheDocument();
       expect(screen.getByText('Shared canvas')).toBeVisible();
       restored.rerender(renderView(false, true));
-      expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+      expect(screen.queryByRole('separator', { name: /^Resize/ })).not.toBeInTheDocument();
       restored.rerender(renderView());
       await waitFor(() =>
         expect(screen.getByRole('region', { name: 'Board detail' }).clientWidth).toBe(boardWidth)

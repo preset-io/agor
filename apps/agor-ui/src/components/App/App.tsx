@@ -1407,6 +1407,9 @@ export const App: React.FC<AppProps> = ({
           onRetryConnection={stableOnRetryConnection}
           eventStreamEnabled={eventStreamEnabled}
           currentBoardId={headerBoardId}
+          boardViewBoardId={
+            user?.user_id && !isHomeSurface && !isTeammatesPath ? currentBoard?.board_id : undefined
+          }
           onBoardChange={navigation.goToBoard}
           onHomeClick={handleHomeClick}
           onUpdateBoard={onUpdateBoard}
@@ -1425,6 +1428,12 @@ export const App: React.FC<AppProps> = ({
               key={`${user?.user_id}:${currentBoard.board_id}`}
               board={currentBoard}
               branches={boardBranches}
+              viewSwitchInHeader={!!user?.user_id}
+              onCreateBranch={
+                onCreateBranch && hasMinimumRole(user?.role, ROLES.MEMBER)
+                  ? () => createFlows.openCreate('branch')
+                  : undefined
+              }
               actions={boardWorkspaceActions}
               canvas={boardWorkspaceCanvas}
               conversation={boardWorkspaceConversation}

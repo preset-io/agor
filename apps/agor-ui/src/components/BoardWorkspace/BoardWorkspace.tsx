@@ -1,6 +1,5 @@
 import type { Board, Branch } from '@agor-live/client';
-import { ApartmentOutlined, AppstoreOutlined } from '@ant-design/icons';
-import { Button, Drawer, Empty, Flex, Segmented, Space, theme } from 'antd';
+import { Button, Drawer, Empty, Flex, Space, theme } from 'antd';
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type ImperativePanelGroupHandle,
@@ -23,6 +22,7 @@ import {
 import BranchCard from '../BranchCard';
 import { BoardContentDetail, type BoardContentSelection } from './BoardContent';
 import { BoardComments, BoardTreeNavigator } from './BoardTreeNavigator';
+import { BoardViewControl } from './BoardViewSwitch';
 import { type BoardView, useBoardViewPreferences } from './useBoardViewPreferences';
 
 export interface BoardWorkspaceProps {
@@ -40,6 +40,9 @@ export interface BoardWorkspaceProps {
   onBranchClick?: (id: string) => void;
   initialTab?: 'sessions' | 'content' | 'comments';
   initialView?: BoardView;
+  /** The shell renders the shared view switch beside its board selector. */
+  viewSwitchInHeader?: boolean;
+  onCreateBranch?: () => void;
 }
 
 /** Alternative navigators of the SAME board. Only explicit entity actions write
@@ -59,6 +62,8 @@ export function BoardWorkspace({
   onBranchClick,
   initialTab,
   initialView,
+  viewSwitchInHeader = false,
+  onCreateBranch,
 }: BoardWorkspaceProps) {
   const { token } = theme.useToken();
   const [preferences, updatePreferences] = useBoardViewPreferences(
@@ -133,7 +138,6 @@ export function BoardWorkspace({
       splitRef.current.setLayout([size, 100 - size]);
     }
   }, [desiredSize, split, showNavigator]);
-  const changeView = (view: BoardView) => updatePreferences({ view });
   const openContent = (selection: BoardContentSelection) => {
     const object = board.objects?.[selection.id];
     if (!compact && selection.kind === 'object' && object?.type === 'artifact')
@@ -151,34 +155,14 @@ export function BoardWorkspace({
         color: token.colorText,
       }}
     >
-      <Flex
-        align="center"
-        justify="space-between"
-        wrap
-        gap="small"
-        style={{
-          padding: token.paddingXS,
-          borderBottom: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
-        }}
-      >
-        <Segmented<BoardView>
-          aria-label="Board view"
-          value={preferences.view}
-          onChange={changeView}
-          options={[
-            { value: 'tree', label: 'Tree', icon: <ApartmentOutlined aria-hidden /> },
-            { value: 'board', label: 'Board', icon: <AppstoreOutlined aria-hidden /> },
-          ]}
-        />
-        {!tree && (
-          <Space>
-            <Button onClick={() => setCommentsOpen(true)}>Comments</Button>
-            {!branches.some((b) => b.branch_id === board.primary_teammate_id && !b.archived) && (
-              <Button onClick={() => setTeammateOpen(true)}>Primary teammate</Button>
-            )}
-          </Space>
-        )}
-      </Flex>
+      {!viewSwitchInHeader && (
+        <Flex style={{ padding: token.paddingXS }}>
+          <BoardViewControl
+            view={preferences.view}
+            onChange={(view) => updatePreferences({ view })}
+          />
+        </Flex>
+      )}
       <PanelGroup
         ref={splitRef}
         direction="horizontal"
@@ -226,10 +210,27 @@ export function BoardWorkspace({
                 (onBranchClick ?? navigation.goToBranch)(id);
               }}
               onContentClick={openContent}
+              onCreateBranch={onCreateBranch}
             />
           </nav>
           <div hidden={tree} style={{ flex: 1, minWidth: 0, height: '100%', position: 'relative' }}>
             {(canvasVisited || !tree) && canvas}
+            {!tree && (
+              <Space
+                wrap
+                style={{
+                  position: 'absolute',
+                  bottom: token.paddingSM,
+                  left: token.paddingSM,
+                  zIndex: 20,
+                }}
+              >
+                <Button onClick={() => setCommentsOpen(true)}>Comments</Button>
+                {!branches.some(
+                  (b) => b.branch_id === board.primary_teammate_id && !b.archived
+                ) && <Button onClick={() => setTeammateOpen(true)}>Primary teammate</Button>}
+              </Space>
+            )}
           </div>
         </Panel>
         {split && (

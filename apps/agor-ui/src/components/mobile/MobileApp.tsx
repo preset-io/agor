@@ -618,6 +618,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 branchById={branchById}
                 onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
                 onNewSession={(branchId) => setNewSessionBranchId(branchId)}
+                onCreateBranch={
+                  onCreateBranch && hasMinimumRole(user?.role, ROLES.MEMBER)
+                    ? () => createFlows.openCreate('branch')
+                    : undefined
+                }
                 client={client}
                 currentUser={user}
                 onForkSession={onForkSession}

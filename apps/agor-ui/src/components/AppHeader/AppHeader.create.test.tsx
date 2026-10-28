@@ -105,3 +105,33 @@ describe('AppHeader navbar create button', () => {
     expect(await screen.findByText(message)).toBeInTheDocument();
   });
 });
+
+describe('board presentation in the navbar', () => {
+  it('only appears for a board workspace and remembers each board independently', () => {
+    localStorage.clear();
+    const view = renderHeader(
+      <AppHeader user={asRole('member')} currentBoardId="one" boardViewBoardId="one" />
+    );
+    const header = screen.getByRole('banner');
+    const boardView = screen.getByRole('radio', { name: 'Board', exact: true });
+    expect(header).toContainElement(boardView);
+    fireEvent.click(boardView);
+    expect(boardView).toBeChecked();
+    const rerender = (boardViewBoardId?: string) =>
+      view.rerender(
+        <MemoryRouter basename="/ui" initialEntries={['/ui/']}>
+          <AppHeader
+            user={asRole('member')}
+            currentBoardId={boardViewBoardId}
+            boardViewBoardId={boardViewBoardId}
+          />
+        </MemoryRouter>
+      );
+    rerender('two');
+    expect(screen.getByRole('radio', { name: 'Tree', exact: true })).toBeChecked();
+    rerender('one');
+    expect(screen.getByRole('radio', { name: 'Board', exact: true })).toBeChecked();
+    rerender();
+    expect(screen.queryByRole('radio', { name: 'Tree', exact: true })).not.toBeInTheDocument();
+  });
+});

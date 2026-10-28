@@ -2,7 +2,7 @@ import type { ActiveUser, AgorClient, Board, BoardID, Branch, User } from '@agor
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { BulbOutlined, ExportOutlined, PlusOutlined, ShopOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
+import { Button, Divider, Grid, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
 import { type CSSProperties, memo, useMemo } from 'react';
 import { useHref, useNavigate } from 'react-router-dom';
 import { resolveExternalAppLink } from '@/utils/externalAppLink';
@@ -17,6 +17,7 @@ import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectBranchById, selectUserById } from '../../store/selectors';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BoardTile, getBoardEmoji } from '../BoardTile';
+import { BoardViewSwitch } from '../BoardWorkspace/BoardViewSwitch';
 import { BrandLogo } from '../BrandLogo';
 import { BrandMark } from '../BrandMark';
 import { ConnectionStatus } from '../ConnectionStatus';
@@ -61,6 +62,8 @@ export interface AppHeaderProps {
   onRetryConnection?: () => void;
   eventStreamEnabled?: boolean;
   currentBoardId?: string;
+  /** Only set while the board workspace is visible, not Home or directories. */
+  boardViewBoardId?: string;
   onBoardChange?: (boardId: string) => void;
   onHomeClick?: () => void;
   onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void | Promise<void>;
@@ -155,6 +158,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   onRetryConnection,
   eventStreamEnabled = false,
   currentBoardId,
+  boardViewBoardId,
   onBoardChange,
   onHomeClick,
   onUpdateBoard,
@@ -167,6 +171,8 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   onCreate,
 }) => {
   const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
+  const viewUserId = currentUserId ?? user?.user_id;
   const touchInput = useIsTouchInput();
   const navigate = useNavigate();
   const knowledgeHref = useHref('/knowledge');
@@ -316,7 +322,10 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             onUpdateBoard={onUpdateBoard}
           />
         </div>
-        {boards.length > 0 && (
+        {boardViewBoardId && viewUserId && (
+          <BoardViewSwitch userId={viewUserId} boardId={boardViewBoardId} />
+        )}
+        {boards.length > 0 && (!boardViewBoardId || screens.xl) && (
           <RecentBoardPills
             recentBoards={recentBoards}
             branchById={branchById}

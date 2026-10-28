@@ -1,5 +1,5 @@
 import type { AgorClient, Board, Branch, SpawnConfig, User } from '@agor-live/client';
-import { Spin, Typography, theme } from 'antd';
+import { Flex, Spin, Typography, theme } from 'antd';
 import { lazy, Suspense, useEffect, useMemo } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
@@ -11,6 +11,7 @@ import { OPEN_BOARD_SWITCHER_EVENT, requestShellPicker } from '../../utils/shell
 import { BoardSwitcher } from '../BoardSwitcher';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { useBoardTeammatePanelData } from '../BoardTeammatePanel/useBoardTeammatePanelData';
+import { BoardViewSwitch } from '../BoardWorkspace/BoardViewSwitch';
 import { BoardWorkspace } from '../BoardWorkspace/BoardWorkspace';
 import type { BranchModalTab } from '../BranchModal';
 import { CompactNotice } from '../CompactNotice';
@@ -36,6 +37,7 @@ interface MobileBoardPageProps {
   onOpenBranch: (branchId: string, tab: BranchModalTab) => void;
   /** Start a new session on a branch (opens the agent picker). */
   onNewSession: (branchId: string) => void;
+  onCreateBranch?: () => void;
   onForkSession: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
   onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
@@ -61,6 +63,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   branchById,
   onOpenBranch,
   onNewSession,
+  onCreateBranch,
   onForkSession,
   onSpawnSession,
   onUpdateBoard,
@@ -172,7 +175,9 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
 
   return (
     <div style={mobilePageStyle}>
-      <div
+      <Flex
+        align="center"
+        gap="small"
         style={{
           flexShrink: 0,
           paddingInline: token.paddingXXS,
@@ -180,17 +185,20 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           borderBottom: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
         }}
       >
-        <BoardSwitcher
-          boards={boards}
-          currentBoardId={resolvedBoardId}
-          onBoardChange={(id) => navigate(`/m/board/${id}`)}
-          onHomeClick={() => navigate('/m')}
-          branchById={branchById}
-          client={client}
-          currentUser={currentUser}
-          onUpdateBoard={onUpdateBoard}
-        />
-      </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <BoardSwitcher
+            boards={boards}
+            currentBoardId={resolvedBoardId}
+            onBoardChange={(id) => navigate(`/m/board/${id}`)}
+            onHomeClick={() => navigate('/m')}
+            branchById={branchById}
+            client={client}
+            currentUser={currentUser}
+            onUpdateBoard={onUpdateBoard}
+          />
+        </div>
+        {board && userId && <BoardViewSwitch userId={userId} boardId={board.board_id} />}
+      </Flex>
       {!settingsHydrated && (
         <Typography.Text
           role="status"
@@ -206,6 +214,8 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
             key={`${userId}:${board.board_id}`}
             board={board}
             branches={boardBranches}
+            viewSwitchInHeader={!!userId}
+            onCreateBranch={onCreateBranch}
             actions={{
               client,
               board,

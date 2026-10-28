@@ -1,6 +1,6 @@
 import type { Board, Branch, Session } from '@agor-live/client';
 import { isTeammate } from '@agor-live/client';
-import { SettingOutlined } from '@ant-design/icons';
+import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
 import {
   Button,
   Collapse,
@@ -15,7 +15,9 @@ import {
   theme,
 } from 'antd';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useBranchAccess } from '../../hooks/useBranchAccess';
+import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { useAgorStore } from '../../store/agorStore';
 import { makeBoardPartitionSelector } from '../../store/boardPartitions';
 import {
@@ -96,6 +98,7 @@ export function BoardTreeNavigator({
   updatePreferences,
   onBranchClick,
   onContentClick,
+  onCreateBranch,
 }: {
   board: Board;
   branches: Branch[];
@@ -104,6 +107,7 @@ export function BoardTreeNavigator({
   updatePreferences: (patch: Partial<BoardViewPreferences>) => void;
   onBranchClick: (id: string) => void;
   onContentClick: (selection: BoardContentSelection) => void;
+  onCreateBranch?: () => void;
 }) {
   const { token } = theme.useToken();
   const [query, setQuery] = useState('');
@@ -116,6 +120,13 @@ export function BoardTreeNavigator({
   );
   const users = useAgorStore(selectUserById);
   const branchById = useAgorStore(selectBranchById);
+  const user = actions.currentUserId ? users.get(actions.currentUserId) : undefined;
+  const canManageBoard = useCanManageBoard(
+    actions.client,
+    onCreateBranch ? board : undefined,
+    user
+  );
+  const mutationGate = useMutationGate();
   const commentById = useAgorStore(selectCommentById);
   const partition = useAgorStore(
     useMemo(() => makeBoardPartitionSelector(board.board_id), [board.board_id])
@@ -393,6 +404,16 @@ export function BoardTreeNavigator({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
+      {onCreateBranch && (
+        <Button
+          icon={<PlusOutlined aria-hidden />}
+          onClick={onCreateBranch}
+          disabled={!canManageBoard || !mutationGate.canMutate || !actions.boardReady}
+          style={{ marginTop: token.marginSM, flexShrink: 0 }}
+        >
+          New branch
+        </Button>
+      )}
       <div
         ref={scrollRef}
         onScroll={(event) => {
