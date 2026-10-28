@@ -7,7 +7,7 @@ import type {
   UpdateMCPServerInput,
   UserID,
 } from '@agor-live/client';
-import { Alert, Button, Form, Modal, Space, Tooltip } from 'antd';
+import { Alert, Button, Flex, Form, Modal, Space, Tooltip } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import {
   type AuthorityOperationGuard,
@@ -66,6 +66,11 @@ export interface MCPServerEditModalProps {
   afterClose?: () => void;
   /** Delegates focus restoration to an owner when the original trigger was unmounted. */
   focusTriggerAfterClose?: boolean;
+  /**
+   * Render the form and its actions in place (no Modal), like BoardEditModal's
+   * Settings drill-in. The host supplies the breadcrumb and the way back.
+   */
+  embedded?: boolean;
 }
 
 const SHARED_NO_LONGER_ALLOWED =
@@ -78,8 +83,8 @@ const SHARED_NO_LONGER_ALLOWED =
  * Hydrates its own form from `server`, owns transport/authType/test state,
  * and persists via the `mcp-servers` Feathers service. A create persists once
  * (on Save, or before an OAuth start) and later saves patch that new row.
- * Used by `MyServersTab` (Marketplace) and `SessionMcpFooterControl` (admin
- * shortcut).
+ * Used in place (`embedded`) by the MCP Catalog's custom-server editor and as a
+ * modal by `SessionMcpFooterControl` (admin shortcut).
  */
 const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   server,
@@ -97,6 +102,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   onClose,
   afterClose,
   focusTriggerAfterClose,
+  embedded = false,
 }) => {
   const { showSuccess } = useThemedMessage();
   const [modal, modalContextHolder] = Modal.useModal();
@@ -545,6 +551,138 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     return server?.mcp_server_id ?? saved.mcp_server_id;
   };
 
+  const footer = (
+    <Space>
+      <Button onClick={closeAndReset}>Cancel</Button>
+      {/* A disabled button can't host a tooltip of its own — hence the span. */}
+      <Tooltip
+        title={
+          !mutationAllowed
+            ? mutationBlockedReason
+            : configConflict
+              ? 'Load the latest version before you save again.'
+              : testing || reloadingLatest
+                ? 'Wait for the current connection operation to finish.'
+                : createUnconfirmed
+                  ? 'Refresh to see if the server was added before you create it again.'
+                  : !authorityKey
+                    ? 'Reconnect before saving.'
+                    : missingRequiredFields.length > 0
+                      ? describeMissingForSave(missingRequiredFields)
+                      : undefined
+        }
+      >
+        <span>
+          <Button type="primary" loading={saving} disabled={saveBlocked} onClick={handleSave}>
+            {target ? 'Save' : 'Create'}
+          </Button>
+        </span>
+      </Tooltip>
+    </Space>
+  );
+  const body = (
+    <>
+      {policyServer?.auth?.type === 'oauth' && policyServer.oauth_compatibility_policy && (
+        <MCPOAuthPolicySummary
+          policy={policyServer.oauth_compatibility_policy}
+          label="Saved OAuth policy"
+        />
+      )}
+      {policyServer?.auth?.type === 'oauth' && !policyServer.oauth_compatibility_policy && (
+        <Alert
+          type={policyUnavailable ? 'warning' : 'info'}
+          title={
+            policyUnavailable ? 'Saved OAuth policy is unavailable' : 'Loading saved OAuth policy…'
+          }
+          action={policyUnavailable && <Button onClick={retryPolicy}>Retry policy read</Button>}
+        />
+      )}
+      {!mutationAllowed && (
+        <Alert
+          type="warning"
+          showIcon
+          title="MCP server changes are unavailable"
+          description={mutationBlockedReason}
+          style={{ marginTop: 16 }}
+        />
+      )}
+      {configConflict && (
+        <Alert
+          type="warning"
+          showIcon
+          title="This MCP server was changed somewhere else. Load the latest version before you save again."
+          description="Loading it discards your unsaved edits."
+          action={
+            <Button loading={reloadingLatest} onClick={() => void reloadLatest()}>
+              Load latest
+            </Button>
+          }
+          style={{ marginTop: 16 }}
+        />
+      )}
+      {saveError && <ActionErrorNotice error={saveError} style={{ marginTop: 16 }} />}
+      <Form
+        form={form}
+        layout="vertical"
+        style={{ marginTop: 16 }}
+        onValuesChange={(changedValues) => {
+          if ('oauth_dcr_mode' in changedValues) setPreserveAbsentDcrMode(false);
+          if ('oauth_compatibility_mode' in changedValues) {
+            setPreserveAbsentCompatibilityMode(false);
+          }
+          if ('oauth_grant_type' in changedValues) setPreserveAbsentGrantType(false);
+          bumpFormRevision();
+        }}
+      >
+        <MCPServerFormFields
+          offeredTransports={offeredTransports}
+          offeredScopes={offeredScopes}
+          allowSharedOwnership={allowSharedOwnership}
+          mode={target ? 'edit' : 'create'}
+          savedOwnership={target?.owner_user_id ? 'private' : 'shared'}
+          transport={transport}
+          onTransportChange={setTransport}
+          authType={authType}
+          onAuthTypeChange={setAuthType}
+          form={form}
+          client={client}
+          authorityKey={authorityKey}
+          serverId={target?.mcp_server_id}
+          onTestConnection={handleTestConnection}
+          testing={testing}
+          testResult={testResult}
+          saving={saving}
+          onPrepareOAuthStart={prepareOAuthStart}
+          mutationAllowed={mutationAllowed && !configConflict && !reloadingLatest}
+          mutationBlockedReason={
+            configConflict
+              ? 'Load the latest version before you try again.'
+              : reloadingLatest
+                ? 'Wait for the latest settings to load.'
+                : mutationBlockedReason
+          }
+          formRevision={formRevision}
+          managedOAuthCompatibilityMode={managedOAuthCompatibilityMode}
+        />
+      </Form>
+    </>
+  );
+
+  // In place of a host's content (the MCP Catalog), not stacked over it; the
+  // host renders the breadcrumb and decides what Back returns to.
+  if (embedded) {
+    if (!open) return null;
+    return (
+      <>
+        {modalContextHolder}
+        {body}
+        <Flex justify="flex-end" style={{ marginTop: 16 }}>
+          {footer}
+        </Flex>
+      </>
+    );
+  }
+
   return (
     <>
       {modalContextHolder}
@@ -556,121 +694,9 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
         focusable={focusTriggerAfterClose === undefined ? undefined : { focusTriggerAfterClose }}
         width={600}
         destroyOnHidden
-        footer={
-          <Space>
-            <Button onClick={closeAndReset}>Cancel</Button>
-            {/* A disabled button can't host a tooltip of its own — hence the span. */}
-            <Tooltip
-              title={
-                !mutationAllowed
-                  ? mutationBlockedReason
-                  : configConflict
-                    ? 'Load the latest version before you save again.'
-                    : testing || reloadingLatest
-                      ? 'Wait for the current connection operation to finish.'
-                      : createUnconfirmed
-                        ? 'Refresh to see if the server was added before you create it again.'
-                        : !authorityKey
-                          ? 'Reconnect before saving.'
-                          : missingRequiredFields.length > 0
-                            ? describeMissingForSave(missingRequiredFields)
-                            : undefined
-              }
-            >
-              <span>
-                <Button type="primary" loading={saving} disabled={saveBlocked} onClick={handleSave}>
-                  {target ? 'Save' : 'Create'}
-                </Button>
-              </span>
-            </Tooltip>
-          </Space>
-        }
+        footer={footer}
       >
-        {policyServer?.auth?.type === 'oauth' && policyServer.oauth_compatibility_policy && (
-          <MCPOAuthPolicySummary
-            policy={policyServer.oauth_compatibility_policy}
-            label="Saved OAuth policy"
-          />
-        )}
-        {policyServer?.auth?.type === 'oauth' && !policyServer.oauth_compatibility_policy && (
-          <Alert
-            type={policyUnavailable ? 'warning' : 'info'}
-            title={
-              policyUnavailable
-                ? 'Saved OAuth policy is unavailable'
-                : 'Loading saved OAuth policy…'
-            }
-            action={policyUnavailable && <Button onClick={retryPolicy}>Retry policy read</Button>}
-          />
-        )}
-        {!mutationAllowed && (
-          <Alert
-            type="warning"
-            showIcon
-            title="MCP server changes are unavailable"
-            description={mutationBlockedReason}
-            style={{ marginTop: 16 }}
-          />
-        )}
-        {configConflict && (
-          <Alert
-            type="warning"
-            showIcon
-            title="This MCP server was changed somewhere else. Load the latest version before you save again."
-            description="Loading it discards your unsaved edits."
-            action={
-              <Button loading={reloadingLatest} onClick={() => void reloadLatest()}>
-                Load latest
-              </Button>
-            }
-            style={{ marginTop: 16 }}
-          />
-        )}
-        {saveError && <ActionErrorNotice error={saveError} style={{ marginTop: 16 }} />}
-        <Form
-          form={form}
-          layout="vertical"
-          style={{ marginTop: 16 }}
-          onValuesChange={(changedValues) => {
-            if ('oauth_dcr_mode' in changedValues) setPreserveAbsentDcrMode(false);
-            if ('oauth_compatibility_mode' in changedValues) {
-              setPreserveAbsentCompatibilityMode(false);
-            }
-            if ('oauth_grant_type' in changedValues) setPreserveAbsentGrantType(false);
-            bumpFormRevision();
-          }}
-        >
-          <MCPServerFormFields
-            offeredTransports={offeredTransports}
-            offeredScopes={offeredScopes}
-            allowSharedOwnership={allowSharedOwnership}
-            mode={target ? 'edit' : 'create'}
-            savedOwnership={target?.owner_user_id ? 'private' : 'shared'}
-            transport={transport}
-            onTransportChange={setTransport}
-            authType={authType}
-            onAuthTypeChange={setAuthType}
-            form={form}
-            client={client}
-            authorityKey={authorityKey}
-            serverId={target?.mcp_server_id}
-            onTestConnection={handleTestConnection}
-            testing={testing}
-            testResult={testResult}
-            saving={saving}
-            onPrepareOAuthStart={prepareOAuthStart}
-            mutationAllowed={mutationAllowed && !configConflict && !reloadingLatest}
-            mutationBlockedReason={
-              configConflict
-                ? 'Load the latest version before you try again.'
-                : reloadingLatest
-                  ? 'Wait for the latest settings to load.'
-                  : mutationBlockedReason
-            }
-            formRevision={formRevision}
-            managedOAuthCompatibilityMode={managedOAuthCompatibilityMode}
-          />
-        </Form>
+        {body}
       </Modal>
     </>
   );

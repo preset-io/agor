@@ -403,8 +403,10 @@ export function useDrillFormDraft(
 export const DrillCrumbs: React.FC<{
   parent?: ReactNode;
   onParent: () => void;
+  /** Plain crumbs between the parent and the current page. */
+  trail?: ReactNode[];
   current: ReactNode;
-}> = ({ parent, onParent, current }) => {
+}> = ({ parent, onParent, trail = [], current }) => {
   const { token } = theme.useToken();
   const ref = useRef<HTMLDivElement>(null);
   // An editor opens in the list's scroll container, at the list's offset: bring
@@ -428,6 +430,10 @@ export const DrillCrumbs: React.FC<{
                 },
               ]
             : []),
+          ...trail.map((title, index) => ({
+            key: `trail-${index}`,
+            title: <Typography.Text type="secondary">{title}</Typography.Text>,
+          })),
           {
             key: 'current',
             title: (

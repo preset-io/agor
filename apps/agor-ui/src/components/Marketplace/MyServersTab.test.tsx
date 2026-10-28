@@ -106,6 +106,7 @@ function renderTab(
 ) {
   const mocked = client(options.policy, options.canConfigure);
   const refresh = vi.fn(async () => undefined);
+  const onEditServer = vi.fn();
   render(
     <MyServersTab
       client={mocked.value}
@@ -117,9 +118,10 @@ function renderTab(
       loading={false}
       error={null}
       refresh={refresh}
+      onEditServer={onEditServer}
     />
   );
-  return { ...mocked, refresh };
+  return { ...mocked, refresh, onEditServer };
 }
 
 function settingsAction(serverId: string): HTMLButtonElement {
@@ -361,7 +363,7 @@ describe('Marketplace server inventory and settings', () => {
         },
       ],
     };
-    const { service, get } = renderTab(value);
+    const { service, get, onEditServer } = renderTab(value);
     fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
     const drawer = await screen.findByRole('dialog');
     expect(within(drawer).getByText('No sessions are attached.')).toBeVisible();
@@ -369,18 +371,29 @@ describe('Marketplace server inventory and settings', () => {
 
     await waitFor(() => expect(service).toHaveBeenCalledWith('mcp-servers'));
     expect(get).toHaveBeenCalledWith('server-1');
-    expect(await screen.findByText('Edit MCP Server')).toBeInTheDocument();
+    // The host's in-place editor gets the full server, not a modal over the Catalog.
+    await waitFor(() =>
+      expect(onEditServer).toHaveBeenCalledWith(
+        expect.objectContaining({ mcp_server_id: 'server-1' }),
+        'credential'
+      )
+    );
   });
 
-  it('opens the shared server editor from Edit configuration for a custom server', async () => {
-    const { get } = renderTab();
+  it('opens the host editor from Edit configuration for a custom server', async () => {
+    const { get, onEditServer } = renderTab();
     expect(screen.getByText('Private')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
     const edit = await screen.findByRole('button', { name: 'Edit GitHub configuration' });
     await waitFor(() => expect(edit).toBeEnabled());
     fireEvent.click(edit);
     await waitFor(() => expect(get).toHaveBeenCalledWith('server-1'));
-    expect(await screen.findByText('Edit MCP Server')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(onEditServer).toHaveBeenCalledWith(
+        expect.objectContaining({ mcp_server_id: 'server-1' }),
+        'configuration'
+      )
+    );
   });
 
   it('offers one editor entry point for a custom server with a stored credential', async () => {

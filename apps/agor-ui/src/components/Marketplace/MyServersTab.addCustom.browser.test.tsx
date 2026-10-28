@@ -3,12 +3,12 @@ import type { MCPMarketplaceOverview, MCPMarketplaceServer, MCPServerID } from '
 import type { AgorClient, MCPMemberPolicy, MCPServer } from '@agor-live/client';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider } from 'antd';
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { checkBrowserSanity } from '../../test/browserSanity';
 import { MyServersTab } from './MyServersTab';
-import { useAddCustomMcpServer } from './useAddCustomMcpServer';
+import { useCustomMcpServerEditor } from './useCustomMcpServerEditor';
 
 checkBrowserSanity();
 beforeEach(() => {
@@ -137,44 +137,43 @@ function Harness({
       ],
     }));
   controls.refresh = refresh;
-  // As MCPCatalogContent does: the tab bar owns the add action and hands the
-  // new server to My Servers once its form closes.
+  // As MCPCatalogContent does: the tab bar owns the add action, whose editor
+  // replaces the list in place and hands the new server to My Servers on close.
   const currentUser = { user_id: 'member-a', role } as never;
   const [requestedServerId, setRequestedServerId] = useState<string | null>(null);
-  const added = useRef<string | null>(null);
-  const addCustom = useAddCustomMcpServer({
+  const editor = useCustomMcpServerEditor({
     client,
     connected: true,
     connecting: false,
     authGeneration: 1,
     currentUser,
-    onCreated: (server) => {
-      added.current = server.mcp_server_id;
-    },
-    onClose: () => {
+    onClose: (serverId) => {
       void refresh();
-      setRequestedServerId(added.current);
-      added.current = null;
+      setRequestedServerId(serverId);
     },
   });
   return (
     <>
-      {addCustom.modal}
-      {addCustom.button}
-      <MyServersTab
-        client={client}
-        connected
-        connecting={false}
-        authGeneration={1}
-        currentUser={currentUser}
-        overview={overview}
-        loading={false}
-        error={null}
-        refresh={refresh}
-        onBrowseCatalog={() => undefined}
-        requestedServerId={requestedServerId}
-        onRequestedServerOpened={() => setRequestedServerId(null)}
-      />
+      {editor.button}
+      {editor.view && <section aria-label={editor.view.current}>{editor.view.editor}</section>}
+      <div hidden={Boolean(editor.view)}>
+        <MyServersTab
+          active={!editor.view}
+          client={client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={currentUser}
+          overview={overview}
+          loading={false}
+          error={null}
+          refresh={refresh}
+          onBrowseCatalog={() => undefined}
+          onEditServer={editor.openEdit}
+          requestedServerId={requestedServerId}
+          onRequestedServerOpened={() => setRequestedServerId(null)}
+        />
+      </div>
     </>
   );
 }
@@ -207,7 +206,7 @@ async function openCreateDialog() {
     return button;
   });
   await act(() => userEvent.click(add));
-  return screen.findByRole('dialog', { name: 'Add MCP Server' });
+  return screen.findByRole('region', { name: 'Add custom server' });
 }
 
 async function chooseOption(dialog: HTMLElement, label: string, option: string) {
@@ -289,7 +288,7 @@ it('adds a custom HTTP server while nothing is installed and opens it', async ()
     auth: { type: 'bearer', token: 'fictional-token' },
   });
   await waitFor(() =>
-    expect(screen.queryByRole('dialog', { name: 'Add MCP Server' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Add custom server' })).not.toBeInTheDocument()
   );
   // The new server is listed as Manual and its settings drawer opens.
   expect(await screen.findByLabelText('Remove Acme server')).toBeInTheDocument();
@@ -396,7 +395,7 @@ it('opens from the tab bar and resets the draft after cancel', async () => {
   await fillHttpBearer(dialog);
   await act(() => userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' })));
   await waitFor(() =>
-    expect(screen.queryByRole('dialog', { name: 'Add MCP Server' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Add custom server' })).not.toBeInTheDocument()
   );
 
   dialog = await openCreateDialog();
@@ -532,7 +531,7 @@ it('creates once when Create is clicked twice while the first create is in fligh
 
   reply.resolve();
   await waitFor(() =>
-    expect(screen.queryByRole('dialog', { name: 'Add MCP Server' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Add custom server' })).not.toBeInTheDocument()
   );
   expect(create).toHaveBeenCalledOnce();
 });
@@ -555,7 +554,7 @@ it('holds the OAuth start while Create is in flight', async () => {
   await waitFor(() => expect(startOAuth).toBeDisabled());
   firstReply.resolve();
   await waitFor(() =>
-    expect(screen.queryByRole('dialog', { name: 'Add MCP Server' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Add custom server' })).not.toBeInTheDocument()
   );
   expect(create).toHaveBeenCalledOnce();
   expect(oauthStart).not.toHaveBeenCalled();
@@ -603,7 +602,7 @@ it('keeps the OAuth-created draft open when the refreshed list replaces the empt
   await waitFor(() =>
     expect(screen.queryByRole('button', { name: 'Browse catalog' })).not.toBeInTheDocument()
   );
-  expect(screen.getByRole('dialog', { name: 'Add MCP Server' })).toBe(dialog);
+  expect(screen.getByRole('region', { name: 'Add custom server' })).toBe(dialog);
   expect(within(dialog).getByLabelText('Name (Internal ID)')).toHaveValue('acme');
   expect(within(dialog).getByLabelText('Display Name')).toHaveValue('Acme 2');
   expect(within(dialog).getByText('fictional-oauth-start-error')).toBeVisible();
