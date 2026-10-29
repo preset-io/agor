@@ -6865,7 +6865,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   {
                     ...params,
                     route: { id: session.session_id },
-                    // Daemon-set analytics origin; caller task metadata stays forbidden.
+                    // Client-reported analytics origin (closed list) as a daemon param; caller task metadata stays forbidden.
                     ...(data.origin ? { _taskAnalyticsOrigin: data.origin } : {}),
                   }
                 )
