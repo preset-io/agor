@@ -54,6 +54,28 @@ _The scheduler dovetails with [Teammates](/guide/teammates): a daily cron firing
 
 You can edit the schedule whenever you like; changes apply to the next run. Disabling the schedule clears the upcoming run timestamp but preserves your configuration for later.
 
+## Triggering a Run From Another System
+
+Some work should run when something happens, not on a clock. Give a schedule a **trigger URL** and another system (a CI job, a webhook relay, a release pipeline) can start a run with one HTTP request.
+
+1. Open the schedule in the branch's `Schedule` tab and choose **Turn on trigger URL**. Agents can do the same with the `agor_schedules_set_trigger` MCP tool (`enable`, `rotate`, `disable`).
+2. Copy the token right away. It starts with `agor_trg_` and is shown only once; Agor stores a hash, never the token. Rotating issues a new token and stops the old one immediately.
+3. Call the URL with the token as a bearer credential:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $AGOR_TRIGGER_TOKEN" \
+  https://<your-agor>/schedules/<schedule-id>/trigger
+```
+
+How it behaves:
+
+- **Narrow credential.** The token can only start this schedule. The run uses the schedule's own prompt and settings and runs as the schedule's owner, exactly like **Run now**. Only the owner can turn the trigger on, rotate it, or turn it off.
+- **The request body is ignored.** Nothing from the request reaches the prompt, so an outside system can't inject instructions. Put what the agent should look at in the prompt template, or let the agent fetch it with its tools.
+- **No pile-ups.** If a run of this schedule is still active, the request returns `{"status": "coalesced"}` and Agor queues exactly one follow-up run that starts once the current run finishes. Otherwise it returns `{"status": "started"}`. Both respond with `202 Accepted`.
+- **Other responses.** `404` for an unknown schedule or a wrong token (they look the same on purpose), `409` when the schedule is turned off, and `429` when a run of this schedule already started in the current minute and nothing is running to queue behind.
+- Triggered sessions carry `custom_context.scheduled_run.trigger_source: "webhook"` (cron runs say `"cron"`, **Run now** says `"manual"`). The cron cadence keeps running alongside the trigger. For event-driven work, pick a rare cron, such as a weekly safety-net run.
+
 ## Template Variables & Context
 
 Prompt templates render with a full, typed context:
