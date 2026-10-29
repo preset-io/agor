@@ -4,7 +4,9 @@ import type {
   DefaultModelConfig,
   EffortLevel,
   PermissionMode,
+  PromptDraftProvenance,
   Session,
+  TaskAnalyticsOrigin,
 } from '@agor-live/client';
 
 export interface NewSessionConfig {
@@ -24,6 +26,8 @@ export interface NewSessionConfig {
   envVarNames?: string[];
   /** Files are uploaded only after the session exists; never send them in the create payload. */
   attachmentFiles?: File[];
+  /** Marks `initialPrompt` as auto-generated for analytics; never sent in the create payload. */
+  initialPromptOrigin?: TaskAnalyticsOrigin;
 }
 
 export interface SessionCreationResult {
@@ -97,4 +101,9 @@ export function getSessionCreationWarning(session: Session): string | undefined 
   return skipped === 1
     ? "Session started without 1 default MCP server because it isn't available. Check MCP servers in branch settings."
     : `Session started without ${skipped} default MCP servers because they aren't available. Check MCP servers in branch settings.`;
+}
+
+/** Content-free extras for a composer send; the daemon validates every value. */
+export interface PromptSendOptions {
+  draft?: PromptDraftProvenance;
 }

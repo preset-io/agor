@@ -225,6 +225,7 @@ export function useCreateFlows(options: UseCreateFlowsOptions): UseCreateFlowsRe
         templateId: result.templateId,
         localHome: getTeammateConfig(branch)?.localHome,
       }),
+      initialPromptOrigin: 'teammate_bootstrap',
       modelConfig: result.modelConfig,
       effort: result.effort,
       mcpServerIds: result.mcpServerIds,

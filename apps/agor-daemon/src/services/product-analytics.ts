@@ -36,7 +36,8 @@ export class ProductAnalyticsService {
         input.action === 'completion_failed' ||
         input.action === 'completed';
       const isFinalStep = input.step === 'done';
-      if ((isCompletion && !isFinalStep) || (input.action === 'skipped' && isFinalStep)) {
+      const isForward = input.action === 'skipped' || input.action === 'continued';
+      if ((isCompletion && !isFinalStep) || (isForward && isFinalStep)) {
         throw new BadRequest('Invalid onboarding analytics transition');
       }
       analyticsLogger.track(input.event, { step: input.step, action: input.action }, { userId });

@@ -85,6 +85,7 @@ import {
   deletePromptDraft,
   discardPromptDraftSeed,
   getPromptDraft,
+  promptDraftSeedProvenance,
   readPromptDraftSeed,
   savePromptDraft,
 } from '../../utils/promptDrafts';
@@ -1123,8 +1124,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // Single entry point: /prompt. The daemon decides run-vs-queue based on
       // session state and reports it back via `task.status`. The 'queued'
       // WebSocket event populates the queue panel for queued prompts.
-      const sendResult = await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
+      const draft = promptDraftSeedProvenance(currentUserId, sendStartSessionId, latestValue);
+      const sendResult = await (draft
+        ? onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode, { draft })
+        : onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode));
       if (sendResult === false) return;
+      // The starter is used up once its first send is admitted.
+      if (draft) discardPromptDraftSeed(currentUserId, sendStartSessionId);
 
       // Admission can outlive this composer. Re-check ownership after the
       // await rather than reusing the pre-admission snapshot: a later caller

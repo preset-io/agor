@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   consumePromptDraftSeed,
   deletePromptDraft,
+  discardPromptDraftSeed,
   getPromptDraft,
+  promptDraftSeedProvenance,
   savePromptDraft,
   stagePromptDraftSeed,
 } from './promptDrafts';
@@ -63,5 +65,31 @@ describe('promptDrafts', () => {
 
     stagePromptDraftSeed('user-a', 'session-new', 'Stale starter');
     expect(consumePromptDraftSeed('user-a', 'session-new', now + 11 * 60 * 1000)).toBe('');
+  });
+
+  it('classifies a send against a sourced starter after the composer takes it', () => {
+    stagePromptDraftSeed('user-a', 'session-new', 'List my issues', 'catalog');
+    expect(consumePromptDraftSeed('user-a', 'session-new')).toBe('List my issues');
+    expect(consumePromptDraftSeed('user-a', 'session-new')).toBe('');
+    expect(promptDraftSeedProvenance('user-a', 'session-new', ' List my issues\n')).toBe(
+      'catalog_unchanged'
+    );
+    expect(promptDraftSeedProvenance('user-a', 'session-new', 'Only urgent ones')).toBe(
+      'catalog_edited'
+    );
+    expect(promptDraftSeedProvenance('user-b', 'session-new', 'List my issues')).toBeUndefined();
+    expect(promptDraftSeedProvenance('user-a', 'session-other', 'List my issues')).toBeUndefined();
+    discardPromptDraftSeed('user-a', 'session-new');
+    expect(promptDraftSeedProvenance('user-a', 'session-new', 'List my issues')).toBeUndefined();
+  });
+
+  it('reports no provenance for an unsourced or expired starter', () => {
+    const now = Date.now();
+    stagePromptDraftSeed('user-a', 'session-new', 'Plain starter');
+    expect(promptDraftSeedProvenance('user-a', 'session-new', 'Plain starter')).toBeUndefined();
+    stagePromptDraftSeed('user-a', 'session-new', 'Welcome', 'onboarding');
+    expect(
+      promptDraftSeedProvenance('user-a', 'session-new', 'Welcome', now + 11 * 60 * 1000)
+    ).toBeUndefined();
   });
 });

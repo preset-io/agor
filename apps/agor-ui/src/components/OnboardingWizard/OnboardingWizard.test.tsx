@@ -2032,6 +2032,27 @@ describe('onboarding analytics boundaries', () => {
       expect(Object.keys(event).sort()).toEqual(['action', 'event', 'step']);
   });
 
+  it('records one continue per forward step, never on Back or a repeated continue', async () => {
+    renderWizard();
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Ada' } });
+    pickCard('Start from scratch');
+    clickButton(/^continue/i); // workspace → llm
+    await findAndClickButton(/skip for now/i); // llm
+    clickButton('Back'); // tools → llm
+    clickButton('Back'); // llm → workspace
+    clickButton(/^continue/i); // workspace → llm again
+    await findAndClickButton(/skip for now/i); // llm
+    clickButton(/^continue/i); // tools → done
+    const continued = vi
+      .mocked(trackProductEvent)
+      .mock.calls.map(([, event]) => event)
+      .filter((event) => 'action' in event && event.action === 'continued');
+    expect(continued).toEqual([
+      { event: 'onboarding.step', step: 'workspace', action: 'continued' },
+      { event: 'onboarding.step', step: 'tools', action: 'continued' },
+    ]);
+  });
+
   it('records final failure and retry without false completion or raw error text', async () => {
     const onComplete = vi
       .fn()

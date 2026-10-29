@@ -9,6 +9,7 @@ import type React from 'react';
 import { createContext, useContext } from 'react';
 import type { AgenticToolOption } from '../components/AgentSelectionGrid/AgentSelectionGrid';
 import type { BranchModalTab } from '../components/BranchModal/BranchModal';
+import type { PromptSendOptions } from '../domain/sessionCreation';
 
 /**
  * AppActionsContext - Provides action callbacks for domain operations
@@ -21,7 +22,8 @@ export interface AppActionsContextValue {
   onSendPrompt?: (
     sessionId: string,
     prompt: string,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    options?: PromptSendOptions
   ) => boolean | undefined | Promise<boolean | undefined>;
   onFork?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwFork?: (sessionId: string, prompt: string) => Promise<void>;

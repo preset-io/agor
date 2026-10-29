@@ -726,7 +726,8 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         stagePromptDraftSeed(
           currentUser.user_id,
           result.session.session_id,
-          result.starter_prompt ?? ''
+          result.starter_prompt ?? '',
+          'catalog'
         );
         if (onOpenSession) onOpenSession(result.session.session_id);
         else navigate(sessionPath(result.session.session_id));
