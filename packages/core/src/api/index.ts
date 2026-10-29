@@ -74,6 +74,7 @@ import type {
   OwnershipTransferResult,
   PatchAgenticToolPreset,
   PermissionMode,
+  PromptDraftProvenance,
   ReorderQueuedTasksInput,
   Repo,
   RuntimeTelemetryInput,
@@ -86,6 +87,7 @@ import type {
   SessionID,
   SessionUpdate,
   Task,
+  TaskAnalyticsOrigin,
   TaskQueueMutationResult,
   TeammateWelcomeNoteRequest,
   TemplateRenderRequest,
@@ -158,6 +160,8 @@ export interface SessionPromptRequest {
   prompt: string;
   permissionMode?: PermissionMode;
   stream?: boolean;
+  /** Set when the sent text began as Agor's onboarding suggestion; analytics only. */
+  draft?: PromptDraftProvenance;
 }
 
 export interface SessionPromptOptions extends Omit<SessionPromptRequest, 'prompt'> {
@@ -173,6 +177,8 @@ export interface SessionInitializationRequest {
   envVarNames?: string[];
   prompt?: string;
   permissionMode?: PermissionMode;
+  /** Marks the first prompt as auto-generated (onboarding welcome); analytics only. */
+  origin?: TaskAnalyticsOrigin;
 }
 
 export interface SessionInitializationOptions extends SessionInitializationRequest {

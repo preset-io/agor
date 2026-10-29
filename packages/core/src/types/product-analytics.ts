@@ -12,6 +12,7 @@ export type OnboardingAnalyticsStep = (typeof ONBOARDING_ANALYTICS_STEPS)[number
 export const ONBOARDING_ANALYTICS_ACTIONS = [
   'started',
   'viewed',
+  'continued',
   'skipped',
   'deferred',
   'completion_started',

@@ -989,6 +989,26 @@ export function OnboardingWizard({
     setCurrentStep(step);
   }, []);
 
+  // One `continued` per step per open activation; Back and failed validation never call this.
+  const continuedSteps = useRef(new Set<WizardStep>());
+  useEffect(() => {
+    if (!open) continuedSteps.current.clear();
+  }, [open]);
+  const continueFrom = useCallback(
+    (from: WizardStep, to: WizardStep) => {
+      if (!continuedSteps.current.has(from)) {
+        continuedSteps.current.add(from);
+        trackProductEvent(user?.user_id, {
+          event: PRODUCT_ANALYTICS_EVENTS.ONBOARDING_STEP,
+          step: from,
+          action: 'continued',
+        });
+      }
+      goToStep(to);
+    },
+    [goToStep, user?.user_id]
+  );
+
   // Stable handlers for the memoized device sign-in pane — identity-preserving
   // so its internal timers never force wizard-wide re-renders.
   const handleCodexDeviceVerified = useCallback(() => {
@@ -1011,8 +1031,8 @@ export function OnboardingWizard({
   // marking codex verified so the primary button advances to the next step.
   const handleCodexImported = useCallback(() => {
     setLlmAuthVerified((prev) => (prev.codex === true ? prev : { ...prev, codex: true }));
-    goToStep('tools');
-  }, [goToStep]);
+    continueFrom('llm', 'tools');
+  }, [continueFrom]);
 
   const handleBack = useCallback(() => {
     if (stepIndex > 0) goToStep(STEPS[stepIndex - 1]);
@@ -1092,7 +1112,7 @@ export function OnboardingWizard({
       case 'llm': {
         if (!selectedAgent) return;
         if (agentIsVerifiedConnected(selectedAgent)) {
-          goToStep('tools');
+          continueFrom('llm', 'tools');
           return;
         }
         // Device sign-in and login-file import both complete inside their own
@@ -1102,11 +1122,12 @@ export function OnboardingWizard({
           selectedAgent === 'codex' &&
           (effectiveAuthMethod === 'codex-device-auth' || effectiveAuthMethod === 'codex-auth-json')
         ) {
-          if (llmAuthVerified.codex === true) goToStep('tools');
+          if (llmAuthVerified.codex === true) continueFrom('llm', 'tools');
           return;
         }
         if (selectedAgent === 'claude-code' && effectiveAuthMethod === 'claude-oauth') {
-          if (allowClaudeOAuthSignIn && llmAuthVerified['claude-code'] === true) goToStep('tools');
+          if (allowClaudeOAuthSignIn && llmAuthVerified['claude-code'] === true)
+            continueFrom('llm', 'tools');
           return;
         }
         // Key stored, auth check still running — proceed optimistically
@@ -1114,7 +1135,7 @@ export function OnboardingWizard({
           agentHasUsableStoredKey(selectedAgent) &&
           llmAuthVerified[selectedAgent] === undefined
         ) {
-          goToStep('tools');
+          continueFrom('llm', 'tools');
           return;
         }
         if (!user || !sanitizeSecretValue(apiKey)) return;
@@ -1156,7 +1177,7 @@ export function OnboardingWizard({
             } as UpdateUserInput['agentic_tools'],
           });
           if (!isCurrent()) return;
-          goToStep('tools');
+          continueFrom('llm', 'tools');
         } catch (err) {
           if (isCurrent()) {
             // No raw error under Details: it can echo the submitted key.
@@ -1171,11 +1192,11 @@ export function OnboardingWizard({
       case 'workspace': {
         // Naming does not provision a workspace; final completion owns provisioning.
         // Skip remains the no-teammate path.
-        goToStep('llm');
+        continueFrom('workspace', 'llm');
         break;
       }
       case 'tools': {
-        goToStep('done');
+        continueFrom('tools', 'done');
         break;
       }
       case 'done': {
@@ -1285,7 +1306,7 @@ export function OnboardingWizard({
     invalidSavedTemplateId,
     onComplete,
     completionSlowThresholdMs,
-    goToStep,
+    continueFrom,
   ]);
 
   // A wizard step is a navigation event. Move focus to its heading after the

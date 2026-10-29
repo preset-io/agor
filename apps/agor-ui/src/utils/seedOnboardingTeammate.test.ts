@@ -86,14 +86,35 @@ describe('seedOnboardingTeammate', () => {
     });
     expect(startTeammateBootstrapSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionConfig: expect.objectContaining({ agent: 'claude-code', initialPrompt: undefined }),
+        sessionConfig: expect.objectContaining({
+          agent: 'claude-code',
+          initialPrompt: undefined,
+          initialPromptOrigin: undefined,
+        }),
       })
     );
     expect(stagePromptDraftSeed).toHaveBeenCalledWith(
       USER_ID,
       'session-1',
-      expect.stringContaining('Rusty')
+      expect.stringContaining('Rusty'),
+      'onboarding'
     );
+  });
+
+  it('marks the auto-sent welcome prompt as the onboarding bootstrap and stages no starter', async () => {
+    createTeammateBranchMock.mockResolvedValue({ branch_id: 'branch-1' } as Branch);
+    startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
+    const { input } = setup({ startInitialTurn: true });
+    await seedOnboardingTeammate(input);
+    expect(startTeammateBootstrapSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionConfig: expect.objectContaining({
+          initialPrompt: expect.stringContaining('Rusty'),
+          initialPromptOrigin: 'onboarding_bootstrap',
+        }),
+      })
+    );
+    expect(stagePromptDraftSeed).not.toHaveBeenCalled();
   });
 
   it('does not stage the starter after the authenticated owner changes during session creation', async () => {

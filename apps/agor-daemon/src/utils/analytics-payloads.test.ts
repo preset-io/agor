@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildBranchCreatedAnalyticsProperties,
   buildSessionCreatedAnalyticsProperties,
+  llmCredentialMethodForField,
 } from './analytics-payloads.js';
 
 describe('analytics payload builders', () => {
@@ -72,5 +73,24 @@ describe('analytics payload builders', () => {
     expect(payload).not.toHaveProperty('name');
     expect(payload).not.toHaveProperty('metadata');
     expect(payload).not.toHaveProperty('callback_config');
+  });
+});
+
+describe('llmCredentialMethodForField', () => {
+  it('maps canonical credential fields to closed methods', () => {
+    expect(llmCredentialMethodForField('claude-code', 'ANTHROPIC_API_KEY')).toBe('api_key');
+    expect(llmCredentialMethodForField('claude-code', 'CLAUDE_CODE_OAUTH_TOKEN')).toBe(
+      'subscription_token'
+    );
+    expect(llmCredentialMethodForField('claude-code', 'ANTHROPIC_AUTH_TOKEN')).toBe('auth_token');
+    expect(llmCredentialMethodForField('codex', 'OPENAI_API_KEY')).toBe('api_key');
+    expect(llmCredentialMethodForField('opencode', 'anthropic')).toBe('api_key');
+  });
+
+  it('treats endpoints and unknown names as non-credentials', () => {
+    expect(llmCredentialMethodForField('codex', 'OPENAI_BASE_URL')).toBeUndefined();
+    expect(llmCredentialMethodForField('claude-code', 'ANTHROPIC_BASE_URL')).toBeUndefined();
+    expect(llmCredentialMethodForField('codex', '__proto__')).toBeUndefined();
+    expect(llmCredentialMethodForField('codex', 'sk-pasted-into-the-name')).toBeUndefined();
   });
 });

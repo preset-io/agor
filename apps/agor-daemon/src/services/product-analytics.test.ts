@@ -46,6 +46,16 @@ it.each(ONBOARDING_ANALYTICS_STEPS)('accepts the real normalized step %s', async
   );
 });
 
+it.each(['workspace', 'llm', 'tools'] as const)('accepts continuing from step %s', async (step) => {
+  await send({ event: 'onboarding.step', step, action: 'continued' });
+  expect(recorded).toHaveBeenCalledWith(
+    'tenant-a',
+    'onboarding.step',
+    { step, action: 'continued' },
+    { userId: user.user_id }
+  );
+});
+
 it.each([
   { event: 'auth.login_succeeded' },
   { event: 'home.viewed', userId: 'victim' },
@@ -57,6 +67,7 @@ it.each([
   { event: 'onboarding.step', step: 'Connect AI', action: 'viewed' },
   { event: 'onboarding.step', step: 'llm', action: 'completed' },
   { event: 'onboarding.step', step: 'done', action: 'skipped' },
+  { event: 'onboarding.step', step: 'done', action: 'continued' },
   { event: 'onboarding.step', step: 'done', action: 'completion_failed', error: 'secret' },
 ])('rejects forged identity, non-allowlisted events and content: %j', async (data) => {
   await expect(send(data)).rejects.toThrow();

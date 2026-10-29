@@ -62,6 +62,7 @@ import { setPrimaryAgenticToolIfUnset } from './domain/primaryAgenticTool';
 import {
   getSessionCreationWarning,
   type NewSessionConfig,
+  type PromptSendOptions,
   runSessionCreationStages,
   type SessionCreationResult,
 } from './domain/sessionCreation';
@@ -131,7 +132,7 @@ import {
   type OnboardingReopenMode,
 } from './utils/onboardingLifecycle';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingPreferences';
-import { savePromptDraft } from './utils/promptDrafts';
+import { savePromptDraft, stagePromptDraftSeed } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
 import {
@@ -1105,7 +1106,7 @@ function AppContent() {
     const operationAccessToken = accessToken;
     const shouldContinue = () =>
       isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration);
-    const { attachmentFiles, ...sessionConfig } = config;
+    const { attachmentFiles, initialPromptOrigin, ...sessionConfig } = config;
     const outcome = await runSessionCreationStages({
       createSession: () => createSession({ ...sessionConfig, branch_id }),
       onSessionCreated: (session) => {
@@ -1134,6 +1135,7 @@ function AppContent() {
           envVarNames: config.envVarNames,
           prompt,
           permissionMode: config.permissionMode,
+          ...(initialPromptOrigin && prompt ? { origin: initialPromptOrigin } : {}),
         }),
       shouldContinue,
     });
@@ -1160,6 +1162,21 @@ function AppContent() {
 
     if (!shouldContinue()) return null;
     savePromptDraft(operationUserId, outcome.session.session_id, outcome.prompt);
+    // The recovered draft is still Agor's generated text, not something the user typed.
+    const starterSource =
+      initialPromptOrigin === 'onboarding_bootstrap'
+        ? 'onboarding'
+        : initialPromptOrigin === 'teammate_bootstrap'
+          ? 'teammate'
+          : undefined;
+    if (starterSource) {
+      stagePromptDraftSeed(
+        operationUserId,
+        outcome.session.session_id,
+        outcome.prompt,
+        starterSource
+      );
+    }
     showError(sessionStartedMessageNotSent(outcome.error));
     return { sessionId: outcome.session.session_id };
   };
@@ -1207,13 +1224,18 @@ function AppContent() {
   const handleSendPrompt = async (
     sessionId: string,
     prompt: string,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    options?: PromptSendOptions
   ): Promise<boolean> => {
     if (!client || !currentUser) return false;
     const operationUserId = currentUser.user_id;
     const operationAuthenticationGeneration = authenticationGeneration;
     return sendPromptWithReconciliation({
-      send: () => client.sessions.prompt(sessionId, prompt, { permissionMode }),
+      send: () =>
+        client.sessions.prompt(sessionId, prompt, {
+          permissionMode,
+          ...(options?.draft ? { draft: options.draft } : {}),
+        }),
       getClient: () => clientRef.current,
       attempt: { sessionId, userId: operationUserId, prompt },
       showError,

@@ -53,6 +53,7 @@ import type {
   SessionBulkArchiveResult,
 } from './services/sessions.js';
 import type { TaskTerminationSettlementInput } from './services/tasks.js';
+import type { TaskCreatedAnalytics } from './utils/task-authorship.js';
 
 // Re-export core types for convenience
 export type AuthenticatedUser = CoreAuthenticatedUser;
@@ -217,6 +218,8 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     params?: FeathersParams
   ): Promise<TaskQueueMutationResult>;
   autoTitleSession(task: Task, params?: FeathersParams): Promise<void>;
+  /** Analytics for Tasks admitted by repository-backed prompt admission (not a transport method). */
+  trackTaskCreated(task: Task, admission?: TaskCreatedAnalytics): void;
   complete(
     id: string,
     data: { git_state?: { sha_at_end?: string; commit_message?: string } },

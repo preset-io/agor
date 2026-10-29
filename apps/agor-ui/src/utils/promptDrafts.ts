@@ -7,6 +7,8 @@
  * accumulating one localStorage namespace per session.
  */
 
+import type { PromptDraftProvenance } from '@agor-live/client';
+
 const DRAFT_KEY = 'agor:prompt-draft';
 const DRAFT_SEED_KEY = 'agor:prompt-draft-seed';
 const LEGACY_DRAFT_KEY_PREFIX = 'agor-draft-';
@@ -18,8 +20,14 @@ interface StoredPromptDraft {
   text: string;
 }
 
+/** Which Agor suggestion a starter came from; only its closed provenance ever leaves the browser. */
+export type PromptStarterSource = 'onboarding' | 'teammate' | 'catalog';
+
 interface StoredPromptDraftSeed extends StoredPromptDraft {
   createdAt: number;
+  source?: PromptStarterSource;
+  /** Taken by the composer; kept only so the first send can report draft provenance. */
+  consumed?: boolean;
 }
 
 function pruneLegacyDraftKeys(): void {
@@ -103,12 +111,23 @@ export function deletePromptDraft(
  * sessionStorage separately from the current composer's draft so the old
  * composer's unmount flush cannot overwrite it.
  */
-export function stagePromptDraftSeed(ownerId: string, sessionId: string, text: string): void {
+export function stagePromptDraftSeed(
+  ownerId: string,
+  sessionId: string,
+  text: string,
+  source?: PromptStarterSource
+): void {
   if (!text.trim()) return;
   try {
     sessionStorage.setItem(
       DRAFT_SEED_KEY,
-      JSON.stringify({ ownerId, sessionId, text, createdAt: Date.now() })
+      JSON.stringify({
+        ownerId,
+        sessionId,
+        text,
+        createdAt: Date.now(),
+        ...(source ? { source } : {}),
+      })
     );
   } catch {
     // sessionStorage unavailable
@@ -147,8 +166,15 @@ function readSeed(
       sessionStorage.removeItem(DRAFT_SEED_KEY);
       return '';
     }
-    if (seedSessionId !== sessionId) return '';
-    if (consume) sessionStorage.removeItem(DRAFT_SEED_KEY);
+    if (seedSessionId !== sessionId || seed.consumed === true) return '';
+    if (consume) {
+      // A sourced starter stays, marked consumed, until its first send reports provenance.
+      if (seed.source) {
+        sessionStorage.setItem(DRAFT_SEED_KEY, JSON.stringify({ ...seed, consumed: true }));
+      } else {
+        sessionStorage.removeItem(DRAFT_SEED_KEY);
+      }
+    }
     return typeof seedText === 'string' ? seedText : '';
   } catch {
     try {
@@ -193,5 +219,35 @@ export function discardPromptDraftSeed(
     }
   } catch {
     // Storage may be unavailable; an unreadable seed cannot hydrate a composer.
+  }
+}
+
+/** Classify a send against its session's Agor starter, whether or not the composer took it. */
+export function promptDraftSeedProvenance(
+  ownerId: string | undefined,
+  sessionId: string,
+  sentText: string,
+  now = Date.now()
+): PromptDraftProvenance | undefined {
+  if (!ownerId) return undefined;
+  try {
+    const raw = sessionStorage.getItem(DRAFT_SEED_KEY);
+    const seed = raw ? (JSON.parse(raw) as Partial<StoredPromptDraftSeed>) : null;
+    if (
+      seed?.ownerId !== ownerId ||
+      seed.sessionId !== sessionId ||
+      typeof seed.text !== 'string' ||
+      typeof seed.createdAt !== 'number' ||
+      now < seed.createdAt ||
+      now - seed.createdAt > DRAFT_SEED_TTL_MS ||
+      (seed.source !== 'onboarding' && seed.source !== 'teammate' && seed.source !== 'catalog')
+    ) {
+      return undefined;
+    }
+    return sentText.trim() === seed.text.trim()
+      ? (`${seed.source}_unchanged` as const)
+      : (`${seed.source}_edited` as const);
+  } catch {
+    return undefined;
   }
 }

@@ -1,6 +1,7 @@
+import { analyticsLogger } from '@agor/core/analytics';
 import { isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
-import { runWithTenantContext } from '@agor/core/db';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getCurrentTenantId, runWithTenantContext } from '@agor/core/db';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { inspectClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { createCheckAuthService } from './check-auth';
@@ -221,6 +222,90 @@ describe('check-auth Claude subscription tokens', () => {
 });
 
 // Round-3 — honest tri-state / fail-safe distinctions layered on top of #1867.
+describe('check-auth verification analytics', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const user = { user: { user_id: 'user-1' } } as never;
+  function recordVerified() {
+    const seen: unknown[] = [];
+    vi.spyOn(analyticsLogger, 'track').mockImplementation((event, properties) => {
+      if (event === 'llm.credential_verified') seen.push([getCurrentTenantId(), properties]);
+    });
+    return seen;
+  }
+
+  it('records explicit typed-key checks with their result, never the key', async () => {
+    const seen = recordVerified();
+    mockClaudeAccount({ tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN' });
+    await service().create({ tool: 'claude-code', apiKey: 'sk-ant-oat01-test' }, user);
+    expect(seen).toEqual([
+      [
+        'tenant-test',
+        { agentic_tool: 'claude-code', method: 'subscription_token', result: 'authenticated' },
+      ],
+    ]);
+    expect(JSON.stringify(seen)).not.toContain('sk-ant');
+  });
+
+  it('records an explicit native-login probe, and nothing for passive banner checks', async () => {
+    const seen = recordVerified();
+    resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'user', useNativeAuth: true });
+    await service().create({ tool: 'claude-code' }, user);
+    expect(seen).toEqual([]);
+    resolveCodexCredentialRouteMock.mockResolvedValue({
+      ok: true,
+      delegatedHomeKey: null,
+      userId: 'user-1',
+    } as never);
+    inspectClaudeAuthViaExecutorMock.mockResolvedValue({ ok: false, reason: 'not-found' });
+    await service().create({ tool: 'claude-code', validateNative: true }, user);
+    expect(seen).toEqual([
+      [
+        'tenant-test',
+        { agentic_tool: 'claude-code', method: 'native_login', result: 'unauthenticated' },
+      ],
+    ]);
+  });
+
+  it('never records a background check of a stored key', async () => {
+    const seen = recordVerified();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('{}', { status: 200 }))
+    );
+    resolveApiKeyMock.mockResolvedValue({
+      apiKey: 'sk-stored-openai',
+      source: 'user',
+      useNativeAuth: false,
+    });
+    await service().create({ tool: 'codex' }, user);
+    expect(seen).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  it('never reports a found native login file as provider-verified', async () => {
+    const seen = recordVerified();
+    resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'user', useNativeAuth: true });
+    resolveCodexCredentialRouteMock.mockResolvedValue({
+      ok: true,
+      delegatedHomeKey: null,
+      userId: 'user-1',
+    } as never);
+    inspectClaudeAuthViaExecutorMock.mockResolvedValue({ ok: true });
+    const result = await service().create({ tool: 'claude-code', validateNative: true }, user);
+    expect(result.status).toBe('authenticated');
+    expect(seen).toEqual([
+      ['tenant-test', { agentic_tool: 'claude-code', method: 'native_login', result: 'unknown' }],
+    ]);
+  });
+
+  it('records nothing without an authenticated caller', async () => {
+    const seen = recordVerified();
+    mockClaudeAccount({ tokenSource: 'CLAUDE_CODE_OAUTH_TOKEN' });
+    await service().create({ tool: 'claude-code', apiKey: 'sk-ant-oat01-test' });
+    expect(seen).toEqual([]);
+  });
+});
+
 describe('check-auth tri-state', () => {
   const params = { user: { user_id: 'user-1' } } as never;
 

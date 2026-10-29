@@ -31,7 +31,11 @@ import { useLocation, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
-import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import type {
+  NewSessionConfig,
+  PromptSendOptions,
+  SessionCreationResult,
+} from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
@@ -181,7 +185,8 @@ export interface AppProps {
   onSendPrompt?: (
     sessionId: string,
     prompt: string,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    options?: PromptSendOptions
   ) => boolean | undefined | Promise<boolean | undefined>;
   onUpdateSession?: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession?: (sessionId: string) => void;

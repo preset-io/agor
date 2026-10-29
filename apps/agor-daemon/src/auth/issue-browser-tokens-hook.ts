@@ -94,7 +94,7 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
       runWithTenantContext(analyticsTenantId, () =>
         analyticsLogger.track(
           PRODUCT_ANALYTICS_EVENTS.LOGIN_SUCCEEDED,
-          { method: 'local' },
+          { method: 'local', runtime_user_created: false },
           {
             userId: context.result.user.user_id,
           }

@@ -35,6 +35,7 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { analyticsLogger } from '@agor/core/analytics';
 import {
   hasContainedClaudeRuntimeCredentials,
   isClaudeSubscriptionOAuthEnabled,
@@ -42,6 +43,7 @@ import {
 } from '@agor/core/config';
 import {
   getCurrentTenantId,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -57,6 +59,7 @@ import type {
 } from '@agor/core/types';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import { EXECUTOR_SESSION_TOKEN_TYPE } from '../auth/executor-session-token.js';
+import { buildLlmCredentialVerifiedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { writeClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { sandboxManagedCredentialIsolationAvailable } from '../utils/sandbox-wrap.js';
 import type { ClaudeBackendOAuth } from './claude-backend-oauth.js';
@@ -619,7 +622,19 @@ export function createClaudeOAuthService(
       }
       return { value: true, subscriptionType: tokens.subscriptionType };
     });
-    return outcome.outcome === 'committed' ? store.status(ctx, claim.attemptId) : false;
+    if (outcome.outcome !== 'committed') return false;
+    runWithTenantContext(String(ctx.tenantId), () =>
+      analyticsLogger.track(
+        'llm.credential_verified',
+        buildLlmCredentialVerifiedAnalyticsProperties(
+          'claude-code',
+          'claude_oauth',
+          'authenticated'
+        ),
+        { userId: ctx.userId }
+      )
+    );
+    return store.status(ctx, claim.attemptId);
   }
 
   async function submit(

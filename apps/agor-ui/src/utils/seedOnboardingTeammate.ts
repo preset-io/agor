@@ -297,6 +297,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
           emoji: input.teammateEmoji,
         }),
         initialPrompt: input.startInitialTurn ? starterPrompt : undefined,
+        initialPromptOrigin: input.startInitialTurn ? 'onboarding_bootstrap' : undefined,
       },
       onCreateSession: input.onCreateSession,
       shouldContinue: isCurrentUser,
@@ -304,7 +305,12 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
 
     if (!isCurrentUser()) return {};
     if (!input.startInitialTurn) {
-      stagePromptDraftSeed(input.expectedUserId, initialization.sessionId, starterPrompt);
+      stagePromptDraftSeed(
+        input.expectedUserId,
+        initialization.sessionId,
+        starterPrompt,
+        'onboarding'
+      );
     }
     return {
       branchId: branch.branch_id,

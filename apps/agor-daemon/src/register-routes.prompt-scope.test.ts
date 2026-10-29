@@ -53,7 +53,7 @@ describe('prompt and widget transaction scopes', () => {
     const transaction = prompt.indexOf('runPromptAdmissionTransaction(');
     const authorityLock = prompt.indexOf('lockTenantAuthorizationFence(operationDb, params)');
     const rbacCheck = prompt.lastIndexOf('assertCurrentPromptAuthority(');
-    const taskAdmission = prompt.indexOf('new TaskRepository(operationDb).createPending(');
+    const taskAdmission = prompt.indexOf('new TaskRepository(operationDb).admitPending(');
     expect(transaction).toBeGreaterThan(0);
     expect(authorityLock).toBeGreaterThan(transaction);
     expect(rbacCheck).toBeGreaterThan(authorityLock);
@@ -170,6 +170,13 @@ describe('prompt and widget transaction scopes', () => {
     expect(promptAdmission).toBeGreaterThan(envSetup);
     expect(initialization.indexOf("path: 'session-mcp-servers'")).toBeLessThan(promptAdmission);
     expect(initialization.indexOf("path: 'session-env-selections'")).toBeLessThan(promptAdmission);
+    // A closed analytics origin is validated up front and reaches admission only as a daemon param.
+    const originCheck = initialization.indexOf('TASK_ANALYTICS_ORIGINS.includes(data.origin)');
+    expect(originCheck).toBeGreaterThan(0);
+    expect(originCheck).toBeLessThan(scopedAuthorization);
+    expect(initialization.indexOf('_taskAnalyticsOrigin: data.origin')).toBeGreaterThan(
+      promptAdmission
+    );
   });
 
   it('restores the queued user before hooked Session recovery under branch RBAC', () => {

@@ -1,5 +1,6 @@
+import { analyticsLogger } from '@agor/core/analytics';
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
-import { runWithTenantContext } from '@agor/core/db';
+import { getCurrentTenantId, runWithTenantContext } from '@agor/core/db';
 import type { UserID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeCodexAuthCredential } from '../utils/executor-codex-auth.js';
@@ -80,6 +81,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function mockUserCodeIssued() {
@@ -144,6 +146,10 @@ describe('codex-device-auth', () => {
         })
       );
 
+    const verified: unknown[] = [];
+    vi.spyOn(analyticsLogger, 'track').mockImplementation((event, properties) => {
+      if (event === 'llm.credential_verified') verified.push([getCurrentTenantId(), properties]);
+    });
     await withTenant(() => service.create({}, AUTH_PARAMS));
     // interval "1" is floored to MIN_POLL_INTERVAL_MS (2s) — each 2.1s
     // advance crosses exactly one scheduled poll.
@@ -152,6 +158,9 @@ describe('codex-device-auth', () => {
 
     const status = await withTenant(() => service.find(AUTH_PARAMS));
     expect(status.phase).toBe('success');
+    expect(verified).toEqual([
+      ['tenant-test', { agentic_tool: 'codex', method: 'codex_device', result: 'authenticated' }],
+    ]);
     expect(status.planType).toBe('pro');
     expect(JSON.stringify(status)).not.toContain('refresh-tok');
     expect(JSON.stringify(status)).not.toContain('access-tok');

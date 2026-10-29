@@ -11,6 +11,7 @@ import { Alert, Button, Flex, Spin, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
+import type { PromptSendOptions } from '../../domain/sessionCreation';
 import { usePermissionDecision } from '../../hooks/usePermissionDecision';
 import { usePinnedOpenRows } from '../../hooks/usePinnedRows';
 import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
@@ -34,7 +35,8 @@ interface SessionPageProps {
   onSendPrompt?: (
     sessionId: string,
     prompt: string,
-    permissionMode?: PermissionMode
+    permissionMode?: PermissionMode,
+    options?: PromptSendOptions
   ) => boolean | undefined | Promise<boolean | undefined>;
   onForkSession: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession: (sessionId: string, prompt: string) => Promise<void>;

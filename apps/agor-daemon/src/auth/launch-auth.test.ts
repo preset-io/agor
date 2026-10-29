@@ -186,7 +186,7 @@ describe('one-time launch auth service', () => {
       [
         'tenant-a',
         'auth.login_succeeded',
-        { method: 'external_launch' },
+        { method: 'external_launch', runtime_user_created: true, cloud_subject: 'external-user-1' },
         { userId: result.user.user_id },
       ],
     ]);
@@ -197,6 +197,74 @@ describe('one-time launch auth service', () => {
     await expect(service(cloud).create({ launchCode: 'no-tenant' })).rejects.toThrow();
     expect(seen).not.toHaveBeenCalled();
   });
+
+  function loginEvents(track: ReturnType<typeof vi.spyOn>) {
+    return track.mock.calls
+      .filter(([event]) => event === 'auth.login_succeeded')
+      .map(([, properties]) => properties as Record<string, unknown>);
+  }
+
+  it('reports runtime user creation only for the launch that inserted the user', async () => {
+    const track = vi.spyOn(analyticsLogger, 'track').mockImplementation(() => undefined);
+    mockExchange(signClaims({ sub: 'user:cloud-1' }));
+    await service().create({ launchCode: 'first' });
+    await service().create({ launchCode: 'second' });
+    expect(loginEvents(track)).toEqual([
+      { method: 'external_launch', runtime_user_created: true, cloud_subject: 'user:cloud-1' },
+      { method: 'external_launch', runtime_user_created: false, cloud_subject: 'user:cloud-1' },
+    ]);
+  });
+
+  it('reports exactly one runtime user creation for concurrent first launches', async () => {
+    const track = vi.spyOn(analyticsLogger, 'track').mockImplementation(() => undefined);
+    mockExchange(signClaims({ sub: 'user:concurrent' }));
+    const auth = service();
+    await Promise.all([
+      auth.create({ launchCode: 'concurrent-1' }),
+      auth.create({ launchCode: 'concurrent-2' }),
+    ]);
+    const created = loginEvents(track).map((properties) => properties.runtime_user_created);
+    expect(created.sort()).toEqual([false, true]);
+  });
+
+  it('does not report creation when a launch links an existing user by trusted email', async () => {
+    const track = vi.spyOn(analyticsLogger, 'track').mockImplementation(() => undefined);
+    const now = new Date();
+    await insert(db, users)
+      .values({
+        user_id: 'local-user-1',
+        created_at: now,
+        updated_at: now,
+        email: 'person@example.test',
+        password: await hash('local-password', 10),
+        name: 'Existing Local User',
+        emoji: '👤',
+        role: 'member',
+        onboarding_completed: false,
+        must_change_password: false,
+        data: { preferences: {} },
+      })
+      .run();
+    mockExchange(signClaims({ email_verified: true }));
+    await service({
+      external_launch: { ...baseConfig().external_launch, trust_verified_email_for_linking: true },
+    }).create({ launchCode: 'trusted-email' });
+    expect(loginEvents(track)).toEqual([
+      { method: 'external_launch', runtime_user_created: false, cloud_subject: 'external-user-1' },
+    ]);
+  });
+
+  it.each(['person@example.test', 'has space', 'x'.repeat(129)])(
+    'keeps a non-opaque launch subject out of analytics (%s)',
+    async (sub) => {
+      const track = vi.spyOn(analyticsLogger, 'track').mockImplementation(() => undefined);
+      mockExchange(signClaims({ sub }));
+      await service().create({ launchCode: 'odd-subject' });
+      expect(loginEvents(track)).toEqual([
+        { method: 'external_launch', runtime_user_created: true },
+      ]);
+    }
+  );
 
   it('projects a verified public URL tenant-wide and preserves it for legacy launches', async () => {
     const issuedAt = Math.floor(Date.now() / 1000) - 10;

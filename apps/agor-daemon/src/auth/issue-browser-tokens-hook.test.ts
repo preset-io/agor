@@ -183,7 +183,12 @@ test('records exactly one local success after token issuance, with trusted tenan
   context.params = { tenant: { tenant_id: 'tenant-a' } };
   await makeHook()(context);
   expect(seen.mock.calls).toEqual([
-    ['tenant-a', 'auth.login_succeeded', { method: 'local' }, { userId: 'user-1' }],
+    [
+      'tenant-a',
+      'auth.login_succeeded',
+      { method: 'local', runtime_user_created: false },
+      { userId: 'user-1' },
+    ],
   ]);
 });
 

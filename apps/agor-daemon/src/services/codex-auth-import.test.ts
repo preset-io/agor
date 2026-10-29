@@ -1,5 +1,6 @@
+import { analyticsLogger } from '@agor/core/analytics';
 import { isTenantAgenticToolEnabled, loadConfigSync } from '@agor/core/config';
-import { runWithTenantContext } from '@agor/core/db';
+import { getCurrentTenantId, runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CodexAuthCredentialWriteError,
@@ -146,10 +147,19 @@ describe('codex-auth-import', () => {
   it('writes, verifies, flips the auth method, and returns non-secret metadata only', async () => {
     const { app, usersService } = makeApp();
     const invalidateCredentialBinds = vi.fn(async () => undefined);
+    const events: unknown[] = [];
+    const track = vi.spyOn(analyticsLogger, 'track').mockImplementation((event, properties) => {
+      if (String(event).startsWith('llm.')) events.push([getCurrentTenantId(), event, properties]);
+    });
+    // Structurally valid but fabricated: import must not claim the provider accepted it.
     const result = await service(app, invalidateCredentialBinds).create(
       { authJson: VALID_AUTH_JSON },
       AUTH_PARAMS
     );
+    track.mockRestore();
+    expect(events).toEqual([
+      ['tenant-test', 'llm.credential_saved', { agentic_tool: 'codex', method: 'codex_import' }],
+    ]);
 
     expect(writeCodexAuthCredentialMock).toHaveBeenCalledTimes(1);
     const [writtenContent, routing] = writeCodexAuthCredentialMock.mock.calls[0];

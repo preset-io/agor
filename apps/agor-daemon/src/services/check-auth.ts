@@ -18,6 +18,7 @@
 
 import { getAgenticToolIntegration, TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
+import { analyticsLogger } from '@agor/core/analytics';
 import { type AgorConfig, isTenantAgenticToolEnabled, resolveApiKey } from '@agor/core/config';
 import {
   getCurrentTenantId,
@@ -35,6 +36,10 @@ import type {
 } from '@agor/core/types';
 import { isAgenticToolName } from '@agor/core/types';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
+import {
+  buildLlmCredentialVerifiedAnalyticsProperties,
+  type LlmCredentialMethod,
+} from '../utils/analytics-payloads.js';
 import { inspectClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { inspectCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
 import { isRealAuthSource } from './check-auth-helpers.js';
@@ -414,24 +419,50 @@ export function createCheckAuthService(
       // Caller provided a raw key (wizard / settings "Test Connection") — validate directly.
       // Claude subscription tokens from `claude setup-token` are not Anthropic Console
       // API keys; the Claude SDK/CLI reads them from CLAUDE_CODE_OAUTH_TOKEN.
+      // Explicit checks (a typed key or a native-login probe) are funnel signals; banner polls are not.
+      const explicit = (method: LlmCredentialMethod, result: AuthCheckResult) => {
+        if (userId) {
+          // A native-login probe only finds the credential file; it is never provider proof.
+          const status =
+            method === 'native_login' && result.status === 'authenticated'
+              ? 'unknown'
+              : result.status;
+          analyticsLogger.track(
+            'llm.credential_verified',
+            buildLlmCredentialVerifiedAnalyticsProperties(tool, method, status),
+            { userId }
+          );
+        }
+        return result;
+      };
+
       if (rawKey?.trim()) {
         if (tool === 'claude-code' && isClaudeSubscriptionToken(rawKey)) {
           const status = await validateClaudeSubscriptionToken(rawKey);
-          if (status === 'authenticated') return authed('oauth');
+          if (status === 'authenticated') return explicit('subscription_token', authed('oauth'));
           if (status === 'unauthenticated') {
-            return unauthenticated(
-              'none',
-              'Claude subscription token rejected — run `claude setup-token` again and paste the fresh token.'
+            return explicit(
+              'subscription_token',
+              unauthenticated(
+                'none',
+                'Claude subscription token rejected — run `claude setup-token` again and paste the fresh token.'
+              )
             );
           }
-          return unknown('Could not verify the Claude subscription token — try again.');
+          return explicit(
+            'subscription_token',
+            unknown('Could not verify the Claude subscription token — try again.')
+          );
         }
 
-        return resultFromKeyStatus(
-          await validateProviderCredential(tool, rawProviderConnection(tool, rawKey.trim())),
-          tool === 'copilot'
-            ? 'GitHub token rejected — check the token has not expired or been revoked.'
-            : 'Key rejected by provider — double-check and try again.'
+        return explicit(
+          'api_key',
+          resultFromKeyStatus(
+            await validateProviderCredential(tool, rawProviderConnection(tool, rawKey.trim())),
+            tool === 'copilot'
+              ? 'GitHub token rejected — check the token has not expired or been revoked.'
+              : 'Key rejected by provider — double-check and try again.'
+          )
         );
       }
 
@@ -480,7 +511,7 @@ export function createCheckAuthService(
         // Filesystem validation can require an ephemeral Cloud executor, so it
         // is reserved for an explicit user action.
         return data.validateNative
-          ? probeCodexAuthFile(userId, withTenantDatabase, config)
+          ? explicit('native_login', await probeCodexAuthFile(userId, withTenantDatabase, config))
           : unknown('ChatGPT login is configured but has not been validated.');
       }
 
@@ -494,7 +525,7 @@ export function createCheckAuthService(
       // connected here and the banner would never return.
       if (tool === 'claude-code' && useNativeAuth) {
         return data.validateNative
-          ? probeClaudeAuthFile(userId, withTenantDatabase, config)
+          ? explicit('native_login', await probeClaudeAuthFile(userId, withTenantDatabase, config))
           : unknown('Claude subscription login is configured but has not been validated.');
       }
 

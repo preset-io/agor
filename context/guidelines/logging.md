@@ -104,3 +104,38 @@ cause.
 
 None of these may carry content that logs are forbidden to carry, and all of them must
 respect tenant isolation.
+
+### Activation funnel events
+
+Operator analytics ships every event as Segment `event: 'agor_event'`; the name is in
+`properties.event_type`, the tenant in `context.tenant_id`, and `userId` is the runtime user.
+All properties are closed values or opaque ids. Emit inside the originating tenant scope, and
+after commit for anything that records a write.
+
+| `event_type`              | Fires when                                                                                                      | Funnel-relevant properties                                      |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `auth.login_succeeded`    | Local password login, or a Cloud launch-code exchange                                                           | `method`, `runtime_user_created`, `cloud_subject` (launch only) |
+| `onboarding.step`         | Wizard `started` / step `viewed` / `continued` / `skipped` / `deferred` (closed) / `completion_*` / `completed` | `step`, `action`                                                |
+| `llm.credential_saved`    | A user patch commits a credential field (wizard or Settings), or a login file is imported                       | `agentic_tool`, `method`                                        |
+| `llm.credential_verified` | Explicit key test (wizard or Settings), native-login probe, device-code or OAuth sign-in                        | `agentic_tool`, `method`, `result`                              |
+| `task.created`            | A Task is admitted (prompt route or service create), once, after commit                                         | `authorship`, `origin`, `draft`, `source`, `is_callback`        |
+
+Funnel definitions:
+
+- **New runtime user**: `auth.login_succeeded` with `runtime_user_created = true`. A trusted-email
+  link to an existing user reports `false`, so first runtime login per person is the earliest
+  `auth.login_succeeded` per `cloud_subject`.
+- **Cloud join**: `cloud_subject` (Cloud `user:<id>`, opaque) maps `(tenant_id, userId)` to the Cloud
+  account. It appears only on `auth.login_succeeded`; never join by email.
+- **Onboarding started / steps**: count unique users per activation; resumes can start at `done`.
+- **LLM connected**: first `llm.credential_verified` with `result = authenticated`. Background
+  status checks never emit, so a credential saved in Settings without an explicit test shows only
+  as `llm.credential_saved`.
+- **First human-typed prompt**: first `task.created` per user with `authorship = human` and no
+  unchanged suggestion (`draft` not ending in `_unchanged`). Auto-sent first prompts carry their own
+  authorship: `onboarding_bootstrap` (onboarding welcome) and `teammate_bootstrap` (teammate created
+  from the dialog). A sent Agor suggestion stays `human` with `draft` set to `onboarding_*`,
+  `teammate_*` (a generated first prompt recovered as a draft after initialization failed) or
+  `catalog_*`, each `_unchanged` or `_edited`; the browser keeps that tag only in the same tab
+  for ten minutes after the suggestion was offered. `system`, `agent`, `callback`, `gateway` and
+  `internal` (scheduler and other unattributed producers) never count.

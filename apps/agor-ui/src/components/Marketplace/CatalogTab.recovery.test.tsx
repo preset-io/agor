@@ -6,7 +6,11 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../../store/agorStore';
-import { consumePromptDraftSeed, getPromptDraft } from '../../utils/promptDrafts';
+import {
+  consumePromptDraftSeed,
+  getPromptDraft,
+  promptDraftSeedProvenance,
+} from '../../utils/promptDrafts';
 import { CatalogTab } from './CatalogTab';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -159,6 +163,9 @@ describe('CatalogTab add then start-session flow', () => {
     });
     expect(getPromptDraft(USER.user_id, SESSION_ID)).toBe('');
     expect(consumePromptDraftSeed(USER.user_id, SESSION_ID)).toBe(ENTRY.starter_prompt);
+    expect(promptDraftSeedProvenance(USER.user_id, SESSION_ID, ENTRY.starter_prompt ?? '')).toBe(
+      'catalog_unchanged'
+    );
     expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID));
   });
 

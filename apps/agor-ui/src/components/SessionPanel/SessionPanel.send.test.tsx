@@ -77,7 +77,9 @@ function renderSessionPanel({
 }: {
   onSendPrompt?: (
     sessionId: string,
-    prompt: string
+    prompt: string,
+    permissionMode?: string,
+    options?: { draft?: string }
   ) => boolean | undefined | Promise<boolean | undefined>;
   onFork?: (sessionId: string, prompt: string) => Promise<void>;
   onBtwFork?: (sessionId: string, prompt: string) => Promise<void>;
@@ -164,6 +166,65 @@ describe('SessionPanel composer send', () => {
       )
     );
     expect(sessionStorage.getItem('agor:prompt-draft-seed')).toBeNull();
+  });
+
+  it.each([
+    ['unchanged onboarding', 'onboarding', null, 'onboarding_unchanged'],
+    ['edited onboarding', 'onboarding', 'Welcome, but first fix CI', 'onboarding_edited'],
+    ['unchanged Catalog', 'catalog', null, 'catalog_unchanged'],
+    ['edited Catalog', 'catalog', 'List my open Linear issues instead', 'catalog_edited'],
+  ] as const)('reports an %s starter once, content-free', async (_label, source, edit, draft) => {
+    const onSendPrompt = vi.fn();
+    const starter = 'Hi Rusty, welcome aboard';
+    stagePromptDraftSeed('user-a', 'session-1', starter, source);
+    const { container } = renderSessionPanel({ onSendPrompt });
+    const textarea = screen.getByPlaceholderText(/Prompt here/i);
+    if (edit) fireEvent.change(textarea, { target: { value: edit } });
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() =>
+      expect(onSendPrompt).toHaveBeenCalledWith('session-1', edit ?? starter, expect.any(String), {
+        draft,
+      })
+    );
+    fireEvent.change(textarea, { target: { value: 'My own follow-up' } });
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledTimes(2));
+    expect(onSendPrompt.mock.calls[1]).toEqual([
+      'session-1',
+      'My own follow-up',
+      expect.any(String),
+    ]);
+  });
+
+  it('keeps a failed-initialization teammate draft tagged when it is sent', async () => {
+    const onSendPrompt = vi.fn();
+    const generated = 'Hi Rusty, here is your first task';
+    // App's initialization-failure recovery: the generated prompt becomes the saved draft.
+    savePromptDraft('user-a', 'session-1', generated);
+    stagePromptDraftSeed('user-a', 'session-1', generated, 'teammate');
+    const { container } = renderSessionPanel({ onSendPrompt });
+    expect(screen.getByPlaceholderText(/Prompt here/i)).toHaveValue(generated);
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() =>
+      expect(onSendPrompt).toHaveBeenCalledWith('session-1', generated, expect.any(String), {
+        draft: 'teammate_unchanged',
+      })
+    );
+  });
+
+  it('sends an ordinary typed prompt with no draft provenance', async () => {
+    const onSendPrompt = vi.fn();
+    const { container } = renderSessionPanel({ onSendPrompt });
+    fireEvent.change(screen.getByPlaceholderText(/Prompt here/i), {
+      target: { value: 'Typed from scratch' },
+    });
+    fireEvent.click(container.querySelector('button.ant-btn-primary') as HTMLButtonElement);
+    await waitFor(() => expect(onSendPrompt).toHaveBeenCalledOnce());
+    expect(onSendPrompt.mock.calls[0]).toEqual([
+      'session-1',
+      'Typed from scratch',
+      expect.any(String),
+    ]);
   });
 
   it('preserves an existing user draft instead of replacing it with a starter', () => {

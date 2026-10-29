@@ -17,10 +17,12 @@
  *   derived from the authenticated user, never from request data.
  */
 
+import { analyticsLogger } from '@agor/core/analytics';
 import { parseCodexAuthJson } from '@agor/core/codex/auth-file';
 import { isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   getCurrentTenantId,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -28,6 +30,7 @@ import {
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, CodexAuthImportResult, UserID } from '@agor/core/types';
 import type { CodexCredentialBindInvalidator } from '../codex-auth-bind-invalidation.js';
+import { buildLlmCredentialSavedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import {
   type AppLike,
   type CodexCredentialMutationCoordinator,
@@ -114,6 +117,14 @@ export function createCodexAuthImportService(
         userId,
         reason: 'credentials_imported',
       });
+      // Import proves file shape and a faithful write, not that the provider accepts it.
+      runWithTenantContext(String(tenantId), () =>
+        analyticsLogger.track(
+          'llm.credential_saved',
+          buildLlmCredentialSavedAnalyticsProperties('codex', 'codex_import'),
+          { userId }
+        )
+      );
 
       return {
         status: 'authenticated',

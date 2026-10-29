@@ -367,6 +367,22 @@ export interface TaskFindPageOptions {
   skip?: number;
 }
 
+export interface PendingTaskAdmissionInput {
+  /** Optional stable identity used by idempotent internal producers. */
+  task_id?: TaskID;
+  session_id: SessionID;
+  full_prompt: string;
+  created_by: string;
+  status: TaskPendingDispatchStatus;
+  metadata?: TaskMetadata;
+  /**
+   * Prepared launch metadata for a fresh prompt only. Under the same Branch/
+   * Session fence, insert DISPATCHING directly when no unfinished work exists.
+   * Stable-ID producers retain their existing queue/reconciliation protocol.
+   */
+  dispatchIfIdle?: TaskLaunchFields;
+}
+
 /**
  * Task repository implementation
  */
@@ -2809,21 +2825,16 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * conversation/git state. Direct admission supplies prepared fields here;
    * queued work receives them at claimDispatchAndProjectSession.
    */
-  async createPending(input: {
-    /** Optional stable identity used by idempotent internal producers. */
-    task_id?: TaskID;
-    session_id: SessionID;
-    full_prompt: string;
-    created_by: string;
-    status: TaskPendingDispatchStatus;
-    metadata?: TaskMetadata;
-    /**
-     * Prepared launch metadata for a fresh prompt only. Under the same Branch/
-     * Session fence, insert DISPATCHING directly when no unfinished work exists.
-     * Stable-ID producers retain their existing queue/reconciliation protocol.
-     */
-    dispatchIfIdle?: TaskLaunchFields;
-  }): Promise<Task> {
+  async createPending(input: PendingTaskAdmissionInput): Promise<Task> {
+    return (await this.admitPending(input)).task;
+  }
+
+  /**
+   * Like `createPending`, plus `inserted`: whether this call created the Task row.
+   * Decided under the same durable admission lock, so concurrent stable-ID
+   * admitters on different daemons agree that exactly one inserted it.
+   */
+  async admitPending(input: PendingTaskAdmissionInput): Promise<{ task: Task; inserted: boolean }> {
     if (
       input.dispatchIfIdle &&
       (input.task_id ||
@@ -2855,16 +2866,17 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     };
 
     if (input.status === TaskStatus.CREATED && !input.task_id) {
-      return this.create(taskBase);
+      return { task: await this.create(taskBase), inserted: true };
     }
 
     if (input.status === TaskStatus.CREATED) {
       const insertData = this.taskToInsert(taskBase);
-      await runDatabaseTransaction(
+      const inserted = await runDatabaseTransaction(
         this.db,
         async (tx) => {
           await lockSessionBranchForAdmission(tx, insertData.session_id);
-          await insert(tx, tasks).values(insertData).onConflictDoNothing().run();
+          const result = await insert(tx, tasks).values(insertData).onConflictDoNothing().run();
+          return result.rowsAffected > 0;
         },
         { sqliteImmediate: true, sqliteBusyRetries: 9 }
       );
@@ -2878,7 +2890,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       ) {
         throw new RepositoryError(`Task identity ${input.task_id} is already in use`);
       }
-      return existing;
+      return { task: existing, inserted };
     }
 
     // QUEUED: lock the durable Session row before max+1. This is required on
@@ -2919,7 +2931,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
               ) {
                 throw new RepositoryError(`Task identity ${input.task_id} is already in use`);
               }
-              if (existing.status !== TaskStatus.CREATED) return existing;
+              if (existing.status !== TaskStatus.CREATED)
+                return { task: existing, inserted: false };
 
               // A stable internal producer may recover a standalone SQLite
               // crash that committed CREATED before launch admission. Move
@@ -2978,7 +2991,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
               if (!row) throw new RepositoryError('Failed to retrieve directly admitted task');
               const admitted = this.rowToTask(row);
               await this.projectDispatchedSession(txDb, sessionRow, admitted, dispatchAt);
-              return admitted;
+              return { task: admitted, inserted: true };
             }
           }
 
@@ -2996,9 +3009,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
               .where(eq(tasks.task_id, existingCreated.task_id))
               .run();
             return {
-              ...existingCreated,
-              status: TaskStatus.QUEUED,
-              queue_position: nextPosition,
+              task: { ...existingCreated, status: TaskStatus.QUEUED, queue_position: nextPosition },
+              inserted: false,
             };
           }
 
@@ -3013,7 +3025,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             .where(eq(tasks.task_id, insertData.task_id))
             .one();
           if (!row) throw new RepositoryError('Failed to retrieve created queued task');
-          return this.rowToTask(row);
+          return { task: this.rowToTask(row), inserted: true };
         },
         { sqliteImmediate: true, sqliteBusyRetries: 9 }
       )
