@@ -23,14 +23,17 @@ import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
-import { describe, expect, it, type MockInstance, vi } from 'vitest';
+import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { createDeploymentToolUnsupportedGate } from '../integrations/opencode/deployment-capabilities.js';
+import { generateScheduleTriggerToken } from './schedule-trigger-token';
 import {
   materializeScheduleAgenticToolConfig,
   renderSchedulePrompt,
   type ScheduleNotReadyError,
   SchedulerService,
+  ScheduleTriggerNotFoundError,
+  ScheduleTriggerRateLimitedError,
 } from './scheduler';
 
 function makeBranch(overrides: Partial<Branch> = {}): Branch {
@@ -192,6 +195,168 @@ describe('scheduler deployment capability admission', () => {
       expect(gate).toHaveBeenCalledWith('opencode');
     });
   }
+});
+
+describe('schedule trigger URL', () => {
+  async function triggerFixture(db: SchedulerDb) {
+    const seeded = await seedRunnableSchedule(
+      db,
+      { email: `scheduler-trigger-${generateId()}@example.com`, name: 'Owner' },
+      { agentic_tool: 'claude-code' }
+    );
+    const schedules = new ScheduleRepository(db);
+    const sessions = new SessionRepository(db);
+    const issue = async (scheduleId = seeded.schedule.schedule_id) => {
+      const { token, tokenHash } = generateScheduleTriggerToken();
+      await schedules.setTriggerTokenHash(scheduleId, tokenHash);
+      return token;
+    };
+    const { app, prompt } = createSchedulerApp(db);
+    const scheduler = new SchedulerService(db, app, { tenantId: 'trigger-test' });
+    const runs = () => sessions.findByScheduleId(seeded.schedule.schedule_id);
+    const tick = async () => {
+      const schedule = await schedules.findById(seeded.schedule.schedule_id);
+      await (
+        scheduler as unknown as {
+          runPendingTrigger(schedule: Schedule, now: number): Promise<void>;
+        }
+      ).runPendingTrigger(schedule!, Date.now());
+    };
+    return { ...seeded, schedules, sessions, issue, scheduler, prompt, runs, tick };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  dbTest('starts a run as the owner, marked as a webhook run', async ({ db }) => {
+    const { creator, schedule, schedules, issue, scheduler, prompt, runs } =
+      await triggerFixture(db);
+    const token = await issue();
+
+    await expect(scheduler.triggerSchedule(schedule.schedule_id, token)).resolves.toEqual({
+      status: 'started',
+    });
+
+    const [run] = await runs();
+    expect(run.created_by).toBe(creator.user_id);
+    expect(run.custom_context?.scheduled_run).toMatchObject({
+      trigger_source: 'webhook',
+      triggered_manually: false,
+    });
+    expect(run.custom_context?.scheduled_run?.triggered_by).toBeUndefined();
+    // The prompt comes only from the schedule template; nothing request-supplied reaches it.
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(prompt.mock.calls[0][0].prompt).toBe('Run now');
+    expect((await schedules.findById(schedule.schedule_id))?.last_triggered_at).toEqual(
+      expect.any(Number)
+    );
+  });
+
+  dbTest('rejects missing, wrong, foreign, rotated, and disabled tokens alike', async ({ db }) => {
+    const { branch, creator, schedule, schedules, issue, scheduler, runs } =
+      await triggerFixture(db);
+    const sibling = await schedules.create({
+      branch_id: branch.branch_id,
+      created_by: creator.user_id,
+      name: 'Sibling',
+      cron_expression: '0 * * * *',
+      timezone_mode: 'utc',
+      prompt: 'Sibling',
+      agentic_tool_config: { agentic_tool: 'claude-code' },
+    });
+    const siblingToken = await issue(sibling.schedule_id);
+    const rotatedOut = await issue();
+    const current = await issue();
+    const rejected = [
+      () => scheduler.triggerSchedule(schedule.schedule_id, generateScheduleTriggerToken().token),
+      () => scheduler.triggerSchedule(schedule.schedule_id, siblingToken),
+      () => scheduler.triggerSchedule(schedule.schedule_id, rotatedOut),
+      () => scheduler.triggerSchedule(generateId() as Schedule['schedule_id'], current),
+      // Short-ID prefixes resolve elsewhere, but never on the trigger URL.
+      () =>
+        scheduler.triggerSchedule(
+          schedule.schedule_id.slice(0, 8) as Schedule['schedule_id'],
+          current
+        ),
+    ];
+    for (const attempt of rejected) {
+      await expect(attempt()).rejects.toBeInstanceOf(ScheduleTriggerNotFoundError);
+    }
+
+    await schedules.setTriggerTokenHash(schedule.schedule_id, null);
+    await expect(scheduler.triggerSchedule(schedule.schedule_id, current)).rejects.toBeInstanceOf(
+      ScheduleTriggerNotFoundError
+    );
+    expect(await runs()).toHaveLength(0);
+  });
+
+  dbTest('refuses a disabled schedule after verifying the token', async ({ db }) => {
+    const { schedule, schedules, issue, scheduler, runs } = await triggerFixture(db);
+    const token = await issue();
+    await schedules.update(schedule.schedule_id, { enabled: false });
+
+    await expect(scheduler.triggerSchedule(schedule.schedule_id, token)).rejects.toMatchObject({
+      code: 'schedule_disabled',
+    });
+    expect(await runs()).toHaveLength(0);
+  });
+
+  dbTest('coalesces triggers during an active run into exactly one follow-up', async ({ db }) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    const { schedule, schedules, sessions, issue, scheduler, runs, tick } =
+      await triggerFixture(db);
+    const token = await issue();
+
+    await expect(scheduler.triggerSchedule(schedule.schedule_id, token)).resolves.toEqual({
+      status: 'started',
+    });
+    const [first] = await runs();
+    await sessions.update(first.session_id, { status: SessionStatus.RUNNING });
+
+    for (let i = 0; i < 3; i++) {
+      await expect(scheduler.triggerSchedule(schedule.schedule_id, token)).resolves.toEqual({
+        status: 'coalesced',
+      });
+    }
+    expect((await schedules.findById(schedule.schedule_id))?.trigger_pending_at).toBe(NOW);
+
+    // Still running: the tick keeps the request pending.
+    vi.setSystemTime(NOW + 60_000);
+    await tick();
+    expect(await runs()).toHaveLength(1);
+    expect((await schedules.findById(schedule.schedule_id))?.trigger_pending_at).toBe(NOW);
+
+    await sessions.update(first.session_id, { status: SessionStatus.IDLE });
+    await tick();
+    await tick();
+    const all = await runs();
+    expect(all).toHaveLength(2);
+    expect(
+      all.every((run) => run.custom_context?.scheduled_run?.trigger_source === 'webhook')
+    ).toBe(true);
+    expect((await schedules.findById(schedule.schedule_id))?.trigger_pending_at).toBeUndefined();
+  });
+
+  dbTest('rate limits a second start within the same minute', async ({ db }) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    const { schedule, issue, scheduler, runs } = await triggerFixture(db);
+    const token = await issue();
+
+    await scheduler.triggerSchedule(schedule.schedule_id, token);
+    // The first run finished instantly (idle), so there is nothing to coalesce into.
+    vi.setSystemTime(NOW + 30_000);
+    await expect(scheduler.triggerSchedule(schedule.schedule_id, token)).rejects.toBeInstanceOf(
+      ScheduleTriggerRateLimitedError
+    );
+    vi.setSystemTime(NOW + 60_000);
+    await expect(scheduler.triggerSchedule(schedule.schedule_id, token)).resolves.toEqual({
+      status: 'started',
+    });
+    expect(await runs()).toHaveLength(2);
+  });
 });
 
 describe('scheduler HA occurrence recovery', () => {

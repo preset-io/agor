@@ -9,6 +9,7 @@ import { BadRequest } from '@agor/core/feathers';
 import {
   AGENTIC_TOOL_NAMES,
   type Branch,
+  SCHEDULE_TRIGGER_TOKEN_ACTIONS,
   type Schedule,
   type ScheduleAgenticToolConfig,
   type ScheduleCreateData,
@@ -359,6 +360,28 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
       const result = await ctx.app
         .service('/schedules/:id/run-now')
         .create({}, { route: { id: scheduleId }, ...ctx.baseServiceParams });
+      return textResult(result);
+    }
+  );
+
+  // agor_schedules_set_trigger
+  server.registerTool(
+    'agor_schedules_set_trigger',
+    {
+      description:
+        "Enable, rotate, or disable a schedule's inbound trigger URL. An external system can then start a run with `POST /schedules/:id/trigger` and `Authorization: Bearer <token>`; the request body is ignored. The token can only run this schedule, as its owner. enable/rotate return the token ONCE (rotate invalidates the old one); store it as a secret and never paste it into chat or prompts. Same permission as run-now.",
+      inputSchema: z.strictObject({
+        scheduleId: mcpRequiredId('scheduleId', 'Schedule'),
+        action: z
+          .enum(SCHEDULE_TRIGGER_TOKEN_ACTIONS)
+          .describe("'enable' issues the first token, 'rotate' replaces it, 'disable' removes it."),
+      }),
+    },
+    async (args) => {
+      const scheduleId = await resolveScheduleId(ctx, args.scheduleId);
+      const result = await ctx.app
+        .service('/schedules/:id/trigger-token')
+        .create({ action: args.action }, { route: { id: scheduleId }, ...ctx.baseServiceParams });
       return textResult(result);
     }
   );

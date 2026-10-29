@@ -81,6 +81,7 @@ import type {
   ScheduleID,
   SchedulerInitializationFailureCode,
   SchedulerInitializationStage,
+  ScheduleTriggerResult,
   Session,
   SessionID,
   Task,
@@ -92,6 +93,7 @@ import type {
 import {
   EXECUTING_SESSION_STATUSES,
   isAgenticToolName,
+  isCanonicalFullUuid,
   isSessionExecuting,
   isTaskPendingDispatch,
   isTerminalTaskStatus,
@@ -124,6 +126,10 @@ import {
   type StructuredLogValue,
   structuredLogErrorCode,
 } from '../utils/structured-log.js';
+import {
+  hashScheduleTriggerToken,
+  scheduleTriggerTokenHashesMatch,
+} from './schedule-trigger-token.js';
 
 function isSQLiteBusyError(err: unknown): boolean {
   if (!err) return false;
@@ -248,6 +254,29 @@ export class ScheduleNotReadyError extends Error {
     this.code = code;
   }
 }
+
+/**
+ * Thrown by the trigger route for an unknown schedule AND for a wrong token,
+ * so a caller without the token cannot tell the two apart (both map to 404).
+ */
+export class ScheduleTriggerNotFoundError extends Error {
+  public readonly code = 'schedule_trigger_not_found';
+  constructor() {
+    super('Schedule trigger not found');
+    this.name = 'ScheduleTriggerNotFoundError';
+  }
+}
+
+/** Thrown when a trigger would start a second run within the same minute (maps to 429). */
+export class ScheduleTriggerRateLimitedError extends Error {
+  public readonly code = 'schedule_trigger_rate_limited';
+  constructor() {
+    super('This schedule already started a run this minute. Retry after the minute rolls over.');
+    this.name = 'ScheduleTriggerRateLimitedError';
+  }
+}
+
+type ScheduleTriggerOutcome = ScheduleTriggerResult['status'] | 'rate_limited';
 
 class ScheduledInitializationError extends Error {
   constructor(
@@ -584,6 +613,7 @@ export class SchedulerService {
           );
           if (!schedule) return;
           await this.processSchedule(schedule, now);
+          await this.runPendingTrigger(schedule, now);
           stats.processed += 1;
         });
       } catch (error) {
@@ -738,19 +768,23 @@ export class SchedulerService {
   /**
    * Public: trigger a scheduled run on-demand.
    *
-   * Used by `POST /schedules/:id/run-now`. Reuses the same spawn path as
-   * the cron tick (via spawnScheduledSession) so scheduled and manual
-   * runs are indistinguishable downstream, except for a
-   * `triggered_manually: true` marker in custom_context and a different
-   * session title.
+   * Used by `POST /schedules/:id/run-now` and (with `source: 'webhook'`)
+   * by `triggerSchedule`. Reuses the same spawn path as the cron tick (via
+   * spawnScheduledSession) so scheduled and on-demand runs are
+   * indistinguishable downstream, except for the `trigger_source` /
+   * `triggered_manually` markers in custom_context and the session title.
    *
    * @throws ScheduleNotReadyError when the schedule is disabled or its
    *   branch can't be loaded.
    * @throws ScheduleBusyError when allow_concurrent_runs is false and
    *   this schedule already has an active run.
    */
-  async executeScheduleNow(opts: { scheduleId: ScheduleID; triggeredBy: UUID }): Promise<Session> {
-    const { scheduleId, triggeredBy } = opts;
+  async executeScheduleNow(opts: {
+    scheduleId: ScheduleID;
+    triggeredBy: UUID;
+    source?: 'manual' | 'webhook';
+  }): Promise<Session> {
+    const { scheduleId, triggeredBy, source = 'manual' } = opts;
     const schedule = await this.withTenantDatabase(() => this.scheduleRepo.findById(scheduleId));
     if (!schedule) {
       throw new ScheduleNotReadyError('schedule_incomplete', `Schedule not found: ${scheduleId}`);
@@ -773,7 +807,7 @@ export class SchedulerService {
     const scheduledRunAt = roundToMinute(new Date(now)).getTime();
 
     const session = await this.spawnScheduledSession(schedule, scheduledRunAt, now, {
-      source: 'manual',
+      source,
       triggeredBy,
     });
     if (!session) {
@@ -782,6 +816,128 @@ export class SchedulerService {
       );
     }
     return session;
+  }
+
+  /**
+   * Public: start a run from the schedule's inbound trigger URL.
+   *
+   * The caller has no user session; possession of the token is the proof.
+   * Tenant identity comes from the token hash (narrow discovery capability in
+   * hosted mode), never from the request. The run reuses `executeScheduleNow`
+   * as the schedule's owner, marked `trigger_source: 'webhook'`.
+   *
+   * @throws ScheduleTriggerNotFoundError for an unknown schedule or wrong token.
+   * @throws ScheduleNotReadyError when the schedule is disabled.
+   * @throws ScheduleTriggerRateLimitedError when a run already started this minute.
+   */
+  async triggerSchedule(scheduleId: ScheduleID, token: string): Promise<ScheduleTriggerResult> {
+    // Exact IDs only: short-ID prefix resolution would answer differently
+    // (e.g. "ambiguous") for a caller who does not hold the token.
+    if (!isCanonicalFullUuid(scheduleId)) throw new ScheduleTriggerNotFoundError();
+    const tokenHash = hashScheduleTriggerToken(token);
+    const tenantId = await this.findTriggerTenant(scheduleId, tokenHash);
+    if (!tenantId) throw new ScheduleTriggerNotFoundError();
+
+    return runWithTenantContext(tenantId, async () => {
+      const storedHash = await this.withTenantDatabase(() =>
+        this.scheduleRepo.findTriggerTokenHash(scheduleId)
+      );
+      if (!storedHash || !scheduleTriggerTokenHashesMatch(storedHash, tokenHash)) {
+        throw new ScheduleTriggerNotFoundError();
+      }
+      const schedule = await this.withTenantDatabase(() => this.scheduleRepo.findById(scheduleId));
+      if (!schedule) {
+        throw new ScheduleTriggerNotFoundError();
+      }
+      if (!schedule.enabled) {
+        throw new ScheduleNotReadyError(
+          'schedule_disabled',
+          'Schedule is disabled. Enable it before triggering it.'
+        );
+      }
+
+      const now = Date.now();
+      const outcome = await this.startTriggeredRun(schedule, now);
+      if (outcome === 'rate_limited') throw new ScheduleTriggerRateLimitedError();
+      await this.withTenantDatabase(() => this.scheduleRepo.recordTrigger(scheduleId, now));
+      if (outcome === 'coalesced') {
+        await this.withTenantDatabase(() => this.scheduleRepo.markTriggerPending(scheduleId, now));
+      }
+      this.logWorkEvent('info', 'trigger_accepted', { schedule_id: scheduleId, outcome });
+      return { status: outcome };
+    });
+  }
+
+  private async findTriggerTenant(
+    scheduleId: ScheduleID,
+    tokenHash: string
+  ): Promise<TenantID | string | null> {
+    if (this.config.tenantId) return this.config.tenantId;
+    const ref = await runWithSystemDatabaseScope(
+      this.db,
+      'schedule trigger tenant discovery',
+      () => this.scheduleRepo.findTriggerRef(tokenHash),
+      { capability: 'schedule_trigger_discovery' }
+    );
+    return ref?.schedule_id === scheduleId ? (ref.tenant_id ?? null) : null;
+  }
+
+  /**
+   * Start one triggered run unless this schedule is already running, in which
+   * case the trigger coalesces. Triggered runs never overlap, regardless of
+   * `allow_concurrent_runs`. Backstop rate limit: at most one start per
+   * minute, matching the minute-rounded run identity `executeScheduleNow`
+   * dedupes on.
+   */
+  private async startTriggeredRun(
+    schedule: Schedule,
+    now: number
+  ): Promise<ScheduleTriggerOutcome> {
+    const active = await this.withTenantDatabase(() =>
+      this.sessionRepo.existsActiveOrInitializingInSchedule(
+        schedule.schedule_id,
+        EXECUTING_SESSION_STATUSES,
+        NONTERMINAL_TASK_STATUSES
+      )
+    );
+    if (active) return 'coalesced';
+    if ((schedule.last_run_at ?? 0) >= roundToMinute(new Date(now)).getTime()) {
+      return 'rate_limited';
+    }
+    try {
+      await this.executeScheduleNow({
+        scheduleId: schedule.schedule_id,
+        triggeredBy: schedule.created_by,
+        source: 'webhook',
+      });
+      return 'started';
+    } catch (error) {
+      if (error instanceof ScheduleBusyError) return 'coalesced';
+      throw error;
+    }
+  }
+
+  /**
+   * Tick step: start the single coalesced follow-up run once the schedule is
+   * idle. The claim is atomic across daemons; a still-busy or rate-limited
+   * schedule puts the request back for a later tick. A failed start drops it
+   * (logged by the tick) rather than retrying a broken schedule forever.
+   */
+  private async runPendingTrigger(schedule: Schedule, now: number): Promise<void> {
+    const pendingAt = schedule.trigger_pending_at;
+    if (pendingAt === undefined || !schedule.trigger_enabled) return;
+    const claimed = await this.withTenantDatabase(() =>
+      this.scheduleRepo.claimTriggerPending(schedule.schedule_id)
+    );
+    if (!claimed) return;
+    const outcome = await this.startTriggeredRun(schedule, now);
+    if (outcome !== 'started') {
+      await this.withTenantDatabase(() =>
+        this.scheduleRepo.markTriggerPending(schedule.schedule_id, pendingAt)
+      );
+      return;
+    }
+    this.logWorkEvent('info', 'trigger_follow_up_started', { schedule_id: schedule.schedule_id });
   }
 
   /**
@@ -824,10 +980,10 @@ export class SchedulerService {
   /**
    * Spawn a scheduled session for a schedule.
    *
-   * Shared path for both cron-driven and manual (execute-now) runs.
+   * Shared path for cron-driven, manual (run-now), and webhook (trigger URL) runs.
    * - `source: 'cron'`: concurrency violation is a silent skip (metadata
    *   still advanced to avoid repeated checks).
-   * - `source: 'manual'`: concurrency violation throws `ScheduleBusyError`
+   * - `source: 'manual' | 'webhook'`: concurrency violation throws `ScheduleBusyError`
    *   so the API route can surface a 409.
    *
    * Steps:
@@ -853,10 +1009,12 @@ export class SchedulerService {
     schedule: Schedule,
     scheduledRunAt: number,
     now: number,
-    options: { source: 'cron' | 'manual'; triggeredBy?: UUID } = { source: 'cron' }
+    options: { source: 'cron' | 'manual' | 'webhook'; triggeredBy?: UUID } = { source: 'cron' }
   ): Promise<Session | null> {
     const { source, triggeredBy } = options;
-    const manual = source === 'manual';
+    // Manual and webhook runs are on-demand: they surface errors to the caller
+    // instead of silently skipping, and never advance the cron cursor.
+    const onDemand = source !== 'cron';
     const branch = await this.withTenantDatabase(() =>
       this.branchRepo.findById(schedule.branch_id)
     );
@@ -870,7 +1028,7 @@ export class SchedulerService {
       this.branchRepo.resolveUserAccess(branch, schedule.created_by)
     );
     if (!['session', 'prompt', 'all'].includes(creatorAccess.can)) {
-      if (!manual) await this.advanceScheduleCursor(schedule, now);
+      if (!onDemand) await this.advanceScheduleCursor(schedule, now);
       throw new ScheduleNotReadyError(
         'schedule_permission_revoked',
         `Schedule creator ${schedule.created_by} no longer has Collaborator access to branch ${schedule.branch_id}`
@@ -889,7 +1047,7 @@ export class SchedulerService {
     } catch (error) {
       if (!(error instanceof InvalidScheduleAgenticToolConfigError)) throw error;
       const removedTool = !isAgenticToolName(schedule.agentic_tool_config.agentic_tool);
-      if (!manual) await this.advanceScheduleCursor(schedule, now);
+      if (!onDemand) await this.advanceScheduleCursor(schedule, now);
       throw new ScheduleNotReadyError(
         removedTool ? 'schedule_agentic_tool_removed' : 'schedule_invalid_config',
         removedTool
@@ -995,9 +1153,10 @@ export class SchedulerService {
           scheduled_run_at: scheduledRunAt,
           scheduled_from_branch: true,
           schedule_id: schedule.schedule_id,
-          title: manual
-            ? `${schedule.name} — manual @ ${new Date(scheduledRunAt).toISOString()}`
-            : `${schedule.name} — ${new Date(scheduledRunAt).toISOString()}`,
+          title:
+            source === 'cron'
+              ? `${schedule.name} — ${new Date(scheduledRunAt).toISOString()}`
+              : `${schedule.name} — ${source === 'webhook' ? 'triggered' : 'manual'} @ ${new Date(scheduledRunAt).toISOString()}`,
           contextFiles: cfg.context_files ?? [],
           permission_config: resolvedConfig.sessionConfig.permission_config,
           model_config: resolvedConfig.sessionConfig.model_config,
@@ -1006,8 +1165,9 @@ export class SchedulerService {
               rendered_prompt: renderedPrompt,
               run_index: runIndex,
               initial_task_id: candidateTaskId,
-              triggered_manually: manual,
-              triggered_by: manual ? triggeredBy : undefined,
+              triggered_manually: source === 'manual',
+              triggered_by: source === 'manual' ? triggeredBy : undefined,
+              trigger_source: source,
               schedule_config_snapshot: {
                 schedule_id: schedule.schedule_id,
                 cron: schedule.cron_expression,
@@ -1057,7 +1217,7 @@ export class SchedulerService {
         scheduled_run_at: scheduledRunAt,
         source,
       });
-      if (manual) throw new ScheduleBusyError(schedule.name);
+      if (onDemand) throw new ScheduleBusyError(schedule.name);
       await this.updateScheduleMetadata(schedule, scheduledRunAt, null, now);
       return null;
     }
@@ -1086,7 +1246,7 @@ export class SchedulerService {
       admission.session.scheduler_init_failure_code &&
       !admission.session.scheduler_init_retry_at
     ) {
-      if (manual) {
+      if (onDemand) {
         throw new ScheduleNotReadyError(
           'schedule_incomplete',
           'This scheduled occurrence has a permanent initialization failure.'
@@ -1100,7 +1260,7 @@ export class SchedulerService {
       admission.session.scheduler_init_retry_at &&
       Date.parse(admission.session.scheduler_init_retry_at) > now
     ) {
-      if (manual) {
+      if (onDemand) {
         throw new ScheduleNotReadyError(
           'schedule_initialization_retry_pending',
           'This scheduled occurrence is waiting for its durable initialization retry.'
@@ -1137,7 +1297,7 @@ export class SchedulerService {
         throw error instanceof ScheduledInitializationError ? error.cause : error;
       }
       await this.recordInitializationFailure(admission.session, error);
-      if (!manual) await this.advanceScheduleCursor(schedule, now);
+      if (!onDemand) await this.advanceScheduleCursor(schedule, now);
       throw error;
     }
     return admission.session;

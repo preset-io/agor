@@ -22,6 +22,7 @@ import {
   type AgorConfig,
   ENV_VAR_CONSTRAINTS,
   environmentCommandCapabilities,
+  getDaemonBaseUrl,
   isEnvVarAllowed,
   permanentBranchDeletionCapability,
   type ResolvedDeploymentConfig,
@@ -75,6 +76,7 @@ import {
   LocalStrategy,
   NotAuthenticated,
   NotFound,
+  TooManyRequests,
 } from '@agor/core/feathers';
 import {
   isMCPServerNotUsableError,
@@ -104,7 +106,10 @@ import type {
   MessageID,
   MessageSource,
   Params,
+  Schedule,
   ScheduleID,
+  ScheduleTriggerResult,
+  ScheduleTriggerTokenResult,
   Session,
   SessionID,
   SessionMCPServer,
@@ -131,7 +136,10 @@ import {
   MessageRole,
   normalizeRole,
   ROLES,
+  SCHEDULE_TRIGGER_TOKEN_ACTIONS,
+  type ScheduleTriggerTokenAction,
   SessionStatus,
+  scheduleTriggerPath,
   TaskStatus,
   UPLOAD_REQUEST_ID_HEADER,
 } from '@agor/core/types';
@@ -222,9 +230,15 @@ import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-a
 import { notifyMcpSlackConnectCard } from './services/mcp-slack-connect-card.js';
 import { createMCPSlackConnectCardControl } from './services/mcp-slack-connect-control.js';
 import {
+  generateScheduleTriggerToken,
+  parseScheduleTriggerBearer,
+} from './services/schedule-trigger-token.js';
+import {
   ScheduleBusyError,
   ScheduleNotReadyError,
   type SchedulerService,
+  ScheduleTriggerNotFoundError,
+  ScheduleTriggerRateLimitedError,
 } from './services/scheduler.js';
 import { runSessionInitializationStages } from './services/session-initialization.js';
 import { createSpawnPromptService } from './services/session-spawn-prompt';
@@ -4744,6 +4758,114 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         inTenantDatabaseScope(loadScheduleAndBranch(scheduleRepository, branchRepository)),
         ensureScheduleRunsAsCaller(superadminOpts),
         ensureBranchPermission('all', 'run schedule', superadminOpts),
+      ],
+    },
+  });
+
+  // ============================================================================
+  // Schedule trigger URL: token management + the token-gated trigger itself.
+  // ============================================================================
+  // The token runs the schedule as its owner, so issuing one needs exactly the
+  // run-now authority: the owner (or superadmin) with branch-tier 'all'.
+  registerAuthenticatedRoute(
+    app,
+    '/schedules/:id/trigger-token',
+    {
+      async create(data: unknown, params: RouteParams): Promise<ScheduleTriggerTokenResult> {
+        const action = (data as { action?: unknown } | null)?.action;
+        if (!SCHEDULE_TRIGGER_TOKEN_ACTIONS.includes(action as ScheduleTriggerTokenAction)) {
+          throw new BadRequest(
+            `action must be one of: ${SCHEDULE_TRIGGER_TOKEN_ACTIONS.join(', ')}`
+          );
+        }
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('Schedule ID required');
+        // loadScheduleAndBranch caches the row for external callers.
+        const schedule =
+          (params as RouteParams & { schedule?: Schedule }).schedule ??
+          (await scheduleRepository.findById(id));
+        if (!schedule) throw new NotFound(`Schedule not found: ${id}`);
+        if (action === 'enable' && schedule.trigger_enabled) {
+          throw new Conflict('Trigger URL is already enabled. Rotate it to issue a new token.');
+        }
+        if (action === 'rotate' && !schedule.trigger_enabled) {
+          throw new BadRequest('Trigger URL is not enabled. Enable it first.');
+        }
+
+        const issued = action === 'disable' ? null : generateScheduleTriggerToken();
+        const updated = await scheduleRepository.setTriggerTokenHash(
+          schedule.schedule_id,
+          issued?.tokenHash ?? null
+        );
+        emitServiceEvent(app, {
+          path: 'schedules',
+          event: 'patched',
+          data: updated,
+          id: updated.schedule_id,
+          params,
+        });
+        const baseUrl = updated.trigger_enabled ? await getDaemonBaseUrl(db) : '';
+        return {
+          schedule_id: updated.schedule_id,
+          trigger_enabled: updated.trigger_enabled,
+          ...(baseUrl
+            ? { trigger_url: `${baseUrl}${scheduleTriggerPath(updated.schedule_id)}` }
+            : {}),
+          ...(issued ? { token: issued.token } : {}),
+        };
+      },
+    },
+    { create: { role: ROLES.MEMBER, action: 'manage schedule trigger' } },
+    requireAuth
+  );
+  app.service('/schedules/:id/trigger-token').hooks({
+    before: {
+      create: [
+        loadScheduleAndBranch(scheduleRepository, branchRepository),
+        ensureScheduleRunsAsCaller(superadminOpts),
+        ensureBranchPermission('all', 'manage schedule trigger', superadminOpts),
+      ],
+    },
+  });
+
+  // Unauthenticated by user session: the bearer token is the whole
+  // credential. The request body is ignored and never reaches the prompt.
+  // Unknown schedule and wrong token are indistinguishable (404). The
+  // scheduler resolves the tenant from the token hash and opens its own short
+  // tenant units, so no tenant identity is taken from the request.
+  app.use('/schedules/:id/trigger', {
+    async create(_data: unknown, params: RouteParams): Promise<ScheduleTriggerResult> {
+      const id = params.route?.id;
+      const token = parseScheduleTriggerBearer(params.headers);
+      if (!id || !token) throw new NotFound('Schedule trigger not found');
+
+      const scheduler = app.get('scheduler') as SchedulerService | undefined;
+      if (!scheduler) {
+        throw new NotFound('Scheduler service is not enabled on this instance.');
+      }
+      try {
+        return await scheduler.triggerSchedule(id as ScheduleID, token);
+      } catch (err) {
+        if (err instanceof ScheduleTriggerNotFoundError) {
+          throw new NotFound('Schedule trigger not found');
+        }
+        if (err instanceof ScheduleTriggerRateLimitedError) {
+          throw new TooManyRequests(err.message, { code: err.code });
+        }
+        if (err instanceof ScheduleNotReadyError) {
+          throw new Conflict(err.message, { code: err.code });
+        }
+        throw err;
+      }
+    },
+  });
+  app.service('/schedules/:id/trigger').hooks({
+    after: {
+      create: [
+        (context: HookContext) => {
+          context.http = { ...context.http, status: 202 };
+          return context;
+        },
       ],
     },
   });
