@@ -9,6 +9,7 @@ import {
   materializeAgenticToolConfiguration,
   normalizeAgenticToolModelConfiguration,
 } from '@agor/agentic-tools/config';
+import { analyticsLogger } from '@agor/core/analytics';
 import {
   AgorAvatarAuthority,
   type AgorConfig,
@@ -107,8 +108,14 @@ import {
   toAgenticToolsStatus,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
+import {
+  buildLlmCredentialSavedAnalyticsProperties,
+  type LlmCredentialMethod,
+  llmCredentialMethodForField,
+} from '../utils/analytics-payloads.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
+import { runAfterTenantCommit } from '../utils/tenant-db-scope.js';
 import type { ClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation.js';
 import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
 import { UserAvatarSyncManager } from './user-avatar-sync.js';
@@ -308,6 +315,22 @@ function ensureCanExactEmailLookup(params: Params | undefined, email: string): v
   }
 
   throw new Forbidden('Exact email user lookup is restricted');
+}
+
+/** Credentials this patch stores: canonical credential fields with a value; `null` deletes. */
+function savedLlmCredentials(
+  patch: AgenticToolsUpdate | undefined
+): Array<{ agent: AgenticToolName; method: LlmCredentialMethod }> {
+  if (!patch) return [];
+  const saved: Array<{ agent: AgenticToolName; method: LlmCredentialMethod }> = [];
+  for (const [tool, fields] of Object.entries(patch)) {
+    if (!isAgenticToolName(tool) || !fields) continue;
+    for (const [field, value] of Object.entries(fields)) {
+      const method = llmCredentialMethodForField(tool, field);
+      if (method && typeof value === 'string' && value.trim()) saved.push({ agent: tool, method });
+    }
+  }
+  return saved;
 }
 
 /**
@@ -1440,9 +1463,12 @@ export class UsersService {
       // discoverable from the user record.
       await this.claudeCredentialPatches!.cleanupRouteBeforePatch(String(credentialTenantId), id);
     }
+    const mutationTenantId =
+      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
+    const savedCredentials = savedLlmCredentials(data.agentic_tools);
     const row = await runWithTenantDatabaseTransaction(
       this.db,
-      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId(),
+      mutationTenantId,
       async (mutationDb) => {
         const updated = await update(mutationDb, users)
           .set(updates)
@@ -1465,6 +1491,17 @@ export class UsersService {
 
         if (!updated) {
           throw new Forbidden(USER_AUTHORITY_DENIED);
+        }
+        if (mutationTenantId && savedCredentials.length > 0) {
+          runAfterTenantCommit(String(mutationTenantId), () => {
+            for (const { agent, method } of savedCredentials) {
+              analyticsLogger.track(
+                'llm.credential_saved',
+                buildLlmCredentialSavedAnalyticsProperties(agent, method),
+                { userId: id }
+              );
+            }
+          });
         }
 
         // Keep metadata cleanup in the same native transaction as the secret

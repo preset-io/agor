@@ -1,5 +1,7 @@
+import { analyticsLogger } from '@agor/core/analytics';
 import {
   createTenantScopedDatabaseProxy,
+  getCurrentTenantId,
   runWithTenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
@@ -234,4 +236,60 @@ describe('UsersService credential reader delegation', () => {
     await expect(service.getToolConfigField(user, 'codex', 'OPENAI_API_KEY')).rejects.toBe(error);
     await expect(service.getToolConfig(user, 'codex')).rejects.toBe(error);
   });
+});
+
+describe('UsersService credential analytics', () => {
+  dbTest(
+    'records a saved credential after commit, never for a deletion or the secret itself',
+    async ({ db }) => {
+      vi.stubEnv('AGOR_MASTER_SECRET', 'synthetic-credential-analytics-key');
+      const seen: unknown[] = [];
+      vi.spyOn(analyticsLogger, 'track').mockImplementation((event, properties, identity) => {
+        if (event === 'llm.credential_saved') {
+          seen.push([getCurrentTenantId(), properties, identity]);
+        }
+      });
+      const guarded = createTenantScopedDatabaseProxy(db, { requireScope: true });
+      await runWithTenantDatabaseScope(guarded, 'default', async (scoped) => {
+        const user = await new UsersRepository(scoped).create({
+          email: 'synthetic-credential-analytics@example.invalid',
+        });
+        const service = new UsersService(scoped);
+        const params = { user } as AuthenticatedParams;
+        await service.patch(
+          user.user_id,
+          { agentic_tools: { codex: { OPENAI_API_KEY: 'sk-synthetic-secret' } } },
+          params
+        );
+        await service.patch(
+          user.user_id,
+          { agentic_tools: { codex: { OPENAI_API_KEY: null } } },
+          params
+        );
+        // An endpoint alone is configuration; an endpoint plus a key is one saved credential.
+        await service.patch(
+          user.user_id,
+          { agentic_tools: { codex: { OPENAI_BASE_URL: 'https://proxy.example.invalid/v1' } } },
+          params
+        );
+        await service.patch(
+          user.user_id,
+          {
+            agentic_tools: {
+              'claude-code': {
+                ANTHROPIC_BASE_URL: 'https://proxy.example.invalid',
+                ANTHROPIC_API_KEY: 'sk-ant-synthetic',
+              },
+            },
+          },
+          params
+        );
+        expect(seen).toEqual([
+          ['default', { agentic_tool: 'codex', method: 'api_key' }, { userId: user.user_id }],
+          ['default', { agentic_tool: 'claude-code', method: 'api_key' }, { userId: user.user_id }],
+        ]);
+      });
+      expect(JSON.stringify(seen)).not.toContain('sk-synthetic-secret');
+    }
+  );
 });

@@ -30,10 +30,12 @@
  * to any agent/LLM context. Callers act only on their own credentials.
  */
 
+import { analyticsLogger } from '@agor/core/analytics';
 import { isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   generateId,
   getCurrentTenantId,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -63,6 +65,7 @@ import {
 export { buildDeviceAuthJson } from './codex-device-auth-provider.js';
 
 import type { CodexCredentialBindInvalidator } from '../codex-auth-bind-invalidation.js';
+import { buildLlmCredentialVerifiedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import type { ClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
 import {
   type AppLike,
@@ -254,6 +257,14 @@ export function createCodexDeviceAuthService(
         userId: attempt.userId,
         reason: 'credentials_imported',
       });
+      // The device exchange returns provider-issued tokens, so it proves the credential works.
+      runWithTenantContext(String(attempt.tenantId), () =>
+        analyticsLogger.track(
+          'llm.credential_verified',
+          buildLlmCredentialVerifiedAnalyticsProperties('codex', 'codex_device', 'authenticated'),
+          { userId: attempt.userId }
+        )
+      );
       if (attempt.cancelled || attempts.get(attempt.key) !== attempt) return;
       attempt.planType = summary.planType;
       finish(

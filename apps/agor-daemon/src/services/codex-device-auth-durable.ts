@@ -1,9 +1,11 @@
 /** PostgreSQL/HA Codex device auth with DB-clock poll leases and generation fencing. */
 
+import { analyticsLogger } from '@agor/core/analytics';
 import { isTenantAgenticToolEnabled } from '@agor/core/config';
 import {
   type CodexDeviceAuthAttemptRecord,
   getCurrentTenantId,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -16,6 +18,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import type { CodexCredentialBindInvalidator } from '../codex-auth-bind-invalidation.js';
+import { buildLlmCredentialVerifiedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import {
   type AppLike,
   persistVerifiedCodexAuth,
@@ -257,6 +260,18 @@ export function createDurableCodexDeviceAuthService(
             userId: worker.context.userId,
             reason: 'credentials_imported',
           });
+          // The device exchange returns provider-issued tokens, so it proves the credential works.
+          runWithTenantContext(String(worker.context.tenantId), () =>
+            analyticsLogger.track(
+              'llm.credential_verified',
+              buildLlmCredentialVerifiedAnalyticsProperties(
+                'codex',
+                'codex_device',
+                'authenticated'
+              ),
+              { userId: worker.context.userId }
+            )
+          );
         }
       } catch (error) {
         console.error(

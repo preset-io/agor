@@ -35,6 +35,7 @@ let activeTenantId = 'tenant-1';
 let tenantDatabaseScopeDepth = 0;
 vi.mock('@agor/core/db', () => ({
   getCurrentTenantId: () => activeTenantId,
+  runWithTenantContext: <T>(_tenantId: unknown, work: () => T) => work(),
   runWithTenantDatabaseScope: async <T>(
     _db: unknown,
     _tid: unknown,
@@ -49,6 +50,7 @@ vi.mock('@agor/core/db', () => ({
   },
 }));
 
+import { analyticsLogger } from '@agor/core/analytics';
 import {
   buildAuthorizeUrl,
   buildClaudeCredentialsJson,
@@ -126,8 +128,10 @@ function makeService(
 }
 
 const asUserA = { user: { user_id: 'user-A' } };
+let trackSpy: ReturnType<typeof vi.spyOn<typeof analyticsLogger, 'track'>>;
 
 beforeEach(() => {
+  trackSpy = vi.spyOn(analyticsLogger, 'track').mockImplementation(() => undefined);
   writeClaudeAuthViaExecutor.mockClear();
   writeClaudeAuthViaExecutor.mockResolvedValue(undefined);
   deleteClaudeAuthViaExecutor.mockClear();
@@ -413,6 +417,11 @@ describe('createClaudeOAuthService — flow + security', () => {
       },
       expect.anything()
     );
+    expect(trackSpy).toHaveBeenCalledExactlyOnceWith(
+      'llm.credential_verified',
+      { agentic_tool: 'claude-code', method: 'claude_oauth', result: 'authenticated' },
+      { userId: 'user-A' }
+    );
   });
 
   it('does not path-delete after an ambiguous metadata failure', async () => {
@@ -426,6 +435,7 @@ describe('createClaudeOAuthService — flow + security', () => {
     expect(writeClaudeAuthViaExecutor).toHaveBeenCalledTimes(1);
     expect(deleteClaudeAuthViaExecutor).not.toHaveBeenCalled();
     expect((await svc.find(asUserA)).phase).toBe('error');
+    expect(trackSpy).not.toHaveBeenCalled();
   });
 
   it('does not hold a tenant database transaction across executor credential I/O', async () => {
