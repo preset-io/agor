@@ -118,7 +118,10 @@ describe('parseChangelogReleaseNotes', () => {
     const highlights = JSON.parse(readFileSync(join(root, RELEASE_NOTE_HIGHLIGHTS_PATH), 'utf8'));
     for (const highlight of Object.values<ReleaseNoteHighlight>(highlights.items)) {
       for (const url of [highlight.visual_url, highlight.visual_url_dark]) {
-        if (url) expect(new URL(url).origin).toBe(RELEASE_NOTES_CSP_IMG_SRC);
+        if (url) {
+          expect(new URL(url).protocol).toBe('https:');
+          expect(new URL(url).origin).toBe(RELEASE_NOTES_CSP_IMG_SRC);
+        }
       }
     }
     expect(notes.every((note) => note.items.every((item) => item.title && item.body_md))).toBe(

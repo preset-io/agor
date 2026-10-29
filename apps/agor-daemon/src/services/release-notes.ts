@@ -91,7 +91,9 @@ const noteSchema = z.object({
 function allowedVisual(url: string | null): boolean {
   if (url === null) return true;
   try {
-    return new URL(url).origin === RELEASE_NOTES_CSP_IMG_SRC;
+    // Check the scheme too: `blob:https://agor.live/x` also has that origin.
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && parsed.origin === RELEASE_NOTES_CSP_IMG_SRC;
   } catch {
     return false;
   }

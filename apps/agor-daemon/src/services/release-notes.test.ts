@@ -193,12 +193,18 @@ describe('parseReleaseNotes', () => {
           visual_url_dark: 'https://agor.live/whats-new/x-dark.svg',
         }),
         item('j', { visual_url: 'http://agor.live/x.svg' }),
+        item('k', {
+          visual_url: 'blob:https://agor.live/0d4b4a8e',
+          visual_url_dark: 'https://agor.live/whats-new/k-dark.svg',
+        }),
       ]),
     ]);
 
     expect(parsed.items.map((i) => [i.visual_url, i.visual_url_dark])).toEqual([
       [null, 'https://agor.live/whats-new/x-dark.svg'],
       [null, null],
+      // blob: shares the https://agor.live origin but is not a hosted visual.
+      [null, 'https://agor.live/whats-new/k-dark.svg'],
     ]);
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
