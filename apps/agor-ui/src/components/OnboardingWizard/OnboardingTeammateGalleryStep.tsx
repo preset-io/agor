@@ -1,6 +1,6 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: intentional dark-glass onboarding input treatment, matching the owning wizard surface
 import { Flex, Input, Typography, theme } from 'antd';
-import { type Ref, useState } from 'react';
+import { type Ref, useRef, useState } from 'react';
 import type { TeammateGalleryCardId } from '../../utils/teammateTemplates';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { TeammateGalleryCards } from '../TeammateGallery/TeammateGallery';
@@ -39,11 +39,13 @@ export const OnboardingTeammateGalleryStep: React.FC<OnboardingTeammateGallerySt
 }) => {
   const { token } = theme.useToken();
   const [scrolled, setScrolled] = useState(false);
+  const collapsibleRef = useRef<HTMLDivElement>(null);
 
   return (
     <Flex vertical style={{ flex: '1 1 auto', minHeight: 0 }}>
       <div style={{ flex: '0 0 auto', paddingBottom: token.paddingSM }}>
         <div
+          ref={collapsibleRef}
           className="onb-workspace-collapsible"
           data-collapsible-header=""
           style={{
@@ -115,7 +117,15 @@ export const OnboardingTeammateGalleryStep: React.FC<OnboardingTeammateGallerySt
 
       <div
         onScroll={(event) => {
-          const next = event.currentTarget.scrollTop > 8;
+          const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+          // Collapsing the title grows this region and lowers its max scrollTop.
+          // Only collapse if the cards still scroll past the threshold afterwards;
+          // otherwise the clamp re-expands the title and the scroll oscillates.
+          const collapsedOverflow =
+            scrollHeight -
+            clientHeight -
+            (scrolled ? 0 : (collapsibleRef.current?.offsetHeight ?? 0) + token.marginSM);
+          const next = scrollTop > 8 && collapsedOverflow > 8;
           setScrolled((previous) => (previous === next ? previous : next));
         }}
         style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}
