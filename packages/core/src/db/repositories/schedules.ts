@@ -13,7 +13,7 @@ import type {
   TimezoneMode,
   UUID,
 } from '@agor/core/types';
-import { and, asc, desc, eq, isNull, like, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, like, lte, or, sql } from 'drizzle-orm';
 import { normalizeScheduleAgenticToolDefaultReference } from '../../config/schedule-agentic-tool-config';
 import { generateId } from '../../lib/ids';
 import { lockBranchForAdmission } from '../branch-admission';
@@ -43,6 +43,14 @@ import { deepMerge } from './merge-utils';
 export interface DueScheduleRef {
   schedule_id: ScheduleID;
   tenant_id?: string;
+}
+
+const TRIGGER_TOKEN_HASH = /^[a-f0-9]{64}$/;
+
+function assertTriggerTokenHash(hash: string): void {
+  if (!TRIGGER_TOKEN_HASH.test(hash)) {
+    throw new RepositoryError('Schedule trigger token hash must be a sha256 hex digest');
+  }
 }
 
 export class ScheduleRepository implements BaseRepository<Schedule, Partial<Schedule>> {
@@ -84,6 +92,10 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
         last_run_at: row.last_run_at ?? undefined,
         last_run_session_id: (row.last_run_session_id as SessionID | null) ?? undefined,
         next_run_at: row.next_run_at ?? undefined,
+        trigger_enabled: row.trigger_token_hash != null,
+        trigger_token_created_at: row.trigger_token_created_at ?? undefined,
+        last_triggered_at: row.last_triggered_at ?? undefined,
+        trigger_pending_at: row.trigger_pending_at ?? undefined,
         created_at: new Date(row.created_at).toISOString(),
         updated_at: new Date(row.updated_at).toISOString(),
         created_by: row.created_by as UUID,
@@ -243,7 +255,12 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
   private dueCondition(now: number) {
     return and(
       eq(schedules.enabled, true),
-      or(isNull(schedules.next_run_at), lte(schedules.next_run_at, now))
+      or(
+        isNull(schedules.next_run_at),
+        lte(schedules.next_run_at, now),
+        // A coalesced trigger waits for the tick to start its follow-up run.
+        isNotNull(schedules.trigger_pending_at)
+      )
     );
   }
 
@@ -284,6 +301,85 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
         ? { tenant_id: row.tenant_id }
         : {}),
     }));
+  }
+
+  /**
+   * Trigger discovery query. Returns only routing metadata for the schedule
+   * holding this token hash, so the unauthenticated trigger route can enter
+   * the owning tenant's scope before loading the schedule itself.
+   */
+  async findTriggerRef(tokenHash: string): Promise<DueScheduleRef | null> {
+    assertTriggerTokenHash(tokenHash);
+    const tenantColumn = (schedules as unknown as { tenant_id?: unknown }).tenant_id;
+    const columns =
+      isPostgresDatabase(this.db) && tenantColumn
+        ? { schedule_id: schedules.schedule_id, tenant_id: tenantColumn }
+        : { schedule_id: schedules.schedule_id };
+    const row = (await select(this.db, columns)
+      .from(schedules)
+      .where(eq(schedules.trigger_token_hash, tokenHash))
+      .one()) as { schedule_id: string; tenant_id?: unknown } | null;
+    if (!row) return null;
+    return {
+      schedule_id: row.schedule_id as ScheduleID,
+      ...(typeof row.tenant_id === 'string' && row.tenant_id.length > 0
+        ? { tenant_id: row.tenant_id }
+        : {}),
+    };
+  }
+
+  /** Stored trigger token hash, or null when the trigger is disabled. Never leaves the daemon. */
+  async findTriggerTokenHash(scheduleId: ScheduleID): Promise<string | null> {
+    const row = await select(this.db, { hash: schedules.trigger_token_hash })
+      .from(schedules)
+      .where(eq(schedules.schedule_id, scheduleId))
+      .one();
+    return (row as { hash: string | null } | null)?.hash ?? null;
+  }
+
+  /** Install (hash) or clear (null) the trigger token. Either way any pending re-run is dropped. */
+  async setTriggerTokenHash(scheduleId: ScheduleID, tokenHash: string | null): Promise<Schedule> {
+    if (tokenHash !== null) assertTriggerTokenHash(tokenHash);
+    const row = await update(this.db, schedules)
+      .set({
+        trigger_token_hash: tokenHash,
+        trigger_token_created_at: tokenHash ? Date.now() : null,
+        trigger_pending_at: null,
+        updated_at: new Date(),
+      })
+      .where(eq(schedules.schedule_id, scheduleId))
+      .returning()
+      .one();
+    if (!row) throw new EntityNotFoundError('Schedule', scheduleId);
+    return this.rowToSchedule(row);
+  }
+
+  /** Record an accepted trigger request. */
+  async recordTrigger(scheduleId: ScheduleID, now: number): Promise<void> {
+    await update(this.db, schedules)
+      .set({ last_triggered_at: now })
+      .where(eq(schedules.schedule_id, scheduleId))
+      .run();
+  }
+
+  /** Request one follow-up run. Idempotent: an existing request keeps its timestamp. */
+  async markTriggerPending(scheduleId: ScheduleID, at: number): Promise<void> {
+    await update(this.db, schedules)
+      .set({ trigger_pending_at: sql`COALESCE(${schedules.trigger_pending_at}, ${at})` })
+      .where(eq(schedules.schedule_id, scheduleId))
+      .run();
+  }
+
+  /**
+   * Atomically take the pending follow-up run. Exactly one caller (across
+   * daemons) observes `true` for a given pending request.
+   */
+  async claimTriggerPending(scheduleId: ScheduleID): Promise<boolean> {
+    const result = await update(this.db, schedules)
+      .set({ trigger_pending_at: null })
+      .where(and(eq(schedules.schedule_id, scheduleId), isNotNull(schedules.trigger_pending_at)))
+      .run();
+    return result.rowsAffected > 0;
   }
 
   /**

@@ -7,6 +7,7 @@
  *   pnpm --filter @agor/core exec vitest run src/db/scheduler-ha.postgres.test.ts
  */
 
+import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { SessionID, TaskID, UUID } from '../types/id';
@@ -326,5 +327,55 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('scheduler HA (PostgreSQL)'
     const recoveryTenants = new Map(recoveries.map((ref) => [ref.session_id, ref.tenant_id]));
     expect(recoveryTenants.get(pendingA.session_id)).toBe(a.tenantId);
     expect(recoveryTenants.get(pendingB.session_id)).toBe(b.tenantId);
+  });
+
+  it('discovers a trigger token tenant only by hash and only under its capability', async () => {
+    const a = await seedTenant(db, `trigger-a-${generateId()}`);
+    const b = await seedTenant(db, `trigger-b-${generateId()}`);
+    const hashA = createHash('sha256').update(`token-a-${generateId()}`).digest('hex');
+    const hashB = createHash('sha256').update(`token-b-${generateId()}`).digest('hex');
+    await runWithTenantDatabaseScope(db, a.tenantId, (scoped) =>
+      new ScheduleRepository(scoped).setTriggerTokenHash(a.scheduleId, hashA)
+    );
+    const discover = (
+      hash: string,
+      capability: 'schedule_trigger_discovery' | 'task_queue_discovery'
+    ) =>
+      runWithSystemDatabaseScope(
+        db,
+        'schedule trigger integration discovery',
+        (systemDb) => new ScheduleRepository(systemDb).findTriggerRef(hash),
+        { capability }
+      );
+
+    expect(await discover(hashA, 'schedule_trigger_discovery')).toEqual({
+      schedule_id: a.scheduleId,
+      tenant_id: a.tenantId,
+    });
+    expect(await discover(hashB, 'schedule_trigger_discovery')).toBeNull();
+    expect(await discover(hashA, 'task_queue_discovery')).toBeNull();
+
+    // The capability is SELECT-only: it cannot consume or rewrite trigger state.
+    expect(
+      await runWithSystemDatabaseScope(
+        db,
+        'schedule trigger integration write attempt',
+        (systemDb) => new ScheduleRepository(systemDb).claimTriggerPending(a.scheduleId),
+        { capability: 'schedule_trigger_discovery' }
+      )
+    ).toBe(false);
+
+    await runWithTenantDatabaseScope(db, b.tenantId, async (scoped) => {
+      const schedules = new ScheduleRepository(scoped);
+      expect(await schedules.findTriggerRef(hashA)).toBeNull();
+      expect(await schedules.findTriggerTokenHash(a.scheduleId)).toBeNull();
+      await expect(schedules.setTriggerTokenHash(a.scheduleId, hashB)).rejects.toThrow();
+      await schedules.markTriggerPending(a.scheduleId, Date.now());
+    });
+    await runWithTenantDatabaseScope(db, a.tenantId, async (scoped) => {
+      const schedules = new ScheduleRepository(scoped);
+      expect(await schedules.findTriggerTokenHash(a.scheduleId)).toBe(hashA);
+      expect((await schedules.findById(a.scheduleId))?.trigger_pending_at).toBeUndefined();
+    });
   });
 });

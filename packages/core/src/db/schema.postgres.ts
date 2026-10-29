@@ -1071,6 +1071,13 @@ export const schedules = pgTable(
     ),
     next_run_at: bigint('next_run_at', { mode: 'number' }),
 
+    // Inbound trigger URL: sha256 of the bearer token (raw token is shown once).
+    trigger_token_hash: varchar('trigger_token_hash', { length: 64 }),
+    trigger_token_created_at: bigint('trigger_token_created_at', { mode: 'number' }), // Unix timestamp (ms)
+    last_triggered_at: bigint('last_triggered_at', { mode: 'number' }), // Unix timestamp (ms)
+    // At most one coalesced follow-up run, started by the tick once idle.
+    trigger_pending_at: bigint('trigger_pending_at', { mode: 'number' }), // Unix timestamp (ms)
+
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at').notNull(),
     created_by: varchar('created_by', { length: 36 })
@@ -1085,6 +1092,12 @@ export const schedules = pgTable(
     enabledNextRunIdx: index('schedules_enabled_next_run_idx').on(table.enabled, table.next_run_at),
     branchIdx: index('schedules_branch_idx').on(table.branch_id),
     createdByIdx: index('schedules_created_by_idx').on(table.created_by),
+    triggerTokenHashUnique: uniqueIndex('schedules_trigger_token_hash_unique').on(
+      table.trigger_token_hash
+    ),
+    triggerPendingIdx: index('schedules_trigger_pending_idx')
+      .on(table.trigger_pending_at)
+      .where(sql`${table.trigger_pending_at} IS NOT NULL`),
   })
 );
 
