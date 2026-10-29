@@ -148,6 +148,13 @@ function identityKey(provider: string, issuer: string, subject: string): string 
   return createHash('sha256').update(`${provider}\0${issuer}\0${subject}`).digest('hex');
 }
 
+// Opaque ids only (Cloud sends `user:<id>`); an email-shaped or unbounded subject never reaches analytics.
+const ANALYTICS_LAUNCH_SUBJECT = /^[A-Za-z0-9][A-Za-z0-9:_.-]{0,127}$/;
+
+function analyticsSafeLaunchSubject(subject: string): string | undefined {
+  return ANALYTICS_LAUNCH_SUBJECT.test(subject) ? subject : undefined;
+}
+
 function sanitizeEmailLocalPart(value: string): string {
   return (
     value
@@ -296,7 +303,7 @@ async function projectLaunchUser(
   db: TenantScopedDatabase,
   options: LaunchAuthServiceOptions,
   claims: LaunchClaims
-): Promise<{ userId: UserID; authorizationChanged: boolean }> {
+): Promise<{ userId: UserID; authorizationChanged: boolean; created: boolean }> {
   const { config } = options;
   const issuer = claims.iss;
   const subject = claims.sub;
@@ -421,6 +428,7 @@ async function projectLaunchUser(
     return {
       userId: existing.user_id as UserID,
       authorizationChanged: normalizeRole(existing.role) !== normalizeRole(role),
+      created: false,
     };
   }
 
@@ -463,7 +471,7 @@ async function projectLaunchUser(
   await identityRepository.bind(userId, identity, now);
   await reattributeLegacyAnonymousRows(db, userId);
 
-  return { userId, authorizationChanged: false };
+  return { userId, authorizationChanged: false, created: true };
 }
 
 async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
@@ -869,11 +877,17 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           tenant.tenant_id
         );
         // The external provider has succeeded, projection committed, and Agor
-        // issued its browser tokens. No provider claims enter analytics.
+        // issued its browser tokens. Only the opaque launch subject joins the
+        // runtime user to its Cloud account; no other provider claim enters analytics.
+        const cloudSubject = analyticsSafeLaunchSubject(claims.sub);
         runWithTenantContext(tenant.tenant_id, () =>
           analyticsLogger.track(
             PRODUCT_ANALYTICS_EVENTS.LOGIN_SUCCEEDED,
-            { method: 'external_launch' },
+            {
+              method: 'external_launch',
+              runtime_user_created: projection.created,
+              ...(cloudSubject ? { cloud_subject: cloudSubject } : {}),
+            },
             {
               userId: user.user_id,
             }
