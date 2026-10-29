@@ -15,7 +15,7 @@ import type {
 } from '@agor-live/client';
 import { getDefaultPermissionMode, isAgenticToolName } from '@agor-live/client';
 import { Alert, Checkbox, Form, Modal, Radio, Typography, theme } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import {
@@ -129,37 +129,46 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
     [currentUser, session]
   );
 
-  // Reset form and preset when modal opens
+  // Only seed when the modal opens or the session actually changes.
+  // Live query updates produce new object references for the same session_id.
+  const sessionId = session?.session_id ?? null;
+  const lastSessionIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (open && session) {
-      setConfigPreset('parent');
-      setEnvVarNames([]);
-      const agentTool = isAgenticToolName(session.agentic_tool)
-        ? session.agentic_tool
-        : 'claude-code';
+    if (!open || !sessionId || !session) {
+      lastSessionIdRef.current = null;
+      return;
+    }
+
+    if (lastSessionIdRef.current === sessionId) return;
+
+    lastSessionIdRef.current = sessionId;
+    setConfigPreset('parent');
+    setEnvVarNames([]);
+    const agentTool = isAgenticToolName(session.agentic_tool)
+      ? session.agentic_tool
+      : 'claude-code';
+    form.setFieldsValue({
+      prompt: initialPrompt,
+      enableCallback: session.callback_config?.enabled,
+      includeLastMessage: session.callback_config?.include_last_message,
+      includeOriginalPrompt: session.callback_config?.include_original_prompt,
+    });
+    setSelectedAgent(agentTool);
+  }, [open, sessionId, session, form, initialPrompt]);
+
+  const handleConfigPresetChange = (preset: 'parent' | 'custom') => {
+    setConfigPreset(preset);
+    if (preset === 'custom' && session && isAgenticToolName(session.agentic_tool)) {
+      const agentTool = session.agentic_tool;
       form.setFieldsValue({
-        prompt: initialPrompt,
-        enableCallback: session.callback_config?.enabled,
-        includeLastMessage: session.callback_config?.include_last_message,
-        includeOriginalPrompt: session.callback_config?.include_original_prompt,
+        ...getCustomConfigDefaults(agentTool),
+        // Undefined inherits on the server; only an edit becomes a selection.
+        mcpServerIds: undefined,
       });
       setSelectedAgent(agentTool);
     }
-  }, [open, session, form, initialPrompt]);
-
-  // When switching to "Custom config", load the values that will be
-  // effective if the user submits without touching individual fields.
-  useEffect(() => {
-    if (!open || !session || configPreset !== 'custom') return;
-    if (!isAgenticToolName(session.agentic_tool)) return;
-    const agentTool = session.agentic_tool;
-    form.setFieldsValue({
-      ...getCustomConfigDefaults(agentTool),
-      // Undefined inherits on the server; only an edit becomes a selection.
-      mcpServerIds: undefined,
-    });
-    setSelectedAgent(agentTool);
-  }, [open, session, configPreset, form, getCustomConfigDefaults]);
+  };
 
   const handleOk = async () => {
     if (!hasActiveParentTool) return;
@@ -345,7 +354,7 @@ export const ForkSpawnModal: React.FC<ForkSpawnModalProps> = ({
             <Form.Item label="Start from">
               <Radio.Group
                 value={configPreset}
-                onChange={(e) => setConfigPreset(e.target.value)}
+                onChange={(e) => handleConfigPresetChange(e.target.value)}
                 buttonStyle="solid"
               >
                 <Radio.Button value="parent">Same as parent</Radio.Button>
