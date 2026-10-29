@@ -137,7 +137,7 @@ describe('ZoneNode compact toolbar', () => {
         onLayoutChange: vi.fn(async () => {}),
       });
       const button = screen.getByRole('button', { name: /^Zone layout: / });
-      expect(button.querySelector('[aria-label="appstore"]')).not.toBeNull();
+      expect(button.querySelector('[aria-label="layout"]')).not.toBeNull();
       unmount();
     }
   });

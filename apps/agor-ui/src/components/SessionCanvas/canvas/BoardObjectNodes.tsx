@@ -23,6 +23,7 @@ import {
   CommentOutlined,
   DeleteOutlined,
   EditOutlined,
+  LayoutOutlined,
   LockOutlined,
   MoreOutlined,
   SettingOutlined,
@@ -682,7 +683,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                   aria-label={`Zone layout: ${layoutOption.label}`}
                   title={`Zone layout: ${layoutOption.label}`}
                   // One icon for every layout, so the control is easy to find; the menu marks the current one.
-                  icon={<AppstoreOutlined />}
+                  icon={<LayoutOutlined />}
                   disabled={mutationDisabled}
                   style={{ width: 32, height: 32 }}
                 />

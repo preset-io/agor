@@ -17,22 +17,33 @@ export function isZoneDrag(start: Position, end: Position): boolean {
   );
 }
 
+/** Which way a drag went from its start; true grows the rectangle left or up. */
+export interface DragDirection {
+  left: boolean;
+  up: boolean;
+}
+
+function dragDirection(start: Position, end: Position): DragDirection {
+  return { left: end.x < start.x, up: end.y < start.y };
+}
+
 /**
  * The rectangle between two points, at least `minWidth` by `minHeight`. It stays
- * pinned to `start` and grows toward `end`, so a small drag up or left never
- * spreads past its start.
+ * pinned to `start` and grows toward `end` (or `direction`, when given), so a
+ * small drag up or left never spreads past its start.
  */
 export function anchoredZoneRect(
   start: Position,
   end: Position,
   minWidth: number,
-  minHeight: number
+  minHeight: number,
+  direction: DragDirection = dragDirection(start, end)
 ): DrawnRect {
   const width = Math.max(minWidth, Math.abs(end.x - start.x));
   const height = Math.max(minHeight, Math.abs(end.y - start.y));
   return {
-    x: end.x < start.x ? start.x - width : start.x,
-    y: end.y < start.y ? start.y - height : start.y,
+    x: direction.left ? start.x - width : start.x,
+    y: direction.up ? start.y - height : start.y,
     width,
     height,
   };
@@ -56,16 +67,14 @@ export function drawnZoneFlowRect(
   minWidth: number,
   minHeight: number
 ): DrawnRect {
-  const anchor = flow.screenToFlowPosition(start);
-  const corner = flow.screenToFlowPosition(end);
-  const width = Math.max(minWidth, Math.abs(corner.x - anchor.x));
-  const height = Math.max(minHeight, Math.abs(corner.y - anchor.y));
-  return {
-    x: end.x < start.x ? anchor.x - width : anchor.x,
-    y: end.y < start.y ? anchor.y - height : anchor.y,
-    width,
-    height,
-  };
+  // Direction comes from the screen drag: grid snap can collapse the flow points onto one axis.
+  return anchoredZoneRect(
+    flow.screenToFlowPosition(start),
+    flow.screenToFlowPosition(end),
+    minWidth,
+    minHeight,
+    dragDirection(start, end)
+  );
 }
 
 /**
