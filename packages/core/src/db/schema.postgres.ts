@@ -1073,7 +1073,6 @@ export const schedules = pgTable(
 
     // Inbound trigger URL: sha256 of the bearer token (raw token is shown once).
     trigger_token_hash: varchar('trigger_token_hash', { length: 64 }),
-    trigger_token_created_at: bigint('trigger_token_created_at', { mode: 'number' }), // Unix timestamp (ms)
     last_triggered_at: bigint('last_triggered_at', { mode: 'number' }), // Unix timestamp (ms)
     // At most one coalesced follow-up run, started by the tick once idle.
     trigger_pending_at: bigint('trigger_pending_at', { mode: 'number' }), // Unix timestamp (ms)

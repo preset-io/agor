@@ -19,15 +19,18 @@ import {
   isPostgresDatabase,
   type RawDatabase,
   RepoRepository,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   ScheduleRepository,
+  SessionRepository,
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import type { ScheduleID, Session } from '@agor/core/types';
+import type { Schedule, ScheduleID, Session } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { generateScheduleTriggerToken } from './schedule-trigger-token';
-import { SchedulerService, ScheduleTriggerNotFoundError } from './scheduler';
+import { ScheduleBusyError, SchedulerService, ScheduleTriggerNotFoundError } from './scheduler';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -72,67 +75,159 @@ async function seedTriggeredSchedule(db: TenantScopeAwareDatabase, tenantId: str
   });
 }
 
-describe.skipIf(!postgresUrl || !usesPostgresSchema)(
-  'schedule trigger tenancy (PostgreSQL)',
-  () => {
-    let raw: RawDatabase;
-    let db: TenantScopeAwareDatabase;
+/** Minimal daemon app for real admissions: prompt dispatch is stubbed out. */
+function daemonApp(handle: TenantScopeAwareDatabase) {
+  const sessions = new SessionRepository(handle);
+  const inTenant = <T>(work: () => Promise<T>) =>
+    runWithTenantDatabaseScope(handle, getCurrentTenantId(), work);
+  return {
+    get: (name: string) =>
+      name === 'distributedWorkIdentity' ? { instanceId: 'test', bootId: 'test' } : undefined,
+    service: (path: string) => {
+      if (path === 'sessions') {
+        return {
+          emit: () => {},
+          patch: (id: string, data: Partial<Session>) => inTenant(() => sessions.update(id, data)),
+          remove: (id: string) => inTenant(() => sessions.delete(id)),
+        };
+      }
+      if (path === '/sessions/:id/prompt') {
+        return {
+          create: async (data: { prompt: string; idempotencyTaskId: string }, params: any) => ({
+            task_id: data.idempotencyTaskId,
+            session_id: params.route.id,
+            status: TaskStatus.DISPATCHING,
+            full_prompt: data.prompt,
+          }),
+        };
+      }
+      if (path === 'session-mcp-servers') return { emit: () => {} };
+      throw new Error(`Unexpected service: ${path}`);
+    },
+  } as unknown as ConstructorParameters<typeof SchedulerService>[1];
+}
 
-    beforeAll(async () => {
-      raw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
-      await initializeDatabase(raw);
-      if (!isPostgresDatabase(raw)) throw new Error('PostgreSQL test requires PostgreSQL');
-      db = createTenantScopedDatabaseProxy(raw, { requireScope: true, label: 'trigger test' });
-    });
+type SchedulerInternals = {
+  runOnDemand(opts: { scheduleId: ScheduleID; triggeredBy: string }): Promise<unknown>;
+  spawnScheduledSession(
+    schedule: Schedule,
+    scheduledRunAt: number,
+    now: number,
+    options: { source: 'cron' | 'webhook'; triggeredBy?: string }
+  ): Promise<{ created: boolean } | null>;
+};
 
-    afterAll(async () => {
-      await (raw as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end();
-    });
+describe.skipIf(!postgresUrl || !usesPostgresSchema)('schedule trigger (PostgreSQL)', () => {
+  let raw: RawDatabase;
+  let rawB: RawDatabase;
+  let db: TenantScopeAwareDatabase;
+  let dbB: TenantScopeAwareDatabase;
 
-    it("confines a token to its own tenant's schedule and runs it there as the owner", async () => {
-      const a = await seedTriggeredSchedule(db, `trigger-a-${generateId()}`);
-      const b = await seedTriggeredSchedule(db, `trigger-b-${generateId()}`);
-      const app = {
-        get: (name: string) =>
-          name === 'distributedWorkIdentity' ? { instanceId: 'test', bootId: 'test' } : undefined,
-      } as unknown as ConstructorParameters<typeof SchedulerService>[1];
-      // No static tenant: hosted mode discovers the tenant from the token hash.
-      const scheduler = new SchedulerService(db, app);
-      const runs: Array<{
-        tenantId: string | undefined;
-        scheduleId: ScheduleID;
-        triggeredBy: string;
-      }> = [];
-      vi.spyOn(scheduler, 'executeScheduleNow').mockImplementation(async (opts) => {
+  beforeAll(async () => {
+    raw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+    await initializeDatabase(raw);
+    if (!isPostgresDatabase(raw)) throw new Error('PostgreSQL test requires PostgreSQL');
+    db = createTenantScopedDatabaseProxy(raw, { requireScope: true, label: 'trigger daemon A' });
+    // A second pool stands in for a second daemon.
+    rawB = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+    dbB = createTenantScopedDatabaseProxy(rawB, { requireScope: true, label: 'trigger daemon B' });
+  });
+
+  afterAll(async () => {
+    for (const handle of [raw, rawB]) {
+      await (handle as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end();
+    }
+  });
+
+  it("confines a token to its own tenant's schedule and runs it there as the owner", async () => {
+    const a = await seedTriggeredSchedule(db, `trigger-a-${generateId()}`);
+    const b = await seedTriggeredSchedule(db, `trigger-b-${generateId()}`);
+    // No static tenant: hosted mode discovers the tenant from the token hash.
+    const scheduler = new SchedulerService(db, daemonApp(db));
+    const runs: Array<{
+      tenantId: string | undefined;
+      scheduleId: ScheduleID;
+      triggeredBy: string;
+    }> = [];
+    vi.spyOn(scheduler as unknown as SchedulerInternals, 'runOnDemand').mockImplementation(
+      async (opts) => {
         runs.push({
           tenantId: getCurrentTenantId(),
           scheduleId: opts.scheduleId,
           triggeredBy: opts.triggeredBy,
         });
-        return {} as Session;
-      });
-
-      for (const [scheduleId, token] of [
-        [b.scheduleId, a.token],
-        [a.scheduleId, b.token],
-      ] as const) {
-        await expect(scheduler.triggerSchedule(scheduleId, token)).rejects.toBeInstanceOf(
-          ScheduleTriggerNotFoundError
-        );
+        return { session: {} as Session, created: true };
       }
-      expect(runs).toEqual([]);
+    );
 
-      await expect(scheduler.triggerSchedule(a.scheduleId, a.token)).resolves.toEqual({
-        status: 'started',
-      });
-      expect(runs).toEqual([
-        { tenantId: a.tenantId, scheduleId: a.scheduleId, triggeredBy: a.ownerId },
-      ]);
-      await runWithTenantDatabaseScope(db, b.tenantId, async () => {
-        expect((await new ScheduleRepository(db).findById(b.scheduleId))?.last_triggered_at).toBe(
-          undefined
+    for (const [scheduleId, token] of [
+      [b.scheduleId, a.token],
+      [a.scheduleId, b.token],
+    ] as const) {
+      await expect(scheduler.triggerSchedule(scheduleId, token)).rejects.toBeInstanceOf(
+        ScheduleTriggerNotFoundError
+      );
+    }
+    expect(runs).toEqual([]);
+
+    await expect(scheduler.triggerSchedule(a.scheduleId, a.token)).resolves.toEqual({
+      status: 'started',
+    });
+    expect(runs).toEqual([
+      { tenantId: a.tenantId, scheduleId: a.scheduleId, triggeredBy: a.ownerId },
+    ]);
+    await runWithTenantDatabaseScope(db, b.tenantId, async () => {
+      expect((await new ScheduleRepository(db).findById(b.scheduleId))?.last_triggered_at).toBe(
+        undefined
+      );
+    });
+  });
+
+  // allow_concurrent_runs=false: the locked admission check is the only guard.
+  // The two daemons race occurrences in different minutes, so occurrence
+  // uniqueness cannot save them; exactly one run may be admitted.
+  for (const [label, sources] of [
+    ['trigger vs cron', ['webhook', 'cron']],
+    ['trigger vs trigger across a minute boundary', ['webhook', 'webhook']],
+  ] as const) {
+    it(`admits exactly one run for ${label} on a non-concurrent schedule`, async () => {
+      for (let round = 0; round < 5; round++) {
+        const seed = await seedTriggeredSchedule(db, `trigger-race-${generateId()}`);
+        const handles = [db, dbB];
+        const minute = Math.floor(Date.now() / 60_000) * 60_000;
+        const results = await Promise.allSettled(
+          sources.map((source, i) =>
+            runWithTenantContext(seed.tenantId, async () => {
+              const handle = handles[i];
+              const daemon = new SchedulerService(
+                handle,
+                daemonApp(handle)
+              ) as unknown as SchedulerInternals;
+              const schedule = await runWithTenantDatabaseScope(handle, seed.tenantId, () =>
+                new ScheduleRepository(handle).findById(seed.scheduleId)
+              );
+              return daemon.spawnScheduledSession(schedule!, minute + i * 60_000, Date.now(), {
+                source,
+                triggeredBy: seed.ownerId,
+              });
+            })
+          )
         );
-      });
+        const admitted = results.filter((r) => r.status === 'fulfilled' && r.value?.created);
+        const refused = results.filter(
+          (r) =>
+            (r.status === 'rejected' && r.reason instanceof ScheduleBusyError) ||
+            (r.status === 'fulfilled' && r.value === null)
+        );
+        expect({ admitted: admitted.length, refused: refused.length }).toEqual({
+          admitted: 1,
+          refused: 1,
+        });
+        const sessions = await runWithTenantDatabaseScope(db, seed.tenantId, () =>
+          new SessionRepository(db).findByScheduleId(seed.scheduleId)
+        );
+        expect(sessions).toHaveLength(1);
+      }
     });
   }
-);
+});

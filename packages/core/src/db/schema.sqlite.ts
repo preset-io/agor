@@ -1015,7 +1015,6 @@ export const schedules = sqliteTable(
 
     // Inbound trigger URL: sha256 of the bearer token (raw token is shown once).
     trigger_token_hash: text('trigger_token_hash'),
-    trigger_token_created_at: integer('trigger_token_created_at'), // Unix timestamp (ms)
     last_triggered_at: integer('last_triggered_at'), // Unix timestamp (ms)
     // At most one coalesced follow-up run, started by the tick once idle.
     trigger_pending_at: integer('trigger_pending_at'), // Unix timestamp (ms)

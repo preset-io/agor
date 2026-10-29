@@ -20,6 +20,7 @@ import { lockBranchForAdmission } from '../branch-admission';
 import type { Database } from '../client';
 import {
   deleteFrom,
+  executeRaw,
   insert,
   isPostgresDatabase,
   lockRowForUpdate,
@@ -93,7 +94,6 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
         last_run_session_id: (row.last_run_session_id as SessionID | null) ?? undefined,
         next_run_at: row.next_run_at ?? undefined,
         trigger_enabled: row.trigger_token_hash != null,
-        trigger_token_created_at: row.trigger_token_created_at ?? undefined,
         last_triggered_at: row.last_triggered_at ?? undefined,
         trigger_pending_at: row.trigger_pending_at ?? undefined,
         created_at: new Date(row.created_at).toISOString(),
@@ -315,6 +315,14 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
       isPostgresDatabase(this.db) && tenantColumn
         ? { schedule_id: schedules.schedule_id, tenant_id: tenantColumn }
         : { schedule_id: schedules.schedule_id };
+    // PostgreSQL's discovery policy admits only the row matching this
+    // transaction-bound hash; the WHERE clause keeps SQLite equivalent.
+    if (isPostgresDatabase(this.db)) {
+      await executeRaw(
+        this.db,
+        sql`SELECT set_config('agor.schedule_trigger_token_hash', ${tokenHash}, true)`
+      );
+    }
     const row = (await select(this.db, columns)
       .from(schedules)
       .where(eq(schedules.trigger_token_hash, tokenHash))
@@ -343,7 +351,6 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
     const row = await update(this.db, schedules)
       .set({
         trigger_token_hash: tokenHash,
-        trigger_token_created_at: tokenHash ? Date.now() : null,
         trigger_pending_at: null,
         updated_at: new Date(),
       })
@@ -459,6 +466,9 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
 
       const insertData = this.scheduleToInsert(merged);
       insertData.updated_at = new Date();
+      // A disabled schedule drops any coalesced trigger in the same write, so
+      // re-enabling it later does not fire a stale follow-up run.
+      if (!merged.enabled) insertData.trigger_pending_at = null;
 
       const row = await update(txAsDb(tx), schedules)
         .set(insertData)

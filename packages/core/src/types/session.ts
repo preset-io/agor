@@ -923,6 +923,9 @@ export interface ScheduledRunMetadata {
 
   /**
    * Whether this run was triggered manually via execute-now (vs. cron tick).
+   *
+   * @deprecated Use `trigger_source`, which also distinguishes webhook runs.
+   * Still written for older readers.
    */
   triggered_manually?: boolean;
 

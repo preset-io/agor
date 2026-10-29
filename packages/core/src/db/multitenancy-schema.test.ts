@@ -219,13 +219,15 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).not.toContain('WITH CHECK');
   });
 
-  it('limits schedule trigger discovery to token-bearing rows and an explicit capability', () => {
+  it('binds schedule trigger discovery to one caller-supplied hash and an explicit capability', () => {
     const migration = readRepoFile(
       'packages/core/drizzle/postgres/0120_schedule_trigger_token.sql'
     );
 
     expect(migration).toContain('FOR SELECT');
-    expect(migration).toContain('"trigger_token_hash" IS NOT NULL');
+    expect(migration).toContain(
+      `"trigger_token_hash" = current_setting('agor.schedule_trigger_token_hash', true)`
+    );
     expect(migration).toContain("current_setting('agor.system_scope', true)");
     expect(migration).toContain("= 'schedule_trigger_discovery'");
     expect(migration).not.toContain('WITH CHECK');

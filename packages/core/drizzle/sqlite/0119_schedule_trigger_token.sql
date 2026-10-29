@@ -1,7 +1,5 @@
 ALTER TABLE `schedules` ADD `trigger_token_hash` text;
 --> statement-breakpoint
-ALTER TABLE `schedules` ADD `trigger_token_created_at` integer;
---> statement-breakpoint
 ALTER TABLE `schedules` ADD `last_triggered_at` integer;
 --> statement-breakpoint
 ALTER TABLE `schedules` ADD `trigger_pending_at` integer;

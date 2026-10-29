@@ -368,7 +368,7 @@ describe('schedule MCP input schemas', () => {
     expect(body.data).toHaveLength(25);
   });
 
-  it('manages the trigger token through the RBAC-checked trigger-token route', async () => {
+  it('reads or disables the trigger and never returns a token', async () => {
     const configs = new Map<string, { inputSchema: { safeParse: (args: unknown) => any } }>();
     const handlers = new Map<string, ToolHandler>();
     const fakeServer = {
@@ -381,8 +381,13 @@ describe('schedule MCP input schemas', () => {
         handlers.set(name, cb);
       },
     } as unknown as McpServer;
+    // Even if the route ever returned a token, the tool must drop it.
     const tokenRoute = {
-      create: vi.fn(async () => ({ trigger_enabled: true, token: 'agor_trg_x' })),
+      create: vi.fn(async () => ({
+        schedule_id: 'schedule-1',
+        trigger_enabled: true,
+        token: 'agor_trg_must-not-leak',
+      })),
     };
     const schedules = { get: vi.fn(async () => ({ schedule_id: 'schedule-1' })) };
     const baseServiceParams = { provider: 'mcp' } as const;
@@ -399,11 +404,14 @@ describe('schedule MCP input schemas', () => {
     });
 
     const schema = configs.get('agor_schedules_set_trigger')!.inputSchema;
-    expect(schema.safeParse({ scheduleId: 'schedule-1', action: 'reveal' }).success).toBe(false);
-    for (const action of ['enable', 'rotate', 'disable']) {
+    for (const action of ['enable', 'rotate', 'reveal']) {
+      expect(schema.safeParse({ scheduleId: 'schedule-1', action }).success).toBe(false);
+    }
+    for (const action of ['status', 'disable']) {
       const args = schema.safeParse({ scheduleId: 'schedule-1', action });
       expect(args.success).toBe(true);
-      await handlers.get('agor_schedules_set_trigger')!(args.data);
+      const result = await handlers.get('agor_schedules_set_trigger')!(args.data);
+      expect(JSON.stringify(result)).not.toContain('agor_trg_');
       expect(tokenRoute.create).toHaveBeenLastCalledWith(
         { action },
         { route: { id: 'schedule-1' }, ...baseServiceParams }

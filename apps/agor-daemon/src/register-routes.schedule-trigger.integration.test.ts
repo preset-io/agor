@@ -12,11 +12,7 @@ import { seedEnvironmentCommandBranch } from '../../../packages/core/src/db/repo
 import { dbTest as test } from '../../../packages/core/src/db/test-helpers';
 import { retirementRouteApp } from '../test/retirement-route-app';
 import { generateScheduleTriggerToken } from './services/schedule-trigger-token';
-import {
-  ScheduleNotReadyError,
-  ScheduleTriggerNotFoundError,
-  ScheduleTriggerRateLimitedError,
-} from './services/scheduler';
+import { ScheduleNotReadyError, ScheduleTriggerNotFoundError } from './services/scheduler';
 
 const tokenRoute = '/schedules/:id/trigger-token';
 const triggerRoute = '/schedules/:id/trigger';
@@ -85,6 +81,14 @@ test('owner enables, rotates, and disables the trigger; the token is returned on
   expect(rotated.token).not.toBe(enabled.token);
   expect(await storedHash()).toBe(sha256(rotated.token));
 
+  const status = await service.create({ action: 'status' }, asUser(user));
+  expect(status).toEqual({
+    schedule_id: schedule.schedule_id,
+    trigger_enabled: true,
+    trigger_url: enabled.trigger_url,
+  });
+  expect(await storedHash()).toBe(sha256(rotated.token));
+
   const disabled = await service.create({ action: 'disable' }, asUser(user));
   expect(disabled).toEqual({ schedule_id: schedule.schedule_id, trigger_enabled: false });
   expect(await storedHash()).toBeNull();
@@ -136,7 +140,7 @@ test('trigger route needs a trigger bearer and never forwards the body', async (
   expect(triggerSchedule).toHaveBeenCalledExactlyOnceWith(schedule.schedule_id, token);
 });
 
-test('trigger route maps scheduler outcomes to 404 / 409 / 429', async ({ db }) => {
+test('trigger route maps scheduler outcomes to 404 / 409', async ({ db }) => {
   const { app, schedule, triggerSchedule } = await fixture(db);
   const service = app.service(triggerRoute);
   const { token } = generateScheduleTriggerToken();
@@ -148,7 +152,6 @@ test('trigger route maps scheduler outcomes to 404 / 409 / 429', async ({ db }) 
   const cases = [
     [new ScheduleTriggerNotFoundError(), 404],
     [new ScheduleNotReadyError('schedule_disabled', 'disabled'), 409],
-    [new ScheduleTriggerRateLimitedError(), 429],
   ] as const;
   for (const [error, code] of cases) {
     triggerSchedule.mockRejectedValueOnce(error);

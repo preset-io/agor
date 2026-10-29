@@ -9,11 +9,11 @@ import { BadRequest } from '@agor/core/feathers';
 import {
   AGENTIC_TOOL_NAMES,
   type Branch,
-  SCHEDULE_TRIGGER_TOKEN_ACTIONS,
   type Schedule,
   type ScheduleAgenticToolConfig,
   type ScheduleCreateData,
   type SchedulePatchData,
+  type ScheduleTriggerTokenResult,
   TIMEZONE_MODES,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -369,19 +369,22 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
     'agor_schedules_set_trigger',
     {
       description:
-        "Enable, rotate, or disable a schedule's inbound trigger URL. An external system can then start a run with `POST /schedules/:id/trigger` and `Authorization: Bearer <token>`; the request body is ignored. The token can only run this schedule, as its owner. enable/rotate return the token ONCE (rotate invalidates the old one); store it as a secret and never paste it into chat or prompts. Same permission as run-now.",
+        "Read or turn off a schedule's inbound trigger URL (`POST /schedules/:id/trigger` with a bearer token; the request body is ignored and the run uses the schedule's own prompt as its owner). 'status' returns trigger_enabled, trigger_url and last_triggered_at; 'disable' revokes the token. Tokens are never returned here so they cannot enter a transcript: to turn the trigger on or rotate its token, ask the schedule owner to use the Trigger URL section of the schedule editor (or the REST trigger-token route), which shows the token once. Same permission as run-now.",
       inputSchema: z.strictObject({
         scheduleId: mcpRequiredId('scheduleId', 'Schedule'),
         action: z
-          .enum(SCHEDULE_TRIGGER_TOKEN_ACTIONS)
-          .describe("'enable' issues the first token, 'rotate' replaces it, 'disable' removes it."),
+          .enum(['status', 'disable'])
+          .describe("'status' reads the trigger state; 'disable' revokes the current token."),
       }),
     },
     async (args) => {
       const scheduleId = await resolveScheduleId(ctx, args.scheduleId);
-      const result = await ctx.app
+      const { token: _never, ...result } = (await ctx.app
         .service('/schedules/:id/trigger-token')
-        .create({ action: args.action }, { route: { id: scheduleId }, ...ctx.baseServiceParams });
+        .create(
+          { action: args.action },
+          { route: { id: scheduleId }, ...ctx.baseServiceParams }
+        )) as ScheduleTriggerTokenResult;
       return textResult(result);
     }
   );

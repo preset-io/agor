@@ -33,7 +33,6 @@ import {
   type ScheduleNotReadyError,
   SchedulerService,
   ScheduleTriggerNotFoundError,
-  ScheduleTriggerRateLimitedError,
 } from './scheduler';
 
 function makeBranch(overrides: Partial<Branch> = {}): Branch {
@@ -214,15 +213,13 @@ describe('schedule trigger URL', () => {
     const { app, prompt } = createSchedulerApp(db);
     const scheduler = new SchedulerService(db, app, { tenantId: 'trigger-test' });
     const runs = () => sessions.findByScheduleId(seeded.schedule.schedule_id);
-    const tick = async () => {
-      const schedule = await schedules.findById(seeded.schedule.schedule_id);
-      await (
-        scheduler as unknown as {
-          runPendingTrigger(schedule: Schedule, now: number): Promise<void>;
-        }
-      ).runPendingTrigger(schedule!, Date.now());
+    const internals = scheduler as unknown as {
+      runPendingTrigger(scheduleId: Schedule['schedule_id']): Promise<void>;
+      tick(): Promise<unknown>;
     };
-    return { ...seeded, schedules, sessions, issue, scheduler, prompt, runs, tick };
+    const tick = () => internals.runPendingTrigger(seeded.schedule.schedule_id);
+    const fullTick = () => internals.tick();
+    return { ...seeded, schedules, sessions, issue, scheduler, prompt, runs, tick, fullTick };
   }
 
   afterEach(() => {
@@ -339,23 +336,86 @@ describe('schedule trigger URL', () => {
     expect((await schedules.findById(schedule.schedule_id))?.trigger_pending_at).toBeUndefined();
   });
 
-  dbTest('rate limits a second start within the same minute', async ({ db }) => {
+  dbTest('a second trigger in the same minute coalesces into next minute', async ({ db }) => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(NOW);
-    const { schedule, issue, scheduler, runs } = await triggerFixture(db);
+    const { schedule, schedules, issue, scheduler, runs, tick } = await triggerFixture(db);
     const token = await issue();
 
     await scheduler.triggerSchedule(schedule.schedule_id, token);
-    // The first run finished instantly (idle), so there is nothing to coalesce into.
+    // The first run already finished (idle); this minute's occurrence exists.
     vi.setSystemTime(NOW + 30_000);
-    await expect(scheduler.triggerSchedule(schedule.schedule_id, token)).rejects.toBeInstanceOf(
-      ScheduleTriggerRateLimitedError
-    );
+    await expect(scheduler.triggerSchedule(schedule.schedule_id, token)).resolves.toEqual({
+      status: 'coalesced',
+    });
+    await tick();
+    expect(await runs()).toHaveLength(1);
+    expect((await schedules.findById(schedule.schedule_id))?.trigger_pending_at).toBe(NOW + 30_000);
+
+    vi.setSystemTime(NOW + 60_000);
+    await tick();
+    expect(await runs()).toHaveLength(2);
+    expect((await schedules.findById(schedule.schedule_id))?.trigger_pending_at).toBeUndefined();
+  });
+
+  dbTest('starts an overlapping run when the schedule allows concurrency', async ({ db }) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    const { schedule, schedules, sessions, issue, scheduler, runs } = await triggerFixture(db);
+    await schedules.update(schedule.schedule_id, { allow_concurrent_runs: true });
+    const token = await issue();
+
+    await scheduler.triggerSchedule(schedule.schedule_id, token);
+    const [first] = await runs();
+    await sessions.update(first.session_id, { status: SessionStatus.RUNNING });
     vi.setSystemTime(NOW + 60_000);
     await expect(scheduler.triggerSchedule(schedule.schedule_id, token)).resolves.toEqual({
       status: 'started',
     });
     expect(await runs()).toHaveLength(2);
+  });
+
+  dbTest(
+    "keeps the follow-up when this minute's cron occurrence completes immediately",
+    async ({ db }) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      // NOW is 15:00 UTC; the fixture's hourly cron is due this minute.
+      vi.setSystemTime(NOW + 10_000);
+      const { schedule, schedules, issue, runs, fullTick } = await triggerFixture(db);
+      await issue();
+      await schedules.update(schedule.schedule_id, { next_run_at: NOW });
+      await schedules.markTriggerPending(schedule.schedule_id, NOW);
+
+      await fullTick();
+      const afterCron = await runs();
+      expect(afterCron).toHaveLength(1);
+      expect(afterCron[0].custom_context?.scheduled_run?.trigger_source).toBe('cron');
+      // The cron run owns this minute, so the trigger did not start: still pending.
+      expect((await schedules.findById(schedule.schedule_id))?.trigger_pending_at).toBe(NOW);
+
+      vi.setSystemTime(NOW + 70_000);
+      await fullTick();
+      await fullTick();
+      const all = await runs();
+      expect(all.map((run) => run.custom_context?.scheduled_run?.trigger_source).sort()).toEqual([
+        'cron',
+        'webhook',
+      ]);
+      expect((await schedules.findById(schedule.schedule_id))?.trigger_pending_at).toBeUndefined();
+    }
+  );
+
+  dbTest('disabling the schedule drops a pending follow-up', async ({ db }) => {
+    const { schedule, schedules, issue, runs, tick } = await triggerFixture(db);
+    await issue();
+    await schedules.markTriggerPending(schedule.schedule_id, Date.now());
+
+    await schedules.update(schedule.schedule_id, { enabled: false });
+    expect((await schedules.findById(schedule.schedule_id))?.trigger_pending_at).toBeUndefined();
+
+    await schedules.update(schedule.schedule_id, { enabled: true });
+    await tick();
+    expect(await runs()).toHaveLength(0);
   });
 });
 

@@ -272,15 +272,14 @@ export interface Schedule {
    */
   trigger_enabled: boolean;
 
-  /** When the current trigger token was issued (Unix ms). */
-  trigger_token_created_at?: number;
-
   /** Last accepted trigger request (Unix ms). */
   last_triggered_at?: number;
 
   /**
-   * Set when a trigger arrived while a run was active. The scheduler tick
-   * starts one follow-up run once this schedule is idle, then clears it.
+   * Set when a trigger could not start a new run (one is active, or one
+   * already started this minute). The scheduler tick starts one follow-up
+   * run once that is no longer true, then clears it. Disabling the schedule
+   * clears it too.
    */
   trigger_pending_at?: number;
 
@@ -400,8 +399,11 @@ export function scheduleTriggerPath(scheduleId: ScheduleID): string {
   return `/schedules/${scheduleId}/trigger`;
 }
 
-/** `POST /schedules/:id/trigger-token` actions. */
-export const SCHEDULE_TRIGGER_TOKEN_ACTIONS = ['enable', 'rotate', 'disable'] as const;
+/**
+ * `POST /schedules/:id/trigger-token` actions. `enable`/`rotate` return the raw
+ * token once; `status` and `disable` never do.
+ */
+export const SCHEDULE_TRIGGER_TOKEN_ACTIONS = ['enable', 'rotate', 'disable', 'status'] as const;
 export type ScheduleTriggerTokenAction = (typeof SCHEDULE_TRIGGER_TOKEN_ACTIONS)[number];
 
 /** `POST /schedules/:id/trigger-token` response. `token` is present only on enable/rotate. */
@@ -409,6 +411,7 @@ export interface ScheduleTriggerTokenResult {
   schedule_id: ScheduleID;
   trigger_enabled: boolean;
   trigger_url?: string;
+  last_triggered_at?: number;
   token?: string;
 }
 

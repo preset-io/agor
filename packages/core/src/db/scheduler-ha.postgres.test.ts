@@ -8,6 +8,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { SessionID, TaskID, UUID } from '../types/id';
@@ -15,7 +16,7 @@ import type { ScheduleID } from '../types/schedule';
 import { SessionStatus } from '../types/session';
 import { TaskStatus } from '../types/task';
 import { createDatabase, type Database } from './client';
-import { isPostgresDatabase } from './database-wrapper';
+import { executeRaw, isPostgresDatabase, rawRows } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import {
   BranchRepository,
@@ -354,6 +355,31 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('scheduler HA (PostgreSQL)'
     });
     expect(await discover(hashB, 'schedule_trigger_discovery')).toBeNull();
     expect(await discover(hashA, 'task_queue_discovery')).toBeNull();
+
+    // The database, not the query, narrows the capability: an unfiltered read
+    // or a wrong bound hash sees no rows, even with other token-enabled rows.
+    const rawDiscovery = (boundHash: string | null) =>
+      runWithSystemDatabaseScope(
+        db,
+        'schedule trigger raw discovery',
+        async (systemDb) => {
+          if (boundHash) {
+            await executeRaw(
+              systemDb,
+              sql`SELECT set_config('agor.schedule_trigger_token_hash', ${boundHash}, true)`
+            );
+          }
+          return rawRows(
+            await executeRaw(systemDb, sql`SELECT tenant_id, schedule_id FROM schedules`)
+          );
+        },
+        { capability: 'schedule_trigger_discovery' }
+      );
+    expect(await rawDiscovery(null)).toEqual([]);
+    expect(await rawDiscovery(hashB)).toEqual([]);
+    expect(await rawDiscovery(hashA)).toEqual([
+      { tenant_id: a.tenantId, schedule_id: a.scheduleId },
+    ]);
 
     // The capability is SELECT-only: it cannot consume or rewrite trigger state.
     expect(

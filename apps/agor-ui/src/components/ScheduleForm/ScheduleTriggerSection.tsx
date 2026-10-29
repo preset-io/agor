@@ -66,8 +66,8 @@ export const ScheduleTriggerSection: React.FC<ScheduleTriggerSectionProps> = ({
       <Text strong>Trigger URL</Text>
       <Paragraph type="secondary" style={{ marginBottom: 8 }}>
         Let another system start this schedule with an HTTP request, for example when there is new
-        work to do. The request body is ignored, and a request during an active run queues one
-        follow-up run.
+        work to do. The request body is ignored. If a run can't start yet, one follow-up run is
+        queued (see Concurrency under Schedule Settings).
       </Paragraph>
 
       {enabled ? (

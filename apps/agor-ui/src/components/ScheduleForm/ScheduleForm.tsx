@@ -538,7 +538,7 @@ export const ScheduleForm: React.FC<ScheduleFormProps> = ({
                   <Form.Item
                     name="allow_concurrent_runs"
                     label="Concurrency"
-                    extra="Controls overlap for this schedule only; sibling schedules on the same branch are independent."
+                    extra="Controls overlap for this schedule only; sibling schedules on the same branch are independent. Applies to cron, Run now, and the trigger URL. When overlap is blocked, a trigger during an active run queues one follow-up run instead."
                   >
                     <Radio.Group>
                       <Radio value={false}>

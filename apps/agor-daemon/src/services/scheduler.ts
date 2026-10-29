@@ -267,17 +267,6 @@ export class ScheduleTriggerNotFoundError extends Error {
   }
 }
 
-/** Thrown when a trigger would start a second run within the same minute (maps to 429). */
-export class ScheduleTriggerRateLimitedError extends Error {
-  public readonly code = 'schedule_trigger_rate_limited';
-  constructor() {
-    super('This schedule already started a run this minute. Retry after the minute rolls over.');
-    this.name = 'ScheduleTriggerRateLimitedError';
-  }
-}
-
-type ScheduleTriggerOutcome = ScheduleTriggerResult['status'] | 'rate_limited';
-
 class ScheduledInitializationError extends Error {
   constructor(
     readonly stage: SchedulerInitializationStage,
@@ -613,7 +602,9 @@ export class SchedulerService {
           );
           if (!schedule) return;
           await this.processSchedule(schedule, now);
-          await this.runPendingTrigger(schedule, now);
+          if (schedule.trigger_pending_at !== undefined) {
+            await this.runPendingTrigger(schedule.schedule_id);
+          }
           stats.processed += 1;
         });
       } catch (error) {
@@ -768,8 +759,8 @@ export class SchedulerService {
   /**
    * Public: trigger a scheduled run on-demand.
    *
-   * Used by `POST /schedules/:id/run-now` and (with `source: 'webhook'`)
-   * by `triggerSchedule`. Reuses the same spawn path as the cron tick (via
+   * Used by `POST /schedules/:id/run-now`; `triggerSchedule` shares the
+   * same `runOnDemand` path with `source: 'webhook'`. Reuses the same spawn path as the cron tick (via
    * spawnScheduledSession) so scheduled and on-demand runs are
    * indistinguishable downstream, except for the `trigger_source` /
    * `triggered_manually` markers in custom_context and the session title.
@@ -779,12 +770,21 @@ export class SchedulerService {
    * @throws ScheduleBusyError when allow_concurrent_runs is false and
    *   this schedule already has an active run.
    */
-  async executeScheduleNow(opts: {
+  async executeScheduleNow(opts: { scheduleId: ScheduleID; triggeredBy: UUID }): Promise<Session> {
+    return (await this.runOnDemand({ ...opts, source: 'manual' })).session;
+  }
+
+  /**
+   * Shared on-demand run. `created` is false when the minute-rounded
+   * occurrence already existed (another on-demand or cron run won it), so
+   * no new run started.
+   */
+  private async runOnDemand(opts: {
     scheduleId: ScheduleID;
     triggeredBy: UUID;
-    source?: 'manual' | 'webhook';
-  }): Promise<Session> {
-    const { scheduleId, triggeredBy, source = 'manual' } = opts;
+    source: 'manual' | 'webhook';
+  }): Promise<{ session: Session; created: boolean }> {
+    const { scheduleId, triggeredBy, source } = opts;
     const schedule = await this.withTenantDatabase(() => this.scheduleRepo.findById(scheduleId));
     if (!schedule) {
       throw new ScheduleNotReadyError('schedule_incomplete', `Schedule not found: ${scheduleId}`);
@@ -806,16 +806,16 @@ export class SchedulerService {
     // collisions within the same minute) dedupe via scheduled_run_at.
     const scheduledRunAt = roundToMinute(new Date(now)).getTime();
 
-    const session = await this.spawnScheduledSession(schedule, scheduledRunAt, now, {
+    const run = await this.spawnScheduledSession(schedule, scheduledRunAt, now, {
       source,
       triggeredBy,
     });
-    if (!session) {
+    if (!run) {
       throw new Error(
         `Unexpected null result from spawnScheduledSession for manual run on schedule ${scheduleId}`
       );
     }
-    return session;
+    return run;
   }
 
   /**
@@ -826,9 +826,12 @@ export class SchedulerService {
    * hosted mode), never from the request. The run reuses `executeScheduleNow`
    * as the schedule's owner, marked `trigger_source: 'webhook'`.
    *
+   * When no new run can start (busy under `allow_concurrent_runs: false`,
+   * or this minute's occurrence already exists) the trigger coalesces into
+   * one pending follow-up that the tick starts later.
+   *
    * @throws ScheduleTriggerNotFoundError for an unknown schedule or wrong token.
    * @throws ScheduleNotReadyError when the schedule is disabled.
-   * @throws ScheduleTriggerRateLimitedError when a run already started this minute.
    */
   async triggerSchedule(scheduleId: ScheduleID, token: string): Promise<ScheduleTriggerResult> {
     // Exact IDs only: short-ID prefix resolution would answer differently
@@ -857,8 +860,7 @@ export class SchedulerService {
       }
 
       const now = Date.now();
-      const outcome = await this.startTriggeredRun(schedule, now);
-      if (outcome === 'rate_limited') throw new ScheduleTriggerRateLimitedError();
+      const outcome = await this.startTriggeredRun(schedule);
       await this.withTenantDatabase(() => this.scheduleRepo.recordTrigger(scheduleId, now));
       if (outcome === 'coalesced') {
         await this.withTenantDatabase(() => this.scheduleRepo.markTriggerPending(scheduleId, now));
@@ -883,34 +885,19 @@ export class SchedulerService {
   }
 
   /**
-   * Start one triggered run unless this schedule is already running, in which
-   * case the trigger coalesces. Triggered runs never overlap, regardless of
-   * `allow_concurrent_runs`. Backstop rate limit: at most one start per
-   * minute, matching the minute-rounded run identity `executeScheduleNow`
-   * dedupes on.
+   * Try to start one triggered run. Concurrency follows the schedule's own
+   * `allow_concurrent_runs`, decided by the locked admission check; an
+   * existing occurrence for this minute (from cron, run-now, or another
+   * trigger) means nothing new started. Both coalesce.
    */
-  private async startTriggeredRun(
-    schedule: Schedule,
-    now: number
-  ): Promise<ScheduleTriggerOutcome> {
-    const active = await this.withTenantDatabase(() =>
-      this.sessionRepo.existsActiveOrInitializingInSchedule(
-        schedule.schedule_id,
-        EXECUTING_SESSION_STATUSES,
-        NONTERMINAL_TASK_STATUSES
-      )
-    );
-    if (active) return 'coalesced';
-    if ((schedule.last_run_at ?? 0) >= roundToMinute(new Date(now)).getTime()) {
-      return 'rate_limited';
-    }
+  private async startTriggeredRun(schedule: Schedule): Promise<ScheduleTriggerResult['status']> {
     try {
-      await this.executeScheduleNow({
+      const { created } = await this.runOnDemand({
         scheduleId: schedule.schedule_id,
         triggeredBy: schedule.created_by,
         source: 'webhook',
       });
-      return 'started';
+      return created ? 'started' : 'coalesced';
     } catch (error) {
       if (error instanceof ScheduleBusyError) return 'coalesced';
       throw error;
@@ -918,26 +905,27 @@ export class SchedulerService {
   }
 
   /**
-   * Tick step: start the single coalesced follow-up run once the schedule is
-   * idle. The claim is atomic across daemons; a still-busy or rate-limited
-   * schedule puts the request back for a later tick. A failed start drops it
-   * (logged by the tick) rather than retrying a broken schedule forever.
+   * Tick step: start the single coalesced follow-up run. Reloads the
+   * schedule after cron processing so this minute's cron occurrence is seen.
+   * The claim is atomic across daemons; if no new run starts, the request is
+   * put back for a later tick. A failed start drops it (logged by the tick)
+   * rather than retrying a broken schedule forever.
    */
-  private async runPendingTrigger(schedule: Schedule, now: number): Promise<void> {
-    const pendingAt = schedule.trigger_pending_at;
-    if (pendingAt === undefined || !schedule.trigger_enabled) return;
+  private async runPendingTrigger(scheduleId: ScheduleID): Promise<void> {
+    const schedule = await this.withTenantDatabase(() => this.scheduleRepo.findById(scheduleId));
+    const pendingAt = schedule?.trigger_pending_at;
+    if (!schedule || pendingAt === undefined || !schedule.trigger_enabled) return;
     const claimed = await this.withTenantDatabase(() =>
-      this.scheduleRepo.claimTriggerPending(schedule.schedule_id)
+      this.scheduleRepo.claimTriggerPending(scheduleId)
     );
     if (!claimed) return;
-    const outcome = await this.startTriggeredRun(schedule, now);
-    if (outcome !== 'started') {
+    if ((await this.startTriggeredRun(schedule)) !== 'started') {
       await this.withTenantDatabase(() =>
-        this.scheduleRepo.markTriggerPending(schedule.schedule_id, pendingAt)
+        this.scheduleRepo.markTriggerPending(scheduleId, pendingAt)
       );
       return;
     }
-    this.logWorkEvent('info', 'trigger_follow_up_started', { schedule_id: schedule.schedule_id });
+    this.logWorkEvent('info', 'trigger_follow_up_started', { schedule_id: scheduleId });
   }
 
   /**
@@ -1010,7 +998,7 @@ export class SchedulerService {
     scheduledRunAt: number,
     now: number,
     options: { source: 'cron' | 'manual' | 'webhook'; triggeredBy?: UUID } = { source: 'cron' }
-  ): Promise<Session | null> {
+  ): Promise<{ session: Session; created: boolean } | null> {
     const { source, triggeredBy } = options;
     // Manual and webhook runs are on-demand: they surface errors to the caller
     // instead of silently skipping, and never advance the cron cursor.
@@ -1222,6 +1210,7 @@ export class SchedulerService {
       return null;
     }
 
+    const created = admission.outcome === 'created';
     const recovering = admission.outcome === 'existing';
     this.logWorkEvent(
       'info',
@@ -1239,7 +1228,7 @@ export class SchedulerService {
         this.sessionRepo.isScheduledInitializationComplete(admission.session.session_id)
       ))
     ) {
-      return admission.session;
+      return { session: admission.session, created };
     }
     if (
       recovering &&
@@ -1253,7 +1242,7 @@ export class SchedulerService {
         );
       }
       await this.advanceScheduleCursor(schedule, now);
-      return admission.session;
+      return { session: admission.session, created };
     }
     if (
       recovering &&
@@ -1267,7 +1256,7 @@ export class SchedulerService {
         );
       }
       await this.advanceScheduleCursor(schedule, now);
-      return admission.session;
+      return { session: admission.session, created };
     }
     await this.config.testHooks?.afterSessionAdmission?.(admission.session);
     try {
@@ -1300,7 +1289,7 @@ export class SchedulerService {
       if (!onDemand) await this.advanceScheduleCursor(schedule, now);
       throw error;
     }
-    return admission.session;
+    return { session: admission.session, created };
   }
 
   private async recoverIncompleteSession(
