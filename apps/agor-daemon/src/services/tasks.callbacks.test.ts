@@ -1,6 +1,7 @@
-import { runWithTenantDatabaseScope, shortId } from '@agor/core/db';
+import { analyticsLogger } from '@agor/core/analytics';
+import { getCurrentTenantId, runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import { type Session, type Task, TaskStatus } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { completionCallbackTaskId } from '../utils/durable-task-id.js';
 import { TasksService } from './tasks';
 
@@ -107,6 +108,12 @@ function makeService(
     status: TaskStatus.QUEUED,
   });
   const createPending = vi.fn(async (data: Partial<Task>) => ({ ...callbackTask, ...data }));
+  // Durable admission reports whether this call inserted the stable callback Task.
+  const admission = { inserted: true };
+  const admitPending = vi.fn(async (data: Partial<Task>) => ({
+    task: await createPending(data),
+    inserted: admission.inserted,
+  }));
 
   const sessionsPatch = vi.fn(async (id: string, updates: Partial<Session>) => {
     const target = id === parentSession.session_id ? parentSession : childSession;
@@ -125,7 +132,10 @@ function makeService(
 
   const service = Object.create(TasksService.prototype) as TasksService & {
     repository: typeof repository;
-    taskRepo: typeof repository & { createPending: typeof createPending };
+    taskRepo: typeof repository & {
+      createPending: typeof createPending;
+      admitPending: typeof admitPending;
+    };
     id: string;
     emit: ReturnType<typeof vi.fn>;
     app: { service: ReturnType<typeof vi.fn> };
@@ -133,7 +143,7 @@ function makeService(
     executorCredentialRevoker: { revokeTaskTokens: typeof revokeTaskTokens };
   };
   service.repository = repository;
-  service.taskRepo = { ...repository, createPending };
+  service.taskRepo = { ...repository, createPending, admitPending };
   service.id = 'task_id';
   service.emit = vi.fn();
   service.completionCallbackDispatches = new Map();
@@ -159,6 +169,7 @@ function makeService(
     service,
     repository,
     createPending,
+    admission,
     sessionsPatch,
     triggerQueueProcessing,
     messagesFind,
@@ -346,6 +357,62 @@ describe('TasksService completion callbacks', () => {
       'tx:committed',
     ]);
     expect(createPending).toHaveBeenCalledTimes(1);
+  });
+
+  describe('callback admission analytics', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    /** Drives real child completion inside a tenant scope backed by an observable fake transaction. */
+    async function completeChild(inserted: boolean) {
+      const order: string[] = [];
+      const seen: unknown[] = [];
+      vi.spyOn(analyticsLogger, 'track').mockImplementation((event, properties) => {
+        if (event !== 'task.created') return;
+        order.push('analytics');
+        seen.push([getCurrentTenantId(), properties]);
+      });
+      const { service, createPending, admission } = makeService();
+      admission.inserted = inserted;
+      createPending.mockImplementationOnce(async (data: Partial<Task>) => {
+        order.push('callback:admitted');
+        return { ...makeTask({ status: TaskStatus.QUEUED }), ...data };
+      });
+      const db = {
+        transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
+          const result = await callback({ execute: vi.fn(async () => []) });
+          order.push('tx:committed');
+          return result;
+        }),
+      };
+      (service as unknown as { db: unknown }).db = db;
+      await runWithTenantDatabaseScope(db as never, 'tenant-a', () =>
+        service.patch(taskId, { status: TaskStatus.COMPLETED })
+      );
+      await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { order, seen };
+    }
+
+    it('records a real child-completion callback once, after its admission commits', async () => {
+      const { order, seen } = await completeChild(true);
+      expect(seen).toEqual([
+        [
+          'tenant-a',
+          expect.objectContaining({
+            task_id: durableCallbackTaskId,
+            authorship: 'callback',
+            is_callback: true,
+          }),
+        ],
+      ]);
+      const admitted = order.indexOf('callback:admitted');
+      expect(order.indexOf('tx:committed', admitted)).toBeLessThan(order.indexOf('analytics'));
+    });
+
+    it('records nothing when another admitter already inserted the stable callback', async () => {
+      const { seen } = await completeChild(false);
+      expect(seen).toEqual([]);
+    });
   });
 
   it('queues exactly one templated callback with last-message metadata for a completed subsession task', async () => {

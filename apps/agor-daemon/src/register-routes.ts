@@ -104,6 +104,7 @@ import type {
   MessageID,
   MessageSource,
   Params,
+  PromptDraftProvenance,
   ScheduleID,
   Session,
   SessionID,
@@ -111,6 +112,7 @@ import type {
   SessionStopResult,
   StreamingEventType,
   Task,
+  TaskAnalyticsOrigin,
   TaskID,
   TaskLaunchFields,
   TaskMetadata,
@@ -130,8 +132,10 @@ import {
   MCP_MEMBER_POLICY_CHANGED_EVENT,
   MessageRole,
   normalizeRole,
+  PROMPT_DRAFT_PROVENANCES,
   ROLES,
   SessionStatus,
+  TASK_ANALYTICS_ORIGINS,
   TaskStatus,
   UPLOAD_REQUEST_ID_HEADER,
 } from '@agor/core/types';
@@ -321,6 +325,7 @@ import {
   createTenantDatabaseScopeAroundHook,
   createTenantWriteAdmissionAroundHook,
   deferWithTenantContext,
+  runAfterTenantCommit,
   withFreshTenantWrite,
 } from './utils/tenant-db-scope.js';
 import {
@@ -427,6 +432,8 @@ export interface RouteParams extends Params, GatewayAdmissionFenceParams {
    * caller input unconditionally.
    */
   _promptProvenance?: McpPromptProvenanceStamp;
+  /** Trusted analytics origin for an auto-generated first prompt, set by `/sessions/:id/initialize` only. */
+  _taskAnalyticsOrigin?: TaskAnalyticsOrigin;
 }
 
 /**
@@ -2179,6 +2186,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
            * as the scheduler. External callers may not set this field.
            */
           idempotencyTaskId?: UUID;
+          /** Closed, content-free draft provenance; analytics only. */
+          draft?: PromptDraftProvenance;
         },
         params: RouteParams
       ) {
@@ -2197,6 +2206,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
         if (data.metadata !== undefined && params.provider) {
           throw new Forbidden('Task metadata is internal-only');
+        }
+        if (data.draft !== undefined && !PROMPT_DRAFT_PROVENANCES.includes(data.draft)) {
+          throw new BadRequest('Invalid draft provenance');
         }
         const promptTenantId = getCurrentTenantId();
         if (!promptTenantId) throw new Error('Missing active tenant context for prompt admission');
@@ -2448,7 +2460,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 const admissionSession = (await sessionsService.get(id, params)) as Session;
                 await assertCurrentPromptAuthority(operationDb, admissionSession);
                 if (admissionFence) await admissionFence(operationDb);
-                return new TaskRepository(operationDb).createPending({
+                const admission = await new TaskRepository(operationDb).admitPending({
                   task_id: data.idempotencyTaskId,
                   session_id: id as SessionID,
                   full_prompt: admittedPrompt,
@@ -2457,6 +2469,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   metadata: Object.keys(taskMetadata).length > 0 ? taskMetadata : undefined,
                   dispatchIfIdle: preparedLaunch?.updates,
                 });
+                // Repository admission bypasses TasksService.create; record a Task this call
+                // inserted, decided under the durable admission lock, once it commits.
+                if (admission.inserted) {
+                  runAfterTenantCommit(promptTenantId, () =>
+                    tasksService.trackTaskCreated(admission.task, {
+                      origin: params._taskAnalyticsOrigin,
+                      draft: data.draft,
+                    })
+                  );
+                }
+                return admission.task;
               }
             );
             await tasksService.autoTitleSession(task, params);
@@ -6769,6 +6792,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (data.prompt !== undefined && typeof data.prompt !== 'string') {
           throw new BadRequest('prompt must be a string');
         }
+        if (data.origin !== undefined && !TASK_ANALYTICS_ORIGINS.includes(data.origin)) {
+          throw new BadRequest('Invalid session initialization origin');
+        }
         const callerId = params.user?.user_id;
         if (!callerId || data?.expectedUserId !== callerId) {
           throw new Forbidden('Session initialization caller changed');
@@ -6836,7 +6862,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                     prompt: data.prompt,
                     permissionMode: data.permissionMode,
                   },
-                  { ...params, route: { id: session.session_id } }
+                  {
+                    ...params,
+                    route: { id: session.session_id },
+                    // Daemon-set analytics origin; caller task metadata stays forbidden.
+                    ...(data.origin ? { _taskAnalyticsOrigin: data.origin } : {}),
+                  }
                 )
             : undefined,
         });

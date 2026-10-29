@@ -7,6 +7,7 @@ import type {
   MCPServerID,
   MessageID,
   Task,
+  TaskID,
   TaskLaunchFields,
   TaskPendingDispatchStatus,
   UserID,
@@ -3499,6 +3500,37 @@ function dispatchFields(): TaskLaunchFields {
 }
 
 describe('TaskRepository.createPending', () => {
+  dbTest(
+    'reports exactly one insertion when two admitters race on one stable task id',
+    async ({ db }) => {
+      for (const status of [TaskStatus.QUEUED, TaskStatus.CREATED]) {
+        const sessionId = await createSessionWithDeps(db);
+        const input = {
+          ...createPendingInput({ session_id: sessionId, status }),
+          task_id: generateId() as TaskID,
+        };
+        // Separate repositories stand in for two daemons; only the durable lock is shared.
+        const results = await Promise.all([
+          new TaskRepository(db).admitPending(input),
+          new TaskRepository(db).admitPending(input),
+        ]);
+        expect(results.map((result) => result.inserted).sort()).toEqual([false, true]);
+        expect(new Set(results.map((result) => result.task.task_id)).size).toBe(1);
+        expect((await new TaskRepository(db).admitPending(input)).inserted).toBe(false);
+      }
+    }
+  );
+
+  dbTest('reports a fresh direct or queued admission as inserted', async ({ db }) => {
+    const repo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const input = createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED });
+    const direct = await repo.admitPending({ ...input, dispatchIfIdle: dispatchFields() });
+    const queued = await repo.admitPending({ ...input, dispatchIfIdle: dispatchFields() });
+    expect([direct.task.status, direct.inserted]).toEqual([TaskStatus.DISPATCHING, true]);
+    expect([queued.task.status, queued.inserted]).toEqual([TaskStatus.QUEUED, true]);
+  });
+
   dbTest('directly admits an idle prompt and atomically projects its Session', async ({ db }) => {
     const repo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);

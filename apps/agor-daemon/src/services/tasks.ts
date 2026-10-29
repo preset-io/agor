@@ -106,8 +106,13 @@ import {
   ExecutorHeartbeatCallbackRunner,
 } from '../utils/executor-heartbeat-callback.js';
 import { ensureRepoOriginAlignedById } from '../utils/realign-repo-origin';
+import { classifyTaskAuthorship, type TaskCreatedAnalytics } from '../utils/task-authorship.js';
 import { taskFailureAnalytics } from '../utils/task-failure-analytics.js';
-import { deferWithTenantContext, withFreshTenantWrite } from '../utils/tenant-db-scope.js';
+import {
+  deferWithTenantContext,
+  runAfterTenantCommit,
+  withFreshTenantWrite,
+} from '../utils/tenant-db-scope.js';
 import type { SessionParams, SessionsService } from './sessions';
 
 /** Internal settlement input; cleanup evidence is not persisted or accepted in Task patches. */
@@ -506,10 +511,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     if (!Array.isArray(result)) {
-      this.trackTaskCreated(result);
-      if (result.status === TaskStatus.RUNNING) {
-        this.trackTaskStarted(result);
-      }
+      const created = result;
+      runAfterTenantCommit(getCurrentTenantId() ?? params?.tenant?.tenant_id, () => {
+        this.trackTaskCreated(created);
+        if (created.status === TaskStatus.RUNNING) this.trackTaskStarted(created);
+      });
     }
 
     return result;
@@ -558,10 +564,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     };
   }
 
-  private trackTaskCreated(task: Task): void {
-    analyticsLogger.track('task.created', this.baseTaskAnalyticsProperties(task), {
-      userId: task.created_by,
-    });
+  /** Also called by repository-backed prompt admission, which bypasses `create`. */
+  trackTaskCreated(task: Task, admission: TaskCreatedAnalytics = {}): void {
+    analyticsLogger.track(
+      'task.created',
+      {
+        ...this.baseTaskAnalyticsProperties(task),
+        authorship: classifyTaskAuthorship(task.metadata, admission.origin),
+        origin: admission.origin ?? null,
+        draft: admission.draft ?? null,
+      },
+      { userId: task.created_by }
+    );
   }
 
   private trackTaskStarted(task: Task): void {
@@ -1583,8 +1597,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         childSession.callback_config?.callback_created_by ??
         task.created_by;
       const callbackTaskId = completionCallbackTaskId(task.task_id, targetSessionId);
-      const createCallbackTask = () =>
-        this.taskRepo.createPending({
+      const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+      const createCallbackTask = async () => {
+        const admission = await this.taskRepo.admitPending({
           task_id: callbackTaskId,
           session_id: targetSessionId,
           full_prompt: callbackMessage,
@@ -1599,7 +1614,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             initial_message_id: callbackTaskId as MessageID,
           },
         });
-      const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+        // Repository admission bypasses create; count the callback once, for the inserting daemon.
+        if (admission.inserted) {
+          runAfterTenantCommit(tenantId, () => this.trackTaskCreated(admission.task));
+        }
+        return admission.task;
+      };
       const callbackTask = tenantId
         ? await runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
             await assertTenantWritable(tenantDb, tenantId);

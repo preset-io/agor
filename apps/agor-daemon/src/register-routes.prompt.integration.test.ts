@@ -1,4 +1,5 @@
 import { setImmediate as nextTurn } from 'node:timers/promises';
+import { analyticsLogger } from '@agor/core/analytics';
 import { DEFAULT_STATIC_TENANT_ID } from '@agor/core/config';
 import {
   BranchRepository,
@@ -8,10 +9,13 @@ import {
   GatewayInboundEventRepository,
   generateId,
   getCurrentTenantDatabaseScope,
+  getCurrentTenantId,
   MessagesRepository,
   RepoRepository,
   runMigrations,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   SessionRepository,
   TaskRepository,
   UsersRepository,
@@ -158,6 +162,7 @@ async function fixture() {
       prompt: string;
       idempotencyTaskId?: TaskID;
       metadata?: Record<string, unknown>;
+      draft?: string;
     },
     extraParams: GatewayAdmissionFenceParams | Record<string, unknown> = {}
   ) =>
@@ -169,6 +174,7 @@ async function fixture() {
     } as AuthenticatedParams) as Promise<Task>;
   return {
     db,
+    tasksService,
     scoped,
     session,
     actor,
@@ -565,6 +571,233 @@ describe('prompt route provenance envelope', () => {
     const f = await fixture();
     const task = await f.prompt({ prompt: 'rebase onto main and rerun the suite' }, stamp());
     expect(deriveTitleFromPrompt(task.full_prompt)).toBe('rebase onto main and rerun the suite');
+  });
+});
+
+describe('prompt admission analytics', () => {
+  function recordTaskCreated() {
+    const events: Array<{
+      tenant: unknown;
+      inTransaction: boolean;
+      properties: Record<string, unknown>;
+      userId: unknown;
+    }> = [];
+    vi.spyOn(analyticsLogger, 'track').mockImplementation((event, properties, identity) => {
+      if (event !== 'task.created') return;
+      events.push({
+        tenant: getCurrentTenantId(),
+        inTransaction: getCurrentTenantDatabaseScope()?.kind === 'tenant',
+        properties: properties as Record<string, unknown>,
+        userId: (identity as { userId?: unknown } | undefined)?.userId,
+      });
+    });
+    return events;
+  }
+  const browser = { provider: 'rest' };
+
+  it('records one task.created per admitted prompt after commit, in the admitting tenant', async () => {
+    const f = await fixture();
+    const events = recordTaskCreated();
+    const task = await f.prompt({ prompt: 'typed by a person' }, browser);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({
+      tenant: DEFAULT_STATIC_TENANT_ID,
+      inTransaction: false,
+      userId: f.actor.user_id,
+      properties: {
+        task_id: task.task_id,
+        authorship: 'human',
+        source: 'agor',
+        origin: null,
+        draft: null,
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain('typed by a person');
+  });
+
+  it('records queued admissions and never a stable-ID replay', async () => {
+    const f = await fixture();
+    const events = recordTaskCreated();
+    await f.scoped(() =>
+      f.taskRepo.createPending({
+        session_id: f.session.session_id,
+        full_prompt: 'older fixture',
+        created_by: f.actor.user_id,
+        status: TaskStatus.QUEUED,
+      })
+    );
+    const queued = await f.prompt({ prompt: 'behind older work' }, browser);
+    expect(queued.status).toBe(TaskStatus.QUEUED);
+    const idempotencyTaskId = generateId() as TaskID;
+    await f.prompt({ prompt: 'stable', idempotencyTaskId });
+    await f.prompt({ prompt: 'stable', idempotencyTaskId });
+    await f.settle();
+    expect(events.map((event) => event.properties.task_id)).toEqual([
+      queued.task_id,
+      idempotencyTaskId,
+    ]);
+  });
+
+  it.each([
+    ['internal producer', {}, {}, 'internal'],
+    ['system-authored continuation', { metadata: { system_authored: true } }, {}, 'system'],
+    ['child completion callback', { metadata: { is_agor_callback: true } }, {}, 'callback'],
+    ['MCP-delivered prompt', {}, 'stamp', 'agent'],
+    [
+      'onboarding welcome prompt',
+      {},
+      { ...browser, _taskAnalyticsOrigin: 'onboarding_bootstrap' },
+      'onboarding_bootstrap',
+    ],
+    [
+      'teammate-dialog first prompt',
+      {},
+      { ...browser, _taskAnalyticsOrigin: 'teammate_bootstrap' },
+      'teammate_bootstrap',
+    ],
+    ['ordinary browser prompt', {}, browser, 'human'],
+  ] as const)('classifies a %s as %s', async (_label, data, params, authorship) => {
+    const f = await fixture();
+    const events = recordTaskCreated();
+    const extra =
+      params === 'stamp'
+        ? {
+            _promptProvenance: {
+              authenticated_by: 'session_token',
+              origin_user_id: f.actor.user_id,
+              origin_user_label: 'relay@example.invalid',
+            },
+          }
+        : params;
+    await f.prompt({ prompt: 'fixture', ...data }, extra);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].properties.authorship).toBe(authorship);
+    expect(events[0].properties.origin).toBe(
+      authorship === 'onboarding_bootstrap' || authorship === 'teammate_bootstrap'
+        ? authorship
+        : null
+    );
+    expect(events[0].properties.draft).toBeNull();
+  });
+
+  it('records nothing when another daemon admitted the stable id after this one looked', async () => {
+    const f = await fixture();
+    const events = recordTaskCreated();
+    const idempotencyTaskId = generateId() as TaskID;
+    // The other daemon's admission commits first; this daemon's pre-transaction reads miss it.
+    await f.scoped(() =>
+      f.taskRepo.createPending({
+        task_id: idempotencyTaskId,
+        session_id: f.session.session_id,
+        full_prompt: 'stable',
+        created_by: f.actor.user_id,
+        status: TaskStatus.QUEUED,
+      })
+    );
+    let racing = true;
+    const findById = TaskRepository.prototype.findById;
+    vi.spyOn(TaskRepository.prototype, 'findById').mockImplementation(function (
+      this: TaskRepository,
+      taskId
+    ) {
+      return racing && taskId === idempotencyTaskId
+        ? Promise.resolve(null)
+        : findById.call(this, taskId);
+    });
+    const admitPending = TaskRepository.prototype.admitPending;
+    vi.spyOn(TaskRepository.prototype, 'admitPending').mockImplementation(function (
+      this: TaskRepository,
+      input
+    ) {
+      racing = false;
+      return admitPending.call(this, input);
+    });
+    await f.prompt({ prompt: 'stable', idempotencyTaskId }).catch(() => undefined);
+    await f.settle();
+    expect(TaskRepository.prototype.admitPending).toHaveBeenCalledOnce();
+    expect(events).toEqual([]);
+  });
+
+  it('attributes each concurrent admission to the tenant that admitted it', async () => {
+    const f = await fixture();
+    const events = recordTaskCreated();
+    // The static fixture config admits a request tenant inherited from trusted context.
+    const admitAs = (tenant: string, prompt: string) =>
+      runWithTenantContext(tenant, () =>
+        f.prompt({ prompt }, { ...browser, tenant: { tenant_id: tenant, source: 'explicit' } })
+      );
+    const [a, b] = await Promise.all([
+      admitAs('tenant-a', 'from a'),
+      admitAs('tenant-b', 'from b'),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    const tenantOf = (taskId: string) =>
+      events.find((event) => event.properties.task_id === taskId)?.tenant;
+    expect(tenantOf(a.task_id)).toBe('tenant-a');
+    expect(tenantOf(b.task_id)).toBe('tenant-b');
+  });
+
+  it('defers service-created Task analytics until commit, and drops them on rollback', async () => {
+    const f = await fixture();
+    const events = recordTaskCreated();
+    const data = () => ({
+      session_id: f.session.session_id,
+      full_prompt: 'service fixture',
+      created_by: f.actor.user_id,
+      status: TaskStatus.CREATED,
+      message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
+      git_state: { ref_at_start: 'main', sha_at_start: 'abc' },
+    });
+    const rollback = new Error('outer rollback');
+    await expect(
+      runWithTenantDatabaseTransaction(f.db, DEFAULT_STATIC_TENANT_ID, async () => {
+        await f.tasksService.create(data());
+        expect(events).toEqual([]);
+        throw rollback;
+      })
+    ).rejects.toBe(rollback);
+    await f.settle();
+    expect(events).toEqual([]);
+    await runWithTenantDatabaseTransaction(f.db, DEFAULT_STATIC_TENANT_ID, async () => {
+      await f.tasksService.create(data());
+      expect(events).toEqual([]);
+    });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0]).toMatchObject({ tenant: DEFAULT_STATIC_TENANT_ID, inTransaction: false });
+  });
+
+  it('records nothing when an enclosing transaction rolls the admission back', async () => {
+    const f = await fixture();
+    const events = recordTaskCreated();
+    const rollback = new Error('outer rollback');
+    await expect(
+      runWithTenantDatabaseTransaction(f.db, DEFAULT_STATIC_TENANT_ID, async () => {
+        await f.prompt({ prompt: 'never committed' }, browser);
+        throw rollback;
+      })
+    ).rejects.toBe(rollback);
+    await f.settle();
+    expect(events).toEqual([]);
+  });
+
+  it('carries closed draft provenance and rejects anything else before admission', async () => {
+    const f = await fixture();
+    const events = recordTaskCreated();
+    await f.prompt({ prompt: 'edited suggestion', draft: 'onboarding_edited' }, browser);
+    await f.prompt({ prompt: 'catalog starter', draft: 'catalog_unchanged' }, browser);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events.map((event) => event.properties)).toMatchObject([
+      { authorship: 'human', draft: 'onboarding_edited' },
+      { authorship: 'human', draft: 'catalog_unchanged' },
+    ]);
+    await expect(f.prompt({ prompt: 'x', draft: 'my secret text' }, browser)).rejects.toThrow(
+      'Invalid draft provenance'
+    );
+    await expect(
+      f.prompt({ prompt: 'x', metadata: { system_authored: false } }, browser)
+    ).rejects.toThrow('Task metadata is internal-only');
+    await f.settle();
+    expect(events).toHaveLength(2);
   });
 });
 

@@ -151,6 +151,12 @@ export function assertTenantWriteAdmission(
   return withFreshTenantWrite(db, tenantId, async () => undefined);
 }
 
+/** Run a synchronous side effect (such as analytics) after the surrounding tenant commit, in `tenantId`. */
+export function runAfterTenantCommit(tenantId: string | undefined, work: () => void): void {
+  const run = () => (tenantId ? runWithTenantContext(tenantId, work) : work());
+  if (!enqueueAfterTenantDatabaseCommit(run)) run();
+}
+
 /** Defer long orchestration work after commit with tenant identity only. */
 export function deferWithTenantContext(
   params: unknown,
