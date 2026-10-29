@@ -666,3 +666,28 @@ export interface TaskQueueMutationResult {
   queue: Pick<Task, 'task_id' | 'queue_position'>[];
   cancelled_task_ids: TaskID[];
 }
+
+/** Origin of an auto-sent first prompt; only `/sessions/:id/initialize` accepts it. Analytics only. */
+export const TASK_ANALYTICS_ORIGINS = ['onboarding_bootstrap', 'teammate_bootstrap'] as const;
+export type TaskAnalyticsOrigin = (typeof TASK_ANALYTICS_ORIGINS)[number];
+
+/** Content-free provenance of a sent composer draft that started as Agor's suggestion. */
+export const PROMPT_DRAFT_PROVENANCES = [
+  'onboarding_unchanged',
+  'onboarding_edited',
+  'catalog_unchanged',
+  'catalog_edited',
+  'teammate_unchanged',
+  'teammate_edited',
+] as const;
+export type PromptDraftProvenance = (typeof PROMPT_DRAFT_PROVENANCES)[number];
+
+/** Who a task's prompt came from, as reported on `task.created`. */
+export type TaskAuthorship =
+  | 'human'
+  | TaskAnalyticsOrigin
+  | 'callback'
+  | 'system'
+  | 'agent'
+  | 'gateway'
+  | 'internal';
