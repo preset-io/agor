@@ -36,6 +36,11 @@ import {
   selectMySessionsLoaded,
   selectMySessionsTruncated,
 } from '../../store/userScope';
+import {
+  isExampleOwned,
+  selectCreatableRepoById,
+  selectExampleOwnerId,
+} from '../../utils/exampleBoard';
 import { useThemedMessage } from '../../utils/message';
 import { runWithLimit } from '../../utils/promisePool';
 import {
@@ -144,12 +149,16 @@ const HomeOnboarding: React.FC<{
   const catalog = useMCPCatalogModal();
   const done = useStoreWithEqualityFn(
     agorStore,
-    (s) => ({
-      repo: s.repoById.size > 0,
-      board: s.boardById.size > 0,
-      mcp: s.mcpServerById.size > 0,
-      invite: s.userById.size > 1,
-    }),
+    (s) => {
+      // The example board, its repo and its owner are not the person's own setup.
+      const exampleOwnerId = selectExampleOwnerId(s);
+      return {
+        repo: selectCreatableRepoById(s).size > 0,
+        board: [...s.boardById.values()].some((b) => !isExampleOwned(b, exampleOwnerId)),
+        mcp: s.mcpServerById.size > 0,
+        invite: s.userById.size > (exampleOwnerId ? 2 : 1),
+      };
+    },
     shallow
   );
   const steps = [

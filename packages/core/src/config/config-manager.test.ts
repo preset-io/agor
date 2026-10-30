@@ -31,6 +31,7 @@ import {
   getReposDir,
   getTenantDataRoot,
   initConfig,
+  isExampleBoardEnabled,
   isManagedBranchPath,
   loadConfig,
   loadConfigSync,
@@ -2767,5 +2768,22 @@ describe('security.private_outbound_destinations', () => {
     expect(() => assertValidRawConfig(withDestinations(entries))).toThrow(
       'Config error: security.private_outbound_destinations must be an array of at most 64 entries'
     );
+  });
+});
+
+describe('isExampleBoardEnabled', () => {
+  it('is off by default, follows config, and lets AGOR_EXAMPLE_BOARD override it', () => {
+    expect(isExampleBoardEnabled({}, {})).toBe(false);
+    expect(isExampleBoardEnabled({ teammates: { example_board: true } }, {})).toBe(true);
+    expect(isExampleBoardEnabled({}, { AGOR_EXAMPLE_BOARD: 'true' })).toBe(true);
+    expect(
+      isExampleBoardEnabled({ teammates: { example_board: true } }, { AGOR_EXAMPLE_BOARD: 'false' })
+    ).toBe(false);
+  });
+
+  it('rejects a non-boolean config value', () => {
+    expect(() =>
+      assertValidRawConfig({ teammates: { example_board: 'yes' } } as unknown as AgorConfig)
+    ).toThrow('teammates.example_board must be a boolean');
   });
 });

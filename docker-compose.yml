@@ -156,6 +156,8 @@ services:
       # artifacts). Pure DB inserts (no git/network). Composes with SEED; the
       # recommended combo for instant E2E testing is SEED=true LOAD_FIXTURES=true
       - LOAD_FIXTURES=${LOAD_FIXTURES:-false}
+      # Seed the read-only example board when this start creates the workspace
+      - AGOR_EXAMPLE_BOARD=${AGOR_EXAMPLE_BOARD:-false}
 
       # Pass through API keys from host (if set)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

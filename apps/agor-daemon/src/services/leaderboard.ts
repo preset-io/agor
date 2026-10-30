@@ -18,6 +18,7 @@ import {
   inArray,
   jsonExtract,
   lte,
+  notExampleBoardOwned,
   type SQL,
   sessions,
   sql,
@@ -237,6 +238,7 @@ export class LeaderboardService {
       normalizeStringFilterValues(userId, userIdsQuery)
     );
     if (userFilter) conditions.push(userFilter);
+    conditions.push(notExampleBoardOwned(tasks.created_by));
 
     const branchFilter = stringFilter(
       sessions.branch_id,

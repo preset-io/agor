@@ -12,10 +12,12 @@ import {
 } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEnsureBranches } from '../../hooks/useEnsureRows';
+import { useAgorStore } from '../../store/agorStore';
 import { rowsOf } from '../../store/idReads';
 import { holdRows, type RowHold } from '../../store/retention';
 import { sessionListQuery } from '../../store/sessionListQuery';
 import { fillOnDemand } from '../../store/userScope';
+import { isExampleOwned, selectExampleOwnerId } from '../../utils/exampleBoard';
 import {
   type ChipFilter,
   EMPTY_COUNTS,
@@ -170,6 +172,7 @@ export function useGlobalSearch({
   flush: () => void;
 } {
   const { debouncedQuery, flush } = useDebouncedSearchQuery(query);
+  const exampleOwnerId = useAgorStore(selectExampleOwnerId);
   const serverMatches = useServerSearch(
     client,
     debouncedQuery,
@@ -187,6 +190,7 @@ export function useGlobalSearch({
       return { results: EMPTY_RESULTS, counts: EMPTY_COUNTS };
     }
     const served = serverMatches?.query === trimmed ? serverMatches : null;
+    const notExample = (row: { created_by?: string }) => !isExampleOwned(row, exampleOwnerId);
 
     // Counts must be independent of `activeTypeChip`: an inactive chip still
     // shows its real match count so the badge tells you what's behind that
@@ -199,7 +203,7 @@ export function useGlobalSearch({
 
     // Sessions (timestamp field is `last_updated`, not `updated_at`)
     const sessions = Array.from(sessionById.values())
-      .filter((s) => !s.archived)
+      .filter((s) => !s.archived && notExample(s))
       .filter((s) => !ownedByMe || s.created_by === currentUserId)
       .filter(
         (s) =>
@@ -212,6 +216,7 @@ export function useGlobalSearch({
     // both row variants (teammate displayName is included), and the type
     // split below uses `isTeammate()` to bucket matched rows.
     const allBranches = Array.from(branchById.values())
+      .filter(notExample)
       .filter((b) => !ownedByMe || b.created_by === currentUserId)
       .filter(
         (b) =>
@@ -224,14 +229,14 @@ export function useGlobalSearch({
 
     // Artifacts (filter archived — useAgorData keeps them in the map regardless)
     const arts = Array.from(artifactById.values())
-      .filter((a) => !a.archived)
+      .filter((a) => !a.archived && notExample(a))
       .filter((a) => !ownedByMe || a.created_by === currentUserId)
       .filter((a) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.artifact(a)))
       .sort(byTimestamp((a) => a.updated_at));
 
     // Boards (filter archived)
     const bs = Array.from(boardById.values())
-      .filter((b) => !b.archived)
+      .filter((b) => !b.archived && notExample(b))
       .filter((b) => !ownedByMe || b.created_by === currentUserId)
       .filter((b) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.board(b)))
       .sort(byTimestamp((b) => b.last_updated));
@@ -292,6 +297,7 @@ export function useGlobalSearch({
     boardById,
     mcpServerById,
     serverMatches,
+    exampleOwnerId,
   ]);
 
   // Parent-branch labels come from the map: read the shown rows' parents it lacks.

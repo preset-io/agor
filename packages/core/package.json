@@ -292,6 +292,12 @@
       "import": "./dist/seed/index.js",
       "default": "./dist/seed/index.js"
     },
+    "./seed/example-board": {
+      "source": "./src/seed/example-board/index.ts",
+      "types": "./dist/seed/example-board/index.d.ts",
+      "import": "./dist/seed/example-board.js",
+      "default": "./dist/seed/example-board.js"
+    },
     "./seed/dev-fixtures": {
       "source": "./src/seed/dev-fixtures.ts",
       "types": "./dist/seed/dev-fixtures.d.ts",

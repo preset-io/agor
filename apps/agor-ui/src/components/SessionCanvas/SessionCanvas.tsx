@@ -114,6 +114,11 @@ import {
   notConnectedMessage,
   sessionStartedMessageNotSent,
 } from '../../utils/connectionErrors';
+import {
+  EXAMPLE_NOT_AVAILABLE,
+  isExampleOwned,
+  selectExampleOwnerId,
+} from '../../utils/exampleBoard';
 import { useThemedMessage } from '../../utils/message';
 import { REACT_FLOW_DRAG_HANDLE_SELECTOR } from '../../utils/reactFlowDragClasses';
 import { buildScopedBoardCss } from '../../utils/sanitizeCss';
@@ -575,7 +580,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const cardById = useAgorStore(selectCardById);
     const userById = useAgorStore(selectUserById);
     const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
-    const canEditBoard = useCanManageBoard(client, board ?? undefined, currentUser) && !readOnly;
+    const exampleOwnerId = useAgorStore(selectExampleOwnerId);
+    const isExampleBoard = isExampleOwned(board, exampleOwnerId);
+    const canEditBoard =
+      useCanManageBoard(client, board ?? undefined, currentUser) && !readOnly && !isExampleBoard;
     // Until this board's partition is loaded (e.g. right after a reconnect
     // unloaded it), its cached placements may be stale and its record may be
     // the lean one without zone geometry: a drag would then persist
@@ -587,7 +595,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // canvas mutations require board.edit. The daemon applies the same global
     // member floor plus board-view authorization on comment creation.
     const canComment =
-      !readOnly && Boolean(currentUser && hasMinimumRole(currentUser.role, ROLES.MEMBER));
+      !readOnly &&
+      !isExampleBoard &&
+      Boolean(currentUser && hasMinimumRole(currentUser.role, ROLES.MEMBER));
     // The single fence for every board-scoped write (`useBoardMutationGuard`).
     // A write captures a ticket when it is queued or its dialog opens, and the
     // ticket is rechecked immediately before every dispatch: a write decided
@@ -596,14 +606,18 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const commentGuard = useBoardMutationGuard(board?.board_id, canComment);
     const canMutateBoard = boardGuard.canMutate;
     const canMutateComments = commentGuard.canMutate;
-    const boardMutationMessage = !canEditBoard
-      ? 'You do not have permission to edit this board'
-      : !boardReady
-        ? 'This board is still loading'
-        : mutationGate.message;
+    const boardMutationMessage = isExampleBoard
+      ? EXAMPLE_NOT_AVAILABLE
+      : !canEditBoard
+        ? 'You do not have permission to edit this board'
+        : !boardReady
+          ? 'This board is still loading'
+          : mutationGate.message;
     const commentMutationMessage = canComment
       ? mutationGate.message
-      : 'You do not have permission to comment on this board';
+      : isExampleBoard
+        ? EXAMPLE_NOT_AVAILABLE
+        : 'You do not have permission to comment on this board';
 
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
@@ -3579,7 +3593,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // The connection gate is global; each node carries its narrower
             // authorization (board.edit for structure, author/admin for
             // comments). Selection/focus remain available in read-only mode.
-            nodesDraggable={mutationGate.canMutate && !readOnly}
+            nodesDraggable={mutationGate.canMutate && !readOnly && !isExampleBoard}
             nodesConnectable={false}
             elementsSelectable={true}
             elevateNodesOnSelect={false}

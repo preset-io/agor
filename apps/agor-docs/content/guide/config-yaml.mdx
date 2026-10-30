@@ -271,6 +271,26 @@ response headers should include `Sec-WebSocket-Extensions: permessage-deflate` w
 is on, and no such header when it is off. REST responses use HTTP compression and are not
 affected by this setting.
 
+## Example board for new workspaces
+
+New workspaces can start with a read-only example board: one made-up teammate at work, with
+sessions, sub-sessions, a fork, artifacts and scheduled runs, so people can look around before
+they connect an AI. It is off by default:
+
+```yaml
+teammates:
+  example_board: true # default: false
+```
+
+`AGOR_EXAMPLE_BOARD=true` (or `false`) overrides the file. The board is added only when a
+workspace is first created (the first start of a new install, or the first login to a new hosted
+workspace). Turning the setting on never adds it to an existing workspace.
+
+Everything on it belongs to an "Agor examples" account that cannot sign in. Everyone else can
+view it, nothing on it runs (its schedules are off), and each person can hide it for
+themselves. It stays out of search, Home, usage totals and gateway targets, and it is never
+offered as a primary teammate. To remove it for everyone, archive the board.
+
 ## Local password policy
 
 The effective daemon config owns local password policy. New installations materialize the

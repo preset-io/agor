@@ -6,6 +6,7 @@ import {
   eq,
   gte,
   lt,
+  notExampleBoardOwned,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   select,
@@ -52,7 +53,13 @@ async function countCreatedRows(
 ): Promise<number> {
   const row = await select(db, { value: count() })
     .from(table)
-    .where(and(gte(table.created_at, start), lt(table.created_at, end)))
+    .where(
+      and(
+        gte(table.created_at, start),
+        lt(table.created_at, end),
+        notExampleBoardOwned(table.created_by)
+      )
+    )
     .one();
   return Number(row?.value ?? 0);
 }
@@ -66,7 +73,13 @@ async function addDistinctCreatedBy(
 ): Promise<void> {
   const rows = await select(db, { createdBy: table.created_by })
     .from(table)
-    .where(and(gte(table.created_at, start), lt(table.created_at, end)))
+    .where(
+      and(
+        gte(table.created_at, start),
+        lt(table.created_at, end),
+        notExampleBoardOwned(table.created_by)
+      )
+    )
     .groupBy(table.created_by)
     .all();
 
@@ -87,7 +100,13 @@ async function getTaskUsageRows(
   })
     .from(tasks)
     .innerJoin(sessions, eq(tasks.session_id, sessions.session_id))
-    .where(and(gte(tasks.created_at, start), lt(tasks.created_at, end)))
+    .where(
+      and(
+        gte(tasks.created_at, start),
+        lt(tasks.created_at, end),
+        notExampleBoardOwned(tasks.created_by)
+      )
+    )
     .all()) as TaskUsageRow[];
 }
 

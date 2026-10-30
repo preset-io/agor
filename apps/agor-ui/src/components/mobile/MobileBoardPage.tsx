@@ -7,12 +7,14 @@ import { useTrackBoardVisit } from '../../hooks/useRecentBoards';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { makeBranchesForBoardSelector } from '../../store/selectors';
+import { isExampleOwned, selectExampleOwnerId } from '../../utils/exampleBoard';
 import { OPEN_BOARD_SWITCHER_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BoardTeammatePanel, type BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { useBoardTeammatePanelData } from '../BoardTeammatePanel/useBoardTeammatePanelData';
 import type { BranchModalTab } from '../BranchModal';
 import { CompactNotice } from '../CompactNotice';
+import { ExampleBoardBanner } from '../ExampleBoard/ExampleBoard';
 import { mobilePageStyle } from './constants';
 
 // React Flow stays out of the shell bundle until a board is opened.
@@ -107,6 +109,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   );
 
   const boards = useMemo(() => Array.from(boardById.values()), [boardById]);
+  const exampleOwnerId = useAgorStore(selectExampleOwnerId);
   // Shallow-equal like desktop: unrelated socket churn keeps the array, so the canvas stays put.
   const boardBranches = useStoreWithEqualityFn(
     agorStore,
@@ -179,6 +182,9 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           onUpdateBoard={onUpdateBoard}
         />
       </div>
+      {board && isExampleOwned(board, exampleOwnerId) && (
+        <ExampleBoardBanner boardId={board.board_id} />
+      )}
       {!settingsHydrated && (
         <Typography.Text
           role="status"
