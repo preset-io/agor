@@ -7,6 +7,7 @@
 
 import type { PersistedAgenticToolName } from './agentic-tool';
 import type { MessageID, SessionID, TaskID } from './id';
+import type { TaskMetadata } from './task';
 import type { WidgetMessageMetadata } from './widget';
 
 /**
@@ -258,6 +259,9 @@ export interface Message {
 
   /** Agent-specific metadata */
   metadata?: {
+    /** Server-stamped origin copied from the admitted Task. */
+    prompt_provenance?: TaskMetadata['prompt_provenance'];
+
     /** Model used for this message */
     model?: string;
 
@@ -342,6 +346,7 @@ export const LEAN_TRANSCRIPT_METADATA_FIELDS = [
   'widget_id',
   'widget',
   'is_agor_callback',
+  'prompt_provenance',
   'is_btw_result',
   'btw_prompt',
   'btw_session_id',

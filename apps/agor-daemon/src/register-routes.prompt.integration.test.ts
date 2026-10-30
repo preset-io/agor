@@ -504,6 +504,19 @@ describe('prompt route provenance envelope', () => {
       placement: 'prefix',
     });
 
+    await vi.waitFor(() => expect(f.launchObservations).toHaveLength(1));
+    const [message] = await f.scoped(() => f.messages.findByTaskId(task.task_id));
+    expect(message.metadata?.prompt_provenance).toEqual(task.metadata?.prompt_provenance);
+    expect(message.content).toBe(task.full_prompt);
+    const lean = await f.scoped(() => f.messages.findPage({ taskId: task.task_id, lean: true }));
+    expect(lean.data[0].metadata?.prompt_provenance).toEqual(task.metadata?.prompt_provenance);
+    const otherTenant = 'prompt-provenance-other-tenant';
+    await f.scoped(async () => {
+      await expect(
+        runWithTenantDatabaseScope(f.db, otherTenant, () => f.messages.findById(message.message_id))
+      ).rejects.toThrow('Cannot enter tenant scope');
+    });
+
     // Durable, not just returned: the recipient reads this from the row.
     const persisted = await f.scoped(() => f.taskRepo.findById(task.task_id));
     expect(persisted?.full_prompt).toBe(task.full_prompt);
