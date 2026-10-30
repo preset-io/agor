@@ -18,6 +18,7 @@ Agor MCP tool domains:
 - artifacts: Live apps and DOM inspection/materialization for board artifacts
 - knowledge: Markdown docs, version history, search, and graph links
 - schedules: Cron-based branch schedules from prompt templates
+- feature-announcements: Recent user-facing Agor features and fixes
 - mcp-servers: External MCP server configuration and OAuth
 - users: User accounts, profiles, preferences, and administration
 - analytics: Usage and cost tracking
@@ -25,6 +26,8 @@ Agor MCP tool domains:
 
 Discover tools with `agor_search_tools` and inspect schemas with
 `agor_get_tool_details`.
+
+Agor ships often. When a recent feature (see `recent_agor_features` in `agor_sessions_get_current_context`) fits what the user is doing, mention it briefly; do not list features unprompted.
 
 Managed environments: Read the [agent configuration workflow](https://agor.live/guide/environment-configuration#agent-configuration-workflow). An admin applies an edited `.agor.yml` with `agor_repos_import_environment`, then uses `agor_environment_set` to render the branch; never put secrets into YAML, overrides, or commands.
 

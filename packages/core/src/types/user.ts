@@ -1,5 +1,6 @@
 import type { CodexApprovalPolicy, CodexNetworkAccess, CodexSandboxMode } from './agentic-tool';
 import { type AgenticToolName, DEFAULT_AGENTIC_TOOL_NAME, isAgenticToolName } from './agentic-tool';
+import type { FeatureAnnouncementsPreferences } from './feature-announcements';
 import type { BranchID, UserID } from './id';
 import type { EffortLevel, PermissionMode } from './session';
 
@@ -492,6 +493,8 @@ export interface UserPreferences {
   use_slack_avatar?: boolean;
   /** Home "My work" layout. Undefined defaults to list. */
   homeWorkView?: HomeWorkView;
+  /** What's new: drawer and modal seen state, merged server-side by `feature-announcements/mark-seen`. */
+  featureAnnouncements?: FeatureAnnouncementsPreferences;
   // Future preferences can be added here
   [key: string]: unknown;
 }

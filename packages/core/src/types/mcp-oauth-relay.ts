@@ -1,9 +1,12 @@
+/** Audience Agor Cloud verifies for every Cell runtime-service assertion. */
+export const CLOUD_RUNTIME_SERVICE_AUDIENCE = 'agor-cloud:executor-runs';
+
 /** v1 wire contract shared with Cloud's packages/contracts/src/mcp-oauth-relay.ts. */
 export const MCP_OAUTH_RELAY = {
   preparePath: '/api/runtime-internal/mcp-oauth/relay/prepare',
   callbackPrefix: '/api/mcp-oauth/relay/callback/',
   deliveryPath: '/api/cloud/mcp-oauth/callback',
-  serviceAudience: 'agor-cloud:executor-runs',
+  serviceAudience: CLOUD_RUNTIME_SERVICE_AUDIENCE,
   serviceScope: 'mcp_oauth:relay',
   callbackPurpose: 'mcp_oauth_callback',
 } as const;

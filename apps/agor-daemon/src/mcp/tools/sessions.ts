@@ -22,6 +22,9 @@ import {
   type AgenticToolName,
   type Board,
   type BranchID,
+  FEATURE_ANNOUNCEMENTS_LIMITS,
+  FEATURE_ANNOUNCEMENTS_SERVICE,
+  type FeatureAnnouncementsFeed,
   getSessionType,
   getUserPrimaryAgenticTool,
   type Session,
@@ -34,6 +37,10 @@ import {
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
+import {
+  featureAnnouncementItemsForAgents,
+  shortBrief,
+} from '../../services/feature-announcements.js';
 import type { SessionBulkArchiveResult, SessionParams } from '../../services/sessions.js';
 import { requireActiveAgenticTool } from '../../utils/agentic-tool-runtime.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
@@ -596,6 +603,28 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         } catch {
           // branch may have been deleted
         }
+      }
+
+      // Recently shipped features this user can see, so the agent can mention
+      // one when it fits. Kept here rather than in the static system prompt.
+      try {
+        const feed = (await ctx.app
+          .service(FEATURE_ANNOUNCEMENTS_SERVICE)
+          .find(ctx.baseServiceParams)) as FeatureAnnouncementsFeed;
+        // Briefs stay short here; the full text is in agor_feature_announcements_list.
+        const recent = featureAnnouncementItemsForAgents(feed, {
+          since: new Date(Date.now() - FEATURE_ANNOUNCEMENTS_LIMITS.recentFeatureDays * 86_400_000),
+          limit: FEATURE_ANNOUNCEMENTS_LIMITS.recentFeatureMax,
+        }).map(({ title, agent_brief, docs_url, published_at, seen_by_user }) => ({
+          title,
+          agent_brief: shortBrief(agent_brief),
+          docs_url,
+          published_at,
+          seen_by_user,
+        }));
+        if (recent.length > 0) result.recent_agor_features = recent;
+      } catch {
+        // non-critical, skip
       }
 
       return textResult(result);

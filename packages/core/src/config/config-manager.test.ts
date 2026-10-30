@@ -883,6 +883,18 @@ describe('loadConfig', () => {
     }
   );
 
+  it('accepts feature announcement sources and rejects unknown ones', () => {
+    for (const source of ['bundled', 'cloud', 'off'] as const) {
+      expect(() => assertValidRawConfig({ feature_announcements: { source } })).not.toThrow();
+    }
+    expect(() =>
+      assertValidRawConfig({ feature_announcements: { source: 'github' } } as unknown as AgorConfig)
+    ).toThrow(/feature_announcements.source must be one of bundled, cloud, off/);
+    expect(() =>
+      assertValidRawConfig({ feature_announcements: { url: 'https://x' } } as unknown as AgorConfig)
+    ).toThrow(/feature_announcements.url/);
+  });
+
   it('rejects invalid managed environment execution modes', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');

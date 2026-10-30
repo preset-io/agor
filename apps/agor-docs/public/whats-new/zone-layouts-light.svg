@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 320" width="640" height="320" role="img" aria-label="A zone arranging six cards in a three by two grid">
+  <rect width="640" height="320" fill="#f5f7fa"/>
+  <rect x="64" y="40" width="512" height="240" rx="16" fill="#e6f0ff" stroke="#4096ff" stroke-width="2" stroke-dasharray="8 6"/>
+  <rect x="84" y="56" width="104" height="24" rx="12" fill="#d6e4ff"/>
+  <text x="136" y="72" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600" fill="#1d39c4">Grid · 6</text>
+  <g>
+    <rect x="92" y="96" width="140" height="72" rx="10" fill="#ffffff" stroke="#c9d1dc" stroke-width="1.5"/>
+    <circle cx="110" cy="116" r="6" fill="#4096ff" opacity="0.85"/>
+    <rect x="124" y="111" width="88" height="10" rx="5" fill="#dfe4ea"/>
+    <rect x="108" y="134" width="108" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+    <rect x="108" y="148" width="54" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+  </g>
+  <g>
+    <rect x="256" y="96" width="140" height="72" rx="10" fill="#ffffff" stroke="#c9d1dc" stroke-width="1.5"/>
+    <circle cx="274" cy="116" r="6" fill="#4096ff" opacity="0.85"/>
+    <rect x="288" y="111" width="88" height="10" rx="5" fill="#dfe4ea"/>
+    <rect x="272" y="134" width="108" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+    <rect x="272" y="148" width="54" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+  </g>
+  <g>
+    <rect x="420" y="96" width="140" height="72" rx="10" fill="#ffffff" stroke="#c9d1dc" stroke-width="1.5"/>
+    <circle cx="438" cy="116" r="6" fill="#4096ff" opacity="0.85"/>
+    <rect x="452" y="111" width="88" height="10" rx="5" fill="#dfe4ea"/>
+    <rect x="436" y="134" width="108" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+    <rect x="436" y="148" width="54" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+  </g>
+  <g>
+    <rect x="92" y="192" width="140" height="72" rx="10" fill="#ffffff" stroke="#c9d1dc" stroke-width="1.5"/>
+    <circle cx="110" cy="212" r="6" fill="#4096ff" opacity="0.85"/>
+    <rect x="124" y="207" width="88" height="10" rx="5" fill="#dfe4ea"/>
+    <rect x="108" y="230" width="108" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+    <rect x="108" y="244" width="54" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+  </g>
+  <g>
+    <rect x="256" y="192" width="140" height="72" rx="10" fill="#ffffff" stroke="#c9d1dc" stroke-width="1.5"/>
+    <circle cx="274" cy="212" r="6" fill="#4096ff" opacity="0.85"/>
+    <rect x="288" y="207" width="88" height="10" rx="5" fill="#dfe4ea"/>
+    <rect x="272" y="230" width="108" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+    <rect x="272" y="244" width="54" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+  </g>
+  <g>
+    <rect x="420" y="192" width="140" height="72" rx="10" fill="#ffffff" stroke="#c9d1dc" stroke-width="1.5"/>
+    <circle cx="438" cy="212" r="6" fill="#4096ff" opacity="0.85"/>
+    <rect x="452" y="207" width="88" height="10" rx="5" fill="#dfe4ea"/>
+    <rect x="436" y="230" width="108" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+    <rect x="436" y="244" width="54" height="8" rx="4" fill="#dfe4ea" opacity="0.7"/>
+  </g>
+</svg>

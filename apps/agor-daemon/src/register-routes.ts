@@ -2,9 +2,16 @@ import { resolveClaudeOAuthCapability } from '@agor/core/config';
 import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
 import {
   BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
+  FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,
+  FEATURE_ANNOUNCEMENTS_SERVICE,
   PRODUCT_ANALYTICS_SERVICE,
 } from '@agor/core/types';
 import { BranchWorkspaceNotificationService } from './services/branch-workspace-notification';
+import {
+  createFeatureAnnouncementsProvider,
+  FeatureAnnouncementsMarkSeenService,
+  FeatureAnnouncementsService,
+} from './services/feature-announcements';
 import { ProductAnalyticsService } from './services/product-analytics.js';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
@@ -1090,6 +1097,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     config,
     jwtSecret,
   });
+
+  // One provider per daemon replica; `cloud` polls on its own timer.
+  const featureAnnouncementsProvider = createFeatureAnnouncementsProvider(config);
 
   const registerLongAuthenticatedRoute: typeof registerAuthenticatedRouteUnscoped = (
     routeApp,
@@ -4533,6 +4543,27 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     { create: { role: ROLES.VIEWER, action: 'dismiss branch workspace notifications' } },
     requireAuth
   );
+  // What's new: notes are platform content held in memory; the only tenant
+  // data read or written is the caller's own users row.
+  const featureAnnouncementsFeed = new FeatureAnnouncementsService(
+    featureAnnouncementsProvider,
+    new UsersRepository(db)
+  );
+  registerAuthenticatedRoute(
+    app,
+    FEATURE_ANNOUNCEMENTS_SERVICE,
+    featureAnnouncementsFeed,
+    { find: { role: ROLES.VIEWER, action: 'read feature announcements' } },
+    requireAuth
+  );
+  registerAuthenticatedRoute(
+    app,
+    FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,
+    new FeatureAnnouncementsMarkSeenService(featureAnnouncementsFeed, app),
+    { create: { role: ROLES.VIEWER, action: 'mark feature announcements seen' } },
+    requireAuth
+  );
+
   app.service(BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE).hooks({
     after: {
       create: [
@@ -6897,6 +6928,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           : { required: false, ready: true },
         features: {
           environmentDisclaimerMarkdown: config.environment_disclaimer_markdown,
+          featureAnnouncements: featureAnnouncementsProvider.source,
           environmentCommands: environmentCommandCapabilities(config),
           permanentBranchDeletion: permanentBranchDeletionCapability(config),
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),

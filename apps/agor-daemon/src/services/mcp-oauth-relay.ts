@@ -1,4 +1,3 @@
-import { createHash, createPrivateKey, type KeyObject, randomUUID } from 'node:crypto';
 import {
   type AgorConfig,
   type ResolvedExternalLaunchProvider,
@@ -17,6 +16,13 @@ import {
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { resolveVerificationKey } from '../auth/launch-auth.js';
+import {
+  type CloudRuntimeCredential,
+  loadCloudRuntimeCredential,
+  readBoundedText,
+  sha256Hex,
+  signCloudRuntimeAssertion,
+} from '../utils/cloud-runtime-credential.js';
 
 // Ordinary bounded clock skew, not a longer assertion lifetime or a retry permit.
 const CLOCK_SKEW_SECONDS = 30;
@@ -40,36 +46,14 @@ const callbackSchema = z
   .strict()
   .refine((value) => Boolean(value.code) !== Boolean(value.error));
 
-export function relayBodyHash(body: string | Buffer): string {
-  return createHash('sha256').update(body).digest('hex');
-}
-
-async function readBoundedText(response: Response, maxBytes: number): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) return '';
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      throw new Error('Response too large');
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks, total).toString('utf8');
-}
+export const relayBodyHash = sha256Hex;
 
 /** No provider exchange/refresh proxy. This client carries routing material only. */
 export class MCPOAuthRelay {
   readonly origin: string;
   readonly cellId: string;
   readonly launch: ResolvedExternalLaunchProvider;
-  private readonly privateKey: KeyObject;
-  private readonly credentialId: string;
-  private readonly keyId?: string;
+  private readonly credential: CloudRuntimeCredential;
 
   constructor(config: AgorConfig, env: NodeJS.ProcessEnv = process.env) {
     const relay = config.mcp_oauth_relay;
@@ -94,31 +78,9 @@ export class MCPOAuthRelay {
       throw new Error('MCP callback relay requires an exact trusted HTTPS origin');
     }
     // The Cell's existing runtime service credential, provisioned by Cloud.
-    const cellId = env.AGOR_CLOUD_CELL_ID;
-    const credentialId = env.AGOR_CLOUD_RUNTIME_CREDENTIAL_ID;
-    const keyId = env.AGOR_CLOUD_RUNTIME_KEY_ID || undefined;
-    if (
-      !cellId ||
-      cellId.length > 200 ||
-      !credentialId ||
-      credentialId.length > 200 ||
-      (keyId?.length ?? 0) > 200
-    )
-      throw new Error('Invalid MCP relay service identity');
-    try {
-      this.privateKey = createPrivateKey(env.AGOR_CLOUD_RUNTIME_SIGNING_KEY ?? '');
-      if (
-        this.privateKey.asymmetricKeyType !== 'rsa' ||
-        (this.privateKey.asymmetricKeyDetails?.modulusLength ?? 0) < 2048
-      )
-        throw new Error();
-    } catch {
-      throw new Error('MCP callback relay requires the Cell RS256 service key');
-    }
+    this.credential = loadCloudRuntimeCredential(env);
     this.origin = origin.origin;
-    this.cellId = cellId;
-    this.credentialId = credentialId;
-    this.keyId = keyId;
+    this.cellId = this.credential.cellId;
     this.launch = launch.settings;
   }
 
@@ -146,23 +108,10 @@ export class MCPOAuthRelay {
         throw new Error('MCP relay callback binding mismatch');
       reason = 'oauth_relay_prepare_signing_failed';
       const body = JSON.stringify(input);
-      const authorization = jwt.sign(
-        {
-          cell_id: this.cellId,
-          credential_id: this.credentialId,
-          scope: MCP_OAUTH_RELAY.serviceScope,
-          body_sha256: relayBodyHash(body),
-        },
-        this.privateKey,
-        {
-          algorithm: 'RS256',
-          issuer: `agor-cell:${this.cellId}`,
-          audience: MCP_OAUTH_RELAY.serviceAudience,
-          expiresIn: 60,
-          jwtid: randomUUID(),
-          ...(this.keyId ? { keyid: this.keyId } : {}),
-        }
-      );
+      const authorization = signCloudRuntimeAssertion(this.credential, {
+        scope: MCP_OAUTH_RELAY.serviceScope,
+        body,
+      });
       reason = 'oauth_relay_prepare_transport_failed';
       category = undefined;
       // Plain fetch, not safeOutboundFetch: the destination is the trusted,

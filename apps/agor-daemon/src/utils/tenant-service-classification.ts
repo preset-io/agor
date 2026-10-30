@@ -1,5 +1,7 @@
 import {
   BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
+  FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,
+  FEATURE_ANNOUNCEMENTS_SERVICE,
   PRODUCT_ANALYTICS_SERVICE,
 } from '@agor/core/types';
 import {
@@ -131,6 +133,14 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   [BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE]: {
     scopeClass: 'scoped',
     why: 'Registered through the tenant-scoped authenticated route registrar; metadata-only acknowledgement.',
+  },
+  [FEATURE_ANNOUNCEMENTS_SERVICE]: {
+    scopeClass: 'scoped',
+    why: 'Tenant-scoped authenticated route; notes are in-memory platform content and the only tenant read is the caller users row.',
+  },
+  [FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE]: {
+    scopeClass: 'scoped',
+    why: 'Tenant-scoped authenticated route; writes only the caller users.preferences.featureAnnouncements through users.patch.',
   },
   // --------------------------------------------------------------------------
   // The two Slack lanes' browser preflights. Registered with a bare `app.use`

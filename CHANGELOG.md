@@ -35,6 +35,7 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ### Features
 
+- **Feature announcements** — a What's new bell in the navbar lists recent user-facing changes, major ones appear once in a What's new window, and **Ask my teammate** reviews them against your work. Agents can read them through MCP. Announcements come from this CHANGELOG on self-hosted installs or from Agor Cloud; `feature_announcements.source: off` hides them. ([#3182](https://github.com/preset-io/agor/pull/3182))
 - **Claude Haiku 5.5** — adds `claude-haiku-5-5` (native 1M context) to the Claude model picker and the OpenCode Anthropic catalog, and bundles Claude Agent SDK 0.3.293, the first release whose runtime knows the model. Haiku 4.5 is unchanged and stays selectable. ([#3130](https://github.com/preset-io/agor/pull/3130))
 
 ### Security

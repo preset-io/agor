@@ -3,6 +3,8 @@ import {
   BRANCH_DELETION_REPORT_SERVICE,
   BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
+  FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,
+  FEATURE_ANNOUNCEMENTS_SERVICE,
   KNOWLEDGE_TRANSFER,
   MCP_OAUTH_RELAY,
   OWNERSHIP_TRANSFER_SERVICES,
@@ -284,6 +286,14 @@ export const REALTIME_PUBLISH_POLICY = {
   [BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE]: {
     audience: 'none',
     why: 'Acknowledgement response; updated branch publishes through branches.',
+  },
+  [FEATURE_ANNOUNCEMENTS_SERVICE]: {
+    audience: 'none',
+    why: 'Per-caller feed; notes are read on demand and seen state is per user.',
+  },
+  [FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE]: {
+    audience: 'none',
+    why: 'Per-caller feed reply; the preference change publishes through users.',
   },
   'branches/:id/clean': {
     audience: 'none',

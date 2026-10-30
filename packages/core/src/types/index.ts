@@ -16,6 +16,7 @@ export * from './context';
 export * from './environment-command';
 export * from './executor-admission';
 export * from './feathers';
+export * from './feature-announcements';
 export * from './file';
 export * from './gateway';
 export * from './group';

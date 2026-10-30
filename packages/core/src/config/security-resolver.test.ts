@@ -16,6 +16,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { loadCuratedCatalog } from '../mcp-catalog/curated-loader';
 import {
+  FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC,
   getDefaultGitConfigParameters,
   gitConfigParameterLooksSecret,
   MCP_CATALOG_CSP_IMG_SRCS,
@@ -49,6 +50,11 @@ describe('resolveSecurity — CSP defaults', () => {
   it('allows Slack avatar images by default', () => {
     const { csp } = resolveSecurity(EMPTY, { daemonUrl: 'http://localhost:3030' });
     expect(csp.directives['img-src']).toContain(SLACK_AVATAR_CSP_IMG_SRC);
+  });
+
+  it("allows What's new visuals from the docs site by default", () => {
+    const { csp } = resolveSecurity(EMPTY, { daemonUrl: 'http://localhost:3030' });
+    expect(csp.directives['img-src']).toContain(FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC);
   });
 
   it('allows checked-in MCP catalog logo origins by default', () => {
