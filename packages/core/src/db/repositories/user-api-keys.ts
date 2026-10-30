@@ -17,7 +17,8 @@ import {
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { userApiKeys } from '../schema';
-import { enqueueTenantDatabasePostCommitCallback } from '../tenant-context';
+import { enqueueTenantDatabasePostCommitCallback, getCurrentTenantId } from '../tenant-context';
+import { readTenantWriteGate } from '../tenant-write-gate';
 
 const KEY_PREFIX = PERSONAL_API_KEY_PREFIX;
 const KEY_PREFIX_LENGTH = 12;
@@ -161,6 +162,10 @@ export class UserApiKeysRepository {
    * leaderboard analytics scans). If a transaction is active, defer this
    * best-effort write until after commit and perform the actual UPDATE directly
    * so it cannot re-enqueue itself.
+   *
+   * The write is skipped while the tenant is write-gated. Authentication keeps
+   * working during a freeze; only this bookkeeping stops. It never throws for
+   * the gate, because a post-commit failure would fail the committed request.
    */
   async updateLastUsed(id: string): Promise<void> {
     if (enqueueTenantDatabasePostCommitCallback(() => this.updateLastUsedNow(id))) {
@@ -171,6 +176,8 @@ export class UserApiKeysRepository {
   }
 
   private async updateLastUsedNow(id: string): Promise<void> {
+    const tenantId = getCurrentTenantId();
+    if (tenantId && (await readTenantWriteGate(this.db, tenantId)).active) return;
     await update(this.db, userApiKeys)
       .set({ last_used_at: new Date() })
       .where(eq(userApiKeys.id, id))

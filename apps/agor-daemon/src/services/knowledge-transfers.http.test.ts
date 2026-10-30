@@ -60,7 +60,11 @@ describe.skipIf(process.platform === 'win32')('Knowledge transfer REST boundary'
         false,
         async (app) => {
           const strategy = new ApiKeyStrategy();
-          strategy.setDependencies(new UserApiKeysRepository(guarded), app.service('users'));
+          strategy.setDependencies(
+            new UserApiKeysRepository(guarded),
+            app.service('users'),
+            guarded
+          );
           (app.service('authentication') as unknown as AuthenticationService).register(
             'api-key',
             strategy

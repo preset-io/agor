@@ -1194,7 +1194,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Initialize API key strategy with dependencies
   const { UserApiKeysRepository } = await import('@agor/core/db');
   const userApiKeysRepo = new UserApiKeysRepository(db);
-  apiKeyStrategy.setDependencies(userApiKeysRepo, usersService);
+  apiKeyStrategy.setDependencies(userApiKeysRepo, usersService, db);
 
   // SECURITY: Rate-limit the authentication + refresh endpoints.
   //
@@ -2120,16 +2120,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // count, so it lands the system error at the true tail whether
           // the user-message row exists or not (no gap, no collision).
           const errorContent = `⚠️ The agent failed to start.\n\n${errorMessage}`;
-          await appendSystemMessage({
-            app,
-            db,
-            sessionId,
-            taskId,
-            content: errorContent,
-            role: MessageRole.ASSISTANT,
-            metadata: { is_meta: true },
-            params: failureParams,
-          });
+          // Deferred work carries tenant identity only; open the DB unit here.
+          await inCurrentTenantDatabaseScope(() =>
+            appendSystemMessage({
+              app,
+              db,
+              sessionId,
+              taskId,
+              content: errorContent,
+              role: MessageRole.ASSISTANT,
+              metadata: { is_meta: true },
+              params: failureParams,
+            })
+          );
         } catch (sysErr) {
           console.warn(
             '[Daemon] Failed to write system error message after spawn failure:',
