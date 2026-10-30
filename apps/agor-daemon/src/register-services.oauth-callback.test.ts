@@ -182,6 +182,7 @@ describe('register-services OAuth callback URL regression', () => {
     const nonIssuingOrInternal = [
       'mcp-servers/oauth-disconnect',
       'mcp-servers/oauth-status',
+      'mcp-servers/oauth-redirect-uri',
       'mcp-servers/oauth-attempt-status',
       'mcp-servers/oauth-auth-headers',
       'mcp-servers/oauth-client-registration-reset',

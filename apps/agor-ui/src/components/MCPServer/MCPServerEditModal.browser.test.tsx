@@ -132,6 +132,8 @@ it.each(['dcr_disabled', 'protected_resource_mismatch'] as const)(
     const service = vi.fn((path: string) => {
       if (path === 'mcp-servers') return { patch, get };
       if (path === 'mcp-servers/oauth-start') return { create: start };
+      // The form's advisory callback-URL read has no side effects.
+      if (path === 'mcp-servers/oauth-redirect-uri') return { find: vi.fn().mockResolvedValue({}) };
       throw new Error(`Unexpected inspection side effect: ${path}`);
     });
     const client = { service, io: { on: vi.fn(), off: vi.fn() } } as unknown as AgorClient;
@@ -153,7 +155,9 @@ it.each(['dcr_disabled', 'protected_resource_mismatch'] as const)(
     );
     const summary = await screen.findByText(/Saved OAuth policy:/);
     expect(summary).toHaveTextContent('compatibility strict; DCR disabled (explicit).');
-    expect(service).not.toHaveBeenCalled();
+    expect(
+      service.mock.calls.filter(([path]) => path !== 'mcp-servers/oauth-redirect-uri')
+    ).toEqual([]);
     await act(() => userEvent.click(screen.getByRole('button', { name: /Start OAuth Flow/ })));
     const reason = await screen.findByText(failureReason);
     reason.scrollIntoView();

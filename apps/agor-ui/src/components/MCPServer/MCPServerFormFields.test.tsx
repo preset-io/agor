@@ -181,7 +181,7 @@ describe('MCPServerFormFields OAuth start', () => {
       service: vi.fn((path: string) => {
         if (path === 'mcp-servers/test-oauth') return { create: testOAuth };
         if (path === 'mcp-servers/oauth-start') return { create: startOAuth };
-        return {};
+        return { find: vi.fn().mockResolvedValue({}) };
       }),
     } as unknown as AgorClient;
     const onPrepareOAuthStart = vi
@@ -269,7 +269,7 @@ describe('MCPServerFormFields OAuth start', () => {
       service: vi.fn((path: string) => {
         if (path === 'mcp-servers/test-oauth') return { create: testOAuth };
         if (path === 'mcp-servers/oauth-start') return { create: startOAuth };
-        return {};
+        return { find: vi.fn().mockResolvedValue({}) };
       }),
     } as unknown as AgorClient;
     // Rejects the way a malformed name would; the successful start is the
@@ -390,7 +390,10 @@ describe('MCPServerFormFields Test Authentication results', () => {
   ) => {
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
-      service: vi.fn((path: string) => ({ create: services[path] ?? vi.fn() })),
+      service: vi.fn((path: string) => ({
+        create: services[path] ?? vi.fn(),
+        find: vi.fn().mockResolvedValue({}),
+      })),
     } as unknown as AgorClient;
     const Harness = () => {
       const [form] = Form.useForm();
@@ -462,4 +465,95 @@ describe('MCPServerFormFields Test Authentication results', () => {
     expect(screen.getByText('Check the client ID.')).toBeInTheDocument();
     expect(showError).not.toHaveBeenCalled();
   });
+});
+
+describe('MCPServerFormFields OAuth callback URL', () => {
+  const CALLBACK = 'https://cell.example.test/mcp-servers/oauth-callback';
+  const COPY =
+    'If you register an OAuth app or the provider requires an allowlist, allow this redirect URL.';
+  const renderWith = (
+    authType: 'oauth' | 'bearer',
+    result: Record<string, unknown>,
+    extra: { catalogInstall?: boolean; managedOAuthCompatibilityMode?: 'strict' } = {}
+  ) => {
+    const find = vi.fn().mockResolvedValue(result);
+    const client = {
+      service: vi.fn((path: string) =>
+        path === 'mcp-servers/oauth-redirect-uri' ? { find } : { create: vi.fn() }
+      ),
+    } as unknown as AgorClient;
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form} initialValues={{ auth_type: authType }}>
+          <MCPServerFormFields
+            mode={extra.catalogInstall || extra.managedOAuthCompatibilityMode ? 'edit' : 'create'}
+            transport="http"
+            authType={authType}
+            form={form}
+            client={client}
+            authorityKey="admin:1"
+            onPrepareOAuthStart={vi.fn()}
+            {...extra}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    return find;
+  };
+
+  it('shows the daemon-resolved callback for a custom OAuth server', async () => {
+    renderWith('oauth', { redirect_uri: CALLBACK });
+    expect(await screen.findByText(CALLBACK)).toBeInTheDocument();
+    expect(screen.getByText(COPY)).toBeInTheDocument();
+  });
+
+  it('shows nothing when the daemon resolves no callback', async () => {
+    const find = renderWith('oauth', {});
+    await waitFor(() => expect(find).toHaveBeenCalled());
+    expect(screen.queryByText('Callback URL')).not.toBeInTheDocument();
+  });
+
+  it('keeps the form usable when the client cannot serve the read', () => {
+    const client = {
+      service: vi.fn(() => {
+        throw new Error('no such service');
+      }),
+    } as unknown as AgorClient;
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form} initialValues={{ auth_type: 'oauth' }}>
+          <MCPServerFormFields
+            mode="create"
+            transport="http"
+            authType="oauth"
+            form={form}
+            client={client}
+            authorityKey="admin:1"
+            onPrepareOAuthStart={vi.fn()}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(screen.getByText('Auth Type')).toBeInTheDocument();
+    expect(screen.queryByText('Callback URL')).not.toBeInTheDocument();
+  });
+
+  it('does not ask for or show a callback for other auth types', () => {
+    const find = renderWith('bearer', { redirect_uri: CALLBACK });
+    expect(find).not.toHaveBeenCalled();
+    expect(screen.queryByText(CALLBACK)).not.toBeInTheDocument();
+  });
+
+  it.each([{ catalogInstall: true }, { managedOAuthCompatibilityMode: 'strict' as const }])(
+    'shows no direct callback for a Catalog install (%o), which may use the relay',
+    (extra) => {
+      const find = renderWith('oauth', { redirect_uri: CALLBACK }, extra);
+      expect(find).not.toHaveBeenCalled();
+      expect(screen.queryByText(CALLBACK)).not.toBeInTheDocument();
+    }
+  );
 });

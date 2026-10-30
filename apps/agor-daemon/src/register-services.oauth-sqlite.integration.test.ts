@@ -3965,6 +3965,43 @@ describe('SQLite saved-row OAuth authority', () => {
     }
   });
 
+  it("gives the custom server form only its own workspace's callback", async () => {
+    const hosted = await hostedTenantRouting({ tenantId: 'default' });
+    try {
+      const provider = await createTestProvider({ serveDynamicRegistration: true });
+      providers.push(provider);
+      const harness = await createHarness(provider, undefined, {
+        config: {
+          multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        } as RegisterServicesContext['config'],
+      });
+      databases.push(harness.rawDb);
+      const redirect = () =>
+        runWithTenantDatabaseScope(harness.db, 'default', () =>
+          harness.app.service('mcp-servers/oauth-redirect-uri').find(paramsFor(harness))
+        );
+      const observe = (tenantId: string, origin: string) =>
+        runWithTenantDatabaseTransaction(harness.rawDb, tenantId, (scoped) =>
+          new TenantPublicRoutingRepository(scoped).observeVerifiedLaunch({
+            public_base_url: origin,
+            assertion_issued_at: 100,
+          })
+        );
+
+      // No workspace address yet: nothing, rather than the cell callback.
+      expect(await redirect()).toEqual({});
+      // Another workspace's address is never used for this one.
+      await observe('globex', 'https://globex.example.test');
+      expect(await redirect()).toEqual({});
+      await observe('default', 'https://tenant-a.example.test');
+      expect(await redirect()).toEqual({
+        redirect_uri: 'https://tenant-a.example.test/mcp-servers/oauth-callback',
+      });
+    } finally {
+      await hosted.cleanup();
+    }
+  });
+
   it('registers under the deployed client name, and the front channel accepts that client', async () => {
     const provider = await createTestProvider({ serveDynamicRegistration: true });
     providers.push(provider);

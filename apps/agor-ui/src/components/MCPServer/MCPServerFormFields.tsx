@@ -28,6 +28,7 @@ import { useThemedMessage } from '@/utils/message';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { CompactNotice, type CompactNoticeProps } from '../CompactNotice';
 import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
+import { MCPOAuthRedirectUri } from './MCPOAuthRedirectUri';
 import { describeMissingForOAuth, missingMCPFieldLabels } from './mcp-form-requirements';
 import {
   extractOAuthConfigForTesting,
@@ -103,6 +104,8 @@ export interface MCPServerFormFieldsProps {
   formRevision?: number;
   /** Effective catalog-managed policy shown read-only in Settings. */
   managedOAuthCompatibilityMode?: 'strict' | 'marketplace';
+  /** A Catalog install; its callback may be the relay's, so none is shown here. */
+  catalogInstall?: boolean;
 }
 
 /**
@@ -141,6 +144,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   // Re-renders on every edit (see `formRevision` above) and dates the auth test notice.
   formRevision,
   managedOAuthCompatibilityMode,
+  catalogInstall,
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
   const [testingAuth, setTestingAuth] = useState(false);
@@ -633,6 +637,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               <Select.Option value="oauth">OAuth 2.1</Select.Option>
             </Select>
           </Form.Item>
+
+          {authType === 'oauth' && !catalogInstall && !managedOAuthCompatibilityMode && (
+            <MCPOAuthRedirectUri client={client} />
+          )}
 
           {authType === 'bearer' && (
             <Form.Item

@@ -340,6 +340,10 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'Admin-only OAuth registration recovery control plane.',
   },
   'mcp-servers/oauth-status': { audience: 'none', why: 'Per-user token status.' },
+  'mcp-servers/oauth-redirect-uri': {
+    audience: 'none',
+    why: 'Caller-scoped advisory read with no mutations or events.',
+  },
   'mcp-servers/oauth-attempt-status': {
     audience: 'none',
     why: 'Per-attempt status polled by the initiating tab.',
