@@ -471,6 +471,62 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
   // #2332: the flow used to authorize against the last saved row, so an unsaved
   // URL / compatibility / DCR edit made "Test Authentication" pass and the flow
   // fail. The prepared ID must come back only after those values are persisted.
+  it('renders the same form and actions in place, without a dialog, when embedded', async () => {
+    const onClose = vi.fn();
+    render(
+      <MCPServerEditModal
+        embedded
+        server={null}
+        open
+        client={null}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={onClose}
+      />
+    );
+    expect(await screen.findByLabelText('URL')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('reports a create made for an OAuth start even when the form is then cancelled', async () => {
+    const created = { mcp_server_id: '01900000-0000-7000-8000-000000000009', name: 'new' };
+    const create = vi.fn().mockResolvedValue(created);
+    const client = {
+      service: vi.fn().mockReturnValue({ create }),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    const onCreated = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <MCPServerEditModal
+        server={null}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onCreated={onCreated}
+        onClose={onClose}
+      />
+    );
+    fireEvent.change(await screen.findByLabelText('URL'), {
+      target: { value: 'https://new.example/mcp' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start OAuth Flow' }));
+    await waitFor(() => expect(preparedServerId).toHaveBeenCalledWith(created.mcp_server_id));
+    expect(create).toHaveBeenCalledOnce();
+    expect(onCreated).toHaveBeenCalledWith(created);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onCreated).toHaveBeenCalledOnce();
+  });
+
   it('persists pending URL and OAuth mode edits before returning the server ID', async () => {
     const patch = vi.fn().mockResolvedValue({});
     const client = {

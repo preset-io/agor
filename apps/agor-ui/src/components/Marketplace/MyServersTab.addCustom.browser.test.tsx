@@ -8,6 +8,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { checkBrowserSanity } from '../../test/browserSanity';
 import { MyServersTab } from './MyServersTab';
+import { useCustomMcpServerEditor } from './useCustomMcpServerEditor';
 
 checkBrowserSanity();
 beforeEach(() => {
@@ -136,19 +137,44 @@ function Harness({
       ],
     }));
   controls.refresh = refresh;
+  // As MCPCatalogContent does: the tab bar owns the add action, whose editor
+  // replaces the list in place and hands the new server to My Servers on close.
+  const currentUser = { user_id: 'member-a', role } as never;
+  const [requestedServerId, setRequestedServerId] = useState<string | null>(null);
+  const editor = useCustomMcpServerEditor({
+    client,
+    connected: true,
+    connecting: false,
+    authGeneration: 1,
+    currentUser,
+    onClose: (serverId) => {
+      void refresh();
+      setRequestedServerId(serverId);
+    },
+  });
   return (
-    <MyServersTab
-      client={client}
-      connected
-      connecting={false}
-      authGeneration={1}
-      currentUser={{ user_id: 'member-a', role } as never}
-      overview={overview}
-      loading={false}
-      error={null}
-      refresh={refresh}
-      onBrowseCatalog={() => undefined}
-    />
+    <>
+      {editor.button}
+      {editor.view && <section aria-label={editor.view.current}>{editor.view.editor}</section>}
+      <div hidden={Boolean(editor.view)}>
+        <MyServersTab
+          active={!editor.view}
+          client={client}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={currentUser}
+          overview={overview}
+          loading={false}
+          error={null}
+          refresh={refresh}
+          onBrowseCatalog={() => undefined}
+          onEditServer={editor.openEdit}
+          requestedServerId={requestedServerId}
+          onRequestedServerOpened={() => setRequestedServerId(null)}
+        />
+      </div>
+    </>
   );
 }
 
@@ -180,7 +206,7 @@ async function openCreateDialog() {
     return button;
   });
   await act(() => userEvent.click(add));
-  return screen.findByRole('dialog', { name: 'Add MCP Server' });
+  return screen.findByRole('region', { name: 'Add custom server' });
 }
 
 async function chooseOption(dialog: HTMLElement, label: string, option: string) {
@@ -243,7 +269,7 @@ async function expectAddRestriction(button: HTMLElement, text: RegExp) {
   expect(await screen.findByText(text)).toBeInTheDocument();
 }
 
-it('adds a custom HTTP server from the empty state and opens it', async () => {
+it('adds a custom HTTP server while nothing is installed and opens it', async () => {
   const { create } = mount(emptyOverview);
   expect(await screen.findByRole('button', { name: 'Browse catalog' })).toBeVisible();
   const dialog = await openCreateDialog();
@@ -262,7 +288,7 @@ it('adds a custom HTTP server from the empty state and opens it', async () => {
     auth: { type: 'bearer', token: 'fictional-token' },
   });
   await waitFor(() =>
-    expect(screen.queryByRole('dialog', { name: 'Add MCP Server' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Add custom server' })).not.toBeInTheDocument()
   );
   // The new server is listed as Manual and its settings drawer opens.
   expect(await screen.findByLabelText('Remove Acme server')).toBeInTheDocument();
@@ -363,13 +389,13 @@ it('leaves a shared-mode OAuth grant to admins on a Shared server a member manag
   expect(screen.getByLabelText('Disconnect Existing OAuth connection')).toBeDisabled();
 });
 
-it('opens from the toolbar and resets the draft after cancel', async () => {
+it('opens from the tab bar and resets the draft after cancel', async () => {
   const { create } = mount({ ...emptyOverview, servers: [existing] });
   let dialog = await openCreateDialog();
   await fillHttpBearer(dialog);
   await act(() => userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' })));
   await waitFor(() =>
-    expect(screen.queryByRole('dialog', { name: 'Add MCP Server' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Add custom server' })).not.toBeInTheDocument()
   );
 
   dialog = await openCreateDialog();
@@ -392,7 +418,7 @@ it('keeps a failed create visible in the form', async () => {
   expect(within(dialog).getByLabelText('URL')).toHaveValue('https://mcp.example.com/mcp');
 });
 
-it('tells a member who cannot configure why the toolbar add is off', async () => {
+it('tells a member who cannot configure why the tab-bar add is off', async () => {
   mount({ ...emptyOverview, servers: [existing] }, { policy: 'use_existing_only' });
   expect(
     await screen.findByText("Your workspace's MCP policy doesn't let you change this server.")
@@ -403,7 +429,7 @@ it('tells a member who cannot configure why the toolbar add is off', async () =>
   );
 });
 
-it('tells a member who cannot configure why the empty-state add is off', async () => {
+it('tells a member who cannot configure why add is off while nothing is installed', async () => {
   mount(emptyOverview, { policy: 'use_existing_only' });
   await screen.findByRole('button', { name: 'Browse catalog' });
   // The policy reason only replaces the pending hint once the answer has landed.
@@ -505,7 +531,7 @@ it('creates once when Create is clicked twice while the first create is in fligh
 
   reply.resolve();
   await waitFor(() =>
-    expect(screen.queryByRole('dialog', { name: 'Add MCP Server' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Add custom server' })).not.toBeInTheDocument()
   );
   expect(create).toHaveBeenCalledOnce();
 });
@@ -528,7 +554,7 @@ it('holds the OAuth start while Create is in flight', async () => {
   await waitFor(() => expect(startOAuth).toBeDisabled());
   firstReply.resolve();
   await waitFor(() =>
-    expect(screen.queryByRole('dialog', { name: 'Add MCP Server' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Add custom server' })).not.toBeInTheDocument()
   );
   expect(create).toHaveBeenCalledOnce();
   expect(oauthStart).not.toHaveBeenCalled();
@@ -576,7 +602,7 @@ it('keeps the OAuth-created draft open when the refreshed list replaces the empt
   await waitFor(() =>
     expect(screen.queryByRole('button', { name: 'Browse catalog' })).not.toBeInTheDocument()
   );
-  expect(screen.getByRole('dialog', { name: 'Add MCP Server' })).toBe(dialog);
+  expect(screen.getByRole('region', { name: 'Add custom server' })).toBe(dialog);
   expect(within(dialog).getByLabelText('Name (Internal ID)')).toHaveValue('acme');
   expect(within(dialog).getByLabelText('Display Name')).toHaveValue('Acme 2');
   expect(within(dialog).getByText('fictional-oauth-start-error')).toBeVisible();

@@ -57,6 +57,53 @@ describe('MCPServerFormFields OAuth start', () => {
     expect(screen.queryByText('Installation ownership')).not.toBeInTheDocument();
   });
 
+  it.each([
+    { values: { oauth_mode: 'per_user' }, shown: false },
+    { values: {}, shown: false },
+    { values: { oauth_mode: 'shared' }, shown: true },
+    { values: { oauth_mode: 'per_user', headers: '{"X-Api-Key":"k"}' }, shown: true },
+    // A literal (or saved, masked) client secret is a shared machine credential.
+    { values: { oauth_mode: 'per_user', oauth_client_secret: 'app-secret' }, shown: true },
+    { values: { oauth_mode: 'per_user', oauth_client_secret: '••••••••' }, shown: true },
+    // A client-credentials grant other users can exercise.
+    {
+      values: {
+        oauth_mode: 'per_user',
+        oauth_grant_type: 'client_credentials',
+        oauth_client_id: 'machine',
+        oauth_client_secret: 'machine-secret',
+      },
+      shown: true,
+    },
+    // The form's default grant type alone mints nothing without a secret.
+    { values: { oauth_mode: 'per_user', oauth_grant_type: 'client_credentials' }, shown: false },
+    // A per-user environment reference resolves for the acting user.
+    {
+      values: { oauth_mode: 'per_user', oauth_client_secret: '{{ user.env.OAUTH_SECRET }}' },
+      shown: false,
+    },
+  ])('shared OAuth with $values shows the credential warning: $shown', ({ values, shown }) => {
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form} initialValues={values}>
+          <MCPServerFormFields
+            mode="edit"
+            savedOwnership="shared"
+            transport="http"
+            authType="oauth"
+            form={form}
+            client={null}
+            authorityKey="admin:1"
+            onPrepareOAuthStart={vi.fn()}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(screen.queryByText('Shared configuration can share credentials') !== null).toBe(shown);
+  });
+
   it.each(['create', 'edit'] as const)('explains private/global reach in %s mode', (mode) => {
     const Harness = () => {
       const [form] = Form.useForm();

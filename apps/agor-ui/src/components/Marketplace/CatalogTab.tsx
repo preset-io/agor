@@ -21,7 +21,7 @@ import { readCredentialRequirement } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES, sessionPath } from '@agor-live/client';
 import { Alert, Button, Card, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import {
@@ -128,9 +128,11 @@ export interface CatalogTabProps {
   authGeneration: number;
   /** Whose server-provided capability decides whether Connect is offered. */
   currentUser?: User | null;
-  /** Refresh the shared four-tab projection after durable OAuth confirmation. */
   onOpenSession?: (sessionId: SessionID) => void;
+  /** Refresh the shared Marketplace overview after durable OAuth confirmation. */
   refreshMarketplaceOverview?: () => Promise<unknown>;
+  /** The "Add custom server" action, offered when a search finds nothing. */
+  addCustomServerAction?: ReactNode;
 }
 
 const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
@@ -143,6 +145,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   currentUser,
   refreshMarketplaceOverview,
   onOpenSession,
+  addCustomServerAction,
 }) => {
   const handoff = context?.mode === 'handoff' ? context : undefined;
   const returnTarget = handoff?.returnTo ?? 'the conversation';
@@ -886,7 +889,16 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         // nothing filtering there is nothing to have excluded, so an empty read
         // means the daemon could not read its catalog at all.
         isFilterActive(filters) ? (
-          <Empty description="No servers match" />
+          <Empty
+            description={
+              <Flex vertical>
+                <span>No servers match</span>
+                {addCustomServerAction && <span>Can't find it? Add a custom server.</span>}
+              </Flex>
+            }
+          >
+            {addCustomServerAction}
+          </Empty>
         ) : (
           <Empty description="No servers in the catalog yet">
             <Button onClick={retry}>Check again</Button>
