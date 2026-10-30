@@ -36,8 +36,10 @@ import type {
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { getLogContext, runWithLogContext } from '@agor/core/utils/log-context';
+import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequireAuthHook } from './auth/require-auth.js';
+import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from './auth/runtime-tokens.js';
 import { type RegisterRoutesContext, registerRoutes } from './register-routes.js';
 import {
   type GatewayAdmissionFenceParams,
@@ -46,6 +48,7 @@ import {
 } from './services/gateway-authority.js';
 import { TasksService } from './services/tasks.js';
 
+const JWT_SECRET = 'disposable-test-not-a-credential';
 const cleanup: Array<() => void> = [];
 afterEach(() => {
   vi.restoreAllMocks();
@@ -153,7 +156,7 @@ async function fixture(
         db,
         config: {},
         externalLaunchProvider: { enabled: false },
-        jwtSecret: 'disposable-test-not-a-credential',
+        jwtSecret: JWT_SECRET,
         requireAuth: options.requireAuth ?? ((context: unknown) => context),
         enforcePasswordChange: (context: unknown) => context,
         sessionsService,
@@ -410,29 +413,31 @@ describe('registered prompt route launch handoff', () => {
   });
 });
 
-describe('prompt route REST personal API key authentication', () => {
-  it('verifies the key without a request-wide database scope and admits the prompt', async () => {
-    // Production's REST auth chain: the real `authenticate` hook resolves the
-    // API-key strategy registerRoutes wires. Long routes carry tenant identity
-    // only, so the key lookup must open its own tenant unit (#3204).
-    const f = await fixture({
+describe('prompt route REST authentication on the identity-only boundary', () => {
+  // Production's REST auth chain in front of the real registered route. Long
+  // routes carry tenant identity but no request-wide database scope, so every
+  // DB read a strategy or `requireAuth` makes must open its own unit (#3204).
+  const restFixture = () =>
+    fixture({
       requireAuth: createRequireAuthHook(
         authenticate({ strategies: ['api-key', 'jwt'] }),
         resolveMultiTenancyConfig({})
       ),
     });
+  const restPrompt = (f: Awaited<ReturnType<typeof fixture>>, authentication: object) =>
+    f.app
+      .service('sessions/:id/prompt')
+      .create(
+        { prompt: 'rest fixture' },
+        { provider: 'rest', headers: {}, route: { id: f.session.session_id }, authentication }
+      ) as Promise<Task>;
+
+  it('admits a personal API key and records its use', async () => {
+    const f = await restFixture();
     const apiKeys = new UserApiKeysRepository(f.db);
     const { rawKey, key } = await f.scoped(() => apiKeys.create(f.actor.user_id, 'REST fixture'));
 
-    const task = (await f.app.service('sessions/:id/prompt').create(
-      { prompt: 'rest fixture' },
-      {
-        provider: 'rest',
-        headers: {},
-        route: { id: f.session.session_id },
-        authentication: { strategy: 'api-key', apiKey: rawKey },
-      }
-    )) as Task;
+    const task = await restPrompt(f, { strategy: 'api-key', apiKey: rawKey });
 
     expect(task).toMatchObject({ status: TaskStatus.DISPATCHING, created_by: f.actor.user_id });
     await vi.waitFor(() => expect(f.launchObservations).toHaveLength(1));
@@ -440,6 +445,20 @@ describe('prompt route REST personal API key authentication', () => {
       const [row] = await f.scoped(() => apiKeys.findByPrefix(key.prefix));
       expect(row.last_used_at).toBeTruthy();
     });
+  });
+
+  it('admits a user access token', async () => {
+    const f = await restFixture();
+    const accessToken = jwt.sign({ sub: f.actor.user_id, type: 'access' }, JWT_SECRET, {
+      issuer: RUNTIME_JWT_ISSUER,
+      audience: RUNTIME_JWT_AUDIENCE,
+      expiresIn: '5m',
+    });
+
+    const task = await restPrompt(f, { strategy: 'jwt', accessToken });
+
+    expect(task).toMatchObject({ status: TaskStatus.DISPATCHING, created_by: f.actor.user_id });
+    await vi.waitFor(() => expect(f.launchObservations).toHaveLength(1));
   });
 });
 
