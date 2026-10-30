@@ -61,6 +61,7 @@ env \
   AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=false \
   AGOR_MIGRATION_OFFLINE_CUTOVER=true \
   SEED=true \
+  AGOR_EXAMPLE_BOARD=true \
   docker compose -p agor-codespaces-sqlite up -d --build
 unset admin_password
 
