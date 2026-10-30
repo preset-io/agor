@@ -1,5 +1,5 @@
 import { setImmediate as nextTurn } from 'node:timers/promises';
-import { DEFAULT_STATIC_TENANT_ID } from '@agor/core/config';
+import { DEFAULT_STATIC_TENANT_ID, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   BranchRepository,
   createDatabaseAsync,
@@ -14,12 +14,20 @@ import {
   runWithTenantDatabaseScope,
   SessionRepository,
   TaskRepository,
+  UserApiKeysRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { type Application, feathers, feathersExpress, socketio } from '@agor/core/feathers';
+import {
+  type Application,
+  authenticate,
+  feathers,
+  feathersExpress,
+  socketio,
+} from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
+  HookContext,
   MessageCreate,
   Session,
   SessionUpdate,
@@ -29,6 +37,7 @@ import type {
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { getLogContext, runWithLogContext } from '@agor/core/utils/log-context';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createRequireAuthHook } from './auth/require-auth.js';
 import { type RegisterRoutesContext, registerRoutes } from './register-routes.js';
 import {
   type GatewayAdmissionFenceParams,
@@ -44,7 +53,9 @@ afterEach(() => {
   for (const close of cleanup.splice(0)) close();
 });
 
-async function fixture() {
+async function fixture(
+  options: { requireAuth?: (context: HookContext) => Promise<HookContext> } = {}
+) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   cleanup.push(() => (rawDb as unknown as { $client: { close(): void } }).$client.close());
   await runMigrations(rawDb);
@@ -115,7 +126,8 @@ async function fixture() {
   app.use('messages', {
     create: (data: MessageCreate) => scoped(() => messages.create(data)),
   });
-  app.use('users', { get: (id: string) => usersRepository.findById(id) });
+  // Like the production users service, the lookup opens its own tenant scope.
+  app.use('users', { get: (id: string) => scoped(() => usersRepository.findById(id)) });
   app.use('repos', { get: vi.fn() });
   const tasksService = new TasksService(db, app);
   app.use('tasks', tasksService);
@@ -142,7 +154,7 @@ async function fixture() {
         config: {},
         externalLaunchProvider: { enabled: false },
         jwtSecret: 'disposable-test-not-a-credential',
-        requireAuth: (context: unknown) => context,
+        requireAuth: options.requireAuth ?? ((context: unknown) => context),
         enforcePasswordChange: (context: unknown) => context,
         sessionsService,
         sessionsRepository,
@@ -168,6 +180,7 @@ async function fixture() {
       ...extraParams,
     } as AuthenticatedParams) as Promise<Task>;
   return {
+    app,
     db,
     scoped,
     session,
@@ -394,6 +407,39 @@ describe('registered prompt route launch handoff', () => {
       },
     });
     expect(slack.task_id).toBeTruthy();
+  });
+});
+
+describe('prompt route REST personal API key authentication', () => {
+  it('verifies the key without a request-wide database scope and admits the prompt', async () => {
+    // Production's REST auth chain: the real `authenticate` hook resolves the
+    // API-key strategy registerRoutes wires. Long routes carry tenant identity
+    // only, so the key lookup must open its own tenant unit (#3204).
+    const f = await fixture({
+      requireAuth: createRequireAuthHook(
+        authenticate({ strategies: ['api-key', 'jwt'] }),
+        resolveMultiTenancyConfig({})
+      ),
+    });
+    const apiKeys = new UserApiKeysRepository(f.db);
+    const { rawKey, key } = await f.scoped(() => apiKeys.create(f.actor.user_id, 'REST fixture'));
+
+    const task = (await f.app.service('sessions/:id/prompt').create(
+      { prompt: 'rest fixture' },
+      {
+        provider: 'rest',
+        headers: {},
+        route: { id: f.session.session_id },
+        authentication: { strategy: 'api-key', apiKey: rawKey },
+      }
+    )) as Task;
+
+    expect(task).toMatchObject({ status: TaskStatus.DISPATCHING, created_by: f.actor.user_id });
+    await vi.waitFor(() => expect(f.launchObservations).toHaveLength(1));
+    await vi.waitFor(async () => {
+      const [row] = await f.scoped(() => apiKeys.findByPrefix(key.prefix));
+      expect(row.last_used_at).toBeTruthy();
+    });
   });
 });
 

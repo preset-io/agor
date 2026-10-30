@@ -135,7 +135,7 @@ function createAuthApp(
   authentication.register('local', localStrategy);
   const apiKeysRepo = new UserApiKeysRepository(db);
   const apiKeyStrategy = new ApiKeyStrategy();
-  apiKeyStrategy.setDependencies(apiKeysRepo, usersService);
+  apiKeyStrategy.setDependencies(apiKeysRepo, usersService, db);
   authentication.register('api-key', apiKeyStrategy);
   app.use('authentication', authentication);
 

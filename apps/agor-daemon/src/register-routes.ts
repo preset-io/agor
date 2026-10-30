@@ -1194,7 +1194,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Initialize API key strategy with dependencies
   const { UserApiKeysRepository } = await import('@agor/core/db');
   const userApiKeysRepo = new UserApiKeysRepository(db);
-  apiKeyStrategy.setDependencies(userApiKeysRepo, usersService);
+  apiKeyStrategy.setDependencies(userApiKeysRepo, usersService, db);
 
   // SECURITY: Rate-limit the authentication + refresh endpoints.
   //

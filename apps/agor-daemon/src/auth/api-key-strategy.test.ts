@@ -1,13 +1,28 @@
+import {
+  createDatabase,
+  createTenantScopedDatabaseProxy,
+  getCurrentTenantDatabaseScope,
+} from '@agor/core/db';
 import type { Params } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { isAuthenticationUserLookup } from '../services/users.js';
 import { ApiKeyStrategy } from './api-key-strategy.js';
 
+// The repository is mocked, so no query reaches this handle.
+const db = createTenantScopedDatabaseProxy(createDatabase({ url: ':memory:' }));
+
 describe('ApiKeyStrategy tenant propagation', () => {
   it('passes the resolved tenant params into the user lookup', async () => {
     const strategy = new ApiKeyStrategy();
     const apiKeysRepo = {
-      verifyKey: vi.fn(async () => ({ id: 'key-1', user_id: 'user-1' })),
+      // Long routes open no request-wide scope; the strategy opens its own.
+      verifyKey: vi.fn(async () => {
+        expect(getCurrentTenantDatabaseScope()).toMatchObject({
+          kind: 'tenant',
+          tenantId: 'tenant-a',
+        });
+        return { id: 'key-1', user_id: 'user-1' };
+      }),
       updateLastUsed: vi.fn(async () => undefined),
     };
     const usersService = {
@@ -17,7 +32,7 @@ describe('ApiKeyStrategy tenant propagation', () => {
       })),
     };
     const params = { tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } };
-    strategy.setDependencies(apiKeysRepo as never, usersService as never);
+    strategy.setDependencies(apiKeysRepo as never, usersService as never, db);
 
     await strategy.authenticate({ apiKey: 'agor_sk_test' }, params);
 
@@ -53,7 +68,7 @@ describe('ApiKeyStrategy tenant propagation', () => {
         return { user_id: 'user-1', tenant_id: 'tenant-a' };
       }),
     };
-    strategy.setDependencies(apiKeysRepo as never, usersService);
+    strategy.setDependencies(apiKeysRepo as never, usersService, db);
     await strategy.authenticate({ apiKey: 'agor_sk_test' }, params);
     expect(params.query).toBe(query);
     expect(params.query).not.toHaveProperty('internal');
@@ -72,7 +87,7 @@ describe('ApiKeyStrategy tenant propagation', () => {
     const usersService = {
       get: vi.fn(async () => ({ user_id: 'user-1', tenant_id: userTenant })),
     };
-    strategy.setDependencies(apiKeysRepo as never, usersService as never);
+    strategy.setDependencies(apiKeysRepo as never, usersService as never, db);
 
     await expect(
       strategy.authenticate(

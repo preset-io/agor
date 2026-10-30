@@ -5,7 +5,11 @@
  * Supports both Authorization: Bearer and X-API-Key headers.
  */
 
-import type { UserApiKeysRepository } from '@agor/core/db';
+import {
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
+  type UserApiKeysRepository,
+} from '@agor/core/db';
 import { AuthenticationBaseStrategy, NotAuthenticated } from '@agor/core/feathers';
 import { isUserApiKeySource, PERSONAL_API_KEY_PREFIX } from '@agor/core/types';
 import { markAuthenticationUserLookup } from '../services/users.js';
@@ -13,18 +17,25 @@ import { isSocketIoHandshakeRequest } from './socket-handshake-request.js';
 
 export class ApiKeyStrategy extends AuthenticationBaseStrategy {
   private apiKeysRepo: UserApiKeysRepository | null = null;
+  private db: TenantScopeAwareDatabase | null = null;
   // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
   private usersService: any = null;
 
-  // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
-  setDependencies(apiKeysRepo: UserApiKeysRepository, usersService: any) {
+  setDependencies(
+    apiKeysRepo: UserApiKeysRepository,
+    // biome-ignore lint/suspicious/noExplicitAny: Feathers service type
+    usersService: any,
+    db: TenantScopeAwareDatabase
+  ) {
     this.apiKeysRepo = apiKeysRepo;
     this.usersService = usersService;
+    this.db = db;
   }
 
   // biome-ignore lint/suspicious/noExplicitAny: Feathers type compatibility
   async authenticate(authentication: any, params: any): Promise<any> {
-    if (!this.apiKeysRepo || !this.usersService) {
+    const { apiKeysRepo, db } = this;
+    if (!apiKeysRepo || !db || !this.usersService) {
       throw new NotAuthenticated('ApiKeyStrategy not initialized');
     }
 
@@ -33,22 +44,29 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
       throw new NotAuthenticated('Invalid API key format');
     }
 
-    // Verify key against stored hashes
-    const keyRow = await this.apiKeysRepo.verifyKey(apiKey);
+    // Long routes (e.g. `/sessions/:id/prompt`) and identity-only services
+    // carry tenant identity but no request-wide database scope, so the key
+    // lookup opens its own short tenant unit. It joins the request scope when
+    // an ordinary tenant-owned service already opened one.
+    const requestTenantId = params?.tenant?.tenant_id as string | undefined;
+    const keyRow = await runWithTenantDatabaseScope(db, requestTenantId, () =>
+      apiKeysRepo.verifyKey(apiKey)
+    );
     if (!keyRow) {
       throw new NotAuthenticated('Invalid API key');
     }
 
     // Tenant RLS already confines verifyKey to the request tenant; also refuse
     // explicitly so key/tenant agreement never rests on a policy alone.
-    const requestTenantId = params?.tenant?.tenant_id as string | undefined;
     const keyTenantId = (keyRow as { tenant_id?: unknown }).tenant_id;
     if (requestTenantId && typeof keyTenantId === 'string' && keyTenantId !== requestTenantId) {
       throw new NotAuthenticated('Invalid API key');
     }
 
     // Update last_used_at (non-blocking)
-    this.apiKeysRepo.updateLastUsed(keyRow.id).catch((err: unknown) => {
+    runWithTenantDatabaseScope(db, requestTenantId, () =>
+      apiKeysRepo.updateLastUsed(keyRow.id)
+    ).catch((err: unknown) => {
       console.warn('Failed to update API key last_used_at:', err);
     });
 
