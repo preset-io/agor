@@ -81,6 +81,7 @@ import type {
   ScheduleID,
   SchedulerInitializationFailureCode,
   SchedulerInitializationStage,
+  ScheduleTriggerResult,
   Session,
   SessionID,
   Task,
@@ -92,6 +93,7 @@ import type {
 import {
   EXECUTING_SESSION_STATUSES,
   isAgenticToolName,
+  isCanonicalFullUuid,
   isSessionExecuting,
   isTaskPendingDispatch,
   isTerminalTaskStatus,
@@ -124,6 +126,10 @@ import {
   type StructuredLogValue,
   structuredLogErrorCode,
 } from '../utils/structured-log.js';
+import {
+  hashScheduleTriggerToken,
+  scheduleTriggerTokenHashesMatch,
+} from './schedule-trigger-token.js';
 
 function isSQLiteBusyError(err: unknown): boolean {
   if (!err) return false;
@@ -246,6 +252,18 @@ export class ScheduleNotReadyError extends Error {
     super(message);
     this.name = 'ScheduleNotReadyError';
     this.code = code;
+  }
+}
+
+/**
+ * Thrown by the trigger route for an unknown schedule AND for a wrong token,
+ * so a caller without the token cannot tell the two apart (both map to 404).
+ */
+export class ScheduleTriggerNotFoundError extends Error {
+  public readonly code = 'schedule_trigger_not_found';
+  constructor() {
+    super('Schedule trigger not found');
+    this.name = 'ScheduleTriggerNotFoundError';
   }
 }
 
@@ -584,6 +602,9 @@ export class SchedulerService {
           );
           if (!schedule) return;
           await this.processSchedule(schedule, now);
+          if (schedule.trigger_pending_at !== undefined) {
+            await this.runPendingTrigger(schedule.schedule_id);
+          }
           stats.processed += 1;
         });
       } catch (error) {
@@ -738,11 +759,11 @@ export class SchedulerService {
   /**
    * Public: trigger a scheduled run on-demand.
    *
-   * Used by `POST /schedules/:id/run-now`. Reuses the same spawn path as
-   * the cron tick (via spawnScheduledSession) so scheduled and manual
-   * runs are indistinguishable downstream, except for a
-   * `triggered_manually: true` marker in custom_context and a different
-   * session title.
+   * Used by `POST /schedules/:id/run-now`; `triggerSchedule` shares the
+   * same `runOnDemand` path with `source: 'webhook'`. Reuses the same spawn path as the cron tick (via
+   * spawnScheduledSession) so scheduled and on-demand runs are
+   * indistinguishable downstream, except for the `trigger_source` /
+   * `triggered_manually` markers in custom_context and the session title.
    *
    * @throws ScheduleNotReadyError when the schedule is disabled or its
    *   branch can't be loaded.
@@ -750,7 +771,20 @@ export class SchedulerService {
    *   this schedule already has an active run.
    */
   async executeScheduleNow(opts: { scheduleId: ScheduleID; triggeredBy: UUID }): Promise<Session> {
-    const { scheduleId, triggeredBy } = opts;
+    return (await this.runOnDemand({ ...opts, source: 'manual' })).session;
+  }
+
+  /**
+   * Shared on-demand run. `created` is false when the minute-rounded
+   * occurrence already existed (another on-demand or cron run won it), so
+   * no new run started.
+   */
+  private async runOnDemand(opts: {
+    scheduleId: ScheduleID;
+    triggeredBy: UUID;
+    source: 'manual' | 'webhook';
+  }): Promise<{ session: Session; created: boolean }> {
+    const { scheduleId, triggeredBy, source } = opts;
     const schedule = await this.withTenantDatabase(() => this.scheduleRepo.findById(scheduleId));
     if (!schedule) {
       throw new ScheduleNotReadyError('schedule_incomplete', `Schedule not found: ${scheduleId}`);
@@ -772,16 +806,126 @@ export class SchedulerService {
     // collisions within the same minute) dedupe via scheduled_run_at.
     const scheduledRunAt = roundToMinute(new Date(now)).getTime();
 
-    const session = await this.spawnScheduledSession(schedule, scheduledRunAt, now, {
-      source: 'manual',
+    const run = await this.spawnScheduledSession(schedule, scheduledRunAt, now, {
+      source,
       triggeredBy,
     });
-    if (!session) {
+    if (!run) {
       throw new Error(
         `Unexpected null result from spawnScheduledSession for manual run on schedule ${scheduleId}`
       );
     }
-    return session;
+    return run;
+  }
+
+  /**
+   * Public: start a run from the schedule's inbound trigger URL.
+   *
+   * The caller has no user session; possession of the token is the proof.
+   * Tenant identity comes from the token hash (narrow discovery capability in
+   * hosted mode), never from the request. The run reuses `executeScheduleNow`
+   * as the schedule's owner, marked `trigger_source: 'webhook'`.
+   *
+   * When no new run can start (busy under `allow_concurrent_runs: false`,
+   * or this minute's occurrence already exists) the trigger coalesces into
+   * one pending follow-up that the tick starts later.
+   *
+   * @throws ScheduleTriggerNotFoundError for an unknown schedule or wrong token.
+   * @throws ScheduleNotReadyError when the schedule is disabled.
+   */
+  async triggerSchedule(scheduleId: ScheduleID, token: string): Promise<ScheduleTriggerResult> {
+    // Exact IDs only: short-ID prefix resolution would answer differently
+    // (e.g. "ambiguous") for a caller who does not hold the token.
+    if (!isCanonicalFullUuid(scheduleId)) throw new ScheduleTriggerNotFoundError();
+    const tokenHash = hashScheduleTriggerToken(token);
+    const tenantId = await this.findTriggerTenant(scheduleId, tokenHash);
+    if (!tenantId) throw new ScheduleTriggerNotFoundError();
+
+    return runWithTenantContext(tenantId, async () => {
+      const storedHash = await this.withTenantDatabase(() =>
+        this.scheduleRepo.findTriggerTokenHash(scheduleId)
+      );
+      if (!storedHash || !scheduleTriggerTokenHashesMatch(storedHash, tokenHash)) {
+        throw new ScheduleTriggerNotFoundError();
+      }
+      const schedule = await this.withTenantDatabase(() => this.scheduleRepo.findById(scheduleId));
+      if (!schedule) {
+        throw new ScheduleTriggerNotFoundError();
+      }
+      if (!schedule.enabled) {
+        throw new ScheduleNotReadyError(
+          'schedule_disabled',
+          'Schedule is disabled. Enable it before triggering it.'
+        );
+      }
+
+      const now = Date.now();
+      const outcome = await this.startTriggeredRun(schedule);
+      await this.withTenantDatabase(() => this.scheduleRepo.recordTrigger(scheduleId, now));
+      if (outcome === 'coalesced') {
+        await this.withTenantDatabase(() => this.scheduleRepo.markTriggerPending(scheduleId, now));
+      }
+      this.logWorkEvent('info', 'trigger_accepted', { schedule_id: scheduleId, outcome });
+      return { status: outcome };
+    });
+  }
+
+  private async findTriggerTenant(
+    scheduleId: ScheduleID,
+    tokenHash: string
+  ): Promise<TenantID | string | null> {
+    if (this.config.tenantId) return this.config.tenantId;
+    const ref = await runWithSystemDatabaseScope(
+      this.db,
+      'schedule trigger tenant discovery',
+      () => this.scheduleRepo.findTriggerRef(tokenHash),
+      { capability: 'schedule_trigger_discovery' }
+    );
+    return ref?.schedule_id === scheduleId ? (ref.tenant_id ?? null) : null;
+  }
+
+  /**
+   * Try to start one triggered run. Concurrency follows the schedule's own
+   * `allow_concurrent_runs`, decided by the locked admission check; an
+   * existing occurrence for this minute (from cron, run-now, or another
+   * trigger) means nothing new started. Both coalesce.
+   */
+  private async startTriggeredRun(schedule: Schedule): Promise<ScheduleTriggerResult['status']> {
+    try {
+      const { created } = await this.runOnDemand({
+        scheduleId: schedule.schedule_id,
+        triggeredBy: schedule.created_by,
+        source: 'webhook',
+      });
+      return created ? 'started' : 'coalesced';
+    } catch (error) {
+      if (error instanceof ScheduleBusyError) return 'coalesced';
+      throw error;
+    }
+  }
+
+  /**
+   * Tick step: start the single coalesced follow-up run. Reloads the
+   * schedule after cron processing so this minute's cron occurrence is seen.
+   * The claim is atomic across daemons; if no new run starts, the request is
+   * put back for a later tick. A failed start drops it (logged by the tick)
+   * rather than retrying a broken schedule forever.
+   */
+  private async runPendingTrigger(scheduleId: ScheduleID): Promise<void> {
+    const schedule = await this.withTenantDatabase(() => this.scheduleRepo.findById(scheduleId));
+    const pendingAt = schedule?.trigger_pending_at;
+    if (!schedule || pendingAt === undefined || !schedule.trigger_enabled) return;
+    const claimed = await this.withTenantDatabase(() =>
+      this.scheduleRepo.claimTriggerPending(scheduleId)
+    );
+    if (!claimed) return;
+    if ((await this.startTriggeredRun(schedule)) !== 'started') {
+      await this.withTenantDatabase(() =>
+        this.scheduleRepo.markTriggerPending(scheduleId, pendingAt)
+      );
+      return;
+    }
+    this.logWorkEvent('info', 'trigger_follow_up_started', { schedule_id: scheduleId });
   }
 
   /**
@@ -824,10 +968,10 @@ export class SchedulerService {
   /**
    * Spawn a scheduled session for a schedule.
    *
-   * Shared path for both cron-driven and manual (execute-now) runs.
+   * Shared path for cron-driven, manual (run-now), and webhook (trigger URL) runs.
    * - `source: 'cron'`: concurrency violation is a silent skip (metadata
    *   still advanced to avoid repeated checks).
-   * - `source: 'manual'`: concurrency violation throws `ScheduleBusyError`
+   * - `source: 'manual' | 'webhook'`: concurrency violation throws `ScheduleBusyError`
    *   so the API route can surface a 409.
    *
    * Steps:
@@ -853,10 +997,12 @@ export class SchedulerService {
     schedule: Schedule,
     scheduledRunAt: number,
     now: number,
-    options: { source: 'cron' | 'manual'; triggeredBy?: UUID } = { source: 'cron' }
-  ): Promise<Session | null> {
+    options: { source: 'cron' | 'manual' | 'webhook'; triggeredBy?: UUID } = { source: 'cron' }
+  ): Promise<{ session: Session; created: boolean } | null> {
     const { source, triggeredBy } = options;
-    const manual = source === 'manual';
+    // Manual and webhook runs are on-demand: they surface errors to the caller
+    // instead of silently skipping, and never advance the cron cursor.
+    const onDemand = source !== 'cron';
     const branch = await this.withTenantDatabase(() =>
       this.branchRepo.findById(schedule.branch_id)
     );
@@ -870,7 +1016,7 @@ export class SchedulerService {
       this.branchRepo.resolveUserAccess(branch, schedule.created_by)
     );
     if (!['session', 'prompt', 'all'].includes(creatorAccess.can)) {
-      if (!manual) await this.advanceScheduleCursor(schedule, now);
+      if (!onDemand) await this.advanceScheduleCursor(schedule, now);
       throw new ScheduleNotReadyError(
         'schedule_permission_revoked',
         `Schedule creator ${schedule.created_by} no longer has Collaborator access to branch ${schedule.branch_id}`
@@ -889,7 +1035,7 @@ export class SchedulerService {
     } catch (error) {
       if (!(error instanceof InvalidScheduleAgenticToolConfigError)) throw error;
       const removedTool = !isAgenticToolName(schedule.agentic_tool_config.agentic_tool);
-      if (!manual) await this.advanceScheduleCursor(schedule, now);
+      if (!onDemand) await this.advanceScheduleCursor(schedule, now);
       throw new ScheduleNotReadyError(
         removedTool ? 'schedule_agentic_tool_removed' : 'schedule_invalid_config',
         removedTool
@@ -995,9 +1141,10 @@ export class SchedulerService {
           scheduled_run_at: scheduledRunAt,
           scheduled_from_branch: true,
           schedule_id: schedule.schedule_id,
-          title: manual
-            ? `${schedule.name} — manual @ ${new Date(scheduledRunAt).toISOString()}`
-            : `${schedule.name} — ${new Date(scheduledRunAt).toISOString()}`,
+          title:
+            source === 'cron'
+              ? `${schedule.name} — ${new Date(scheduledRunAt).toISOString()}`
+              : `${schedule.name} — ${source === 'webhook' ? 'triggered' : 'manual'} @ ${new Date(scheduledRunAt).toISOString()}`,
           contextFiles: cfg.context_files ?? [],
           permission_config: resolvedConfig.sessionConfig.permission_config,
           model_config: resolvedConfig.sessionConfig.model_config,
@@ -1006,8 +1153,9 @@ export class SchedulerService {
               rendered_prompt: renderedPrompt,
               run_index: runIndex,
               initial_task_id: candidateTaskId,
-              triggered_manually: manual,
-              triggered_by: manual ? triggeredBy : undefined,
+              triggered_manually: source === 'manual',
+              triggered_by: source === 'manual' ? triggeredBy : undefined,
+              trigger_source: source,
               schedule_config_snapshot: {
                 schedule_id: schedule.schedule_id,
                 cron: schedule.cron_expression,
@@ -1057,11 +1205,12 @@ export class SchedulerService {
         scheduled_run_at: scheduledRunAt,
         source,
       });
-      if (manual) throw new ScheduleBusyError(schedule.name);
+      if (onDemand) throw new ScheduleBusyError(schedule.name);
       await this.updateScheduleMetadata(schedule, scheduledRunAt, null, now);
       return null;
     }
 
+    const created = admission.outcome === 'created';
     const recovering = admission.outcome === 'existing';
     this.logWorkEvent(
       'info',
@@ -1079,35 +1228,35 @@ export class SchedulerService {
         this.sessionRepo.isScheduledInitializationComplete(admission.session.session_id)
       ))
     ) {
-      return admission.session;
+      return { session: admission.session, created };
     }
     if (
       recovering &&
       admission.session.scheduler_init_failure_code &&
       !admission.session.scheduler_init_retry_at
     ) {
-      if (manual) {
+      if (onDemand) {
         throw new ScheduleNotReadyError(
           'schedule_incomplete',
           'This scheduled occurrence has a permanent initialization failure.'
         );
       }
       await this.advanceScheduleCursor(schedule, now);
-      return admission.session;
+      return { session: admission.session, created };
     }
     if (
       recovering &&
       admission.session.scheduler_init_retry_at &&
       Date.parse(admission.session.scheduler_init_retry_at) > now
     ) {
-      if (manual) {
+      if (onDemand) {
         throw new ScheduleNotReadyError(
           'schedule_initialization_retry_pending',
           'This scheduled occurrence is waiting for its durable initialization retry.'
         );
       }
       await this.advanceScheduleCursor(schedule, now);
-      return admission.session;
+      return { session: admission.session, created };
     }
     await this.config.testHooks?.afterSessionAdmission?.(admission.session);
     try {
@@ -1137,10 +1286,10 @@ export class SchedulerService {
         throw error instanceof ScheduledInitializationError ? error.cause : error;
       }
       await this.recordInitializationFailure(admission.session, error);
-      if (!manual) await this.advanceScheduleCursor(schedule, now);
+      if (!onDemand) await this.advanceScheduleCursor(schedule, now);
       throw error;
     }
-    return admission.session;
+    return { session: admission.session, created };
   }
 
   private async recoverIncompleteSession(

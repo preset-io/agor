@@ -22,6 +22,7 @@ import {
   type AgorConfig,
   ENV_VAR_CONSTRAINTS,
   environmentCommandCapabilities,
+  getDaemonBaseUrl,
   isEnvVarAllowed,
   permanentBranchDeletionCapability,
   type ResolvedDeploymentConfig,
@@ -104,7 +105,9 @@ import type {
   MessageID,
   MessageSource,
   Params,
+  Schedule,
   ScheduleID,
+  ScheduleTriggerTokenResult,
   Session,
   SessionID,
   SessionMCPServer,
@@ -131,7 +134,10 @@ import {
   MessageRole,
   normalizeRole,
   ROLES,
+  SCHEDULE_TRIGGER_TOKEN_ACTIONS,
+  type ScheduleTriggerTokenAction,
   SessionStatus,
+  scheduleTriggerPath,
   TaskStatus,
   UPLOAD_REQUEST_ID_HEADER,
 } from '@agor/core/types';
@@ -207,6 +213,7 @@ import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
+import { registerScheduleTriggerRoute } from './routes/schedule-trigger.js';
 import { registerTeamsGatewayIngressRoute } from './routes/teams-gateway-ingress.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
@@ -221,6 +228,7 @@ import { createMCPCatalogStartSessionService } from './services/mcp-catalog-star
 import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
 import { notifyMcpSlackConnectCard } from './services/mcp-slack-connect-card.js';
 import { createMCPSlackConnectCardControl } from './services/mcp-slack-connect-control.js';
+import { generateScheduleTriggerToken } from './services/schedule-trigger-token.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -4747,6 +4755,79 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       ],
     },
   });
+
+  // ============================================================================
+  // Schedule trigger URL: token management + the token-gated trigger itself.
+  // ============================================================================
+  // The token runs the schedule as its owner, so issuing one needs exactly the
+  // run-now authority: the owner (or superadmin) with branch-tier 'all'.
+  registerAuthenticatedRoute(
+    app,
+    '/schedules/:id/trigger-token',
+    {
+      async create(data: unknown, params: RouteParams): Promise<ScheduleTriggerTokenResult> {
+        const action = (data as { action?: unknown } | null)?.action;
+        if (!SCHEDULE_TRIGGER_TOKEN_ACTIONS.includes(action as ScheduleTriggerTokenAction)) {
+          throw new BadRequest(
+            `action must be one of: ${SCHEDULE_TRIGGER_TOKEN_ACTIONS.join(', ')}`
+          );
+        }
+        const id = params.route?.id;
+        if (!id) throw new BadRequest('Schedule ID required');
+        // loadScheduleAndBranch caches the row for external callers.
+        const schedule =
+          (params as RouteParams & { schedule?: Schedule }).schedule ??
+          (await scheduleRepository.findById(id));
+        if (!schedule) throw new NotFound(`Schedule not found: ${id}`);
+        if (action === 'enable' && schedule.trigger_enabled) {
+          throw new Conflict('Trigger URL is already enabled. Rotate it to issue a new token.');
+        }
+        if (action === 'rotate' && !schedule.trigger_enabled) {
+          throw new BadRequest('Trigger URL is not enabled. Enable it first.');
+        }
+
+        const issued =
+          action === 'enable' || action === 'rotate' ? generateScheduleTriggerToken() : null;
+        let updated = schedule;
+        if (action !== 'status') {
+          updated = await scheduleRepository.setTriggerTokenHash(
+            schedule.schedule_id,
+            issued?.tokenHash ?? null
+          );
+          emitServiceEvent(app, {
+            path: 'schedules',
+            event: 'patched',
+            data: updated,
+            id: updated.schedule_id,
+            params,
+          });
+        }
+        const baseUrl = updated.trigger_enabled ? await getDaemonBaseUrl(db) : '';
+        return {
+          schedule_id: updated.schedule_id,
+          trigger_enabled: updated.trigger_enabled,
+          ...(updated.last_triggered_at ? { last_triggered_at: updated.last_triggered_at } : {}),
+          ...(baseUrl
+            ? { trigger_url: `${baseUrl}${scheduleTriggerPath(updated.schedule_id)}` }
+            : {}),
+          ...(issued ? { token: issued.token } : {}),
+        };
+      },
+    },
+    { create: { role: ROLES.MEMBER, action: 'manage schedule trigger' } },
+    requireAuth
+  );
+  app.service('/schedules/:id/trigger-token').hooks({
+    before: {
+      create: [
+        loadScheduleAndBranch(scheduleRepository, branchRepository),
+        ensureScheduleRunsAsCaller(superadminOpts),
+        ensureBranchPermission('all', 'manage schedule trigger', superadminOpts),
+      ],
+    },
+  });
+
+  registerScheduleTriggerRoute(app);
 
   // ============================================================================
   // Back-compat shim: POST /branches/:id/execute-schedule-now

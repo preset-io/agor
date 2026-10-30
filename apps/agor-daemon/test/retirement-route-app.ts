@@ -13,7 +13,12 @@ import { SessionsService } from '../src/services/sessions';
 
 /** Production route registration, hooks and lifecycle services; unrelated services are inert.
  * Authentication is represented by trusted params, not a provider/browser sign-in. */
-export async function retirementRouteApp(db: TenantScopeAwareDatabase, config: AgorConfig) {
+export async function retirementRouteApp(
+  db: TenantScopeAwareDatabase,
+  config: AgorConfig,
+  /** Registration stops at (excludes) this path; earlier routes are live. */
+  stopAt = '/branches/:id/archive-or-delete'
+) {
   const app = feathersExpress(feathers()) as unknown as Application;
   app.configure(socketio());
   app.set('config', config);
@@ -34,7 +39,7 @@ export async function retirementRouteApp(db: TenantScopeAwareDatabase, config: A
   const stop = new Error('retirement registered');
   const use = app.use.bind(app);
   const useSpy = vi.spyOn(app, 'use').mockImplementation((...args) => {
-    if (args[0] === '/branches/:id/archive-or-delete') throw stop;
+    if (args[0] === stopAt) throw stop;
     return use(...args);
   });
   try {

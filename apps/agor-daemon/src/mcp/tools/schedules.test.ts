@@ -367,4 +367,55 @@ describe('schedule MCP input schemas', () => {
     expect(body.total).toBe(PAGINATION.MAX_LIMIT + 1);
     expect(body.data).toHaveLength(25);
   });
+
+  it('reads or disables the trigger and never returns a token', async () => {
+    const configs = new Map<string, { inputSchema: { safeParse: (args: unknown) => any } }>();
+    const handlers = new Map<string, ToolHandler>();
+    const fakeServer = {
+      registerTool: (
+        name: string,
+        cfg: { inputSchema: { safeParse: (args: unknown) => any } },
+        cb: ToolHandler
+      ) => {
+        configs.set(name, cfg);
+        handlers.set(name, cb);
+      },
+    } as unknown as McpServer;
+    // Even if the route ever returned a token, the tool must drop it.
+    const tokenRoute = {
+      create: vi.fn(async () => ({
+        schedule_id: 'schedule-1',
+        trigger_enabled: true,
+        token: 'agor_trg_must-not-leak',
+      })),
+    };
+    const schedules = { get: vi.fn(async () => ({ schedule_id: 'schedule-1' })) };
+    const baseServiceParams = { provider: 'mcp' } as const;
+    registerScheduleTools(fakeServer, {
+      app: {
+        service: (path: string) =>
+          path === '/schedules/:id/trigger-token' ? tokenRoute : schedules,
+      } as any,
+      db: {} as any,
+      userId: 'user-1' as any,
+      sessionId: undefined,
+      authenticatedUser: { user_id: 'user-1', email: 'user@example.com', role: 'member' } as any,
+      baseServiceParams,
+    });
+
+    const schema = configs.get('agor_schedules_set_trigger')!.inputSchema;
+    for (const action of ['enable', 'rotate', 'reveal']) {
+      expect(schema.safeParse({ scheduleId: 'schedule-1', action }).success).toBe(false);
+    }
+    for (const action of ['status', 'disable']) {
+      const args = schema.safeParse({ scheduleId: 'schedule-1', action });
+      expect(args.success).toBe(true);
+      const result = await handlers.get('agor_schedules_set_trigger')!(args.data);
+      expect(JSON.stringify(result)).not.toContain('agor_trg_');
+      expect(tokenRoute.create).toHaveBeenLastCalledWith(
+        { action },
+        { route: { id: 'schedule-1' }, ...baseServiceParams }
+      );
+    }
+  });
 });

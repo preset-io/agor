@@ -263,6 +263,26 @@ export interface Schedule {
    */
   next_run_at?: number;
 
+  // ===== Inbound trigger =====
+
+  /**
+   * Whether the schedule has an inbound trigger token
+   * (`POST /schedules/:id/trigger`). Only a hash is stored; the token is
+   * shown once when it is issued and never returned again.
+   */
+  trigger_enabled: boolean;
+
+  /** Last accepted trigger request (Unix ms). */
+  last_triggered_at?: number;
+
+  /**
+   * Set when a trigger could not start a new run (one is active, or one
+   * already started this minute). The scheduler tick starts one follow-up
+   * run once that is no longer true, then clears it. Disabling the schedule
+   * clears it too.
+   */
+  trigger_pending_at?: number;
+
   // ===== Audit =====
 
   /** Creation timestamp (ISO 8601). */
@@ -370,3 +390,32 @@ export const SCHEDULE_PATCH_WRITE_FIELDS: ExhaustiveWriteFields<
   SchedulePatchData,
   typeof SCHEDULE_PATCH_WRITE_FIELD_VALUES
 > = SCHEDULE_PATCH_WRITE_FIELD_VALUES;
+
+/** Every schedule trigger token starts with this non-secret prefix (secret scanners key on it). */
+export const SCHEDULE_TRIGGER_TOKEN_PREFIX = 'agor_trg_';
+
+/** Path of the unauthenticated, token-gated trigger endpoint for one schedule. */
+export function scheduleTriggerPath(scheduleId: ScheduleID): string {
+  return `/schedules/${scheduleId}/trigger`;
+}
+
+/**
+ * `POST /schedules/:id/trigger-token` actions. `enable`/`rotate` return the raw
+ * token once; `status` and `disable` never do.
+ */
+export const SCHEDULE_TRIGGER_TOKEN_ACTIONS = ['enable', 'rotate', 'disable', 'status'] as const;
+export type ScheduleTriggerTokenAction = (typeof SCHEDULE_TRIGGER_TOKEN_ACTIONS)[number];
+
+/** `POST /schedules/:id/trigger-token` response. `token` is present only on enable/rotate. */
+export interface ScheduleTriggerTokenResult {
+  schedule_id: ScheduleID;
+  trigger_enabled: boolean;
+  trigger_url?: string;
+  last_triggered_at?: number;
+  token?: string;
+}
+
+/** `POST /schedules/:id/trigger` (202) response. */
+export interface ScheduleTriggerResult {
+  status: 'started' | 'coalesced';
+}

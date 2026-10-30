@@ -79,6 +79,7 @@ import {
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { ActionErrorNotice } from '../CompactNotice';
 import { DrillCrumbs, useDiscardConfirm, useDrillFormDraft } from '../SettingsModal/SettingsDrill';
+import { ScheduleTriggerSection } from './ScheduleTriggerSection';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -537,7 +538,7 @@ export const ScheduleForm: React.FC<ScheduleFormProps> = ({
                   <Form.Item
                     name="allow_concurrent_runs"
                     label="Concurrency"
-                    extra="Controls overlap for this schedule only; sibling schedules on the same branch are independent."
+                    extra="Controls overlap for this schedule only; sibling schedules on the same branch are independent. Applies to cron, Run now, and the trigger URL. When overlap is blocked, a trigger during an active run queues one follow-up run instead."
                   >
                     <Radio.Group>
                       <Radio value={false}>
@@ -552,6 +553,14 @@ export const ScheduleForm: React.FC<ScheduleFormProps> = ({
           ]}
           style={{ marginTop: 16 }}
         />
+
+        {schedule?.schedule_id && (
+          <ScheduleTriggerSection
+            client={client}
+            schedule={schedule}
+            canManage={schedule.created_by === currentUser?.user_id}
+          />
+        )}
 
         {!isEditing && (
           <Alert
