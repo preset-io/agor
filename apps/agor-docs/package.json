@@ -20,16 +20,16 @@
     "build:search": "pagefind --site out --output-path out/_pagefind && rm -rf public/_pagefind && cp -R out/_pagefind public/_pagefind"
   },
   "dependencies": {
-    "@scalar/api-reference-react": "0.9.67",
+    "@scalar/api-reference-react": "0.9.83",
     "@theguild/remark-mermaid": "^0.3.0",
-    "katex": "^0.18.7",
-    "lucide-react": "^1.46.0",
-    "next": "^15.5.25",
+    "katex": "^0.19.1",
+    "lucide-react": "^1.62.0",
+    "next": "^15.5.28",
     "nextra": "^4.6.1",
     "nextra-theme-docs": "^4.6.1",
     "ogl": "^1.0.11",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
