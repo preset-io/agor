@@ -123,6 +123,7 @@ export function appVariables(record, domain, password, previewBase = 'runtime-bu
     AGOR_SOURCE_BRANCH: record.ref,
     AGOR_MANAGED_BRANCH_ID: record.branchId,
     ...(record.tenantId ? { AGOR_MANAGED_TENANT_ID: record.tenantId } : {}),
+    AGOR_EXAMPLE_BOARD: 'true',
     AGOR_AGENTIC_TOOLS: 'claude-code,codex,opencode,copilot',
     AGOR_RUNTIME_ADD_TOOLS: 'claude-code,codex,opencode,copilot',
     RAILWAY_DOCKERFILE_PATH: 'docker/Dockerfile',
