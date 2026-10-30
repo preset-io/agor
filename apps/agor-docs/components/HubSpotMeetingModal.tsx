@@ -40,6 +40,7 @@ export function MeetingEmbed() {
   // (the standalone meeting modal and the contact-form modal's "book a demo
   // instead" view alike).
   useEffect(() => {
+    window.gtag?.('event', 'demo_scheduler_open', { form_name: 'agor_cloud_demo' });
     window.dataLayer = window.dataLayer || [];
     window.dataLayer.push({ event: 'hubspot_meeting_open' });
   }, []);
