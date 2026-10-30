@@ -1,0 +1,12 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: accounts
+        description: One row per customer account (plus internal and sandbox accounts).
+      - name: users
+        description: One row per seat.
+      - name: events
+        description: Product events from web and mobile, including passive ones (notification_received, email_opened).
