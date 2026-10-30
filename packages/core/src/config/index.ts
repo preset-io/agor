@@ -39,9 +39,9 @@ export type {
   ResolveSecurityOptions,
 } from './security-resolver';
 export {
+  FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC,
   getDefaultGitConfigParameters,
   gitConfigParameterLooksSecret,
-  RELEASE_NOTES_CSP_IMG_SRC,
   redactUrlUserinfo,
   renderGitConfigParametersForLog,
   resolveGitConfigParameters,

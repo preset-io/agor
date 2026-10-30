@@ -18,7 +18,7 @@ Agor MCP tool domains:
 - artifacts: Live apps and DOM inspection/materialization for board artifacts
 - knowledge: Markdown docs, version history, search, and graph links
 - schedules: Cron-based branch schedules from prompt templates
-- release-notes: Recent user-facing Agor features and fixes
+- feature-announcements: Recent user-facing Agor features and fixes
 - mcp-servers: External MCP server configuration and OAuth
 - users: User accounts, profiles, preferences, and administration
 - analytics: Usage and cost tracking

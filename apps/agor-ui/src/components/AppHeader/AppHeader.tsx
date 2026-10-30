@@ -21,9 +21,9 @@ import { BrandLogo } from '../BrandLogo';
 import { BrandMark } from '../BrandMark';
 import { ConnectionStatus } from '../ConnectionStatus';
 import { CreateMenu, type CreateModalKind } from '../CreateMenu';
+import { FeatureAnnouncementsBell } from '../FeatureAnnouncements';
 import { GlobalUserMenu } from '../GlobalUserMenu';
 import { MarkdownRenderer } from '../MarkdownRenderer';
-import { ReleaseNotesBell } from '../ReleaseNotes';
 import { buildThemeMenuItems } from '../ThemeSwitcher';
 import { AppHeaderGlobalSearch } from './AppHeaderGlobalSearch';
 import { GlobalPresenceFacepile } from './GlobalPresenceFacepile';
@@ -407,7 +407,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             />
           </Tooltip>
         )}
-        <ReleaseNotesBell />
+        <FeatureAnnouncementsBell />
         <SettingsDropdown items={settingsItems} />
         <GlobalUserMenu
           user={user}

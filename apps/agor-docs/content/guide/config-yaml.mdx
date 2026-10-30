@@ -388,18 +388,18 @@ call-specific default wins over `timeout_ms.default`.
 
 ## What's new
 
-The bell in the navbar lists recent user-facing changes. Major ones also appear once in a
-What's new window, and agents can read them through MCP (`agor_release_notes_list`). Choose where
-the notes come from:
+Feature announcements: the What's new bell in the navbar lists recent user-facing changes, major
+ones also appear once in a What's new window, and agents can read them through MCP
+(`agor_feature_announcements_list`). Choose where the announcements come from:
 
 ```yaml
-release_notes:
+feature_announcements:
   source: bundled # bundled | cloud | off
 ```
 
 - `bundled` (default for self-hosted): the released sections of `CHANGELOG.md` shipped with the
   daemon. Features, Fixes, Security and Breaking entries appear; Chores and Unreleased do not.
-- `cloud`: notes published by Agor Cloud. This is the default when the daemon has the Agor Cloud
+- `cloud`: announcements published by Agor Cloud. This is the default when the daemon has the Agor Cloud
   runtime credential (`AGOR_CLOUD_API_BASE_URL` and `AGOR_CLOUD_*`).
 - `off`: hides the bell and the What's new window.
 

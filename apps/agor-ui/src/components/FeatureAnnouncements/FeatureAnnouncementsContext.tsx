@@ -1,17 +1,20 @@
 import type {
   AgorClient,
-  ReleaseNotesFeed,
-  ReleaseNotesMarkSeenRequest,
+  FeatureAnnouncementsFeed,
+  FeatureAnnouncementsMarkSeenRequest,
   User,
 } from '@agor-live/client';
-import { RELEASE_NOTES_MARK_SEEN_SERVICE, RELEASE_NOTES_SERVICE } from '@agor-live/client';
+import {
+  FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,
+  FEATURE_ANNOUNCEMENTS_SERVICE,
+} from '@agor-live/client';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 /** Cloud notes refresh on the daemon every 15 minutes; follow at the same pace. */
 const REFRESH_INTERVAL_MS = 15 * 60_000;
 
-interface ReleaseNotesController {
-  feed: ReleaseNotesFeed | null;
+interface FeatureAnnouncementsController {
+  feed: FeatureAnnouncementsFeed | null;
   drawerOpen: boolean;
   /** Notes that were unread when the drawer was opened, so they can stay marked as new. */
   newNoteIds: ReadonlySet<string>;
@@ -21,12 +24,12 @@ interface ReleaseNotesController {
   markMajorsSeen: (itemIds: string[]) => void;
 }
 
-const ReleaseNotesContext = createContext<ReleaseNotesController | null>(null);
+const FeatureAnnouncementsContext = createContext<FeatureAnnouncementsController | null>(null);
 
-/** Null outside the provider, when release notes are off, or before the source first answers. */
-export const useReleaseNotes = () => useContext(ReleaseNotesContext);
+/** Null outside the provider, when feature announcements are off, or before the source first answers. */
+export const useFeatureAnnouncements = () => useContext(FeatureAnnouncementsContext);
 
-export function ReleaseNotesProvider({
+export function FeatureAnnouncementsProvider({
   client,
   user,
   enabled,
@@ -37,12 +40,12 @@ export function ReleaseNotesProvider({
   enabled: boolean;
   children: React.ReactNode;
 }) {
-  const [feed, setFeed] = useState<ReleaseNotesFeed | null>(null);
+  const [feed, setFeed] = useState<FeatureAnnouncementsFeed | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [newNoteIds, setNewNoteIds] = useState<ReadonlySet<string>>(new Set());
   const userId = user?.user_id;
   // Another tab marking notes seen arrives as a users patch; refetch on it.
-  const seenKey = JSON.stringify(user?.preferences?.releaseNotes ?? null);
+  const seenKey = JSON.stringify(user?.preferences?.featureAnnouncements ?? null);
   const active = enabled && !!client && !!userId;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: seenKey and userId deliberately trigger a refetch
@@ -53,11 +56,15 @@ export function ReleaseNotesProvider({
     }
     let cancelled = false;
     const load = () =>
-      (client.service(RELEASE_NOTES_SERVICE).find() as unknown as Promise<ReleaseNotesFeed>).then(
+      (
+        client
+          .service(FEATURE_ANNOUNCEMENTS_SERVICE)
+          .find() as unknown as Promise<FeatureAnnouncementsFeed>
+      ).then(
         (next) => {
           if (!cancelled) setFeed(next);
         },
-        // Release notes are never worth an error toast; keep what we have.
+        // Feature announcements are never worth an error toast; keep what we have.
         () => {}
       );
     void load();
@@ -69,13 +76,13 @@ export function ReleaseNotesProvider({
   }, [active, client, userId, seenKey]);
 
   const markSeen = useCallback(
-    (request: ReleaseNotesMarkSeenRequest) => {
+    (request: FeatureAnnouncementsMarkSeenRequest) => {
       if (!client) return;
       client
-        .service(RELEASE_NOTES_MARK_SEEN_SERVICE)
+        .service(FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE)
         .create(request)
         .then(
-          (next) => setFeed(next as ReleaseNotesFeed),
+          (next) => setFeed(next as FeatureAnnouncementsFeed),
           () => {}
         );
     },
@@ -107,12 +114,16 @@ export function ReleaseNotesProvider({
   );
 
   // Nothing renders until the source has answered once, so a Cloud cell that
-  // ships before its release-notes endpoint shows no bell and no empty drawer.
+  // ships before its feature-announcements endpoint shows no bell and no empty drawer.
   const shown = active && !!feed?.available;
   const value = useMemo(
     () =>
       shown ? { feed, drawerOpen, newNoteIds, openDrawer, closeDrawer, markMajorsSeen } : null,
     [shown, feed, drawerOpen, newNoteIds, openDrawer, closeDrawer, markMajorsSeen]
   );
-  return <ReleaseNotesContext.Provider value={value}>{children}</ReleaseNotesContext.Provider>;
+  return (
+    <FeatureAnnouncementsContext.Provider value={value}>
+      {children}
+    </FeatureAnnouncementsContext.Provider>
+  );
 }

@@ -1,9 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { RELEASE_NOTES_CSP_IMG_SRC } from '@agor/core/config';
+import { FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC } from '@agor/core/config';
 import { describe, expect, it } from 'vitest';
-import { parseReleaseNotes, RELEASE_NOTE_HIGHLIGHTS_PATH } from './release-notes';
-import { parseChangelogReleaseNotes, type ReleaseNoteHighlight } from './release-notes-changelog';
+import {
+  FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH,
+  parseFeatureAnnouncements,
+} from './feature-announcements';
+import {
+  type FeatureAnnouncementHighlight,
+  parseChangelogFeatureAnnouncements,
+} from './feature-announcements-changelog';
 
 const CHANGELOG = `# Changelog
 
@@ -49,9 +55,9 @@ Release preparation covers merged changes.
 - **A fix** — fixed ([#101](https://github.com/preset-io/agor/pull/101))
 `;
 
-describe('parseChangelogReleaseNotes', () => {
+describe('parseChangelogFeatureAnnouncements', () => {
   it('ships dated releases newest first and skips Unreleased, Chores and undated headings', () => {
-    const notes = parseChangelogReleaseNotes(CHANGELOG);
+    const notes = parseChangelogFeatureAnnouncements(CHANGELOG);
 
     expect(notes.map((note) => [note.id, note.version, note.published_at])).toEqual([
       ['oss-0.2.0', '0.2.0', '2026-10-13T00:00:00.000Z'],
@@ -66,7 +72,7 @@ describe('parseChangelogReleaseNotes', () => {
   });
 
   it('keeps the entry text and details but moves PR links into pr_numbers', () => {
-    const [zones] = parseChangelogReleaseNotes(CHANGELOG)[0].items;
+    const [zones] = parseChangelogFeatureAnnouncements(CHANGELOG)[0].items;
 
     expect(zones).toMatchObject({
       id: 'oss-0.2.0-1',
@@ -79,7 +85,7 @@ describe('parseChangelogReleaseNotes', () => {
   });
 
   it('promotes an entry from the highlights sidecar by PR number', () => {
-    const [zones, second] = parseChangelogReleaseNotes(CHANGELOG, {
+    const [zones, second] = parseChangelogFeatureAnnouncements(CHANGELOG, {
       items: {
         '3136': {
           tier: 'major',
@@ -99,28 +105,30 @@ describe('parseChangelogReleaseNotes', () => {
   });
 
   it('limits the number of releases', () => {
-    expect(parseChangelogReleaseNotes(CHANGELOG, {}, 1).map((note) => note.version)).toEqual([
-      '0.2.0',
-    ]);
+    expect(
+      parseChangelogFeatureAnnouncements(CHANGELOG, {}, 1).map((note) => note.version)
+    ).toEqual(['0.2.0']);
   });
 
   it('turns the repository CHANGELOG and highlights into valid notes', () => {
     const root = join(__dirname, '..', '..', '..', '..');
-    const notes = parseReleaseNotes(
-      parseChangelogReleaseNotes(
+    const notes = parseFeatureAnnouncements(
+      parseChangelogFeatureAnnouncements(
         readFileSync(join(root, 'CHANGELOG.md'), 'utf8'),
-        JSON.parse(readFileSync(join(root, RELEASE_NOTE_HIGHLIGHTS_PATH), 'utf8'))
+        JSON.parse(readFileSync(join(root, FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH), 'utf8'))
       )
     );
 
     expect(notes.length).toBeGreaterThan(0);
     // Highlight visuals must load under the default CSP img-src.
-    const highlights = JSON.parse(readFileSync(join(root, RELEASE_NOTE_HIGHLIGHTS_PATH), 'utf8'));
-    for (const highlight of Object.values<ReleaseNoteHighlight>(highlights.items)) {
+    const highlights = JSON.parse(
+      readFileSync(join(root, FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH), 'utf8')
+    );
+    for (const highlight of Object.values<FeatureAnnouncementHighlight>(highlights.items)) {
       for (const url of [highlight.visual_url, highlight.visual_url_dark]) {
         if (url) {
           expect(new URL(url).protocol).toBe('https:');
-          expect(new URL(url).origin).toBe(RELEASE_NOTES_CSP_IMG_SRC);
+          expect(new URL(url).origin).toBe(FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC);
         }
       }
     }

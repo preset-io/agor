@@ -882,16 +882,16 @@ describe('loadConfig', () => {
     }
   );
 
-  it('accepts release note sources and rejects unknown ones', () => {
+  it('accepts feature announcement sources and rejects unknown ones', () => {
     for (const source of ['bundled', 'cloud', 'off'] as const) {
-      expect(() => assertValidRawConfig({ release_notes: { source } })).not.toThrow();
+      expect(() => assertValidRawConfig({ feature_announcements: { source } })).not.toThrow();
     }
     expect(() =>
-      assertValidRawConfig({ release_notes: { source: 'github' } } as unknown as AgorConfig)
-    ).toThrow(/release_notes.source must be one of bundled, cloud, off/);
+      assertValidRawConfig({ feature_announcements: { source: 'github' } } as unknown as AgorConfig)
+    ).toThrow(/feature_announcements.source must be one of bundled, cloud, off/);
     expect(() =>
-      assertValidRawConfig({ release_notes: { url: 'https://x' } } as unknown as AgorConfig)
-    ).toThrow(/release_notes.url/);
+      assertValidRawConfig({ feature_announcements: { url: 'https://x' } } as unknown as AgorConfig)
+    ).toThrow(/feature_announcements.url/);
   });
 
   it('rejects invalid managed environment execution modes', async () => {

@@ -15,7 +15,7 @@ import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agenti
 import type { Database } from '../db/client';
 import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
 import type { AgenticToolName } from '../types';
-import { RELEASE_NOTES_SOURCES } from '../types/release-notes';
+import { FEATURE_ANNOUNCEMENTS_SOURCES } from '../types/feature-announcements';
 import { normalizeHttpBaseUrl } from '../utils/url';
 import {
   agorHomePath,
@@ -640,7 +640,7 @@ function validateConfig(config: AgorConfig): void {
     'database',
     'external_launch',
     'mcp_oauth_relay',
-    'release_notes',
+    'feature_announcements',
     'identity',
     'execution',
     'security',
@@ -860,13 +860,13 @@ function validateConfig(config: AgorConfig): void {
   ]);
   assertValidRawExternalLaunchConfig(config.external_launch);
   only(config.mcp_oauth_relay, 'mcp_oauth_relay', ['callback_origin']);
-  only(config.release_notes, 'release_notes', ['source']);
+  only(config.feature_announcements, 'feature_announcements', ['source']);
   if (
-    config.release_notes?.source !== undefined &&
-    !RELEASE_NOTES_SOURCES.includes(config.release_notes.source)
+    config.feature_announcements?.source !== undefined &&
+    !FEATURE_ANNOUNCEMENTS_SOURCES.includes(config.feature_announcements.source)
   ) {
     throw new Error(
-      `Config error: release_notes.source must be one of ${RELEASE_NOTES_SOURCES.join(', ')}`
+      `Config error: feature_announcements.source must be one of ${FEATURE_ANNOUNCEMENTS_SOURCES.join(', ')}`
     );
   }
   only(config.identity, 'identity', [

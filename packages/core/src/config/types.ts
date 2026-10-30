@@ -4,7 +4,7 @@
 
 import type { InstallableAgenticTool } from '../agentic-integrations';
 import type { ManagedEnvExecutionMode } from '../environment/webhook';
-import type { ReleaseNotesSource } from '../types/release-notes';
+import type { FeatureAnnouncementsSource } from '../types/feature-announcements';
 import type { AgorPasswordPolicyProfile } from './password-policy';
 
 export type { ManagedEnvExecutionMode };
@@ -1593,8 +1593,8 @@ export interface AgorConfig {
    * hides the notification center. Unset resolves to `cloud` when the
    * `AGOR_CLOUD_*` runtime credential is complete, otherwise `bundled`.
    */
-  release_notes?: {
-    source?: ReleaseNotesSource;
+  feature_announcements?: {
+    source?: FeatureAnnouncementsSource;
   };
 
   /** User identity, lifecycle, role, and local-login authority. */

@@ -1,22 +1,28 @@
 import type {
   AgorClient,
-  ReleaseNoteDTO,
-  ReleaseNoteItemDTO,
-  ReleaseNotesFeed,
+  FeatureAnnouncementDTO,
+  FeatureAnnouncementItemDTO,
+  FeatureAnnouncementsFeed,
 } from '@agor-live/client';
-import { RELEASE_NOTES_MARK_SEEN_SERVICE, RELEASE_NOTES_SERVICE } from '@agor-live/client';
+import {
+  FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,
+  FEATURE_ANNOUNCEMENTS_SERVICE,
+} from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '../../contexts/ThemeContext';
 import { makeUser } from '../BranchModal/testUtils';
-import { ReleaseNotesBell } from './ReleaseNotesBell';
-import { ReleaseNotesProvider } from './ReleaseNotesContext';
-import { ReleaseNotesDrawer } from './ReleaseNotesDrawer';
+import { FeatureAnnouncementsBell } from './FeatureAnnouncementsBell';
+import { FeatureAnnouncementsProvider } from './FeatureAnnouncementsContext';
+import { FeatureAnnouncementsDrawer } from './FeatureAnnouncementsDrawer';
 import { WhatsNewModal } from './WhatsNewModal';
 
-const item = (id: string, overrides: Partial<ReleaseNoteItemDTO> = {}): ReleaseNoteItemDTO => ({
+const item = (
+  id: string,
+  overrides: Partial<FeatureAnnouncementItemDTO> = {}
+): FeatureAnnouncementItemDTO => ({
   id,
   tier: 'update',
   category: 'feature',
@@ -34,7 +40,7 @@ const item = (id: string, overrides: Partial<ReleaseNoteItemDTO> = {}): ReleaseN
   ...overrides,
 });
 
-const notes: ReleaseNoteDTO[] = [
+const notes: FeatureAnnouncementDTO[] = [
   {
     id: 'r2',
     version: '2',
@@ -65,7 +71,7 @@ const notes: ReleaseNoteDTO[] = [
   },
 ];
 
-const feed = (overrides: Partial<ReleaseNotesFeed> = {}): ReleaseNotesFeed => ({
+const feed = (overrides: Partial<FeatureAnnouncementsFeed> = {}): FeatureAnnouncementsFeed => ({
   source: 'cloud',
   available: true,
   notes,
@@ -77,12 +83,12 @@ const feed = (overrides: Partial<ReleaseNotesFeed> = {}): ReleaseNotesFeed => ({
 
 const user = makeUser({ preferences: { mainBoardId: '01a17e45-5b1a-71d0-baed-ed27bc25facf' } });
 
-function setup(initial: ReleaseNotesFeed, { suppressed = false } = {}) {
+function setup(initial: FeatureAnnouncementsFeed, { suppressed = false } = {}) {
   const find = vi.fn(async () => initial);
   const create = vi.fn(async () => feed({ unread_note_ids: [], pending_major_items: [] }));
   const service = vi.fn((path: string) => {
-    if (path === RELEASE_NOTES_SERVICE) return { find };
-    if (path === RELEASE_NOTES_MARK_SEEN_SERVICE) return { create };
+    if (path === FEATURE_ANNOUNCEMENTS_SERVICE) return { find };
+    if (path === FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE) return { create };
     if (path === 'users') return { getPrimaryTeammate: vi.fn(async () => null) };
     throw new Error(`Unexpected service ${path}`);
   });
@@ -91,11 +97,11 @@ function setup(initial: ReleaseNotesFeed, { suppressed = false } = {}) {
     <ThemeProvider>
       <AntdApp>
         <MemoryRouter>
-          <ReleaseNotesProvider client={client} user={user} enabled>
-            <ReleaseNotesBell />
-            <ReleaseNotesDrawer client={client} user={user} />
+          <FeatureAnnouncementsProvider client={client} user={user} enabled>
+            <FeatureAnnouncementsBell />
+            <FeatureAnnouncementsDrawer client={client} user={user} />
             <WhatsNewModal user={user} suppressed={suppressed} />
-          </ReleaseNotesProvider>
+          </FeatureAnnouncementsProvider>
         </MemoryRouter>
       </AntdApp>
     </ThemeProvider>

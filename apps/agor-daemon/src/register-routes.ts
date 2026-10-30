@@ -2,17 +2,17 @@ import { resolveClaudeOAuthCapability } from '@agor/core/config';
 import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
 import {
   BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
+  FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,
+  FEATURE_ANNOUNCEMENTS_SERVICE,
   PRODUCT_ANALYTICS_SERVICE,
-  RELEASE_NOTES_MARK_SEEN_SERVICE,
-  RELEASE_NOTES_SERVICE,
 } from '@agor/core/types';
 import { BranchWorkspaceNotificationService } from './services/branch-workspace-notification';
-import { ProductAnalyticsService } from './services/product-analytics.js';
 import {
-  createReleaseNotesProvider,
-  ReleaseNotesMarkSeenService,
-  ReleaseNotesService,
-} from './services/release-notes';
+  createFeatureAnnouncementsProvider,
+  FeatureAnnouncementsMarkSeenService,
+  FeatureAnnouncementsService,
+} from './services/feature-announcements';
+import { ProductAnalyticsService } from './services/product-analytics.js';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
@@ -1099,7 +1099,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   });
 
   // One provider per daemon replica; `cloud` polls on its own timer.
-  const releaseNotesProvider = createReleaseNotesProvider(config);
+  const featureAnnouncementsProvider = createFeatureAnnouncementsProvider(config);
 
   const registerLongAuthenticatedRoute: typeof registerAuthenticatedRouteUnscoped = (
     routeApp,
@@ -4544,19 +4544,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   );
   // What's new: notes are platform content held in memory; the only tenant
   // data read or written is the caller's own users row.
-  const releaseNotesFeed = new ReleaseNotesService(releaseNotesProvider, new UsersRepository(db));
+  const featureAnnouncementsFeed = new FeatureAnnouncementsService(
+    featureAnnouncementsProvider,
+    new UsersRepository(db)
+  );
   registerAuthenticatedRoute(
     app,
-    RELEASE_NOTES_SERVICE,
-    releaseNotesFeed,
-    { find: { role: ROLES.VIEWER, action: 'read release notes' } },
+    FEATURE_ANNOUNCEMENTS_SERVICE,
+    featureAnnouncementsFeed,
+    { find: { role: ROLES.VIEWER, action: 'read feature announcements' } },
     requireAuth
   );
   registerAuthenticatedRoute(
     app,
-    RELEASE_NOTES_MARK_SEEN_SERVICE,
-    new ReleaseNotesMarkSeenService(releaseNotesFeed, app),
-    { create: { role: ROLES.VIEWER, action: 'mark release notes seen' } },
+    FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,
+    new FeatureAnnouncementsMarkSeenService(featureAnnouncementsFeed, app),
+    { create: { role: ROLES.VIEWER, action: 'mark feature announcements seen' } },
     requireAuth
   );
 
@@ -6924,7 +6927,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           : { required: false, ready: true },
         features: {
           environmentDisclaimerMarkdown: config.environment_disclaimer_markdown,
-          releaseNotes: releaseNotesProvider.source,
+          featureAnnouncements: featureAnnouncementsProvider.source,
           environmentCommands: environmentCommandCapabilities(config),
           permanentBranchDeletion: permanentBranchDeletionCapability(config),
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),

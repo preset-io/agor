@@ -16,10 +16,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { loadCuratedCatalog } from '../mcp-catalog/curated-loader';
 import {
+  FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC,
   getDefaultGitConfigParameters,
   gitConfigParameterLooksSecret,
   MCP_CATALOG_CSP_IMG_SRCS,
-  RELEASE_NOTES_CSP_IMG_SRC,
   redactUrlUserinfo,
   renderGitConfigParametersForLog,
   resolveGitConfigParameters,
@@ -54,7 +54,7 @@ describe('resolveSecurity — CSP defaults', () => {
 
   it("allows What's new visuals from the docs site by default", () => {
     const { csp } = resolveSecurity(EMPTY, { daemonUrl: 'http://localhost:3030' });
-    expect(csp.directives['img-src']).toContain(RELEASE_NOTES_CSP_IMG_SRC);
+    expect(csp.directives['img-src']).toContain(FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC);
   });
 
   it('allows checked-in MCP catalog logo origins by default', () => {

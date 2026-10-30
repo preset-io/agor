@@ -1,8 +1,8 @@
-import type { ReleaseNoteDTO, User } from '@agor-live/client';
+import type { FeatureAnnouncementDTO, User } from '@agor-live/client';
 import { shortId } from '@agor-live/client';
 import { beforeEach, expect, it } from 'vitest';
 import { recentBoardsStorageKey } from '../../hooks/useRecentBoards';
-import { buildAskTeammatePrompt, resolveCtaPath } from './releaseNotesLinks';
+import { buildAskTeammatePrompt, resolveCtaPath } from './featureAnnouncementsLinks';
 
 const MAIN = '01a17e45-5b1a-71d0-baed-ed27bc25facf';
 const RECENT = '01a17e47-4768-7017-92e4-75e003cf4a27';
@@ -39,7 +39,7 @@ it('asks the teammate about each item without changing anything unasked', () => 
         { title: 'A fix', agent_brief: 'Fixed a thing.', docs_url: null },
       ],
     },
-  ] as unknown as ReleaseNoteDTO[];
+  ] as unknown as FeatureAnnouncementDTO[];
 
   const prompt = buildAskTeammatePrompt(notes);
   expect(prompt).toContain(

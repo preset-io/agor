@@ -6,7 +6,7 @@ Images for the in-app What's new modal, served from `https://agor.live/whats-new
 - 640 × 320 (2:1), SVG or WebP, no text that needs translating beyond short labels.
 - The app falls back to text only when an image fails to load, so the copy must stand on its own.
 
-## Where release notes come from
+## Where feature announcements come from
 
 This repository is the single editorial source: `CHANGELOG.md` plus `highlights.json`. Self-hosted
 daemons ship both (the daemon build copies them into `dist/`) and parse them at startup. Agor

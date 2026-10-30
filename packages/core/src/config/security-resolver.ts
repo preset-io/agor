@@ -76,7 +76,7 @@ export const SANDPACK_CSP_FRAME_SRC = 'https://*.codesandbox.io';
 export const SANDPACK_CSP_WORKER_SRC = 'blob:';
 export const SLACK_AVATAR_CSP_IMG_SRC = 'https://*.slack-edge.com';
 /** What's new visuals are hosted on the docs site (`apps/agor-docs/public/whats-new/`). */
-export const RELEASE_NOTES_CSP_IMG_SRC = 'https://agor.live';
+export const FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC = 'https://agor.live';
 /**
  * Browser image origins used by the checked-in MCP catalog.
  *
@@ -118,7 +118,7 @@ function buildDefaultDirectives(opts: {
     'data:',
     'blob:',
     SLACK_AVATAR_CSP_IMG_SRC,
-    RELEASE_NOTES_CSP_IMG_SRC,
+    FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC,
     ...MCP_CATALOG_CSP_IMG_SRCS,
   ];
   const frameSrc = ["'self'"];

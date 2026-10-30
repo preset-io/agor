@@ -1,6 +1,6 @@
 /**
- * Release notes ("What's new"): in-memory platform content plus per-user seen
- * state in `users.data.preferences.releaseNotes`. No table: notes are either
+ * Feature announcements ("What's new"): in-memory platform content plus per-user seen
+ * state in `users.data.preferences.featureAnnouncements`. No table: notes are either
  * the CHANGELOG bundled with this daemon or the last good answer from Agor
  * Cloud, which each replica polls on its own.
  */
@@ -8,22 +8,22 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type AgorConfig, RELEASE_NOTES_CSP_IMG_SRC } from '@agor/core/config';
+import { type AgorConfig, FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC } from '@agor/core/config';
 import type { UsersRepository } from '@agor/core/db';
 import { BadRequest, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
+  FEATURE_ANNOUNCEMENT_ITEM_AUDIENCES,
+  FEATURE_ANNOUNCEMENT_ITEM_CATEGORIES,
+  FEATURE_ANNOUNCEMENT_ITEM_TIERS,
+  FEATURE_ANNOUNCEMENTS_LIMITS,
+  type FeatureAnnouncementDTO,
+  type FeatureAnnouncementsFeed,
+  type FeatureAnnouncementsMarkSeenRequest,
+  type FeatureAnnouncementsPreferences,
+  type FeatureAnnouncementsSource,
   hasMinimumRole,
   type Params,
-  RELEASE_NOTE_ITEM_AUDIENCES,
-  RELEASE_NOTE_ITEM_CATEGORIES,
-  RELEASE_NOTE_ITEM_TIERS,
-  RELEASE_NOTES_LIMITS,
-  type ReleaseNoteDTO,
-  type ReleaseNotesFeed,
-  type ReleaseNotesMarkSeenRequest,
-  type ReleaseNotesPreferences,
-  type ReleaseNotesSource,
   ROLES,
   type User,
   type UserID,
@@ -37,21 +37,22 @@ import {
   signCloudRuntimeAssertion,
 } from '../utils/cloud-runtime-credential.js';
 import {
-  parseChangelogReleaseNotes,
-  type ReleaseNoteHighlights,
-} from './release-notes-changelog.js';
+  type FeatureAnnouncementHighlights,
+  parseChangelogFeatureAnnouncements,
+} from './feature-announcements-changelog.js';
 import { withPreferencesMerge } from './users.js';
 
 /** Contract endpoint, relative to `AGOR_CLOUD_API_BASE_URL` (which ends in `/api`). */
-const CLOUD_RELEASE_NOTES_PATH = '/internal/runtime/release-notes';
-const CLOUD_RELEASE_NOTES_SCOPE = 'release_notes:read';
+const CLOUD_FEATURE_ANNOUNCEMENTS_PATH = '/internal/runtime/feature-announcements';
+const CLOUD_FEATURE_ANNOUNCEMENTS_SCOPE = 'feature_announcements:read';
 const CLOUD_POLL_INTERVAL_MS = 15 * 60_000;
 const CLOUD_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const CLOUD_MAX_NOTES = 50;
 /** Repository-relative location of the optional OSS highlights sidecar. */
-export const RELEASE_NOTE_HIGHLIGHTS_PATH = 'apps/agor-docs/public/whats-new/highlights.json';
+export const FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH =
+  'apps/agor-docs/public/whats-new/highlights.json';
 /** Its name when the daemon build copies it into dist/. */
-const RELEASE_NOTE_HIGHLIGHTS_FILE = 'highlights.json';
+const FEATURE_ANNOUNCEMENT_HIGHLIGHTS_FILE = 'highlights.json';
 
 const httpsUrl = z.url().refine((value) => value.startsWith('https://'));
 // In-app relative path only: one leading slash, never a protocol-relative URL.
@@ -59,9 +60,9 @@ const ctaPath = z.string().regex(/^\/(?!\/)[^\s\\]*$/);
 
 const itemSchema = z.object({
   id: z.string().min(1).max(200),
-  tier: z.enum(RELEASE_NOTE_ITEM_TIERS),
-  category: z.enum(RELEASE_NOTE_ITEM_CATEGORIES),
-  audience: z.enum(RELEASE_NOTE_ITEM_AUDIENCES),
+  tier: z.enum(FEATURE_ANNOUNCEMENT_ITEM_TIERS),
+  category: z.enum(FEATURE_ANNOUNCEMENT_ITEM_CATEGORIES),
+  audience: z.enum(FEATURE_ANNOUNCEMENT_ITEM_AUDIENCES),
   title: z.string().min(1).max(300),
   subtitle: z.string().max(300).nullable(),
   body_md: z.string().max(20_000),
@@ -93,14 +94,14 @@ function allowedVisual(url: string | null): boolean {
   try {
     // Check the scheme too: `blob:https://agor.live/x` also has that origin.
     const parsed = new URL(url);
-    return parsed.protocol === 'https:' && parsed.origin === RELEASE_NOTES_CSP_IMG_SRC;
+    return parsed.protocol === 'https:' && parsed.origin === FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC;
   } catch {
     return false;
   }
 }
 
 /** The one validation gate for both sources; anything the UI renders or navigates to passed it. */
-export function parseReleaseNotes(value: unknown): ReleaseNoteDTO[] {
+export function parseFeatureAnnouncements(value: unknown): FeatureAnnouncementDTO[] {
   const notes = z.array(noteSchema).max(CLOUD_MAX_NOTES).parse(value);
   let dropped = 0;
   for (const item of notes.flatMap((note) => note.items)) {
@@ -114,7 +115,7 @@ export function parseReleaseNotes(value: unknown): ReleaseNoteDTO[] {
   }
   if (dropped > 0) {
     console.warn(
-      `[release-notes] Dropped ${dropped} visual URL(s) outside ${RELEASE_NOTES_CSP_IMG_SRC}`
+      `[feature-announcements] Dropped ${dropped} visual URL(s) outside ${FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC}`
     );
   }
   return notes
@@ -122,19 +123,19 @@ export function parseReleaseNotes(value: unknown): ReleaseNoteDTO[] {
     .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
 }
 
-export function resolveReleaseNotesSource(
+export function resolveFeatureAnnouncementsSource(
   config: AgorConfig,
   env: NodeJS.ProcessEnv = process.env
-): ReleaseNotesSource {
-  const configured = config.release_notes?.source;
+): FeatureAnnouncementsSource {
+  const configured = config.feature_announcements?.source;
   if (configured) return configured;
   return env.AGOR_CLOUD_API_BASE_URL && hasCloudRuntimeCredential(env) ? 'cloud' : 'bundled';
 }
 
-export interface ReleaseNotesProvider {
-  readonly source: ReleaseNotesSource;
+export interface FeatureAnnouncementsProvider {
+  readonly source: FeatureAnnouncementsSource;
   /** Null until the source has answered once; the UI shows nothing until then. */
-  notes(): ReleaseNoteDTO[] | null;
+  notes(): FeatureAnnouncementDTO[] | null;
 }
 
 /** Walk up from this module to the first directory containing `relative`. */
@@ -153,23 +154,25 @@ function findUp(relative: string): string | undefined {
  * so a packaged daemon finds them next to its modules; a source checkout
  * finds the repository copies. Either way they are parsed once at startup.
  */
-export function loadBundledReleaseNotes(): ReleaseNoteDTO[] {
+export function loadBundledFeatureAnnouncements(): FeatureAnnouncementDTO[] {
   const changelog = findUp('CHANGELOG.md');
   if (!changelog) return [];
   const highlightsPath = [
-    join(dirname(changelog), RELEASE_NOTE_HIGHLIGHTS_FILE),
-    join(dirname(changelog), RELEASE_NOTE_HIGHLIGHTS_PATH),
+    join(dirname(changelog), FEATURE_ANNOUNCEMENT_HIGHLIGHTS_FILE),
+    join(dirname(changelog), FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH),
   ].find((path) => existsSync(path));
-  const highlights: ReleaseNoteHighlights = highlightsPath
+  const highlights: FeatureAnnouncementHighlights = highlightsPath
     ? JSON.parse(readFileSync(highlightsPath, 'utf8'))
     : {};
-  return parseReleaseNotes(parseChangelogReleaseNotes(readFileSync(changelog, 'utf8'), highlights));
+  return parseFeatureAnnouncements(
+    parseChangelogFeatureAnnouncements(readFileSync(changelog, 'utf8'), highlights)
+  );
 }
 
 /** Polls Agor Cloud; keeps the last good answer and stays quiet on failure. */
-export class CloudReleaseNotesPoller implements ReleaseNotesProvider {
+export class CloudFeatureAnnouncementsPoller implements FeatureAnnouncementsProvider {
   readonly source = 'cloud' as const;
-  private cached: ReleaseNoteDTO[] | null = null;
+  private cached: FeatureAnnouncementDTO[] | null = null;
   private failing = false;
   private readonly url: string;
   private readonly credential: CloudRuntimeCredential;
@@ -180,9 +183,9 @@ export class CloudReleaseNotesPoller implements ReleaseNotesProvider {
   ) {
     const base = new URL(env.AGOR_CLOUD_API_BASE_URL ?? '');
     if (base.protocol !== 'https:' || base.username || base.password) {
-      throw new Error('Cloud release notes require an HTTPS AGOR_CLOUD_API_BASE_URL');
+      throw new Error('Cloud feature announcements require an HTTPS AGOR_CLOUD_API_BASE_URL');
     }
-    this.url = `${base.origin}${base.pathname.replace(/\/+$/, '')}${CLOUD_RELEASE_NOTES_PATH}`;
+    this.url = `${base.origin}${base.pathname.replace(/\/+$/, '')}${CLOUD_FEATURE_ANNOUNCEMENTS_PATH}`;
     this.credential = loadCloudRuntimeCredential(env);
   }
 
@@ -192,7 +195,7 @@ export class CloudReleaseNotesPoller implements ReleaseNotesProvider {
     return this;
   }
 
-  notes(): ReleaseNoteDTO[] | null {
+  notes(): FeatureAnnouncementDTO[] | null {
     return this.cached;
   }
 
@@ -203,7 +206,7 @@ export class CloudReleaseNotesPoller implements ReleaseNotesProvider {
       const response = await this.fetchImpl(this.url, {
         headers: {
           Authorization: `Bearer ${signCloudRuntimeAssertion(this.credential, {
-            scope: CLOUD_RELEASE_NOTES_SCOPE,
+            scope: CLOUD_FEATURE_ANNOUNCEMENTS_SCOPE,
           })}`,
         },
         redirect: 'error',
@@ -211,14 +214,17 @@ export class CloudReleaseNotesPoller implements ReleaseNotesProvider {
       });
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
       const body = JSON.parse(await readBoundedText(response, CLOUD_MAX_RESPONSE_BYTES));
-      this.cached = parseReleaseNotes(z.object({ notes: z.unknown() }).parse(body).notes);
-      if (this.failing) console.log('[release-notes] Cloud release notes recovered');
+      this.cached = parseFeatureAnnouncements(
+        z.object({ announcements: z.unknown() }).parse(body).announcements
+      );
+      if (this.failing)
+        console.log('[feature-announcements] Cloud feature announcements recovered');
       this.failing = false;
     } catch (error) {
       // Log the transition once; keep serving the last good notes.
       if (!this.failing) {
         console.warn(
-          '[release-notes] Cloud release notes refresh failed; keeping cached notes:',
+          '[feature-announcements] Cloud feature announcements refresh failed; keeping cached notes:',
           error instanceof Error ? error.message : String(error)
         );
       }
@@ -227,29 +233,29 @@ export class CloudReleaseNotesPoller implements ReleaseNotesProvider {
   }
 }
 
-export function createReleaseNotesProvider(
+export function createFeatureAnnouncementsProvider(
   config: AgorConfig,
   env: NodeJS.ProcessEnv = process.env
-): ReleaseNotesProvider {
-  const source = resolveReleaseNotesSource(config, env);
+): FeatureAnnouncementsProvider {
+  const source = resolveFeatureAnnouncementsSource(config, env);
   if (source === 'cloud') {
     try {
-      return new CloudReleaseNotesPoller(env).start();
+      return new CloudFeatureAnnouncementsPoller(env).start();
     } catch (error) {
       console.warn(
-        '[release-notes] Cloud source unavailable; showing no release notes:',
+        '[feature-announcements] Cloud source unavailable; showing no feature announcements:',
         error instanceof Error ? error.message : String(error)
       );
       return { source, notes: () => null };
     }
   }
-  let notes: ReleaseNoteDTO[] = [];
+  let notes: FeatureAnnouncementDTO[] = [];
   if (source === 'bundled') {
     try {
-      notes = loadBundledReleaseNotes();
+      notes = loadBundledFeatureAnnouncements();
     } catch (error) {
       console.warn(
-        '[release-notes] Bundled release notes are invalid; showing none:',
+        '[feature-announcements] Bundled feature announcements are invalid; showing none:',
         error instanceof Error ? error.message : String(error)
       );
     }
@@ -260,12 +266,12 @@ export function createReleaseNotesProvider(
 const time = (iso: string | Date | undefined) => (iso ? new Date(iso).getTime() : 0);
 
 /** The caller's audience-filtered notes plus unread and modal state. */
-export function buildReleaseNotesFeed(
-  source: ReleaseNotesSource,
-  allNotes: ReleaseNoteDTO[] | null,
+export function buildFeatureAnnouncementsFeed(
+  source: FeatureAnnouncementsSource,
+  allNotes: FeatureAnnouncementDTO[] | null,
   user: Pick<User, 'role' | 'created_at' | 'preferences'>,
   now = Date.now()
-): ReleaseNotesFeed {
+): FeatureAnnouncementsFeed {
   const isAdmin = hasMinimumRole(user.role, ROLES.ADMIN);
   const notes = (allNotes ?? [])
     .map((note) => ({
@@ -273,14 +279,14 @@ export function buildReleaseNotesFeed(
       items: note.items.filter((item) => item.audience === 'all' || isAdmin),
     }))
     .filter((note) => note.items.length > 0);
-  const prefs = user.preferences?.releaseNotes ?? {};
+  const prefs = user.preferences?.featureAnnouncements ?? {};
   // Majors published before the account existed are history, not news; until
   // the drawer is first opened, neither is anything older than the window.
   const seenBaseline = Math.max(
     time(user.created_at),
     prefs.lastSeenAt
       ? time(prefs.lastSeenAt)
-      : now - RELEASE_NOTES_LIMITS.firstVisitWindowDays * 86_400_000
+      : now - FEATURE_ANNOUNCEMENTS_LIMITS.firstVisitWindowDays * 86_400_000
   );
   const seenMajor = new Set(prefs.seenMajorItemIds ?? []);
   const unseen = notes.filter((note) => time(note.published_at) > seenBaseline);
@@ -304,26 +310,28 @@ const markSeenSchema = z.discriminatedUnion('scope', [
       itemIds: z
         .array(z.string().min(1).max(200))
         .min(1)
-        .max(RELEASE_NOTES_LIMITS.seenMajorItemIds),
+        .max(FEATURE_ANNOUNCEMENTS_LIMITS.seenMajorItemIds),
     })
     .strict(),
 ]);
 
 /** Merge a mark-seen request into the stored preference; IDs are capped, newest kept. */
-export function mergeReleaseNotesSeen(
-  current: ReleaseNotesPreferences | undefined,
-  request: ReleaseNotesMarkSeenRequest,
+export function mergeFeatureAnnouncementsSeen(
+  current: FeatureAnnouncementsPreferences | undefined,
+  request: FeatureAnnouncementsMarkSeenRequest,
   now: Date
-): ReleaseNotesPreferences {
+): FeatureAnnouncementsPreferences {
   if (request.scope === 'drawer') return { ...current, lastSeenAt: now.toISOString() };
   const ids = (current?.seenMajorItemIds ?? []).filter((id) => !request.itemIds.includes(id));
   return {
     ...current,
-    seenMajorItemIds: [...ids, ...request.itemIds].slice(-RELEASE_NOTES_LIMITS.seenMajorItemIds),
+    seenMajorItemIds: [...ids, ...request.itemIds].slice(
+      -FEATURE_ANNOUNCEMENTS_LIMITS.seenMajorItemIds
+    ),
   };
 }
 
-interface ReleaseNotesApp {
+interface FeatureAnnouncementsApp {
   service(path: 'users'): {
     patch(id: UserID, data: Partial<User>, params: Params): Promise<User>;
   };
@@ -335,36 +343,36 @@ function callerId(params: AuthenticatedParams | undefined): UserID {
   return userId as UserID;
 }
 
-/** `GET /release-notes`: the caller's feed. Reads only the caller's own user row. */
-export class ReleaseNotesService {
+/** `GET /feature-announcements`: the caller's feed. Reads only the caller's own user row. */
+export class FeatureAnnouncementsService {
   constructor(
-    private readonly provider: ReleaseNotesProvider,
+    private readonly provider: FeatureAnnouncementsProvider,
     private readonly users: Pick<UsersRepository, 'findById'>
   ) {}
 
-  async feedFor(userId: UserID): Promise<ReleaseNotesFeed> {
+  async feedFor(userId: UserID): Promise<FeatureAnnouncementsFeed> {
     const user = await this.users.findById(userId);
     if (!user) throw new NotFound('User not found');
-    return buildReleaseNotesFeed(this.provider.source, this.provider.notes(), user);
+    return buildFeatureAnnouncementsFeed(this.provider.source, this.provider.notes(), user);
   }
 
-  async find(params?: AuthenticatedParams): Promise<ReleaseNotesFeed> {
+  async find(params?: AuthenticatedParams): Promise<FeatureAnnouncementsFeed> {
     return this.feedFor(callerId(params));
   }
 }
 
 /**
- * `POST /release-notes/mark-seen`: merges server-side because a users
+ * `POST /feature-announcements/mark-seen`: merges server-side because a users
  * preferences patch replaces the whole object. The write goes through
  * `users.patch` so the caller's other tabs receive the usual `users patched`.
  */
-export class ReleaseNotesMarkSeenService {
+export class FeatureAnnouncementsMarkSeenService {
   constructor(
-    private readonly feed: ReleaseNotesService,
-    private readonly app: ReleaseNotesApp
+    private readonly feed: FeatureAnnouncementsService,
+    private readonly app: FeatureAnnouncementsApp
   ) {}
 
-  async create(data: unknown, params?: AuthenticatedParams): Promise<ReleaseNotesFeed> {
+  async create(data: unknown, params?: AuthenticatedParams): Promise<FeatureAnnouncementsFeed> {
     const userId = callerId(params);
     const request = markSeenSchema.safeParse(data);
     if (!request.success) {
@@ -385,7 +393,11 @@ export class ReleaseNotesMarkSeenService {
         } as Params,
         (current) => ({
           ...current,
-          releaseNotes: mergeReleaseNotesSeen(current?.releaseNotes, request.data, now),
+          featureAnnouncements: mergeFeatureAnnouncementsSeen(
+            current?.featureAnnouncements,
+            request.data,
+            now
+          ),
         })
       )
     );
@@ -396,7 +408,7 @@ export class ReleaseNotesMarkSeenService {
 /** Cut `text` to at most `max` characters on a word boundary, with an ellipsis. */
 export function shortBrief(
   text: string,
-  max: number = RELEASE_NOTES_LIMITS.recentFeatureBriefChars
+  max: number = FEATURE_ANNOUNCEMENTS_LIMITS.recentFeatureBriefChars
 ) {
   if (text.length <= max) return text;
   const cut = text.slice(0, max - 1);
@@ -405,8 +417,8 @@ export function shortBrief(
 }
 
 /** Flat newest-first item view for agents (MCP tools and session context). */
-export function releaseNoteItemsForAgents(
-  feed: ReleaseNotesFeed,
+export function featureAnnouncementItemsForAgents(
+  feed: FeatureAnnouncementsFeed,
   { since, limit }: { since?: Date; limit: number }
 ) {
   const unread = new Set(feed.unread_note_ids);

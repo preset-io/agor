@@ -34,6 +34,7 @@ import type {
   CreateAgenticToolPreset,
   CreateMCPServerInput,
   CreateSessionInput,
+  FeatureAnnouncementsFeed,
   GatewayChannel,
   GatewayChannelCreateData,
   GatewayChannelPatchData,
@@ -74,7 +75,6 @@ import type {
   OwnershipTransferResult,
   PatchAgenticToolPreset,
   PermissionMode,
-  ReleaseNotesFeed,
   ReorderQueuedTasksInput,
   Repo,
   RuntimeTelemetryInput,
@@ -347,7 +347,7 @@ export interface ServiceTypes {
   'opencode-auth': OpenCodeProviderSettings;
   'opencode-models': OpenCodeModelCatalog;
   'executor-git-environment': ExecutorGitEnvironment;
-  'release-notes': ReleaseNotesFeed;
+  'feature-announcements': FeatureAnnouncementsFeed;
 }
 
 /**

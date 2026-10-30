@@ -53,7 +53,7 @@ export interface FeaturesConfig {
   /** Instance-owned informational copy; never a capability or repository override. */
   environmentDisclaimerMarkdown?: string;
   /** What's new source; `off` (or an older daemon) hides the notification center. */
-  releaseNotes?: import('@agor/core/types').ReleaseNotesSource;
+  featureAnnouncements?: import('@agor/core/types').FeatureAnnouncementsSource;
   environmentCommands?: ReturnType<
     typeof import('@agor/core/config/browser').environmentCommandCapabilities
   >;

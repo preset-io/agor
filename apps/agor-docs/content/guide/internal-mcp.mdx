@@ -31,20 +31,20 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 
 ## Capabilities At a Glance
 
-| Domain                | What agents can do                                                                                                           |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **Sessions**          | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work                      |
-| **Repositories**      | List repositories, clone remote repos, register local repos, manage repo metadata                                            |
-| **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards, request policy-approved cleanup |
-| **Board Zones**       | Create zones on boards, update zone properties (position, size, color), manage zone triggers                                 |
-| **Tasks**             | Fetch task history, cancel selected queued tasks, reorder pending work                                                       |
-| **Environments**      | Start, stop, health-check, and read logs for branch environments                                                             |
-| **Cards & Artifacts** | Create, move, and update cards and card types; publish, update, and inspect artifacts                                        |
-| **Schedules**         | Create, update, delete, and run scheduled prompts                                                                            |
-| **Knowledge**         | Search, read, write, link, and publish Knowledge documents; append teammate memory                                           |
-| **Gateway**           | Post to connected channels; read Slack threads and channel history (channel setup is admin-only)                             |
-| **Users**             | Create users, update profiles or avatars, assign roles                                                                       |
-| **Release notes**     | List recent user-facing Agor features with briefs for agents (`agor_release_notes_list`)                                     |
+| Domain                    | What agents can do                                                                                                           |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Sessions**              | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work                      |
+| **Repositories**          | List repositories, clone remote repos, register local repos, manage repo metadata                                            |
+| **Branches & Boards**     | List or fetch branches, create new ones, assign them to boards, update metadata, move cards, request policy-approved cleanup |
+| **Board Zones**           | Create zones on boards, update zone properties (position, size, color), manage zone triggers                                 |
+| **Tasks**                 | Fetch task history, cancel selected queued tasks, reorder pending work                                                       |
+| **Environments**          | Start, stop, health-check, and read logs for branch environments                                                             |
+| **Cards & Artifacts**     | Create, move, and update cards and card types; publish, update, and inspect artifacts                                        |
+| **Schedules**             | Create, update, delete, and run scheduled prompts                                                                            |
+| **Knowledge**             | Search, read, write, link, and publish Knowledge documents; append teammate memory                                           |
+| **Gateway**               | Post to connected channels; read Slack threads and channel history (channel setup is admin-only)                             |
+| **Users**                 | Create users, update profiles or avatars, assign roles                                                                       |
+| **Feature announcements** | List recent user-facing Agor features with briefs for agents (`agor_feature_announcements_list`)                             |
 
 Because tools route through FeathersJS services, every action emits the same events the UI listens to. Real-time updates appear instantly for everyone watching the board.
 

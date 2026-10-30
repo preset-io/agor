@@ -1,4 +1,4 @@
-import type { ReleaseNoteItemDTO, User } from '@agor-live/client';
+import type { FeatureAnnouncementItemDTO, User } from '@agor-live/client';
 import { GiftOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import type { GetRef } from 'antd';
 import { Button, Carousel, ConfigProvider, Flex, Modal, Tag, Typography, theme } from 'antd';
@@ -6,10 +6,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../../contexts/ThemeContext';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
-import { useReleaseNotes } from './ReleaseNotesContext';
-import { resolveCtaPath } from './releaseNotesLinks';
+import { useFeatureAnnouncements } from './FeatureAnnouncementsContext';
+import { resolveCtaPath } from './featureAnnouncementsLinks';
 
-const Slide: React.FC<{ item: ReleaseNoteItemDTO }> = ({ item }) => {
+const Slide: React.FC<{ item: FeatureAnnouncementItemDTO }> = ({ item }) => {
   const { token } = theme.useToken();
   const { isDark } = useTheme();
   const [visualFailed, setVisualFailed] = useState(false);
@@ -57,12 +57,12 @@ export const WhatsNewModal: React.FC<{ user: User | null; suppressed: boolean }>
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const reducedMotion = usePrefersReducedMotion();
-  const releaseNotes = useReleaseNotes();
+  const featureAnnouncements = useFeatureAnnouncements();
   const carousel = useRef<GetRef<typeof Carousel>>(null);
   const [index, setIndex] = useState(0);
   // Freeze the slides while open: marking them seen must not reshuffle the carousel.
-  const [slides, setSlides] = useState<ReleaseNoteItemDTO[]>([]);
-  const pending = releaseNotes?.feed?.pending_major_items ?? [];
+  const [slides, setSlides] = useState<FeatureAnnouncementItemDTO[]>([]);
+  const pending = featureAnnouncements?.feed?.pending_major_items ?? [];
   const open = slides.length > 0;
 
   useEffect(() => {
@@ -72,11 +72,11 @@ export const WhatsNewModal: React.FC<{ user: User | null; suppressed: boolean }>
     }
   }, [open, suppressed, pending]);
 
-  if (!releaseNotes) return null;
+  if (!featureAnnouncements) return null;
   const current = slides[index];
   const ctaPath = current?.cta_label ? resolveCtaPath(current.cta_path, user) : null;
   const close = () => {
-    releaseNotes.markMajorsSeen(slides.map((item) => item.id));
+    featureAnnouncements.markMajorsSeen(slides.map((item) => item.id));
     setSlides([]);
   };
 
@@ -93,7 +93,7 @@ export const WhatsNewModal: React.FC<{ user: User | null; suppressed: boolean }>
             type="text"
             onClick={() => {
               close();
-              releaseNotes.openDrawer();
+              featureAnnouncements.openDrawer();
             }}
           >
             All updates

@@ -1,5 +1,5 @@
 /**
- * Self-hosted release notes: CHANGELOG.md -> ReleaseNoteDTO[].
+ * Self-hosted feature announcements: CHANGELOG.md -> FeatureAnnouncementDTO[].
  *
  * The release PR that finalizes a CHANGELOG section is the review step, so
  * every released Features/Fixes/Security/Breaking entry becomes an `update`
@@ -11,11 +11,15 @@
  * repository copy in a source checkout).
  */
 
-import type { ReleaseNoteDTO, ReleaseNoteItemCategory, ReleaseNoteItemDTO } from '@agor/core/types';
+import type {
+  FeatureAnnouncementDTO,
+  FeatureAnnouncementItemCategory,
+  FeatureAnnouncementItemDTO,
+} from '@agor/core/types';
 
-export const BUNDLED_RELEASE_NOTE_VERSIONS = 10;
+export const BUNDLED_FEATURE_ANNOUNCEMENT_VERSIONS = 10;
 
-const SECTION_CATEGORIES: Record<string, ReleaseNoteItemCategory> = {
+const SECTION_CATEGORIES: Record<string, FeatureAnnouncementItemCategory> = {
   Features: 'feature',
   Fixes: 'fix',
   Security: 'security',
@@ -23,9 +27,9 @@ const SECTION_CATEGORIES: Record<string, ReleaseNoteItemCategory> = {
 };
 
 /** Fields a highlight may set on the entry whose PR it names. */
-export type ReleaseNoteHighlight = Partial<
+export type FeatureAnnouncementHighlight = Partial<
   Pick<
-    ReleaseNoteItemDTO,
+    FeatureAnnouncementItemDTO,
     | 'tier'
     | 'audience'
     | 'title'
@@ -39,9 +43,9 @@ export type ReleaseNoteHighlight = Partial<
   >
 >;
 
-export interface ReleaseNoteHighlights {
+export interface FeatureAnnouncementHighlights {
   /** Keyed by preset-io/agor PR number. */
-  items?: Record<string, ReleaseNoteHighlight>;
+  items?: Record<string, FeatureAnnouncementHighlight>;
 }
 
 const VERSION_HEADING = /^## (?:\[([^\]]+)\]\([^)]*\)|(\S+))\s*\((\d{4}-\d{2}-\d{2})\)\s*$/;
@@ -60,8 +64,8 @@ function plainText(markdown: string): string {
 function parseEntry(
   lines: string[],
   id: string,
-  category: ReleaseNoteItemCategory
-): ReleaseNoteItemDTO {
+  category: FeatureAnnouncementItemCategory
+): FeatureAnnouncementItemDTO {
   const [first, ...rest] = lines;
   const text = first.replace(/^- /, '').trim();
   const prNumbers = [...new Set([...lines.join('\n').matchAll(PR_LINK)].map((m) => Number(m[1])))];
@@ -96,14 +100,14 @@ function parseEntry(
 }
 
 /** Newest-first notes for the latest `limit` dated releases in `markdown`. */
-export function parseChangelogReleaseNotes(
+export function parseChangelogFeatureAnnouncements(
   markdown: string,
-  highlights: ReleaseNoteHighlights = {},
-  limit = BUNDLED_RELEASE_NOTE_VERSIONS
-): ReleaseNoteDTO[] {
-  const notes: ReleaseNoteDTO[] = [];
-  let note: ReleaseNoteDTO | null = null;
-  let category: ReleaseNoteItemCategory | null = null;
+  highlights: FeatureAnnouncementHighlights = {},
+  limit = BUNDLED_FEATURE_ANNOUNCEMENT_VERSIONS
+): FeatureAnnouncementDTO[] {
+  const notes: FeatureAnnouncementDTO[] = [];
+  let note: FeatureAnnouncementDTO | null = null;
+  let category: FeatureAnnouncementItemCategory | null = null;
   let entry: string[] | null = null;
 
   const flushEntry = () => {

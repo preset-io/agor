@@ -2,8 +2,8 @@ import type {
   AgenticToolName,
   AgorClient,
   Branch,
-  ReleaseNoteDTO,
-  ReleaseNoteItemDTO,
+  FeatureAnnouncementDTO,
+  FeatureAnnouncementItemDTO,
   User,
 } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
@@ -20,14 +20,14 @@ import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 import { usePrimaryAssistantSend } from '../PrimaryAssistantCompose';
-import { useReleaseNotes } from './ReleaseNotesContext';
+import { useFeatureAnnouncements } from './FeatureAnnouncementsContext';
 import {
   buildAskTeammatePrompt,
   currentOrRecentBoardId,
   resolveCtaPath,
-} from './releaseNotesLinks';
+} from './featureAnnouncementsLinks';
 
-const CATEGORY_LABELS: Record<ReleaseNoteItemDTO['category'], string> = {
+const CATEGORY_LABELS: Record<FeatureAnnouncementItemDTO['category'], string> = {
   feature: 'Feature',
   improvement: 'Improvement',
   fix: 'Fix',
@@ -43,8 +43,8 @@ const formatDate = (iso: string) =>
   });
 
 /** Notes sharing a publication day render under one date heading. */
-function groupByDay(notes: ReleaseNoteDTO[]): Array<[string, ReleaseNoteDTO[]]> {
-  const groups = new Map<string, ReleaseNoteDTO[]>();
+function groupByDay(notes: FeatureAnnouncementDTO[]): Array<[string, FeatureAnnouncementDTO[]]> {
+  const groups = new Map<string, FeatureAnnouncementDTO[]>();
   for (const note of notes) {
     const day = note.published_at.slice(0, 10);
     groups.set(day, [...(groups.get(day) ?? []), note]);
@@ -52,7 +52,7 @@ function groupByDay(notes: ReleaseNoteDTO[]): Array<[string, ReleaseNoteDTO[]]> 
   return [...groups];
 }
 
-export interface ReleaseNotesDrawerProps {
+export interface FeatureAnnouncementsDrawerProps {
   client: AgorClient | null;
   user: User | null;
   authenticationGeneration?: number;
@@ -67,7 +67,9 @@ export interface ReleaseNotesDrawerProps {
  * Asks a teammate to review recent updates against the user's work.
  * Uses the user's primary assistant, else the current board's primary teammate.
  */
-const AskTeammate: React.FC<ReleaseNotesDrawerProps & { notes: ReleaseNoteDTO[] }> = ({
+const AskTeammate: React.FC<
+  FeatureAnnouncementsDrawerProps & { notes: FeatureAnnouncementDTO[] }
+> = ({
   client,
   user,
   authenticationGeneration,
@@ -77,7 +79,7 @@ const AskTeammate: React.FC<ReleaseNotesDrawerProps & { notes: ReleaseNoteDTO[] 
 }) => {
   const { token } = theme.useToken();
   const navigation = useAppNavigation();
-  const releaseNotes = useReleaseNotes();
+  const featureAnnouncements = useFeatureAnnouncements();
   const boardById = useAgorStore(selectBoardById);
   const branchById = useAgorStore(selectBranchById);
   const settingsHydrated = useAgorStore((state) => state.agenticToolSettingsHydrated);
@@ -104,7 +106,7 @@ const AskTeammate: React.FC<ReleaseNotesDrawerProps & { notes: ReleaseNoteDTO[] 
         initialPrompt: buildAskTeammatePrompt(notes),
       }),
     canSend: () => agorStore.getState().agenticToolSettingsHydrated,
-    onSent: () => releaseNotes?.closeDrawer(),
+    onSent: () => featureAnnouncements?.closeDrawer(),
   });
   const teammate = compose.primaryBranch ?? boardTeammate ?? null;
 
@@ -115,7 +117,7 @@ const AskTeammate: React.FC<ReleaseNotesDrawerProps & { notes: ReleaseNoteDTO[] 
         Want a teammate to check which updates help you?{' '}
         <Typography.Link
           onClick={() => {
-            releaseNotes?.closeDrawer();
+            featureAnnouncements?.closeDrawer();
             navigation.goToTeammates();
           }}
         >
@@ -153,10 +155,13 @@ const AskTeammate: React.FC<ReleaseNotesDrawerProps & { notes: ReleaseNoteDTO[] 
   );
 };
 
-const NoteItem: React.FC<{ item: ReleaseNoteItemDTO; user: User | null }> = ({ item, user }) => {
+const NoteItem: React.FC<{ item: FeatureAnnouncementItemDTO; user: User | null }> = ({
+  item,
+  user,
+}) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
-  const releaseNotes = useReleaseNotes();
+  const featureAnnouncements = useFeatureAnnouncements();
   const ctaPath = item.cta_label ? resolveCtaPath(item.cta_path, user) : null;
   return (
     <Flex vertical gap={token.marginXXS}>
@@ -170,7 +175,7 @@ const NoteItem: React.FC<{ item: ReleaseNoteItemDTO; user: User | null }> = ({ i
           {ctaPath && (
             <Typography.Link
               onClick={() => {
-                releaseNotes?.closeDrawer();
+                featureAnnouncements?.closeDrawer();
                 navigate(ctaPath);
               }}
             >
@@ -188,21 +193,21 @@ const NoteItem: React.FC<{ item: ReleaseNoteItemDTO; user: User | null }> = ({ i
   );
 };
 
-/** The notification center: every release note the caller can see, newest first. */
-export const ReleaseNotesDrawer: React.FC<ReleaseNotesDrawerProps> = (props) => {
+/** The notification center: every feature announcement the caller can see, newest first. */
+export const FeatureAnnouncementsDrawer: React.FC<FeatureAnnouncementsDrawerProps> = (props) => {
   const { token } = theme.useToken();
-  const releaseNotes = useReleaseNotes();
-  const notes = releaseNotes?.feed?.notes ?? [];
+  const featureAnnouncements = useFeatureAnnouncements();
+  const notes = featureAnnouncements?.feed?.notes ?? [];
   const groups = useMemo(() => groupByDay(notes), [notes]);
-  if (!releaseNotes) return null;
+  if (!featureAnnouncements) return null;
 
   return (
     <Drawer
       title="What's new"
       placement="right"
       size={440}
-      open={releaseNotes.drawerOpen}
-      onClose={releaseNotes.closeDrawer}
+      open={featureAnnouncements.drawerOpen}
+      onClose={featureAnnouncements.closeDrawer}
       destroyOnHidden
     >
       <Flex vertical gap={token.marginLG}>
@@ -219,7 +224,7 @@ export const ReleaseNotesDrawer: React.FC<ReleaseNotesDrawerProps> = (props) => 
                 <Typography.Text type="secondary">
                   {dayNotes.map((note) => note.title).join(', ')}
                 </Typography.Text>
-                {dayNotes.some((note) => releaseNotes.newNoteIds.has(note.id)) && (
+                {dayNotes.some((note) => featureAnnouncements.newNoteIds.has(note.id)) && (
                   <Tag color="blue" variant="filled">
                     New
                   </Tag>

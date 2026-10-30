@@ -22,11 +22,11 @@ import {
   type AgenticToolName,
   type Board,
   type BranchID,
+  FEATURE_ANNOUNCEMENTS_LIMITS,
+  FEATURE_ANNOUNCEMENTS_SERVICE,
+  type FeatureAnnouncementsFeed,
   getSessionType,
   getUserPrimaryAgenticTool,
-  RELEASE_NOTES_LIMITS,
-  RELEASE_NOTES_SERVICE,
-  type ReleaseNotesFeed,
   type Session,
   type SessionID,
   type SpawnConfig,
@@ -37,7 +37,10 @@ import {
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { SessionsServiceImpl } from '../../declarations.js';
-import { releaseNoteItemsForAgents, shortBrief } from '../../services/release-notes.js';
+import {
+  featureAnnouncementItemsForAgents,
+  shortBrief,
+} from '../../services/feature-announcements.js';
 import type { SessionBulkArchiveResult, SessionParams } from '../../services/sessions.js';
 import { requireActiveAgenticTool } from '../../utils/agentic-tool-runtime.js';
 import { ensureCanPromptTargetSession } from '../../utils/branch-authorization.js';
@@ -606,12 +609,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       // one when it fits. Kept here rather than in the static system prompt.
       try {
         const feed = (await ctx.app
-          .service(RELEASE_NOTES_SERVICE)
-          .find(ctx.baseServiceParams)) as ReleaseNotesFeed;
-        // Briefs stay short here; the full text is in agor_release_notes_list.
-        const recent = releaseNoteItemsForAgents(feed, {
-          since: new Date(Date.now() - RELEASE_NOTES_LIMITS.recentFeatureDays * 86_400_000),
-          limit: RELEASE_NOTES_LIMITS.recentFeatureMax,
+          .service(FEATURE_ANNOUNCEMENTS_SERVICE)
+          .find(ctx.baseServiceParams)) as FeatureAnnouncementsFeed;
+        // Briefs stay short here; the full text is in agor_feature_announcements_list.
+        const recent = featureAnnouncementItemsForAgents(feed, {
+          since: new Date(Date.now() - FEATURE_ANNOUNCEMENTS_LIMITS.recentFeatureDays * 86_400_000),
+          limit: FEATURE_ANNOUNCEMENTS_LIMITS.recentFeatureMax,
         }).map(({ title, agent_brief, docs_url, published_at, seen_by_user }) => ({
           title,
           agent_brief: shortBrief(agent_brief),

@@ -1,5 +1,5 @@
-import type { ReleaseNoteDTO, User } from '@agor-live/client';
-import { RELEASE_NOTE_CTA_TOKENS, shortId } from '@agor-live/client';
+import type { FeatureAnnouncementDTO, User } from '@agor-live/client';
+import { FEATURE_ANNOUNCEMENT_CTA_TOKENS, shortId } from '@agor-live/client';
 import { readLocalStorageJson } from '../../hooks/localStorageJson';
 import { recentBoardsStorageKey } from '../../hooks/useRecentBoards';
 
@@ -18,8 +18,8 @@ export function currentOrRecentBoardId(user: User | null | undefined): string | 
 export function resolveCtaPath(path: string | null, user: User | null | undefined): string | null {
   if (!path?.startsWith('/') || path.startsWith('//')) return null;
   const boards: Record<string, string | undefined> = {
-    [RELEASE_NOTE_CTA_TOKENS.currentBoard]: currentOrRecentBoardId(user),
-    [RELEASE_NOTE_CTA_TOKENS.mainBoard]: user?.preferences?.mainBoardId,
+    [FEATURE_ANNOUNCEMENT_CTA_TOKENS.currentBoard]: currentOrRecentBoardId(user),
+    [FEATURE_ANNOUNCEMENT_CTA_TOKENS.mainBoard]: user?.preferences?.mainBoardId,
   };
   let resolved = path;
   for (const [token, boardId] of Object.entries(boards)) {
@@ -33,7 +33,7 @@ export function resolveCtaPath(path: string | null, user: User | null | undefine
 /** Most items an "Ask my teammate" prompt carries, newest first. */
 const ASK_TEAMMATE_MAX_ITEMS = 20;
 
-export function buildAskTeammatePrompt(notes: ReleaseNoteDTO[]): string {
+export function buildAskTeammatePrompt(notes: FeatureAnnouncementDTO[]): string {
   const lines = notes
     .flatMap((note) =>
       note.items.map((item) => {

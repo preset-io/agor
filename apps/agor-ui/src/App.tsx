@@ -41,6 +41,11 @@ import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
 import { ActionErrorNotice } from './components/CompactNotice';
 import { DaemonConfigurationAlert, DaemonConnectionAlert } from './components/DaemonErrorAlerts';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
+import {
+  FeatureAnnouncementsDrawer,
+  FeatureAnnouncementsProvider,
+  WhatsNewModal,
+} from './components/FeatureAnnouncements';
 import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
@@ -48,7 +53,6 @@ import { LoginPage } from './components/LoginPage';
 import { MCPCatalogModalHost } from './components/Marketplace/MCPCatalogModalHost';
 import { OnboardingBanners } from './components/OnboardingBanners';
 import { type OnboardingCompletionResult, OnboardingWizard } from './components/OnboardingWizard';
-import { ReleaseNotesDrawer, ReleaseNotesProvider, WhatsNewModal } from './components/ReleaseNotes';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
 import { sendPromptWithReconciliation } from './components/SessionPanel/promptReconciliation';
 import { SettingsModal } from './components/SettingsModal';
@@ -2046,11 +2050,13 @@ function AppContent() {
       <MCPCatalogModalProvider
         key={`${currentUser?.user_id ?? 'anonymous'}:${currentUser?.role ?? 'none'}`}
       >
-        <ReleaseNotesProvider
+        <FeatureAnnouncementsProvider
           key={currentUser?.user_id ?? 'anonymous'}
           client={client}
           user={currentUser}
-          enabled={!!featuresConfig?.releaseNotes && featuresConfig.releaseNotes !== 'off'}
+          enabled={
+            !!featuresConfig?.featureAnnouncements && featuresConfig.featureAnnouncements !== 'off'
+          }
         >
           <MCPCatalogModalHost
             client={client}
@@ -2195,7 +2201,7 @@ function AppContent() {
           </ConfigProvider>
 
           {/* What's new: the modal waits while onboarding is open. */}
-          <ReleaseNotesDrawer
+          <FeatureAnnouncementsDrawer
             client={client}
             user={currentUser}
             authenticationGeneration={authenticationGeneration}
@@ -2317,7 +2323,7 @@ function AppContent() {
               <Route path="/*" element={desktopAppElement} />
             </Routes>
           </Suspense>
-        </ReleaseNotesProvider>
+        </FeatureAnnouncementsProvider>
       </MCPCatalogModalProvider>
     </ConnectionProvider>
   );
