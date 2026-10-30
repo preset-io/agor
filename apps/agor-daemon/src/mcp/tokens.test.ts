@@ -26,6 +26,7 @@ import {
   sessions,
   shortId,
 } from '@agor/core/db';
+import { NotAuthenticated } from '@agor/core/feathers';
 import type { SessionID, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, vi } from 'vitest';
@@ -39,6 +40,18 @@ import {
   validateSessionToken,
   verifySessionTokenDetailed,
 } from './tokens.js';
+
+const epochReads = vi.hoisted(() => ({ calls: [] as unknown[][] }));
+vi.mock('../auth/tenant-credential-epoch.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../auth/tenant-credential-epoch.js')>();
+  return {
+    ...actual,
+    readTenantCredentialEpoch: (...args: Parameters<typeof actual.readTenantCredentialEpoch>) => {
+      epochReads.calls.push(args);
+      return actual.readTenantCredentialEpoch(...args);
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -205,6 +218,28 @@ describe('generateSessionToken', () => {
       expect((jwt.decode(token) as { tid?: string }).tid).toBe('default');
     }
   );
+
+  dbTest('reads the credential generation through the caller-supplied reader', async ({ db }) => {
+    initTestMcpTokens(db);
+    const sessionId = await seedSession(db);
+    const reader = vi.fn();
+    await runWithTenantContext('tenant-a', () =>
+      generateSessionToken(makeApp(), sessionId, 'u1' as UserID, reader)
+    );
+    expect(epochReads.calls.at(-1)).toEqual([db, 'tenant-a', reader]);
+  });
+
+  dbTest('mints nothing for a caller credential from another generation', async ({ db }) => {
+    initTestMcpTokens(db);
+    const sessionId = await seedSession(db);
+    const stale = { payload: { tenant_credential_epoch: 'a'.repeat(64) } };
+    const mint = (credential: { payload: unknown }) =>
+      runWithTenantContext('tenant-a', () =>
+        generateSessionToken(makeApp(), sessionId, 'u1' as UserID, undefined, credential)
+      );
+    await expect(mint(stale)).rejects.toBeInstanceOf(NotAuthenticated);
+    await expect(mint({ payload: {} })).resolves.toEqual(expect.any(String));
+  });
 
   dbTest('uses a custom configured static tenant without ambient scope', async ({ db }) => {
     initTestMcpTokens(db, {

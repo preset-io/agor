@@ -827,6 +827,20 @@
       "when": 1790129000303,
       "tag": "0119_branch_deletion_failed_discovery",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1790129000304,
+      "tag": "0120_tenant_restrictions",
+      "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1790129000305,
+      "tag": "0121_tenant_restriction_discovery",
+      "breakpoints": true
     }
   ]
 }

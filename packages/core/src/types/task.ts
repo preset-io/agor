@@ -68,7 +68,8 @@ export type SdkFailureReason =
   | 'heartbeat_lost'
   | 'executor_interrupted'
   | 'termination_unverified'
-  | 'launch_refused';
+  | 'launch_refused'
+  | 'launch_restricted';
 
 /**
  * Reserved exit code (sysexits `EX_TEMPFAIL`) of a templated launcher that
@@ -76,6 +77,13 @@ export type SdkFailureReason =
  * daemon env opts in with `AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT=75`.
  */
 export const EXECUTOR_LAUNCH_REFUSED_EXIT_CODE = 75;
+
+/**
+ * Reserved exit code of a templated launcher refused because the tenant is suspended or
+ * reactivating; nothing was created. Read only when the daemon env opts in with
+ * `AGOR_EXECUTOR_LAUNCH_RESTRICTED_EXIT=76`.
+ */
+export const EXECUTOR_LAUNCH_RESTRICTED_EXIT_CODE = 76;
 
 export interface SdkFailure {
   reason: SdkFailureReason;
@@ -95,7 +103,7 @@ export type SdkHealthFailureInput = Pick<
 > & { task_id: string; reason: SdkWatchdogFailureReason };
 
 // Wire values for ExecutorCleanupContext v1; keep additions coordinated with helpers.
-export const TERMINATION_CAUSES = [
+export const EXECUTOR_CLEANUP_CAUSES = [
   'user_stop',
   'startup_timeout',
   'heartbeat_lost',
@@ -104,7 +112,15 @@ export const TERMINATION_CAUSES = [
   'authorization_revoked',
   'launch_refused',
 ] as const;
+export type ExecutorCleanupRequestCause = (typeof EXECUTOR_CLEANUP_CAUSES)[number];
+
+export const TERMINATION_CAUSES = [...EXECUTOR_CLEANUP_CAUSES, 'tenant_suspension'] as const;
 export type TerminationCause = (typeof TERMINATION_CAUSES)[number];
+
+/** A suspension is a deliberate operator stop; v1 helpers only know the wire causes. */
+export function executorCleanupCause(cause: TerminationCause): ExecutorCleanupRequestCause {
+  return cause === 'tenant_suspension' ? 'user_stop' : cause;
+}
 
 /** A live executor's signal observation, not evidence of process absence or OOM. */
 export interface ExecutorInterruptionInput {
@@ -161,7 +177,7 @@ export interface ExecutorCleanupContext {
   branch_id: string;
   requested_at: string;
   attempt_id: string;
-  cause: TerminationCause;
+  cause: ExecutorCleanupRequestCause;
 }
 
 export interface TerminationRequest {
@@ -193,6 +209,13 @@ export interface ExecutorTerminationCompleteInput {
   task_id: string;
   /** Fences a late report from a previous termination request. */
   requested_at: string;
+}
+
+/** Exact-task control read; never contains prompts, reports, metadata or credentials. */
+export interface ExecutorTerminationState {
+  task_id: TaskID;
+  status: TaskStatus;
+  termination_request?: Pick<TerminationRequest, 'cause' | 'requested_at' | 'executor_quiesced_at'>;
 }
 
 /**
@@ -516,6 +539,9 @@ export interface Task {
    * Undefined for non-queued tasks.
    */
   queue_position?: number;
+
+  /** Server-owned durable prompt hold; only explicit resubmission creates runnable work. */
+  tenant_restriction_hold?: { reason: 'tenant_restricted'; held_at: string };
 
   /**
    * Structured metadata for the task. Fields here are load-bearing for

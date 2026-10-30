@@ -62,6 +62,8 @@ export interface AuthenticatedConnectionAuthority {
   readonly expiresAt?: number;
   /** Whether this connection capability itself must be retired at `expiresAt`. */
   readonly retireAtExpiry: boolean;
+  /** Frozen verified claims for every principal, terminal executors included (they get no Feathers projection). */
+  readonly credentialPayload?: Readonly<Record<string, unknown>>;
 }
 
 export interface FinalizeAuthenticatedConnectionOptions {
@@ -99,18 +101,14 @@ function defineConnectionProjection(connection: object, key: string, value: unkn
 function bindAuthenticatedFeathersProjection(
   connection: object,
   result: AuthenticationResultShape,
-  tenant: TenantContext | undefined
+  tenant: TenantContext | undefined,
+  frozenPayload: Readonly<Record<string, unknown>> | undefined
 ): void {
   const user = result.user;
   const strategy = result.authentication?.strategy;
   if (!user || typeof strategy !== 'string' || !strategy) {
     throw new NotAuthenticated('Authenticated Feathers projection is unavailable');
   }
-  const payload = result.authentication?.payload;
-  const frozenPayload =
-    payload && typeof payload === 'object'
-      ? Object.freeze({ ...(payload as Record<string, unknown>) })
-      : undefined;
   const authentication = Object.freeze({
     strategy,
     ...(frozenPayload ? { payload: frozenPayload } : {}),
@@ -214,19 +212,22 @@ export function finalizeAuthenticatedConnectionAuthority(
   // projection: they may use their raw terminal capability, but may not enter
   // tenant-owned services. Every other principal receives one immutable,
   // server-owned projection of the result verified at the handshake.
+  const credentialPayload =
+    payload && typeof payload === 'object'
+      ? Object.freeze({ ...(payload as Record<string, unknown>) })
+      : undefined;
   if (principal.kind !== 'terminal-executor') {
-    bindAuthenticatedFeathersProjection(connection, result, trustedTenant);
+    bindAuthenticatedFeathersProjection(connection, result, trustedTenant, credentialPayload);
   }
 
-  const payloadRecord =
-    payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : undefined;
-  const retireAtExpiry = principal.kind !== 'user' || payloadRecord?.is_impersonated === true;
+  const retireAtExpiry = principal.kind !== 'user' || credentialPayload?.is_impersonated === true;
 
   const authority = Object.freeze({
     principal: Object.freeze(principal),
     ...(trustedTenant ? { tenant: trustedTenant } : {}),
     ...(expiresAt === undefined ? {} : { expiresAt }),
     retireAtExpiry,
+    ...(credentialPayload ? { credentialPayload } : {}),
   });
   Object.defineProperty(connection, CONNECTION_AUTHORITY, {
     configurable: true,
@@ -262,6 +263,11 @@ export function getAuthenticatedConnectionAuthority(
   return connection && typeof connection === 'object'
     ? (connection as AuthorityCarrier)[CONNECTION_AUTHORITY]
     : undefined;
+}
+
+/** Credential claims come only from the immutable authority, so every principal kind (terminal executors too) has them. */
+export function getAuthenticatedConnectionCredentialPayload(connection: unknown): unknown {
+  return getAuthenticatedConnectionAuthority(connection)?.credentialPayload;
 }
 
 /** Retire connection-scoped tenant/executor authority on logout or disconnect. */

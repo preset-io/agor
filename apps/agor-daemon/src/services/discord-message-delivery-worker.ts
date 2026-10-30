@@ -31,10 +31,12 @@ import type {
   TenantID,
 } from '@agor/core/types';
 import { isDiscordDirectMessagesEnabled } from '@agor/core/types';
+import { isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
 import {
   boundedBackoff,
   boundedProviderCall,
   DeliveryControlError,
+  deferHeldDelivery,
   discoverDueDeliveryRefs,
   fairOrderByTenant,
   GatewayDeliveryLoop,
@@ -78,6 +80,7 @@ type DiscordMessageDeliveryWorkerRepositories = {
   delivery: Pick<
     DiscordMessageDeliveryRepository,
     | 'findDueRefs'
+    | 'deferDue'
     | 'claim'
     | 'renewClaim'
     | 'reloadClaim'
@@ -211,6 +214,15 @@ export class DiscordMessageDeliveryWorker {
   }
 
   private async processRef(ref: DiscordMessageDeliveryDiscoveryRef): Promise<void> {
+    // Hold a closed tenant's outbox off discovery so it cannot starve other tenants; delivery resumes after reactivation.
+    if (!(await isCurrentTenantRuntimeActive(this.db).catch(() => false))) {
+      await deferHeldDelivery(
+        'distributed-work.discord-message-delivery',
+        ref.delivery_id,
+        (delayMs) => this.deliveryRepo.deferDue(ref.delivery_id, delayMs)
+      );
+      return;
+    }
     const claim = await this.deliveryRepo.claim(
       ref.delivery_id,
       generateId(),
