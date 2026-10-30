@@ -18,10 +18,10 @@ function makeSchedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
     schedule_id: SCHEDULE_ID,
     branch_id: '00000000-0000-7000-8000-000000000002' as BranchID,
-    name: 'Release notes',
+    name: 'Feature announcements',
     cron_expression: '0 9 * * *',
     timezone_mode: 'utc',
-    prompt: 'Draft release notes',
+    prompt: 'Draft feature announcements',
     agentic_tool_config: { agentic_tool: 'claude-code' },
     enabled: true,
     allow_concurrent_runs: false,

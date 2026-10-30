@@ -27,10 +27,10 @@ async function fixture(raw: Database) {
     schedules.create({
       branch_id: branch.branch_id,
       created_by: user.user_id,
-      name: 'Release notes',
+      name: 'Feature announcements',
       cron_expression: '0 * * * *',
       timezone_mode: 'utc',
-      prompt: 'Draft release notes',
+      prompt: 'Draft feature announcements',
       agentic_tool_config: { agentic_tool: 'claude-code' },
     })
   );
