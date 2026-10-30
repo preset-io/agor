@@ -668,4 +668,26 @@ describe('dispatch log context', () => {
       task_id: task.task_id,
     });
   });
+
+  it('writes the spawn failure into the transcript from the deferred launch', async () => {
+    const f = await fixture();
+    // Production's tenant hooks scope `tasks`; the fixture registers the bare service.
+    f.app.service('tasks').hooks({ around: { all: [(_context, next) => f.scoped(next)] } });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.executeTask.mockImplementationOnce(async () => {
+      throw new Error('launch prerequisites failed');
+    });
+    const task = await f.prompt({ prompt: 'disposable fixture' });
+    await vi.waitFor(async () => {
+      const rows = await f.scoped(() => f.messages.findByTaskId(task.task_id));
+      expect(rows.map((row) => row.content_preview)).toContainEqual(
+        expect.stringContaining('The agent failed to start')
+      );
+    });
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('Failed to write system error message'),
+      expect.anything()
+    );
+  });
 });
