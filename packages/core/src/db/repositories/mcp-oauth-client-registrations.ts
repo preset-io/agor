@@ -8,6 +8,7 @@ import type {
 import { sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import { executeRaw, isPostgresDatabase, rawRows, rawRowsAffected } from '../database-wrapper';
+import { openBoundSecret } from '../oauth-secret-envelope';
 import { sanitizeDbError } from '../sanitize-error';
 import { lockTenantAuthoritySubject } from './authority-primitives';
 import { RepositoryError } from './base';
@@ -22,6 +23,20 @@ const STATUSES: readonly MCPOAuthClientRegistrationStatus[] = [
   'registered',
   ...TERMINAL,
 ];
+
+export function dcrRegistrationBinding(material: {
+  tenantId: string;
+  mcpServerId: string;
+  registrationId: string;
+  bindingFingerprint: string;
+}): string {
+  return [
+    material.tenantId,
+    material.mcpServerId,
+    material.registrationId,
+    material.bindingFingerprint,
+  ].join('\0');
+}
 
 export interface MCPOAuthClientRegistrationRecord {
   tenantId: string;
@@ -461,6 +476,66 @@ export class MCPOAuthClientRegistrationRepository {
     } catch (error) {
       throw failure('provider invalidation', error);
     }
+  }
+
+  /**
+   * Match-under-lock invalidation: evicts the registration only if the currently
+   * active row still matches the target client_id. This prevents a slow callback
+   * or refresh failure from retiring a newer registration that a concurrent replica
+   * has already established.
+   *
+   * Caller must wrap this in an active tenant transaction so the FOR UPDATE row
+   * lock is held continuously until the status update completes.
+   */
+  async invalidateIfCurrentMatchesClientId(input: {
+    tenantId: string;
+    serverId: MCPServerID;
+    clientId: string;
+    masterSecret?: string;
+  }): Promise<boolean> {
+    const masterSecret = input.masterSecret ?? process.env.AGOR_MASTER_SECRET;
+    if (!masterSecret) {
+      return false;
+    }
+
+    const currentResult = await executeRaw(
+      this.db,
+      sql`SELECT registration_id, binding_fingerprint, sealed_material
+          FROM mcp_oauth_client_registrations
+          WHERE tenant_id = ${input.tenantId}
+            AND mcp_server_id = ${input.serverId}
+            AND status = 'registered' AND is_current = true
+          LIMIT 1
+          FOR UPDATE`
+    );
+    const row = rawRows(currentResult)[0];
+    if (!row || typeof row.sealed_material !== 'string') {
+      return false;
+    }
+
+    let parsed: { clientId?: string };
+    try {
+      const binding = dcrRegistrationBinding({
+        tenantId: input.tenantId,
+        mcpServerId: input.serverId,
+        registrationId: String(row.registration_id),
+        bindingFingerprint: String(row.binding_fingerprint),
+      });
+      const decrypted = openBoundSecret(row.sealed_material, masterSecret, 'dcr-client', binding);
+      parsed = JSON.parse(decrypted) as { clientId?: string };
+    } catch {
+      return false;
+    }
+
+    if (parsed.clientId !== input.clientId) {
+      return false;
+    }
+
+    return this.invalidateRegisteredById({
+      tenantId: input.tenantId,
+      serverId: input.serverId,
+      registrationId: row.registration_id as MCPOAuthClientRegistrationID,
+    });
   }
 
   async maintain(): Promise<{ abandoned: number; expired: number; purged: number }> {
