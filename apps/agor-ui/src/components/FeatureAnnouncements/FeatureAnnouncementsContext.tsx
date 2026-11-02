@@ -10,41 +10,53 @@ import {
 } from '@agor-live/client';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
-/** Cloud notes refresh on the daemon every 15 minutes; follow at the same pace. */
+/** Cloud announcements refresh on the daemon every 15 minutes; follow at the same pace. */
 const REFRESH_INTERVAL_MS = 15 * 60_000;
 
+export type FeatureAnnouncementsTab = 'notifications' | 'release-notes';
+
+/** Settings the App shell owns; buttons open them through these. */
+export interface FeatureAnnouncementsShell {
+  openWorkspaceSettings: (section: 'gateway' | 'artifacts') => void;
+  openModelSettings: () => void;
+}
+
 interface FeatureAnnouncementsController {
-  feed: FeatureAnnouncementsFeed | null;
-  drawerOpen: boolean;
-  /** Notes that were unread when the drawer was opened, so they can stay marked as new. */
-  newNoteIds: ReadonlySet<string>;
-  /** Opens the drawer and records that the caller has seen everything in it. */
-  openDrawer: () => void;
-  closeDrawer: () => void;
-  markMajorsSeen: (itemIds: string[]) => void;
+  feed: FeatureAnnouncementsFeed;
+  shell: FeatureAnnouncementsShell;
+  /** The bell popover; one per shell, so its state lives here for the pop-up's "All updates". */
+  popoverOpen: boolean;
+  tab: FeatureAnnouncementsTab;
+  /** Opens the popover; Release notes counts as reading every notification. */
+  openPopover: (tab?: FeatureAnnouncementsTab) => void;
+  closePopover: () => void;
+  showTab: (tab: FeatureAnnouncementsTab) => void;
+  markPopupsSeen: (itemIds: string[]) => void;
 }
 
 const FeatureAnnouncementsContext = createContext<FeatureAnnouncementsController | null>(null);
 
-/** Null outside the provider, when feature announcements are off, or before the source first answers. */
+/** Null outside the provider, when announcements are off, or before the source first answers. */
 export const useFeatureAnnouncements = () => useContext(FeatureAnnouncementsContext);
 
 export function FeatureAnnouncementsProvider({
   client,
   user,
   enabled,
+  shell,
   children,
 }: {
   client: AgorClient | null;
   user: User | null;
   enabled: boolean;
+  shell: FeatureAnnouncementsShell;
   children: React.ReactNode;
 }) {
   const [feed, setFeed] = useState<FeatureAnnouncementsFeed | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [newNoteIds, setNewNoteIds] = useState<ReadonlySet<string>>(new Set());
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [tab, setTab] = useState<FeatureAnnouncementsTab>('notifications');
   const userId = user?.user_id;
-  // Another tab marking notes seen arrives as a users patch; refetch on it.
+  // Another tab marking announcements seen arrives as a users patch; refetch on it.
   const seenKey = JSON.stringify(user?.preferences?.featureAnnouncements ?? null);
   const active = enabled && !!client && !!userId;
 
@@ -64,7 +76,7 @@ export function FeatureAnnouncementsProvider({
         (next) => {
           if (!cancelled) setFeed(next);
         },
-        // Feature announcements are never worth an error toast; keep what we have.
+        // Announcements are never worth an error toast; keep what we have.
         () => {}
       );
     void load();
@@ -89,37 +101,57 @@ export function FeatureAnnouncementsProvider({
     [client]
   );
 
-  const openDrawer = useCallback(() => {
-    setNewNoteIds(new Set(feed?.unread_note_ids));
-    setDrawerOpen(true);
-    markSeen({ scope: 'drawer' });
-  }, [feed, markSeen]);
-  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
-  const markMajorsSeen = useCallback(
+  const hasUnread = (feed?.unread_notification_ids.length ?? 0) > 0;
+  const showTab = useCallback(
+    (next: FeatureAnnouncementsTab) => {
+      setTab(next);
+      if (next === 'release-notes' && hasUnread) markSeen({ scope: 'release_notes' });
+    },
+    [hasUnread, markSeen]
+  );
+  const openPopover = useCallback(
+    (next: FeatureAnnouncementsTab = 'notifications') => {
+      showTab(next);
+      setPopoverOpen(true);
+    },
+    [showTab]
+  );
+  const closePopover = useCallback(() => setPopoverOpen(false), []);
+  const markPopupsSeen = useCallback(
     (itemIds: string[]) => {
       if (itemIds.length === 0) return;
-      // Optimistic, so the modal cannot reappear while the write is in flight.
+      // Optimistic, so the pop-up cannot reappear while the write is in flight.
       setFeed(
         (current) =>
           current && {
             ...current,
-            pending_major_items: current.pending_major_items.filter(
+            pending_popup_items: current.pending_popup_items.filter(
               (item) => !itemIds.includes(item.id)
             ),
           }
       );
-      markSeen({ scope: 'major', itemIds });
+      markSeen({ scope: 'popup', itemIds });
     },
     [markSeen]
   );
 
   // Nothing renders until the source has answered once, so a Cloud cell that
-  // ships before its feature-announcements endpoint shows no bell and no empty drawer.
-  const shown = active && !!feed?.available;
+  // ships before its feature-announcements endpoint shows no bell at all.
   const value = useMemo(
     () =>
-      shown ? { feed, drawerOpen, newNoteIds, openDrawer, closeDrawer, markMajorsSeen } : null,
-    [shown, feed, drawerOpen, newNoteIds, openDrawer, closeDrawer, markMajorsSeen]
+      active && feed?.available
+        ? {
+            feed,
+            shell,
+            popoverOpen,
+            tab,
+            openPopover,
+            closePopover,
+            showTab,
+            markPopupsSeen,
+          }
+        : null,
+    [active, feed, shell, popoverOpen, tab, openPopover, closePopover, showTab, markPopupsSeen]
   );
   return (
     <FeatureAnnouncementsContext.Provider value={value}>

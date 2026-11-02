@@ -26,6 +26,7 @@ import type {
 import {
   boardPath,
   ENTITY_PATH_SEGMENTS,
+  getUserPrimaryAgenticTool,
   hasMinimumRole,
   isAgenticToolName,
   PAGINATION,
@@ -41,11 +42,7 @@ import type { BranchUpdate } from './components/BranchModal/tabs/GeneralTab';
 import { ActionErrorNotice } from './components/CompactNotice';
 import { DaemonConfigurationAlert, DaemonConnectionAlert } from './components/DaemonErrorAlerts';
 import { ErrorBoundary, setCrashContext } from './components/ErrorBoundary';
-import {
-  FeatureAnnouncementsDrawer,
-  FeatureAnnouncementsProvider,
-  WhatsNewModal,
-} from './components/FeatureAnnouncements';
+import { FeatureAnnouncementsProvider, NewInAgorModal } from './components/FeatureAnnouncements';
 import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
@@ -582,6 +579,18 @@ function AppContent() {
   const currentUser = enrichAuthenticatedUser(
     user,
     authenticatedUserCanListUsers ? storedCurrentUser : null
+  );
+  // Announcement buttons open settings the shell owns, on desktop and mobile alike.
+  const primaryAgenticTool = getUserPrimaryAgenticTool(currentUser);
+  const featureAnnouncementsShell = useMemo(
+    () => ({
+      openWorkspaceSettings: (section: 'gateway' | 'artifacts') => setSettingsTabToOpen(section),
+      openModelSettings: () => {
+        setUserSettingsInitialTab(primaryAgenticTool);
+        setOpenUserSettings(true);
+      },
+    }),
+    [primaryAgenticTool]
   );
   // Authentication owns the open gate, but a same-user realtime directory
   // `true` is safe as a close-only terminal signal from another tab. Directory
@@ -2057,6 +2066,7 @@ function AppContent() {
           enabled={
             !!featuresConfig?.featureAnnouncements && featuresConfig.featureAnnouncements !== 'off'
           }
+          shell={featureAnnouncementsShell}
         >
           <MCPCatalogModalHost
             client={client}
@@ -2200,15 +2210,15 @@ function AppContent() {
             />
           </ConfigProvider>
 
-          {/* What's new: the modal waits while onboarding is open. */}
-          <FeatureAnnouncementsDrawer
+          {/* Big launches: the pop-up waits while onboarding is open. */}
+          <NewInAgorModal
             client={client}
             user={currentUser}
+            suppressed={onboardingWizardOpen}
             authenticationGeneration={authenticationGeneration}
             isAuthenticationGenerationCurrent={isAuthenticationGenerationCurrent}
             onCreateSession={handleCreateSession}
           />
-          <WhatsNewModal user={currentUser} suppressed={onboardingWizardOpen} />
 
           <DeviceRouter />
           <Suspense fallback={routeFallback}>
