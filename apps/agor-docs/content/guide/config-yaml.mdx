@@ -386,22 +386,28 @@ may retry after an existing request settles. For timeouts, a `by_command` value
 overrides that command's built-in call-specific default; otherwise the
 call-specific default wins over `timeout_ms.default`.
 
-## What's new
+## Feature announcements
 
-Feature announcements: the What's new bell in the navbar lists recent user-facing changes, major
-ones also appear once in a What's new window, and agents can read them through MCP
-(`agor_feature_announcements_list`). Choose where the announcements come from:
+The bell in the navbar has two tabs: **Notifications**, where each release with new features is one
+notification, and **Release notes**, the highlights of each release. Big launches also appear once
+in a pop-up. Agents can read the same list through MCP (`agor_feature_announcements_list`). Choose
+where the announcements come from:
 
 ```yaml
 feature_announcements:
   source: bundled # bundled | cloud | off
+  media_origin: https://console.example.com # optional
 ```
 
 - `bundled` (default for self-hosted): the released sections of `CHANGELOG.md` shipped with the
-  daemon. Features, Fixes, Security and Breaking entries appear; Chores and Unreleased do not.
-- `cloud`: announcements published by Agor Cloud. This is the default when the daemon has the Agor Cloud
-  runtime credential (`AGOR_CLOUD_API_BASE_URL` and `AGOR_CLOUD_*`).
-- `off`: hides the bell and the What's new window.
+  daemon, with the in-app copy, pictures and buttons from `highlights.json`. Chores and Unreleased
+  do not appear.
+- `cloud`: announcements published by Agor Cloud. This is the default when the daemon has the Agor
+  Cloud runtime credential (`AGOR_CLOUD_API_BASE_URL` and `AGOR_CLOUD_*`).
+- `off`: hides the bell and the pop-up.
+- `media_origin`: the HTTPS origin that serves uploaded announcement pictures and videos (the Agor
+  Cloud console). It is added to the CSP `img-src` and `media-src`; pictures from any other origin
+  except `https://agor.live` are dropped. Unset by default.
 
 Each user's read state is stored with their preferences.
 

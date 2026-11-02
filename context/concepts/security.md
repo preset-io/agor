@@ -169,6 +169,7 @@ default-src        'self'
 script-src         'self'
 style-src          'self' 'unsafe-inline' https://fonts.bunny.net # Ant Design inline + Inter font CSS
 img-src            'self' data: blob: https://*.slack-edge.com https://agor.live https://api.smithery.ai https://www.google.com https://*.gstatic.com https://logos.composio.dev https://cdn.jsdelivr.net https://preset.io https://*.codesandbox.io
+media-src          'self' https://agor.live                      # feature announcement videos
 font-src           'self' data: https://fonts.bunny.net           # Inter font files
 connect-src        'self' ws: wss: <daemon-url>
 frame-src          'self' https://*.codesandbox.io               # Sandpack iframes
@@ -177,6 +178,9 @@ frame-ancestors    'none'
 object-src         'none'
 base-uri           'self'
 ```
+
+`feature_announcements.media_origin`, when set, adds that origin to `img-src` and `media-src` for
+uploaded announcement pictures and videos.
 
 The MCP catalog logo sources above are the browser origins used by the
 checked-in curated catalog. Agor does not fetch or proxy those images through
