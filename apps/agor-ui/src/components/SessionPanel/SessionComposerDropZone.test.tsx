@@ -63,7 +63,7 @@ describe('SessionComposerDropZone', () => {
       withFiles([new File(['image'], 'chart.png', { type: 'image/png' })])
     );
 
-    expect(screen.getByText('Drop files here to attach')).toBeInTheDocument();
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument();
     expect(onDragActiveChange).toHaveBeenLastCalledWith(true);
   });
 
@@ -103,11 +103,11 @@ describe('SessionComposerDropZone', () => {
 
     const dropZone = screen.getByLabelText('Composer attachments and input drop zone');
     fireEvent.dragOver(dropZone, withFiles([imageFile]));
-    expect(screen.getByText('Drop files here to attach')).toBeInTheDocument();
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument();
 
     fireEvent.drop(screen.getByTestId('child-drop-target'), withFiles([imageFile]));
 
-    expect(screen.queryByText('Drop files here to attach')).not.toBeInTheDocument();
+    expect(screen.queryByText('Drop files to attach')).not.toBeInTheDocument();
   });
 
   it('semantically disables and ignores container drops while uploads are locked', () => {

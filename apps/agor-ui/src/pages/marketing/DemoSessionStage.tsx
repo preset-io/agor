@@ -391,7 +391,7 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
       <AutocompleteTextarea
         value={composerText}
         onChange={NOOP}
-        placeholder="Prompt here… @ for mentions, : for emoji"
+        placeholder="Prompt here… @ to mention, / for commands"
         client={null}
         sessionId={STAGE_SESSION_ID}
         userById={USER_BY_ID}
@@ -656,6 +656,7 @@ export const DemoSessionStage = ({ scene, t, variant = 'coding' }: DemoSessionSt
           onPermissionModeChange={NOOP}
           onCodexPermissionChange={NOOP}
           promptInputSlot={promptInputSlot}
+          onFilesDrop={NOOP}
         />
       </div>
 

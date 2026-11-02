@@ -7,6 +7,8 @@ interface SessionComposerDropZoneProps {
   disabled?: boolean;
   onDragActiveChange?: (active: boolean) => void;
   onFilesDrop: (files: File[]) => void;
+  /** Corner radius of the surface it wraps, so the outline follows it. */
+  radius?: number;
 }
 
 function hasDraggedFiles(dataTransfer: DataTransfer): boolean {
@@ -18,6 +20,7 @@ export const SessionComposerDropZone: React.FC<SessionComposerDropZoneProps> = (
   disabled = false,
   onDragActiveChange,
   onFilesDrop,
+  radius,
 }) => {
   const { token } = theme.useToken();
   const [isDragOver, setIsDragOver] = useState(false);
@@ -115,9 +118,10 @@ export const SessionComposerDropZone: React.FC<SessionComposerDropZoneProps> = (
             position: 'absolute',
             inset: 0,
             backgroundColor: `${token.colorBgContainer}CC`,
-            border: `1px solid ${token.colorPrimary}`,
-            borderRadius: token.borderRadius,
-            boxShadow: `0 0 0 ${token.controlOutlineWidth}px ${token.controlOutline}`,
+            borderWidth: token.lineWidth * 2,
+            borderStyle: 'dashed',
+            borderColor: token.colorPrimary,
+            borderRadius: radius ?? token.borderRadius,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -126,7 +130,7 @@ export const SessionComposerDropZone: React.FC<SessionComposerDropZoneProps> = (
           }}
         >
           <Typography.Text strong style={{ color: token.colorPrimary }}>
-            Drop files here to attach
+            Drop files to attach
           </Typography.Text>
         </div>
       )}

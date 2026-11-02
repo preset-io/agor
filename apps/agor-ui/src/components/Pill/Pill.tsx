@@ -231,13 +231,16 @@ interface ContextWindowPillProps extends BasePillProps {
  * Context Window Popover Content Component
  * Displays detailed token usage, breakdown, and metadata in a structured layout
  */
-const ContextWindowPopoverContent: React.FC<{
+/** The context window breakdown: tokens, per-model usage and the raw SDK response. */
+export const ContextWindowPopoverContent: React.FC<{
   used: number;
   limit: number;
   percentage: number;
   taskMetadata?: ContextWindowPillProps['taskMetadata'];
   onEscape: () => void;
-}> = ({ used, limit, percentage, taskMetadata, onEscape }) => {
+  /** Defaults to 400px for the popover; menus pass '100%'. */
+  width?: number | string;
+}> = ({ used, limit, percentage, taskMetadata, onEscape, width = 400 }) => {
   const { token } = theme.useToken();
 
   // Build collapsible items for advanced sections
@@ -351,7 +354,7 @@ const ContextWindowPopoverContent: React.FC<{
         // Let AntD handle dismissal so it also cancels pending hover timers.
         onEscape();
       }}
-      style={{ width: 400, maxWidth: '90vw' }}
+      style={{ width, maxWidth: '90vw' }}
     >
       {/* Primary info - always visible */}
       <div style={{ marginBottom: 16 }}>

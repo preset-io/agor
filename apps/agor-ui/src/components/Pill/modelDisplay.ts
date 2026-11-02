@@ -19,3 +19,11 @@ export function getModelDisplayName(modelId: string): string {
 
   return modelId;
 }
+
+/** Composer chip label: `claude-opus-5-5` reads "Opus 5.5". Unknown ids stay as they are. */
+export function getModelChipLabel(modelId: string): string {
+  const name = getModelDisplayName(modelId);
+  const family = MODEL_FAMILIES.find((f) => name === f || name.startsWith(`${f}-`));
+  if (!family) return name;
+  return `${family[0].toUpperCase()}${family.slice(1)}${name.slice(family.length).replace('-', ' ')}`;
+}

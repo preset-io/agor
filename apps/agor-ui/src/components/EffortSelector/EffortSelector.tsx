@@ -29,7 +29,7 @@ interface EffortSelectorProps {
   fullWidth?: boolean;
 }
 
-const EFFORT_OPTIONS: {
+export const EFFORT_OPTIONS: {
   value: EffortLevel;
   shortLabel: string;
   label: string;
