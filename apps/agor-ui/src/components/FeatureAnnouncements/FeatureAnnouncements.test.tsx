@@ -98,9 +98,15 @@ const user = makeUser({ preferences: { mainBoardId: '01a17e45-5b1a-71d0-baed-ed2
 
 const LocationProbe = () => <output aria-label="Location">{useLocation().pathname}</output>;
 
-function setup(initial: FeatureAnnouncementsFeed, { suppressed = false } = {}) {
+function setup(
+  initial: FeatureAnnouncementsFeed,
+  {
+    suppressed = false,
+    afterSeen = feed({ unread_notification_ids: [], pending_popup_items: [] }),
+  } = {}
+) {
   const find = vi.fn(async () => initial);
-  const create = vi.fn(async () => feed({ unread_notification_ids: [], pending_popup_items: [] }));
+  const create = vi.fn(async () => afterSeen);
   const service = vi.fn((path: string) => {
     if (path === FEATURE_ANNOUNCEMENTS_SERVICE) return { find };
     if (path === FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE) return { create };
@@ -242,6 +248,32 @@ it('shows nothing until the source has answered once', async () => {
   await waitFor(() => expect(find).toHaveBeenCalled());
   expect(screen.queryByLabelText(/Notifications/)).not.toBeInTheDocument();
   expect(screen.queryByText('New in Agor')).not.toBeInTheDocument();
+});
+
+it('does not reopen a seen launch or its notification after an operator edits it', async () => {
+  // The daemon's answer once the launch was seen: same IDs, edited copy and visual.
+  const edited = {
+    ...zones,
+    title: 'Zones arrange your cards for you',
+    visual: { type: 'illustration' as const, key: 'channels' as const },
+  };
+  const afterSeen = feed({
+    announcements: [{ ...releases[0], items: [edited] }],
+    unread_notification_ids: [],
+    pending_popup_items: [],
+  });
+  const { create } = setup(feed({ pending_popup_items: [zones] }), { afterSeen });
+
+  fireEvent.click(await screen.findByText('Not now'));
+  expect(create).toHaveBeenCalledWith({ scope: 'popup', itemIds: ['zones'] });
+
+  await waitFor(() => expect(screen.getByLabelText('Notifications')).toBeInTheDocument());
+  expect(screen.queryByText('New in Agor')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByLabelText('Notifications'));
+  fireEvent.click(await screen.findByText('Release notes'));
+  expect(await screen.findByText('Zones arrange your cards for you')).toBeInTheDocument();
+  // Opening Release notes with nothing unread writes nothing.
+  expect(create).toHaveBeenCalledTimes(1);
 });
 
 it('waits while onboarding is open', async () => {

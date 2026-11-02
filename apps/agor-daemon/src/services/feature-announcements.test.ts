@@ -169,6 +169,38 @@ describe('buildFeatureAnnouncementsFeed', () => {
     expect(opened.last_seen_at).toBe('2026-10-15T00:00:00.000Z');
   });
 
+  it('keeps seen state when an operator edits a live item and moves its release time', () => {
+    const seen = member({
+      featureAnnouncements: {
+        lastSeenAt: '2026-10-20T12:00:00.000Z',
+        seenReleaseIds: ['r3'],
+        seenPopupItemIds: ['r3-launch'],
+      },
+    });
+    const [r3, ...rest] = RELEASES;
+    // Same release and item IDs; new copy, a new visual and a later published_at.
+    const edited: FeatureAnnouncementDTO = {
+      ...r3,
+      published_at: '2026-10-20T18:00:00.000Z',
+      items: r3.items.map((i) =>
+        i.id === 'r3-launch'
+          ? {
+              ...i,
+              title: 'Zones arrange your cards for you',
+              visual: { type: 'illustration', key: 'zone-grid' },
+              visual_alt: 'Cards snap into a grid',
+            }
+          : i
+      ),
+    };
+    const feed = buildFeatureAnnouncementsFeed('cloud', [edited, ...rest], seen, 'default', NOW);
+
+    expect(feed.announcements[0].items[0].title).toBe('Zones arrange your cards for you');
+    expect(feed.notification_ids).toContain('r3');
+    expect(feed.unread_notification_ids).not.toContain('r3');
+    expect(feed.pending_popup_items.map((i) => i.id)).not.toContain('r3-launch');
+  });
+
   it('pops up only recent launches and never in the first days of an account', () => {
     const later = Date.parse('2026-10-28T00:00:00.000Z');
     expect(
@@ -207,7 +239,14 @@ describe('mergeFeatureAnnouncementsSeen', () => {
     ).toEqual({
       seenPopupItemIds: ['a'],
       lastSeenAt: now.toISOString(),
+      seenReleaseIds: [],
     });
+    expect(
+      mergeFeatureAnnouncementsSeen({ seenReleaseIds: ['r1'] }, { scope: 'release_notes' }, now, [
+        'r2',
+        'r1',
+      ]).seenReleaseIds
+    ).toEqual(['r2', 'r1']);
 
     const many = Array.from({ length: 200 }, (_, i) => `old-${i}`);
     const merged = mergeFeatureAnnouncementsSeen(
@@ -428,6 +467,51 @@ describe('FeatureAnnouncementsMarkSeenService', () => {
       'r2-launch',
       'r3-launch',
     ]);
+  });
+
+  dbTest('an edited live release stays read after Release notes was opened', async ({ db }) => {
+    const users = new UsersService(db);
+    const created = await users.create({
+      email: 'feature-announcements-edit@example.test',
+      password: 'a unique local test passphrase',
+      role: 'member',
+    });
+    const userId = created.user_id as UserID;
+    const params = {
+      user: { user_id: userId, email: created.email, role: 'member' },
+    } as AuthenticatedParams;
+    const publishedAt = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
+    let live = [
+      release('live', publishedAt(60_000), [
+        item('launch', { popup: true, new_until: '2999-01-01T00:00:00.000Z' }),
+      ]),
+    ];
+    const feed = new FeatureAnnouncementsService(
+      { source: 'cloud', announcements: () => live },
+      new UsersRepository(db)
+    );
+    const markSeen = new FeatureAnnouncementsMarkSeenService(feed, { service: () => users });
+
+    expect((await feed.find(params)).unread_notification_ids).toEqual(['live']);
+    await markSeen.create({ scope: 'release_notes' }, params);
+    await markSeen.create({ scope: 'popup', itemIds: ['launch'] }, params);
+
+    // The operator edits the live item; its release now reports a later time.
+    live = [
+      release('live', publishedAt(3_600_000), [
+        item('launch', {
+          popup: true,
+          new_until: '2999-01-01T00:00:00.000Z',
+          title: 'Edited title',
+          visual: { type: 'illustration', key: 'channels' },
+        }),
+      ]),
+    ];
+    const after = await feed.find(params);
+    expect(after.announcements[0].items[0].title).toBe('Edited title');
+    expect(after.notification_ids).toEqual(['live']);
+    expect(after.unread_notification_ids).toEqual([]);
+    expect(after.pending_popup_items).toEqual([]);
   });
 
   it('rejects malformed requests and unauthenticated callers', async () => {

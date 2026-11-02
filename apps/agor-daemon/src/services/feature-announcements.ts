@@ -300,7 +300,10 @@ export function buildFeatureAnnouncementsFeed(
     (release) =>
       time(release.published_at) > created && release.items.some((i) => i.badge && isNew(i))
   );
+  // Pop-ups are seen by stable item ID and notifications by release ID, never by
+  // content or timestamps, so an operator's edit to a live item reshows nothing.
   const seenPopups = new Set(prefs.seenPopupItemIds ?? []);
+  const seenReleases = new Set(prefs.seenReleaseIds ?? []);
   const popupsAllowed = now - created >= FEATURE_ANNOUNCEMENTS_LIMITS.popupNewAccountDays * DAY_MS;
   const popupSince = Math.max(created, now - FEATURE_ANNOUNCEMENTS_LIMITS.popupWindowDays * DAY_MS);
   return {
@@ -310,7 +313,9 @@ export function buildFeatureAnnouncementsFeed(
     last_seen_at: prefs.lastSeenAt ?? null,
     notification_ids: notifications.map((release) => release.id),
     unread_notification_ids: notifications
-      .filter((release) => time(release.published_at) > seenBaseline)
+      .filter(
+        (release) => !seenReleases.has(release.id) && time(release.published_at) > seenBaseline
+      )
       .map((release) => release.id),
     pending_popup_items: popupsAllowed
       ? announcements
@@ -334,18 +339,37 @@ const markSeenSchema = z.discriminatedUnion('scope', [
     .strict(),
 ]);
 
-/** Merge a mark-seen request into the stored preference; IDs are capped, newest kept. */
+/** Append `added` to `ids`, keeping each once and only the newest `max`. */
+const appendCapped = (ids: string[] | undefined, added: string[], max: number) =>
+  [...(ids ?? []).filter((id) => !added.includes(id)), ...added].slice(-max);
+
+/**
+ * Merge a mark-seen request into the stored preference. Opening Release notes
+ * reads the notifications shown at that moment (`notificationIds`).
+ */
 export function mergeFeatureAnnouncementsSeen(
   current: FeatureAnnouncementsPreferences | undefined,
   request: FeatureAnnouncementsMarkSeenRequest,
-  now: Date
+  now: Date,
+  notificationIds: string[] = []
 ): FeatureAnnouncementsPreferences {
-  if (request.scope === 'release_notes') return { ...current, lastSeenAt: now.toISOString() };
-  const ids = (current?.seenPopupItemIds ?? []).filter((id) => !request.itemIds.includes(id));
+  if (request.scope === 'release_notes') {
+    return {
+      ...current,
+      lastSeenAt: now.toISOString(),
+      seenReleaseIds: appendCapped(
+        current?.seenReleaseIds,
+        notificationIds,
+        FEATURE_ANNOUNCEMENTS_LIMITS.seenReleaseIds
+      ),
+    };
+  }
   return {
     ...current,
-    seenPopupItemIds: [...ids, ...request.itemIds].slice(
-      -FEATURE_ANNOUNCEMENTS_LIMITS.seenPopupItemIds
+    seenPopupItemIds: appendCapped(
+      current?.seenPopupItemIds,
+      request.itemIds,
+      FEATURE_ANNOUNCEMENTS_LIMITS.seenPopupItemIds
     ),
   };
 }
@@ -403,6 +427,10 @@ export class FeatureAnnouncementsMarkSeenService {
       throw new BadRequest("Expected { scope: 'release_notes' } or { scope: 'popup', itemIds }");
     }
     const now = new Date();
+    const notificationIds =
+      request.data.scope === 'release_notes'
+        ? (await this.feed.feedFor(params)).notification_ids
+        : [];
     // The merge runs inside users.patch, against the row it reads under its
     // per-user lock and compare-and-set write, so concurrent writes survive.
     await this.app.service('users').patch(
@@ -420,7 +448,8 @@ export class FeatureAnnouncementsMarkSeenService {
           featureAnnouncements: mergeFeatureAnnouncementsSeen(
             current?.featureAnnouncements,
             request.data,
-            now
+            now,
+            notificationIds
           ),
         })
       )

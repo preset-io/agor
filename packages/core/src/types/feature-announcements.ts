@@ -194,11 +194,17 @@ export interface FeatureAnnouncementsPreferences {
   lastSeenAt?: string;
   /** Pop-up item IDs already shown (or dismissed), newest last. */
   seenPopupItemIds?: string[];
+  /**
+   * Releases whose notification was read, newest last. Read state is keyed by
+   * release ID so an edit that moves `published_at` never makes it unread again.
+   */
+  seenReleaseIds?: string[];
 }
 
 export const FEATURE_ANNOUNCEMENTS_LIMITS = {
   /** Cap on `seenPopupItemIds`; older IDs belong to releases no longer served. */
   seenPopupItemIds: 200,
+  seenReleaseIds: 100,
   /** Items per page for agents. */
   agentListDefault: 20,
   agentListMax: 100,
