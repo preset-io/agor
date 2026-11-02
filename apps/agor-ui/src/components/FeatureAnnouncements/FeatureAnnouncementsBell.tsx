@@ -1,4 +1,7 @@
-import type { FeatureAnnouncementDTO, FeatureAnnouncementItemDTO } from '@agor-live/client';
+import type {
+  FeatureAnnouncementClientItem,
+  FeatureAnnouncementClientRelease,
+} from '@agor-live/client';
 import {
   ArrowRightOutlined,
   BellOutlined,
@@ -45,7 +48,7 @@ const rowStyle = (padding: number): CSSProperties => ({
 
 const pluralUpdates = (count: number) => `${count} ${count === 1 ? 'update' : 'updates'}`;
 
-const isNew = (item: FeatureAnnouncementItemDTO) => Date.parse(item.new_until) > Date.now();
+const isNew = (item: FeatureAnnouncementClientItem) => Date.parse(item.new_until) > Date.now();
 
 const Dot: React.FC<{ on: boolean; size: number }> = ({ on, size }) => {
   const { token } = theme.useToken();
@@ -63,7 +66,9 @@ const Dot: React.FC<{ on: boolean; size: number }> = ({ on, size }) => {
   );
 };
 
-const NotificationsList: React.FC<{ releases: FeatureAnnouncementDTO[] }> = ({ releases }) => {
+const NotificationsList: React.FC<{ releases: FeatureAnnouncementClientRelease[] }> = ({
+  releases,
+}) => {
   const { token } = theme.useToken();
   const featureAnnouncements = useFeatureAnnouncements();
   if (!featureAnnouncements) return null;
@@ -123,7 +128,7 @@ const NotificationsList: React.FC<{ releases: FeatureAnnouncementDTO[] }> = ({ r
   );
 };
 
-const ReleaseNoteRow: React.FC<{ item: FeatureAnnouncementItemDTO; muted: boolean }> = ({
+const ReleaseNoteRow: React.FC<{ item: FeatureAnnouncementClientItem; muted: boolean }> = ({
   item,
   muted,
 }) => {
@@ -184,7 +189,7 @@ const ReleaseNoteRow: React.FC<{ item: FeatureAnnouncementItemDTO; muted: boolea
   );
 };
 
-const ReleaseNotes: React.FC<{ releases: FeatureAnnouncementDTO[] }> = ({ releases }) => {
+const ReleaseNotes: React.FC<{ releases: FeatureAnnouncementClientRelease[] }> = ({ releases }) => {
   const { token } = theme.useToken();
   const [latest, ...earlier] = releases;
   const footer = (

@@ -1,15 +1,16 @@
 import type {
   AgorClient,
-  FeatureAnnouncementDTO,
-  FeatureAnnouncementItemDTO,
+  FeatureAnnouncementClientItem,
+  FeatureAnnouncementClientRelease,
   FeatureAnnouncementsFeed,
+  User,
 } from '@agor-live/client';
 import {
   FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,
   FEATURE_ANNOUNCEMENTS_SERVICE,
 } from '@agor-live/client';
 // Label and text queries: role queries compute styles jsdom cannot parse for AntD v6.
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, expect, it, vi } from 'vitest';
@@ -23,8 +24,8 @@ const FUTURE = '2099-01-01T00:00:00.000Z';
 
 const item = (
   id: string,
-  overrides: Partial<FeatureAnnouncementItemDTO> = {}
-): FeatureAnnouncementItemDTO => ({
+  overrides: Partial<FeatureAnnouncementClientItem> = {}
+): FeatureAnnouncementClientItem => ({
   id,
   kind: 'new',
   title: `Title ${id}`,
@@ -66,13 +67,14 @@ const slack = item('slack', {
   popup: true,
 });
 
-const releases: FeatureAnnouncementDTO[] = [
+const releases: FeatureAnnouncementClientRelease[] = [
   {
     id: 'r2',
     label: 'runtime-2026-10-28',
     version_label: 'Agor 0.27',
     published_at: '2026-10-28T00:00:00.000Z',
     items: [zones, slack, item('quiet', { badge: false, kind: 'improved' })],
+    seen: false,
   },
   {
     id: 'r1',
@@ -80,14 +82,13 @@ const releases: FeatureAnnouncementDTO[] = [
     version_label: 'Agor 0.26',
     published_at: '2026-10-14T00:00:00.000Z',
     items: [item('old', { title: 'Knowledge docs link to each other' })],
+    seen: false,
   },
 ];
 
 const feed = (overrides: Partial<FeatureAnnouncementsFeed> = {}): FeatureAnnouncementsFeed => ({
-  source: 'cloud',
   available: true,
   announcements: releases,
-  last_seen_at: null,
   notification_ids: ['r2'],
   unread_notification_ids: ['r2'],
   pending_popup_items: [],
@@ -113,22 +114,48 @@ function setup(
     if (path === 'users') return { getPrimaryTeammate: vi.fn(async () => null) };
     throw new Error(`Unexpected service ${path}`);
   });
-  const shell = { openWorkspaceSettings: vi.fn(), openModelSettings: vi.fn() };
   const client = { service } as unknown as AgorClient;
-  render(
+  const { shell } = renderTab(client, { suppressed });
+  return { find, create, shell };
+}
+
+/** One browser tab of the app shell; `rerender` swaps in a changed user. */
+function renderTab(client: AgorClient, { suppressed = false } = {}) {
+  const shell = { openWorkspaceSettings: vi.fn(), openModelSettings: vi.fn() };
+  const tree = (tabUser: User) => (
     <ThemeProvider>
       <AntdApp>
         <MemoryRouter>
-          <FeatureAnnouncementsProvider client={client} user={user} enabled shell={shell}>
+          <FeatureAnnouncementsProvider client={client} user={tabUser} enabled shell={shell}>
             <FeatureAnnouncementsBell />
-            <NewInAgorModal client={client} user={user} suppressed={suppressed} />
+            <NewInAgorModal client={client} user={tabUser} suppressed={suppressed} />
             <LocationProbe />
           </FeatureAnnouncementsProvider>
         </MemoryRouter>
       </AntdApp>
     </ThemeProvider>
   );
-  return { find, create, shell };
+  const view = render(tree(user));
+  return { shell, rerender: (next: User) => view.rerender(tree(next)) };
+}
+
+/** A daemon stand-in that persists seen pop-ups the way the real one does. */
+function fakeServer(pending: FeatureAnnouncementClientItem[]) {
+  const seen = new Set<string>();
+  const current = () =>
+    feed({ pending_popup_items: pending.filter((popup) => !seen.has(popup.id)) });
+  const create = vi.fn(async (body: { itemIds?: string[] }) => {
+    for (const id of body.itemIds ?? []) seen.add(id);
+    return current();
+  });
+  const client = {
+    service: (path: string) => {
+      if (path === FEATURE_ANNOUNCEMENTS_SERVICE) return { find: async () => current() };
+      if (path === FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE) return { create };
+      throw new Error(`Unexpected service ${path}`);
+    },
+  } as unknown as AgorClient;
+  return { client, create, seen };
 }
 
 beforeEach(() => {
@@ -172,7 +199,7 @@ it('shows empty states when there is nothing to show', async () => {
   expect(await screen.findByText('No release notes yet')).toBeInTheDocument();
 });
 
-it('shows big launches as one carousel and marks every slide seen on Not now', async () => {
+it('shows big launches as one carousel and records each slide as it is displayed', async () => {
   const { create } = setup(feed({ pending_popup_items: [zones, slack] }));
 
   const dialog = (await screen.findByText('New in Agor')).closest('.ant-modal') as HTMLElement;
@@ -181,6 +208,8 @@ it('shows big launches as one carousel and marks every slide seen on Not now', a
   expect(within(dialog).getByLabelText('Cards snap into a grid')).toBeInTheDocument();
   expect(within(dialog).getAllByLabelText('Close').length).toBeGreaterThan(0);
   expect(within(dialog).getByText('See it on my board')).toBeInTheDocument();
+  await waitFor(() => expect(create).toHaveBeenCalledWith({ scope: 'popup', itemIds: ['zones'] }));
+  expect(create).toHaveBeenCalledTimes(1);
 
   fireEvent.click(within(dialog).getByLabelText('Next'));
   expect(await within(dialog).findByText('Slack setup listens everywhere')).toBeInTheDocument();
@@ -194,9 +223,71 @@ it('shows big launches as one carousel and marks every slide seen on Not now', a
     'https://agor.live/guide/slack'
   );
 
+  await waitFor(() => expect(create).toHaveBeenCalledWith({ scope: 'popup', itemIds: ['slack'] }));
+
+  // Both slides are already recorded, so closing writes nothing more.
   fireEvent.click(within(dialog).getByText('Not now'));
-  expect(create).toHaveBeenCalledWith({ scope: 'popup', itemIds: ['zones', 'slack'] });
   await waitFor(() => expect(screen.queryByText('New in Agor')).not.toBeInTheDocument());
+  expect(create).toHaveBeenCalledTimes(2);
+});
+
+it('closing records the slides that were not displayed', async () => {
+  const { create } = setup(feed({ pending_popup_items: [zones, slack] }));
+
+  fireEvent.click(await screen.findByText('Not now'));
+
+  expect(create).toHaveBeenCalledWith({ scope: 'popup', itemIds: ['zones'] });
+  expect(create).toHaveBeenCalledWith({ scope: 'popup', itemIds: ['slack'] });
+});
+
+it('never shows a displayed launch again after a reload or in a second tab', async () => {
+  const server = fakeServer([zones, slack]);
+  renderTab(server.client);
+
+  // Tab one shows the first slide; displaying it persists it.
+  await screen.findByText('Zones can arrange your cards');
+  await waitFor(() => expect(server.seen.has('zones')).toBe(true));
+
+  // A second tab opened now gets only the launch nobody has displayed yet.
+  renderTab(server.client);
+  await waitFor(() => expect(screen.getAllByText('New in Agor')).toHaveLength(2));
+  expect(screen.getAllByText('Zones can arrange your cards')).toHaveLength(1);
+  expect(screen.getByText('Slack setup listens everywhere')).toBeInTheDocument();
+  await waitFor(() => expect(server.seen.has('slack')).toBe(true));
+
+  // Reload: both launches were displayed, so nothing pops up.
+  cleanup();
+  renderTab(server.client);
+  await screen.findByLabelText('Notifications, 1 unread');
+  expect(screen.queryByText('New in Agor')).not.toBeInTheDocument();
+});
+
+it('a slow fetch from before a dismissal cannot reopen the pop-up', async () => {
+  let resolveStale: (value: FeatureAnnouncementsFeed) => void = () => {};
+  const find = vi
+    .fn()
+    .mockResolvedValueOnce(feed({ pending_popup_items: [zones] }))
+    .mockImplementationOnce(() => new Promise((resolve) => (resolveStale = resolve)));
+  const create = vi.fn(async () => feed({ pending_popup_items: [] }));
+  const client = {
+    service: (path: string) => (path === FEATURE_ANNOUNCEMENTS_SERVICE ? { find } : { create }),
+  } as unknown as AgorClient;
+  const tab = renderTab(client);
+
+  await screen.findByText('Zones can arrange your cards');
+  // Another tab records something: this tab refetches, slowly.
+  tab.rerender({
+    ...user,
+    preferences: { ...user.preferences, featureAnnouncements: { seenReleaseIds: ['r1'] } },
+  } as User);
+  await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+  fireEvent.click(screen.getByText('Not now'));
+  await waitFor(() => expect(screen.queryByText('New in Agor')).not.toBeInTheDocument());
+
+  // The fetch issued before the dismissal answers last, still listing the launch.
+  resolveStale(feed({ pending_popup_items: [zones] }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(screen.queryByText('New in Agor')).not.toBeInTheDocument();
 });
 
 it('opens the Agor page a button names', async () => {
@@ -258,7 +349,7 @@ it('does not reopen a seen launch or its notification after an operator edits it
     visual: { type: 'illustration' as const, key: 'channels' as const },
   };
   const afterSeen = feed({
-    announcements: [{ ...releases[0], items: [edited] }],
+    announcements: [{ ...releases[0], items: [edited], seen: true }],
     unread_notification_ids: [],
     pending_popup_items: [],
   });
@@ -272,7 +363,7 @@ it('does not reopen a seen launch or its notification after an operator edits it
   fireEvent.click(screen.getByLabelText('Notifications'));
   fireEvent.click(await screen.findByText('Release notes'));
   expect(await screen.findByText('Zones arrange your cards for you')).toBeInTheDocument();
-  // Opening Release notes with nothing unread writes nothing.
+  // Every visible release is already seen, so opening Release notes writes nothing.
   expect(create).toHaveBeenCalledTimes(1);
 });
 

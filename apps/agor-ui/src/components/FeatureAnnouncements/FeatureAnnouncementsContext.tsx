@@ -8,7 +8,15 @@ import {
   FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,
   FEATURE_ANNOUNCEMENTS_SERVICE,
 } from '@agor-live/client';
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 /** Cloud announcements refresh on the daemon every 15 minutes; follow at the same pace. */
 const REFRESH_INTERVAL_MS = 15 * 60_000;
@@ -52,62 +60,99 @@ export function FeatureAnnouncementsProvider({
   shell: FeatureAnnouncementsShell;
   children: React.ReactNode;
 }) {
-  const [feed, setFeed] = useState<FeatureAnnouncementsFeed | null>(null);
+  const [received, setReceived] = useState<FeatureAnnouncementsFeed | null>(null);
+  // IDs this tab has shown or read. The server only ever adds seen IDs, so they
+  // stay hidden for the provider's lifetime, whatever a response says.
+  const [localSeen, setLocalSeen] = useState(() => ({
+    popups: new Set<string>(),
+    releases: new Set<string>(),
+  }));
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [tab, setTab] = useState<FeatureAnnouncementsTab>('notifications');
+  // Fetches and writes race: apply a response only if no later request's answer
+  // has been applied, so a slow pre-dismissal fetch cannot reopen anything.
+  const requestSeq = useRef(0);
+  const appliedSeq = useRef(0);
   const userId = user?.user_id;
   // Another tab marking announcements seen arrives as a users patch; refetch on it.
   const seenKey = JSON.stringify(user?.preferences?.featureAnnouncements ?? null);
   const active = enabled && !!client && !!userId;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: seenKey and userId deliberately trigger a refetch
-  useEffect(() => {
-    if (!active || !client) {
-      setFeed(null);
-      return;
-    }
-    let cancelled = false;
-    const load = () =>
-      (
-        client
-          .service(FEATURE_ANNOUNCEMENTS_SERVICE)
-          .find() as unknown as Promise<FeatureAnnouncementsFeed>
-      ).then(
+  const request = useCallback(
+    (send: () => Promise<unknown>, isCurrent: () => boolean = () => true) => {
+      const seq = ++requestSeq.current;
+      send().then(
         (next) => {
-          if (!cancelled) setFeed(next);
+          if (!isCurrent() || seq < appliedSeq.current) return;
+          appliedSeq.current = seq;
+          setReceived(next as FeatureAnnouncementsFeed);
         },
         // Announcements are never worth an error toast; keep what we have.
         () => {}
       );
-    void load();
+    },
+    []
+  );
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: seenKey and userId deliberately trigger a refetch
+  useEffect(() => {
+    if (!active || !client) {
+      setReceived(null);
+      return;
+    }
+    let cancelled = false;
+    const load = () =>
+      request(
+        () => client.service(FEATURE_ANNOUNCEMENTS_SERVICE).find(),
+        () => !cancelled
+      );
+    load();
     const timer = window.setInterval(load, REFRESH_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [active, client, userId, seenKey]);
+  }, [active, client, userId, seenKey, request]);
 
   const markSeen = useCallback(
-    (request: FeatureAnnouncementsMarkSeenRequest) => {
-      if (!client) return;
-      client
-        .service(FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE)
-        .create(request)
-        .then(
-          (next) => setFeed(next as FeatureAnnouncementsFeed),
-          () => {}
-        );
+    (body: FeatureAnnouncementsMarkSeenRequest) => {
+      if (client)
+        request(() => client.service(FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE).create(body));
     },
-    [client]
+    [client, request]
   );
 
-  const hasUnread = (feed?.unread_notification_ids.length ?? 0) > 0;
+  const feed = useMemo(
+    () =>
+      received && {
+        ...received,
+        announcements: received.announcements.map((release) =>
+          localSeen.releases.has(release.id) ? { ...release, seen: true } : release
+        ),
+        unread_notification_ids: received.unread_notification_ids.filter(
+          (id) => !localSeen.releases.has(id)
+        ),
+        pending_popup_items: received.pending_popup_items.filter(
+          (item) => !localSeen.popups.has(item.id)
+        ),
+      },
+    [received, localSeen]
+  );
+
   const showTab = useCallback(
     (next: FeatureAnnouncementsTab) => {
       setTab(next);
-      if (next === 'release-notes' && hasUnread) markSeen({ scope: 'release_notes' });
+      if (next !== 'release-notes' || !feed) return;
+      // Opening Release notes reads every visible release, notification or not.
+      const unseen = feed.announcements.filter((release) => !release.seen).map((r) => r.id);
+      if (unseen.length === 0) return;
+      setLocalSeen((current) => ({
+        ...current,
+        releases: new Set([...current.releases, ...unseen]),
+      }));
+      markSeen({ scope: 'release_notes' });
     },
-    [hasUnread, markSeen]
+    [feed, markSeen]
   );
   const openPopover = useCallback(
     (next: FeatureAnnouncementsTab = 'notifications') => {
@@ -119,20 +164,15 @@ export function FeatureAnnouncementsProvider({
   const closePopover = useCallback(() => setPopoverOpen(false), []);
   const markPopupsSeen = useCallback(
     (itemIds: string[]) => {
-      if (itemIds.length === 0) return;
-      // Optimistic, so the pop-up cannot reappear while the write is in flight.
-      setFeed(
-        (current) =>
-          current && {
-            ...current,
-            pending_popup_items: current.pending_popup_items.filter(
-              (item) => !itemIds.includes(item.id)
-            ),
-          }
-      );
-      markSeen({ scope: 'popup', itemIds });
+      const fresh = itemIds.filter((id) => !localSeen.popups.has(id));
+      if (fresh.length === 0) return;
+      setLocalSeen((current) => ({
+        ...current,
+        popups: new Set([...current.popups, ...fresh]),
+      }));
+      markSeen({ scope: 'popup', itemIds: fresh });
     },
-    [markSeen]
+    [localSeen, markSeen]
   );
 
   // Nothing renders until the source has answered once, so a Cloud cell that

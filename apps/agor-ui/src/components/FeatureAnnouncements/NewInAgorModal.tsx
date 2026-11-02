@@ -3,7 +3,7 @@ import type {
   AgorClient,
   Branch,
   FeatureAnnouncementButton,
-  FeatureAnnouncementItemDTO,
+  FeatureAnnouncementClientItem,
   User,
 } from '@agor-live/client';
 import { ArrowRightOutlined, GiftOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
@@ -37,7 +37,7 @@ export interface NewInAgorModalProps {
   ) => Promise<SessionCreationResult | null>;
 }
 
-const NO_ITEMS: FeatureAnnouncementItemDTO[] = [];
+const NO_ITEMS: FeatureAnnouncementClientItem[] = [];
 
 /**
  * Starts a session with the user's primary teammate (else the board's) with the
@@ -95,8 +95,9 @@ const TeammateChatButton: React.FC<
 };
 
 /**
- * Big launches the user has not seen, newest first, one slide each. Any way
- * out marks every slide seen, so the same launches never return.
+ * Big launches the user has not seen, newest first, one slide each. Each slide
+ * is recorded as seen when it is displayed, and any way out marks every slide
+ * seen, so the same launches never return (here, after a reload or in another tab).
  */
 export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...props }) => {
   const { token } = theme.useToken();
@@ -107,7 +108,7 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
   const featureAnnouncements = useFeatureAnnouncements();
   const [index, setIndex] = useState(0);
   // Freeze the slides while open: marking them seen must not reshuffle the carousel.
-  const [slides, setSlides] = useState<FeatureAnnouncementItemDTO[]>(NO_ITEMS);
+  const [slides, setSlides] = useState<FeatureAnnouncementClientItem[]>(NO_ITEMS);
   const pending = featureAnnouncements?.feed.pending_popup_items ?? NO_ITEMS;
   const open = slides.length > 0;
 
@@ -118,8 +119,13 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
     }
   }, [open, suppressed, pending]);
 
-  if (!featureAnnouncements) return null;
   const slide = slides[index];
+  const markPopupsSeen = featureAnnouncements?.markPopupsSeen;
+  useEffect(() => {
+    if (open && !suppressed && slide) markPopupsSeen?.([slide.id]);
+  }, [open, suppressed, slide, markPopupsSeen]);
+
+  if (!featureAnnouncements) return null;
   const many = slides.length > 1;
   const close = () => {
     featureAnnouncements.markPopupsSeen(slides.map((item) => item.id));
