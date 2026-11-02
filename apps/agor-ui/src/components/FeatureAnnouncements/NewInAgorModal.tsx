@@ -119,6 +119,18 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
     }
   }, [open, suppressed, pending]);
 
+  // Another tab may display a launch this carousel has not reached yet: once the
+  // feed says it is seen, drop it from the slides ahead. The current slide and
+  // the ones already passed stay, so nothing moves under the reader.
+  useEffect(() => {
+    if (!open) return;
+    const stillPending = new Set(pending.map((item) => item.id));
+    setSlides((current) => {
+      const kept = current.filter((item, i) => i <= index || stillPending.has(item.id));
+      return kept.length === current.length ? current : kept;
+    });
+  }, [open, pending, index]);
+
   const slide = slides[index];
   const markPopupsSeen = featureAnnouncements?.markPopupsSeen;
   useEffect(() => {

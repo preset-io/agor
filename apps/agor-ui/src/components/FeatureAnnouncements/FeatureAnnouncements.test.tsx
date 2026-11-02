@@ -200,7 +200,10 @@ it('shows empty states when there is nothing to show', async () => {
 });
 
 it('shows big launches as one carousel and records each slide as it is displayed', async () => {
-  const { create } = setup(feed({ pending_popup_items: [zones, slack] }));
+  // The daemon keeps listing the launch nobody has displayed yet.
+  const { create } = setup(feed({ pending_popup_items: [zones, slack] }), {
+    afterSeen: feed({ pending_popup_items: [slack] }),
+  });
 
   const dialog = (await screen.findByText('New in Agor')).closest('.ant-modal') as HTMLElement;
   expect(within(dialog).getByText('New in Agor')).toBeInTheDocument();
@@ -232,7 +235,10 @@ it('shows big launches as one carousel and records each slide as it is displayed
 });
 
 it('closing records the slides that were not displayed', async () => {
-  const { create } = setup(feed({ pending_popup_items: [zones, slack] }));
+  // The daemon keeps listing the launch nobody has displayed yet.
+  const { create } = setup(feed({ pending_popup_items: [zones, slack] }), {
+    afterSeen: feed({ pending_popup_items: [slack] }),
+  });
 
   fireEvent.click(await screen.findByText('Not now'));
 
@@ -242,11 +248,12 @@ it('closing records the slides that were not displayed', async () => {
 
 it('never shows a displayed launch again after a reload or in a second tab', async () => {
   const server = fakeServer([zones, slack]);
-  renderTab(server.client);
+  const tabOne = renderTab(server.client);
 
   // Tab one shows the first slide; displaying it persists it.
   await screen.findByText('Zones can arrange your cards');
   await waitFor(() => expect(server.seen.has('zones')).toBe(true));
+  expect(screen.getAllByLabelText('Next')).toHaveLength(1);
 
   // A second tab opened now gets only the launch nobody has displayed yet.
   renderTab(server.client);
@@ -254,6 +261,16 @@ it('never shows a displayed launch again after a reload or in a second tab', asy
   expect(screen.getAllByText('Zones can arrange your cards')).toHaveLength(1);
   expect(screen.getByText('Slack setup listens everywhere')).toBeInTheDocument();
   await waitFor(() => expect(server.seen.has('slack')).toBe(true));
+
+  // Tab one hears of it (users patched) and refetches: its frozen carousel
+  // drops the launch it had not reached, so there is no Next to show it again.
+  tabOne.rerender({
+    ...user,
+    preferences: { ...user.preferences, featureAnnouncements: { seenPopupItemIds: ['slack'] } },
+  } as User);
+  await waitFor(() => expect(screen.queryAllByLabelText('Next')).toHaveLength(0));
+  expect(screen.getAllByText('Slack setup listens everywhere')).toHaveLength(1);
+  expect(screen.getAllByText('Zones can arrange your cards')).toHaveLength(1);
 
   // Reload: both launches were displayed, so nothing pops up.
   cleanup();
