@@ -68,7 +68,7 @@
     "@microsoft/agents-activity": "1.8.1",
     "@microsoft/agents-hosting": "1.8.1",
     "@modelcontextprotocol/core": "2.0.0",
-    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/node": "2.1.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@oclif/core": "^4.13.3",
