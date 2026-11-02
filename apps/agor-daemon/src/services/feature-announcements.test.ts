@@ -81,7 +81,6 @@ const NOW = Date.parse('2026-10-21T00:00:00.000Z');
 describe('buildFeatureAnnouncementsFeed', () => {
   it('hides admin items from members and drops releases left empty', () => {
     const feed = buildFeatureAnnouncementsFeed(
-      'bundled',
       [
         release('admin-only', '2026-10-21T00:00:00.000Z', [item('a', { roles: 'admins' })]),
         ...RELEASES,
@@ -94,13 +93,8 @@ describe('buildFeatureAnnouncementsFeed', () => {
     expect(feed.announcements.map((r) => r.id)).toEqual(['r3', 'r2', 'r1']);
     expect(feed.announcements[0].items.map((i) => i.id)).toEqual(['r3-launch']);
     expect(
-      buildFeatureAnnouncementsFeed(
-        'bundled',
-        RELEASES,
-        { ...member(), role: 'admin' },
-        'default',
-        NOW
-      ).announcements[0].items
+      buildFeatureAnnouncementsFeed(RELEASES, { ...member(), role: 'admin' }, 'default', NOW)
+        .announcements[0].items
     ).toHaveLength(2);
   });
 
@@ -112,13 +106,9 @@ describe('buildFeatureAnnouncementsFeed', () => {
       ]),
     ];
     const idsFor = (tenantId: string | undefined) =>
-      buildFeatureAnnouncementsFeed(
-        'cloud',
-        limited,
-        member(),
-        tenantId,
-        NOW
-      ).announcements.flatMap((r) => r.items.map((i) => i.id));
+      buildFeatureAnnouncementsFeed(limited, member(), tenantId, NOW).announcements.flatMap((r) =>
+        r.items.map((i) => i.id)
+      );
 
     expect(idsFor('tenant-acme')).toEqual(['acme-only', 'everyone']);
     expect(idsFor('tenant-globex')).toEqual(['everyone']);
@@ -126,8 +116,25 @@ describe('buildFeatureAnnouncementsFeed', () => {
     expect(idsFor(undefined)).toEqual(['everyone']);
   });
 
+  it("never sends audience fields or another tenant's ID to the caller", () => {
+    const limited = [
+      release('r', '2026-10-20T00:00:00.000Z', [
+        item('shared', { tenant_ids: ['tenant-acme', 'tenant-globex'], popup: true }),
+      ]),
+    ];
+    const feed = buildFeatureAnnouncementsFeed(limited, member(), 'tenant-acme', NOW);
+
+    expect(feed.announcements[0].items.map((i) => i.id)).toEqual(['shared']);
+    expect(feed.pending_popup_items.map((i) => i.id)).toEqual(['shared']);
+    const sent = JSON.stringify(feed);
+    expect(sent).not.toContain('tenant-globex');
+    expect(sent).not.toContain('tenant_ids');
+    expect(sent).not.toContain('roles');
+    expect(sent).not.toContain('pr_numbers');
+  });
+
   it('makes one notification per release with a new badge item, never before the account existed', () => {
-    const feed = buildFeatureAnnouncementsFeed('cloud', RELEASES, member(), 'default', NOW);
+    const feed = buildFeatureAnnouncementsFeed(RELEASES, member(), 'default', NOW);
 
     expect(feed.notification_ids).toEqual(['r3', 'r2']);
     expect(feed.unread_notification_ids).toEqual(['r3', 'r2']);
@@ -135,7 +142,6 @@ describe('buildFeatureAnnouncementsFeed', () => {
 
     // Quiet items and items past new_until never ring the bell.
     const quiet = buildFeatureAnnouncementsFeed(
-      'cloud',
       [
         release('q', '2026-10-20T00:00:00.000Z', [
           item('quiet', { badge: false }),
@@ -150,29 +156,28 @@ describe('buildFeatureAnnouncementsFeed', () => {
     expect(quiet.pending_popup_items).toEqual([]);
   });
 
-  it('reads notifications once Release notes is opened and pop-ups once shown', () => {
+  it('reads notifications by release ID and pop-ups by item ID', () => {
     const opened = buildFeatureAnnouncementsFeed(
-      'cloud',
       RELEASES,
       member({
-        featureAnnouncements: {
-          lastSeenAt: '2026-10-15T00:00:00.000Z',
-          seenPopupItemIds: ['r3-launch'],
-        },
+        featureAnnouncements: { seenReleaseIds: ['r2', 'r1'], seenPopupItemIds: ['r3-launch'] },
       }),
       'default',
       NOW
     );
     expect(opened.notification_ids).toEqual(['r3', 'r2']);
     expect(opened.unread_notification_ids).toEqual(['r3']);
+    expect(opened.announcements.map((r) => [r.id, r.seen])).toEqual([
+      ['r3', false],
+      ['r2', true],
+      ['r1', true],
+    ]);
     expect(opened.pending_popup_items.map((i) => i.id)).toEqual(['r2-launch']);
-    expect(opened.last_seen_at).toBe('2026-10-15T00:00:00.000Z');
   });
 
   it('keeps seen state when an operator edits a live item and moves its release time', () => {
     const seen = member({
       featureAnnouncements: {
-        lastSeenAt: '2026-10-20T12:00:00.000Z',
         seenReleaseIds: ['r3'],
         seenPopupItemIds: ['r3-launch'],
       },
@@ -193,7 +198,7 @@ describe('buildFeatureAnnouncementsFeed', () => {
           : i
       ),
     };
-    const feed = buildFeatureAnnouncementsFeed('cloud', [edited, ...rest], seen, 'default', NOW);
+    const feed = buildFeatureAnnouncementsFeed([edited, ...rest], seen, 'default', NOW);
 
     expect(feed.announcements[0].items[0].title).toBe('Zones arrange your cards for you');
     expect(feed.notification_ids).toContain('r3');
@@ -204,57 +209,43 @@ describe('buildFeatureAnnouncementsFeed', () => {
   it('pops up only recent launches and never in the first days of an account', () => {
     const later = Date.parse('2026-10-28T00:00:00.000Z');
     expect(
-      buildFeatureAnnouncementsFeed(
-        'cloud',
-        RELEASES,
-        member(),
-        'default',
-        later
-      ).pending_popup_items.map((i) => i.id)
+      buildFeatureAnnouncementsFeed(RELEASES, member(), 'default', later).pending_popup_items.map(
+        (i) => i.id
+      )
     ).toEqual(['r3-launch']);
 
     const newcomer = { ...member(), created_at: new Date('2026-10-18T00:00:00.000Z') };
-    const feed = buildFeatureAnnouncementsFeed('cloud', RELEASES, newcomer, 'default', NOW);
+    const feed = buildFeatureAnnouncementsFeed(RELEASES, newcomer, 'default', NOW);
     expect(feed.pending_popup_items).toEqual([]);
     expect(feed.unread_notification_ids).toEqual(['r3']);
   });
 
   it('reports a source that has not answered yet as unavailable', () => {
-    expect(buildFeatureAnnouncementsFeed('cloud', null, member(), 'default', NOW)).toMatchObject({
+    expect(buildFeatureAnnouncementsFeed(null, member(), 'default', NOW)).toMatchObject({
       available: false,
       announcements: [],
       pending_popup_items: [],
     });
-    expect(buildFeatureAnnouncementsFeed('bundled', [], member(), 'default', NOW).available).toBe(
-      true
-    );
+    expect(buildFeatureAnnouncementsFeed([], member(), 'default', NOW).available).toBe(true);
   });
 });
 
 describe('mergeFeatureAnnouncementsSeen', () => {
-  it('keeps the other field and caps pop-up IDs to the newest', () => {
-    const now = new Date('2026-10-27T00:00:00.000Z');
+  it('keeps the other field and caps IDs to the newest', () => {
     expect(
-      mergeFeatureAnnouncementsSeen({ seenPopupItemIds: ['a'] }, { scope: 'release_notes' }, now)
-    ).toEqual({
-      seenPopupItemIds: ['a'],
-      lastSeenAt: now.toISOString(),
-      seenReleaseIds: [],
-    });
-    expect(
-      mergeFeatureAnnouncementsSeen({ seenReleaseIds: ['r1'] }, { scope: 'release_notes' }, now, [
-        'r2',
-        'r1',
-      ]).seenReleaseIds
-    ).toEqual(['r2', 'r1']);
+      mergeFeatureAnnouncementsSeen(
+        { seenPopupItemIds: ['a'], seenReleaseIds: ['r1'] },
+        { scope: 'release_notes' },
+        ['r2', 'r1']
+      )
+    ).toEqual({ seenPopupItemIds: ['a'], seenReleaseIds: ['r2', 'r1'] });
 
     const many = Array.from({ length: 200 }, (_, i) => `old-${i}`);
     const merged = mergeFeatureAnnouncementsSeen(
-      { lastSeenAt: 'x', seenPopupItemIds: many },
-      { scope: 'popup', itemIds: ['old-5', 'new'] },
-      now
+      { seenReleaseIds: ['r1'], seenPopupItemIds: many },
+      { scope: 'popup', itemIds: ['old-5', 'new'] }
     );
-    expect(merged.lastSeenAt).toBe('x');
+    expect(merged.seenReleaseIds).toEqual(['r1']);
     expect(merged.seenPopupItemIds).toHaveLength(200);
     expect(merged.seenPopupItemIds?.slice(-2)).toEqual(['old-5', 'new']);
     expect(merged.seenPopupItemIds).not.toContain('old-0');
@@ -334,9 +325,8 @@ describe('parseFeatureAnnouncements', () => {
 describe('featureAnnouncementItemsForAgents', () => {
   it('flattens newest first with seen state, since and limit', () => {
     const feed = buildFeatureAnnouncementsFeed(
-      'cloud',
       RELEASES,
-      member({ featureAnnouncements: { lastSeenAt: '2026-10-15T00:00:00.000Z' } }),
+      member({ featureAnnouncements: { seenReleaseIds: ['r2'] } }),
       'default',
       NOW
     );
@@ -462,7 +452,9 @@ describe('FeatureAnnouncementsMarkSeenService', () => {
 
     const stored = await users.get(userId);
     expect(stored.preferences?.homeWorkView).toBe('board');
-    expect(stored.preferences?.featureAnnouncements?.lastSeenAt).toEqual(expect.any(String));
+    // The test user was created after every fixture release, but opening
+    // Release notes still records each visible release, not only notifications.
+    expect(stored.preferences?.featureAnnouncements?.seenReleaseIds).toEqual(['r3', 'r2', 'r1']);
     expect([...(stored.preferences?.featureAnnouncements?.seenPopupItemIds ?? [])].sort()).toEqual([
       'r2-launch',
       'r3-launch',

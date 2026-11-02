@@ -14,6 +14,7 @@ import { BadRequest, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
   FEATURE_ANNOUNCEMENTS_LIMITS,
+  type FeatureAnnouncementClientItem,
   type FeatureAnnouncementDTO,
   type FeatureAnnouncementItemDTO,
   type FeatureAnnouncementsFeed,
@@ -271,16 +272,29 @@ export function createFeatureAnnouncementsProvider(
 
 const time = (iso: string | Date | undefined) => (iso ? new Date(iso).getTime() : 0);
 
+/** The browser and agent view of an item: audience and PR fields stay on the daemon. */
+function toClientItem({
+  roles: _roles,
+  tenant_ids: _tenantIds,
+  pr_numbers: _prNumbers,
+  ...item
+}: FeatureAnnouncementItemDTO): FeatureAnnouncementClientItem {
+  return item;
+}
+
 /** The caller's role- and tenant-filtered releases plus notification and pop-up state. */
 export function buildFeatureAnnouncementsFeed(
-  source: FeatureAnnouncementsSource,
   all: FeatureAnnouncementDTO[] | null,
   user: Pick<User, 'role' | 'created_at' | 'preferences'>,
   tenantId: string | undefined,
   now = Date.now()
 ): FeatureAnnouncementsFeed {
   const isAdmin = hasMinimumRole(user.role, ROLES.ADMIN);
-  const announcements = (all ?? [])
+  const prefs = user.preferences?.featureAnnouncements ?? {};
+  // Read state is keyed by stable IDs only (see FeatureAnnouncementsPreferences).
+  const seenReleases = new Set(prefs.seenReleaseIds ?? []);
+  const seenPopups = new Set(prefs.seenPopupItemIds ?? []);
+  const visible = (all ?? [])
     .map((release) => ({
       ...release,
       items: release.items.filter(
@@ -291,37 +305,33 @@ export function buildFeatureAnnouncementsFeed(
       ),
     }))
     .filter((release) => release.items.length > 0);
-  const prefs = user.preferences?.featureAnnouncements ?? {};
   // Releases published before the account existed are history, not news.
   const created = time(user.created_at);
-  const seenBaseline = Math.max(created, time(prefs.lastSeenAt));
   const isNew = (item: FeatureAnnouncementItemDTO) => time(item.new_until) > now;
-  const notifications = announcements.filter(
-    (release) =>
-      time(release.published_at) > created && release.items.some((i) => i.badge && isNew(i))
-  );
-  // Pop-ups are seen by stable item ID and notifications by release ID, never by
-  // content or timestamps, so an operator's edit to a live item reshows nothing.
-  const seenPopups = new Set(prefs.seenPopupItemIds ?? []);
-  const seenReleases = new Set(prefs.seenReleaseIds ?? []);
+  const notificationIds = visible
+    .filter(
+      (release) =>
+        time(release.published_at) > created && release.items.some((i) => i.badge && isNew(i))
+    )
+    .map((release) => release.id);
   const popupsAllowed = now - created >= FEATURE_ANNOUNCEMENTS_LIMITS.popupNewAccountDays * DAY_MS;
+  // The 14-day window mirrors Agor Cloud's deliveryItem; see popupWindowDays.
   const popupSince = Math.max(created, now - FEATURE_ANNOUNCEMENTS_LIMITS.popupWindowDays * DAY_MS);
   return {
-    source,
     available: all !== null,
-    announcements,
-    last_seen_at: prefs.lastSeenAt ?? null,
-    notification_ids: notifications.map((release) => release.id),
-    unread_notification_ids: notifications
-      .filter(
-        (release) => !seenReleases.has(release.id) && time(release.published_at) > seenBaseline
-      )
-      .map((release) => release.id),
+    announcements: visible.map((release) => ({
+      ...release,
+      items: release.items.map(toClientItem),
+      seen: seenReleases.has(release.id),
+    })),
+    notification_ids: notificationIds,
+    unread_notification_ids: notificationIds.filter((id) => !seenReleases.has(id)),
     pending_popup_items: popupsAllowed
-      ? announcements
+      ? visible
           .filter((release) => time(release.published_at) > popupSince)
           .flatMap((release) => release.items)
           .filter((item) => item.popup && isNew(item) && !seenPopups.has(item.id))
+          .map(toClientItem)
       : [],
   };
 }
@@ -345,21 +355,20 @@ const appendCapped = (ids: string[] | undefined, added: string[], max: number) =
 
 /**
  * Merge a mark-seen request into the stored preference. Opening Release notes
- * reads the notifications shown at that moment (`notificationIds`).
+ * records every release visible at that moment (`visibleReleaseIds`), whether
+ * or not it was a notification.
  */
 export function mergeFeatureAnnouncementsSeen(
   current: FeatureAnnouncementsPreferences | undefined,
   request: FeatureAnnouncementsMarkSeenRequest,
-  now: Date,
-  notificationIds: string[] = []
+  visibleReleaseIds: string[] = []
 ): FeatureAnnouncementsPreferences {
   if (request.scope === 'release_notes') {
     return {
       ...current,
-      lastSeenAt: now.toISOString(),
       seenReleaseIds: appendCapped(
         current?.seenReleaseIds,
-        notificationIds,
+        visibleReleaseIds,
         FEATURE_ANNOUNCEMENTS_LIMITS.seenReleaseIds
       ),
     };
@@ -397,7 +406,6 @@ export class FeatureAnnouncementsService {
     const user = await this.users.findById(callerId(params));
     if (!user) throw new NotFound('User not found');
     return buildFeatureAnnouncementsFeed(
-      this.provider.source,
       this.provider.announcements(),
       user,
       params?.tenant?.tenant_id
@@ -426,10 +434,9 @@ export class FeatureAnnouncementsMarkSeenService {
     if (!request.success) {
       throw new BadRequest("Expected { scope: 'release_notes' } or { scope: 'popup', itemIds }");
     }
-    const now = new Date();
-    const notificationIds =
+    const visibleReleaseIds =
       request.data.scope === 'release_notes'
-        ? (await this.feed.feedFor(params)).notification_ids
+        ? (await this.feed.feedFor(params)).announcements.map((release) => release.id)
         : [];
     // The merge runs inside users.patch, against the row it reads under its
     // per-user lock and compare-and-set write, so concurrent writes survive.
@@ -448,8 +455,7 @@ export class FeatureAnnouncementsMarkSeenService {
           featureAnnouncements: mergeFeatureAnnouncementsSeen(
             current?.featureAnnouncements,
             request.data,
-            now,
-            notificationIds
+            visibleReleaseIds
           ),
         })
       )
@@ -463,7 +469,6 @@ export function featureAnnouncementItemsForAgents(
   feed: FeatureAnnouncementsFeed,
   { since, limit }: { since?: Date; limit: number }
 ) {
-  const lastSeen = time(feed.last_seen_at ?? undefined);
   return feed.announcements
     .filter((release) => !since || time(release.published_at) >= since.getTime())
     .flatMap((release) =>
@@ -475,7 +480,7 @@ export function featureAnnouncementItemsForAgents(
         learn_more_url: item.learn_more_url,
         version: release.version_label,
         published_at: release.published_at,
-        seen_by_user: time(release.published_at) <= lastSeen,
+        seen_by_user: release.seen,
       }))
     )
     .slice(0, limit);
