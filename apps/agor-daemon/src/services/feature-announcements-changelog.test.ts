@@ -1,15 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC } from '@agor/core/config';
+import { featureAnnouncementHighlightsSchema } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH,
   parseFeatureAnnouncements,
 } from './feature-announcements';
-import {
-  type FeatureAnnouncementHighlight,
-  parseChangelogFeatureAnnouncements,
-} from './feature-announcements-changelog';
+import { clip, parseChangelogFeatureAnnouncements } from './feature-announcements-changelog';
 
 const CHANGELOG = `# Changelog
 
@@ -29,7 +26,7 @@ Release preparation covers merged changes.
 
 ### Features
 
-- **Zone layouts** — zones arrange cards in a row, column or grid ([#3135](https://github.com/preset-io/agor/pull/3135), [#3136](https://github.com/preset-io/agor/pull/3136))
+- **Zone layouts** — zones arrange cards in a row, column or grid. Pick one from the toolbar. ([#3135](https://github.com/preset-io/agor/pull/3135), [#3136](https://github.com/preset-io/agor/pull/3136))
   - Cards keep their order.
   - Agents can set it with \`agor_boards_update\`.
 - **Second feature** - plain hyphen separator ([#3200](https://github.com/preset-io/agor/pull/3200))
@@ -57,83 +54,85 @@ Release preparation covers merged changes.
 
 describe('parseChangelogFeatureAnnouncements', () => {
   it('ships dated releases newest first and skips Unreleased, Chores and undated headings', () => {
-    const notes = parseChangelogFeatureAnnouncements(CHANGELOG);
+    const releases = parseChangelogFeatureAnnouncements(CHANGELOG);
 
-    expect(notes.map((note) => [note.id, note.version, note.published_at])).toEqual([
-      ['oss-0.2.0', '0.2.0', '2026-10-13T00:00:00.000Z'],
-      ['oss-0.1.0', '0.1.0', '2026-09-01T00:00:00.000Z'],
+    expect(releases.map((r) => [r.id, r.label, r.version_label, r.published_at])).toEqual([
+      ['oss-0.2.0', '0.2.0', 'Agor 0.2.0', '2026-10-13T00:00:00.000Z'],
+      ['oss-0.1.0', '0.1.0', 'Agor 0.1.0', '2026-09-01T00:00:00.000Z'],
     ]);
-    expect(notes[0].items.map((item) => [item.title, item.category, item.tier])).toEqual([
-      ['Zone layouts', 'feature', 'update'],
-      ['Second feature', 'feature', 'update'],
-      ['Safer links', 'security', 'update'],
+    // Features are new and ring the bell; the rest are quiet improvements.
+    expect(releases[0].items.map((item) => [item.title, item.kind, item.badge])).toEqual([
+      ['Zone layouts', 'new', true],
+      ['Second feature', 'new', true],
+      ['Safer links', 'improved', false],
     ]);
-    expect(notes[1].items.map((item) => item.category)).toEqual(['improvement', 'fix']);
+    expect(releases[1].items.map((item) => item.kind)).toEqual(['improved', 'improved']);
   });
 
-  it('keeps the entry text and details but moves PR links into pr_numbers', () => {
+  it('keeps the first sentence as the one line and moves PR links into pr_numbers', () => {
     const [zones] = parseChangelogFeatureAnnouncements(CHANGELOG)[0].items;
 
     expect(zones).toMatchObject({
       id: 'oss-0.2.0-1',
-      audience: 'all',
+      one_line: 'Zones arrange cards in a row, column or grid.',
+      roles: 'everyone',
+      popup: false,
+      visual: null,
+      button: null,
+      tenant_ids: null,
       pr_numbers: [3135, 3136],
-      body_md:
-        'Zones arrange cards in a row, column or grid\n\n- Cards keep their order.\n- Agents can set it with `agor_boards_update`.',
-      agent_brief: 'Zone layouts. Zones arrange cards in a row, column or grid',
+      new_until: '2026-11-12T00:00:00.000Z',
+      agent_brief:
+        'Zone layouts. Zones arrange cards in a row, column or grid. Pick one from the toolbar.',
     });
   });
 
-  it('promotes an entry from the highlights sidecar by PR number', () => {
+  it('applies a highlight by PR number', () => {
     const [zones, second] = parseChangelogFeatureAnnouncements(CHANGELOG, {
-      items: {
-        '3136': {
-          tier: 'major',
-          subtitle: 'Cards snap into place.',
-          cta_label: 'See it on my board',
-          cta_path: '/b/:currentBoard/',
-        },
+      '3136': {
+        title: 'Zones can arrange your cards',
+        popup: true,
+        visual: { type: 'illustration', key: 'zone-grid' },
+        button: { action: 'agor_page', target: 'board', label: 'See it on my board' },
       },
     })[0].items;
 
     expect(zones).toMatchObject({
-      tier: 'major',
-      subtitle: 'Cards snap into place.',
-      cta_path: '/b/:currentBoard/',
+      title: 'Zones can arrange your cards',
+      popup: true,
+      visual: { type: 'illustration', key: 'zone-grid' },
+      button: { action: 'agor_page', target: 'board' },
     });
-    expect(second.tier).toBe('update');
+    expect(second.popup).toBe(false);
   });
 
   it('limits the number of releases', () => {
-    expect(
-      parseChangelogFeatureAnnouncements(CHANGELOG, {}, 1).map((note) => note.version)
-    ).toEqual(['0.2.0']);
+    expect(parseChangelogFeatureAnnouncements(CHANGELOG, {}, 1).map((r) => r.label)).toEqual([
+      '0.2.0',
+    ]);
   });
 
-  it('turns the repository CHANGELOG and highlights into valid notes', () => {
+  it('turns the repository CHANGELOG and highlights into valid releases', () => {
     const root = join(__dirname, '..', '..', '..', '..');
-    const notes = parseFeatureAnnouncements(
-      parseChangelogFeatureAnnouncements(
-        readFileSync(join(root, 'CHANGELOG.md'), 'utf8'),
-        JSON.parse(readFileSync(join(root, FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH), 'utf8'))
-      )
+    const highlights = featureAnnouncementHighlightsSchema.parse(
+      JSON.parse(readFileSync(join(root, FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH), 'utf8'))
     );
+    const raw = parseChangelogFeatureAnnouncements(
+      readFileSync(join(root, 'CHANGELOG.md'), 'utf8'),
+      highlights.items
+    );
+    // Every parsed item passes the delivery gate: nothing is silently dropped.
+    const parsed = parseFeatureAnnouncements(raw);
+    expect(parsed.length).toBeGreaterThan(0);
+    expect(parsed.flatMap((r) => r.items)).toHaveLength(raw.flatMap((r) => r.items).length);
+  });
+});
 
-    expect(notes.length).toBeGreaterThan(0);
-    // Highlight visuals must load under the default CSP img-src.
-    const highlights = JSON.parse(
-      readFileSync(join(root, FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH), 'utf8')
-    );
-    for (const highlight of Object.values<FeatureAnnouncementHighlight>(highlights.items)) {
-      for (const url of [highlight.visual_url, highlight.visual_url_dark]) {
-        if (url) {
-          expect(new URL(url).protocol).toBe('https:');
-          expect(new URL(url).origin).toBe(FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC);
-        }
-      }
-    }
-    expect(notes.every((note) => note.items.every((item) => item.title && item.body_md))).toBe(
-      true
-    );
+describe('clip', () => {
+  it('keeps short text and cuts long text on a word boundary', () => {
+    expect(clip('Short brief.', 160)).toBe('Short brief.');
+    const cut = clip('Zones have a layout, Free, Row, Column or Grid.', 30);
+    expect(cut).toBe('Zones have a layout, Free…');
+    expect(cut.length).toBeLessThanOrEqual(30);
   });
 });

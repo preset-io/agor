@@ -20,7 +20,7 @@ export function registerFeatureAnnouncementsTools(server: McpServer, ctx: McpCon
     'agor_feature_announcements_list',
     {
       description:
-        "List recent user-facing Agor features and fixes the current user can see, newest first. Each item has an agent_brief (what it does, when to suggest it, how to use it), a docs_url, and seen_by_user (whether the user has opened What's new since it shipped). Use it when a recent feature may fit what the user is doing; mention it briefly rather than listing features unprompted.",
+        'List recent user-facing Agor features and improvements the current user can see, newest first. Each item has a one_line summary, an agent_brief (what it does, when to suggest it, how to use it), a learn_more_url, and seen_by_user (whether the user has opened Release notes since it shipped). Use it when a recent feature may fit what the user is doing; mention it briefly rather than listing features unprompted.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         since: z

@@ -4542,7 +4542,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     { create: { role: ROLES.VIEWER, action: 'dismiss branch workspace notifications' } },
     requireAuth
   );
-  // What's new: notes are platform content held in memory; the only tenant
+  // Feature announcements are platform content held in memory; the only tenant
   // data read or written is the caller's own users row.
   const featureAnnouncementsFeed = new FeatureAnnouncementsService(
     featureAnnouncementsProvider,

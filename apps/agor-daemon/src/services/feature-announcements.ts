@@ -1,6 +1,6 @@
 /**
- * Feature announcements ("What's new"): in-memory platform content plus per-user seen
- * state in `users.data.preferences.featureAnnouncements`. No table: notes are either
+ * Feature announcements: in-memory platform content plus per-user seen state in
+ * `users.data.preferences.featureAnnouncements`. No table: releases are either
  * the CHANGELOG bundled with this daemon or the last good answer from Agor
  * Cloud, which each replica polls on its own.
  */
@@ -8,20 +8,21 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type AgorConfig, FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC } from '@agor/core/config';
+import { type AgorConfig, FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN } from '@agor/core/config';
 import type { UsersRepository } from '@agor/core/db';
 import { BadRequest, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
-  FEATURE_ANNOUNCEMENT_ITEM_AUDIENCES,
-  FEATURE_ANNOUNCEMENT_ITEM_CATEGORIES,
-  FEATURE_ANNOUNCEMENT_ITEM_TIERS,
   FEATURE_ANNOUNCEMENTS_LIMITS,
   type FeatureAnnouncementDTO,
+  type FeatureAnnouncementItemDTO,
   type FeatureAnnouncementsFeed,
   type FeatureAnnouncementsMarkSeenRequest,
   type FeatureAnnouncementsPreferences,
   type FeatureAnnouncementsSource,
+  featureAnnouncementHighlightsSchema,
+  featureAnnouncementItemSchema,
+  featureAnnouncementSchema,
   hasMinimumRole,
   type Params,
   ROLES,
@@ -36,10 +37,7 @@ import {
   readBoundedText,
   signCloudRuntimeAssertion,
 } from '../utils/cloud-runtime-credential.js';
-import {
-  type FeatureAnnouncementHighlights,
-  parseChangelogFeatureAnnouncements,
-} from './feature-announcements-changelog.js';
+import { clip, parseChangelogFeatureAnnouncements } from './feature-announcements-changelog.js';
 import { withPreferencesMerge } from './users.js';
 
 /** Contract endpoint, relative to `AGOR_CLOUD_API_BASE_URL` (which ends in `/api`). */
@@ -47,79 +45,80 @@ const CLOUD_FEATURE_ANNOUNCEMENTS_PATH = '/internal/runtime/feature-announcement
 const CLOUD_FEATURE_ANNOUNCEMENTS_SCOPE = 'feature_announcements:read';
 const CLOUD_POLL_INTERVAL_MS = 15 * 60_000;
 const CLOUD_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-const CLOUD_MAX_NOTES = 50;
-/** Repository-relative location of the optional OSS highlights sidecar. */
+const CLOUD_MAX_RELEASES = 50;
+const DAY_MS = 86_400_000;
+/** Repository-relative location of the OSS highlights file. */
 export const FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH =
   'apps/agor-docs/public/whats-new/highlights.json';
 /** Its name when the daemon build copies it into dist/. */
 const FEATURE_ANNOUNCEMENT_HIGHLIGHTS_FILE = 'highlights.json';
 
-const httpsUrl = z.url().refine((value) => value.startsWith('https://'));
-// In-app relative path only: one leading slash, never a protocol-relative URL.
-const ctaPath = z.string().regex(/^\/(?!\/)[^\s\\]*$/);
-
-const itemSchema = z.object({
-  id: z.string().min(1).max(200),
-  tier: z.enum(FEATURE_ANNOUNCEMENT_ITEM_TIERS),
-  category: z.enum(FEATURE_ANNOUNCEMENT_ITEM_CATEGORIES),
-  audience: z.enum(FEATURE_ANNOUNCEMENT_ITEM_AUDIENCES),
-  title: z.string().min(1).max(300),
-  subtitle: z.string().max(300).nullable(),
-  body_md: z.string().max(20_000),
-  agent_brief: z.string().max(4_000),
-  docs_url: httpsUrl.nullable(),
-  // Checked against the CSP image origin after parsing; see allowedVisual.
-  visual_url: z.string().max(2_000).nullable(),
-  visual_url_dark: z.string().max(2_000).nullable(),
-  cta_label: z.string().max(80).nullable(),
-  cta_path: ctaPath.nullable(),
-  pr_numbers: z.array(z.number().int().positive()),
-});
-
-const noteSchema = z.object({
-  id: z.string().min(1).max(200),
-  version: z.string().min(1).max(100),
-  published_at: z.iso.datetime({ offset: true }),
-  title: z.string().min(1).max(300),
-  summary_md: z.string().max(20_000).nullable(),
-  items: z.array(itemSchema),
-});
-
 /**
- * The default CSP is the single source of truth for where visuals may load
+ * The CSP is the single source of truth for where pictures and videos may load
  * from; any other host would silently fail in the browser.
  */
-function allowedVisual(url: string | null): boolean {
-  if (url === null) return true;
+function allowedMedia(url: string | null | undefined, origins: readonly string[]): boolean {
+  if (!url) return true;
   try {
     // Check the scheme too: `blob:https://agor.live/x` also has that origin.
     const parsed = new URL(url);
-    return parsed.protocol === 'https:' && parsed.origin === FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC;
+    return parsed.protocol === 'https:' && origins.includes(parsed.origin);
   } catch {
     return false;
   }
 }
 
-/** The one validation gate for both sources; anything the UI renders or navigates to passed it. */
-export function parseFeatureAnnouncements(value: unknown): FeatureAnnouncementDTO[] {
-  const notes = z.array(noteSchema).max(CLOUD_MAX_NOTES).parse(value);
-  let dropped = 0;
-  for (const item of notes.flatMap((note) => note.items)) {
-    // A visual is optional: drop one we could not load and keep the note.
-    for (const key of ['visual_url', 'visual_url_dark'] as const) {
-      if (!allowedVisual(item[key])) {
-        item[key] = null;
-        dropped++;
+/** Origins `img-src` / `media-src` allow for announcement media under this config. */
+export function featureAnnouncementMediaOrigins(config: AgorConfig): string[] {
+  const configured = config.feature_announcements?.media_origin;
+  return configured
+    ? [FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN, configured]
+    : [FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN];
+}
+
+/**
+ * The one validation gate for both sources; anything the UI renders or opens
+ * passed it. An invalid item is dropped on its own, so one bad edit or a newer
+ * Cloud field value never hides the rest of the feed.
+ */
+export function parseFeatureAnnouncements(
+  value: unknown,
+  mediaOrigins: readonly string[] = [FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN]
+): FeatureAnnouncementDTO[] {
+  const releases = z.array(featureAnnouncementSchema).max(CLOUD_MAX_RELEASES).parse(value);
+  let invalid = 0;
+  let droppedMedia = 0;
+  const parsed = releases.map((release) => ({
+    ...release,
+    items: release.items.flatMap((raw): FeatureAnnouncementItemDTO[] => {
+      const result = featureAnnouncementItemSchema.safeParse(raw);
+      if (!result.success) {
+        invalid++;
+        return [];
       }
-    }
-  }
-  if (dropped > 0) {
+      const item = result.data;
+      // A visual is optional: drop one the browser could not load and keep the item.
+      if (
+        item.visual?.type === 'media' &&
+        !(
+          allowedMedia(item.visual.url, mediaOrigins) &&
+          allowedMedia(item.visual.url_dark, mediaOrigins)
+        )
+      ) {
+        droppedMedia++;
+        return [{ ...item, visual: null, visual_alt: null }];
+      }
+      return [item];
+    }),
+  }));
+  if (invalid > 0) console.warn(`[feature-announcements] Dropped ${invalid} invalid item(s)`);
+  if (droppedMedia > 0) {
     console.warn(
-      `[feature-announcements] Dropped ${dropped} visual URL(s) outside ${FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC}`
+      `[feature-announcements] Dropped ${droppedMedia} visual(s) outside ${mediaOrigins.join(', ')}`
     );
   }
-  return notes
-    .filter((note) => note.items.length > 0)
+  return parsed
+    .filter((release) => release.items.length > 0)
     .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
 }
 
@@ -135,7 +134,7 @@ export function resolveFeatureAnnouncementsSource(
 export interface FeatureAnnouncementsProvider {
   readonly source: FeatureAnnouncementsSource;
   /** Null until the source has answered once; the UI shows nothing until then. */
-  notes(): FeatureAnnouncementDTO[] | null;
+  announcements(): FeatureAnnouncementDTO[] | null;
 }
 
 /** Walk up from this module to the first directory containing `relative`. */
@@ -150,22 +149,26 @@ function findUp(relative: string): string | undefined {
 }
 
 /**
- * The daemon build copies CHANGELOG.md and the highlights sidecar into dist/,
- * so a packaged daemon finds them next to its modules; a source checkout
- * finds the repository copies. Either way they are parsed once at startup.
+ * The daemon build copies CHANGELOG.md and highlights.json into dist/, so a
+ * packaged daemon finds them next to its modules; a source checkout finds the
+ * repository copies. Either way they are parsed once at startup.
  */
-export function loadBundledFeatureAnnouncements(): FeatureAnnouncementDTO[] {
+export function loadBundledFeatureAnnouncements(
+  mediaOrigins?: readonly string[]
+): FeatureAnnouncementDTO[] {
   const changelog = findUp('CHANGELOG.md');
   if (!changelog) return [];
   const highlightsPath = [
     join(dirname(changelog), FEATURE_ANNOUNCEMENT_HIGHLIGHTS_FILE),
     join(dirname(changelog), FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH),
   ].find((path) => existsSync(path));
-  const highlights: FeatureAnnouncementHighlights = highlightsPath
-    ? JSON.parse(readFileSync(highlightsPath, 'utf8'))
+  const highlights = highlightsPath
+    ? featureAnnouncementHighlightsSchema.parse(JSON.parse(readFileSync(highlightsPath, 'utf8')))
+        .items
     : {};
   return parseFeatureAnnouncements(
-    parseChangelogFeatureAnnouncements(readFileSync(changelog, 'utf8'), highlights)
+    parseChangelogFeatureAnnouncements(readFileSync(changelog, 'utf8'), highlights),
+    mediaOrigins
   );
 }
 
@@ -179,6 +182,7 @@ export class CloudFeatureAnnouncementsPoller implements FeatureAnnouncementsProv
 
   constructor(
     env: NodeJS.ProcessEnv = process.env,
+    private readonly mediaOrigins: readonly string[] = [FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN],
     private readonly fetchImpl: typeof fetch = fetch
   ) {
     const base = new URL(env.AGOR_CLOUD_API_BASE_URL ?? '');
@@ -195,7 +199,7 @@ export class CloudFeatureAnnouncementsPoller implements FeatureAnnouncementsProv
     return this;
   }
 
-  notes(): FeatureAnnouncementDTO[] | null {
+  announcements(): FeatureAnnouncementDTO[] | null {
     return this.cached;
   }
 
@@ -215,16 +219,17 @@ export class CloudFeatureAnnouncementsPoller implements FeatureAnnouncementsProv
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
       const body = JSON.parse(await readBoundedText(response, CLOUD_MAX_RESPONSE_BYTES));
       this.cached = parseFeatureAnnouncements(
-        z.object({ announcements: z.unknown() }).parse(body).announcements
+        z.object({ announcements: z.unknown() }).parse(body).announcements,
+        this.mediaOrigins
       );
       if (this.failing)
         console.log('[feature-announcements] Cloud feature announcements recovered');
       this.failing = false;
     } catch (error) {
-      // Log the transition once; keep serving the last good notes.
+      // Log the transition once; keep serving the last good answer.
       if (!this.failing) {
         console.warn(
-          '[feature-announcements] Cloud feature announcements refresh failed; keeping cached notes:',
+          '[feature-announcements] Cloud feature announcements refresh failed; keeping the cached ones:',
           error instanceof Error ? error.message : String(error)
         );
       }
@@ -238,21 +243,22 @@ export function createFeatureAnnouncementsProvider(
   env: NodeJS.ProcessEnv = process.env
 ): FeatureAnnouncementsProvider {
   const source = resolveFeatureAnnouncementsSource(config, env);
+  const mediaOrigins = featureAnnouncementMediaOrigins(config);
   if (source === 'cloud') {
     try {
-      return new CloudFeatureAnnouncementsPoller(env).start();
+      return new CloudFeatureAnnouncementsPoller(env, mediaOrigins).start();
     } catch (error) {
       console.warn(
         '[feature-announcements] Cloud source unavailable; showing no feature announcements:',
         error instanceof Error ? error.message : String(error)
       );
-      return { source, notes: () => null };
+      return { source, announcements: () => null };
     }
   }
-  let notes: FeatureAnnouncementDTO[] = [];
+  let announcements: FeatureAnnouncementDTO[] = [];
   if (source === 'bundled') {
     try {
-      notes = loadBundledFeatureAnnouncements();
+      announcements = loadBundledFeatureAnnouncements(mediaOrigins);
     } catch (error) {
       console.warn(
         '[feature-announcements] Bundled feature announcements are invalid; showing none:',
@@ -260,57 +266,70 @@ export function createFeatureAnnouncementsProvider(
       );
     }
   }
-  return { source, notes: () => notes };
+  return { source, announcements: () => announcements };
 }
 
 const time = (iso: string | Date | undefined) => (iso ? new Date(iso).getTime() : 0);
 
-/** The caller's audience-filtered notes plus unread and modal state. */
+/** The caller's role- and tenant-filtered releases plus notification and pop-up state. */
 export function buildFeatureAnnouncementsFeed(
   source: FeatureAnnouncementsSource,
-  allNotes: FeatureAnnouncementDTO[] | null,
+  all: FeatureAnnouncementDTO[] | null,
   user: Pick<User, 'role' | 'created_at' | 'preferences'>,
+  tenantId: string | undefined,
   now = Date.now()
 ): FeatureAnnouncementsFeed {
   const isAdmin = hasMinimumRole(user.role, ROLES.ADMIN);
-  const notes = (allNotes ?? [])
-    .map((note) => ({
-      ...note,
-      items: note.items.filter((item) => item.audience === 'all' || isAdmin),
+  const announcements = (all ?? [])
+    .map((release) => ({
+      ...release,
+      items: release.items.filter(
+        (item) =>
+          (item.roles === 'everyone' || isAdmin) &&
+          // Fails closed: a tenant-limited item needs a trusted caller tenant.
+          (item.tenant_ids === null || (!!tenantId && item.tenant_ids.includes(tenantId)))
+      ),
     }))
-    .filter((note) => note.items.length > 0);
+    .filter((release) => release.items.length > 0);
   const prefs = user.preferences?.featureAnnouncements ?? {};
-  // Majors published before the account existed are history, not news; until
-  // the drawer is first opened, neither is anything older than the window.
-  const seenBaseline = Math.max(
-    time(user.created_at),
-    prefs.lastSeenAt
-      ? time(prefs.lastSeenAt)
-      : now - FEATURE_ANNOUNCEMENTS_LIMITS.firstVisitWindowDays * 86_400_000
+  // Releases published before the account existed are history, not news.
+  const created = time(user.created_at);
+  const seenBaseline = Math.max(created, time(prefs.lastSeenAt));
+  const isNew = (item: FeatureAnnouncementItemDTO) => time(item.new_until) > now;
+  const notifications = announcements.filter(
+    (release) =>
+      time(release.published_at) > created && release.items.some((i) => i.badge && isNew(i))
   );
-  const seenMajor = new Set(prefs.seenMajorItemIds ?? []);
-  const unseen = notes.filter((note) => time(note.published_at) > seenBaseline);
+  const seenPopups = new Set(prefs.seenPopupItemIds ?? []);
+  const popupsAllowed = now - created >= FEATURE_ANNOUNCEMENTS_LIMITS.popupNewAccountDays * DAY_MS;
+  const popupSince = Math.max(created, now - FEATURE_ANNOUNCEMENTS_LIMITS.popupWindowDays * DAY_MS);
   return {
     source,
-    available: allNotes !== null,
-    notes,
+    available: all !== null,
+    announcements,
     last_seen_at: prefs.lastSeenAt ?? null,
-    unread_note_ids: unseen.map((note) => note.id),
-    pending_major_items: unseen
-      .flatMap((note) => note.items)
-      .filter((item) => item.tier === 'major' && !seenMajor.has(item.id)),
+    notification_ids: notifications.map((release) => release.id),
+    unread_notification_ids: notifications
+      .filter((release) => time(release.published_at) > seenBaseline)
+      .map((release) => release.id),
+    pending_popup_items: popupsAllowed
+      ? announcements
+          .filter((release) => time(release.published_at) > popupSince)
+          .flatMap((release) => release.items)
+          .filter((item) => item.popup && isNew(item) && !seenPopups.has(item.id))
+      : [],
   };
 }
 
 const markSeenSchema = z.discriminatedUnion('scope', [
-  z.object({ scope: z.literal('drawer') }).strict(),
+  z.object({ scope: z.literal('release_notes') }).strict(),
   z
     .object({
-      scope: z.literal('major'),
+      scope: z.literal('popup'),
       itemIds: z
         .array(z.string().min(1).max(200))
         .min(1)
-        .max(FEATURE_ANNOUNCEMENTS_LIMITS.seenMajorItemIds),
+        .max(FEATURE_ANNOUNCEMENTS_LIMITS.seenPopupItemIds),
     })
     .strict(),
 ]);
@@ -321,12 +340,12 @@ export function mergeFeatureAnnouncementsSeen(
   request: FeatureAnnouncementsMarkSeenRequest,
   now: Date
 ): FeatureAnnouncementsPreferences {
-  if (request.scope === 'drawer') return { ...current, lastSeenAt: now.toISOString() };
-  const ids = (current?.seenMajorItemIds ?? []).filter((id) => !request.itemIds.includes(id));
+  if (request.scope === 'release_notes') return { ...current, lastSeenAt: now.toISOString() };
+  const ids = (current?.seenPopupItemIds ?? []).filter((id) => !request.itemIds.includes(id));
   return {
     ...current,
-    seenMajorItemIds: [...ids, ...request.itemIds].slice(
-      -FEATURE_ANNOUNCEMENTS_LIMITS.seenMajorItemIds
+    seenPopupItemIds: [...ids, ...request.itemIds].slice(
+      -FEATURE_ANNOUNCEMENTS_LIMITS.seenPopupItemIds
     ),
   };
 }
@@ -350,14 +369,19 @@ export class FeatureAnnouncementsService {
     private readonly users: Pick<UsersRepository, 'findById'>
   ) {}
 
-  async feedFor(userId: UserID): Promise<FeatureAnnouncementsFeed> {
-    const user = await this.users.findById(userId);
+  async feedFor(params: AuthenticatedParams | undefined): Promise<FeatureAnnouncementsFeed> {
+    const user = await this.users.findById(callerId(params));
     if (!user) throw new NotFound('User not found');
-    return buildFeatureAnnouncementsFeed(this.provider.source, this.provider.notes(), user);
+    return buildFeatureAnnouncementsFeed(
+      this.provider.source,
+      this.provider.announcements(),
+      user,
+      params?.tenant?.tenant_id
+    );
   }
 
   async find(params?: AuthenticatedParams): Promise<FeatureAnnouncementsFeed> {
-    return this.feedFor(callerId(params));
+    return this.feedFor(params);
   }
 }
 
@@ -376,7 +400,7 @@ export class FeatureAnnouncementsMarkSeenService {
     const userId = callerId(params);
     const request = markSeenSchema.safeParse(data);
     if (!request.success) {
-      throw new BadRequest("Expected { scope: 'drawer' } or { scope: 'major', itemIds }");
+      throw new BadRequest("Expected { scope: 'release_notes' } or { scope: 'popup', itemIds }");
     }
     const now = new Date();
     // The merge runs inside users.patch, against the row it reads under its
@@ -401,19 +425,8 @@ export class FeatureAnnouncementsMarkSeenService {
         })
       )
     );
-    return this.feed.feedFor(userId);
+    return this.feed.feedFor(params);
   }
-}
-
-/** Cut `text` to at most `max` characters on a word boundary, with an ellipsis. */
-export function shortBrief(
-  text: string,
-  max: number = FEATURE_ANNOUNCEMENTS_LIMITS.recentFeatureBriefChars
-) {
-  if (text.length <= max) return text;
-  const cut = text.slice(0, max - 1);
-  const space = cut.lastIndexOf(' ');
-  return `${(space > 0 ? cut.slice(0, space) : cut).replace(/[\s,.;:]+$/, '')}…`;
 }
 
 /** Flat newest-first item view for agents (MCP tools and session context). */
@@ -421,20 +434,24 @@ export function featureAnnouncementItemsForAgents(
   feed: FeatureAnnouncementsFeed,
   { since, limit }: { since?: Date; limit: number }
 ) {
-  const unread = new Set(feed.unread_note_ids);
-  return feed.notes
-    .filter((note) => !since || time(note.published_at) >= since.getTime())
-    .flatMap((note) =>
-      note.items.map((item) => ({
+  const lastSeen = time(feed.last_seen_at ?? undefined);
+  return feed.announcements
+    .filter((release) => !since || time(release.published_at) >= since.getTime())
+    .flatMap((release) =>
+      release.items.map((item) => ({
         title: item.title,
-        category: item.category,
-        tier: item.tier,
+        kind: item.kind,
+        one_line: item.one_line,
         agent_brief: item.agent_brief,
-        docs_url: item.docs_url,
-        version: note.version,
-        published_at: note.published_at,
-        seen_by_user: !unread.has(note.id),
+        learn_more_url: item.learn_more_url,
+        version: release.version_label,
+        published_at: release.published_at,
+        seen_by_user: time(release.published_at) <= lastSeen,
       }))
     )
     .slice(0, limit);
 }
+
+/** A brief short enough for `recent_agor_features`. */
+export const shortBrief = (text: string) =>
+  clip(text, FEATURE_ANNOUNCEMENTS_LIMITS.recentFeatureBriefChars);

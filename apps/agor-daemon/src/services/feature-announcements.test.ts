@@ -29,42 +29,45 @@ const item = (
   overrides: Partial<FeatureAnnouncementItemDTO> = {}
 ): FeatureAnnouncementItemDTO => ({
   id,
-  tier: 'update',
-  category: 'feature',
-  audience: 'all',
+  kind: 'new',
   title: `Item ${id}`,
-  subtitle: null,
-  body_md: 'Body',
-  agent_brief: `Brief ${id}`,
-  docs_url: null,
-  visual_url: null,
-  visual_url_dark: null,
-  cta_label: null,
-  cta_path: null,
+  one_line: `One line ${id}`,
+  learn_more_url: null,
+  visual: null,
+  visual_alt: null,
+  button: null,
+  badge: true,
+  popup: false,
+  new_until: '2026-12-01T00:00:00.000Z',
+  roles: 'everyone',
+  tenant_ids: null,
   pr_numbers: [],
+  agent_brief: `Brief ${id}`,
   ...overrides,
 });
 
-const note = (
+const release = (
   id: string,
   publishedAt: string,
   items: FeatureAnnouncementItemDTO[]
 ): FeatureAnnouncementDTO => ({
   id,
-  version: id,
+  label: `runtime-${id}`,
+  version_label: `Agor ${id}`,
   published_at: publishedAt,
-  title: `Release ${id}`,
-  summary_md: null,
   items,
 });
 
-const NOTES = [
-  note('r3', '2026-10-20T00:00:00.000Z', [
-    item('r3-major', { tier: 'major' }),
-    item('r3-admin', { tier: 'major', audience: 'admin' }),
+const RELEASES = [
+  release('r3', '2026-10-20T00:00:00.000Z', [
+    item('r3-launch', { popup: true }),
+    item('r3-admin', { popup: true, roles: 'admins' }),
   ]),
-  note('r2', '2026-10-10T00:00:00.000Z', [item('r2-major', { tier: 'major' }), item('r2-update')]),
-  note('r1', '2026-09-01T00:00:00.000Z', [item('r1-major', { tier: 'major' })]),
+  release('r2', '2026-10-10T00:00:00.000Z', [
+    item('r2-launch', { popup: true }),
+    item('r2-quiet', { badge: false }),
+  ]),
+  release('r1', '2026-09-01T00:00:00.000Z', [item('r1-launch', { popup: true })]),
 ];
 
 const member = (preferences: User['preferences'] = {}) => ({
@@ -73,172 +76,219 @@ const member = (preferences: User['preferences'] = {}) => ({
   preferences,
 });
 
-/** Inside the first-visit window of every fixture note after the account existed. */
 const NOW = Date.parse('2026-10-21T00:00:00.000Z');
 
 describe('buildFeatureAnnouncementsFeed', () => {
-  it('hides admin items from members and drops notes left empty', () => {
+  it('hides admin items from members and drops releases left empty', () => {
     const feed = buildFeatureAnnouncementsFeed(
       'bundled',
       [
-        note('admin-only', '2026-10-21T00:00:00.000Z', [item('a', { audience: 'admin' })]),
-        ...NOTES,
+        release('admin-only', '2026-10-21T00:00:00.000Z', [item('a', { roles: 'admins' })]),
+        ...RELEASES,
       ],
       member(),
+      'default',
       NOW
     );
 
-    expect(feed.notes.map((n) => n.id)).toEqual(['r3', 'r2', 'r1']);
-    expect(feed.notes[0].items.map((i) => i.id)).toEqual(['r3-major']);
+    expect(feed.announcements.map((r) => r.id)).toEqual(['r3', 'r2', 'r1']);
+    expect(feed.announcements[0].items.map((i) => i.id)).toEqual(['r3-launch']);
     expect(
-      buildFeatureAnnouncementsFeed('bundled', NOTES, { ...member(), role: 'admin' }, NOW).notes[0]
-        .items
+      buildFeatureAnnouncementsFeed(
+        'bundled',
+        RELEASES,
+        { ...member(), role: 'admin' },
+        'default',
+        NOW
+      ).announcements[0].items
     ).toHaveLength(2);
   });
 
-  it('shows unseen majors newest first, never ones published before the account existed', () => {
-    const feed = buildFeatureAnnouncementsFeed('cloud', NOTES, member(), NOW);
-
-    expect(feed.unread_note_ids).toEqual(['r3', 'r2']);
-    expect(feed.pending_major_items.map((i) => i.id)).toEqual(['r3-major', 'r2-major']);
-  });
-
-  it('treats majors marked seen, or shipped before the drawer was opened, as seen', () => {
-    expect(
+  it('shows tenant-limited items only to callers in a listed tenant', () => {
+    const limited = [
+      release('r', '2026-10-20T00:00:00.000Z', [
+        item('acme-only', { tenant_ids: ['tenant-acme'] }),
+        item('everyone'),
+      ]),
+    ];
+    const idsFor = (tenantId: string | undefined) =>
       buildFeatureAnnouncementsFeed(
         'cloud',
-        NOTES,
-        member({ featureAnnouncements: { seenMajorItemIds: ['r3-major'] } }),
+        limited,
+        member(),
+        tenantId,
         NOW
-      ).pending_major_items.map((i) => i.id)
-    ).toEqual(['r2-major']);
+      ).announcements.flatMap((r) => r.items.map((i) => i.id));
 
+    expect(idsFor('tenant-acme')).toEqual(['acme-only', 'everyone']);
+    expect(idsFor('tenant-globex')).toEqual(['everyone']);
+    // No trusted tenant: a tenant-limited item stays hidden.
+    expect(idsFor(undefined)).toEqual(['everyone']);
+  });
+
+  it('makes one notification per release with a new badge item, never before the account existed', () => {
+    const feed = buildFeatureAnnouncementsFeed('cloud', RELEASES, member(), 'default', NOW);
+
+    expect(feed.notification_ids).toEqual(['r3', 'r2']);
+    expect(feed.unread_notification_ids).toEqual(['r3', 'r2']);
+    expect(feed.pending_popup_items.map((i) => i.id)).toEqual(['r3-launch', 'r2-launch']);
+
+    // Quiet items and items past new_until never ring the bell.
+    const quiet = buildFeatureAnnouncementsFeed(
+      'cloud',
+      [
+        release('q', '2026-10-20T00:00:00.000Z', [
+          item('quiet', { badge: false }),
+          item('old', { new_until: '2026-10-20T12:00:00.000Z', popup: true }),
+        ]),
+      ],
+      member(),
+      'default',
+      NOW
+    );
+    expect(quiet.notification_ids).toEqual([]);
+    expect(quiet.pending_popup_items).toEqual([]);
+  });
+
+  it('reads notifications once Release notes is opened and pop-ups once shown', () => {
     const opened = buildFeatureAnnouncementsFeed(
       'cloud',
-      NOTES,
-      member({ featureAnnouncements: { lastSeenAt: '2026-10-15T00:00:00.000Z' } })
+      RELEASES,
+      member({
+        featureAnnouncements: {
+          lastSeenAt: '2026-10-15T00:00:00.000Z',
+          seenPopupItemIds: ['r3-launch'],
+        },
+      }),
+      'default',
+      NOW
     );
-    expect(opened.unread_note_ids).toEqual(['r3']);
-    expect(opened.pending_major_items.map((i) => i.id)).toEqual(['r3-major']);
+    expect(opened.notification_ids).toEqual(['r3', 'r2']);
+    expect(opened.unread_notification_ids).toEqual(['r3']);
+    expect(opened.pending_popup_items.map((i) => i.id)).toEqual(['r2-launch']);
     expect(opened.last_seen_at).toBe('2026-10-15T00:00:00.000Z');
   });
 
-  it('counts only recent notes until the drawer is first opened', () => {
-    const later = Date.parse('2026-11-01T00:00:00.000Z');
-    const fresh = buildFeatureAnnouncementsFeed('cloud', NOTES, member(), later);
-    expect(fresh.unread_note_ids).toEqual(['r3']);
-    expect(fresh.pending_major_items.map((i) => i.id)).toEqual(['r3-major']);
-
-    // A dismissed modal is not a drawer visit: older majors stay out of the modal.
+  it('pops up only recent launches and never in the first days of an account', () => {
+    const later = Date.parse('2026-10-28T00:00:00.000Z');
     expect(
       buildFeatureAnnouncementsFeed(
         'cloud',
-        NOTES,
-        member({ featureAnnouncements: { seenMajorItemIds: ['r3-major'] } }),
+        RELEASES,
+        member(),
+        'default',
         later
-      ).pending_major_items
-    ).toEqual([]);
+      ).pending_popup_items.map((i) => i.id)
+    ).toEqual(['r3-launch']);
 
-    // Once the drawer has been opened, its time is the only baseline.
-    expect(
-      buildFeatureAnnouncementsFeed(
-        'cloud',
-        NOTES,
-        member({ featureAnnouncements: { lastSeenAt: '2026-10-05T00:00:00.000Z' } }),
-        later
-      ).unread_note_ids
-    ).toEqual(['r3', 'r2']);
+    const newcomer = { ...member(), created_at: new Date('2026-10-18T00:00:00.000Z') };
+    const feed = buildFeatureAnnouncementsFeed('cloud', RELEASES, newcomer, 'default', NOW);
+    expect(feed.pending_popup_items).toEqual([]);
+    expect(feed.unread_notification_ids).toEqual(['r3']);
   });
 
   it('reports a source that has not answered yet as unavailable', () => {
-    expect(buildFeatureAnnouncementsFeed('cloud', null, member(), NOW)).toMatchObject({
+    expect(buildFeatureAnnouncementsFeed('cloud', null, member(), 'default', NOW)).toMatchObject({
       available: false,
-      notes: [],
-      pending_major_items: [],
+      announcements: [],
+      pending_popup_items: [],
     });
-    expect(buildFeatureAnnouncementsFeed('bundled', [], member(), NOW).available).toBe(true);
+    expect(buildFeatureAnnouncementsFeed('bundled', [], member(), 'default', NOW).available).toBe(
+      true
+    );
   });
 });
 
 describe('mergeFeatureAnnouncementsSeen', () => {
-  it('keeps the other field and caps major IDs to the newest', () => {
+  it('keeps the other field and caps pop-up IDs to the newest', () => {
     const now = new Date('2026-10-27T00:00:00.000Z');
     expect(
-      mergeFeatureAnnouncementsSeen({ seenMajorItemIds: ['a'] }, { scope: 'drawer' }, now)
+      mergeFeatureAnnouncementsSeen({ seenPopupItemIds: ['a'] }, { scope: 'release_notes' }, now)
     ).toEqual({
-      seenMajorItemIds: ['a'],
+      seenPopupItemIds: ['a'],
       lastSeenAt: now.toISOString(),
     });
 
     const many = Array.from({ length: 200 }, (_, i) => `old-${i}`);
     const merged = mergeFeatureAnnouncementsSeen(
-      { lastSeenAt: 'x', seenMajorItemIds: many },
-      { scope: 'major', itemIds: ['old-5', 'new'] },
+      { lastSeenAt: 'x', seenPopupItemIds: many },
+      { scope: 'popup', itemIds: ['old-5', 'new'] },
       now
     );
     expect(merged.lastSeenAt).toBe('x');
-    expect(merged.seenMajorItemIds).toHaveLength(200);
-    expect(merged.seenMajorItemIds?.slice(-2)).toEqual(['old-5', 'new']);
-    expect(merged.seenMajorItemIds).not.toContain('old-0');
+    expect(merged.seenPopupItemIds).toHaveLength(200);
+    expect(merged.seenPopupItemIds?.slice(-2)).toEqual(['old-5', 'new']);
+    expect(merged.seenPopupItemIds).not.toContain('old-0');
   });
 });
 
 describe('parseFeatureAnnouncements', () => {
   it.each([
-    ['an external CTA', { cta_path: 'https://evil.example/' }],
-    ['a protocol-relative CTA', { cta_path: '//evil.example/' }],
-    ['an unknown tier', { tier: 'hidden' }],
-  ])('rejects %s', (_label, overrides) => {
+    [
+      'an http link button',
+      { button: { action: 'link', url: 'http://evil.example/', label: 'Go' } },
+    ],
+    ['an unknown page', { button: { action: 'agor_page', target: 'admin', label: 'Go' } }],
+    ['an unknown illustration', { visual: { type: 'illustration', key: 'confetti' } }],
+    [
+      'media without alt text',
+      { visual: { type: 'media', url: 'https://agor.live/x.png', mime: 'image/png' } },
+    ],
+    ['a long title', { title: 'x'.repeat(61) }],
+  ])('drops an item with %s and keeps the rest', (_label, overrides) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const [parsed] = parseFeatureAnnouncements([
+      release('r', '2026-10-01T00:00:00.000Z', [item('bad', overrides as never), item('good')]),
+    ]);
+    expect(parsed.items.map((i) => i.id)).toEqual(['good']);
+    expect(warn).toHaveBeenCalledWith('[feature-announcements] Dropped 1 invalid item(s)');
+    warn.mockRestore();
+  });
+
+  it('rejects a malformed release', () => {
     expect(() =>
-      parseFeatureAnnouncements([
-        note('r', '2026-10-01T00:00:00.000Z', [item('i', overrides as never)]),
-      ])
+      parseFeatureAnnouncements([{ ...release('r', 'not a date', [item('i')]) }])
     ).toThrow();
   });
 
-  it('drops visuals the default CSP would block but keeps the note', () => {
+  it('drops media the CSP would block but keeps the item', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const [parsed] = parseFeatureAnnouncements([
-      note('r', '2026-10-01T00:00:00.000Z', [
-        item('i', {
-          visual_url: 'https://cdn.example/x.svg',
-          visual_url_dark: 'https://agor.live/whats-new/x-dark.svg',
-        }),
-        item('j', { visual_url: 'http://agor.live/x.svg' }),
-        item('k', {
-          visual_url: 'blob:https://agor.live/0d4b4a8e',
-          visual_url_dark: 'https://agor.live/whats-new/k-dark.svg',
-        }),
-      ]),
-    ]);
+    const media = (url: string, url_dark?: string) => ({
+      visual: { type: 'media' as const, url, url_dark, mime: 'image/png' as const },
+      visual_alt: 'Cards in a grid',
+    });
+    const [parsed] = parseFeatureAnnouncements(
+      [
+        release('r', '2026-10-01T00:00:00.000Z', [
+          item('docs', media('https://agor.live/whats-new/a.png')),
+          item('cdn', media('https://cdn.example/a.png')),
+          item('console', media('https://console.example/u/a.png')),
+          item('dark', media('https://agor.live/a.png', 'https://cdn.example/a-dark.png')),
+          item('drawn', { visual: { type: 'illustration', key: 'channels' } }),
+        ]),
+      ],
+      ['https://agor.live', 'https://console.example']
+    );
 
-    expect(parsed.items.map((i) => [i.visual_url, i.visual_url_dark])).toEqual([
-      [null, 'https://agor.live/whats-new/x-dark.svg'],
-      [null, null],
-      // blob: shares the https://agor.live origin but is not a hosted visual.
-      [null, 'https://agor.live/whats-new/k-dark.svg'],
+    expect(parsed.items.map((i) => [i.id, i.visual?.type ?? null])).toEqual([
+      ['docs', 'media'],
+      ['cdn', null],
+      ['console', 'media'],
+      ['dark', null],
+      ['drawn', 'illustration'],
     ]);
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
   });
 
-  it('sorts newest first and drops notes without items', () => {
+  it('sorts newest first and drops releases without items', () => {
     expect(
       parseFeatureAnnouncements([
-        note('old', '2026-01-01T00:00:00.000Z', [item('a')]),
-        note('empty', '2026-12-01T00:00:00.000Z', []),
-        note('new', '2026-06-01T00:00:00.000Z', [item('b', { cta_path: '/b/:mainBoard/' })]),
-      ]).map((n) => n.id)
+        release('old', '2026-01-01T00:00:00.000Z', [item('a')]),
+        release('empty', '2026-12-01T00:00:00.000Z', []),
+        release('new', '2026-06-01T00:00:00.000Z', [item('b')]),
+      ]).map((r) => r.id)
     ).toEqual(['new', 'old']);
-  });
-});
-
-describe('shortBrief', () => {
-  it('keeps short briefs and cuts long ones on a word boundary', () => {
-    expect(shortBrief('Short brief.', 160)).toBe('Short brief.');
-    const cut = shortBrief('Zones have a layout, Free, Row, Column or Grid.', 30);
-    expect(cut).toBe('Zones have a layout, Free…');
-    expect(cut.length).toBeLessThanOrEqual(30);
   });
 });
 
@@ -246,8 +296,9 @@ describe('featureAnnouncementItemsForAgents', () => {
   it('flattens newest first with seen state, since and limit', () => {
     const feed = buildFeatureAnnouncementsFeed(
       'cloud',
-      NOTES,
+      RELEASES,
       member({ featureAnnouncements: { lastSeenAt: '2026-10-15T00:00:00.000Z' } }),
+      'default',
       NOW
     );
 
@@ -257,9 +308,15 @@ describe('featureAnnouncementItemsForAgents', () => {
         limit: 2,
       })
     ).toEqual([
-      expect.objectContaining({ title: 'Item r3-major', version: 'r3', seen_by_user: false }),
-      expect.objectContaining({ title: 'Item r2-major', version: 'r2', seen_by_user: true }),
+      expect.objectContaining({
+        title: 'Item r3-launch',
+        one_line: 'One line r3-launch',
+        version: 'Agor r3',
+        seen_by_user: false,
+      }),
+      expect.objectContaining({ title: 'Item r2-launch', version: 'Agor r2', seen_by_user: true }),
     ]);
+    expect(shortBrief('x '.repeat(200)).length).toBeLessThanOrEqual(160);
   });
 });
 
@@ -288,20 +345,18 @@ describe('resolveFeatureAnnouncementsSource', () => {
 });
 
 describe('CloudFeatureAnnouncementsPoller', () => {
-  it('signs the request with the Cell credential and keeps the last good notes on failure', async () => {
+  it('signs the request with the Cell credential and keeps the last good answer on failure', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(Response.json({ announcements: NOTES }))
+      .mockResolvedValueOnce(Response.json({ announcements: RELEASES }))
       .mockResolvedValueOnce(new Response('nope', { status: 503 }))
-      .mockResolvedValueOnce(
-        Response.json({ announcements: [note('bad', 'x', [item('i', { cta_path: 'https://x' })])] })
-      );
+      .mockResolvedValueOnce(Response.json({ announcements: [release('bad', 'x', [item('i')])] }));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const poller = new CloudFeatureAnnouncementsPoller(CLOUD_ENV, fetchImpl);
-    expect(poller.notes()).toBeNull();
+    const poller = new CloudFeatureAnnouncementsPoller(CLOUD_ENV, undefined, fetchImpl);
+    expect(poller.announcements()).toBeNull();
 
     await poller.refresh();
-    expect(poller.notes().map((n) => n.id)).toEqual(['r3', 'r2', 'r1']);
+    expect(poller.announcements()?.map((r) => r.id)).toEqual(['r3', 'r2', 'r1']);
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('https://cloud.example/api/internal/runtime/feature-announcements');
     const token = (new Headers(init?.headers).get('Authorization') ?? '').slice(7);
@@ -322,7 +377,7 @@ describe('CloudFeatureAnnouncementsPoller', () => {
 
     await poller.refresh();
     await poller.refresh();
-    expect(poller.notes().map((n) => n.id)).toEqual(['r3', 'r2', 'r1']);
+    expect(poller.announcements()?.map((r) => r.id)).toEqual(['r3', 'r2', 'r1']);
     // One log for the failing transition, not one per poll.
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
@@ -340,7 +395,7 @@ describe('CloudFeatureAnnouncementsPoller', () => {
 });
 
 describe('FeatureAnnouncementsMarkSeenService', () => {
-  const provider = { source: 'bundled' as const, notes: () => NOTES };
+  const provider = { source: 'bundled' as const, announcements: () => RELEASES };
 
   dbTest('merges concurrent writes inside users.patch without losing either', async ({ db }) => {
     const users = new UsersService(db);
@@ -361,17 +416,17 @@ describe('FeatureAnnouncementsMarkSeenService', () => {
 
     // Interleave: every request starts before any write lands.
     await Promise.all([
-      service.create({ scope: 'major', itemIds: ['r3-major'] }, params),
-      service.create({ scope: 'major', itemIds: ['r2-major'] }, params),
-      service.create({ scope: 'drawer' }, params),
+      service.create({ scope: 'popup', itemIds: ['r3-launch'] }, params),
+      service.create({ scope: 'popup', itemIds: ['r2-launch'] }, params),
+      service.create({ scope: 'release_notes' }, params),
     ]);
 
     const stored = await users.get(userId);
     expect(stored.preferences?.homeWorkView).toBe('board');
     expect(stored.preferences?.featureAnnouncements?.lastSeenAt).toEqual(expect.any(String));
-    expect([...(stored.preferences?.featureAnnouncements?.seenMajorItemIds ?? [])].sort()).toEqual([
-      'r2-major',
-      'r3-major',
+    expect([...(stored.preferences?.featureAnnouncements?.seenPopupItemIds ?? [])].sort()).toEqual([
+      'r2-launch',
+      'r3-launch',
     ]);
   });
 
@@ -384,11 +439,11 @@ describe('FeatureAnnouncementsMarkSeenService', () => {
       { service: () => ({ patch }) }
     );
 
-    await expect(service.create({ scope: 'major', itemIds: [] }, params)).rejects.toThrow();
+    await expect(service.create({ scope: 'popup', itemIds: [] }, params)).rejects.toThrow();
     await expect(service.create({ scope: 'everything' }, params)).rejects.toThrow();
-    await expect(service.create({ scope: 'drawer' }, {} as AuthenticatedParams)).rejects.toThrow(
-      /Authentication/
-    );
+    await expect(
+      service.create({ scope: 'release_notes' }, {} as AuthenticatedParams)
+    ).rejects.toThrow(/Authentication/);
     expect(patch).not.toHaveBeenCalled();
   });
 });

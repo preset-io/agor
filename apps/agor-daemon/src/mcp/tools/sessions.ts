@@ -615,10 +615,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         const recent = featureAnnouncementItemsForAgents(feed, {
           since: new Date(Date.now() - FEATURE_ANNOUNCEMENTS_LIMITS.recentFeatureDays * 86_400_000),
           limit: FEATURE_ANNOUNCEMENTS_LIMITS.recentFeatureMax,
-        }).map(({ title, agent_brief, docs_url, published_at, seen_by_user }) => ({
+        }).map(({ title, agent_brief, learn_more_url, published_at, seen_by_user }) => ({
           title,
           agent_brief: shortBrief(agent_brief),
-          docs_url,
+          learn_more_url,
           published_at,
           seen_by_user,
         }));
