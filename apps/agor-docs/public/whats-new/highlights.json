@@ -1,15 +1,20 @@
 {
+  "version": 2,
   "items": {
     "3135": {
-      "tier": "major",
       "title": "Zones can arrange your cards",
-      "subtitle": "Pick a row, a column or a grid and cards snap into place.",
-      "agent_brief": "Zones have a layout: Free, Row, Column or Grid. In Row, Column and Grid, cards keep their order and snap into place, and a card dropped into the zone joins at the end. Suggest it when the user tidies a board by hand or wants a kanban-style column. Set it with the layout button in the zone toolbar, or with agor_boards_update (layout: free, row, column or grid).",
-      "docs_url": "https://agor.live/guide/boards#zone-layout",
-      "visual_url": "https://agor.live/whats-new/zone-layouts-light.svg",
-      "visual_url_dark": "https://agor.live/whats-new/zone-layouts-dark.svg",
-      "cta_label": "See it on my board",
-      "cta_path": "/b/:currentBoard/"
+      "one_line": "Pick a row, a column or a grid and cards snap into place.",
+      "learn_more_url": "https://agor.live/guide/boards#zone-layout",
+      "visual": { "type": "illustration", "key": "zone-grid" },
+      "visual_alt": "Scattered cards snap into a grid inside a zone.",
+      "button": { "action": "agor_page", "target": "board", "label": "See it on my board" },
+      "popup": true,
+      "agent_brief": "Zones have a layout: Free, Row, Column or Grid. In Row, Column and Grid, cards keep their order and snap into place, and a card dropped into the zone joins at the end. Suggest it when the user tidies a board by hand or wants a kanban-style column. Set it with the layout button in the zone toolbar, or with agor_boards_update (layout: free, row, column or grid)."
+    },
+    "3182": {
+      "title": "See what's new in Agor",
+      "one_line": "The bell lists new features in each release, with a link to learn more.",
+      "agent_brief": "The bell in the navbar has a Release notes tab with the features in each Agor release; big launches appear once in a pop-up. Agents can read the same list with agor_feature_announcements_list, and recent ones appear as recent_agor_features in agor_sessions_get_current_context."
     }
   }
 }
