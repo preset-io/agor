@@ -211,6 +211,10 @@ it('shows big launches as one carousel and records each slide as it is displayed
   expect(within(dialog).getByLabelText('Cards snap into a grid')).toBeInTheDocument();
   expect(within(dialog).getAllByLabelText('Close').length).toBeGreaterThan(0);
   expect(within(dialog).getByText('See it on my board')).toBeInTheDocument();
+  expect(within(dialog).getByText('Learn more').closest('a')).toHaveAttribute(
+    'href',
+    'https://agor.live/guide/boards'
+  );
   await waitFor(() => expect(create).toHaveBeenCalledWith({ scope: 'popup', itemIds: ['zones'] }));
   expect(create).toHaveBeenCalledTimes(1);
 

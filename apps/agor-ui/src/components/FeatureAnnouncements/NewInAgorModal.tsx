@@ -240,6 +240,16 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
           <Typography.Text type="secondary" style={{ fontSize: token.fontSizeLG }}>
             {slide.one_line}
           </Typography.Text>
+          {slide.learn_more_url && (
+            <Typography.Link
+              href={slide.learn_more_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ alignSelf: 'flex-start' }}
+            >
+              Learn more <ArrowRightOutlined />
+            </Typography.Link>
+          )}
           {slide.visual && (
             <div style={{ marginTop: token.marginSM }}>
               <AnnouncementVisual key={slide.id} visual={slide.visual} alt={slide.visual_alt} />
