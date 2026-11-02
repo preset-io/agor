@@ -41,8 +41,12 @@ import {
 import { clip, parseChangelogFeatureAnnouncements } from './feature-announcements-changelog.js';
 import { withPreferencesMerge } from './users.js';
 
-/** Contract endpoint, relative to `AGOR_CLOUD_API_BASE_URL` (which ends in `/api`). */
-const CLOUD_FEATURE_ANNOUNCEMENTS_PATH = '/internal/runtime/feature-announcements';
+/**
+ * Contract endpoint on the Agor Cloud origin. Cells receive `AGOR_CLOUD_API_BASE_URL`
+ * as a bare origin, and the executor launcher appends `/api/internal/runtime/...`
+ * the same way.
+ */
+const CLOUD_FEATURE_ANNOUNCEMENTS_PATH = '/api/internal/runtime/feature-announcements';
 const CLOUD_FEATURE_ANNOUNCEMENTS_SCOPE = 'feature_announcements:read';
 const CLOUD_POLL_INTERVAL_MS = 15 * 60_000;
 const CLOUD_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -190,7 +194,7 @@ export class CloudFeatureAnnouncementsPoller implements FeatureAnnouncementsProv
     if (base.protocol !== 'https:' || base.username || base.password) {
       throw new Error('Cloud feature announcements require an HTTPS AGOR_CLOUD_API_BASE_URL');
     }
-    this.url = `${base.origin}${base.pathname.replace(/\/+$/, '')}${CLOUD_FEATURE_ANNOUNCEMENTS_PATH}`;
+    this.url = `${base.origin}${CLOUD_FEATURE_ANNOUNCEMENTS_PATH}`;
     this.credential = loadCloudRuntimeCredential(env);
   }
 
@@ -282,12 +286,17 @@ function toClientItem({
   return item;
 }
 
-/** The caller's role- and tenant-filtered releases plus notification and pop-up state. */
+/**
+ * The caller's role- and tenant-filtered releases plus notification and pop-up state.
+ * `popupWindow` applies the 14-day pop-up window; Agor Cloud already sends
+ * `popup: false` outside it, so only the bundled source needs it here.
+ */
 export function buildFeatureAnnouncementsFeed(
   all: FeatureAnnouncementDTO[] | null,
   user: Pick<User, 'role' | 'created_at' | 'preferences'>,
   tenantId: string | undefined,
-  now = Date.now()
+  now = Date.now(),
+  popupWindow = true
 ): FeatureAnnouncementsFeed {
   const isAdmin = hasMinimumRole(user.role, ROLES.ADMIN);
   const prefs = user.preferences?.featureAnnouncements ?? {};
@@ -315,8 +324,10 @@ export function buildFeatureAnnouncementsFeed(
     )
     .map((release) => release.id);
   const popupsAllowed = now - created >= FEATURE_ANNOUNCEMENTS_LIMITS.popupNewAccountDays * DAY_MS;
-  // The 14-day window mirrors Agor Cloud's deliveryItem; see popupWindowDays.
-  const popupSince = Math.max(created, now - FEATURE_ANNOUNCEMENTS_LIMITS.popupWindowDays * DAY_MS);
+  // Bundled only: mirrors Agor Cloud's deliveryItem window; see popupWindowDays.
+  const popupSince = popupWindow
+    ? Math.max(created, now - FEATURE_ANNOUNCEMENTS_LIMITS.popupWindowDays * DAY_MS)
+    : created;
   return {
     available: all !== null,
     announcements: visible.map((release) => ({
@@ -408,7 +419,9 @@ export class FeatureAnnouncementsService {
     return buildFeatureAnnouncementsFeed(
       this.provider.announcements(),
       user,
-      params?.tenant?.tenant_id
+      params?.tenant?.tenant_id,
+      Date.now(),
+      this.provider.source === 'bundled'
     );
   }
 

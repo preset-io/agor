@@ -206,6 +206,20 @@ describe('buildFeatureAnnouncementsFeed', () => {
     expect(feed.pending_popup_items.map((i) => i.id)).not.toContain('r3-launch');
   });
 
+  it('leaves the pop-up window to Agor Cloud for cloud items', () => {
+    const later = Date.parse('2026-10-28T00:00:00.000Z');
+    // r2 is 18 days old: outside the bundled window, but Cloud still marks it popup.
+    expect(
+      buildFeatureAnnouncementsFeed(
+        RELEASES,
+        member(),
+        'default',
+        later,
+        false
+      ).pending_popup_items.map((i) => i.id)
+    ).toEqual(['r3-launch', 'r2-launch']);
+  });
+
   it('pops up only recent launches and never in the first days of an account', () => {
     const later = Date.parse('2026-10-28T00:00:00.000Z');
     expect(
@@ -351,7 +365,8 @@ describe('featureAnnouncementItemsForAgents', () => {
 
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const CLOUD_ENV = {
-  AGOR_CLOUD_API_BASE_URL: 'https://cloud.example/api/',
+  // Cells receive a bare origin (with or without a trailing slash).
+  AGOR_CLOUD_API_BASE_URL: 'https://cloud.example/',
   AGOR_CLOUD_CELL_ID: 'cell-1',
   AGOR_CLOUD_RUNTIME_CREDENTIAL_ID: 'cred-1',
   AGOR_CLOUD_RUNTIME_KEY_ID: 'key-1',
@@ -388,6 +403,17 @@ describe('CloudFeatureAnnouncementsPoller', () => {
     expect(poller.announcements()?.map((r) => r.id)).toEqual(['r3', 'r2', 'r1']);
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('https://cloud.example/api/internal/runtime/feature-announcements');
+    for (const base of ['https://cloud.example', 'https://cloud.example/']) {
+      const bare = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ announcements: [] }));
+      await new CloudFeatureAnnouncementsPoller(
+        { ...CLOUD_ENV, AGOR_CLOUD_API_BASE_URL: base },
+        undefined,
+        bare
+      ).refresh();
+      expect(bare.mock.calls[0][0]).toBe(
+        'https://cloud.example/api/internal/runtime/feature-announcements'
+      );
+    }
     const token = (new Headers(init?.headers).get('Authorization') ?? '').slice(7);
     const decoded = jwt.decode(token, { complete: true });
     expect(decoded?.header.kid).toBe('key-1');

@@ -222,8 +222,9 @@ export const FEATURE_ANNOUNCEMENTS_LIMITS = {
   /** Characters of agent_brief in recent_agor_features; the full brief is in the MCP list. */
   recentFeatureBriefChars: 160,
   /**
-   * A big launch pops up only this many days after its release. Agor Cloud's
-   * deliveryItem applies the same window; change both together.
+   * A bundled big launch pops up only this many days after its release. Agor
+   * Cloud's deliveryItem applies the same window to cloud items (sending
+   * `popup: false` outside it); change both together.
    */
   popupWindowDays: 14,
   /** People in their first days never get pop-ups. */
