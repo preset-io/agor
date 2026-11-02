@@ -28,9 +28,12 @@ in `packages/core/src/types/feature-announcements.ts`.
 - `title` up to 60 characters, `one_line` up to 120. Plain language, sentence case.
 - `visual`: an illustration (`zone-grid`, `channels`, `screenshot-frame`) or
   `{ "type": "media", "url", "url_dark", "mime" }` for a picture or muted looping video served from
-  `https://agor.live/whats-new/` (put the file in this folder). Media needs `visual_alt`.
+  `https://agor.live/whats-new/` (put the file in this folder): PNG, JPEG or GIF, or MP4 or WebM
+  video. Media needs `visual_alt`.
 - `button`: `agor_page` (`board`, `integrations`, `mcp`, `teammates`, `models`, `artifacts`),
-  `link`, or `teammate_chat` with a prefilled `message`.
+  `link`, or `teammate_chat` with a prefilled `message`; `label` up to 24 characters.
+- A highlight applies to one entry: the newest Features entry citing the PR, else the newest entry
+  citing it.
 - `popup` is for big launches only (about two a quarter). `badge: false` keeps an item quiet.
 - `roles: "admins"` hides it from members. `new_until` (ISO time) ends the New marker early or
   late; the default is 30 days after the release.

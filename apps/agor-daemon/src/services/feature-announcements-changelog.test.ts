@@ -73,7 +73,7 @@ describe('parseChangelogFeatureAnnouncements', () => {
     const [zones] = parseChangelogFeatureAnnouncements(CHANGELOG)[0].items;
 
     expect(zones).toMatchObject({
-      id: 'oss-0.2.0-1',
+      id: 'oss-0.2.0-pr3135',
       one_line: 'Zones arrange cards in a row, column or grid.',
       roles: 'everyone',
       popup: false,
@@ -104,6 +104,31 @@ describe('parseChangelogFeatureAnnouncements', () => {
       button: { action: 'agor_page', target: 'board' },
     });
     expect(second.popup).toBe(false);
+  });
+
+  it('keys items by PR and applies a highlight to one entry, preferring Features', () => {
+    const changelog = `## 0.3.0 (2026-10-20)
+
+### Fixes
+
+- **Zone fix** — fixed ([#3135](https://github.com/preset-io/agor/pull/3135))
+- **No PR** — an entry without a link
+
+### Features
+
+- **Zone layouts** — zones arrange cards ([#3135](https://github.com/preset-io/agor/pull/3135))
+- **Same PR again** — a second entry citing it ([#3135](https://github.com/preset-io/agor/pull/3135))
+`;
+    const [release] = parseChangelogFeatureAnnouncements(changelog, {
+      '3135': { title: 'Zones can arrange your cards', popup: true },
+    });
+
+    expect(release.items.map((item) => [item.id, item.title, item.popup])).toEqual([
+      ['oss-0.3.0-pr3135', 'Zone fix', false],
+      ['oss-0.3.0-2', 'No PR', false],
+      ['oss-0.3.0-3', 'Zones can arrange your cards', true],
+      ['oss-0.3.0-4', 'Same PR again', false],
+    ]);
   });
 
   it('limits the number of releases', () => {

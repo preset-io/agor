@@ -99,9 +99,12 @@ export function parseChangelogFeatureAnnouncements(
 
   const flushEntry = () => {
     if (release && kind && entry) {
-      release.items.push(
-        parseEntry(entry, `${release.id}-${release.items.length + 1}`, kind, newUntil)
-      );
+      const item = parseEntry(entry, `${release.id}-${release.items.length + 1}`, kind, newUntil);
+      // Keyed by the entry's first PR so seen state survives reordering;
+      // entries without a PR (or sharing it) keep the positional ID.
+      const prId = item.pr_numbers.length > 0 ? `${release.id}-pr${item.pr_numbers[0]}` : null;
+      if (prId && !release.items.some((other) => other.id === prId)) item.id = prId;
+      release.items.push(item);
     }
     entry = null;
   };
@@ -151,11 +154,14 @@ export function parseChangelogFeatureAnnouncements(
   }
   flushRelease();
 
-  for (const item of releases.flatMap((r) => r.items)) {
-    for (const pr of item.pr_numbers) {
-      const highlight = highlights[String(pr)];
-      if (highlight) Object.assign(item, highlight);
-    }
+  // A highlight applies to one entry only: the newest Features entry citing its
+  // PR, else the newest entry citing it.
+  const items = releases.flatMap((r) => r.items);
+  const fromFeatures = new Set(items.filter((item) => item.kind === 'new'));
+  for (const [pr, highlight] of Object.entries(highlights)) {
+    const citing = items.filter((item) => item.pr_numbers.includes(Number(pr)));
+    const target = citing.find((item) => fromFeatures.has(item)) ?? citing[0];
+    if (target) Object.assign(target, highlight);
   }
   return releases;
 }
