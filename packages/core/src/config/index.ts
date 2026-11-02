@@ -39,7 +39,7 @@ export type {
   ResolveSecurityOptions,
 } from './security-resolver';
 export {
-  FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC,
+  FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN,
   getDefaultGitConfigParameters,
   gitConfigParameterLooksSecret,
   redactUrlUserinfo,

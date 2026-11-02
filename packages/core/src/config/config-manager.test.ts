@@ -882,7 +882,7 @@ describe('loadConfig', () => {
     }
   );
 
-  it('accepts feature announcement sources and rejects unknown ones', () => {
+  it('validates feature announcement sources and the media origin', () => {
     for (const source of ['bundled', 'cloud', 'off'] as const) {
       expect(() => assertValidRawConfig({ feature_announcements: { source } })).not.toThrow();
     }
@@ -892,6 +892,14 @@ describe('loadConfig', () => {
     expect(() =>
       assertValidRawConfig({ feature_announcements: { url: 'https://x' } } as unknown as AgorConfig)
     ).toThrow(/feature_announcements.url/);
+    expect(() =>
+      assertValidRawConfig({ feature_announcements: { media_origin: 'https://cdn.example.com' } })
+    ).not.toThrow();
+    for (const media_origin of ['http://cdn.example.com', 'https://cdn.example.com/uploads']) {
+      expect(() => assertValidRawConfig({ feature_announcements: { media_origin } })).toThrow(
+        /feature_announcements.media_origin must be an https: origin/
+      );
+    }
   });
 
   it('rejects invalid managed environment execution modes', async () => {

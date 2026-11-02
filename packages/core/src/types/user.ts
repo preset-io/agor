@@ -493,7 +493,7 @@ export interface UserPreferences {
   use_slack_avatar?: boolean;
   /** Home "My work" layout. Undefined defaults to list. */
   homeWorkView?: HomeWorkView;
-  /** What's new: drawer and modal seen state, merged server-side by `feature-announcements/mark-seen`. */
+  /** Feature announcements: Release notes and pop-up seen state, merged server-side by `feature-announcements/mark-seen`. */
   featureAnnouncements?: FeatureAnnouncementsPreferences;
   // Future preferences can be added here
   [key: string]: unknown;

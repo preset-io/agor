@@ -75,8 +75,8 @@ const KNOWN_CSP_DIRECTIVES: ReadonlySet<string> = new Set([
 export const SANDPACK_CSP_FRAME_SRC = 'https://*.codesandbox.io';
 export const SANDPACK_CSP_WORKER_SRC = 'blob:';
 export const SLACK_AVATAR_CSP_IMG_SRC = 'https://*.slack-edge.com';
-/** What's new visuals are hosted on the docs site (`apps/agor-docs/public/whats-new/`). */
-export const FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC = 'https://agor.live';
+/** Feature announcement visuals in the repository are served by the docs site (`apps/agor-docs/public/whats-new/`). */
+export const FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN = 'https://agor.live';
 /**
  * Browser image origins used by the checked-in MCP catalog.
  *
@@ -108,6 +108,8 @@ function buildDefaultDirectives(opts: {
   daemonUrl?: string;
   extraConnectSrc?: string[];
   allowSandpack: boolean;
+  /** `feature_announcements.media_origin`: uploaded announcement pictures and videos. */
+  featureAnnouncementsMediaOrigin?: string;
 }): AgorCspDirectives {
   const connectSrc = ["'self'", 'ws:', 'wss:'];
   if (opts.daemonUrl) connectSrc.push(opts.daemonUrl);
@@ -118,9 +120,14 @@ function buildDefaultDirectives(opts: {
     'data:',
     'blob:',
     SLACK_AVATAR_CSP_IMG_SRC,
-    FEATURE_ANNOUNCEMENTS_CSP_IMG_SRC,
+    FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN,
     ...MCP_CATALOG_CSP_IMG_SRCS,
   ];
+  const mediaSrc = ["'self'", FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN];
+  if (opts.featureAnnouncementsMediaOrigin) {
+    imgSrc.push(opts.featureAnnouncementsMediaOrigin);
+    mediaSrc.push(opts.featureAnnouncementsMediaOrigin);
+  }
   const frameSrc = ["'self'"];
   const workerSrc = ["'self'", SANDPACK_CSP_WORKER_SRC];
   if (opts.allowSandpack) {
@@ -135,6 +142,7 @@ function buildDefaultDirectives(opts: {
     // fonts.bunny.net hosts the Inter font CSS imported by index.css.
     'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.bunny.net'],
     'img-src': imgSrc,
+    'media-src': mediaSrc,
     'font-src': ["'self'", 'data:', 'https://fonts.bunny.net'],
     'connect-src': connectSrc,
     'frame-src': frameSrc,
@@ -356,6 +364,7 @@ export function resolveSecurity(
     daemonUrl: opts.daemonUrl,
     extraConnectSrc: opts.extraConnectSrc,
     allowSandpack,
+    featureAnnouncementsMediaOrigin: config.feature_announcements?.media_origin,
   });
 
   const merged = mergeDirectives(defaults, csp.extras, csp.override);

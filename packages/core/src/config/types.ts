@@ -1588,13 +1588,18 @@ export interface AgorConfig {
   };
 
   /**
-   * In-app "What's new" source. `bundled` reads the CHANGELOG shipped with the
-   * daemon; `cloud` polls Agor Cloud with the Cell runtime credential; `off`
-   * hides the notification center. Unset resolves to `cloud` when the
-   * `AGOR_CLOUD_*` runtime credential is complete, otherwise `bundled`.
+   * In-app feature announcements source. `bundled` reads the CHANGELOG shipped
+   * with the daemon; `cloud` polls Agor Cloud with the Cell runtime credential;
+   * `off` hides the bell. Unset resolves to `cloud` when the `AGOR_CLOUD_*`
+   * runtime credential is complete, otherwise `bundled`.
    */
   feature_announcements?: {
     source?: FeatureAnnouncementsSource;
+    /**
+     * HTTPS origin serving uploaded announcement pictures and videos (the Agor
+     * Cloud console). Added to the CSP `img-src` and `media-src`; unset by default.
+     */
+    media_origin?: string;
   };
 
   /** User identity, lifecycle, role, and local-login authority. */

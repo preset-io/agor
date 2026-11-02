@@ -552,6 +552,16 @@ function validatePrivateOutboundDestinations(value: unknown): void {
   }
 }
 
+/** An exact `https://host[:port]` origin: no path, query or credentials. */
+function isHttpsOrigin(value: unknown): boolean {
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'https:' && url.origin === value;
+  } catch {
+    return false;
+  }
+}
+
 function validateConfig(config: AgorConfig): void {
   requirePlainConfigRecord(config, 'config');
   const configuredAnalyticsPlugins = (config.analytics as { plugins?: unknown[] } | undefined)
@@ -860,13 +870,19 @@ function validateConfig(config: AgorConfig): void {
   ]);
   assertValidRawExternalLaunchConfig(config.external_launch);
   only(config.mcp_oauth_relay, 'mcp_oauth_relay', ['callback_origin']);
-  only(config.feature_announcements, 'feature_announcements', ['source']);
+  only(config.feature_announcements, 'feature_announcements', ['source', 'media_origin']);
   if (
     config.feature_announcements?.source !== undefined &&
     !FEATURE_ANNOUNCEMENTS_SOURCES.includes(config.feature_announcements.source)
   ) {
     throw new Error(
       `Config error: feature_announcements.source must be one of ${FEATURE_ANNOUNCEMENTS_SOURCES.join(', ')}`
+    );
+  }
+  const mediaOrigin = config.feature_announcements?.media_origin;
+  if (mediaOrigin !== undefined && !isHttpsOrigin(mediaOrigin)) {
+    throw new Error(
+      'Config error: feature_announcements.media_origin must be an https: origin such as https://console.example.com'
     );
   }
   only(config.identity, 'identity', [
