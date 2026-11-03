@@ -97,6 +97,10 @@ export interface StreamingMessageState {
   /** Text activity is independent of thinking when both share a message ID. */
   isTextStreaming?: boolean;
   isThinking?: boolean;
+  /** Client clock (ms) at the first thinking event this tab saw for the message. */
+  thinkingStartedAt?: number;
+  /** Client clock (ms) at thinking:end; absent while live or when the end was never seen. */
+  thinkingEndedAt?: number;
   error?: string;
 }
 
@@ -1092,6 +1096,7 @@ export class ReactiveSessionHandle {
           isStreaming: false,
           isThinking: false,
           isTextStreaming: false,
+          thinkingEndedAt: stream.isThinking ? Date.now() : stream.thinkingEndedAt,
         });
       }
     }
@@ -2383,6 +2388,7 @@ export class ReactiveSessionHandle {
           isStreaming: false,
           isThinking: false,
           isTextStreaming: false,
+          thinkingEndedAt: current?.isThinking ? Date.now() : current?.thinkingEndedAt,
         });
         this.retiredStreamTasks.delete(event.message_id);
         return { ...prev, streamingMessages: nextStreaming };
@@ -2405,6 +2411,8 @@ export class ReactiveSessionHandle {
           timestamp: existing?.timestamp || event.timestamp,
           isStreaming: true,
           isThinking: true,
+          thinkingStartedAt: existing?.thinkingStartedAt ?? Date.now(),
+          thinkingEndedAt: undefined,
         });
         return {
           ...prev,
@@ -2424,6 +2432,8 @@ export class ReactiveSessionHandle {
             isThinking: true,
             isStreaming: true,
             thinkingContent: (current.thinkingContent || '') + event.chunk,
+            thinkingStartedAt: current.thinkingStartedAt ?? Date.now(),
+            thinkingEndedAt: undefined,
           });
         } else {
           // Attached mid-thinking (a long thinking block, no start replay):
@@ -2439,6 +2449,7 @@ export class ReactiveSessionHandle {
             timestamp: new Date().toISOString(),
             isStreaming: true,
             isThinking: true,
+            thinkingStartedAt: Date.now(),
           });
         }
         return {
@@ -2459,6 +2470,7 @@ export class ReactiveSessionHandle {
           ...current,
           isThinking: false,
           isStreaming: !!current.isTextStreaming,
+          thinkingEndedAt: current.isThinking ? Date.now() : current.thinkingEndedAt,
         });
         return {
           ...prev,

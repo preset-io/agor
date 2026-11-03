@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/utils/message', () => ({
@@ -27,4 +27,26 @@ describe('DiffBlock computation limit', () => {
     expect(screen.getByText(/too complex to compute safely/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Copy diff' })).not.toBeInTheDocument();
   });
+});
+
+it('fades a long diff and toggles between the preview and every line', () => {
+  const before = Array.from({ length: 60 }, (_, index) => `line ${index}`).join('\n');
+  const after = before.replace('line 0', 'first');
+  const { container } = render(
+    <DiffBlock
+      filePath="long.txt"
+      operationType="write"
+      newContent={`${before}\n${after}`}
+      rawContentKind="full-file"
+      forceExpanded
+    />
+  );
+  const more = screen.getByRole('button', { name: /^Show all \d+ lines$/, expanded: false });
+  expect(container.querySelector('[data-fade]')).not.toBeNull();
+  expect(container).not.toHaveTextContent('line 59');
+  fireEvent.click(more);
+  expect(container.querySelector('[data-fade]')).toBeNull();
+  expect(container).toHaveTextContent('line 59');
+  fireEvent.click(screen.getByRole('button', { name: 'Show less', expanded: true }));
+  expect(screen.getByRole('button', { name: /^Show all \d+ lines$/ })).toBeInTheDocument();
 });

@@ -11,9 +11,9 @@ it('collapses a long single paragraph but not short multiline text', () => {
   const paragraph = 'Long paragraph '.repeat(150) + 'Complete tail';
   view.rerender(<CollapsibleMarkdown>{paragraph}</CollapsibleMarkdown>);
   expect(screen.queryByText(paragraph)).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'show more', expanded: false }));
+  fireEvent.click(screen.getByRole('button', { name: 'Show more', expanded: false }));
   expect(screen.getByText(paragraph)).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'show less', expanded: true })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Show less', expanded: true })).toBeInTheDocument();
 });
 
 it('repairs cut emphasis without exposing syntax markers, then renders the full original', () => {
@@ -21,7 +21,7 @@ it('repairs cut emphasis without exposing syntax markers, then renders the full 
   const view = render(<CollapsibleMarkdown>{markdown}</CollapsibleMarkdown>);
   expect(view.container.querySelector('[data-streamdown="strong"]')).not.toBeNull();
   expect(view.container.textContent).not.toContain('**');
-  fireEvent.click(screen.getByRole('button', { name: 'show more' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
   expect(view.container.querySelector('[data-streamdown="strong"]')?.textContent).toBe(
     'bold words '.repeat(250).trimEnd()
   );
@@ -32,6 +32,6 @@ it('does not turn a truncated URL into a navigable destination', () => {
   const markdown = 'Intro '.repeat(95) + `[Link](${url})`;
   render(<CollapsibleMarkdown>{markdown}</CollapsibleMarkdown>);
   expect(screen.queryByRole('link', { name: 'Link' })).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'show more' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
   expect(screen.getByRole('link', { name: 'Link' })).toHaveAttribute('href', url);
 });

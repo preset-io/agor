@@ -87,8 +87,15 @@ function update(patch: Partial<ReactiveSessionState>) {
     for (const listener of listeners) listener();
   });
 }
+/** Live text fades in word by word, so match across the word spans. */
 function tail(index: number) {
-  return screen.queryByText(`Message ${index} line 19`);
+  const text = `Message ${index} line 19`;
+  const holds = (element: Element | null) => !!element?.textContent?.includes(text);
+  return (
+    screen.queryAllByText(
+      (_, element) => holds(element) && !Array.from(element!.children).some(holds)
+    )[0] ?? null
+  );
 }
 beforeEach(() => {
   scrollToBottom.mockClear();
@@ -115,7 +122,7 @@ describe('conversation history text defaults', () => {
   it('collapses nine older turns but protects all three messages of the latest turn on first paint', () => {
     render(<ConversationView client={null} sessionId={sessionId} />);
     expect(scrollToBottom).toHaveBeenCalledWith({ animation: 'instant' });
-    expect(screen.getAllByRole('button', { name: 'show more' })).toHaveLength(27);
+    expect(screen.getAllByRole('button', { name: 'Show more' })).toHaveLength(27);
     for (const index of [27, 28, 29]) expect(tail(index)).toBeInTheDocument();
     expect(tail(0)).not.toBeInTheDocument();
     fireEvent.mouseOver(screen.getByText('Message 0 line 0'));
@@ -144,8 +151,8 @@ describe('conversation history text defaults', () => {
 
   it('preserves explicit choices across hydration/remount/reconnect and protects previous current turns on arrival', () => {
     render(<ConversationView client={null} sessionId={sessionId} />);
-    fireEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
-    fireEvent.click(screen.getAllByRole('button', { name: 'show less' }).at(-1)!);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show more' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show less' }).at(-1)!);
     expect(tail(0)).toBeInTheDocument();
     expect(tail(29)).not.toBeInTheDocument();
     update({ messagesByTask: new Map(), connected: false });
@@ -188,7 +195,7 @@ describe('conversation history text defaults', () => {
     });
     expect(tail(29)).toBeInTheDocument();
     expect(tail(27)).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'show less' }).at(-1)!);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show less' }).at(-1)!);
     update({ tasks, streamingMessages: new Map(), messagesByTask: new Map(messages) });
     expect(tail(29)).not.toBeInTheDocument();
     expect(tail(27)).toBeInTheDocument();
@@ -211,7 +218,7 @@ describe('conversation history text defaults', () => {
 
   it('resets on session navigation, preserves short text and collapses long single-line prose', () => {
     const view = render(<ConversationView client={null} sessionId={sessionId} />);
-    fireEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show more' })[0]);
     const originalState = state;
     const otherId = generateId();
     view.rerender(<ConversationView client={null} sessionId={otherId} />);
@@ -235,7 +242,7 @@ describe('conversation history text defaults', () => {
     expect(tail(100)).not.toBeInTheDocument();
     expect(tail(102)).toBeInTheDocument();
     expect(tail(103)).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'show more' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show more' })[0]);
     expect(tail(100)).toBeInTheDocument();
     view.rerender(<ConversationView client={null} sessionId={sessionId} />);
     expect(tail(100)).not.toBeInTheDocument();
@@ -247,7 +254,7 @@ describe('conversation history text defaults', () => {
     update({ messagesByTask: new Map([[tasks[0].task_id, [short, prose]]]) });
     expect(screen.getByText('Short text')).toBeInTheDocument();
     expect(screen.queryByText(prose.content.trim())).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'show more' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
     expect(screen.getByText(prose.content.trim())).toBeInTheDocument();
   });
 });

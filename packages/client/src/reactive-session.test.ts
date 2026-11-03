@@ -2333,6 +2333,28 @@ describe.each(['lean', 'lazy'] as const)('stream lifecycle (%s)', (taskHydration
     f.handle.dispose();
   });
 
+  it('times thinking from its first event to its first end on the client clock', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    now.mockReturnValue(13_000);
+    f.event('thinking:chunk', 'thought', 'turn', { chunk: ' more' });
+    expect(f.handle.getStreamingMessage('thought')).toMatchObject({
+      thinkingStartedAt: 1_000,
+      thinkingEndedAt: undefined,
+    });
+    f.event('thinking:end', 'thought', 'turn');
+    now.mockReturnValue(20_000);
+    f.event('thinking:end', 'thought', 'turn');
+    expect(f.handle.getStreamingMessage('thought')).toMatchObject({
+      thinkingStartedAt: 1_000,
+      thinkingEndedAt: 13_000,
+    });
+    f.handle.dispose();
+    now.mockRestore();
+  });
+
   it('recovers a missed terminal event through resync and reconnect', async () => {
     const f = await fixture();
     f.task('turn');

@@ -19,8 +19,8 @@ vi.mock('@agor-live/client', async (importOriginal) => ({
 // use-stick-to-bottom owns the actual scroll physics (persistent
 // ResizeObserver, spring animation). jsdom has no real layout, so we don't
 // unit-test the library here — instead we mock it and assert OUR integration
-// wiring: onScrollRef exposes the hook's scrollToBottom + a working
-// scrollToTop, the open/session-switch effect calls scrollToBottom, and the
+// wiring: onScrollRef exposes the hook's scrollToBottom, the
+// open/session-switch effect calls scrollToBottom, and the
 // scroll integration honors the hook's SYNCHRONOUS live `state`
 // (`state.escapedFromLock`), not the lagging returned `isAtBottom`.
 //
@@ -186,16 +186,14 @@ describe('ConversationView auto-scroll integration', () => {
     }
   });
 
-  it('exposes a working scrollToBottom and scrollToTop via onScrollRef', () => {
+  it('exposes a working scrollToBottom via onScrollRef', () => {
     const tasks = [makeTask('task-1', 'first task'), makeTask('task-2', 'latest task')];
     const state = makeState({ loading: false, tasks });
     mockUseSharedReactiveSession.mockImplementation(() => ({ handle: null, state }));
 
     let exposedScrollToBottom: (() => void) | null = null;
-    let exposedScrollToTop: (() => void) | null = null;
-    const onScrollRef = (scrollToBottom: () => void, scrollToTop: () => void) => {
+    const onScrollRef = (scrollToBottom: () => void) => {
       exposedScrollToBottom = scrollToBottom;
-      exposedScrollToTop = scrollToTop;
     };
 
     render(
@@ -208,19 +206,12 @@ describe('ConversationView auto-scroll integration', () => {
     );
 
     expect(exposedScrollToBottom).toBeTypeOf('function');
-    expect(exposedScrollToTop).toBeTypeOf('function');
 
     // The mount effect already engaged the bottom lock once; clear so we only
     // assert the explicit button-driven call below.
     mockScrollToBottom.mockClear();
     act(() => exposedScrollToBottom?.());
     expect(mockScrollToBottom).toHaveBeenCalledTimes(1);
-
-    // scrollToTop drives the real scroll container to the top.
-    const scroller = screen.getByTestId('conversation-scroll-container');
-    scroller.scrollTop = 500;
-    act(() => exposedScrollToTop?.());
-    expect(scroller.scrollTop).toBe(0);
   });
 
   it('scrolls to the bottom on initial open (active + session present)', () => {

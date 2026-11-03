@@ -195,6 +195,23 @@
   }
 }
 
+/* The jump-to-latest pill fades in and rises. */
+@keyframes agor-jump-pill-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .agor-jump-pill-enter {
+    animation: agor-jump-pill-enter 180ms ease-out both;
+  }
+}
+
 /* Plain level guides under each parent's chevron (no elbow connectors).
    Unlike Tree's show-line mode, every level draws its guide, including under
    a last sibling, so a whole subtree reads as one group. Rows are separated by

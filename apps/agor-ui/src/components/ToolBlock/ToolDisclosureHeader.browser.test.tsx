@@ -79,7 +79,7 @@ it.each([false, true])(
     expect(header.querySelectorAll('.ant-tag')).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Tool calls' }).querySelector('.ant-tag')).toBeNull();
     expect(screen.getByRole('button', { name: 'Loading tool activity…' })).toBeDisabled();
-    expect(container.querySelector('.ant-thought-chain-motion-blink')).not.toBeNull();
+    expect(container.querySelector('.ant-thought-chain-motion-blink')).toBeNull();
     for (const button of container.querySelectorAll('button')) {
       expect(button.scrollWidth).toBeLessThanOrEqual(button.clientWidth);
       expect(button.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);

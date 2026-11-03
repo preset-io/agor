@@ -1,11 +1,12 @@
 /** Real Chromium/AntD lifecycle; transport is mocked and no provider is invoked. */
-import type { Session, SpawnConfig } from '@agor-live/client';
+import type { Branch, Repo, Session, SpawnConfig } from '@agor-live/client';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { App } from 'antd';
 import { useRef, useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
+import { agorStore } from '../../store/agorStore';
 import { SessionPanelContent } from './SessionPanelContent';
 
 vi.mock('../ConversationView', () => ({ ConversationView: () => null }));
@@ -80,10 +81,7 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
           <SessionPanelContent
             client={null}
             session={session}
-            scrollToBottom={null}
-            scrollToTop={null}
             setScrollToBottom={vi.fn()}
-            setScrollToTop={vi.fn()}
             queuedTasks={[]}
             spawnModalOpen={open}
             setSpawnModalOpen={setOpen}
@@ -162,3 +160,31 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
   });
   // Five real-browser modal cycles take 22-31s on CI runners, past the 30s browser default.
 }, 60_000);
+
+it('leaves branch context to the header: no branch strip above the transcript', () => {
+  const repo = { repo_id: 'repo-1', slug: 'preset-io/agor' } as Repo;
+  const branch = { branch_id: 'branch-1', repo_id: repo.repo_id, name: 'strip-branch' } as Branch;
+  agorStore.setState({ repoById: new Map([[repo.repo_id, repo]]) });
+  const { container } = render(
+    <App>
+      <AppActionsProvider value={{ onOpenBranch: vi.fn(), onStartEnvironment: vi.fn() }}>
+        <SessionPanelContent
+          client={null}
+          session={parent}
+          branch={branch}
+          setScrollToBottom={vi.fn()}
+          queuedTasks={[]}
+          spawnModalOpen={false}
+          setSpawnModalOpen={vi.fn()}
+          onSpawnModalConfirm={vi.fn()}
+          inputValueRef={{ current: '' }}
+          isOpen
+        />
+      </AppActionsProvider>
+    </App>
+  );
+  expect(screen.queryByText('strip-branch')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Edit branch' })).toBeNull();
+  expect(container.querySelector('.ant-divider')).toBeNull();
+  agorStore.setState({ repoById: new Map() });
+});

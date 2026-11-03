@@ -2,17 +2,10 @@
 import { CloseCircleOutlined } from '@ant-design/icons';
 import { cleanup, render, screen } from '@testing-library/react';
 import { ConfigProvider } from 'antd';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { ToolBlock, ToolDisclosureHeader } from './ToolBlock';
 
-const motion = vi.hoisted(() => ({ reduced: false }));
-vi.mock('../../hooks/usePrefersReducedMotion', () => ({
-  usePrefersReducedMotion: () => motion.reduced,
-}));
-afterEach(() => {
-  cleanup();
-  motion.reduced = false;
-});
+afterEach(cleanup);
 
 describe('ToolBlock', () => {
   it('renders failed tool-call status icons with the warning tone', () => {
@@ -41,7 +34,7 @@ describe('ToolBlock', () => {
   });
 });
 
-it('animates only executing tool labels and respects reduced motion without losing activity state', () => {
+it('marks executing tool groups busy without a second shimmer', () => {
   const view = (executing: boolean) => (
     <ToolDisclosureHeader
       label="Running: Read"
@@ -51,14 +44,9 @@ it('animates only executing tool labels and respects reduced motion without losi
     />
   );
   const { container, rerender } = render(view(true));
-  expect(container.querySelector('.ant-thought-chain-motion-blink')).not.toBeNull();
-  expect(screen.getByRole('button')).toHaveAttribute('aria-busy', 'true');
-  motion.reduced = true;
-  rerender(view(true));
+  // The turn's working line owns the one shimmer.
   expect(container.querySelector('.ant-thought-chain-motion-blink')).toBeNull();
   expect(screen.getByRole('button')).toHaveAttribute('aria-busy', 'true');
-  motion.reduced = false;
   rerender(view(false));
-  expect(container.querySelector('.ant-thought-chain-motion-blink')).toBeNull();
   expect(screen.getByRole('button')).toHaveAttribute('aria-busy', 'false');
 });

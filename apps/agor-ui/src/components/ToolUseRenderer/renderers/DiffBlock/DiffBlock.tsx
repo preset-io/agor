@@ -17,6 +17,7 @@ import { useState } from 'react';
 import { copyToClipboard } from '@/utils/clipboard';
 import { useThemedMessage } from '@/utils/message';
 import { isDarkTheme } from '@/utils/theme';
+import { ShowMoreFade } from '../../../CollapsibleText/ShowMoreFade';
 import { getDiffPalette } from './diffPalette';
 import {
   type DiffLine,
@@ -161,8 +162,9 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
     showSuccess('Diff copied');
   };
 
-  const needsTruncation = diff.totalLines > TRUNCATE_THRESHOLD && !showAll;
-  const visibleLines = needsTruncation ? diff.lines.slice(0, TRUNCATE_SHOW_LINES) : diff.lines;
+  const truncatable = diff.totalLines > TRUNCATE_THRESHOLD;
+  const visibleLines =
+    truncatable && !showAll ? diff.lines.slice(0, TRUNCATE_SHOW_LINES) : diff.lines;
 
   const renderWordSegments = (segments: WordSegment[], highlightBg: string) => {
     // Merge adjacent unchanged segments to minimize DOM nodes, then render
@@ -373,31 +375,17 @@ export const DiffBlock: React.FC<DiffBlockProps> = ({
               description="This change is too complex to compute safely in the browser. Open the file or use local Git to inspect the complete diff."
               style={{ borderRadius: 0 }}
             />
+          ) : truncatable ? (
+            <ShowMoreFade
+              style={{ overflowX: 'auto' }}
+              collapsed={!showAll}
+              onToggle={() => setShowAll(!showAll)}
+              moreLabel={`Show all ${diff.totalLines} lines`}
+            >
+              {visibleLines.map(renderLine)}
+            </ShowMoreFade>
           ) : (
             <div style={{ overflowX: 'auto' }}>{visibleLines.map(renderLine)}</div>
-          )}
-
-          {/* Truncation notice */}
-          {needsTruncation && (
-            <Button
-              type="text"
-              block
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowAll(true);
-              }}
-              style={{
-                padding: `${token.sizeUnit * 0.75}px ${token.sizeUnit}px`,
-                textAlign: 'center',
-                cursor: 'pointer',
-                color: token.colorPrimary,
-                fontSize: token.fontSizeSM,
-                borderTop: `1px dashed ${separatorColor}`,
-                background: token.colorBgLayout,
-              }}
-            >
-              Show {diff.totalLines - TRUNCATE_SHOW_LINES} more lines
-            </Button>
           )}
 
           {/* Actions bar */}

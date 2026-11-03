@@ -1,4 +1,3 @@
-import { hasActiveEnvironmentCommand } from '@agor/core/types';
 import type { Branch, Repo } from '@agor-live/client';
 import {
   ApartmentOutlined,
@@ -17,19 +16,17 @@ import { Button, Tooltip, theme } from 'antd';
 import { Link } from 'react-router-dom';
 import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
-import { getEnvironmentAccessUrls } from '../../utils/environmentAccessUrls';
-import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
 import { EnvironmentStatusIcon } from '../EnvironmentPill';
 import {
-  ENVIRONMENT_NO_CONTROL,
   getEnvironmentProblemLine,
   getEnvironmentStopTooltip,
   isEnvironmentUnconfirmed,
 } from '../EnvironmentPill/environmentStatusCopy';
 import { ENTITY_PILL_COLORS } from '../Pill/Pill';
 import { Tag } from '../Tag';
+import { getBranchEnvironmentControls } from './branchEnvironmentControls';
 
 interface BranchHeaderPillProps {
   repo: Repo;
@@ -101,13 +98,30 @@ export function BranchHeaderPill({
   // Touch inherits the app's no-trigger tooltip default (TouchTooltipConfig).
   const touchInput = useIsTouchInput();
   const confirmNuke = useConfirmNukeEnvironment();
-  const effectiveEnv = getEffectiveEnv(repo);
-  const hasConfig = effectiveEnv.hasConfig;
-  const env = branch.environment_instance;
+  const resolvedCanControlEnvironment = canControlEnvironment ?? true;
+  const {
+    env,
+    effectiveEnv,
+    hasConfig,
+    environmentUrl,
+    commandActive,
+    isRunning,
+    canOpenEnvironment,
+    controlDisabledTooltip,
+    startDisabled,
+    stopDisabled,
+  } = getBranchEnvironmentControls(repo, branch, {
+    // If a parent has loaded effective branch access (e.g. BranchModal), honor
+    // that explicit decision. Otherwise do not infer from direct ownership or
+    // `others_can`: group grants are not present on this branch payload, and the
+    // daemon is the source of truth for environment authorization.
+    canControlEnvironment: resolvedCanControlEnvironment,
+    connectionDisabled,
+    canStart: !!onStartEnvironment,
+    canStopHandler: !!onStopEnvironment,
+  });
   const inferredState = getEnvironmentState(env);
   const unconfirmed = isEnvironmentUnconfirmed(env);
-  const environmentUrl = getEnvironmentAccessUrls(env, branch.app_url)[0]?.url;
-  const commandActive = hasActiveEnvironmentCommand(env);
   // Surface the active environment variant name on the label instead of the
   // generic "env" — only when the repo defines more than one variant to
   // distinguish (single-variant / v1 repos stay quiet as "env"). Mirrors
@@ -116,39 +130,8 @@ export function BranchHeaderPill({
   const envLabel =
     branch.environment_variant && variantCount > 1 ? branch.environment_variant : 'env';
   const variantPrefix = envLabel !== 'env' ? `${envLabel} · ` : '';
-  // If a parent has loaded effective branch access (e.g. BranchModal), honor
-  // that explicit decision. Otherwise do not infer from direct ownership or
-  // `others_can`: group grants are not present on this branch payload, and the
-  // daemon is the source of truth for environment authorization.
-  const resolvedCanControlEnvironment = canControlEnvironment ?? true;
-  const controlDisabledTooltip = resolvedCanControlEnvironment ? undefined : ENVIRONMENT_NO_CONTROL;
   const actionButtonStyle =
     truncateToFit && !compact ? NARROW_ACTION_BUTTON_STYLE : DEFAULT_ACTION_BUTTON_STYLE;
-
-  const status = env?.status || 'stopped';
-  const isRunning = status === 'running';
-  const isStarting = status === 'starting';
-  const isStopping = status === 'stopping';
-  const canStop =
-    status === 'running' || status === 'starting' || (status === 'error' && !!env?.command_attempt);
-  const canOpenEnvironment = (isRunning || isStarting) && Boolean(environmentUrl);
-  const startDisabled =
-    commandActive ||
-    connectionDisabled ||
-    !resolvedCanControlEnvironment ||
-    !hasConfig ||
-    !onStartEnvironment ||
-    isStarting ||
-    isStopping ||
-    isRunning;
-  const stopDisabled =
-    commandActive ||
-    connectionDisabled ||
-    !resolvedCanControlEnvironment ||
-    !hasConfig ||
-    !onStopEnvironment ||
-    isStopping ||
-    !canStop;
 
   const openTab = (tab: BranchModalTab) => (e: React.MouseEvent) => {
     e.stopPropagation();
