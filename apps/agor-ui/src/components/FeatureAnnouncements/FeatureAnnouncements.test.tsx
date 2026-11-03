@@ -187,13 +187,15 @@ it('shows a release as one notification and reads it on Release notes', async ()
     'href',
     'https://github.com/preset-io/agor/blob/main/CHANGELOG.md'
   );
-  await waitFor(() => expect(screen.getByLabelText('Notifications')).toBeInTheDocument());
+  await waitFor(() =>
+    expect(screen.getByLabelText('Notifications', { selector: 'button' })).toBeInTheDocument()
+  );
 });
 
 it('shows empty states when there is nothing to show', async () => {
   setup(feed({ announcements: [], notification_ids: [], unread_notification_ids: [] }));
 
-  fireEvent.click(await screen.findByLabelText('Notifications'));
+  fireEvent.click(await screen.findByLabelText('Notifications', { selector: 'button' }));
   expect(await screen.findByText('Nothing new right now')).toBeInTheDocument();
   fireEvent.click(screen.getByText('Release notes'));
   expect(await screen.findByText('No release notes yet')).toBeInTheDocument();
@@ -398,9 +400,11 @@ it('does not reopen a seen launch or its notification after an operator edits it
   fireEvent.click(await screen.findByText('Not now'));
   expect(create).toHaveBeenCalledWith({ scope: 'popup', itemIds: ['zones'] });
 
-  await waitFor(() => expect(screen.getByLabelText('Notifications')).toBeInTheDocument());
+  await waitFor(() =>
+    expect(screen.getByLabelText('Notifications', { selector: 'button' })).toBeInTheDocument()
+  );
   expect(screen.queryByText('New in Agor')).not.toBeInTheDocument();
-  fireEvent.click(screen.getByLabelText('Notifications'));
+  fireEvent.click(screen.getByLabelText('Notifications', { selector: 'button' }));
   fireEvent.click(await screen.findByText('Release notes'));
   expect(await screen.findByText('Zones arrange your cards for you')).toBeInTheDocument();
   // Every visible release is already seen, so opening Release notes writes nothing.

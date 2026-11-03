@@ -356,9 +356,9 @@ export const FeatureAnnouncementsBell: React.FC = () => {
             label: (
               <Flex align="center" gap={6} style={tabLabel}>
                 Notifications
+                {/* No count when nothing is unread, as in the prototype. */}
                 <Badge
                   count={unread}
-                  showZero
                   style={{
                     minWidth: 18,
                     height: 18,
@@ -367,9 +367,8 @@ export const FeatureAnnouncementsBell: React.FC = () => {
                     fontSize: 10.5,
                     fontWeight: 700,
                     boxShadow: 'none',
-                    ...(unread > 0
-                      ? { background: token.colorPrimary, color: token.colorTextLightSolid }
-                      : { background: token.colorFillSecondary, color: token.colorTextTertiary }),
+                    background: token.colorPrimary,
+                    color: token.colorTextLightSolid,
                   }}
                 />
               </Flex>
