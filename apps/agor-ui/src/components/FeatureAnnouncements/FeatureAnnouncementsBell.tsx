@@ -13,6 +13,7 @@ import {
   Avatar,
   Badge,
   Button,
+  ConfigProvider,
   Empty,
   Flex,
   Popover,
@@ -23,7 +24,9 @@ import {
   theme,
 } from 'antd';
 import { type CSSProperties, useState } from 'react';
+import { useTheme } from '../../contexts/ThemeContext';
 import { formatRelativeTime } from '../../utils/time';
+import { tint } from './AnnouncementVisual';
 import {
   type FeatureAnnouncementsTab,
   useFeatureAnnouncements,
@@ -70,6 +73,7 @@ const NotificationsList: React.FC<{ releases: FeatureAnnouncementClientRelease[]
   releases,
 }) => {
   const { token } = theme.useToken();
+  const { isDark } = useTheme();
   const featureAnnouncements = useFeatureAnnouncements();
   if (!featureAnnouncements) return null;
   if (releases.length === 0) {
@@ -83,7 +87,7 @@ const NotificationsList: React.FC<{ releases: FeatureAnnouncementClientRelease[]
   }
   const unread = new Set(featureAnnouncements.feed.unread_notification_ids);
   return (
-    <Flex vertical style={{ padding: token.paddingXXS }}>
+    <Flex vertical style={{ padding: 6 }}>
       {releases.map((release) => {
         const isUnread = unread.has(release.id);
         return (
@@ -92,26 +96,31 @@ const NotificationsList: React.FC<{ releases: FeatureAnnouncementClientRelease[]
             type="text"
             onClick={() => featureAnnouncements.showTab('release-notes')}
             aria-label={`${isUnread ? 'Unread: ' : ''}New in Agor: ${pluralUpdates(release.items.length)}. See what's new in ${release.version_label}`}
-            style={{ ...rowStyle(token.paddingSM), gap: token.marginSM }}
+            style={{ ...rowStyle(10), gap: 12 }}
           >
             <Avatar
               shape="square"
+              size={32}
               icon={<GiftOutlined />}
               style={{
                 flexShrink: 0,
-                background: token.colorPrimaryBg,
-                color: token.colorPrimaryText,
+                borderRadius: 9,
+                background: tint(token.colorPrimary, '2b'),
+                color: isDark ? token.colorPrimaryTextHover : token.colorPrimaryTextActive,
               }}
             />
             <Flex vertical gap={2} style={{ flex: 1, minWidth: 0 }}>
-              <Typography.Text strong type={isUnread ? undefined : 'secondary'}>
+              <Typography.Text
+                type={isUnread ? undefined : 'secondary'}
+                style={{ fontSize: 13, fontWeight: 600 }}
+              >
                 New in Agor: {pluralUpdates(release.items.length)}
               </Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              <Typography.Text style={{ fontSize: 12.5, color: token.colorTextSecondary }}>
                 See what's new in {release.version_label}, released{' '}
                 {formatReleaseDate(release.published_at)}
               </Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM - 1 }}>
+              <Typography.Text style={{ fontSize: 11.5, color: token.colorTextTertiary }}>
                 {formatRelativeTime(release.published_at)}
               </Typography.Text>
             </Flex>
@@ -133,6 +142,7 @@ const ReleaseNoteRow: React.FC<{ item: FeatureAnnouncementClientItem; muted: boo
   muted,
 }) => {
   const { token } = theme.useToken();
+  const { isDark } = useTheme();
   // Learn more stays quiet until its row is hovered or focused; only its color changes.
   const [active, setActive] = useState(false);
   const body = (
@@ -141,27 +151,62 @@ const ReleaseNoteRow: React.FC<{ item: FeatureAnnouncementClientItem; muted: boo
         {isNew(item) && <Dot on size={6} />}
         <Tag
           variant="filled"
-          color={item.kind === 'new' ? 'cyan' : 'blue'}
-          style={{ marginInlineEnd: 0, borderRadius: token.borderRadiusLG }}
+          style={{
+            margin: 0,
+            height: 20,
+            lineHeight: '20px',
+            paddingInline: 8,
+            border: 'none',
+            borderRadius: 999,
+            fontSize: 11,
+            fontWeight: 600,
+            // Agor's info color is teal, so Improved uses the blue palette directly.
+            background:
+              item.kind === 'new'
+                ? tint(token.colorPrimary, '2b')
+                : isDark
+                  ? token.blue2
+                  : token.blue1,
+            color:
+              item.kind === 'new'
+                ? isDark
+                  ? token.colorPrimaryTextHover
+                  : token.colorPrimaryTextActive
+                : isDark
+                  ? token.blue8
+                  : token.blue7,
+          }}
         >
           {item.kind === 'new' ? 'New' : 'Improved'}
         </Tag>
       </Flex>
-      <Typography.Text strong type={muted ? 'secondary' : undefined}>
+      <Typography.Text
+        style={{
+          fontSize: 13,
+          fontWeight: 600,
+          lineHeight: 1.4,
+          color: muted ? token.colorTextSecondary : token.colorText,
+        }}
+      >
         {item.title}
       </Typography.Text>
       <Typography.Paragraph
-        type="secondary"
         ellipsis={{ rows: 2 }}
-        style={{ margin: 0, fontSize: token.fontSizeSM }}
+        style={{ margin: 0, fontSize: 12.5, lineHeight: 1.45, color: token.colorTextSecondary }}
       >
         {item.one_line}
       </Typography.Paragraph>
       {item.learn_more_url && (
         <Typography.Text
           style={{
+            marginTop: 2,
             fontSize: token.fontSizeSM,
-            color: active ? token.colorPrimaryText : token.colorTextTertiary,
+            fontWeight: 500,
+            color: active
+              ? isDark
+                ? token.colorPrimaryTextHover
+                : token.colorPrimaryText
+              : token.colorTextTertiary,
           }}
         >
           Learn more <ArrowRightOutlined />
@@ -170,7 +215,7 @@ const ReleaseNoteRow: React.FC<{ item: FeatureAnnouncementClientItem; muted: boo
     </Flex>
   );
   if (!item.learn_more_url) {
-    return <div style={{ padding: token.paddingSM }}>{body}</div>;
+    return <div style={{ padding: 10 }}>{body}</div>;
   }
   return (
     <Button
@@ -182,7 +227,7 @@ const ReleaseNoteRow: React.FC<{ item: FeatureAnnouncementClientItem; muted: boo
       onMouseLeave={() => setActive(false)}
       onFocus={() => setActive(true)}
       onBlur={() => setActive(false)}
-      style={rowStyle(token.paddingSM)}
+      style={rowStyle(10)}
     >
       {body}
     </Button>
@@ -199,7 +244,12 @@ const ReleaseNotes: React.FC<{ releases: FeatureAnnouncementClientRelease[] }> =
         borderTop: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
       }}
     >
-      <Typography.Link href={ALL_RELEASE_NOTES_URL} target="_blank" rel="noopener noreferrer">
+      <Typography.Link
+        href={ALL_RELEASE_NOTES_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ fontSize: 13, fontWeight: 500 }}
+      >
         All release notes <ExportOutlined />
       </Typography.Link>
     </div>
@@ -223,13 +273,13 @@ const ReleaseNotes: React.FC<{ releases: FeatureAnnouncementClientRelease[] }> =
           type="secondary"
           style={{
             display: 'block',
-            padding: `${token.paddingSM}px ${token.padding}px ${token.paddingXXS}px`,
+            padding: `10px ${token.padding}px 4px`,
             fontSize: token.fontSizeSM,
           }}
         >
           Latest: {latest.version_label}, {formatReleaseDate(latest.published_at)}
         </Typography.Text>
-        <Flex vertical style={{ paddingInline: token.paddingXXS }}>
+        <Flex vertical style={{ paddingInline: 6 }}>
           {latest.items.map((item) => (
             <ReleaseNoteRow key={item.id} item={item} muted={false} />
           ))}
@@ -237,19 +287,19 @@ const ReleaseNotes: React.FC<{ releases: FeatureAnnouncementClientRelease[] }> =
         {earlier.length > 0 && (
           <>
             <Typography.Text
-              type="secondary"
-              strong
               style={{
                 display: 'block',
-                marginTop: token.marginXS,
-                padding: `${token.paddingSM}px ${token.padding}px ${token.paddingXXS}px`,
+                color: token.colorTextTertiary,
+                marginTop: 6,
+                padding: `10px ${token.padding}px 4px`,
                 borderTop: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
-                fontSize: token.fontSizeSM,
+                fontSize: 11,
+                fontWeight: 600,
               }}
             >
               Earlier
             </Typography.Text>
-            <Flex vertical style={{ paddingInline: token.paddingXXS }}>
+            <Flex vertical style={{ paddingInline: 6 }}>
               {earlier.flatMap((release) =>
                 release.items.map((item) => <ReleaseNoteRow key={item.id} item={item} muted />)
               )}
@@ -276,43 +326,68 @@ export const FeatureAnnouncementsBell: React.FC = () => {
   const notificationIds = new Set(feed.notification_ids);
   const notifications = feed.announcements.filter((release) => notificationIds.has(release.id));
 
+  const tabLabel: CSSProperties = { fontSize: 13, fontWeight: 600 };
   const content = (
-    <Tabs
-      activeKey={tab}
-      onChange={(key) => featureAnnouncements.showTab(key as FeatureAnnouncementsTab)}
-      size="small"
-      tabBarStyle={{ margin: 0, paddingInline: token.padding }}
-      items={[
-        {
-          key: 'notifications',
-          label: (
-            <Flex align="center" gap={token.marginXS}>
-              Notifications
-              <Badge
-                count={unread}
-                showZero
-                size="small"
-                style={
-                  unread > 0
-                    ? { background: token.colorPrimary }
-                    : { background: token.colorFillSecondary, color: token.colorTextTertiary }
-                }
-              />
-            </Flex>
-          ),
-          children: (
-            <div style={{ maxHeight: BODY_MAX_HEIGHT, overflowY: 'auto' }}>
-              <NotificationsList releases={notifications} />
-            </div>
-          ),
+    // The prototype's tabs: bold 13px labels, the active one in the text color
+    // with a teal underline, the others muted.
+    <ConfigProvider
+      theme={{
+        components: {
+          Tabs: {
+            itemColor: token.colorTextTertiary,
+            itemHoverColor: token.colorTextSecondary,
+            itemSelectedColor: token.colorText,
+            itemActiveColor: token.colorText,
+            inkBarColor: token.colorPrimary,
+            horizontalItemGutter: 4,
+            horizontalItemPaddingSM: '9px 8px',
+          },
         },
-        {
-          key: 'release-notes',
-          label: 'Release notes',
-          children: <ReleaseNotes releases={feed.announcements} />,
-        },
-      ]}
-    />
+      }}
+    >
+      <Tabs
+        activeKey={tab}
+        onChange={(key) => featureAnnouncements.showTab(key as FeatureAnnouncementsTab)}
+        size="small"
+        tabBarStyle={{ margin: 0, padding: '8px 10px 0' }}
+        items={[
+          {
+            key: 'notifications',
+            label: (
+              <Flex align="center" gap={6} style={tabLabel}>
+                Notifications
+                <Badge
+                  count={unread}
+                  showZero
+                  style={{
+                    minWidth: 18,
+                    height: 18,
+                    lineHeight: '18px',
+                    paddingInline: 5,
+                    fontSize: 10.5,
+                    fontWeight: 700,
+                    boxShadow: 'none',
+                    ...(unread > 0
+                      ? { background: token.colorPrimary, color: token.colorTextLightSolid }
+                      : { background: token.colorFillSecondary, color: token.colorTextTertiary }),
+                  }}
+                />
+              </Flex>
+            ),
+            children: (
+              <div style={{ maxHeight: BODY_MAX_HEIGHT, overflowY: 'auto' }}>
+                <NotificationsList releases={notifications} />
+              </div>
+            ),
+          },
+          {
+            key: 'release-notes',
+            label: <span style={tabLabel}>Release notes</span>,
+            children: <ReleaseNotes releases={feed.announcements} />,
+          },
+        ]}
+      />
+    </ConfigProvider>
   );
 
   return (
@@ -324,7 +399,16 @@ export const FeatureAnnouncementsBell: React.FC = () => {
       trigger="click"
       placement="bottomRight"
       content={content}
-      styles={{ container: { padding: 0, width: 'min(360px, calc(100vw - 24px))' } }}
+      styles={{
+        container: {
+          padding: 0,
+          width: 'min(360px, calc(100vw - 24px))',
+          overflow: 'hidden',
+          borderRadius: 12,
+          border: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
+          background: token.colorBgContainer,
+        },
+      }}
     >
       <Tooltip title={popoverOpen ? undefined : 'Notifications'}>
         <Button

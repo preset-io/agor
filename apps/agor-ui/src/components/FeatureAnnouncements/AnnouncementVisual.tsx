@@ -8,7 +8,6 @@ import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 /** One loop of an illustration: the "before" frame, then the "after" frame held until the next loop. */
 const LOOP_MS = 3_600;
 const BEFORE_MS = 500;
-const ILLUSTRATION_HEIGHT = 190;
 
 /** False for the "before" frame, true for the "after" one. Reduced motion holds the "after" frame. */
 function useLoop(reduced: boolean): boolean {
@@ -33,17 +32,29 @@ function useLoop(reduced: boolean): boolean {
   return after;
 }
 
-const frameStyle = (token: GlobalToken): CSSProperties => ({
+/** A hex token with an alpha suffix, for the faint tints the illustrations use. */
+export const tint = (hex: string, alpha: string) =>
+  /^#[0-9a-f]{6}$/i.test(hex) ? `${hex}${alpha}` : hex;
+
+interface Palette {
+  token: GlobalToken;
+  isDark: boolean;
+}
+
+/** The dotted canvas behind each illustration, a step below the pop-up's surface. */
+const frameStyle = ({ token, isDark }: Palette): CSSProperties => ({
   position: 'relative',
   boxSizing: 'border-box',
-  height: ILLUSTRATION_HEIGHT,
   overflow: 'hidden',
-  borderRadius: token.borderRadiusLG,
+  borderRadius: 12,
   border: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
-  background: token.colorFillQuaternary,
-  backgroundImage: `radial-gradient(${token.colorBorder} 1px, transparent 1px)`,
+  background: isDark ? token.colorBgContainer : token.colorBgLayout,
+  backgroundImage: `radial-gradient(${isDark ? token.colorFillQuaternary : token.colorFillTertiary} 1px, transparent 1px)`,
   backgroundSize: '14px 14px',
 });
+
+/** The channel illustration's soft blue (Agor's info color is teal). */
+const channelBlue = ({ token, isDark }: Palette) => (isDark ? token.blue8 : token.blue6);
 
 const SCATTER = [
   { x: 6, y: 58, r: -9 },
@@ -54,20 +65,20 @@ const SCATTER = [
   { x: 48, y: 30, r: -12 },
 ];
 
-const ZoneGrid: React.FC<{ token: GlobalToken; after: boolean; motion: boolean }> = ({
+const ZoneGrid: React.FC<Palette & { after: boolean; motion: boolean }> = ({
   token,
   after,
   motion,
+  isDark,
 }) => (
-  <div style={{ ...frameStyle(token), padding: token.padding }}>
+  <div style={{ ...frameStyle({ token, isDark }), padding: 18 }}>
     <div
       style={{
-        height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        borderRadius: token.borderRadius,
-        border: `1.5px solid ${token.colorPrimaryBorder}`,
-        background: token.colorPrimaryBg,
+        borderRadius: 10,
+        border: `1.5px solid ${tint(token.colorPrimary, '80')}`,
+        background: tint(token.colorPrimary, '12'),
       }}
     >
       <div
@@ -75,23 +86,41 @@ const ZoneGrid: React.FC<{ token: GlobalToken; after: boolean; motion: boolean }
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: `${token.paddingXXS}px ${token.paddingXS}px`,
-          borderBottom: `1px dashed ${token.colorPrimaryBorder}`,
+          padding: '8px 10px',
+          borderBottom: `1px dashed ${tint(token.colorPrimary, '40')}`,
           fontSize: token.fontSizeSM,
         }}
       >
-        <span style={{ color: token.colorPrimaryText, fontWeight: 600 }}>
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            color: token.colorPrimaryText,
+            fontWeight: 600,
+          }}
+        >
           <AppstoreOutlined /> Launch prep
         </span>
-        <span style={{ display: 'flex', gap: 2, color: token.colorTextTertiary }}>
+        <span
+          style={{
+            display: 'flex',
+            gap: 2,
+            padding: 2,
+            borderRadius: 6,
+            background: token.colorFillTertiary,
+            color: token.colorTextTertiary,
+            fontSize: 10.5,
+          }}
+        >
           {['Row', 'Column', 'Grid'].map((label) => {
             const on = after && label === 'Grid';
             return (
               <span
                 key={label}
                 style={{
-                  padding: '0 6px',
-                  borderRadius: token.borderRadiusSM,
+                  padding: '2px 7px',
+                  borderRadius: 4,
                   background: on ? token.colorPrimary : 'transparent',
                   color: on ? token.colorTextLightSolid : undefined,
                   transition: motion ? 'background 0.3s, color 0.3s' : undefined,
@@ -103,7 +132,7 @@ const ZoneGrid: React.FC<{ token: GlobalToken; after: boolean; motion: boolean }
           })}
         </span>
       </div>
-      <div style={{ position: 'relative', flex: 1, margin: `0 ${token.marginXS}px` }}>
+      <div style={{ position: 'relative', height: 150, margin: '0 6px' }}>
         {SCATTER.map((spot, i) => {
           const col = i % 3;
           const row = Math.floor(i / 3);
@@ -123,9 +152,9 @@ const ZoneGrid: React.FC<{ token: GlobalToken; after: boolean; motion: boolean }
                 flexDirection: 'column',
                 gap: 5,
                 padding: '7px 8px',
-                borderRadius: token.borderRadiusSM,
-                border: `1.5px solid ${after ? token.colorPrimary : token.colorBorder}`,
-                background: token.colorBgContainer,
+                borderRadius: 7,
+                border: `1.5px solid ${after ? tint(token.colorPrimary, 'bf') : token.colorBorder}`,
+                background: token.colorBgElevated,
                 transition: motion
                   ? `left 0.6s cubic-bezier(0.34, 1.3, 0.5, 1) ${i * 70}ms, top 0.6s cubic-bezier(0.34, 1.3, 0.5, 1) ${i * 70}ms, transform 0.6s ease ${i * 70}ms, border-color 0.4s`
                   : undefined,
@@ -134,13 +163,13 @@ const ZoneGrid: React.FC<{ token: GlobalToken; after: boolean; motion: boolean }
               <span
                 style={{ width: 6, height: 6, borderRadius: '50%', background: token.colorPrimary }}
               />
-              <span style={{ height: 4, borderRadius: 2, background: token.colorFillSecondary }} />
+              <span style={{ height: 4, borderRadius: 2, background: token.colorFill }} />
               <span
                 style={{
                   width: '60%',
                   height: 4,
                   borderRadius: 2,
-                  background: token.colorFillSecondary,
+                  background: token.colorFill,
                 }}
               />
             </div>
@@ -153,12 +182,13 @@ const ZoneGrid: React.FC<{ token: GlobalToken; after: boolean; motion: boolean }
 
 const CHANNELS = ['product', 'support', 'design'];
 
-const Channels: React.FC<{ token: GlobalToken; after: boolean; motion: boolean }> = ({
+const Channels: React.FC<Palette & { after: boolean; motion: boolean }> = ({
   token,
   after,
   motion,
+  isDark,
 }) => (
-  <div style={frameStyle(token)}>
+  <div style={{ ...frameStyle({ token, isDark }), height: 206 }}>
     {CHANNELS.map((channel, i) => (
       <div
         key={channel}
@@ -172,11 +202,11 @@ const Channels: React.FC<{ token: GlobalToken; after: boolean; motion: boolean }
           display: 'flex',
           alignItems: 'center',
           gap: 4,
-          padding: `${token.paddingXXS}px ${token.paddingXS}px`,
-          borderRadius: token.borderRadius,
-          border: `1.5px solid ${after ? token.colorPrimaryBorder : token.colorBorder}`,
-          background: token.colorBgContainer,
-          color: after ? token.colorPrimaryText : token.colorTextTertiary,
+          padding: '6px 10px',
+          borderRadius: 8,
+          border: `1.5px solid ${after ? tint(channelBlue({ token, isDark }), '99') : token.colorBorder}`,
+          background: token.colorBgElevated,
+          color: after ? channelBlue({ token, isDark }) : token.colorTextTertiary,
           fontSize: token.fontSizeSM,
           fontWeight: 500,
           transition: motion
@@ -208,7 +238,7 @@ const Channels: React.FC<{ token: GlobalToken; after: boolean; motion: boolean }
           vectorEffect="non-scaling-stroke"
           style={{
             fill: 'none',
-            stroke: token.colorPrimary,
+            stroke: channelBlue({ token, isDark }),
             strokeWidth: 1.5,
             strokeDasharray: 400,
             strokeDashoffset: after ? 0 : 400,
@@ -246,24 +276,25 @@ const Channels: React.FC<{ token: GlobalToken; after: boolean; motion: boolean }
       >
         <RobotOutlined />
       </span>
-      <span style={{ fontSize: token.fontSizeSM, color: token.colorTextSecondary }}>
+      <span style={{ fontSize: 11.5, fontWeight: 500, color: token.colorTextSecondary }}>
         Agor teammate
       </span>
     </div>
   </div>
 );
 
-const ScreenshotFrame: React.FC<{ token: GlobalToken; after: boolean; motion: boolean }> = ({
+const ScreenshotFrame: React.FC<Palette & { after: boolean; motion: boolean }> = ({
   token,
   after,
   motion,
+  isDark,
 }) => (
-  <div style={{ ...frameStyle(token), padding: `${token.padding}px ${token.paddingLG}px` }}>
+  <div style={{ ...frameStyle({ token, isDark }), padding: '18px 22px' }}>
     <div
       style={{
-        borderRadius: token.borderRadius,
+        borderRadius: 10,
         border: `1.5px solid ${token.colorBorder}`,
-        background: token.colorBgContainer,
+        background: token.colorBgElevated,
         overflow: 'hidden',
       }}
     >
@@ -369,7 +400,7 @@ export const AnnouncementVisual: React.FC<{
     const Illustration = ILLUSTRATIONS[visual.key];
     return (
       <div role="img" aria-label={alt ?? undefined} aria-hidden={alt ? undefined : true}>
-        <Illustration token={token} after={after} motion={!reduced} />
+        <Illustration token={token} isDark={isDark} after={after} motion={!reduced} />
       </div>
     );
   }

@@ -10,6 +10,7 @@ import { ArrowRightOutlined, GiftOutlined, LeftOutlined, RightOutlined } from '@
 import { Button, Flex, Modal, Tag, Typography, theme } from 'antd';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useTheme } from '../../contexts/ThemeContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
@@ -20,7 +21,7 @@ import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSess
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { usePrimaryAssistantSend } from '../PrimaryAssistantCompose';
-import { AnnouncementVisual } from './AnnouncementVisual';
+import { AnnouncementVisual, tint } from './AnnouncementVisual';
 import { useFeatureAnnouncements } from './FeatureAnnouncementsContext';
 import { currentOrRecentBoardId, useOpenAgorPage } from './featureAnnouncementsActions';
 
@@ -111,6 +112,11 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
   const [slides, setSlides] = useState<FeatureAnnouncementClientItem[]>(NO_ITEMS);
   const pending = featureAnnouncements?.feed.pending_popup_items ?? NO_ITEMS;
   const open = slides.length > 0;
+  const { isDark } = useTheme();
+  // The prototype's light teal for text on the dark surface; Agor teal on light.
+  const accent = isDark ? token.colorPrimaryTextHover : token.colorPrimaryTextActive;
+  const footerButton = { height: 36, paddingInline: 14, fontSize: 14.5 };
+  const slideRef = useRef<HTMLDivElement>(null);
   // Slides this carousel has displayed; they stay for the life of the pop-up.
   const shown = useRef(new Set<string>());
 
@@ -158,6 +164,7 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
         return (
           <Button
             type="primary"
+            style={footerButton}
             onClick={() => {
               close();
               openAgorPage(button.target);
@@ -170,6 +177,7 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
         return (
           <Button
             type="primary"
+            style={footerButton}
             href={button.url}
             target="_blank"
             rel="noopener noreferrer"
@@ -187,9 +195,20 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
     <Modal
       open={open && !suppressed}
       onCancel={close}
-      width={560}
+      width={520}
       centered
       destroyOnHidden
+      // Focus the slide, not the close button, so no focus ring shows on open;
+      // arrow keys still move between slides.
+      afterOpenChange={(isOpen) => isOpen && slideRef.current?.focus()}
+      styles={{
+        container: {
+          padding: `${token.paddingLG}px ${token.paddingLG}px 18px`,
+          borderRadius: 16,
+          border: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
+        },
+        footer: { marginTop: 0 },
+      }}
       {...reducedMotionSurface(reduced)}
       footer={
         slide && (
@@ -199,7 +218,7 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
             gap={token.marginSM}
             wrap
             style={{
-              marginTop: token.marginXS,
+              marginTop: token.margin,
               paddingTop: token.padding,
               borderTop: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
             }}
@@ -212,12 +231,19 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
                 if (isMobileShellPath(pathname)) navigate('/m');
                 featureAnnouncements.openPopover('release-notes');
               }}
-              style={{ paddingInline: 0, textDecoration: 'underline', textUnderlineOffset: 4 }}
+              style={{
+                paddingInline: 0,
+                color: accent,
+                textDecoration: 'underline',
+                textUnderlineOffset: 4,
+              }}
             >
               All updates <ArrowRightOutlined />
             </Button>
             <Flex gap={token.marginXS} wrap>
-              <Button onClick={close}>Not now</Button>
+              <Button style={footerButton} onClick={close}>
+                Not now
+              </Button>
               {slide.button && action(slide.button)}
             </Flex>
           </Flex>
@@ -227,7 +253,9 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
       {slide && (
         <Flex
           vertical
-          gap={token.marginXS}
+          ref={slideRef}
+          tabIndex={-1}
+          style={{ outline: 'none' }}
           onKeyDown={(event) => {
             if (event.key === 'ArrowRight') go(index + 1);
             if (event.key === 'ArrowLeft') go(index - 1);
@@ -236,15 +264,33 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
           <Tag
             icon={<GiftOutlined />}
             variant="filled"
-            color="cyan"
-            style={{ alignSelf: 'flex-start', borderRadius: token.borderRadiusLG }}
+            style={{
+              alignSelf: 'flex-start',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              height: 26,
+              margin: 0,
+              paddingInline: 10,
+              borderRadius: 999,
+              border: 'none',
+              background: tint(token.colorPrimary, '2b'),
+              color: accent,
+              fontSize: token.fontSizeSM,
+              fontWeight: 600,
+            }}
           >
             New in Agor
           </Tag>
-          <Typography.Title level={3} style={{ margin: `${token.marginXS}px 0 0` }}>
+          <Typography.Title
+            level={3}
+            style={{ margin: '14px 0 0', fontSize: 22, lineHeight: 1.25, fontWeight: 650 }}
+          >
             {slide.title}
           </Typography.Title>
-          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeLG }}>
+          <Typography.Text
+            style={{ marginTop: 6, fontSize: 14.5, color: token.colorTextSecondary }}
+          >
             {slide.one_line}
           </Typography.Text>
           {slide.learn_more_url && (
@@ -252,23 +298,23 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
               href={slide.learn_more_url}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ alignSelf: 'flex-start' }}
+              style={{
+                alignSelf: 'flex-start',
+                marginTop: 6,
+                fontSize: token.fontSize - 1,
+                color: accent,
+              }}
             >
               Learn more <ArrowRightOutlined />
             </Typography.Link>
           )}
           {slide.visual && (
-            <div style={{ marginTop: token.marginSM }}>
+            <div style={{ marginTop: 20 }}>
               <AnnouncementVisual key={slide.id} visual={slide.visual} alt={slide.visual_alt} />
             </div>
           )}
           {many && (
-            <Flex
-              align="center"
-              justify="center"
-              gap={token.marginSM}
-              style={{ marginTop: token.marginXS }}
-            >
+            <Flex align="center" justify="center" gap={10} style={{ marginTop: 14 }}>
               <Button
                 type="text"
                 size="small"
@@ -291,7 +337,7 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
                       height: 8,
                       padding: 0,
                       borderRadius: token.borderRadiusLG,
-                      background: i === index ? token.colorPrimary : token.colorFillSecondary,
+                      background: i === index ? token.colorPrimary : token.colorFill,
                       transition: reduced ? undefined : 'width 0.2s',
                     }}
                   />
