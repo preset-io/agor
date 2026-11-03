@@ -142,7 +142,12 @@ describe.runIf(process.platform === 'linux')('empty branch credential mountpoint
             '-e',
             script,
           ],
-          { stdio: ['ignore', 'pipe', 'pipe', handle.fd], env: {}, timeout: 8000 }
+          // The sandbox's /tmp is read-only, so tsx can't create its cache dir there.
+          {
+            stdio: ['ignore', 'pipe', 'pipe', handle.fd],
+            env: { TSX_DISABLE_CACHE: '1' },
+            timeout: 8000,
+          }
         );
         expect(result.status, result.stderr.toString()).toBe(42);
       } finally {

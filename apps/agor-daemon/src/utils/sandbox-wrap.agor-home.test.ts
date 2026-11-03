@@ -13,12 +13,10 @@ vi.mock('@agor/core/unix', () => ({
 
 import { buildSandboxWrap } from './sandbox-wrap';
 
-const bwrapRuntimeAvailable =
-  process.platform === 'linux' &&
-  spawnSync('bwrap', ['--unshare-user', '--ro-bind', '/', '/', '--', '/bin/true'], {
-    stdio: 'ignore',
-    timeout: 10_000,
-  }).status === 0;
+// Run real bwrap only where the daemon would (0.12+); older bwrap can't mount via a symlinked AGOR_HOME.
+const { probeBwrapSecurityBaseline } =
+  await vi.importActual<typeof import('@agor/core/unix')>('@agor/core/unix');
+const bwrapRuntimeAvailable = probeBwrapSecurityBaseline();
 
 // Always assert the emitted policy; also exercise actual file reads where the
 // host supports bubblewrap. All state is synthetic and below a disposable root.
