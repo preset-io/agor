@@ -674,6 +674,8 @@ function createOpenCodeEventCollector(input: {
     return stopPromise;
   };
   const start = async () => {
+    // OpenCode sends `server.heartbeat` on /event every 10s, so Node fetch's 300s bodyTimeout
+    // does not cut the stream during a long, otherwise silent tool call.
     subscription = await input.client.event.subscribe({
       query: input.context.branchPath ? { directory: input.context.branchPath } : undefined,
       signal: controller.signal,
@@ -1266,7 +1268,7 @@ export class OpenCodeTool {
           ? { model: { providerID: context.provider, modelID: context.model } }
           : {}),
         // OpenCode accepts `variant`; the generated SDK request type currently omits it.
-      } as NonNullable<Parameters<OpenCodeClient['session']['prompt']>[0]>['body'],
+      } as NonNullable<Parameters<OpenCodeClient['session']['promptAsync']>[0]>['body'],
       query: context.branchPath ? { directory: context.branchPath } : undefined,
     };
     const transcriptRequest = {
@@ -1324,12 +1326,19 @@ export class OpenCodeTool {
     try {
       await eventCollector.start();
 
-      // The prompt call blocks through provider retries; a terminal error (e.g. exhausted retry budget) ends the turn first.
+      // Submit without waiting for the turn: the blocking `session.prompt` sends no response
+      // headers until the turn ends, so Node fetch's 300s headersTimeout failed long turns with
+      // `fetch failed`. The event stream (heartbeated by OpenCode) drives completion instead, and
+      // OpenCode reports a failure after acceptance as `session.error`. A terminal error that
+      // lands first still wins the race.
       const terminalFailure = terminal.then((result) =>
         result.error ? Promise.reject(result.error) : new Promise<never>(() => undefined)
       );
       terminalFailure.catch(() => undefined);
-      const promptResponse = await Promise.race([client.session.prompt(request), terminalFailure]);
+      const promptResponse = await Promise.race([
+        client.session.promptAsync(request),
+        terminalFailure,
+      ]);
       if (promptResponse.error) throw promptFailure(openCodeErrorMessage(promptResponse.error));
 
       const terminalResult = await terminal;

@@ -71,8 +71,12 @@ async function submittedPrompt(
   userPrompt = 'Continue',
   mcpSignInNotice?: string
 ) {
-  type PromptRequest = Parameters<ReturnType<typeof createOpencodeClient>['session']['prompt']>[0];
-  const prompt = vi.fn(async (_request: PromptRequest) => ({ error: { name: 'PromptError' } }));
+  type PromptRequest = Parameters<
+    ReturnType<typeof createOpencodeClient>['session']['promptAsync']
+  >[0];
+  const promptAsync = vi.fn(async (_request: PromptRequest) => ({
+    error: { name: 'PromptError' },
+  }));
   const stream = (async function* () {})();
   const client = {
     event: { subscribe: vi.fn(async () => ({ stream })) },
@@ -80,7 +84,7 @@ async function submittedPrompt(
       create: vi.fn(async () => ({ data: { id: 'opencode-session-1' } })),
       get: vi.fn(async () => ({ data: { id: 'opencode-session-1' } })),
       messages: vi.fn(async () => ({ data: [], error: undefined })),
-      prompt,
+      promptAsync,
     },
   };
   const tool = new OpenCodeTool({});
@@ -131,7 +135,7 @@ async function submittedPrompt(
     )
   ).rejects.toThrow(/prompt failed/i);
 
-  return prompt.mock.calls[0]?.[0];
+  return promptAsync.mock.calls[0]?.[0];
 }
 
 function assertExplicitModelAvailable(model: Record<string, unknown>, effort?: EffortLevel) {
@@ -316,8 +320,8 @@ describe('OpenCodeTool provider failures', () => {
       event: { subscribe: vi.fn(async () => ({ stream })) },
       session: {
         messages: vi.fn(async () => ({ data: [], error: undefined })),
-        // OpenCode's prompt call blocks while it retries the provider.
-        prompt: vi.fn(() => new Promise(() => undefined)),
+        // OpenCode accepts the prompt; provider retries arrive on the event stream.
+        promptAsync: vi.fn(async () => ({ data: undefined, error: undefined })),
       },
     };
     const runtime = new OpenCodeTool({ retryBudget }) as unknown as {
@@ -524,7 +528,7 @@ describe('OpenCodeTool permission rejections', () => {
           .fn()
           .mockResolvedValueOnce({ data: [], error: undefined })
           .mockResolvedValue({ data: transcript, error: undefined }),
-        prompt: vi.fn(async () => ({ data: {}, error: undefined })),
+        promptAsync: vi.fn(async () => ({ data: undefined, error: undefined })),
       },
     };
     const runtime = new OpenCodeTool({
@@ -716,7 +720,7 @@ describe('OpenCodeTool permission rejections', () => {
       event: { subscribe: vi.fn(async () => ({ stream })) },
       session: {
         messages: vi.fn(async () => ({ data: [], error: undefined })),
-        prompt: vi.fn(() => new Promise(() => undefined)),
+        promptAsync: vi.fn(async () => ({ data: undefined, error: undefined })),
       },
     };
     const runtime = new OpenCodeTool({}) as unknown as {
@@ -754,6 +758,150 @@ describe('OpenCodeTool permission rejections', () => {
         { type: 'text', text: 'Partial answer' },
       ],
     });
+  });
+});
+
+describe('OpenCodeTool turn submission', () => {
+  const SESSION = 'opencode-session-1';
+  const assistant = {
+    type: 'message.updated',
+    properties: { info: { id: 'a-1', sessionID: SESSION, role: 'assistant' } },
+  };
+  const idle = { type: 'session.idle', properties: { sessionID: SESSION } };
+  const transcript = [
+    {
+      info: { id: 'a-1', sessionID: SESSION, role: 'assistant' },
+      parts: [{ id: 't-1', type: 'text', text: 'Done after a long turn.' }],
+    },
+  ];
+  // What Node fetch throws once undici's 300s headersTimeout expires on the blocking endpoint.
+  const headersTimeout = () =>
+    Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('Headers Timeout Error'), { code: 'UND_ERR_HEADERS_TIMEOUT' }),
+    });
+
+  function turn(options: {
+    stream: AsyncGenerator<unknown>;
+    promptAsync: (request: unknown) => Promise<unknown>;
+  }) {
+    const client = {
+      event: { subscribe: vi.fn(async () => ({ stream: options.stream })) },
+      session: {
+        messages: vi
+          .fn()
+          .mockResolvedValueOnce({ data: [], error: undefined })
+          .mockResolvedValue({ data: transcript, error: undefined }),
+        // The blocking endpoint holds headers for the whole turn; a long turn hits headersTimeout.
+        prompt: vi.fn(async () => {
+          throw headersTimeout();
+        }),
+        promptAsync: vi.fn(options.promptAsync),
+      },
+    };
+    const runtime = new OpenCodeTool({ eventDrainMs: 0 }) as unknown as {
+      executeTask(...args: unknown[]): Promise<{ finalMessage: { content: string } }>;
+    };
+    const result = runtime.executeTask(
+      client,
+      {
+        agorSessionId: 'session-1',
+        taskId: 'task-1',
+        prompt: 'hi',
+        agorAssistantMessageId: 'message-1',
+        signal: new AbortController().signal,
+        title: 'Test',
+        directory: '/workspace',
+        persistOpenCodeSessionId: vi.fn(),
+      },
+      { opencodeSessionId: SESSION, provider: 'p', model: 'm', branchPath: '/workspace' },
+      undefined,
+      () => undefined,
+      {
+        text: (value: string) => value,
+        error: (value: unknown) => (value instanceof Error ? value : new Error(String(value))),
+      },
+      { permission: { reply: vi.fn() } }
+    );
+    return { client, result };
+  }
+
+  it('submits with promptAsync and completes the turn from the event stream', async () => {
+    const accepted = deferred<void>();
+    const { client, result } = turn({
+      stream: (async function* () {
+        // The turn runs only after OpenCode has accepted the prompt.
+        await accepted.promise;
+        yield assistant;
+        yield idle;
+      })(),
+      promptAsync: async () => {
+        accepted.resolve();
+        return { data: undefined, error: undefined };
+      },
+    });
+
+    const outcome = await result;
+
+    expect(outcome.finalMessage.content).toBe('Done after a long turn.');
+    expect(client.session.promptAsync).toHaveBeenCalledTimes(1);
+    expect(client.session.promptAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { id: SESSION },
+        body: expect.objectContaining({ parts: [{ type: 'text', text: 'hi' }] }),
+      })
+    );
+    expect(client.session.prompt).not.toHaveBeenCalled();
+  });
+
+  it('completes a turn that goes idle before the prompt submission responds', async () => {
+    const reachedIdle = deferred<void>();
+    const { result } = turn({
+      stream: (async function* () {
+        yield assistant;
+        yield idle;
+        reachedIdle.resolve();
+      })(),
+      promptAsync: async () => {
+        await reachedIdle.promise;
+        return { data: undefined, error: undefined };
+      },
+    });
+
+    await expect(result).resolves.toMatchObject({
+      finalMessage: { content: 'Done after a long turn.' },
+    });
+  });
+
+  it('fails the turn when OpenCode rejects the prompt submission', async () => {
+    const { result } = turn({
+      stream: (async function* () {
+        await new Promise(() => undefined);
+      })(),
+      promptAsync: async () => ({
+        data: undefined,
+        error: { name: 'NotFoundError', data: { message: 'Session not found' } },
+      }),
+    });
+
+    await expect(result).rejects.toThrow('OpenCode prompt failed for p/m: Session not found');
+  });
+
+  it('surfaces a failure OpenCode reports after accepting the prompt', async () => {
+    const { result } = turn({
+      stream: (async function* () {
+        yield {
+          type: 'session.error',
+          properties: {
+            sessionID: SESSION,
+            error: { name: 'UnknownError', data: { message: 'agent not found' } },
+          },
+        };
+        await new Promise(() => undefined);
+      })(),
+      promptAsync: async () => ({ data: undefined, error: undefined }),
+    });
+
+    await expect(result).rejects.toThrow('OpenCode prompt failed for p/m: agent not found');
   });
 });
 
