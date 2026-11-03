@@ -63,7 +63,8 @@ export { resolvePackagedOpenCodeBinary };
 
 const DEFAULT_READINESS_TIMEOUT_MS = 10_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2_000;
-const DEFAULT_EVENT_DRAIN_MS = 10;
+// A loop failure after the assistant message publishes `session.idle` just before `session.error`.
+const DEFAULT_EVENT_DRAIN_MS = 250;
 const AGOR_PERMISSION_INTERCEPTION = {
   '*': 'ask',
   read: 'ask',
@@ -674,8 +675,7 @@ function createOpenCodeEventCollector(input: {
     return stopPromise;
   };
   const start = async () => {
-    // OpenCode sends `server.heartbeat` on /event every 10s, so Node fetch's 300s bodyTimeout
-    // does not cut the stream during a long, otherwise silent tool call.
+    // OpenCode heartbeats /event every 10s, so undici's 300s bodyTimeout never fires.
     subscription = await input.client.event.subscribe({
       query: input.context.branchPath ? { directory: input.context.branchPath } : undefined,
       signal: controller.signal,
@@ -1326,11 +1326,7 @@ export class OpenCodeTool {
     try {
       await eventCollector.start();
 
-      // Submit without waiting for the turn: the blocking `session.prompt` sends no response
-      // headers until the turn ends, so Node fetch's 300s headersTimeout failed long turns with
-      // `fetch failed`. The event stream (heartbeated by OpenCode) drives completion instead, and
-      // OpenCode reports a failure after acceptance as `session.error`. A terminal error that
-      // lands first still wins the race.
+      // prompt_async replies 204 at once (blocking prompt hit undici's 300s headersTimeout); events end the turn.
       const terminalFailure = terminal.then((result) =>
         result.error ? Promise.reject(result.error) : new Promise<never>(() => undefined)
       );
