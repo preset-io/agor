@@ -399,8 +399,9 @@ feature_announcements:
   media_origin: https://console.example.com # optional
 ```
 
-- `bundled` (default for self-hosted): the released sections of `CHANGELOG.md` shipped with the
-  daemon, with the in-app copy, pictures and buttons from `highlights.json`. Chores and Unreleased
+- `bundled` (default for self-hosted): the highlights of each release in the `CHANGELOG.md` shipped
+  with the daemon: its Features entries, plus any other entry that has a highlight in
+  `highlights.json`, which also supplies the in-app copy, pictures and buttons. Unreleased entries
   do not appear.
 - `cloud`: announcements published by Agor Cloud. This is the default when the daemon has the Agor
   Cloud runtime credential (`AGOR_CLOUD_API_BASE_URL` and `AGOR_CLOUD_*`).

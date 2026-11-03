@@ -53,20 +53,34 @@ Release preparation covers merged changes.
 `;
 
 describe('parseChangelogFeatureAnnouncements', () => {
-  it('ships dated releases newest first and skips Unreleased, Chores and undated headings', () => {
+  it('ships only Features entries of dated releases, newest first', () => {
     const releases = parseChangelogFeatureAnnouncements(CHANGELOG);
 
+    // 0.1.0 has no Features, so it does not ship; neither do Unreleased and undated headings.
     expect(releases.map((r) => [r.id, r.label, r.version_label, r.published_at])).toEqual([
       ['oss-0.2.0', '0.2.0', 'Agor 0.2.0', '2026-10-13T00:00:00.000Z'],
-      ['oss-0.1.0', '0.1.0', 'Agor 0.1.0', '2026-09-01T00:00:00.000Z'],
     ]);
-    // Features are new and ring the bell; the rest are quiet improvements.
     expect(releases[0].items.map((item) => [item.title, item.kind, item.badge])).toEqual([
       ['Zone layouts', 'new', true],
       ['Second feature', 'new', true],
+    ]);
+  });
+
+  it('ships an entry from any other section only when it is highlighted', () => {
+    const releases = parseChangelogFeatureAnnouncements(CHANGELOG, {
+      '3202': { one_line: 'Links in Agor open safely.' },
+      '3201': {},
+      '101': { title: 'A fix worth announcing' },
+    });
+
+    // Highlighted non-Features entries are quiet improvements unless the highlight says otherwise.
+    expect(releases[0].items.map((item) => [item.title, item.kind, item.badge])).toEqual([
+      ['Zone layouts', 'new', true],
+      ['Second feature', 'new', true],
+      ['Bump deps', 'improved', false],
       ['Safer links', 'improved', false],
     ]);
-    expect(releases[1].items.map((item) => item.kind)).toEqual(['improved', 'improved']);
+    expect(releases[1].items.map((item) => item.title)).toEqual(['A fix worth announcing']);
   });
 
   it('keeps the first sentence as the one line and moves PR links into pr_numbers', () => {
@@ -123,9 +137,8 @@ describe('parseChangelogFeatureAnnouncements', () => {
       '3135': { title: 'Zones can arrange your cards', popup: true },
     });
 
+    // The Fixes entries ship neither: the highlight went to the Features entry.
     expect(release.items.map((item) => [item.id, item.title, item.popup])).toEqual([
-      ['oss-0.3.0-pr3135', 'Zone fix', false],
-      ['oss-0.3.0-2', 'No PR', false],
       ['oss-0.3.0-3', 'Zones can arrange your cards', true],
       ['oss-0.3.0-4', 'Same PR again', false],
     ]);
@@ -135,6 +148,27 @@ describe('parseChangelogFeatureAnnouncements', () => {
     expect(parseChangelogFeatureAnnouncements(CHANGELOG, {}, 1).map((r) => r.label)).toEqual([
       '0.2.0',
     ]);
+  });
+
+  it('ships only Features and highlighted entries from the repository CHANGELOG', () => {
+    const root = join(__dirname, '..', '..', '..', '..');
+    const highlights = featureAnnouncementHighlightsSchema.parse(
+      JSON.parse(readFileSync(join(root, FEATURE_ANNOUNCEMENT_HIGHLIGHTS_PATH), 'utf8'))
+    ).items;
+    const release = parseChangelogFeatureAnnouncements(
+      readFileSync(join(root, 'CHANGELOG.md'), 'utf8'),
+      highlights
+    ).find((r) => r.label === '0.27.0');
+
+    expect(release?.items.length).toBeGreaterThan(0);
+    for (const item of release?.items ?? []) {
+      const highlighted = item.pr_numbers.some((pr) => String(pr) in highlights);
+      expect(item.kind === 'new' || highlighted).toBe(true);
+    }
+    // A 0.27.0 Fixes entry without a highlight does not ship.
+    expect(release?.items.map((item) => item.title)).not.toContain(
+      'Resumable partial Knowledge transfers'
+    );
   });
 
   it('turns the repository CHANGELOG and highlights into valid releases', () => {

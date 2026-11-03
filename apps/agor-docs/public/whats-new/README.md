@@ -5,8 +5,10 @@ the feature, keyed by its preset-io/agor PR number. Self-hosted daemons show it 
 pop-up) once the PR appears in a released `CHANGELOG.md` section; Agor Cloud seeds its drafts from
 the same file. Check it with `pnpm check:whats-new-highlights` (CI runs it).
 
-Every field is optional; missing ones come from the CHANGELOG entry (Features are `new` and ring
-the bell, everything else is a quiet `improved`). The schema is `featureAnnouncementHighlightsSchema`
+Self-hosted installs show highlights only: every released Features entry, plus any other entry
+(Fixes, Security, Breaking, Chores) that has a highlight here. Every field is optional; missing ones
+come from the CHANGELOG entry (Features are `new` and ring the bell, other highlighted entries are a
+quiet `improved`). The schema is `featureAnnouncementHighlightsSchema`
 in `packages/core/src/types/feature-announcements.ts`.
 
 ```json

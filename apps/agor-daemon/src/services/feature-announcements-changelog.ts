@@ -1,11 +1,11 @@
 /**
  * Self-hosted feature announcements: CHANGELOG.md -> FeatureAnnouncementDTO[].
  *
- * The release PR that finalizes a CHANGELOG section is the review step, so
- * every released Features/Fixes/Security/Breaking entry becomes an item.
- * `## Unreleased` and Chores never ship. `highlights.json` (next to the visuals
- * in `apps/agor-docs/public/whats-new/`) sets the in-app copy, picture, button
- * and channels for an entry, keyed by PR number.
+ * Highlights only: every released Features entry becomes an item, and so does
+ * any other entry that `highlights.json` (next to the visuals in
+ * `apps/agor-docs/public/whats-new/`) names by PR number; the highlight sets its
+ * in-app copy, picture, button and channels. Fixes, Security, Breaking and
+ * Chores entries without a highlight never ship, nor does `## Unreleased`.
  *
  * Runs once at daemon startup on the CHANGELOG copied into dist/ (or the
  * repository copy in a source checkout).
@@ -20,14 +20,6 @@ import {
 } from '@agor/core/types';
 
 export const BUNDLED_FEATURE_ANNOUNCEMENT_VERSIONS = 10;
-
-/** Features are new; everything else improves something that exists. Features ring the bell. */
-const SECTION_KINDS: Record<string, FeatureAnnouncementItemDTO['kind']> = {
-  Features: 'new',
-  Fixes: 'improved',
-  Security: 'improved',
-  Breaking: 'improved',
-};
 
 const VERSION_HEADING = /^## (?:\[([^\]]+)\]\([^)]*\)|(\S+))\s*\((\d{4}-\d{2}-\d{2})\)\s*$/;
 const PR_LINK = /\[#(\d+)\]\([^)]*\)/g;
@@ -85,7 +77,7 @@ function parseEntry(
   };
 }
 
-/** Newest-first releases for the latest `limit` dated versions in `markdown`. */
+/** Newest-first releases for the latest `limit` dated versions in `markdown` that have items. */
 export function parseChangelogFeatureAnnouncements(
   markdown: string,
   highlights: FeatureAnnouncementHighlights['items'] = {},
@@ -94,6 +86,8 @@ export function parseChangelogFeatureAnnouncements(
   const releases: FeatureAnnouncementDTO[] = [];
   let release: FeatureAnnouncementDTO | null = null;
   let newUntil = '';
+  // Features are new and ring the bell; any other section's entries improve
+  // something that exists and only ship when highlighted.
   let kind: FeatureAnnouncementItemDTO['kind'] | null = null;
   let entry: string[] | null = null;
 
@@ -108,18 +102,13 @@ export function parseChangelogFeatureAnnouncements(
     }
     entry = null;
   };
-  const flushRelease = () => {
-    flushEntry();
-    if (release && release.items.length > 0) releases.push(release);
-    release = null;
-    kind = null;
-  };
 
   for (const line of markdown.split('\n')) {
     if (line.startsWith('## ')) {
-      flushRelease();
-      if (releases.length >= limit) break;
+      flushEntry();
+      kind = null;
       const heading = line.match(VERSION_HEADING);
+      release = null;
       if (heading) {
         const version = heading[1] ?? heading[2];
         const published = new Date(`${heading[3]}T00:00:00.000Z`);
@@ -133,13 +122,14 @@ export function parseChangelogFeatureAnnouncements(
           published_at: published.toISOString(),
           items: [],
         };
+        releases.push(release);
       }
       continue;
     }
     if (!release) continue;
     if (line.startsWith('### ')) {
       flushEntry();
-      kind = SECTION_KINDS[line.slice(4).trim()] ?? null;
+      kind = line.slice(4).trim() === 'Features' ? 'new' : 'improved';
       continue;
     }
     if (!kind) continue;
@@ -152,16 +142,21 @@ export function parseChangelogFeatureAnnouncements(
       flushEntry();
     }
   }
-  flushRelease();
+  flushEntry();
 
   // A highlight applies to one entry only: the newest Features entry citing its
   // PR, else the newest entry citing it.
   const items = releases.flatMap((r) => r.items);
-  const fromFeatures = new Set(items.filter((item) => item.kind === 'new'));
+  const shipped = new Set(items.filter((item) => item.kind === 'new'));
   for (const [pr, highlight] of Object.entries(highlights)) {
     const citing = items.filter((item) => item.pr_numbers.includes(Number(pr)));
-    const target = citing.find((item) => fromFeatures.has(item)) ?? citing[0];
-    if (target) Object.assign(target, highlight);
+    const target = citing.find((item) => shipped.has(item)) ?? citing[0];
+    if (!target) continue;
+    Object.assign(target, highlight);
+    shipped.add(target);
   }
-  return releases;
+  return releases
+    .map((r) => ({ ...r, items: r.items.filter((item) => shipped.has(item)) }))
+    .filter((r) => r.items.length > 0)
+    .slice(0, limit);
 }
