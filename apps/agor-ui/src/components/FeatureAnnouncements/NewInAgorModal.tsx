@@ -8,7 +8,7 @@ import type {
 } from '@agor-live/client';
 import { ArrowRightOutlined, GiftOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { Button, Flex, Modal, Tag, Typography, theme } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
@@ -111,22 +111,27 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
   const [slides, setSlides] = useState<FeatureAnnouncementClientItem[]>(NO_ITEMS);
   const pending = featureAnnouncements?.feed.pending_popup_items ?? NO_ITEMS;
   const open = slides.length > 0;
+  // Slides this carousel has displayed; they stay for the life of the pop-up.
+  const shown = useRef(new Set<string>());
 
   useEffect(() => {
     if (!open && !suppressed && pending.length > 0) {
+      shown.current = new Set();
       setIndex(0);
       setSlides(pending);
     }
   }, [open, suppressed, pending]);
 
-  // Another tab may display a launch this carousel has not reached yet: once the
-  // feed says it is seen, drop it from the slides ahead. The current slide and
-  // the ones already passed stay, so nothing moves under the reader.
+  // Another tab may display a launch this carousel has not shown yet: once the
+  // feed says it is seen, drop it. Slides shown here stay, so back and next keep
+  // working and nothing moves under the reader.
   useEffect(() => {
     if (!open) return;
     const stillPending = new Set(pending.map((item) => item.id));
     setSlides((current) => {
-      const kept = current.filter((item, i) => i <= index || stillPending.has(item.id));
+      const kept = current.filter(
+        (item, i) => i === index || shown.current.has(item.id) || stillPending.has(item.id)
+      );
       return kept.length === current.length ? current : kept;
     });
   }, [open, pending, index]);
@@ -134,7 +139,9 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
   const slide = slides[index];
   const markPopupsSeen = featureAnnouncements?.markPopupsSeen;
   useEffect(() => {
-    if (open && !suppressed && slide) markPopupsSeen?.([slide.id]);
+    if (!open || suppressed || !slide) return;
+    shown.current.add(slide.id);
+    markPopupsSeen?.([slide.id]);
   }, [open, suppressed, slide, markPopupsSeen]);
 
   if (!featureAnnouncements) return null;

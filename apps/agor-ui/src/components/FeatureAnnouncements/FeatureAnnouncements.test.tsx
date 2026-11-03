@@ -283,6 +283,25 @@ it('never shows a displayed launch again after a reload or in a second tab', asy
   expect(screen.queryByText('New in Agor')).not.toBeInTheDocument();
 });
 
+it('keeps every displayed slide while moving back and forth', async () => {
+  const server = fakeServer([zones, slack]);
+  renderTab(server.client);
+
+  await screen.findByText('Zones can arrange your cards');
+  fireEvent.click(screen.getByLabelText('Next'));
+  await screen.findByText('Slack setup listens everywhere');
+  // Both are persisted now, so the feed no longer lists either as pending.
+  await waitFor(() => expect(server.seen.has('slack')).toBe(true));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  fireEvent.click(screen.getByLabelText('Previous'));
+  expect(await screen.findByText('Zones can arrange your cards')).toBeInTheDocument();
+  expect(screen.getByLabelText('Next')).not.toBeDisabled();
+  fireEvent.click(screen.getByLabelText('Next'));
+  expect(await screen.findByText('Slack setup listens everywhere')).toBeInTheDocument();
+  expect(screen.getByLabelText('Previous')).toBeInTheDocument();
+});
+
 it('a slow fetch from before a dismissal cannot reopen the pop-up', async () => {
   let resolveStale: (value: FeatureAnnouncementsFeed) => void = () => {};
   const find = vi
