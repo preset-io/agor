@@ -71,8 +71,12 @@ async function submittedPrompt(
   userPrompt = 'Continue',
   mcpSignInNotice?: string
 ) {
-  type PromptRequest = Parameters<ReturnType<typeof createOpencodeClient>['session']['prompt']>[0];
-  const prompt = vi.fn(async (_request: PromptRequest) => ({ error: { name: 'PromptError' } }));
+  type PromptRequest = Parameters<
+    ReturnType<typeof createOpencodeClient>['session']['promptAsync']
+  >[0];
+  const promptAsync = vi.fn(async (_request: PromptRequest) => ({
+    error: { name: 'PromptError' },
+  }));
   const stream = (async function* () {})();
   const client = {
     event: { subscribe: vi.fn(async () => ({ stream })) },
@@ -80,7 +84,7 @@ async function submittedPrompt(
       create: vi.fn(async () => ({ data: { id: 'opencode-session-1' } })),
       get: vi.fn(async () => ({ data: { id: 'opencode-session-1' } })),
       messages: vi.fn(async () => ({ data: [], error: undefined })),
-      prompt,
+      promptAsync,
     },
   };
   const tool = new OpenCodeTool({});
@@ -131,7 +135,7 @@ async function submittedPrompt(
     )
   ).rejects.toThrow(/prompt failed/i);
 
-  return prompt.mock.calls[0]?.[0];
+  return promptAsync.mock.calls[0]?.[0];
 }
 
 function assertExplicitModelAvailable(model: Record<string, unknown>, effort?: EffortLevel) {
@@ -316,8 +320,8 @@ describe('OpenCodeTool provider failures', () => {
       event: { subscribe: vi.fn(async () => ({ stream })) },
       session: {
         messages: vi.fn(async () => ({ data: [], error: undefined })),
-        // OpenCode's prompt call blocks while it retries the provider.
-        prompt: vi.fn(() => new Promise(() => undefined)),
+        // OpenCode accepts the prompt; provider retries arrive on the event stream.
+        promptAsync: vi.fn(async () => ({ data: undefined, error: undefined })),
       },
     };
     const runtime = new OpenCodeTool({ retryBudget }) as unknown as {
@@ -524,7 +528,7 @@ describe('OpenCodeTool permission rejections', () => {
           .fn()
           .mockResolvedValueOnce({ data: [], error: undefined })
           .mockResolvedValue({ data: transcript, error: undefined }),
-        prompt: vi.fn(async () => ({ data: {}, error: undefined })),
+        promptAsync: vi.fn(async () => ({ data: undefined, error: undefined })),
       },
     };
     const runtime = new OpenCodeTool({
@@ -716,7 +720,7 @@ describe('OpenCodeTool permission rejections', () => {
       event: { subscribe: vi.fn(async () => ({ stream })) },
       session: {
         messages: vi.fn(async () => ({ data: [], error: undefined })),
-        prompt: vi.fn(() => new Promise(() => undefined)),
+        promptAsync: vi.fn(async () => ({ data: undefined, error: undefined })),
       },
     };
     const runtime = new OpenCodeTool({}) as unknown as {
@@ -754,6 +758,69 @@ describe('OpenCodeTool permission rejections', () => {
         { type: 'text', text: 'Partial answer' },
       ],
     });
+  });
+});
+
+describe('OpenCodeTool turn submission', () => {
+  it('completes a turn that goes idle before the prompt submission responds', async () => {
+    const SESSION = 'opencode-session-1';
+    const reachedIdle = deferred<void>();
+    const stream = (async function* () {
+      yield {
+        type: 'message.updated',
+        properties: { info: { id: 'a-1', sessionID: SESSION, role: 'assistant' } },
+      };
+      yield { type: 'session.idle', properties: { sessionID: SESSION } };
+      reachedIdle.resolve();
+    })();
+    const client = {
+      event: { subscribe: vi.fn(async () => ({ stream })) },
+      session: {
+        messages: vi
+          .fn()
+          .mockResolvedValueOnce({ data: [], error: undefined })
+          .mockResolvedValue({
+            data: [
+              {
+                info: { id: 'a-1', sessionID: SESSION, role: 'assistant' },
+                parts: [{ id: 't-1', type: 'text', text: 'Done.' }],
+              },
+            ],
+            error: undefined,
+          }),
+        promptAsync: vi.fn(async () => {
+          await reachedIdle.promise;
+          return { data: undefined, error: undefined };
+        }),
+      },
+    };
+    const runtime = new OpenCodeTool({ eventDrainMs: 0 }) as unknown as {
+      executeTask(...args: unknown[]): Promise<{ finalMessage: { content: string } }>;
+    };
+
+    await expect(
+      runtime.executeTask(
+        client,
+        {
+          agorSessionId: 'session-1',
+          taskId: 'task-1',
+          prompt: 'hi',
+          agorAssistantMessageId: 'message-1',
+          signal: new AbortController().signal,
+          title: 'Test',
+          directory: '/workspace',
+          persistOpenCodeSessionId: vi.fn(),
+        },
+        { opencodeSessionId: SESSION, provider: 'p', model: 'm', branchPath: '/workspace' },
+        undefined,
+        () => undefined,
+        {
+          text: (value: string) => value,
+          error: (value: unknown) => (value instanceof Error ? value : new Error(String(value))),
+        },
+        { permission: { reply: vi.fn() } }
+      )
+    ).resolves.toMatchObject({ finalMessage: { content: 'Done.' } });
   });
 });
 
