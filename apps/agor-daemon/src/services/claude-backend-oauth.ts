@@ -345,7 +345,8 @@ export class ClaudeBackendOAuth {
   async resolve(
     tenantId: string,
     userId: UserID,
-    assertTask: () => Promise<void>
+    assertTask: () => Promise<void>,
+    taskId?: string
   ): Promise<{
     connection: { CLAUDE_CODE_OAUTH_TOKEN: string };
     useNativeAuth: false;
@@ -509,22 +510,31 @@ export class ClaudeBackendOAuth {
                 ? 'ambiguous'
                 : 'idle';
           const response = error instanceof BackendRefreshFailure ? error.response : undefined;
-          const line =
-            `[claude_oauth.refresh] event=failed outcome=${outcome} grant_state=${state} ` +
-            `source=${response ? 'provider' : 'internal'} ` +
-            `http_status=${response?.httpStatus ?? 'none'} body=${response?.body ?? 'none'} ` +
-            `provider_error=${response?.providerError ?? 'none'}`;
-          if (outcome === 'cancelled') console.info(line);
-          else console.warn(line);
-          await this.writeUnit(tenantId, async (db) => {
-            await new UserProviderOAuthGrantRepository(db).finish(
-              tenantId,
-              userId,
-              fence,
-              state,
-              error instanceof BackendRefreshFailure ? error.retryMs : 0
+          let settled = false;
+          try {
+            settled = await this.writeUnit(tenantId, (db) =>
+              new UserProviderOAuthGrantRepository(db).finish(
+                tenantId,
+                userId,
+                fence,
+                state,
+                error instanceof BackendRefreshFailure ? error.retryMs : 0
+              )
             );
-          });
+          } finally {
+            const source = !response
+              ? 'internal'
+              : response.httpStatus === undefined
+                ? 'network'
+                : 'provider';
+            const line =
+              `[claude_oauth.refresh] event=failed task_id=${taskId ?? 'none'} outcome=${outcome} ` +
+              `grant_state=${settled ? state : 'unchanged'} source=${source} ` +
+              `http_status=${response?.httpStatus ?? 'none'} body=${response?.body ?? 'none'} ` +
+              `provider_error=${response?.providerError ?? 'none'}`;
+            if (outcome === 'cancelled') console.info(line);
+            else console.warn(line);
+          }
         },
       }
     ).catch(async () => {
