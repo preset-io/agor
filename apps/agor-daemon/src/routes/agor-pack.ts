@@ -27,6 +27,7 @@ import {
 } from '@agor/core/config';
 import {
   AgorPackImportRepository,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
@@ -157,6 +158,14 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
     return params;
   };
 
+  /**
+   * Run pack work in the caller's trusted tenant context, like the long
+   * authenticated routes: executor tokens, deferred events, and nested
+   * service calls all read the ambient tenant.
+   */
+  const inTenant = <T>(params: AuthenticatedParams, work: () => Promise<T>): Promise<T> =>
+    runWithTenantContext(params.tenant?.tenant_id as TenantID, work);
+
   const serviceContext = (params: AuthenticatedParams): AgorPackServiceContext => ({
     app,
     db,
@@ -177,7 +186,9 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
       if (branchIds.length === 0 || branchIds.length > AGOR_PACK.maxTeammates) {
         throw new BadRequest('branch_ids is required');
       }
-      const teammates = await new AgorPackExporter(serviceContext(params)).preflight(branchIds);
+      const teammates = await inTenant(params, () =>
+        new AgorPackExporter(serviceContext(params)).preflight(branchIds)
+      );
       res.json({ teammates });
     } catch (error) {
       sendPackError(res, error);
@@ -211,7 +222,9 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
       });
       let manifest: Awaited<ReturnType<AgorPackExporter['export']>>;
       try {
-        manifest = await new AgorPackExporter(context).export(parsed.data, writer);
+        manifest = await inTenant(params, () =>
+          new AgorPackExporter(context).export(parsed.data, writer)
+        );
       } catch (error) {
         writer.abort(error instanceof Error ? error : new Error(String(error)));
         await staged.catch(() => undefined);
@@ -354,7 +367,9 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
       if (size > AGOR_PACK.maxBytes) {
         throw Object.assign(new Error('Pack exceeds the maximum size'), { code: 413 });
       }
-      const result = await new AgorPackImporter(serviceContext(params), params).stage(req, size);
+      const result = await inTenant(params, () =>
+        new AgorPackImporter(serviceContext(params), params).stage(req, size)
+      );
       res.json(result);
     } catch (error) {
       req.resume();
@@ -368,7 +383,9 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
       try {
         const params = await authenticate(req);
         res.json(
-          await new AgorPackImporter(serviceContext(params), params).get(req.params.importId)
+          await inTenant(params, () =>
+            new AgorPackImporter(serviceContext(params), params).get(req.params.importId)
+          )
         );
       } catch (error) {
         sendPackError(res, error);
@@ -386,12 +403,14 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
           throw new BadRequest(`Invalid apply request: ${parsed.error.issues[0]?.message ?? ''}`);
         }
         const importer = new AgorPackImporter(serviceContext(params), params);
-        const result = await importer.apply(req.params.importId, parsed.data);
+        const result = await inTenant(params, () =>
+          importer.apply(req.params.importId, parsed.data)
+        );
         res.json(result);
         // Files land once each branch checkout is ready; progress is on the receipt.
-        void importer
-          .materializePending(req.params.importId, parsed.data.teammates)
-          .catch((error: unknown) => console.error('[agor-pack] materialize failed', error));
+        void inTenant(params, () =>
+          importer.materializePending(req.params.importId, parsed.data.teammates)
+        ).catch((error: unknown) => console.error('[agor-pack] materialize failed', error));
       } catch (error) {
         sendPackError(res, error);
       }
@@ -405,7 +424,9 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
         const params = await authenticate(req);
         const undo = (req.body as { undo?: unknown } | undefined)?.undo === true;
         res.json(
-          await switchOverTeammate(serviceContext(params), params, req.params.branchId, undo)
+          await inTenant(params, () =>
+            switchOverTeammate(serviceContext(params), params, req.params.branchId, undo)
+          )
         );
       } catch (error) {
         sendPackError(res, error);

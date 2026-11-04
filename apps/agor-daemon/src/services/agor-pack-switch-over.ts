@@ -101,15 +101,12 @@ export async function switchOverTeammate(
     next = null;
   }
 
-  const { move_to_cloud: _previous, ...context } = (branch.custom_context ?? {}) as Record<
-    string,
-    unknown
-  >;
+  // custom_context patches merge, so Undo writes an explicit null.
   await ctx.app
     .service('branches')
     .patch(
       branch.branch_id,
-      { custom_context: next ? { ...context, move_to_cloud: next } : context },
+      { custom_context: { ...(branch.custom_context ?? {}), move_to_cloud: next } },
       params
     );
   return { branch_id: branchId, switch_over: next, warnings };

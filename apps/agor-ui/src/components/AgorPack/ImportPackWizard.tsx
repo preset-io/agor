@@ -209,7 +209,7 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
                   title: 'Teammate',
                   key: 'teammate',
                   render: (_: unknown, row) => (
-                    <Space direction="vertical" size={0}>
+                    <Space orientation="vertical" size={0}>
                       <Typography.Text strong>
                         {row.emoji ?? '🤖'} {row.display_name}
                       </Typography.Text>
@@ -225,7 +225,7 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
                     row.dry?.already_imported_branch_id ? (
                       <Tag color="success">already imported</Tag>
                     ) : (
-                      <Space direction="vertical" size={0}>
+                      <Space orientation="vertical" size={0}>
                         <Typography.Text>{row.repo.slug}</Typography.Text>
                         <Tag>
                           {row.dry?.repo_status === 'existing'
