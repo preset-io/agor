@@ -2648,17 +2648,18 @@ export class SlackConnector implements GatewayConnector {
     }
 
     const socketLogger = createSlackSdkLoggerController();
-    // Deliberately WITHOUT `clientOptions`, unlike every WebClient this
-    // connector builds (see SLACK_WEB_CLIENT_OPTIONS).
+    // Deliberately NOT SLACK_WEB_CLIENT_OPTIONS, unlike every WebClient this
+    // connector builds.
     //
     // Do not "tidy this up" by giving it the bounded policy for consistency.
-    // SocketModeClient defaults its internal client to `{retries: 100,
-    // factor: 1.3}`, and that is a RECONNECT policy for a long-lived
-    // listener, not a per-request deadline: disconnects are regular and
-    // expected in Socket Mode, so those retries are how the listener comes
-    // back. Capping them converts a recoverable disconnect into a permanently
-    // dead listener — the channel simply stops receiving messages, with no
-    // error anyone is watching.
+    // Its retryConfig is a RECONNECT policy for a long-lived listener, not a
+    // per-request deadline: disconnects are regular and expected in Socket
+    // Mode, so those retries are how the listener comes back. Capping them
+    // converts a recoverable disconnect into a permanently dead listener — the
+    // channel simply stops receiving messages, with no error anyone is
+    // watching. The SDK default `{retries: 100, factor: 1.3}` has no ceiling
+    // on the wait, so after a night offline the next apps.connections.open
+    // attempt is hours away. Retry forever, at most a minute apart.
     //
     // Its liveness is already bounded, by mechanisms of its own: a 5s
     // `clientPingTimeout` and a 30s `serverPingTimeout`, either of which
@@ -2667,6 +2668,7 @@ export class SlackConnector implements GatewayConnector {
     const socketMode = new SocketModeClient({
       appToken: this.config.app_token,
       logger: socketLogger.logger,
+      clientOptions: { retryConfig: { forever: true, factor: 1.3, maxTimeout: 60_000 } },
     });
     this.socketLogger = socketLogger;
     this.socketMode = socketMode;
