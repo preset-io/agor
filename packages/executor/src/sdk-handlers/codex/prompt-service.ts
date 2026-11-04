@@ -81,6 +81,12 @@ import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
 import { forkCodexThreadViaAppServer } from './app-server-client.js';
+import {
+  type CodexErrorInfo,
+  type CodexErrorInfoVariant,
+  describeCodexErrorInfo,
+  readCodexErrorInfo,
+} from './error-info.js';
 import { applyAgorCodexLaunchPolicy } from './launch-policy.js';
 import { findLatestRolloutRecord } from './rollout-tail.js';
 import {
@@ -178,13 +184,25 @@ function projectCodexCompletedEvent(
   };
 }
 
+// Lead-ins for failures Codex classified with a closed CodexErrorInfo.
+const CODEX_LIFECYCLE_LEADS: Partial<Record<CodexLifecycleFailureCode, string>> = {
+  completed_without_response: 'Codex returned no response after a stream error',
+  turn_failed: 'Codex failed the turn',
+};
+
 class CodexLifecycleError extends Error {
   readonly failureCode: CodexLifecycleFailureCode;
+  readonly failureKind?: CodexErrorInfoVariant;
 
-  constructor(failureCode: CodexLifecycleFailureCode) {
-    super(CODEX_LIFECYCLE_MESSAGES[failureCode]);
+  constructor(failureCode: CodexLifecycleFailureCode, errorInfo?: CodexErrorInfo) {
+    const lead = CODEX_LIFECYCLE_LEADS[failureCode];
+    super(
+      (lead ? describeCodexErrorInfo(lead, errorInfo) : undefined) ??
+        CODEX_LIFECYCLE_MESSAGES[failureCode]
+    );
     this.name = 'CodexLifecycleError';
     this.failureCode = failureCode;
+    if (errorInfo) this.failureKind = errorInfo.variant;
   }
 }
 
@@ -1523,7 +1541,10 @@ export class CodexPromptService {
 
             if (observedStreamError && !receivedAssistantMessage) {
               diagnostics.recordFailure('turn_completed_without_response', observedStreamError);
-              throw new CodexLifecycleError('completed_without_response');
+              throw new CodexLifecycleError(
+                'completed_without_response',
+                readCodexErrorInfo(observedStreamError)
+              );
             }
 
             codexDebug(
@@ -1713,7 +1734,10 @@ export class CodexPromptService {
             receivedTerminalEvent = true;
             if (observedStreamError && !receivedAssistantMessage) {
               diagnostics.recordFailure('turn_completed_without_response', observedStreamError);
-              throw new CodexLifecycleError('completed_without_response');
+              throw new CodexLifecycleError(
+                'completed_without_response',
+                readCodexErrorInfo(observedStreamError)
+              );
             }
             threadId = thread.id || '';
             const mappedUsage = extractCodexTokenUsage((event as { usage?: unknown }).usage);
@@ -1746,7 +1770,8 @@ export class CodexPromptService {
               missingAuthentication ? 'configuration_required' : undefined
             );
             throw new CodexLifecycleError(
-              missingAuthentication ? 'authentication_required' : 'turn_failed'
+              missingAuthentication ? 'authentication_required' : 'turn_failed',
+              readCodexErrorInfo(event.error) ?? readCodexErrorInfo(observedStreamError)
             );
           }
 
