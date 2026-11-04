@@ -22,6 +22,9 @@
 
 ## Validation / test plan
 
+<!-- Changed onboarding, board, session or Home UI? Update the example board fixture
+(packages/core/src/seed/example-board/fixture.ts). -->
+
 <!-- List commands run, manual checks, screenshots, or intentionally unchecked follow-ups. Example:
 - [x] pnpm test
 - [x] pnpm typecheck

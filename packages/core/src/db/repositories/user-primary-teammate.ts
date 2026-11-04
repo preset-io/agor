@@ -13,6 +13,7 @@ import {
   select,
   update,
 } from '../database-wrapper';
+import { findExampleBoardOwnerId } from '../example-board';
 import { users } from '../schema';
 import { RepositoryError } from './base';
 import { BranchRepository } from './branches';
@@ -98,6 +99,8 @@ export class UserPrimaryTeammateRepository {
       enforceAccess: options.enforceAccess,
     });
     if (!branch || branch.archived || !isTeammate(branch)) return null;
+    // The example teammate is read-only and must never become anyone's primary.
+    if (branch.created_by === (await findExampleBoardOwnerId(this.db))) return null;
     return branch;
   }
 
@@ -126,7 +129,10 @@ export class UserPrimaryTeammateRepository {
       candidates.push(...page);
       if (page.length < pageSize) break;
     }
-    return candidates.filter(isTeammate);
+    const exampleOwnerId = await findExampleBoardOwnerId(this.db);
+    return candidates.filter(
+      (branch) => isTeammate(branch) && branch.created_by !== exampleOwnerId
+    );
   }
 
   /** Set the user's primary teammate branch and emit the assignment event. */

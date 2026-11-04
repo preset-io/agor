@@ -56,6 +56,7 @@ import { TouchTooltipConfig } from './components/TouchTooltipConfig';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
+import { ExampleBoardProvider } from './contexts/ExampleBoardContext';
 import { MCPCatalogModalProvider } from './contexts/MCPCatalogModalContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { setPrimaryAgenticToolIfUnset } from './domain/primaryAgenticTool';
@@ -82,6 +83,7 @@ import { useAuthenticatedInstanceConfig } from './hooks/useAuthenticatedInstance
 import { useAuthorityOperationGuard } from './hooks/useAuthorityOperationGuard';
 import { useEnsureFrameworkRepo } from './hooks/useEnsureFrameworkRepo';
 import { useEnvironmentStart } from './hooks/useEnvironmentStart';
+import { useExampleBoardController } from './hooks/useExampleBoardController';
 import { findFrameworkRepo } from './hooks/useFrameworkRepo';
 import {
   type OnboardingOperationOwner,
@@ -600,6 +602,19 @@ function AppContent() {
   // read-only role, so its first login must enter the workspace without opening
   // a flow the daemon will correctly refuse at every write boundary.
   const canRunOnboarding = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
+  const reopenOnboardingRef = useRef<(mode: OnboardingReopenMode) => Promise<void>>(undefined);
+  const resumableOnboarding =
+    currentUser?.onboarding_completed !== true && isOnboardingDeferred(currentUser?.preferences);
+  const openOnboardingFromExample = useCallback(
+    () => void reopenOnboardingRef.current?.(resumableOnboarding ? 'resume' : 'restart'),
+    [resumableOnboarding]
+  );
+  const exampleBoardActions = useExampleBoardController({
+    client,
+    user: currentUser,
+    isMobile: isMobileShellPath(location.pathname),
+    openOnboarding: canRunOnboarding ? openOnboardingFromExample : undefined,
+  });
 
   // Keep the global ErrorBoundary's crash context populated so a render
   // crash anywhere below us can produce a useful report (build SHA + signed-in
@@ -1370,6 +1385,8 @@ function AppContent() {
     activateOnboardingWizard(operationUserId, operationAuthenticationGeneration, true);
   };
 
+  reopenOnboardingRef.current = handleReopenOnboarding;
+
   // Handle delete user
   const handleDeleteUser = async (userId: string, shouldApply?: () => boolean) => {
     if (!client || (shouldApply && !shouldApply())) return;
@@ -2042,235 +2059,236 @@ function AppContent() {
   // Render main app
   return (
     <ConnectionProvider value={connectionContextValue}>
-      <MCPCatalogModalProvider
-        key={`${currentUser?.user_id ?? 'anonymous'}:${currentUser?.role ?? 'none'}`}
-      >
-        <MCPCatalogModalHost
-          client={client}
-          connected={connected}
-          connecting={connecting}
-          authGeneration={authGeneration}
-          currentUser={currentUser}
-        />
-        {/* Force Password Change Modal - shown when user.must_change_password is true */}
-        <ForcePasswordChangeModal
-          open={!!currentUser?.must_change_password && passwordWriteAvailable}
-          user={currentUser}
-          onChangePassword={handleForcePasswordChange}
-          onLogout={logout}
-        />
+      <ExampleBoardProvider value={exampleBoardActions}>
+        <MCPCatalogModalProvider
+          key={`${currentUser?.user_id ?? 'anonymous'}:${currentUser?.role ?? 'none'}`}
+        >
+          <MCPCatalogModalHost
+            client={client}
+            connected={connected}
+            connecting={connecting}
+            authGeneration={authGeneration}
+            currentUser={currentUser}
+          />
+          {/* Force Password Change Modal - shown when user.must_change_password is true */}
+          <ForcePasswordChangeModal
+            open={!!currentUser?.must_change_password && passwordWriteAvailable}
+            user={currentUser}
+            onChangePassword={handleForcePasswordChange}
+            onLogout={logout}
+          />
 
-        {/* Shared/current-user settings for lightweight surfaces. The full
+          {/* Shared/current-user settings for lightweight surfaces. The full
             Workspace App still owns its existing settings stack; this wrapper
             lets Knowledge expose the user menu without mounting Workspace. */}
-        {sharedSurfaceOwnsUserSettings && (
-          <SharedUserSettingsModal
-            open={openUserSettings}
-            onClose={() => {
-              setOpenUserSettings(false);
-              setUserSettingsInitialTab(undefined);
-            }}
-            user={currentUser}
-            client={client}
-            onUpdateUser={handleUpdateUserFromSettings}
-            onRefreshCurrentUser={refreshCurrentUserForAuthorityCycle}
-            onReopenOnboarding={canRunOnboarding ? handleReopenOnboarding : undefined}
-            initialTab={userSettingsInitialTab}
-          />
-        )}
+          {sharedSurfaceOwnsUserSettings && (
+            <SharedUserSettingsModal
+              open={openUserSettings}
+              onClose={() => {
+                setOpenUserSettings(false);
+                setUserSettingsInitialTab(undefined);
+              }}
+              user={currentUser}
+              client={client}
+              onUpdateUser={handleUpdateUserFromSettings}
+              onRefreshCurrentUser={refreshCurrentUserForAuthorityCycle}
+              onReopenOnboarding={canRunOnboarding ? handleReopenOnboarding : undefined}
+              initialTab={userSettingsInitialTab}
+            />
+          )}
 
-        {isMobileShellPath(location.pathname) && (
-          <SettingsModal
-            open={settingsTabToOpen !== null}
-            onClose={handleSettingsClose}
-            client={client}
-            currentUser={currentUser}
-            activeTab={settingsTabToOpen ?? 'boards'}
-            onTabChange={setSettingsTabToOpen}
-            onCreateBoard={handleCreateBoard}
-            onUpdateBoard={handleUpdateBoard}
-            onDeleteBoard={handleDeleteBoard}
-            onArchiveBoard={handleArchiveBoard}
-            onUnarchiveBoard={handleUnarchiveBoard}
-            onCreateRepo={(data, shouldApply) => handleCreateRepo(data, { shouldApply })}
-            onCreateLocalRepo={handleCreateLocalRepo}
-            onUpdateRepo={handleUpdateRepo}
-            onDeleteRepo={handleDeleteRepo}
-            onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
-            onUnarchiveBranch={handleUnarchiveBranch}
-            onUpdateBranch={handleUpdateBranch}
-            onCreateBranch={handleCreateBranch}
-            onStartEnvironment={handleStartEnvironment}
-            onStopEnvironment={handleStopEnvironment}
-            onCreateUser={handleCreateUser}
-            onUpdateUser={handleUpdateUserFromSettings}
-            onDeleteUser={handleDeleteUser}
-            onDeleteMCPServer={handleDeleteMCPServer}
-            onCreateGatewayChannel={handleCreateGatewayChannel}
-            onUpdateGatewayChannel={handleUpdateGatewayChannel}
-            onDeleteGatewayChannel={handleDeleteGatewayChannel}
-            onUpdateArtifact={handleUpdateArtifact}
-            onDeleteArtifact={handleDeleteArtifact}
-            // As on desktop: member-only; close Settings, then the shared create-teammate flow (owned by MobileApp).
-            onCreateTeammate={
-              hasMinimumRole(currentUser?.role, ROLES.MEMBER)
-                ? () => {
-                    handleSettingsClose();
-                    requestShellPicker(OPEN_CREATE_FLOW_EVENT, 'teammate');
-                  }
-                : undefined
-            }
-            branchStorageConfig={featuresConfig?.branchStorage}
-          />
-        )}
+          {isMobileShellPath(location.pathname) && (
+            <SettingsModal
+              open={settingsTabToOpen !== null}
+              onClose={handleSettingsClose}
+              client={client}
+              currentUser={currentUser}
+              activeTab={settingsTabToOpen ?? 'boards'}
+              onTabChange={setSettingsTabToOpen}
+              onCreateBoard={handleCreateBoard}
+              onUpdateBoard={handleUpdateBoard}
+              onDeleteBoard={handleDeleteBoard}
+              onArchiveBoard={handleArchiveBoard}
+              onUnarchiveBoard={handleUnarchiveBoard}
+              onCreateRepo={(data, shouldApply) => handleCreateRepo(data, { shouldApply })}
+              onCreateLocalRepo={handleCreateLocalRepo}
+              onUpdateRepo={handleUpdateRepo}
+              onDeleteRepo={handleDeleteRepo}
+              onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
+              onUnarchiveBranch={handleUnarchiveBranch}
+              onUpdateBranch={handleUpdateBranch}
+              onCreateBranch={handleCreateBranch}
+              onStartEnvironment={handleStartEnvironment}
+              onStopEnvironment={handleStopEnvironment}
+              onCreateUser={handleCreateUser}
+              onUpdateUser={handleUpdateUserFromSettings}
+              onDeleteUser={handleDeleteUser}
+              onDeleteMCPServer={handleDeleteMCPServer}
+              onCreateGatewayChannel={handleCreateGatewayChannel}
+              onUpdateGatewayChannel={handleUpdateGatewayChannel}
+              onDeleteGatewayChannel={handleDeleteGatewayChannel}
+              onUpdateArtifact={handleUpdateArtifact}
+              onDeleteArtifact={handleDeleteArtifact}
+              // As on desktop: member-only; close Settings, then the shared create-teammate flow (owned by MobileApp).
+              onCreateTeammate={
+                hasMinimumRole(currentUser?.role, ROLES.MEMBER)
+                  ? () => {
+                      handleSettingsClose();
+                      requestShellPicker(OPEN_CREATE_FLOW_EVENT, 'teammate');
+                    }
+                  : undefined
+              }
+              branchStorageConfig={featuresConfig?.branchStorage}
+            />
+          )}
 
-        {/* Onboarding Wizard - shown for new users. Both visibility and local
+          {/* Onboarding Wizard - shown for new users. Both visibility and local
             React state belong to one authenticated generation, not merely a
             user ID. Logout/login as the same user and principal changes both
             invalidate the old wizard and any pending completion work. */}
-        <ConfigProvider theme={ONBOARDING_DARK_THEME}>
-          <OnboardingWizard
-            key={`${onboardingWizardOwner?.userId ?? '__anon__'}:${onboardingWizardOwner?.authenticationGeneration ?? authenticationGeneration}:${onboardingWizardOwner?.activationGeneration ?? 0}`}
-            open={onboardingWizardOpen}
-            repositorySetupNotice={frameworkSetup.error}
-            isCurrent={() =>
-              !!onboardingWizardOwner && isOnboardingOwnerCurrent(onboardingWizardOwner)
-            }
-            onComplete={(result, attempt) => {
-              if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))
-                return;
-              return handleOnboardingComplete(
-                onboardingWizardOwner,
-                result,
-                attempt.isCurrent
-              ).then(() => undefined);
-            }}
-            onDismiss={(progress) => {
-              if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))
-                return;
-              handleOnboardingDismiss(onboardingWizardOwner, progress);
-            }}
-            user={currentUser}
-            client={client}
-            allowClaudeOAuthSignIn={featuresConfig?.claudeSubscriptionOAuth === true}
-            claudeOAuthCapability={featuresConfig?.claudeOAuthCapability}
-            onUpdateUser={async (userId, updates) => {
-              if (
-                !onboardingWizardOwner ||
-                userId !== onboardingWizardOwner.userId ||
-                !isOnboardingOwnerCurrent(onboardingWizardOwner)
-              ) {
-                return;
+          <ConfigProvider theme={ONBOARDING_DARK_THEME}>
+            <OnboardingWizard
+              key={`${onboardingWizardOwner?.userId ?? '__anon__'}:${onboardingWizardOwner?.authenticationGeneration ?? authenticationGeneration}:${onboardingWizardOwner?.activationGeneration ?? 0}`}
+              open={onboardingWizardOpen}
+              repositorySetupNotice={frameworkSetup.error}
+              isCurrent={() =>
+                !!onboardingWizardOwner && isOnboardingOwnerCurrent(onboardingWizardOwner)
               }
-              const wizardWrite = handleUpdateUser(userId, updates, { silent: true });
-              onboardingWizardWriteRef.current = {
-                owner: onboardingWizardOwner,
-                promise: wizardWrite,
-              };
-              try {
-                await wizardWrite;
-              } finally {
-                if (onboardingWizardWriteRef.current?.promise === wizardWrite) {
-                  onboardingWizardWriteRef.current = null;
+              onComplete={(result, attempt) => {
+                if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))
+                  return;
+                return handleOnboardingComplete(
+                  onboardingWizardOwner,
+                  result,
+                  attempt.isCurrent
+                ).then(() => undefined);
+              }}
+              onDismiss={(progress) => {
+                if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner))
+                  return;
+                handleOnboardingDismiss(onboardingWizardOwner, progress);
+              }}
+              user={currentUser}
+              client={client}
+              allowClaudeOAuthSignIn={featuresConfig?.claudeSubscriptionOAuth === true}
+              claudeOAuthCapability={featuresConfig?.claudeOAuthCapability}
+              onUpdateUser={async (userId, updates) => {
+                if (
+                  !onboardingWizardOwner ||
+                  userId !== onboardingWizardOwner.userId ||
+                  !isOnboardingOwnerCurrent(onboardingWizardOwner)
+                ) {
+                  return;
                 }
-              }
-            }}
-            onCheckAuth={async (tool, apiKey) => {
-              if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) {
-                return { status: 'unknown', authenticated: false, method: 'none' };
-              }
-              const result = await handleCheckAuth(tool, apiKey);
-              return isOnboardingOwnerCurrent(onboardingWizardOwner)
-                ? result
-                : { status: 'unknown', authenticated: false, method: 'none' };
-            }}
-          />
-        </ConfigProvider>
-
-        <DeviceRouter />
-        <Suspense fallback={routeFallback}>
-          <Routes>
-            {/* Demo routes */}
-            <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
-            <Route path="/demo/marketing-screenshots" element={<MarketingScreenshotPage />} />
-            <Route path="/demo/marketing-video" element={<MarketingVideoPage />} />
-
-            {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
-            {KNOWLEDGE_ROUTE_PATHS.map((path) => (
-              <Route key={path} path={path} element={knowledgePageElement} />
-            ))}
-
-            {MCP_RECOVERY_ROUTE_PATHS.map((path) => (
-              <Route key={path} path={path} element={mcpRecoveryElement} />
-            ))}
-
-            {MCP_CONNECT_ROUTE_PATHS.map((path) => (
-              <Route key={path} path={path} element={mcpConnectElement} />
-            ))}
-
-            {MCP_OAUTH_RETURN_ROUTE_PATHS.map((path) => (
-              <Route key={path} path={path} element={mcpOAuthReturnElement} />
-            ))}
-
-            {CLI_LOGIN_ROUTE_PATHS.map((path) => (
-              <Route key={path} path={path} element={cliLoginElement} />
-            ))}
-
-            {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,
-                but does not start the Workspace board/session store on fresh loads. */}
-            {ARTIFACT_FULLSCREEN_ROUTE_PATHS.map((path) => (
-              <Route key={path} path={path} element={artifactFullscreenElement} />
-            ))}
-
-            {/* Mobile routes */}
-            <Route
-              path="/m/*"
-              element={
-                <MobileApp
-                  client={client}
-                  user={user}
-                  authGeneration={authenticationGeneration}
-                  isAuthenticationGenerationCurrent={isAuthenticationGenerationCurrent}
-                  topBanner={onboardingBanners}
-                  onSendPrompt={handleSendPrompt}
-                  onCreateSession={handleCreateSession}
-                  onCreateBranch={handleCreateBranch}
-                  onCreateBoard={handleCreateBoard}
-                  onCreateRepo={handleCreateRepo}
-                  onCreateLocalRepo={handleCreateLocalRepo}
-                  branchStorageConfig={featuresConfig?.branchStorage}
-                  onForkSession={handleForkSession}
-                  onBtwForkSession={handleBtwForkSession}
-                  onSpawnSession={handleSpawnSession}
-                  onUpdateSession={handleUpdateSession}
-                  onDeleteSession={handleDeleteSession}
-                  onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
-                  onUpdateSessionEnvSelections={handleUpdateSessionEnvSelections}
-                  onSendComment={handleSendComment}
-                  onReplyComment={handleReplyComment}
-                  onResolveComment={handleResolveComment}
-                  onToggleReaction={handleToggleReaction}
-                  onDeleteComment={handleDeleteComment}
-                  onLogout={logout}
-                  onRetryConnection={retryConnection}
-                  externalAppLink={headerInstanceConfig?.externalAppLink}
-                  externalAppLabel={headerInstanceConfig?.externalAppLabel}
-                  onOpenWorkspaceSettings={setSettingsTabToOpen}
-                  onOpenUserSettings={() => setOpenUserSettings(true)}
-                  onOpenAgenticToolSettings={(tool) => {
-                    setUserSettingsInitialTab(tool);
-                    setOpenUserSettings(true);
-                  }}
-                  onUpdateBranch={handleUpdateBranch}
-                  onUpdateRepo={handleUpdateRepo}
-                  onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
-                  onExecuteScheduleNow={handleExecuteScheduleNow}
-                  onUpdateBoard={handleUpdateBoard}
-                />
-              }
+                const wizardWrite = handleUpdateUser(userId, updates, { silent: true });
+                onboardingWizardWriteRef.current = {
+                  owner: onboardingWizardOwner,
+                  promise: wizardWrite,
+                };
+                try {
+                  await wizardWrite;
+                } finally {
+                  if (onboardingWizardWriteRef.current?.promise === wizardWrite) {
+                    onboardingWizardWriteRef.current = null;
+                  }
+                }
+              }}
+              onCheckAuth={async (tool, apiKey) => {
+                if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) {
+                  return { status: 'unknown', authenticated: false, method: 'none' };
+                }
+                const result = await handleCheckAuth(tool, apiKey);
+                return isOnboardingOwnerCurrent(onboardingWizardOwner)
+                  ? result
+                  : { status: 'unknown', authenticated: false, method: 'none' };
+              }}
             />
+          </ConfigProvider>
 
-            {/* Desktop routes — flat entity URLs. Boards have their own
+          <DeviceRouter />
+          <Suspense fallback={routeFallback}>
+            <Routes>
+              {/* Demo routes */}
+              <Route path="/demo/streamdown" element={<StreamdownDemoPage />} />
+              <Route path="/demo/marketing-screenshots" element={<MarketingScreenshotPage />} />
+              <Route path="/demo/marketing-video" element={<MarketingVideoPage />} />
+
+              {/* Knowledge route shell. `/kb` is a short alias for the same surface. */}
+              {KNOWLEDGE_ROUTE_PATHS.map((path) => (
+                <Route key={path} path={path} element={knowledgePageElement} />
+              ))}
+
+              {MCP_RECOVERY_ROUTE_PATHS.map((path) => (
+                <Route key={path} path={path} element={mcpRecoveryElement} />
+              ))}
+
+              {MCP_CONNECT_ROUTE_PATHS.map((path) => (
+                <Route key={path} path={path} element={mcpConnectElement} />
+              ))}
+
+              {MCP_OAUTH_RETURN_ROUTE_PATHS.map((path) => (
+                <Route key={path} path={path} element={mcpOAuthReturnElement} />
+              ))}
+
+              {CLI_LOGIN_ROUTE_PATHS.map((path) => (
+                <Route key={path} path={path} element={cliLoginElement} />
+              ))}
+
+              {/* Lightweight artifact fullscreen surface. Uses the shared auth shell,
+                but does not start the Workspace board/session store on fresh loads. */}
+              {ARTIFACT_FULLSCREEN_ROUTE_PATHS.map((path) => (
+                <Route key={path} path={path} element={artifactFullscreenElement} />
+              ))}
+
+              {/* Mobile routes */}
+              <Route
+                path="/m/*"
+                element={
+                  <MobileApp
+                    client={client}
+                    user={user}
+                    authGeneration={authenticationGeneration}
+                    isAuthenticationGenerationCurrent={isAuthenticationGenerationCurrent}
+                    topBanner={onboardingBanners}
+                    onSendPrompt={handleSendPrompt}
+                    onCreateSession={handleCreateSession}
+                    onCreateBranch={handleCreateBranch}
+                    onCreateBoard={handleCreateBoard}
+                    onCreateRepo={handleCreateRepo}
+                    onCreateLocalRepo={handleCreateLocalRepo}
+                    branchStorageConfig={featuresConfig?.branchStorage}
+                    onForkSession={handleForkSession}
+                    onBtwForkSession={handleBtwForkSession}
+                    onSpawnSession={handleSpawnSession}
+                    onUpdateSession={handleUpdateSession}
+                    onDeleteSession={handleDeleteSession}
+                    onUpdateSessionMcpServers={handleUpdateSessionMcpServers}
+                    onUpdateSessionEnvSelections={handleUpdateSessionEnvSelections}
+                    onSendComment={handleSendComment}
+                    onReplyComment={handleReplyComment}
+                    onResolveComment={handleResolveComment}
+                    onToggleReaction={handleToggleReaction}
+                    onDeleteComment={handleDeleteComment}
+                    onLogout={logout}
+                    onRetryConnection={retryConnection}
+                    externalAppLink={headerInstanceConfig?.externalAppLink}
+                    externalAppLabel={headerInstanceConfig?.externalAppLabel}
+                    onOpenWorkspaceSettings={setSettingsTabToOpen}
+                    onOpenUserSettings={() => setOpenUserSettings(true)}
+                    onOpenAgenticToolSettings={(tool) => {
+                      setUserSettingsInitialTab(tool);
+                      setOpenUserSettings(true);
+                    }}
+                    onUpdateBranch={handleUpdateBranch}
+                    onUpdateRepo={handleUpdateRepo}
+                    onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
+                    onExecuteScheduleNow={handleExecuteScheduleNow}
+                    onUpdateBoard={handleUpdateBoard}
+                  />
+                }
+              />
+
+              {/* Desktop routes — flat entity URLs. Boards have their own
                 path because they're a destination; sub-entities (session,
                 branch, artifact) get top-level paths keyed by short ID
                 so they're stable across board moves. The app resolves the
@@ -2279,28 +2297,29 @@ function AppContent() {
                 `ENTITY_PATH_SEGMENTS` constant so this list and the
                 URL/path builders can't drift. See
                 `packages/core/src/utils/url.ts`. */}
-            <Route
-              path={`/${ENTITY_PATH_SEGMENTS.board}/:boardParam/`}
-              element={desktopAppElement}
-            />
-            <Route
-              path={`/${ENTITY_PATH_SEGMENTS.session}/:sessionShortId/`}
-              element={desktopAppElement}
-            />
-            <Route
-              path={`/${ENTITY_PATH_SEGMENTS.branch}/:branchShortId/`}
-              element={desktopAppElement}
-            />
-            <Route
-              path={`/${ENTITY_PATH_SEGMENTS.artifact}/:artifactShortId/`}
-              element={desktopAppElement}
-            />
+              <Route
+                path={`/${ENTITY_PATH_SEGMENTS.board}/:boardParam/`}
+                element={desktopAppElement}
+              />
+              <Route
+                path={`/${ENTITY_PATH_SEGMENTS.session}/:sessionShortId/`}
+                element={desktopAppElement}
+              />
+              <Route
+                path={`/${ENTITY_PATH_SEGMENTS.branch}/:branchShortId/`}
+                element={desktopAppElement}
+              />
+              <Route
+                path={`/${ENTITY_PATH_SEGMENTS.artifact}/:artifactShortId/`}
+                element={desktopAppElement}
+              />
 
-            {/* Fallback for unknown / root paths */}
-            <Route path="/*" element={desktopAppElement} />
-          </Routes>
-        </Suspense>
-      </MCPCatalogModalProvider>
+              {/* Fallback for unknown / root paths */}
+              <Route path="/*" element={desktopAppElement} />
+            </Routes>
+          </Suspense>
+        </MCPCatalogModalProvider>
+      </ExampleBoardProvider>
     </ConnectionProvider>
   );
 }

@@ -732,7 +732,8 @@ export async function seedInitialDataInTransaction(
   return inserted.rowsAffected;
 }
 
-export async function seedInitialData(db: Database, createdBy: string): Promise<void> {
+/** Returns true when this call created the workspace's Main Board. */
+export async function seedInitialData(db: Database, createdBy: string): Promise<boolean> {
   try {
     // Insert atomically instead of using a read-then-write check. Multiple HA
     // daemons can reach first-run seeding together, and the unique tenant/slug
@@ -767,6 +768,7 @@ export async function seedInitialData(db: Database, createdBy: string): Promise<
     if (result > 0) {
       console.log('✅ Main Board created');
     }
+    return result > 0;
   } catch (error) {
     throw new MigrationError(
       `Failed to seed initial data: ${error instanceof Error ? error.message : String(error)}`,

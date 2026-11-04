@@ -78,6 +78,7 @@ import {
 } from '../../utils/connectionErrors';
 import { getContextWindowGradient, selectLatestContextWindow } from '../../utils/contextWindow';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { isExampleOwned, selectExampleOwnerId } from '../../utils/exampleBoard';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import {
@@ -92,6 +93,7 @@ import { describeSessionStatus } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { ExampleSessionFooter } from '../ExampleBoard/ExampleBoard';
 import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
@@ -406,6 +408,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // re-render it; each whole-map selector is a stable module-level reference, so
   // user and MCP updates are isolated from each other and from repo edits.
   const userById = useAgorStore(selectUserById);
+  const exampleOwnerId = selectExampleOwnerId({ userById });
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
 
@@ -1513,54 +1516,57 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onCodexPermissionChange: handleCodexPermissionChange,
   };
 
-  const sessionFooter = activeSession ? (
-    <SessionFooter
-      session={activeSession}
-      currentUserId={currentUserId}
-      footerTimerTask={footerTimerTask}
-      latestContextWindow={latestContextWindow}
-      footerGradient={footerGradient}
-      sessionMcpServerIds={sessionMcpServerIds}
-      sessionMcpLoadFailed={sessionMcpLoadFailed}
-      onSessionMcpRetry={onSessionMcpRetry}
-      unauthedMcpServers={unauthedMcpServers}
-      mcpServerById={mcpServerById}
-      userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
-      isRunning={isRunning}
-      isStopping={isStopping}
-      stopRequestInFlight={stopRequestInFlight}
-      recoveryTask={recoveryTask}
-      recoveryError={recoveryError}
-      canReopenSession={canReopenSession}
-      onRetryCleanup={stableFooterHandlers.onRetryCleanup}
-      hasInput={hasInput || hasComposerAttachments}
-      composerAttachmentsPresent={hasComposerAttachments}
-      composerAttachmentUploading={composerAttachmentUploading}
-      connectionDisabled={connectionDisabled}
-      toolCaps={toolCaps}
-      effortLevel={effortLevel}
-      permissionMode={permissionMode}
-      codexSandboxMode={codexSandboxMode}
-      codexApprovalPolicy={codexApprovalPolicy}
-      queuedTasks={queuedTasks}
-      client={client}
-      modelLabel={modelLabel}
-      modelConfig={modelConfig}
-      onModelConfigCommit={stableFooterHandlers.onModelConfigCommit}
-      onOpenSessionSettings={onOpenSettings}
-      onSendPrompt={stableFooterHandlers.onSendPrompt}
-      onStop={stableFooterHandlers.onStop}
-      onFork={stableFooterHandlers.onFork}
-      onBtwSend={stableFooterHandlers.onBtwSend}
-      onSpawnOpen={stableFooterHandlers.onSpawnOpen}
-      onAttachFiles={stableFooterHandlers.onAttachFiles}
-      onUploadOpen={stableFooterHandlers.onUploadOpen}
-      onEffortChange={stableFooterHandlers.onEffortChange}
-      onPermissionModeChange={stableFooterHandlers.onPermissionModeChange}
-      onCodexPermissionChange={stableFooterHandlers.onCodexPermissionChange}
-      promptInputSlot={promptInputSlot}
-    />
-  ) : null;
+  const sessionFooter =
+    session && isExampleOwned(session, exampleOwnerId) ? (
+      <ExampleSessionFooter sessionId={session.session_id} />
+    ) : activeSession ? (
+      <SessionFooter
+        session={activeSession}
+        currentUserId={currentUserId}
+        footerTimerTask={footerTimerTask}
+        latestContextWindow={latestContextWindow}
+        footerGradient={footerGradient}
+        sessionMcpServerIds={sessionMcpServerIds}
+        sessionMcpLoadFailed={sessionMcpLoadFailed}
+        onSessionMcpRetry={onSessionMcpRetry}
+        unauthedMcpServers={unauthedMcpServers}
+        mcpServerById={mcpServerById}
+        userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
+        isRunning={isRunning}
+        isStopping={isStopping}
+        stopRequestInFlight={stopRequestInFlight}
+        recoveryTask={recoveryTask}
+        recoveryError={recoveryError}
+        canReopenSession={canReopenSession}
+        onRetryCleanup={stableFooterHandlers.onRetryCleanup}
+        hasInput={hasInput || hasComposerAttachments}
+        composerAttachmentsPresent={hasComposerAttachments}
+        composerAttachmentUploading={composerAttachmentUploading}
+        connectionDisabled={connectionDisabled}
+        toolCaps={toolCaps}
+        effortLevel={effortLevel}
+        permissionMode={permissionMode}
+        codexSandboxMode={codexSandboxMode}
+        codexApprovalPolicy={codexApprovalPolicy}
+        queuedTasks={queuedTasks}
+        client={client}
+        modelLabel={modelLabel}
+        modelConfig={modelConfig}
+        onModelConfigCommit={stableFooterHandlers.onModelConfigCommit}
+        onOpenSessionSettings={onOpenSettings}
+        onSendPrompt={stableFooterHandlers.onSendPrompt}
+        onStop={stableFooterHandlers.onStop}
+        onFork={stableFooterHandlers.onFork}
+        onBtwSend={stableFooterHandlers.onBtwSend}
+        onSpawnOpen={stableFooterHandlers.onSpawnOpen}
+        onAttachFiles={stableFooterHandlers.onAttachFiles}
+        onUploadOpen={stableFooterHandlers.onUploadOpen}
+        onEffortChange={stableFooterHandlers.onEffortChange}
+        onPermissionModeChange={stableFooterHandlers.onPermissionModeChange}
+        onCodexPermissionChange={stableFooterHandlers.onCodexPermissionChange}
+        promptInputSlot={promptInputSlot}
+      />
+    ) : null;
 
   return (
     <div

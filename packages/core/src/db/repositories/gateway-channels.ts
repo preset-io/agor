@@ -44,7 +44,13 @@ import {
   update,
 } from '../database-wrapper';
 import { decryptApiKeyAsync, encryptApiKey } from '../encryption';
-import { type GatewayChannelInsert, type GatewayChannelRow, gatewayChannels } from '../schema';
+import { findExampleBoardOwnerId } from '../example-board';
+import {
+  branches,
+  type GatewayChannelInsert,
+  type GatewayChannelRow,
+  gatewayChannels,
+} from '../schema';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -827,6 +833,7 @@ export class GatewayChannelRepository
         this.db,
         async (txDb) => {
           await lockBranchForAdmission(txDb, insertData.target_branch_id);
+          await assertNotExampleBranch(txDb, insertData.target_branch_id);
           await insert(txDb, gatewayChannels).values(insertData).run();
           return select(txDb)
             .from(gatewayChannels)
@@ -1098,7 +1105,10 @@ export class GatewayChannelRepository
     return runDatabaseTransaction(
       this.db,
       async (txDb) => {
-        if (updates.target_branch_id) await lockBranchForAdmission(txDb, updates.target_branch_id);
+        if (updates.target_branch_id) {
+          await lockBranchForAdmission(txDb, updates.target_branch_id);
+          await assertNotExampleBranch(txDb, updates.target_branch_id);
+        }
         if (updates.enabled === true) {
           const target = await select(txDb)
             .from(gatewayChannels)
@@ -1331,5 +1341,18 @@ export class GatewayChannelRepository
         error
       );
     }
+  }
+}
+
+/** Example branches are read-only; no gateway may route messages into them. */
+async function assertNotExampleBranch(db: Database, branchId: string): Promise<void> {
+  const exampleOwnerId = await findExampleBoardOwnerId(db);
+  if (!exampleOwnerId) return;
+  const branch = await select(db, { created_by: branches.created_by })
+    .from(branches)
+    .where(eq(branches.branch_id, branchId))
+    .one();
+  if (branch?.created_by === exampleOwnerId) {
+    throw new RepositoryError('Example branches cannot be a gateway target');
   }
 }

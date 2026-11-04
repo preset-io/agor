@@ -39,6 +39,7 @@ export * from './client';
 export * from './database-wrapper';
 // Encryption utilities
 export * from './encryption';
+export * from './example-board';
 // First-run admin bootstrap (creates default admin if no users exist; also
 // re-attributes legacy 'anonymous' created_by rows from removed anonymous mode)
 export * from './first-run-bootstrap';

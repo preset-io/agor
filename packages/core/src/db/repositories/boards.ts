@@ -52,6 +52,7 @@ import {
   select,
   update,
 } from '../database-wrapper';
+import { findExampleBoardOwnerId } from '../example-board';
 import { type BoardInsert, type BoardRow, boards, users } from '../schema';
 import { ArtifactRepository } from './artifacts';
 import {
@@ -1089,6 +1090,10 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     }
     if (branch.archived) {
       throw new RepositoryError('Primary teammate branch must be active');
+    }
+    const exampleOwnerId = await findExampleBoardOwnerId(this.db);
+    if (exampleOwnerId && branch.created_by === exampleOwnerId) {
+      throw new RepositoryError('The example teammate cannot be a primary teammate');
     }
 
     return branch;

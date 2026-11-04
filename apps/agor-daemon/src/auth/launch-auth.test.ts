@@ -532,6 +532,30 @@ execution:
     ]);
   });
 
+  describe('example board', () => {
+    const exampleBoards = async () =>
+      (await new BoardRepository(db).findAll()).filter((b) => b.slug === 'example-wendy');
+    const withExample = (): AgorConfig => ({ ...baseConfig(), teammates: { example_board: true } });
+
+    it('seeds once, on the launch that creates the workspace', async () => {
+      mockExchange(signClaims());
+      await service(withExample()).create({ launchCode: 'first' });
+      mockExchange(signClaims({ sub: 'external-user-2', email: 'second@example.test' }));
+      await service(withExample()).create({ launchCode: 'second' });
+
+      expect(await exampleBoards()).toHaveLength(1);
+    });
+
+    it('never backfills a workspace created before the flag was on', async () => {
+      mockExchange(signClaims());
+      await service().create({ launchCode: 'flag-off' });
+      mockExchange(signClaims({ sub: 'external-user-2', email: 'second@example.test' }));
+      await service(withExample()).create({ launchCode: 'flag-on' });
+
+      expect(await exampleBoards()).toEqual([]);
+    });
+  });
+
   it('scopes launch auth with the configured tenant claim', async () => {
     const usersService = makeUsersService(db);
     const getSpy = vi.spyOn(usersService, 'get');

@@ -4,6 +4,7 @@
 
 import { type AgorConfig, resolveExternalLaunchSettings } from '@agor/core/config';
 import {
+  BoardRepository,
   boards,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -258,6 +259,33 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await expect(healthLabel(tenantA, dbB)).resolves.toBe('Acme');
       await expect(healthLabel(tenantB, dbA)).resolves.toBe('Data team');
       await expect(healthLabel(tenantC, dbB)).resolves.toBe('config-label');
+    });
+
+    it('seeds the example board only into the tenant whose workspace was just created', async () => {
+      const exampleConfig: AgorConfig = { ...config(), teammates: { example_board: true } };
+      const existing = `example-existing-${generateId()}`;
+      const fresh = `example-fresh-${generateId()}`;
+      const assertions = new Map([
+        ['existing', signClaims({ subject: 'x', email: 'x@example.invalid', tenantId: existing })],
+        ['fresh', signClaims({ subject: 'f', email: 'f@example.invalid', tenantId: fresh })],
+      ]);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (_url: string, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as { launch_code?: string };
+          return Response.json({ assertion: assertions.get(body.launch_code ?? '') });
+        })
+      );
+      await service(dbA).create({ launchCode: 'existing' });
+      await service(dbB, exampleConfig).create({ launchCode: 'fresh' });
+      await service(dbA, exampleConfig).create({ launchCode: 'existing' });
+
+      const exampleBoards = (tenantId: string) =>
+        runWithTenantDatabaseScope(dbA, tenantId, async (scoped) =>
+          (await new BoardRepository(scoped).findAll()).filter((b) => b.slug === 'example-wendy')
+        );
+      await expect(exampleBoards(fresh)).resolves.toHaveLength(1);
+      await expect(exampleBoards(existing)).resolves.toEqual([]);
     });
   }
 );

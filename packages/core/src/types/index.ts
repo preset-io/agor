@@ -14,6 +14,7 @@ export * from './capability-policy';
 export * from './card';
 export * from './context';
 export * from './environment-command';
+export * from './example-board';
 export * from './executor-admission';
 export * from './feathers';
 export * from './file';

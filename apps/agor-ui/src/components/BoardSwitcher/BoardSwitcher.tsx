@@ -10,15 +10,19 @@ import {
   Grid,
   Input,
   Space,
+  Tag,
   Tooltip,
   Typography,
   theme,
 } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useExampleBoardActions } from '../../contexts/ExampleBoardContext';
 import { useBranchCounts } from '../../hooks/useBranchCounts';
 import { useIsTouchInput } from '../../hooks/useCanHover';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
+import { useAgorStore } from '../../store/agorStore';
+import { isExampleOwned, selectExampleOwnerId } from '../../utils/exampleBoard';
 import { OPEN_BOARD_SWITCHER_EVENT, onShellPicker } from '../../utils/shellEvents';
 import { BoardEditModal } from '../BoardEditModal';
 import { BoardTile, getBoardEmoji } from '../BoardTile';
@@ -63,7 +67,11 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   const coarsePointer = useIsTouchInput();
 
   const currentBoard = boards.find((b) => b.board_id === currentBoardId);
-  const canManage = useCanManageBoard(client, currentBoard, currentUser);
+  const exampleOwnerId = useAgorStore(selectExampleOwnerId);
+  const exampleHidden = useExampleBoardActions()?.hidden ?? false;
+  const canManage =
+    useCanManageBoard(client, currentBoard, currentUser) &&
+    !isExampleOwned(currentBoard, exampleOwnerId);
 
   const { counts: branchCountByBoard, loaded: branchCountsLoaded } = useBranchCounts(client);
 
@@ -114,7 +122,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
 
   const boardMenuItems: MenuProps['items'] = useMemo(() => {
     const sortedBoards = boards
-      .filter((b) => !b.archived)
+      .filter((b) => !b.archived && !(exampleHidden && isExampleOwned(b, exampleOwnerId)))
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
     const filteredBoards = filterText
       ? sortedBoards.filter((board) => board.name.toLowerCase().includes(filterText.toLowerCase()))
@@ -157,6 +165,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
                   {board.name}
                 </Text>
               </Tooltip>
+              {isExampleOwned(board, exampleOwnerId) && <ExampleTag />}
             </Flex>
             <Badge
               count={branchCount}
@@ -190,6 +199,8 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     token,
     filterText,
     keyboardTooltipBoardId,
+    exampleHidden,
+    exampleOwnerId,
   ]);
 
   const homeRow = (
@@ -346,6 +357,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
               <Text strong ellipsis style={{ flex: 1, minWidth: 0 }} data-current-board-name>
                 {currentBoard?.name || 'Home'}
               </Text>
+              {isExampleOwned(currentBoard, exampleOwnerId) && <ExampleTag />}
             </Flex>
             <DownOutlined
               style={{ fontSize: 12, color: token.colorTextSecondary, flexShrink: 0 }}
@@ -383,3 +395,5 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
 };
 
 export default BoardSwitcher;
+
+const ExampleTag = () => <Tag style={{ marginInlineEnd: 0, flexShrink: 0 }}>Example</Tag>;

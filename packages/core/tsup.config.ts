@@ -56,6 +56,7 @@ export default defineConfig({
     'utils/log-context': 'src/utils/log-context.ts', // Run context attached to JSON log lines
     'utils/jwt': 'src/utils/jwt.ts', // Browser-safe JWT decode (no signature verification)
     'seed/index': 'src/seed/index.ts', // Development database seeding
+    'seed/example-board': 'src/seed/example-board/index.ts', // Example board for new workspaces
     'callbacks/child-completion-template': 'src/callbacks/child-completion-template.ts', // Parent session callback templates
     'client/index': 'src/client/index.ts', // Client-safe core entrypoint for browser/SDK consumers
     'models/browser': 'src/models/browser.ts', // Browser-safe model metadata only

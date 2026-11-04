@@ -1,8 +1,9 @@
 import type { AgorClient, CreateRepoRequest, User } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
-import { selectMcpServerById, selectRepoById } from '../../store/selectors';
+import { selectMcpServerById } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
+import { selectCreatableRepoById } from '../../utils/exampleBoard';
 import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
 import { TeammateTab } from '../CreateDialog/tabs/TeammateTab';
 import { CreateModalShell } from './CreateModalShell';
@@ -43,7 +44,7 @@ export const CreateTeammateModal: React.FC<CreateTeammateModalProps> = ({
   onCreateTeammate,
   targetBoardName,
 }) => {
-  const repoById = useAgorStore(selectRepoById);
+  const repoById = useAgorStore(selectCreatableRepoById);
   const mcpServerById = useAgorStore(selectMcpServerById);
   const [isValid, setIsValid] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);

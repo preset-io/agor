@@ -93,6 +93,17 @@ export function resolveTeammateFrameworkRepoUrl(config: AgorConfig): string | un
   );
 }
 
+/** Example board seeding for new workspaces; `AGOR_EXAMPLE_BOARD=true|false` overrides config. */
+export function isExampleBoardEnabled(
+  config: AgorConfig,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  const override = env.AGOR_EXAMPLE_BOARD?.trim().toLowerCase();
+  if (override === 'true') return true;
+  if (override === 'false') return false;
+  return config.teammates?.example_board === true;
+}
+
 // ---------------------------------------------------------------------------
 // In-memory cache for the default-path config
 //
@@ -1152,7 +1163,13 @@ function validateConfig(config: AgorConfig): void {
     'override',
   ]);
   only(legacyConfig.branches, 'branches', RETIRED_CONFIG_KEYS.branches);
-  only(config.teammates, 'teammates', ['framework_repo_url']);
+  only(config.teammates, 'teammates', ['framework_repo_url', 'example_board']);
+  if (
+    config.teammates?.example_board !== undefined &&
+    typeof config.teammates.example_board !== 'boolean'
+  ) {
+    throw new Error('Config error: teammates.example_board must be a boolean');
+  }
   only(config.paths, 'paths', ['data_home']);
   only(config.analytics, 'analytics', ['enabled', 'client', 'extras', 'filters', 'plugins']);
   only(config.analytics?.client, 'analytics.client', ['app', 'version', 'debug']);

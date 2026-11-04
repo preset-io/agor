@@ -1399,6 +1399,8 @@ export interface AgorAnalyticsHttpBatchPluginSettings {
 export interface AgorTeammateSettings {
   /** Repository cloned by the onboarding wizard when creating the first teammate. */
   framework_repo_url?: string;
+  /** Seed the read-only example board when a workspace is first created. Default false. */
+  example_board?: boolean;
 }
 
 /**

@@ -67,6 +67,7 @@ import {
 import { SharedUserSettingsModal } from '../../surfaces/SharedUserSettingsModal';
 import type { AgenticToolOption, CreateRepoOptions } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
+import { isExampleOwned, selectExampleOwnerId } from '../../utils/exampleBoard';
 import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
@@ -82,6 +83,7 @@ import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CreateModals } from '../CreateModals';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
+import { ExampleBoardBanner } from '../ExampleBoard/ExampleBoard';
 import { HomePage } from '../HomePage';
 import { NewSessionModal } from '../NewSessionModal';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
@@ -535,6 +537,7 @@ export const App: React.FC<AppProps> = ({
   const currentBoard = useAgorStore(
     useMemo(() => makeBoardSelector(currentBoardId), [currentBoardId])
   );
+  const exampleOwnerId = useAgorStore(selectExampleOwnerId);
   const isHomeSurface = isRootHomePath && !hasExplicitEntityTarget;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
@@ -1296,6 +1299,9 @@ export const App: React.FC<AppProps> = ({
           onCreate={createFlows.openCreate}
         />
         {topBanner}
+        {!isHomeSurface && !isTeammatesPath && isExampleOwned(currentBoard, exampleOwnerId) && (
+          <ExampleBoardBanner boardId={currentBoardId} />
+        )}
         <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
           <PanelGroup
             id="main-layout"
