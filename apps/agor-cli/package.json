@@ -70,6 +70,9 @@
       "mcp": {
         "description": "Manage MCP servers"
       },
+      "pack": {
+        "description": "Export and import AI teammates as .agorpack files"
+      },
       "repo": {
         "description": "Manage repositories"
       },

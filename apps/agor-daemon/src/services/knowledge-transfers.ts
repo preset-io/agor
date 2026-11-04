@@ -8,17 +8,31 @@ import {
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden, NotFound } from '@agor/core/feathers';
 import {
+  decodeKnowledgeDocument,
+  encodeKnowledgeDocument,
+  exportRepositoryLinks,
+  importRepositoryLinks,
+  knowledgeRepositoryFiles,
   knowledgeTransferValidationIssues,
   knowledgeTransferValidationSummary,
+  parseKnowledgeYaml,
+  repositoryTransferManifest,
+  rewriteTransferLinks,
+  serializeKnowledgeYaml,
   transferDigest,
   transferDocumentMetadata,
   transferEntryDigest,
   transferRequestBytes,
   transferSha256,
+  validateRepositoryManifest,
+  validateTransferManifest,
 } from '@agor/core/knowledge';
 import type {
+  AgorPackAuthor,
+  AgorPackKnowledgeHistory,
   AuthenticatedParams,
   KnowledgeTransferBody,
+  KnowledgeTransferEntry,
   KnowledgeTransferPage,
   KnowledgeTransferWriteResult,
   User,
@@ -26,6 +40,7 @@ import type {
 } from '@agor/core/types';
 import {
   hasMinimumRole,
+  KNOWLEDGE_REPOSITORY,
   KNOWLEDGE_TRANSFER,
   knowledgeTransferHash,
   knowledgeTransferSlug,
@@ -66,6 +81,33 @@ const querySchema = z
   .strict();
 type TransferParams = AuthenticatedParams & { query?: Record<string, unknown> };
 
+type KnowledgeNamespaceRow = NonNullable<
+  Awaited<ReturnType<KnowledgeNamespaceRepository['findBySlug']>>
+>;
+
+function knowledgeNamespaceProjection(ns: KnowledgeNamespaceRow) {
+  return {
+    slug: ns.slug,
+    display_name: ns.display_name,
+    description: ns.description ?? null,
+    provenance: JSON.parse(
+      JSON.stringify({
+        source_uuid: ns.namespace_id,
+        kind: ns.kind,
+        owner_user_id: ns.owner_user_id,
+        created_by: ns.created_by,
+        visibility_default: ns.visibility_default,
+        others_can: ns.others_can,
+        repo_id: ns.repo_id,
+        branch_id: ns.branch_id,
+        created_at: ns.created_at,
+        updated_at: ns.updated_at,
+        metadata: ns.metadata ?? null,
+      })
+    ),
+  };
+}
+
 /** One request is one bounded DB unit. No local files, jobs or source-supplied identities. */
 export class KnowledgeTransfersService {
   constructor(
@@ -86,27 +128,7 @@ export class KnowledgeTransfersService {
     return namespace;
   }
   private namespaceProjection(ns: Awaited<ReturnType<KnowledgeNamespaceRepository['findBySlug']>>) {
-    if (!ns) return null;
-    return {
-      slug: ns.slug,
-      display_name: ns.display_name,
-      description: ns.description ?? null,
-      provenance: JSON.parse(
-        JSON.stringify({
-          source_uuid: ns.namespace_id,
-          kind: ns.kind,
-          owner_user_id: ns.owner_user_id,
-          created_by: ns.created_by,
-          visibility_default: ns.visibility_default,
-          others_can: ns.others_can,
-          repo_id: ns.repo_id,
-          branch_id: ns.branch_id,
-          created_at: ns.created_at,
-          updated_at: ns.updated_at,
-          metadata: ns.metadata ?? null,
-        })
-      ),
-    };
+    return ns ? knowledgeNamespaceProjection(ns) : null;
   }
   private async destination(owner: UserID, bundle: string, slug: string) {
     const receipt = await new KnowledgeTransferRepository(this.db).receipt(owner, bundle, slug, '');
@@ -369,4 +391,234 @@ export class KnowledgeTransfersService {
       return { target_id: created.document_id, skipped: false };
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// In-process repository export/import for `.agorpack`
+// ---------------------------------------------------------------------------
+
+/** Older versions kept per document when "+version history" is exported. */
+const PACK_HISTORY_VERSIONS_PER_DOCUMENT = 50;
+
+export interface KnowledgeRepositoryExport {
+  /** Repository v2 files: `manifest.yaml` and `docs/**.md`, as `agor kb export` writes them. */
+  files: Array<{ path: string; content: string }>;
+  documents: number;
+  history: AgorPackKnowledgeHistory | null;
+  historyVersions: number;
+}
+
+/**
+ * Export a namespace's current Markdown documents as Knowledge repository v2
+ * files — the same encoders and link rewriting as `agor kb export`, without
+ * the HTTP round trips. Must run inside a tenant database scope. Optional
+ * history carries up to {@link PACK_HISTORY_VERSIONS_PER_DOCUMENT} older
+ * versions per document, oldest first.
+ */
+export async function exportKnowledgeRepository(
+  db: TenantScopeAwareDatabase,
+  namespaceId: string,
+  options: { includeHistory: boolean; authorOf: (userId: string | null) => Promise<AgorPackAuthor> }
+): Promise<KnowledgeRepositoryExport> {
+  const ns = await new KnowledgeNamespaceRepository(db).findById(namespaceId);
+  if (!ns || ns.archived) throw new NotFound('Knowledge namespace not found');
+  const transfers = new KnowledgeTransferRepository(db);
+  const versions = new KnowledgeDocumentVersionRepository(db);
+  const rows = [];
+  for (let cursor = ''; ; ) {
+    const page = await transfers.inventory(ns.namespace_id, cursor);
+    rows.push(...page.entries);
+    if (!page.next_cursor) break;
+    cursor = page.next_cursor;
+  }
+  const documents: KnowledgeTransferEntry[] = [];
+  const bodies = new Map<string, string>();
+  const omissions = new Set<string>(['acl', 'graph', 'assets']);
+  for (const row of rows) {
+    if (row.mime_type !== 'text/markdown' || !row.version_id) {
+      omissions.add('non-markdown documents');
+      continue;
+    }
+    const version = await versions.findById(row.version_id);
+    if (typeof version?.content_text !== 'string') continue;
+    const key = `d${String(documents.length + 1).padStart(6, '0')}`;
+    documents.push({
+      key,
+      path: row.path,
+      title: row.title,
+      icon_emoji: row.icon_emoji,
+      kind: row.kind,
+      status: row.status,
+      sha256: transferSha256(version.content_text),
+      bytes: Buffer.byteLength(version.content_text, 'utf8'),
+      frontmatter: row.frontmatter,
+      provenance: row.provenance,
+    });
+    bodies.set(key, version.content_text);
+  }
+  if (!options.includeHistory) omissions.add('history');
+  const manifest = validateTransferManifest({
+    format: KNOWLEDGE_TRANSFER.format,
+    version: 1,
+    completed: true,
+    consistency: 'per-document-version; non-atomic-inventory',
+    exported_at: new Date().toISOString(),
+    namespace: knowledgeNamespaceProjection(ns),
+    documents,
+    omissions: [...omissions].sort(),
+  });
+  const fileByPath = knowledgeRepositoryFiles(manifest.documents.map((doc) => doc.path));
+  const files: KnowledgeRepositoryExport['files'] = [];
+  for (const doc of manifest.documents) {
+    const file = fileByPath.get(doc.path) as string;
+    const links = exportRepositoryLinks(bodies.get(doc.key) as string, manifest, fileByPath, file);
+    const { key: _key, sha256: _sha, bytes: _bytes, frontmatter, provenance, ...attributes } = doc;
+    files.push({
+      path: file,
+      content: encodeKnowledgeDocument(
+        {
+          format: KNOWLEDGE_REPOSITORY.documentFormat,
+          version: 2,
+          agor: { id: String(provenance.source_uuid), ...attributes },
+          frontmatter,
+          provenance,
+        },
+        links.content
+      ),
+    });
+  }
+  const index = validateRepositoryManifest({
+    format: manifest.format,
+    version: 2,
+    namespace: manifest.namespace,
+    documents: [...fileByPath.values()].sort(),
+    omissions: manifest.omissions,
+  });
+  files.unshift({ path: KNOWLEDGE_REPOSITORY.manifest, content: serializeKnowledgeYaml(index) });
+
+  let history: AgorPackKnowledgeHistory | null = null;
+  let historyVersions = 0;
+  if (options.includeHistory) {
+    history = { version: 1, documents: [] };
+    for (const row of rows) {
+      if (!row.version_id || row.mime_type !== 'text/markdown') continue;
+      const older = (await versions.findAll({ document_id: row.document_id as never }))
+        .filter((v) => v.version_id !== row.version_id && typeof v.content_text === 'string')
+        .slice(0, PACK_HISTORY_VERSIONS_PER_DOCUMENT)
+        .reverse();
+      if (older.length === 0) continue;
+      const entries = [];
+      for (const v of older) {
+        entries.push({
+          version_number: v.version_number,
+          title: null,
+          content: v.content_text as string,
+          change_summary: v.change_summary ?? null,
+          created_at: new Date(v.created_at).toISOString(),
+          originally_by: await options.authorOf(v.created_by ?? null),
+        });
+      }
+      history.documents.push({ path: row.path, versions: entries });
+      historyVersions += entries.length;
+    }
+  }
+  return { files, documents: manifest.documents.length, history, historyVersions };
+}
+
+/**
+ * Import Knowledge repository v2 files into an EXISTING namespace the caller
+ * owns (an imported teammate's memory namespace). Same decoding and link
+ * rewriting as `agor kb import`, but documents land in the given namespace and
+ * inherit its visibility defaults. A path that already exists (seeded) is
+ * overwritten. Older versions, when present, are replayed oldest-first before
+ * the current content so the document's history reads naturally.
+ */
+export async function importKnowledgeRepository(input: {
+  db: TenantScopeAwareDatabase;
+  app?: Application;
+  params: AuthenticatedParams;
+  namespace: { namespace_id: string; slug: string };
+  files: Map<string, string>;
+  history: AgorPackKnowledgeHistory | null;
+  importMetadata: Record<string, unknown>;
+}): Promise<{ documents: number; unresolvedLinks: number }> {
+  const manifestText = input.files.get(KNOWLEDGE_REPOSITORY.manifest);
+  if (!manifestText) throw new BadRequest('Knowledge section is missing manifest.yaml');
+  const index = validateRepositoryManifest(parseKnowledgeYaml(manifestText));
+  const decoded = [];
+  const paths = new Map<string, string>();
+  for (const file of index.documents) {
+    const text = input.files.get(file);
+    if (text === undefined) throw new BadRequest(`Missing indexed Knowledge document: ${file}`);
+    const doc = decodeKnowledgeDocument(text);
+    decoded.push({ ...doc, file });
+    paths.set(file, doc.header.agor.path);
+  }
+  const source = validateTransferManifest(repositoryTransferManifest(index, decoded));
+  const byId = new Map(decoded.map((doc) => [doc.header.agor.id, doc]));
+  const historyByPath = new Map(
+    (input.history?.documents ?? []).map((doc) => [doc.path, doc.versions])
+  );
+  const documents = new KnowledgeDocumentsService(input.db, input.app);
+  const repository = new KnowledgeDocumentRepository(input.db);
+  const written: string[] = [];
+  let unresolvedLinks = 0;
+  const localize = (body: string, file: string) => {
+    const linked = rewriteTransferLinks(body, source, input.namespace.slug);
+    const relative = importRepositoryLinks(linked.content, file, paths, input.namespace.slug);
+    unresolvedLinks += linked.unresolved + relative.unresolved;
+    return relative.content;
+  };
+  for (const entry of source.documents) {
+    const doc = byId.get(String(entry.provenance.source_uuid));
+    if (!doc) continue;
+    const metadata = { ...transferDocumentMetadata(entry), ...input.importMetadata };
+    const steps = [
+      ...(historyByPath.get(entry.path) ?? []).map((version) => ({
+        content: localize(version.content, doc.file),
+        summary: `Imported version ${version.version_number}${
+          version.originally_by.name ? ` (originally by ${version.originally_by.name})` : ''
+        }`,
+      })),
+      { content: localize(doc.body, doc.file), summary: 'Imported current Knowledge document' },
+    ];
+    let documentId = (
+      await repository.findByNamespaceAndPath(input.namespace.namespace_id as never, entry.path)
+    )?.document_id as string | undefined;
+    for (const step of steps) {
+      if (!documentId) {
+        const created = await documents.create(
+          {
+            namespace_id: input.namespace.namespace_id as never,
+            path: entry.path,
+            title: entry.title,
+            icon_emoji: entry.icon_emoji,
+            kind: entry.kind,
+            status: entry.status,
+            content_text: step.content,
+            frontmatter: entry.frontmatter,
+            metadata,
+            change_summary: step.summary,
+          },
+          input.params
+        );
+        if (Array.isArray(created)) throw new Error('Unexpected bulk Knowledge result');
+        documentId = created.document_id;
+      } else {
+        await documents.patch(
+          documentId,
+          {
+            title: entry.title,
+            content_text: step.content,
+            frontmatter: entry.frontmatter,
+            change_summary: step.summary,
+          },
+          input.params
+        );
+      }
+    }
+    if (documentId) written.push(documentId);
+  }
+  for (const id of written) await documents.reconcileReferences(id, input.params);
+  return { documents: written.length, unresolvedLinks };
 }

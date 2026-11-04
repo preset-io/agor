@@ -79,6 +79,12 @@ export const ROOT_COMMANDS = [
   },
   { name: 'board', description: 'Manage boards', group: 'connected', policy: 'connection' },
   {
+    name: 'pack',
+    description: 'Export and import AI teammates as .agorpack files',
+    group: 'connected',
+    policy: 'connection',
+  },
+  {
     name: 'kb',
     description: 'Export and import Knowledge namespaces',
     group: 'connected',

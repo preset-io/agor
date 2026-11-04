@@ -5,7 +5,7 @@ import {
   getAgorHome,
   getManagedStorageSegments,
 } from '@agor/core/config';
-import type { UploadStagingStore } from '@agor/core/types';
+import { AGOR_PACK, type UploadStagingStore } from '@agor/core/types';
 import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import { MetadataUploadStagingStore } from './metadata-upload-staging-store.js';
 import { parseS3UploadLocation, S3UploadStagingStore } from './s3-upload-staging-store.js';
@@ -26,6 +26,26 @@ export function resolveLocalUploadDirectory(
 let factory: UploadStagingStoreFactory = () =>
   new LocalUploadStagingStore((tenantId) => getUploadDirectory(tenantId));
 let instance: UploadStagingStore | undefined;
+
+/**
+ * `.agorpack` files and executor pack fragments are staged as raw bytes in the
+ * same object store as uploads, under their own `agor-packs` namespace, with
+ * the pack size limit and a short TTL. They have no `uploads` row: the owner
+ * binding is (tenant, import/export id, branch-or-id, user), which the pack
+ * routes re-check on every read.
+ */
+const PACK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+let packFactory: UploadStagingStoreFactory = () =>
+  new LocalUploadStagingStore((tenantId) => join(getUploadDirectory(tenantId), 'agor-packs'), {
+    maxBytes: AGOR_PACK.maxBytes,
+    ttlMs: PACK_TTL_MS,
+  });
+let packInstance: UploadStagingStore | undefined;
+
+export function getAgorPackStagingStore(): UploadStagingStore {
+  packInstance ??= packFactory();
+  return packInstance;
+}
 
 /** Application composition seam used by local self-hosted and Cloud adapters. */
 export function configureUploadStagingStore(next: UploadStagingStoreFactory): void {
@@ -55,6 +75,15 @@ export function configureUploadStagingStoreFromConfig(
         : new S3UploadStagingStore(parseS3UploadLocation(url), { maxBytes, ttlMs });
       return db ? new MetadataUploadStagingStore(db, adapter) : adapter;
     });
+    packFactory = () => {
+      const url = new URL(location);
+      url.pathname = `${url.pathname.replace(/\/$/, '')}/agor-packs`;
+      return new S3UploadStagingStore(parseS3UploadLocation(url), {
+        maxBytes: AGOR_PACK.maxBytes,
+        ttlMs: PACK_TTL_MS,
+      });
+    };
+    packInstance = undefined;
     return;
   }
   const expanded = expandHomePath(location);
@@ -68,6 +97,13 @@ export function configureUploadStagingStoreFromConfig(
     );
     return db ? new MetadataUploadStagingStore(db, adapter) : adapter;
   });
+  packFactory = () =>
+    new LocalUploadStagingStore(
+      (tenantId) =>
+        join(resolveLocalUploadDirectory(expanded, tenantId, tenantSeparated), 'agor-packs'),
+      { maxBytes: AGOR_PACK.maxBytes, ttlMs: PACK_TTL_MS }
+    );
+  packInstance = undefined;
 }
 
 export function getUploadStagingStore(): UploadStagingStore {
@@ -79,4 +115,10 @@ export function resetUploadStagingStoreForTests(): void {
   configureUploadLimits(50 * 1024 * 1024);
   factory = () => new LocalUploadStagingStore((tenantId) => getUploadDirectory(tenantId));
   instance = undefined;
+  packFactory = () =>
+    new LocalUploadStagingStore((tenantId) => join(getUploadDirectory(tenantId), 'agor-packs'), {
+      maxBytes: AGOR_PACK.maxBytes,
+      ttlMs: PACK_TTL_MS,
+    });
+  packInstance = undefined;
 }

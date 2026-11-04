@@ -151,6 +151,40 @@ async function collect(stream: Readable, limit: number): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+export interface PackFragmentEntry {
+  path: string;
+  bytes: number;
+  mode: number;
+  open(): Promise<Readable>;
+}
+
+/**
+ * Visit every entry of a manifest-less pack fragment in central-directory
+ * order, with the same name, type, and size validation as a full pack.
+ */
+export async function forEachPackFragmentEntry(
+  source: AgorPackByteSource,
+  visit: (entry: PackFragmentEntry) => Promise<void>
+): Promise<void> {
+  const zip = await openZip(source);
+  try {
+    const entries = await readCentralDirectory(zip);
+    if (entries.has(AGOR_PACK.manifestPath)) {
+      throw new AgorPackFormatError('A pack fragment must not carry a manifest');
+    }
+    for (const [path, entry] of entries) {
+      await visit({
+        path,
+        bytes: entry.uncompressedSize,
+        mode: (entry.externalFileAttributes >>> 16) & 0o777,
+        open: () => openEntryStream(zip, entry),
+      });
+    }
+  } finally {
+    zip.close();
+  }
+}
+
 export class AgorPackReader {
   private constructor(
     private readonly zip: ZipFile,

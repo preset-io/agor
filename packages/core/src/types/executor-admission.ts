@@ -39,6 +39,8 @@ export const EXECUTOR_COMMAND_ADMISSION = {
   'branch.knowledge.read': 'utility',
   'branch.gateway.slack-file-upload': 'utility',
   'branch.upload.materialize': 'utility',
+  'branch.pack.collect': 'utility',
+  'branch.pack.materialize': 'utility',
   'branch.agor-yml.import': 'utility',
   'branch.agor-yml.export': 'utility',
   'environment.lifecycle': 'utility',

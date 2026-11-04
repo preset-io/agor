@@ -41,7 +41,9 @@ export type UploadProvenance =
   | 'gateway-slack'
   | 'gateway-discord'
   | 'gateway-teams'
-  | 'mcp-slack';
+  | 'mcp-slack'
+  /** Restored from an `.agorpack` import (and the staged pack itself). */
+  | 'import';
 export type UploadStatus = 'pending' | 'active' | 'deleting';
 
 export interface UploadOwner {

@@ -3056,6 +3056,138 @@ export async function deleteBranch(repoPath: string, branchName: string): Promis
   }
 }
 
+// ===== Teammate pack (.agorpack) =====
+
+/** Working-tree facts a teammate pack records about its branch checkout. */
+export interface PackWorkingTreeState {
+  headSha: string | null;
+  ref: string | null;
+  /** Modified, added, and untracked (not ignored) regular files. */
+  changed: string[];
+  /** Tracked files missing from the working tree. */
+  deleted: string[];
+  /** Non-regular files (symlinks, submodules) that cannot travel. */
+  skipped: string[];
+  /** Commits a destination cannot get from `origin` (all of them for a local home). */
+  unpushedCommits: number;
+}
+
+async function optionalRaw(
+  git: ReturnType<typeof simpleGit>,
+  args: string[]
+): Promise<string | null> {
+  try {
+    const out = (await git.raw(args)).trim();
+    return out.length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+function packHistoryRange(localHome: boolean): string[] {
+  // A local-home teammate has no publishing remote: its whole history travels.
+  return localHome ? ['--all'] : ['HEAD', '--not', '--remotes=origin'];
+}
+
+/**
+ * Describe a branch checkout for a teammate pack: HEAD, the checked-out
+ * branch, uncommitted/untracked files (gitignored files excluded), and how
+ * many commits exist only locally.
+ */
+export async function readPackWorkingTreeState(
+  repoPath: string,
+  options: { localHome: boolean }
+): Promise<PackWorkingTreeState> {
+  const { git } = createGit(repoPath);
+  const headSha = await optionalRaw(git, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const ref = await optionalRaw(git, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  const status = await git.raw([
+    'status',
+    '--porcelain=v1',
+    '-z',
+    '--untracked-files=all',
+    '--no-renames',
+    '--ignore-submodules=none',
+  ]);
+  const changed: string[] = [];
+  const deleted: string[] = [];
+  const skipped: string[] = [];
+  for (const record of status.split('\0')) {
+    if (record.length < 4) continue;
+    const path = record.slice(3);
+    let info: Awaited<ReturnType<typeof lstat>> | null = null;
+    try {
+      info = await lstat(join(repoPath, path));
+    } catch {
+      info = null;
+    }
+    if (!info) deleted.push(path);
+    else if (info.isFile()) changed.push(path);
+    else skipped.push(path);
+  }
+  let unpushedCommits = 0;
+  if (headSha) {
+    const count = await optionalRaw(git, [
+      'rev-list',
+      '--count',
+      ...packHistoryRange(options.localHome),
+    ]);
+    unpushedCommits = count ? Number.parseInt(count, 10) || 0 : 0;
+  }
+  return {
+    headSha,
+    ref,
+    changed: changed.sort(),
+    deleted: deleted.sort(),
+    skipped,
+    unpushedCommits,
+  };
+}
+
+/**
+ * Write a git bundle of the history a destination cannot fetch from `origin`
+ * (everything for a local home). Returns false when there is nothing to bundle.
+ */
+export async function createPackBundle(
+  repoPath: string,
+  bundlePath: string,
+  options: { localHome: boolean }
+): Promise<boolean> {
+  const state = await readPackWorkingTreeState(repoPath, options);
+  if (!state.headSha || state.unpushedCommits === 0) return false;
+  const { git } = createGit(repoPath);
+  await git.raw(['bundle', 'create', bundlePath, ...packHistoryRange(options.localHome)]);
+  return true;
+}
+
+/**
+ * Move a fresh checkout to the HEAD recorded in a pack bundle. The bundle's
+ * prerequisites must already be present (fetched from `origin`, or none for a
+ * local-home bundle); `git bundle verify` refuses otherwise.
+ */
+export async function applyPackBundle(repoPath: string, bundlePath: string): Promise<string> {
+  const { git: transfer } = createLocalTransferGit(repoPath);
+  try {
+    await transfer.raw(['bundle', 'verify', '--quiet', bundlePath]);
+  } catch {
+    throw new Error(
+      'The packed git history needs commits this checkout does not have; push the source branch and export again'
+    );
+  }
+  await transfer.raw([
+    'fetch',
+    '--no-tags',
+    '--no-write-fetch-head',
+    bundlePath,
+    'HEAD:refs/agor-pack/head',
+  ]);
+  const { git } = createGit(repoPath);
+  const sha = (await git.raw(['rev-parse', '--verify', 'refs/agor-pack/head^{commit}'])).trim();
+  await git.raw(['reset', '--hard', sha]);
+  await git.raw(['update-ref', '-d', 'refs/agor-pack/head']);
+  return sha;
+}
+
 /**
  * Re-export for test helpers only.
  * Production service code must use createGit() to get the unsafe-ops flags,

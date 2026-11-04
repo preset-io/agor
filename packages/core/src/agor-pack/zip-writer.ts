@@ -13,6 +13,9 @@ import { ZipFile } from 'yazl';
 import { AGOR_PACK, type AgorPackEntry, type AgorPackManifest } from '../types/agor-pack';
 import { AgorPackFormatError, assertAgorPackEntryPath } from './paths';
 
+/** Teammate key used inside executor-produced pack fragments. */
+export const AGOR_PACK_FRAGMENT_KEY = 't00';
+
 /** Fixed mtime keeps two exports of identical content byte-comparable. */
 const ENTRY_MTIME = new Date('2020-01-01T00:00:00Z');
 
@@ -151,6 +154,16 @@ export class AgorPackWriter {
     );
     this.zip.end();
     return manifest;
+  }
+
+  /**
+   * Close a manifest-less fragment (the executor's git/Claude-home slice of
+   * one teammate, keyed {@link AGOR_PACK_FRAGMENT_KEY}); the daemon re-keys
+   * its entries into the real pack.
+   */
+  finishFragment(): void {
+    this.finished = true;
+    this.zip.end();
   }
 
   /** Abort: destroy the output so a consumer sees a truncated (invalid) zip. */

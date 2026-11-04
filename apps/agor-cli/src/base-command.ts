@@ -100,6 +100,19 @@ export abstract class BaseCommand extends Command {
     return client;
   }
 
+  /**
+   * Bearer credential for raw HTTP routes (binary uploads/downloads) on the
+   * connected daemon: the API key when one is configured, else the stored
+   * login token. Call after {@link connectToDaemon}.
+   */
+  protected async resolveHttpBearer(): Promise<string> {
+    const apiKey = getApiKeyFromEnv() ?? (await resolveConnectedDeploymentTarget())?.apiKey;
+    if (apiKey) return apiKey;
+    const storedAuth = await loadToken();
+    if (storedAuth?.version === 2) return storedAuth.accessToken;
+    this.error(`${chalk.red('✗ Not authenticated')}\n\nRun:\n  ${chalk.cyan('agor login')}`);
+  }
+
   /** Connect to the authenticated daemon for this machine's local deployment. */
   protected async connectToLocalDaemon(): Promise<AuthenticatedAgorClient> {
     const localTarget = await resolveLocalDeploymentTarget();

@@ -641,6 +641,45 @@ export const BranchUploadMaterializePayloadSchema = BasePayloadSchema.extend({
 export type BranchUploadMaterializePayload = z.infer<typeof BranchUploadMaterializePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
+// Teammate pack (.agorpack) Payloads
+// ═══════════════════════════════════════════════════════════
+
+const packBranchHomeParams = {
+  branchId: z.string().uuid(),
+  /** Whole teammate tree travels (framework teammate with no publishing remote). */
+  localHome: z.boolean(),
+  /** `<tenantDataRoot>/branch-homes/<branchId>`; verified by the executor. */
+  branchHome: z.string().min(1),
+  tenantDataRoot: z.string().min(1),
+};
+
+/** Collect a branch's unpushed git history, dirty files, and Claude memory. */
+export const BranchPackCollectPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.pack.collect'),
+  sessionToken: z.string(),
+  params: z.object({
+    ...packBranchHomeParams,
+    exportId: z.string().uuid(),
+    includeClaudeMemory: z.boolean(),
+  }),
+});
+export type BranchPackCollectPayload = z.infer<typeof BranchPackCollectPayloadSchema>;
+
+/** Write one imported teammate's git history, files, and Claude memory. */
+export const BranchPackMaterializePayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('branch.pack.materialize'),
+  sessionToken: z.string(),
+  params: z.object({
+    ...packBranchHomeParams,
+    importId: z.string().uuid(),
+    teammateKey: z.string().regex(/^t[0-9]{2,3}$/),
+    /** Claude project slug of the source branch path (renamed to this branch's). */
+    sourceClaudeProjectSlug: z.string().max(4096).nullable(),
+  }),
+});
+export type BranchPackMaterializePayload = z.infer<typeof BranchPackMaterializePayloadSchema>;
+
+// ═══════════════════════════════════════════════════════════
 // Branch .agor.yml Payloads
 // ═══════════════════════════════════════════════════════════
 
@@ -1017,6 +1056,8 @@ const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
   BranchKnowledgeReadPayloadSchema,
   BranchSlackFileUploadPayloadSchema,
   BranchUploadMaterializePayloadSchema,
+  BranchPackCollectPayloadSchema,
+  BranchPackMaterializePayloadSchema,
   BranchAgorYmlImportPayloadSchema,
   BranchAgorYmlExportPayloadSchema,
   EnvironmentLifecyclePayloadSchema,
@@ -1099,6 +1140,8 @@ export function getSupportedCommands(): string[] {
     'branch.knowledge.read',
     'branch.gateway.slack-file-upload',
     'branch.upload.materialize',
+    'branch.pack.collect',
+    'branch.pack.materialize',
     'branch.agor-yml.import',
     'branch.agor-yml.export',
     'environment.lifecycle',

@@ -338,7 +338,9 @@ export const agorPackScheduleSchema = z
     timezone_mode: z.string().max(32),
     timezone: z.string().max(100).nullable(),
     prompt: z.string().max(1_000_000),
+    /** Inline tool config; preset/default references are resolved by name on import. */
     agentic_tool_config: jsonRecord,
+    preset_name: z.string().max(500).nullable(),
     allow_concurrent_runs: z.boolean(),
     retention: nonNegativeInt,
     /** MCP servers by name; resolved on import, unresolved ones are reported. */
