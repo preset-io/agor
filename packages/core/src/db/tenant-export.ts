@@ -162,7 +162,10 @@ export async function exportTenant(
   const writeTable = async (name: string, lines: string[]) => {
     const resealed =
       options.transferKey && secrets
-        ? lines.map((line) => rewrapEnvelopesInText(line, options.transferKey!, secrets))
+        ? lines
+            .map((line) => rewrapEnvelopesInText(line, options.transferKey!, secrets))
+            // Fresh ciphertext can reorder rows; keep the archive in canonical byte order.
+            .sort((a, b) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8')))
         : lines;
     if (name === 'branches') branchLines.push(...resealed);
     const bytes = Buffer.from(resealed.length === 0 ? '' : `${resealed.join('\n')}\n`, 'utf8');

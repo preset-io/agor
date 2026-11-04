@@ -23,7 +23,13 @@ export const AGOR_PACK_SECRET_PATTERNS: readonly SecretPattern[] = [
   { id: 'github_pat', pattern: /\bgithub_pat_[A-Za-z0-9_]{22,}/ },
   { id: 'anthropic_key', pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
   { id: 'aws_access_key', pattern: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/ },
-  { id: 'private_key', pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/ },
+  // The whole block (header, key material, footer), or to the end of the text
+  // when the footer is missing, so redaction never leaves usable key material.
+  {
+    id: 'private_key',
+    pattern:
+      /-----BEGIN ([A-Z0-9 ]*)PRIVATE KEY-----(?:[\s\S]*?-----END \1PRIVATE KEY-----|[\s\S]*$)/,
+  },
 ];
 
 export interface SecretScanHit {
@@ -53,6 +59,47 @@ export function redactSecrets(text: string): { text: string; redacted: number } 
   return { text: out, redacted };
 }
 
+/**
+ * Redact every string inside a JSON-shaped value. Scanning serialized JSON is
+ * not enough: escapes such as `\n` put a word character right before a token,
+ * which defeats the patterns' word boundaries.
+ */
+export function redactSecretsDeep<T>(value: T): { value: T; redacted: number } {
+  let redacted = 0;
+  const walk = (node: unknown): unknown => {
+    if (typeof node === 'string') {
+      const result = redactSecrets(node);
+      redacted += result.redacted;
+      return result.text;
+    }
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === 'object') {
+      return Object.fromEntries(Object.entries(node).map(([key, child]) => [key, walk(child)]));
+    }
+    return node;
+  };
+  return { value: walk(value) as T, redacted };
+}
+
+/** Pattern ids found in any string (keys included) inside a JSON-shaped value. */
+export function scanForSecretsDeep(value: unknown): SecretScanHit[] {
+  const ids = new Set<string>();
+  const walk = (node: unknown) => {
+    if (typeof node === 'string') {
+      for (const hit of scanForSecrets(node)) ids.add(hit.id);
+    } else if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+    } else if (node && typeof node === 'object') {
+      for (const [key, child] of Object.entries(node)) {
+        walk(key);
+        walk(child);
+      }
+    }
+  };
+  walk(value);
+  return [...ids].map((id) => ({ id }));
+}
+
 export class AgorPackSecretError extends Error {
   constructor(
     readonly entryPath: string,
@@ -68,6 +115,17 @@ export class AgorPackSecretError extends Error {
 /** Throw when `text` (the content of `entryPath`) contains a secret shape. */
 export function assertNoSecrets(entryPath: string, text: string): void {
   const hits = scanForSecrets(text);
+  if (hits.length > 0) {
+    throw new AgorPackSecretError(
+      entryPath,
+      hits.map((hit) => hit.id)
+    );
+  }
+}
+
+/** {@link assertNoSecrets} over the decoded strings of a JSON-shaped value. */
+export function assertNoSecretsDeep(entryPath: string, value: unknown): void {
+  const hits = scanForSecretsDeep(value);
   if (hits.length > 0) {
     throw new AgorPackSecretError(
       entryPath,

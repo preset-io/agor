@@ -12,7 +12,13 @@ import {
   isPortableWorktreePath,
   renameClaudeProjectPath,
 } from './paths';
-import { assertNoSecrets, redactSecrets, scanForSecrets } from './secret-scan';
+import {
+  assertNoSecrets,
+  assertNoSecretsDeep,
+  redactSecrets,
+  redactSecretsDeep,
+  scanForSecrets,
+} from './secret-scan';
 import { AgorPackReader, bufferByteSource } from './zip-reader';
 import { AgorPackWriter, computePackContentSha256 } from './zip-writer';
 
@@ -80,10 +86,13 @@ async function buildPack(
 }
 
 /** A raw zip with arbitrary entry names, bypassing the writer's validation. */
-async function rawZip(files: Record<string, string>): Promise<Buffer> {
+async function rawZip(
+  files: Record<string, string> | Array<[string, string, { mode?: number }?]>
+): Promise<Buffer> {
   const zip = new ZipFile();
   const out = drain(zip.outputStream);
-  for (const [name, content] of Object.entries(files)) zip.addBuffer(Buffer.from(content), name);
+  const list = Array.isArray(files) ? files : Object.entries(files);
+  for (const [name, content, options] of list) zip.addBuffer(Buffer.from(content), name, options);
   zip.end();
   return out;
 }
@@ -180,6 +189,32 @@ describe('agor pack round trip', () => {
     await expect(AgorPackReader.open(bufferByteSource(zip))).rejects.toThrow(AgorPackFormatError);
   });
 
+  it('rejects a traversal name smuggled past the writer', async () => {
+    // yazl refuses `..`, so write a same-length name and patch the bytes.
+    const zip = await rawZip({ 'manifest.json': '{}', 'xx/escape.json': 'x' });
+    const patched = Buffer.from(
+      zip.toString('latin1').split('xx/escape').join('../escape'),
+      'latin1'
+    );
+    await expect(AgorPackReader.open(bufferByteSource(patched))).rejects.toThrow(/\.\.\/escape/);
+  });
+
+  it('rejects duplicate and symlink entries in a raw archive', async () => {
+    const duplicate = await rawZip([
+      ['manifest.json', '{}'],
+      ['teammates/t01/teammate.json', '{}'],
+      ['teammates/t01/teammate.json', '{"evil":true}'],
+    ]);
+    await expect(AgorPackReader.open(bufferByteSource(duplicate))).rejects.toThrow(/Duplicate/);
+    const symlink = await rawZip([
+      ['manifest.json', '{}'],
+      ['teammates/t01/git/worktree/link', '/etc/passwd', { mode: 0o120777 }],
+    ]);
+    await expect(AgorPackReader.open(bufferByteSource(symlink))).rejects.toThrow(
+      /not a regular file/
+    );
+  });
+
   it('rejects duplicate entries and oversized packs', async () => {
     const writer = new AgorPackWriter();
     writer.addJson('teammates/t01/teammate.json', {});
@@ -237,6 +272,30 @@ describe('agor pack secret scan', () => {
     expect(scanForSecrets(`token: ${value}\n`).map((hit) => hit.id)).toContain(id);
     expect(() => assertNoSecrets('teammates/t01/x', value)).toThrow(/looks like a secret/);
     expect(redactSecrets(`a ${value} b`).text).not.toContain(value);
+  });
+
+  it('redacts a whole private key block, not just its header', () => {
+    const key = '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----';
+    const out = redactSecrets(`before\n${key}\nafter`);
+    expect(out.text).toBe('before\n[redacted:private_key]\nafter');
+    expect(redactSecrets('-----BEGIN PRIVATE KEY-----\nMIIEvQ').text).toBe(
+      '[redacted:private_key]'
+    );
+  });
+
+  it('finds tokens that JSON escaping glues to a word character', () => {
+    const value = {
+      content: `token:\nghp_${'a'.repeat(36)}`,
+      nested: [`\t${'xoxb-123456789012-abc'}`],
+    };
+    // Serialized, `\nghp_` has no word boundary before `ghp_`.
+    expect(scanForSecrets(JSON.stringify(value)).map((hit) => hit.id)).not.toContain(
+      'github_token'
+    );
+    expect(() => assertNoSecretsDeep('x.json', value)).toThrow(/github_token/);
+    const redacted = redactSecretsDeep(value);
+    expect(redacted.redacted).toBe(2);
+    expect(JSON.stringify(redacted.value)).not.toMatch(/ghp_a|xoxb-1/);
   });
 
   it('passes ordinary text', () => {

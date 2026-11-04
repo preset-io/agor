@@ -22,6 +22,21 @@ export const MOVED_REPO_MESSAGE =
 
 type Row = Record<string, unknown> & { data?: Record<string, unknown> };
 
+type RawJson = { rawJSON(text: string): unknown };
+
+/**
+ * Parse an archive line without losing number precision: any number whose
+ * source text does not survive a JS `Number` round trip (big integers, `1.10`)
+ * is kept as raw JSON so `JSON.stringify` re-emits the original digits.
+ */
+function parseLossless(line: string): Row {
+  return JSON.parse(line, (_key, value, context?: { source?: string }) =>
+    typeof value === 'number' && context?.source !== undefined && String(value) !== context.source
+      ? (JSON as unknown as RawJson).rawJSON(context.source)
+      : value
+  ) as Row;
+}
+
 /** Rewrite archived JSONL lines of `repos`/`branches`; other tables pass through. */
 export function createCloneLayoutTransform(
   paths: CloneLayoutPaths,
@@ -29,7 +44,7 @@ export function createCloneLayoutTransform(
 ): (tableName: string, lines: string[]) => string[] {
   const slugByRepoId = new Map<string, string>();
   for (const line of readTable('repos')) {
-    const row = JSON.parse(line) as Row;
+    const row = parseLossless(line);
     if (typeof row.repo_id === 'string' && typeof row.slug === 'string') {
       slugByRepoId.set(row.repo_id, row.slug);
     }
@@ -37,7 +52,7 @@ export function createCloneLayoutTransform(
   return (tableName, lines) => {
     if (tableName === 'repos') {
       return lines.map((line) => {
-        const row = JSON.parse(line) as Row;
+        const row = parseLossless(line);
         const slug = String(row.slug);
         let local: string;
         try {
@@ -56,7 +71,7 @@ export function createCloneLayoutTransform(
     }
     if (tableName === 'branches') {
       return lines.map((line) => {
-        const row = JSON.parse(line) as Row;
+        const row = parseLossless(line);
         const slug = slugByRepoId.get(String(row.repo_id));
         if (!slug || typeof row.name !== 'string') return line;
         let path: string;

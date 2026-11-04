@@ -39,10 +39,12 @@ export interface SecretRewrapCounts {
   scannedValues: number;
   rewrappedValues: number;
   alreadyDestinationKey: number;
+  /** Envelopes neither key opens (wrong key, or sealed by some other install). */
+  unreadableValues: number;
 }
 
 export function emptySecretRewrapCounts(): SecretRewrapCounts {
-  return { scannedValues: 0, rewrappedValues: 0, alreadyDestinationKey: 0 };
+  return { scannedValues: 0, rewrappedValues: 0, alreadyDestinationKey: 0, unreadableValues: 0 };
 }
 
 function readable(value: string, key: string): boolean {
@@ -74,6 +76,7 @@ export function rewrapEnvelopesInText(
     try {
       plain = decryptApiKey(match, keys.fromKey);
     } catch {
+      counts.unreadableValues += 1;
       return match;
     }
     counts.rewrappedValues += 1;
@@ -177,6 +180,13 @@ export async function rewrapTenantSecrets(
     if (visibleRows === 0) {
       throw new TenantSecretRewrapError(
         'Secret rewrap saw no tenant rows; refusing to report success'
+      );
+    }
+    // A wrong source key opens nothing, so nothing counts as residual either:
+    // refuse rather than report success over secrets the runtime cannot read.
+    if (counts.unreadableValues !== 0) {
+      throw new TenantSecretRewrapError(
+        `${counts.unreadableValues} secret value(s) open with neither key; check that the source key is the one these secrets were sealed with`
       );
     }
     if (residual !== 0) {

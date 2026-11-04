@@ -19,11 +19,13 @@ import {
   AGOR_PACK_FRAGMENT_KEY,
   type AgorPackWriter,
   assertNoSecrets,
+  assertNoSecretsDeep,
   classifyEnvironmentVariants,
   claudeProjectSlug,
   forEachPackFragmentEntry,
   packSequence,
-  redactSecrets,
+  redactSecretsDeep,
+  scanForSecrets,
   teammatePackPath,
 } from '@agor/core/agor-pack';
 import type { AgorConfig } from '@agor/core/config';
@@ -121,15 +123,93 @@ function iso(value: string | number | Date | null | undefined): string {
   return new Date(value).toISOString();
 }
 
+/** Text files are scanned for secrets; binary files (NUL in the head) are not. */
+function looksLikeText(buffer: Buffer): boolean {
+  return !buffer.subarray(0, 8192).includes(0);
+}
+
+/** Buffer a stream up to `limit` bytes; null (stream drained) when it is larger. */
+async function readBounded(stream: NodeJS.ReadableStream, limit: number): Promise<Buffer | null> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of stream as AsyncIterable<Buffer | string>) {
+    const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    size += buffer.byteLength;
+    if (size > limit) {
+      (stream as unknown as { destroy?: () => void }).destroy?.();
+      return null;
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
 function envNamesIn(value: unknown, into: Set<string>): void {
   const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
   for (const match of text.matchAll(USER_ENV_TEMPLATE)) into.add(match[1] as string);
 }
 
 function scrubbedJson(path: string, value: unknown): string {
+  assertNoSecretsDeep(path, value);
   const text = `${JSON.stringify(value, null, 2)}\n`;
   assertNoSecrets(path, text);
   return text;
+}
+
+const CREDENTIAL_NAME =
+  /(api[_-]?key|access[_-]?key|key$|token|secret|passw|pwd|credential|signature|^-*sig$|^-*auth$|authorization)/i;
+const REDACTED = '[redacted]';
+const isTemplate = (value: string) => value.includes('{{');
+
+/**
+ * Drop credentials an MCP server URL carries inline (userinfo, credential-named
+ * query parameters). `{{ user.env.X }}` references are kept: they travel by name.
+ */
+export function sanitizeMcpUrl(url: string): { url: string; changed: boolean } {
+  let changed = false;
+  let out = url.replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#@]*)@/i, (whole, scheme, userinfo) => {
+    if (isTemplate(userinfo)) return whole;
+    changed = true;
+    return scheme;
+  });
+  out = out.replace(/\?([^#]*)/, (whole, query: string) => {
+    const parts = query.split('&').map((part) => {
+      const eq = part.indexOf('=');
+      if (eq < 0) return part;
+      const name = part.slice(0, eq);
+      const value = part.slice(eq + 1);
+      if (!CREDENTIAL_NAME.test(name) || isTemplate(value) || value === '') return part;
+      changed = true;
+      return `${name}=${REDACTED}`;
+    });
+    return `?${parts.join('&')}`;
+  });
+  return { url: out, changed };
+}
+
+/** Same for command arguments: `--api-key x` and `--api-key=x` lose their values. */
+export function sanitizeMcpArgs(args: readonly string[]): { args: string[]; changed: boolean } {
+  let changed = false;
+  const out = [...args];
+  for (let i = 0; i < out.length; i += 1) {
+    const arg = out[i] as string;
+    const flag = /^(-{1,2}[A-Za-z0-9_.-]+)(=(.*))?$/.exec(arg);
+    if (!flag || !CREDENTIAL_NAME.test(flag[1] as string)) continue;
+    if (flag[2] !== undefined) {
+      if (!isTemplate(flag[3] as string) && flag[3] !== '') {
+        out[i] = `${flag[1]}=${REDACTED}`;
+        changed = true;
+      }
+      continue;
+    }
+    const next = out[i + 1];
+    if (next !== undefined && !next.startsWith('-') && !isTemplate(next)) {
+      out[i + 1] = REDACTED;
+      changed = true;
+      i += 1;
+    }
+  }
+  return { args: out, changed };
 }
 
 export class AgorPackExporter {
@@ -295,7 +375,8 @@ export class AgorPackExporter {
             name: server.name,
             display_name: server.display_name ?? null,
             catalog_entry_name: server.catalog_entry_name ?? null,
-            url: server.transport === 'stdio' ? null : (server.url ?? null),
+            url:
+              server.transport === 'stdio' || !server.url ? null : sanitizeMcpUrl(server.url).url,
             custom: !server.catalog_entry_name,
             used_by: [...(usedBy.get(server.mcp_server_id) ?? [])].sort(),
           }))
@@ -641,9 +722,12 @@ export class AgorPackExporter {
               message_range: (task.message_range as Record<string, unknown> | undefined) ?? null,
             })),
         };
-        const sessionText = redactSecrets(`${JSON.stringify(file, null, 2)}\n`);
-        redacted += sessionText.redacted;
-        writer.addBuffer(path(`sessions/${sequence}.json`), sessionText.text);
+        const sessionFile = redactSecretsDeep(file);
+        redacted += sessionFile.redacted;
+        writer.addBuffer(
+          path(`sessions/${sequence}.json`),
+          `${JSON.stringify(sessionFile.value, null, 2)}\n`
+        );
 
         const messages = await this.unit(() =>
           messagesRepo.findAll({ sessionId: session.session_id })
@@ -669,12 +753,13 @@ export class AgorPackExporter {
                 }
               : null,
           };
-          const text = redactSecrets(JSON.stringify(line));
-          redacted += text.redacted;
-          for (const match of text.text.matchAll(UPLOAD_LINK)) {
+          const scrubbed = redactSecretsDeep(line);
+          redacted += scrubbed.redacted;
+          const text = JSON.stringify(scrubbed.value);
+          for (const match of text.matchAll(UPLOAD_LINK)) {
             uploadRefs.set(match[1] as string, session.session_id);
           }
-          lines.push(text.text);
+          lines.push(text);
         }
         messageCount += lines.length;
         writer.addBuffer(
@@ -724,6 +809,26 @@ export class AgorPackExporter {
           warnings.push(`Attachment ${row.displayName} is no longer available and was skipped.`);
           continue;
         }
+        // Attachments are user files: a text one carrying a token stays behind.
+        const content = await readBounded(stream, AGOR_PACK.maxTextEntryBytes);
+        if (
+          content &&
+          looksLikeText(content) &&
+          scanForSecrets(content.toString('utf8')).length > 0
+        ) {
+          warnings.push(
+            `Attachment ${row.displayName} looks like it contains a secret and was skipped.`
+          );
+          continue;
+        }
+        if (content === null) {
+          stream = await store.read({
+            tenantId: this.ctx.tenantId,
+            sessionId: row.sessionId,
+            branchId: row.branchId,
+            ref: row.ref,
+          });
+        }
         const meta: AgorPackUploadFile = {
           version: 1,
           ref: row.ref,
@@ -733,9 +838,12 @@ export class AgorPackExporter {
           size: row.size,
           created_at: iso(row.createdAt),
         };
-        await writer.addStream(path(`uploads/${row.ref}.data`), stream as never, {
-          compress: false,
-        });
+        if (content)
+          writer.addBuffer(path(`uploads/${row.ref}.data`), content, { compress: false });
+        else
+          await writer.addStream(path(`uploads/${row.ref}.data`), stream as never, {
+            compress: false,
+          });
         writer.addJson(path(`uploads/${row.ref}.json`), meta);
         count += 1;
         bytes += row.size;
@@ -786,17 +894,26 @@ export class AgorPackExporter {
         local_home: localHome,
         environment: repo.environment ?? null,
       },
-      mcp_servers: custom.map((server) => ({
-        name: server.name,
-        display_name: server.display_name ?? null,
-        description: server.description ?? null,
-        transport: server.transport,
-        url: server.url ?? null,
-        command: server.command ?? null,
-        args: server.args ?? null,
-        env_names: Object.keys(server.env ?? {}),
-        header_names: Object.keys(server.headers ?? {}),
-      })),
+      mcp_servers: custom.map((server) => {
+        const url = server.url ? sanitizeMcpUrl(server.url) : null;
+        const args = server.args ? sanitizeMcpArgs(server.args) : null;
+        if (url?.changed || args?.changed) {
+          warnings.push(
+            `MCP server "${server.name}" had credentials in its URL or arguments; they were removed. Re-enter them after import.`
+          );
+        }
+        return {
+          name: server.name,
+          display_name: server.display_name ?? null,
+          description: server.description ?? null,
+          transport: server.transport,
+          url: url?.url ?? null,
+          command: server.command ?? null,
+          args: args?.args ?? null,
+          env_names: Object.keys(server.env ?? {}),
+          header_names: Object.keys(server.headers ?? {}),
+        };
+      }),
       claude_project_slug: claudeProjectSlug(branch.path),
       originally_by: await this.authorOf(branch.created_by),
     };

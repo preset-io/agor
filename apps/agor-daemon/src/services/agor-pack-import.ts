@@ -9,13 +9,15 @@
  *   duplicating anything.
  * - Schedules arrive disabled, custom MCP servers disabled and without
  *   credentials, sessions archived as read-only history without SDK resume
- *   state, attachments keep their `upl_` refs.
+ *   state (prompting them is refused), attachments get fresh `upl_` refs
+ *   rewritten into the imported messages.
  * - Rows go through the existing services/repositories (createBranch, board
  *   import, Knowledge documents, schedules, MCP servers); the branch's files
  *   are written afterwards by the executor (`branch.pack.materialize`) once
  *   the checkout is ready.
  */
 
+import { randomUUID } from 'node:crypto';
 import {
   type AgorPackByteSource,
   AgorPackFormatError,
@@ -36,7 +38,6 @@ import {
   runWithTenantDatabaseScope,
   SessionRepository,
   TaskRepository,
-  UploadRepository,
 } from '@agor/core/db';
 import { BadRequest, Conflict, NotFound } from '@agor/core/feathers';
 import { generateId } from '@agor/core/ids';
@@ -45,9 +46,11 @@ import {
   type AgorPackDryRunTeammate,
   type AgorPackImport,
   type AgorPackManifest,
+  type AgorPackSessionFile,
   type AgorPackTeammateFile,
   type AgorPackTeammateResult,
   type AgorPackTeammateSummary,
+  type AgorPackUploadFile,
   type AuthenticatedParams,
   agorPackArtifactFileSchema,
   agorPackBoardFileSchema,
@@ -327,8 +330,9 @@ export class AgorPackImporter {
               teammatePackPath(teammate.key, 'teammate.json'),
               agorPackTeammateFileSchema
             );
-            // Registering/cloning a repository commits on its own; the teammate's
-            // rows then land in one tenant transaction (all or nothing).
+            // Not atomic: repository registration, the branch, and each row
+            // commit separately. A failure part-way leaves a partial teammate
+            // and no receipt result, so a retry creates another copy.
             const repo = await this.ensureRepo(file);
             const result = await this.write(() =>
               this.applyTeammate(reader, teammate, file, repo, request.board_id)
@@ -718,16 +722,49 @@ export class AgorPackImporter {
       }
     }
 
-    // 6. Sessions as archived history (+ tasks, messages).
-    const sessionsRepo = new SessionRepository(this.ctx.db);
-    const tasksRepo = new TaskRepository(this.ctx.db);
-    const messagesRepo = new MessagesRepository(this.ctx.db);
+    // 6. Sessions as archived history (+ tasks, messages). Attachments get
+    // fresh refs (refs are global keys; the originals may exist here or in
+    // another workspace), rewritten into message text before it is stored.
+    const uploadMetas: AgorPackUploadFile[] = [];
+    for (const entry of reader.list(path('uploads/'))) {
+      if (entry.path.endsWith('.json')) {
+        uploadMetas.push(await reader.readJson(entry.path, agorPackUploadFileSchema));
+      }
+    }
+    const newRefs = new Map(
+      uploadMetas.map((meta) => [meta.ref, `upl_${randomUUID()}` as UploadRef])
+    );
+    const rewriteRefs = (text: string) => {
+      let out = text;
+      for (const [from, to] of newRefs) if (out.includes(from)) out = out.split(from).join(to);
+      return out;
+    };
+
+    // All ids first, so parent/fork links and reverse children resolve in any
+    // entry order.
+    const sessionEntries: Array<{ path: string; file: AgorPackSessionFile }> = [];
     for (const entry of reader.list(path('sessions/'))) {
       if (!entry.path.endsWith('.json')) continue;
       const sessionFile = await reader.readJson(entry.path, agorPackSessionFileSchema);
+      sessionEntries.push({ path: entry.path, file: sessionFile });
+      remap.sessions[sessionFile.session.source_session_id] = generateId() as SessionID;
+    }
+    const childrenOf = new Map<string, SessionID[]>();
+    for (const { file: sessionFile } of sessionEntries) {
       const source = sessionFile.session;
-      const sessionId = generateId() as SessionID;
-      remap.sessions[source.source_session_id] = sessionId;
+      const parentSource = source.parent_source_session_id ?? source.forked_from_source_session_id;
+      if (!parentSource || !remap.sessions[parentSource]) continue;
+      const list = childrenOf.get(parentSource) ?? [];
+      list.push(remap.sessions[source.source_session_id] as SessionID);
+      childrenOf.set(parentSource, list);
+    }
+
+    const sessionsRepo = new SessionRepository(this.ctx.db);
+    const tasksRepo = new TaskRepository(this.ctx.db);
+    const messagesRepo = new MessagesRepository(this.ctx.db);
+    for (const { path: entryPath, file: sessionFile } of sessionEntries) {
+      const source = sessionFile.session;
+      const sessionId = remap.sessions[source.source_session_id] as SessionID;
       const taskIds = new Map(
         sessionFile.tasks.map((task) => [task.source_task_id, generateId() as TaskID])
       );
@@ -751,7 +788,7 @@ export class AgorPackImporter {
           genealogy: {
             ...(parent ? { parent_session_id: parent as SessionID } : {}),
             ...(forked ? { forked_from_session_id: forked as SessionID } : {}),
-            children: [],
+            children: childrenOf.get(source.source_session_id) ?? [],
           },
           tasks: [...taskIds.values()],
           archived: true,
@@ -771,7 +808,7 @@ export class AgorPackImporter {
             task_id: taskIds.get(task.source_task_id) as TaskID,
             session_id: sessionId,
             created_by: userId,
-            full_prompt: task.full_prompt,
+            full_prompt: rewriteRefs(task.full_prompt),
             status: (TERMINAL_TASK_STATUSES.has(task.status)
               ? task.status
               : TaskStatus.STOPPED) as never,
@@ -782,7 +819,7 @@ export class AgorPackImporter {
           })
         );
       }
-      const messagesPath = entry.path.replace(/\.json$/, '.messages.jsonl');
+      const messagesPath = entryPath.replace(/\.json$/, '.messages.jsonl');
       if (reader.has(messagesPath)) {
         const batch: MessageCreate[] = [];
         const flush = async () => {
@@ -792,7 +829,7 @@ export class AgorPackImporter {
         };
         for (const line of (await reader.readText(messagesPath)).split('\n')) {
           if (!line) continue;
-          const message = agorPackMessageSchema.parse(JSON.parse(line));
+          const message = agorPackMessageSchema.parse(JSON.parse(rewriteRefs(line)));
           batch.push({
             message_id: generateId() as MessageID,
             session_id: sessionId,
@@ -815,16 +852,12 @@ export class AgorPackImporter {
       }
     }
 
-    // 7. Attachments under their original refs (message text needs no rewrite).
-    const uploads = new UploadRepository(this.ctx.db);
+    // 7. Attachments under their new refs.
     const uploadStore = getUploadStagingStore();
-    for (const entry of reader.list(path('uploads/'))) {
-      if (!entry.path.endsWith('.json')) continue;
-      const meta = await reader.readJson(entry.path, agorPackUploadFileSchema);
+    for (const meta of uploadMetas) {
       const sessionId = remap.sessions[meta.source_session_id];
       if (!sessionId) continue;
-      const ref = meta.ref as UploadRef;
-      if (await this.unit(() => uploads.findOwned(this.ctx.tenantId, ref))) continue;
+      const ref = newRefs.get(meta.ref) as UploadRef;
       try {
         await uploadStore.stage({
           reservedRef: ref,

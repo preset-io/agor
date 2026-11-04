@@ -2362,6 +2362,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // archived local ancestors and descendants keep their own state, so
         // the Session can intentionally appear as a root until they are
         // restored separately.
+        // Sessions imported from an .agorpack are history without SDK resume
+        // state; reviving one would start an agent with none of that context.
+        const packImport = (
+          session.custom_context as { import?: { pack_id?: unknown } } | undefined
+        )?.import;
+        if (packImport?.pack_id) {
+          throw new BadRequest(
+            'Imported session history is read-only. Start a new session on this branch to continue.'
+          );
+        }
+
         if (session.archived) {
           console.log(
             `📦 [Prompt] Auto-unarchiving session ${shortId(id)} (was archived: ${session.archived_reason || 'unknown reason'})`

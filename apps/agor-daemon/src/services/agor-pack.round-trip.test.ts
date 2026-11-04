@@ -325,6 +325,21 @@ dbTest(
           content: `look [chart](${UPLOAD_VIRTUAL_URL_PREFIX}${upload.ref})`,
         } as never)
       );
+      // Secrets after a newline (JSON-escaped as \n) and a whole private key.
+      const token = `ghp_${'a'.repeat(36)}`;
+      const keyBody = 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ';
+      await unit(() =>
+        new MessagesRepository(db).create({
+          session_id: seeded.first.session_id,
+          task_id: seeded.task.task_id,
+          type: 'assistant',
+          role: 'assistant',
+          index: 1,
+          timestamp: new Date().toISOString(),
+          content_preview: 'creds',
+          content: `token:\n${token}\n-----BEGIN OPENSSH PRIVATE KEY-----\n${keyBody}\n-----END OPENSSH PRIVATE KEY-----\n`,
+        } as never)
+      );
 
       // ---- Export as Ada --------------------------------------------------------
       const writer = new AgorPackWriter();
@@ -354,19 +369,23 @@ dbTest(
       expect(reader.has('teammates/t01/sdk-home/claude/projects/-src-ada/memory/MEMORY.md')).toBe(
         true
       );
+      const messagesText = (
+        await Promise.all(
+          reader
+            .list('teammates/t01/sessions/')
+            .filter((entry) => entry.path.endsWith('.messages.jsonl'))
+            .map((entry) => reader.readText(entry.path))
+        )
+      ).join('');
+      expect(messagesText).toContain('[redacted:github_token]');
+      expect(messagesText).not.toContain(token);
+      expect(messagesText).not.toContain(keyBody);
       reader.close();
       const sections = manifest.teammates[0]!.sections;
       expect(sections.knowledge).toEqual({ documents: 3, history_versions: 1 });
       expect(sections.sessions?.count).toBe(2);
       expect(sections.uploads?.count).toBe(1);
-
-      // A different workspace would not have the attachment yet.
-      await getUploadStagingStore().delete({
-        tenantId: TENANT,
-        sessionId: seeded.first.session_id,
-        branchId: seeded.branch.branch_id,
-        ref: upload.ref,
-      });
+      expect(sections.sessions?.redacted_values).toBe(2);
 
       // ---- Import as Bea ----------------------------------------------------------
       const importer = new AgorPackImporter(ctx(bea), params(bea));
@@ -378,6 +397,13 @@ dbTest(
       });
       expect(applied.status).toBe('applied');
       const result = applied.results[0]!;
+
+      // Receipts are private to their importer.
+      const outsider = new AgorPackImporter(ctx(ada), params(ada));
+      await expect(outsider.get(staged.import_id)).rejects.toThrow(/Import not found/);
+      await expect(
+        outsider.apply(staged.import_id, { teammates: ['t01'], board_id: null })
+      ).rejects.toThrow(/Import not found/);
 
       await unit(async () => {
         const branch = await new BranchRepository(db).findById(result.branch_id);
@@ -445,28 +471,37 @@ dbTest(
         });
         expect(newFirst?.sdk_session_id).toBeUndefined();
         expect(newSecond?.genealogy.parent_session_id).toBe(newFirst?.session_id);
+        expect(newFirst?.genealogy.children).toEqual([newSecond?.session_id]);
         const messages = await new MessagesRepository(db).findAll({
           sessionId: newFirst!.session_id as SessionID,
         });
-        expect(messages).toHaveLength(1);
-        expect(String(messages[0]!.content)).toContain(upload.ref);
+        expect(messages).toHaveLength(2);
 
-        // Attachment kept its ref, now owned by Bea on the imported session.
-        const restored = await new UploadRepository(db).findOwned(TENANT, upload.ref as UploadRef);
+        // The attachment gets a fresh ref (refs are global keys) rewritten into
+        // the message; the original stays with Ada's session.
+        const newRef = result.remap.uploads[0] as UploadRef;
+        expect(newRef).toBeDefined();
+        expect(newRef).not.toBe(upload.ref);
+        const linked = messages.find((m) => String(m.content).includes('chart'));
+        expect(String(linked!.content)).toContain(newRef);
+        expect(String(linked!.content)).not.toContain(upload.ref);
+        const restored = await new UploadRepository(db).findOwned(TENANT, newRef);
         expect(restored).toMatchObject({
           createdBy: bea.user_id,
           sessionId: newFirst?.session_id,
           provenance: 'import',
           expiresAt: null,
         });
-        expect(result.remap.uploads).toEqual([upload.ref]);
+        expect(
+          await new UploadRepository(db).findOwned(TENANT, upload.ref as UploadRef)
+        ).toMatchObject({ sessionId: seeded.first.session_id });
       });
       const bytes: Buffer[] = [];
       for await (const chunk of await getUploadStagingStore().read({
         tenantId: TENANT,
         sessionId: result.remap.sessions[seeded.first.session_id] as SessionID,
         branchId: result.branch_id as BranchID,
-        ref: upload.ref,
+        ref: result.remap.uploads[0] as UploadRef,
       }))
         bytes.push(chunk as Buffer);
       expect(Buffer.concat(bytes).toString()).toBe('png-bytes');

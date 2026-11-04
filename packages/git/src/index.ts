@@ -3161,6 +3161,46 @@ export async function createPackBundle(
 }
 
 /**
+ * Text added by the commits a pack bundle would carry, per file (`+` lines of
+ * each commit's patch; binary files excluded). The executor scans it so a
+ * token committed in unpushed history — even one deleted later — never
+ * travels inside `repo.bundle`.
+ */
+export async function readPackHistoryAdditions(
+  repoPath: string,
+  options: { localHome: boolean }
+): Promise<Map<string, string>> {
+  const { git } = createGit(repoPath);
+  const patch = await git.raw([
+    '-c',
+    'core.quotePath=false',
+    'log',
+    '--format=',
+    '-p',
+    '--no-color',
+    '--no-ext-diff',
+    '--no-textconv',
+    '--unified=0',
+    '--diff-filter=ACMR',
+    ...packHistoryRange(options.localHome),
+  ]);
+  const additions = new Map<string, string[]>();
+  let current: string[] | null = null;
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('+++ ')) {
+      const file = line.slice(4).replace(/^b\//, '');
+      current = additions.get(file) ?? [];
+      additions.set(file, current);
+    } else if (line.startsWith('diff --git ')) {
+      current = null;
+    } else if (current && line.startsWith('+')) {
+      current.push(line.slice(1));
+    }
+  }
+  return new Map([...additions].map(([file, lines]) => [file, lines.join('\n')]));
+}
+
+/**
  * Move a fresh checkout to the HEAD recorded in a pack bundle. The bundle's
  * prerequisites must already be present (fetched from `origin`, or none for a
  * local-home bundle); `git bundle verify` refuses otherwise.

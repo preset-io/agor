@@ -51,6 +51,16 @@ function contents(row: Row): string {
     .join(' · ');
 }
 
+/**
+ * Already-imported teammates can't be imported twice; one whose file restore
+ * failed stays selectable, and applying it again only retries the files.
+ */
+function locked(receipt: AgorPackImport, key: string): boolean {
+  const imported = receipt.dry_run.find((d) => d.key === key)?.already_imported_branch_id;
+  if (!imported) return false;
+  return receipt.results.find((r) => r.key === key)?.filesystem !== 'failed';
+}
+
 export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
   open,
   onClose,
@@ -95,7 +105,7 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
     try {
       const result = await uploadPack(file, setProgress);
       setReceipt(result);
-      setSelected(result.dry_run.filter((d) => !d.already_imported_branch_id).map((d) => d.key));
+      setSelected(result.dry_run.filter((d) => !locked(result, d.key)).map((d) => d.key));
       setStep(1);
     } catch (error) {
       showError(error instanceof Error ? error.message : String(error));
@@ -201,7 +211,7 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
                 selectedRowKeys: selected,
                 onChange: (keys) => setSelected(keys as string[]),
                 getCheckboxProps: (row) => ({
-                  disabled: Boolean(row.dry?.already_imported_branch_id),
+                  disabled: locked(receipt, row.key),
                   'aria-label': `Import ${row.display_name}`,
                 }),
               }}
@@ -224,7 +234,11 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
                   width: 180,
                   render: (_: unknown, row) =>
                     row.dry?.already_imported_branch_id ? (
-                      <Tag color="success">already imported</Tag>
+                      locked(receipt, row.key) ? (
+                        <Tag color="success">already imported</Tag>
+                      ) : (
+                        <Tag color="warning">files failed: select to retry</Tag>
+                      )
                     ) : (
                       <Space orientation="vertical" size={0}>
                         <Typography.Text>{row.repo.slug}</Typography.Text>
@@ -284,7 +298,12 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
         )}
 
         {step === 2 && receipt && (
-          <ReconnectChecklist client={client} currentUser={currentUser} receipt={receipt} />
+          <ReconnectChecklist
+            client={client}
+            currentUser={currentUser}
+            receipt={receipt}
+            onReceipt={setReceipt}
+          />
         )}
       </Flex>
     </AdaptiveSettingsModal>

@@ -4,6 +4,7 @@ import { Alert, Button, Flex, List, Space, Switch, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { useAuthenticatedAuthorityScope } from '../../hooks/useAuthorityOperationGuard';
+import { applyPackImport } from '../../utils/agorPack';
 import { useThemedMessage } from '../../utils/message';
 import { EnvVarEditor, type EnvVarEntry } from '../EnvVarEditor';
 import { Tag } from '../Tag';
@@ -12,6 +13,8 @@ export interface ReconnectChecklistProps {
   client?: AgorClient | null;
   currentUser?: User | null;
   receipt: AgorPackImport;
+  /** Called with the receipt after a retry, so the wizard can follow it. */
+  onReceipt?: (receipt: AgorPackImport) => void;
 }
 
 const FILESYSTEM_TAG: Record<string, { color: string; label: string }> = {
@@ -31,8 +34,33 @@ export const ReconnectChecklist: React.FC<ReconnectChecklistProps> = ({
   client,
   currentUser,
   receipt,
+  onReceipt,
 }) => {
   const { showError } = useThemedMessage();
+  const [retrying, setRetrying] = useState<string | null>(null);
+
+  // Applying an already-imported teammate again only re-runs its file restore.
+  const retryFiles = async (key: string) => {
+    setRetrying(key);
+    try {
+      const updated = await applyPackImport(receipt.import_id, {
+        teammates: [key],
+        board_id: null,
+      });
+      onReceipt?.({
+        ...updated,
+        results: updated.results.map((result) =>
+          result.key === key
+            ? { ...result, filesystem: 'pending', filesystem_error: undefined }
+            : result
+        ),
+      });
+    } catch (error) {
+      showError(`Retry failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setRetrying(null);
+    }
+  };
   const catalog = useMCPCatalogModal();
   const authority = useAuthenticatedAuthorityScope(
     client ?? null,
@@ -124,7 +152,22 @@ export const ReconnectChecklist: React.FC<ReconnectChecklistProps> = ({
         header={<Typography.Text strong>Imported</Typography.Text>}
         dataSource={receipt.results}
         renderItem={(result) => (
-          <List.Item>
+          <List.Item
+            actions={
+              result.filesystem === 'failed'
+                ? [
+                    <Button
+                      key="retry"
+                      size="small"
+                      loading={retrying === result.key}
+                      onClick={() => retryFiles(result.key)}
+                    >
+                      Retry
+                    </Button>,
+                  ]
+                : undefined
+            }
+          >
             <Space wrap>
               <Typography.Text>{result.display_name}</Typography.Text>
               <Tag color={FILESYSTEM_TAG[result.filesystem]?.color}>

@@ -301,7 +301,12 @@ export async function deriveExpectedTenantTableSnapshots(
       table.name,
       splitTenantJsonlLines(await readTableJsonl(archivePath, table.name))
     );
-    const rewritten = await rewriteRowsToCanonicalText(db, table.name, lines, destinationTenantId);
+    // Live snapshots order rows by canonical text (COLLATE "C", i.e. bytes).
+    // A rewrite (transfer-key reseal, tenant id, clone layout) can change that
+    // order relative to the archive, so sort the same way before hashing.
+    const rewritten = (
+      await rewriteRowsToCanonicalText(db, table.name, lines, destinationTenantId)
+    ).sort((a, b) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8')));
     snapshots.push({
       name: table.name,
       rowCount: rewritten.length,

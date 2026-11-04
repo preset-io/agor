@@ -20,12 +20,28 @@ describe('rewrapEnvelopesInText', () => {
     expect(decryptApiKey(parsed.a, keys.toKey)).toBe('xoxb-secret');
     expect(parsed.nested.b).toBe(foreign);
     expect(parsed.sha).toBe('deadbeef'.repeat(8));
-    expect(counts).toEqual({ scannedValues: 2, rewrappedValues: 1, alreadyDestinationKey: 0 });
+    expect(counts).toEqual({
+      scannedValues: 2,
+      rewrappedValues: 1,
+      alreadyDestinationKey: 0,
+      unreadableValues: 1,
+    });
     expect(countSourceOnlyEnvelopes(out, keys)).toBe(0);
     // A second pass converges instead of double-encrypting.
     const again = emptySecretRewrapCounts();
     expect(rewrapEnvelopesInText(out, keys, again)).toBe(out);
     expect(again.alreadyDestinationKey).toBe(1);
+  });
+
+  it('counts envelopes a wrong source key cannot open instead of passing them silently', () => {
+    const sealed = encryptApiKey('xoxb-secret', keys.fromKey);
+    const counts = emptySecretRewrapCounts();
+    const wrong = { fromKey: 'not-the-source-key', toKey: keys.toKey };
+    expect(rewrapEnvelopesInText(sealed, wrong, counts)).toBe(sealed);
+    expect(counts.rewrappedValues).toBe(0);
+    expect(counts.unreadableValues).toBe(1);
+    // The residual proof alone cannot see it: the wrong key opens nothing.
+    expect(countSourceOnlyEnvelopes(sealed, wrong)).toBe(0);
   });
 });
 

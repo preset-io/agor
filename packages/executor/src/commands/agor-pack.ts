@@ -35,6 +35,7 @@ import { AGOR_PACK, type AgorPackGitState, agorPackGitStateSchema } from '@agor/
 import {
   applyPackBundle,
   createPackBundle,
+  readPackHistoryAdditions,
   readPackWorkingTreeState,
   resetToPackCommit,
 } from '@agor/git';
@@ -117,6 +118,11 @@ export async function handleBranchPackCollect(
     const bundlePath = join(work, 'repo.bundle');
     const bundled = await createPackBundle(branch.path, bundlePath, { localHome: p.localHome });
     if (bundled) {
+      for (const [file, added] of await readPackHistoryAdditions(branch.path, {
+        localHome: p.localHome,
+      })) {
+        assertNoSecrets(`git history of ${file}`, added);
+      }
       await writer.addStream(
         teammatePackPath(key, 'git/repo.bundle'),
         createReadStream(bundlePath),
