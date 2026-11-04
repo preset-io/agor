@@ -526,7 +526,12 @@ describe('ConfigService.resolveApiKey', () => {
         connection: { CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-access-only' },
         useNativeAuth: false,
       });
-      expect(backend.resolve).toHaveBeenCalledWith('tenant-1', 'actor', expect.any(Function));
+      expect(backend.resolve).toHaveBeenCalledWith(
+        'tenant-1',
+        'actor',
+        expect.any(Function),
+        'task-1'
+      );
       expect(dbMocks.assertRuntimeCredentialAuthority).toHaveBeenCalledWith(
         'task-1',
         expect.objectContaining({ principal_user_id: 'actor', branch_id: 'branch-1' })

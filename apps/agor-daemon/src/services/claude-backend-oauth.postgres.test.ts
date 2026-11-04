@@ -317,37 +317,37 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           throw new Error(refreshSentinel);
         },
         'ambiguous',
-        'http_status=none body=none provider_error=none',
+        'source=network http_status=none body=none provider_error=none',
       ],
       [
         'mixed response',
         () => response({ error: 'invalid_grant', access_token: 'mixed' }, 400),
         'ambiguous',
-        'http_status=400 body=json provider_error=invalid_grant',
+        'source=provider http_status=400 body=json provider_error=invalid_grant',
       ],
       [
         'invalid grant',
         () => response({ error: 'invalid_grant', error_description: refreshSentinel }, 400),
         'reauth_required',
-        'http_status=400 body=json provider_error=invalid_grant',
+        'source=provider http_status=400 body=json provider_error=invalid_grant',
       ],
       [
         'empty replacement',
         () => response({ access_token: 'new', refresh_token: '', expires_in: 7200 }),
         'ambiguous',
-        'http_status=200 body=json provider_error=none',
+        'source=provider http_status=200 body=json provider_error=none',
       ],
       [
         'uncertain 5xx',
         () => response({ error: 'server_error' }, 503),
         'ambiguous',
-        'http_status=503 body=json provider_error=other',
+        'source=provider http_status=503 body=json provider_error=other',
       ],
       [
         'HTML block page',
         () => new Response(`<html>${refreshSentinel}</html>`, { status: 403 }),
         'ambiguous',
-        'http_status=403 body=non_json provider_error=none',
+        'source=provider http_status=403 body=non_json provider_error=none',
       ],
     ] as const)(
       'never replays %s, logs only closed fields, and asks for a reconnect',
@@ -362,7 +362,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         try {
           const backend = new ClaudeBackendOAuth(dbA, () => ready, { request, masterSecret });
           await expect(
-            backend.resolve(subject.tenantId, subject.userId, async () => {})
+            backend.resolve(subject.tenantId, subject.userId, async () => {}, 'task-under-test')
           ).rejects.toMatchObject({
             message: CLAUDE_RECONNECT_REQUIRED_MESSAGE,
             data: { code: 'claude_reconnect_required' },
@@ -378,7 +378,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             .map((call) => String(call[0]))
             .filter((line) => line.startsWith('[claude_oauth.refresh]'));
           expect(lines).toEqual([
-            `[claude_oauth.refresh] event=failed outcome=${state === 'reauth_required' ? 'invalid' : 'ambiguous'} grant_state=${state} source=provider ${logged}`,
+            `[claude_oauth.refresh] event=failed task_id=task-under-test outcome=${state === 'reauth_required' ? 'invalid' : 'ambiguous'} grant_state=${state} ${logged}`,
           ]);
           expect(JSON.stringify(warn.mock.calls)).not.toContain(refreshSentinel);
         } finally {
@@ -420,7 +420,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       expect(await backend.reconnectRequired(switchedAway.tenantId, switchedAway.userId)).toBe(
         false
       );
-      expect(await backend.reconnectRequired(broken.tenantId, healthyExpired.userId)).toBe(false);
+      expect(await backend.reconnectRequired(healthyExpired.tenantId, broken.userId)).toBe(false);
       const unavailable = new ClaudeBackendOAuth(
         dbA,
         () => ({ available: false, storage: 'backend', reason: 'operator_disabled' }),
