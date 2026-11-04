@@ -418,6 +418,18 @@
       "import": "./dist/unix/index.js",
       "default": "./dist/unix/index.js"
     },
+    "./agor-pack": {
+      "source": "./src/agor-pack/index.ts",
+      "types": "./dist/agor-pack/index.d.ts",
+      "import": "./dist/agor-pack/index.js",
+      "default": "./dist/agor-pack/index.js"
+    },
+    "./agor-pack/file-source": {
+      "source": "./src/agor-pack/file-source.ts",
+      "types": "./dist/agor-pack/file-source.d.ts",
+      "import": "./dist/agor-pack/file-source.js",
+      "default": "./dist/agor-pack/file-source.js"
+    },
     "./knowledge": {
       "source": "./src/knowledge/index.ts",
       "types": "./dist/knowledge/index.d.ts",
@@ -588,6 +600,8 @@
     "slackify-markdown": "^5.0.0",
     "socket.io-client": "^4.8.3",
     "uuid": "^14.0.2",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -600,6 +614,8 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.6.0",
+    "@types/yauzl": "^3.4.0",
+    "@types/yazl": "^3.3.1",
     "@vitest/coverage-v8": "^5.0.1",
     "analytics": "^0.8.19",
     "concurrently": "^9.2.1",

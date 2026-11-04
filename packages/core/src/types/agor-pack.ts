@@ -1,0 +1,541 @@
+/**
+ * `.agorpack` — a portable, secret-free zip of one or more AI teammates.
+ *
+ * The pack carries versioned section DTOs, never raw table rows, so packs move
+ * between Agor releases and between SQLite and PostgreSQL installs without the
+ * exact-migration lock the tenant archive needs. Every entry is listed in
+ * `manifest.json` with its size and SHA-256; readers reject anything else.
+ *
+ * Layout (`<key>` is `t01`…):
+ *
+ *   manifest.json
+ *   teammates/<key>/teammate.json
+ *   teammates/<key>/board.json
+ *   teammates/<key>/knowledge/manifest.yaml, docs/**.md   (Knowledge repository v2)
+ *   teammates/<key>/knowledge/history.json
+ *   teammates/<key>/artifacts/<nnnn>.json
+ *   teammates/<key>/schedules.json
+ *   teammates/<key>/sessions/<nnnn>.json, <nnnn>.messages.jsonl
+ *   teammates/<key>/uploads/<upl_ref>.json, <upl_ref>.data
+ *   teammates/<key>/git/state.json, repo.bundle, worktree/**
+ *   teammates/<key>/sdk-home/claude/**                     (allow-listed)
+ */
+
+import { z } from 'zod';
+
+export const AGOR_PACK = {
+  format: 'agor-pack',
+  version: 1,
+  extension: '.agorpack',
+  mimeType: 'application/zip',
+  manifestPath: 'manifest.json',
+  /** Compressed pack size accepted by the import route. */
+  maxBytes: 1024 * 1024 * 1024,
+  maxEntries: 50_000,
+  maxEntryBytes: 256 * 1024 * 1024,
+  maxUncompressedBytes: 4 * 1024 * 1024 * 1024,
+  /** JSON/YAML/Markdown entries are parsed in memory; keep them bounded. */
+  maxTextEntryBytes: 64 * 1024 * 1024,
+  maxTeammates: 50,
+  recentSessionDays: 30,
+} as const;
+
+/** Optional sections chosen with checkboxes at export time. */
+export const AGOR_PACK_SECTIONS = [
+  'board',
+  'knowledge',
+  'knowledge_history',
+  'artifacts',
+  'schedules',
+  'claude_memory',
+  'uploads',
+] as const;
+export type AgorPackSection = (typeof AGOR_PACK_SECTIONS)[number];
+
+export const AGOR_PACK_SESSION_MODES = ['none', 'last_30_days', 'all'] as const;
+export type AgorPackSessionMode = (typeof AGOR_PACK_SESSION_MODES)[number];
+
+const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/);
+const uuid = z.string().uuid();
+const isoTimestamp = z.string().min(1).max(64);
+const shortText = z.string().max(1_000);
+const nonNegativeInt = z.number().int().nonnegative();
+
+export const agorPackTeammateKey = z.string().regex(/^t[0-9]{2,3}$/);
+
+export const agorPackExportRequestSchema = z
+  .object({
+    branch_ids: z.array(uuid).min(1).max(AGOR_PACK.maxTeammates),
+    sections: z.array(z.enum(AGOR_PACK_SECTIONS)).max(AGOR_PACK_SECTIONS.length),
+    sessions: z.enum(AGOR_PACK_SESSION_MODES).default('none'),
+    include_others_sessions: z.boolean().default(false),
+  })
+  .strict();
+export type AgorPackExportRequest = z.infer<typeof agorPackExportRequestSchema>;
+
+export const agorPackEntrySchema = z
+  .object({ path: z.string().min(1).max(1024), bytes: nonNegativeInt, sha256: sha256Hex })
+  .strict();
+export type AgorPackEntry = z.infer<typeof agorPackEntrySchema>;
+
+/** Environment-variant portability, derived from its lifecycle commands. */
+export const AGOR_PACK_ENVIRONMENT_STATUSES = ['ok', 'needs_webhook', 'wont_run_in_cloud'] as const;
+export type AgorPackEnvironmentStatus = (typeof AGOR_PACK_ENVIRONMENT_STATUSES)[number];
+
+export const agorPackRequirementsSchema = z
+  .object({
+    env_vars: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(200),
+            scope: z.enum(['global', 'session']).nullable(),
+            used_by: z.array(shortText).max(100),
+          })
+          .strict()
+      )
+      .max(500),
+    mcp_servers: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(200),
+            display_name: shortText.nullable(),
+            catalog_entry_name: shortText.nullable(),
+            url: z.string().max(2048).nullable(),
+            /** True when the server is not a catalog entry and is recreated disabled. */
+            custom: z.boolean(),
+            used_by: z.array(shortText).max(100),
+          })
+          .strict()
+      )
+      .max(200),
+    gateway_channels: z
+      .array(z.object({ channel_type: shortText, name: shortText }).strict())
+      .max(100),
+    agentic_tools: z.array(shortText).max(20),
+  })
+  .strict();
+export type AgorPackRequirements = z.infer<typeof agorPackRequirementsSchema>;
+
+/**
+ * Section summaries recorded in the manifest so an import dry-run never has to
+ * read the payload. Loose on purpose: a section added by a newer release is
+ * reported and skipped instead of failing the whole pack.
+ */
+export const agorPackTeammateSectionsSchema = z.looseObject({
+  board: z.object({ objects: nonNegativeInt }).strict().nullable(),
+  knowledge: z
+    .object({ documents: nonNegativeInt, history_versions: nonNegativeInt })
+    .strict()
+    .nullable(),
+  artifacts: nonNegativeInt.nullable(),
+  schedules: nonNegativeInt.nullable(),
+  claude_memory: z.object({ files: nonNegativeInt, bytes: nonNegativeInt }).strict().nullable(),
+  uploads: z.object({ count: nonNegativeInt, bytes: nonNegativeInt }).strict().nullable(),
+  sessions: z
+    .object({
+      mode: z.enum(AGOR_PACK_SESSION_MODES),
+      count: nonNegativeInt,
+      messages: nonNegativeInt,
+      others_included: z.boolean(),
+      redacted_values: nonNegativeInt,
+    })
+    .strict()
+    .nullable(),
+  git: z
+    .object({
+      mode: z.enum(['remote', 'bundle']),
+      head_sha: z.string().max(64).nullable(),
+      unpushed_commits: nonNegativeInt,
+      dirty_files: nonNegativeInt,
+      deleted_files: nonNegativeInt,
+      bundle: z.boolean(),
+      skipped_files: z.array(shortText).max(200),
+    })
+    .strict()
+    .nullable(),
+});
+export type AgorPackTeammateSections = z.infer<typeof agorPackTeammateSectionsSchema>;
+
+export const agorPackTeammateSummarySchema = z
+  .object({
+    key: agorPackTeammateKey,
+    display_name: z.string().min(1).max(200),
+    emoji: z.string().max(32).nullable(),
+    source_branch_id: uuid,
+    branch_name: z.string().min(1).max(255),
+    repo: z
+      .object({
+        slug: z.string().min(1).max(255),
+        remote_url: z.string().max(2048).nullable(),
+        local_home: z.boolean(),
+      })
+      .strict(),
+    sections: agorPackTeammateSectionsSchema,
+    requirements: agorPackRequirementsSchema,
+    environment: z
+      .object({
+        variant: shortText.nullable(),
+        variants: z
+          .array(
+            z
+              .object({
+                name: shortText,
+                status: z.enum(AGOR_PACK_ENVIRONMENT_STATUSES),
+                match: shortText.nullable(),
+              })
+              .strict()
+          )
+          .max(50),
+      })
+      .strict(),
+    warnings: z.array(shortText).max(100),
+  })
+  .strict();
+export type AgorPackTeammateSummary = z.infer<typeof agorPackTeammateSummarySchema>;
+
+export const agorPackManifestSchema = z
+  .object({
+    format: z.literal(AGOR_PACK.format),
+    version: z.literal(AGOR_PACK.version),
+    pack_id: uuid,
+    created_at: isoTimestamp,
+    source: z
+      .object({
+        agor_version: z.string().max(64),
+        instance_label: shortText.nullable(),
+        exported_by: z
+          .object({ user_id: uuid, email: shortText.nullable(), name: shortText.nullable() })
+          .strict(),
+      })
+      .strict(),
+    options: z
+      .object({
+        sections: z.array(z.enum(AGOR_PACK_SECTIONS)),
+        sessions: z.enum(AGOR_PACK_SESSION_MODES),
+        include_others_sessions: z.boolean(),
+      })
+      .strict(),
+    teammates: z.array(agorPackTeammateSummarySchema).min(1).max(AGOR_PACK.maxTeammates),
+    entries: z.array(agorPackEntrySchema).max(AGOR_PACK.maxEntries),
+    /** SHA-256 over the canonical entry list; the import idempotency key. */
+    content_sha256: sha256Hex,
+  })
+  .strict();
+export type AgorPackManifest = z.infer<typeof agorPackManifestSchema>;
+
+/** Who originally authored an imported row. Metadata only — never ownership. */
+export const agorPackAuthorSchema = z
+  .object({ name: shortText.nullable(), email: shortText.nullable() })
+  .strict();
+export type AgorPackAuthor = z.infer<typeof agorPackAuthorSchema>;
+
+const jsonRecord = z.record(z.string(), z.unknown());
+
+export const agorPackTeammateFileSchema = z
+  .object({
+    version: z.literal(1),
+    teammate: z
+      .object({
+        displayName: z.string().min(1).max(200),
+        emoji: z.string().max(32).optional(),
+        frameworkRepo: z.string().max(255).optional(),
+        frameworkVersion: z.string().max(255).optional(),
+      })
+      .strict(),
+    branch: z
+      .object({
+        name: z.string().min(1).max(255),
+        ref: z.string().min(1).max(255),
+        notes: z.string().max(100_000).nullable(),
+        environment_variant: shortText.nullable(),
+        custom_context: jsonRecord.nullable(),
+      })
+      .strict(),
+    repo: z
+      .object({
+        slug: z.string().min(1).max(255),
+        name: shortText.nullable(),
+        remote_url: z.string().max(2048).nullable(),
+        default_branch: shortText.nullable(),
+        local_home: z.boolean(),
+        environment: z.unknown().nullable(),
+      })
+      .strict(),
+    /** Custom (non-catalog) MCP servers, secrets removed; recreated disabled. */
+    mcp_servers: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(200),
+            display_name: shortText.nullable(),
+            description: z.string().max(10_000).nullable(),
+            transport: z.enum(['stdio', 'http', 'sse']),
+            url: z.string().max(2048).nullable(),
+            command: z.string().max(4096).nullable(),
+            args: z.array(z.string().max(4096)).max(100).nullable(),
+            env_names: z.array(z.string().max(200)).max(200),
+            header_names: z.array(z.string().max(200)).max(200),
+          })
+          .strict()
+      )
+      .max(100),
+    /**
+     * Claude Code keys auto-memory by working directory
+     * (`projects/<slug>/memory`); the importer renames this slug to the new
+     * branch path's slug.
+     */
+    claude_project_slug: z.string().max(4096).nullable(),
+    originally_by: agorPackAuthorSchema,
+  })
+  .strict();
+export type AgorPackTeammateFile = z.infer<typeof agorPackTeammateFileSchema>;
+
+export const agorPackBoardFileSchema = z
+  .object({
+    version: z.literal(1),
+    /** `BoardExportBlob` (validated by `BoardRepository.validateBoardBlob`). */
+    board: jsonRecord,
+    /** Zone the teammate card was pinned to (board object id) and its position. */
+    placement: z
+      .object({
+        zone_object_id: z.string().max(200).nullable(),
+        position: z.object({ x: z.number(), y: z.number() }).strict(),
+      })
+      .strict()
+      .nullable(),
+    /** Board artifact object id → pack artifact file (`artifacts/<nnnn>.json`). */
+    artifact_objects: z.record(z.string().max(200), z.string().regex(/^[0-9]{4}$/)),
+  })
+  .strict();
+export type AgorPackBoardFile = z.infer<typeof agorPackBoardFileSchema>;
+
+export const agorPackArtifactFileSchema = z
+  .object({
+    version: z.literal(1),
+    name: z.string().min(1).max(500),
+    description: z.string().max(10_000).nullable(),
+    template: z.string().min(1).max(64),
+    files: z.record(z.string().max(1024), z.string()).nullable(),
+    dependencies: z.record(z.string().max(500), z.string().max(500)).nullable(),
+    entry: z.string().max(1024).nullable(),
+    sandpack_config: jsonRecord.nullable(),
+    required_env_vars: z.array(z.string().max(200)).max(200).nullable(),
+    agor_runtime: jsonRecord.nullable(),
+    /** Grants are workspace-local authority; dropped on import and reported. */
+    had_agor_grants: z.boolean(),
+    originally_by: agorPackAuthorSchema,
+  })
+  .strict();
+export type AgorPackArtifactFile = z.infer<typeof agorPackArtifactFileSchema>;
+
+export const agorPackScheduleSchema = z
+  .object({
+    name: z.string().min(1).max(500),
+    description: z.string().max(10_000).nullable(),
+    cron_expression: z.string().min(1).max(200),
+    timezone_mode: z.string().max(32),
+    timezone: z.string().max(100).nullable(),
+    prompt: z.string().max(1_000_000),
+    agentic_tool_config: jsonRecord,
+    allow_concurrent_runs: z.boolean(),
+    retention: nonNegativeInt,
+    /** MCP servers by name; resolved on import, unresolved ones are reported. */
+    mcp_server_names: z.array(z.string().max(200)).max(100),
+    was_enabled: z.boolean(),
+    originally_by: agorPackAuthorSchema,
+  })
+  .strict();
+export type AgorPackSchedule = z.infer<typeof agorPackScheduleSchema>;
+
+export const agorPackSchedulesFileSchema = z
+  .object({ version: z.literal(1), schedules: z.array(agorPackScheduleSchema).max(500) })
+  .strict();
+
+export const agorPackTaskSchema = z
+  .object({
+    source_task_id: uuid,
+    full_prompt: z.string(),
+    status: z.string().max(32),
+    model: z.string().max(200).nullable(),
+    created_at: isoTimestamp,
+    completed_at: isoTimestamp.nullable(),
+    duration_ms: z.number().nonnegative().nullable(),
+    message_range: jsonRecord.nullable(),
+  })
+  .strict();
+export type AgorPackTask = z.infer<typeof agorPackTaskSchema>;
+
+export const agorPackSessionFileSchema = z
+  .object({
+    version: z.literal(1),
+    session: z
+      .object({
+        source_session_id: uuid,
+        title: z.string().max(10_000).nullable(),
+        description: z.string().max(100_000).nullable(),
+        agentic_tool: z.string().min(1).max(64),
+        model_config: jsonRecord.nullable(),
+        created_at: isoTimestamp,
+        last_updated: isoTimestamp,
+        parent_source_session_id: uuid.nullable(),
+        forked_from_source_session_id: uuid.nullable(),
+        originally_by: agorPackAuthorSchema,
+      })
+      .strict(),
+    tasks: z.array(agorPackTaskSchema).max(100_000),
+  })
+  .strict();
+export type AgorPackSessionFile = z.infer<typeof agorPackSessionFileSchema>;
+
+/** One line of `sessions/<nnnn>.messages.jsonl`. */
+export const agorPackMessageSchema = z
+  .object({
+    source_message_id: uuid,
+    source_task_id: uuid.nullable(),
+    type: z.string().min(1).max(64),
+    role: z.string().min(1).max(64),
+    index: nonNegativeInt,
+    timestamp: isoTimestamp,
+    content_preview: z.string(),
+    content: z.unknown(),
+    tool_uses: z.array(z.unknown()).nullable(),
+    parent_tool_use_id: z.string().max(200).nullable(),
+    metadata: jsonRecord.nullable(),
+  })
+  .strict();
+export type AgorPackMessage = z.infer<typeof agorPackMessageSchema>;
+
+export const agorPackUploadFileSchema = z
+  .object({
+    version: z.literal(1),
+    ref: z.string().regex(/^upl_[0-9a-f-]{36}$/),
+    source_session_id: uuid,
+    name: z.string().min(1).max(500),
+    mime_type: z.string().min(1).max(200),
+    size: nonNegativeInt,
+    created_at: isoTimestamp,
+  })
+  .strict();
+export type AgorPackUploadFile = z.infer<typeof agorPackUploadFileSchema>;
+
+export const agorPackKnowledgeHistorySchema = z
+  .object({
+    version: z.literal(1),
+    documents: z
+      .array(
+        z
+          .object({
+            path: z.string().min(1).max(1024),
+            versions: z
+              .array(
+                z
+                  .object({
+                    version_number: z.number().int().positive(),
+                    title: z.string().max(1000).nullable(),
+                    content: z.string(),
+                    change_summary: z.string().max(10_000).nullable(),
+                    created_at: isoTimestamp,
+                    originally_by: agorPackAuthorSchema,
+                  })
+                  .strict()
+              )
+              .max(1_000),
+          })
+          .strict()
+      )
+      .max(10_000),
+  })
+  .strict();
+export type AgorPackKnowledgeHistory = z.infer<typeof agorPackKnowledgeHistorySchema>;
+
+export const agorPackGitStateSchema = z
+  .object({
+    version: z.literal(1),
+    head_sha: z.string().max(64).nullable(),
+    ref: z.string().max(255).nullable(),
+    /** Tracked files deleted in the working tree (applied after the bundle). */
+    deleted: z.array(z.string().max(4096)).max(50_000),
+  })
+  .strict();
+export type AgorPackGitState = z.infer<typeof agorPackGitStateSchema>;
+
+// ---------------------------------------------------------------------------
+// Import contract
+// ---------------------------------------------------------------------------
+
+export const AGOR_PACK_IMPORT_STATUSES = ['staged', 'applying', 'applied', 'failed'] as const;
+export type AgorPackImportStatus = (typeof AGOR_PACK_IMPORT_STATUSES)[number];
+
+export const agorPackApplyRequestSchema = z
+  .object({
+    teammates: z.array(agorPackTeammateKey).min(1).max(AGOR_PACK.maxTeammates),
+    /** `new` creates a board per teammate; otherwise an existing board id. */
+    board_id: uuid.nullable().default(null),
+  })
+  .strict();
+export type AgorPackApplyRequest = z.infer<typeof agorPackApplyRequestSchema>;
+
+export type AgorPackFilesystemStatus = 'pending' | 'ready' | 'failed' | 'skipped';
+
+export interface AgorPackTeammateResult {
+  key: string;
+  display_name: string;
+  branch_id: string;
+  board_id: string;
+  knowledge_namespace_id: string | null;
+  filesystem: AgorPackFilesystemStatus;
+  filesystem_error?: string;
+  remap: {
+    artifacts: Record<string, string>;
+    schedules: string[];
+    sessions: Record<string, string>;
+    uploads: string[];
+  };
+  warnings: string[];
+}
+
+/** Dry-run checks against the destination workspace. */
+export interface AgorPackDryRunTeammate {
+  key: string;
+  display_name: string;
+  repo_status: 'existing' | 'clone' | 'framework';
+  already_imported_branch_id: string | null;
+  warnings: string[];
+}
+
+export interface AgorPackImport {
+  import_id: string;
+  status: AgorPackImportStatus;
+  content_sha256: string;
+  manifest: AgorPackManifest;
+  dry_run: AgorPackDryRunTeammate[];
+  results: AgorPackTeammateResult[];
+  error: string | null;
+  created_at: string;
+  applied_at: string | null;
+}
+
+/** Recorded on a source branch by "Switch over"; cleared by Undo. */
+export interface AgorPackSwitchOverState {
+  switched_at: string;
+  switched_by: string;
+  disabled_schedule_ids: string[];
+  disabled_channel_ids: string[];
+}
+
+export interface AgorPackPreflightTeammate {
+  branch_id: string;
+  display_name: string;
+  local_home: boolean;
+  remote_url: string | null;
+  sessions: { own: number; others: number; recent_own: number; recent_others: number };
+  schedules: number;
+  artifacts: number;
+  knowledge_documents: number;
+  requirements: AgorPackRequirements;
+  environment: AgorPackTeammateSummary['environment'];
+  switch_over: AgorPackSwitchOverState | null;
+  warnings: string[];
+}
