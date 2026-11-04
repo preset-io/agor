@@ -285,7 +285,9 @@ export async function deriveExpectedTenantTableSnapshots(
   db: Database,
   archivePath: string,
   archivedTables: readonly TenantArchiveTable[],
-  destinationTenantId: string
+  destinationTenantId: string,
+  /** Same row rewrite the restore applies (e.g. a clone layout). */
+  transform: (tableName: string, lines: string[]) => string[] = (_table, lines) => lines
 ): Promise<TenantTableSnapshot[]> {
   const archivedByName = new Map(archivedTables.map((table) => [table.name, table]));
   const snapshots: TenantTableSnapshot[] = [];
@@ -295,7 +297,10 @@ export async function deriveExpectedTenantTableSnapshots(
       snapshots.push({ name: table.name, rowCount: 0, sha256: EMPTY_TABLE_SHA256 });
       continue;
     }
-    const lines = splitTenantJsonlLines(await readTableJsonl(archivePath, table.name));
+    const lines = transform(
+      table.name,
+      splitTenantJsonlLines(await readTableJsonl(archivePath, table.name))
+    );
     const rewritten = await rewriteRowsToCanonicalText(db, table.name, lines, destinationTenantId);
     snapshots.push({
       name: table.name,

@@ -246,8 +246,16 @@ function isStringArray(value: unknown): value is string[] {
 function assertIdentityShape(identity: unknown): void {
   assertManifest(isRecord(identity), 'Archive manifest database.identity must be an object');
   assertManifest(
-    identity.dialect === 'postgresql',
-    'Archive manifest database.identity.dialect must be "postgresql"'
+    identity.dialect === 'postgresql' || identity.dialect === 'sqlite',
+    'Archive manifest database.identity.dialect must be "postgresql" or "sqlite"'
+  );
+  assertManifest(
+    identity.schemaKey === undefined || isSha256Hex(identity.schemaKey),
+    'Archive manifest database.identity.schemaKey must be a SHA-256 hex string'
+  );
+  assertManifest(
+    identity.dialect === 'postgresql' || isSha256Hex(identity.schemaKey),
+    'A SQLite archive must carry database.identity.schemaKey'
   );
   assertManifest(
     typeof identity.schemaVersion === 'string' && identity.schemaVersion.length > 0,

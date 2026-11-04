@@ -21,7 +21,10 @@ snapshotting, or mounting the archive directory is your deployment's concern.
 ## Requirements
 
 - **PostgreSQL.** Multi-tenancy is a PostgreSQL-only feature; the SQLite schema
-  is single-tenant. Every database operation fails closed against SQLite.
+  is single-tenant. The one exception is `export`, which reads a self-hosted
+  SQLite install as a single tenant (see
+  [Moving a self-hosted install](#moving-a-self-hosted-install)); every other
+  operation fails closed against SQLite.
 - **A matching binary.** The database's applied migration ledger must match the
   running binary. Commands refuse to run when the database has pending or
   unknown migrations, so an archive is never produced or restored against a
@@ -221,6 +224,44 @@ filesystem isolation is disabled, the status is `"not-configured"`; with
 `--database-only`, it is `"not-requested"`. Those outcomes deliberately do not
 claim filesystem absence, so a caller that expects an isolated runtime root can
 fail closed on missing configuration or a missing mount.
+
+## Moving a self-hosted install
+
+A whole self-hosted install (SQLite or PostgreSQL) can be moved into a fresh
+tenant of another runtime, such as an Agor Cloud workspace that has never been
+launched. To move only some AI teammates into an existing workspace, use
+[`.agorpack` files](/guide/teammates#moving-teammates-between-workspaces)
+instead.
+
+On the source, run the same Agor release as the destination and export:
+
+```bash
+agor tenant export --tenant-id <destination-tenant-id> --archive ./move \
+  --transfer-key-out ./transfer.key --files-subset
+```
+
+- A SQLite export emits the same canonical rows a PostgreSQL export would.
+  Compatibility is checked by release (the compiled schema), not by migration
+  numbering, so the destination refuses an archive from another release.
+- `--transfer-key-out` reseals every stored secret under a new one-time key and
+  writes that key to the given file (it never enters the archive). Hand it to
+  the destination operator separately.
+- `--files-subset` copies only branch SDK homes, uploads, and the trees of
+  framework teammates (which have no remote). Repositories and other checkouts
+  are cloned again at the destination.
+
+On the destination:
+
+```bash
+agor tenant import --archive ./move --tenant-id <tenant-id> --target-layout clone
+AGOR_TRANSFER_KEY=… agor tenant rewrap-secrets --tenant-id <tenant-id> --from-env AGOR_TRANSFER_KEY
+```
+
+`--target-layout clone` rewrites branches as clones at the destination's paths
+and marks repositories and branches for re-clone ("Retry provisioning").
+`rewrap-secrets` reseals the secrets under the destination's master key and
+fails unless nothing remains readable with the transfer key. OAuth grants and
+other deployment-bound credentials never move; people reconnect them.
 
 ## Freezing a tenant: the write gate
 

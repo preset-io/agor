@@ -7,6 +7,8 @@
  * single stable JSON summary is written to stdout; audit lines go to stderr.
  */
 
+import { join } from 'node:path';
+import { getBranchPath, getReposDir } from '@agor/core/config';
 import { createDatabase, getDatabaseUrl } from '@agor/core/db';
 import {
   importTenant,
@@ -51,6 +53,12 @@ export default class TenantImport extends Command {
       description: 'Restore only the database, skipping the tenant filesystem tree',
       default: false,
     }),
+    'target-layout': Flags.string({
+      description:
+        "Rewrite branches as clones at this runtime's paths and mark repositories/branches for " +
+        're-clone (for archives exported with --files-subset from a self-hosted install)',
+      options: ['clone'],
+    }),
   };
 
   async run(): Promise<void> {
@@ -75,6 +83,18 @@ export default class TenantImport extends Command {
         archivePath: flags.archive,
         ...(requestedTenantId ? { tenantId: requestedTenantId } : {}),
         ...(filesystemRoot ? { filesystemRoot } : {}),
+        ...(flags['target-layout'] === 'clone'
+          ? {
+              targetLayout: {
+                kind: 'clone' as const,
+                paths: {
+                  branchPath: (slug: string, name: string) =>
+                    getBranchPath(slug, name, effectiveTenantId),
+                  repoPath: (slug: string) => join(getReposDir(effectiveTenantId), slug),
+                },
+              },
+            }
+          : {}),
         log: (message) => this.logToStderr(chalk.dim(`  ${message}`)),
       });
       await writeStdoutJson(result);
