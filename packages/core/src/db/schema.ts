@@ -81,3 +81,4 @@ export type * from './schema.sqlite';
 
 export const kbImportReceipts = schema.kbImportReceipts;
 export const opencodeCheckpointAttempts = schema.opencodeCheckpointAttempts;
+export const agorPackImports = schema.agorPackImports;

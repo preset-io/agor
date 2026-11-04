@@ -24,7 +24,9 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
   }
 
   async stage(input: UploadStageInput): Promise<UploadMetadata> {
-    const ref = `upl_${randomUUID()}` as UploadRef;
+    // Only trusted daemon code (an `.agorpack` import restoring an attachment
+    // under its original ref) passes a reserved ref; requests never do.
+    const ref = input.reservedRef ?? (`upl_${randomUUID()}` as UploadRef);
     await runWithTenantDatabaseScope(this.db, input.owner.tenantId, () =>
       this.repository.reserve(input.owner, {
         ref,

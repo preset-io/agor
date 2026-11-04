@@ -3189,6 +3189,20 @@ export async function applyPackBundle(repoPath: string, bundlePath: string): Pro
 }
 
 /**
+ * Move a fresh checkout to an exported HEAD that the destination already
+ * fetched from `origin` (the source had no unpushed commits).
+ */
+export async function resetToPackCommit(repoPath: string, sha: string): Promise<boolean> {
+  if (!/^[0-9a-f]{40,64}$/.test(sha)) throw new Error('Invalid commit id in pack');
+  const { git } = createGit(repoPath);
+  if (!(await optionalRaw(git, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`]))) {
+    return false;
+  }
+  await git.raw(['reset', '--hard', sha]);
+  return true;
+}
+
+/**
  * Re-export for test helpers only.
  * Production service code must use createGit() to get the unsafe-ops flags,
  * env hardening, and consistent git binary selection.

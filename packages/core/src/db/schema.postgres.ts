@@ -149,7 +149,7 @@ export const sessions = pgTable(
     // Archive state (cascaded from branch archive)
     archived: t.bool('archived').notNull().default(false),
     archived_reason: text('archived_reason', {
-      enum: ['branch_archived', 'manual', 'parent_archived', 'btw_completed'],
+      enum: ['branch_archived', 'manual', 'parent_archived', 'btw_completed', 'imported'],
     }),
 
     // JSON blob for everything else (cross-DB via json() type)
@@ -3830,6 +3830,38 @@ export const kbImportReceipts = pgTable(
       table.bundle,
       table.slug,
       table.entry_key
+    ),
+  })
+);
+
+/**
+ * `.agorpack` import receipts: one row per (owner, pack content). Caches the
+ * dry-run, records the per-teammate result/remap for idempotent re-import,
+ * and points at the staged pack bytes. No FKs: receipts are history.
+ */
+export const agorPackImports = pgTable(
+  'agor_pack_imports',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    import_id: varchar('import_id', { length: 36 }).primaryKey(),
+    owner_user_id: varchar('owner_user_id', { length: 36 }).notNull(),
+    content_sha256: text('content_sha256').notNull(),
+    staging_ref: text('staging_ref'),
+    status: text('status', { enum: ['staged', 'applying', 'applied', 'failed'] }).notNull(),
+    manifest: t.json<import('@agor/core/types').AgorPackManifest>('manifest').notNull(),
+    dry_run: t.json<import('@agor/core/types').AgorPackDryRunTeammate[]>('dry_run'),
+    results: t.json<import('@agor/core/types').AgorPackTeammateResult[]>('results'),
+    error: text('error'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    applied_at: t.timestamp('applied_at'),
+  },
+  (table) => ({
+    tenantIdx: index('agor_pack_imports_tenant_idx').on(table.tenant_id),
+    contentUnique: uniqueIndex('agor_pack_imports_content_unique').on(
+      table.tenant_id,
+      table.owner_user_id,
+      table.content_sha256
     ),
   })
 );

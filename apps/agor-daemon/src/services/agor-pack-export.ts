@@ -656,7 +656,13 @@ export class AgorPackExporter {
             content: message.content,
             tool_uses: (message.tool_uses as unknown[] | undefined) ?? null,
             parent_tool_use_id: message.parent_tool_use_id ?? null,
-            metadata: (message.metadata as Record<string, unknown> | undefined) ?? null,
+            // Only display metadata travels; runtime/recovery bookkeeping stays behind.
+            metadata: message.metadata
+              ? {
+                  ...(message.metadata.model ? { model: message.metadata.model } : {}),
+                  ...(message.metadata.tokens ? { tokens: message.metadata.tokens } : {}),
+                }
+              : null,
           };
           const text = redactSecrets(JSON.stringify(line));
           redacted += text.redacted;

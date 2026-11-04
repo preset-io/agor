@@ -32,7 +32,12 @@ import {
 } from '@agor/core/agor-pack';
 import { fileByteSource } from '@agor/core/agor-pack/file-source';
 import { AGOR_PACK, type AgorPackGitState, agorPackGitStateSchema } from '@agor/core/types';
-import { applyPackBundle, createPackBundle, readPackWorkingTreeState } from '@agor/git';
+import {
+  applyPackBundle,
+  createPackBundle,
+  readPackWorkingTreeState,
+  resetToPackCommit,
+} from '@agor/git';
 import type {
   BranchPackCollectPayload,
   BranchPackMaterializePayload,
@@ -234,9 +239,12 @@ export async function handleBranchPackMaterialize(
       throw new Error('Branch checkout is not ready yet');
     }
     const packPath = join(work, 'pack.agorpack');
-    const response = await fetch(`${daemonUrl}/executor/agor-pack/imports/${p.importId}/content`, {
-      headers: { Authorization: `Bearer ${payload.sessionToken}` },
-    });
+    const response = await fetch(
+      `${daemonUrl}/executor/agor-pack/imports/${p.importId}/content?key=${p.teammateKey}`,
+      {
+        headers: { Authorization: `Bearer ${payload.sessionToken}` },
+      }
+    );
     if (!response.ok || !response.body) {
       throw new Error(`Pack download failed with HTTP ${response.status}`);
     }
@@ -259,6 +267,10 @@ export async function handleBranchPackMaterialize(
 
     if (reader.has(`${prefix}git/state.json`)) {
       const state = await reader.readJson(`${prefix}git/state.json`, agorPackGitStateSchema);
+      if (!headSha && state.head_sha && !p.localHome) {
+        // Nothing unpushed: the exported HEAD is on the remote the checkout came from.
+        if (await resetToPackCommit(branch.path, state.head_sha)) headSha = state.head_sha;
+      }
       for (const file of state.deleted) {
         if (!isPortableWorktreePath(file)) continue;
         const resolved = await resolvePathInsideBranch(branch.path, file);
