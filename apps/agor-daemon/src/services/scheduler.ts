@@ -87,6 +87,7 @@ import type {
   TaskID,
   TenantID,
   User,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import {
@@ -234,7 +235,8 @@ export class ScheduleNotReadyError extends Error {
     | 'schedule_permission_revoked'
     | 'schedule_initialization_retry_pending'
     | 'schedule_agentic_tool_removed'
-    | 'schedule_invalid_config';
+    | 'schedule_invalid_config'
+    | 'schedule_claude_reconnect_required';
   constructor(
     code:
       | 'schedule_disabled'
@@ -242,7 +244,8 @@ export class ScheduleNotReadyError extends Error {
       | 'schedule_permission_revoked'
       | 'schedule_initialization_retry_pending'
       | 'schedule_agentic_tool_removed'
-      | 'schedule_invalid_config',
+      | 'schedule_invalid_config'
+      | 'schedule_claude_reconnect_required',
     message: string
   ) {
     super(message);
@@ -319,6 +322,8 @@ export interface SchedulerConfig {
   random?: () => number;
   /** Diagnostic daemon instance/process identity. */
   workIdentity?: DistributedWorkIdentity;
+  /** True when the creator's backend Claude login needs a new sign-in before any run can work. */
+  claudeReconnectRequired?: (tenantId: string, userId: UserID) => Promise<boolean>;
   /** Deterministic crash injection used only by kill-point tests. */
   testHooks?: SchedulerTestHooks;
 }
@@ -346,6 +351,7 @@ interface ResolvedSchedulerConfig {
   jitterRatio: number;
   random: () => number;
   workIdentity: DistributedWorkIdentity;
+  claudeReconnectRequired?: (tenantId: string, userId: UserID) => Promise<boolean>;
   testHooks?: SchedulerTestHooks;
 }
 
@@ -399,6 +405,7 @@ export class SchedulerService {
       jitterRatio: config.jitterRatio ?? 0.2,
       random: config.random ?? Math.random,
       workIdentity,
+      claudeReconnectRequired: config.claudeReconnectRequired,
       testHooks: config.testHooks,
     };
     // The HA scheduler is a system-discovered, tenant-reentered workflow rather
@@ -786,6 +793,23 @@ export class SchedulerService {
     return session;
   }
 
+  /** Fails open: a check error must not block a run that may still succeed. */
+  private async creatorClaudeReconnectRequired(schedule: Schedule): Promise<boolean> {
+    if (!this.config.claudeReconnectRequired) return false;
+    try {
+      return await this.config.claudeReconnectRequired(
+        String(getCurrentTenantId()),
+        schedule.created_by as UserID
+      );
+    } catch (error) {
+      this.logWorkEvent('warn', 'claude_login_check_failed', {
+        schedule_id: schedule.schedule_id,
+        error_code: structuredLogErrorCode(error),
+      });
+      return false;
+    }
+  }
+
   /**
    * Resolve creator's unix_username for scheduled session execution.
    *
@@ -916,6 +940,23 @@ export class SchedulerService {
       ))
     ) {
       throw new BadRequest(`${resolvedConfig.activeTool} is disabled for this workspace`);
+    }
+    if (
+      resolvedConfig.activeTool === 'claude-code' &&
+      (await this.creatorClaudeReconnectRequired(schedule))
+    ) {
+      if (manual) {
+        throw new ScheduleNotReadyError(
+          'schedule_claude_reconnect_required',
+          'Your Claude login needs to be reconnected. Reconnect Claude in Settings, then run this schedule again.'
+        );
+      }
+      this.logWorkEvent('info', 'occurrence_skipped_reconnect_required', {
+        schedule_id: schedule.schedule_id,
+        scheduled_run_at: scheduledRunAt,
+      });
+      await this.advanceScheduleCursor(schedule, now);
+      return null;
     }
     // Native Codex auth cannot be projected safely into branch-owned state.
     // Resolve it before admission so a rejected scheduled run cannot leave an

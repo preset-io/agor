@@ -44,6 +44,7 @@ import type {
 } from '@agor/core/types';
 import type { DaemonMetrics, DaemonOperationalMetrics } from './metrics/index.js';
 import type { EnvironmentHealthCheckOptions } from './services/branches.js';
+import type { ClaudeBackendOAuth } from './services/claude-backend-oauth.js';
 import type {
   ExecuteTaskData,
   SessionArchiveBatchResult,
@@ -72,6 +73,8 @@ export type Application = ExpressApplication & {
   set(name: 'metrics', value: DaemonMetrics): ExpressApplication;
   get(name: 'daemonOperationalMetrics'): DaemonOperationalMetrics | undefined;
   set(name: 'daemonOperationalMetrics', value: DaemonOperationalMetrics): ExpressApplication;
+  get(name: 'claudeBackendOAuth'): ClaudeBackendOAuth | undefined;
+  set(name: 'claudeBackendOAuth', value: ClaudeBackendOAuth): ExpressApplication;
 };
 
 /**

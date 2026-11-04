@@ -996,6 +996,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const claudeBackendOAuth = isPostgresDatabaseHandle(db)
     ? new ClaudeBackendOAuth(db, claudeCapability)
     : undefined;
+  if (claudeBackendOAuth) app.set('claudeBackendOAuth', claudeBackendOAuth);
   const claudeRuntimeCredentials = new ClaudeRuntimeCredentialResolver(
     db,
     config,
