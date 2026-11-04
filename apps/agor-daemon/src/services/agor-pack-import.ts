@@ -331,12 +331,15 @@ export class AgorPackImporter {
               agorPackTeammateFileSchema
             );
             // Not atomic: repository registration, the branch, and each row
-            // commit separately. A failure part-way leaves a partial teammate
-            // and no receipt result, so a retry creates another copy.
+            // commit separately (each step opens its own short tenant unit,
+            // like the request that step would normally be). A failure part-way
+            // leaves a partial teammate and no receipt result, so a retry
+            // creates another copy. Never wrap the whole teammate in one scope:
+            // on PostgreSQL that is one transaction across branch provisioning,
+            // Knowledge writes, and attachment staging.
+            await this.write(async () => undefined); // tenant write gate
             const repo = await this.ensureRepo(file);
-            const result = await this.write(() =>
-              this.applyTeammate(reader, teammate, file, repo, request.board_id)
-            );
+            const result = await this.applyTeammate(reader, teammate, file, repo, request.board_id);
             results = [...results, result];
             await this.write(() => this.receipts().update(importId, { results }));
           }
@@ -460,14 +463,16 @@ export class AgorPackImporter {
           )
         : null;
       const boards = this.ctx.app.service('boards') as unknown as BoardsServiceImpl;
-      const board = (await boards.fromBlob(
-        {
-          ...boardBlob,
-          ...(slugTaken ? { slug: undefined } : {}),
-          objects,
-          custom_context: { ...(boardBlob.custom_context ?? {}), imported_from: importedFrom },
-        },
-        this.params
+      const board = (await this.write(() =>
+        boards.fromBlob(
+          {
+            ...boardBlob,
+            ...(slugTaken ? { slug: undefined } : {}),
+            objects,
+            custom_context: { ...(boardBlob.custom_context ?? {}), imported_from: importedFrom },
+          },
+          this.params
+        )
       )) as Board & { import_skipped?: unknown[] };
       boardId = board.board_id;
       if (board.import_skipped?.length) {
@@ -538,15 +543,17 @@ export class AgorPackImporter {
       const history = reader.has(path('knowledge/history.json'))
         ? await reader.readJson(path('knowledge/history.json'), agorPackKnowledgeHistorySchema)
         : null;
-      const kbResult = await importKnowledgeRepository({
-        db: this.ctx.db,
-        app: this.ctx.app,
-        params: this.params,
-        namespace: { namespace_id: kb.primary_namespace_id, slug: kb.primary_namespace_slug },
-        files,
-        history,
-        importMetadata: { agor_pack: importedFrom },
-      });
+      const kbResult = await this.write(() =>
+        importKnowledgeRepository({
+          db: this.ctx.db,
+          app: this.ctx.app,
+          params: this.params,
+          namespace: { namespace_id: kb.primary_namespace_id, slug: kb.primary_namespace_slug },
+          files,
+          history,
+          importMetadata: { agor_pack: importedFrom },
+        })
+      );
       if (kbResult.unresolvedLinks) {
         warnings.push(
           `${pluralize(kbResult.unresolvedLinks, 'Knowledge link')} could not be resolved.`

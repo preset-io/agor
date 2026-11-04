@@ -78,10 +78,21 @@ export function configureUploadStagingStoreFromConfig(
     packFactory = () => {
       const url = new URL(location);
       url.pathname = `${url.pathname.replace(/\/$/, '')}/agor-packs`;
-      return new S3UploadStagingStore(parseS3UploadLocation(url), {
-        maxBytes: AGOR_PACK.maxBytes,
-        ttlMs: PACK_TTL_MS,
-      });
+      // Same injected adapter as uploads (Cloud owns S3 construction), with
+      // the pack size and TTL limits instead of the upload ones.
+      return s3Factory
+        ? s3Factory(url, {
+            ...config,
+            uploads: {
+              ...config.uploads,
+              max_file_size_mb: AGOR_PACK.maxBytes / (1024 * 1024),
+              max_age_days: PACK_TTL_MS / (24 * 60 * 60 * 1000),
+            },
+          })
+        : new S3UploadStagingStore(parseS3UploadLocation(url), {
+            maxBytes: AGOR_PACK.maxBytes,
+            ttlMs: PACK_TTL_MS,
+          });
     };
     packInstance = undefined;
     return;
