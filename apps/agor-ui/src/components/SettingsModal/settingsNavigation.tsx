@@ -1,6 +1,7 @@
 import {
   AppstoreOutlined,
   BranchesOutlined,
+  CloudUploadOutlined,
   ClusterOutlined,
   ControlOutlined,
   CreditCardOutlined,
@@ -114,6 +115,11 @@ export function buildSettingsNav({
       title: 'System',
       mobileTitle: 'About',
       rows: [
+        {
+          section: 'move-to-cloud',
+          label: 'Move to Agor Cloud',
+          icon: <CloudUploadOutlined />,
+        },
         {
           section: 'about',
           label: 'About',

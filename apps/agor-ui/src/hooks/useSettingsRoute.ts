@@ -18,6 +18,7 @@ export const SETTINGS_SECTIONS = [
   'gateway',
   'groups',
   'users',
+  'move-to-cloud',
   'about',
 ] as const;
 

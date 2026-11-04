@@ -1,0 +1,292 @@
+import type { AgorPackImport } from '@agor/core/types';
+import type { AgorClient, Board, User } from '@agor-live/client';
+import { InboxOutlined } from '@ant-design/icons';
+import {
+  Alert,
+  Button,
+  Flex,
+  Progress,
+  Select,
+  Space,
+  Steps,
+  Table,
+  Typography,
+  Upload,
+} from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { applyPackImport, getPackImport, uploadPack } from '../../utils/agorPack';
+import { useThemedMessage } from '../../utils/message';
+import { AdaptiveSettingsModal } from '../SettingsModal/AdaptiveSettingsModal';
+import { Tag } from '../Tag';
+import { ReconnectChecklist } from './ReconnectChecklist';
+
+export interface ImportPackWizardProps {
+  open: boolean;
+  onClose: () => void;
+  client?: AgorClient | null;
+  currentUser?: User | null;
+  boardById: Map<string, Board>;
+  /** Start on the review step for an already-uploaded pack (tests). */
+  initialReceipt?: AgorPackImport;
+}
+
+type Row = AgorPackImport['manifest']['teammates'][number] & {
+  dry: AgorPackImport['dry_run'][number] | undefined;
+};
+
+function contents(row: Row): string {
+  const s = row.sections;
+  return [
+    s.board ? 'board' : null,
+    s.knowledge ? `${s.knowledge.documents} docs` : null,
+    s.artifacts ? `${s.artifacts} artifacts` : null,
+    s.schedules ? `${s.schedules} schedules` : null,
+    s.sessions ? `${s.sessions.count} sessions` : null,
+    s.uploads?.count ? `${s.uploads.count} attachments` : null,
+    s.claude_memory?.files ? 'Claude memory' : null,
+    s.git ? (s.git.mode === 'bundle' ? 'full git tree' : 'git changes') : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
+  open,
+  onClose,
+  client,
+  currentUser,
+  boardById,
+  initialReceipt,
+}) => {
+  const { showError, showSuccess } = useThemedMessage();
+  const [receipt, setReceipt] = useState<AgorPackImport | null>(initialReceipt ?? null);
+  const [step, setStep] = useState(initialReceipt ? 1 : 0);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [selected, setSelected] = useState<string[]>(
+    () => initialReceipt?.manifest.teammates.map((t) => t.key) ?? []
+  );
+  const [boardId, setBoardId] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+
+  // Files restore in the background after apply; follow the receipt until done.
+  const pending = receipt?.results.some((r) => r.filesystem === 'pending') ?? false;
+  useEffect(() => {
+    if (!receipt || step !== 2 || !pending) return;
+    const timer = setInterval(() => {
+      getPackImport(receipt.import_id)
+        .then(setReceipt)
+        .catch(() => undefined);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [receipt, step, pending]);
+
+  const rows: Row[] = useMemo(
+    () =>
+      (receipt?.manifest.teammates ?? []).map((teammate) => ({
+        ...teammate,
+        dry: receipt?.dry_run.find((d) => d.key === teammate.key),
+      })),
+    [receipt]
+  );
+
+  const handleFile = async (file: File) => {
+    setProgress(0);
+    try {
+      const result = await uploadPack(file, setProgress);
+      setReceipt(result);
+      setSelected(result.dry_run.filter((d) => !d.already_imported_branch_id).map((d) => d.key));
+      setStep(1);
+    } catch (error) {
+      showError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setProgress(null);
+    }
+  };
+
+  const handleApply = async () => {
+    if (!receipt) return;
+    setApplying(true);
+    try {
+      const result = await applyPackImport(receipt.import_id, {
+        teammates: selected,
+        board_id: boardId,
+      });
+      setReceipt(result);
+      setStep(2);
+      showSuccess(`Imported ${selected.length} teammate${selected.length === 1 ? '' : 's'}`);
+    } catch (error) {
+      showError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const source = receipt?.manifest.source;
+
+  return (
+    <AdaptiveSettingsModal
+      title="Import teammates (.agorpack)"
+      open={open}
+      onCancel={onClose}
+      width={880}
+      destroyOnHidden
+      footer={
+        step === 1 ? (
+          <Flex justify="flex-end" gap={8}>
+            <Button onClick={onClose}>Cancel</Button>
+            <Button
+              type="primary"
+              loading={applying}
+              disabled={selected.length === 0}
+              onClick={handleApply}
+            >
+              Import {selected.length} teammate{selected.length === 1 ? '' : 's'}
+            </Button>
+          </Flex>
+        ) : step === 2 ? (
+          <Flex justify="flex-end">
+            <Button type="primary" onClick={onClose}>
+              Done
+            </Button>
+          </Flex>
+        ) : null
+      }
+    >
+      <Flex vertical gap="large">
+        <Steps
+          size="small"
+          current={step}
+          items={[{ title: 'Upload' }, { title: 'Review' }, { title: 'Reconnect' }]}
+        />
+
+        {step === 0 && (
+          <Flex vertical gap="small">
+            <Upload.Dragger
+              accept=".agorpack,application/zip"
+              multiple={false}
+              showUploadList={false}
+              disabled={progress !== null}
+              beforeUpload={(file) => {
+                void handleFile(file);
+                return false;
+              }}
+            >
+              <p className="ant-upload-drag-icon">
+                <InboxOutlined />
+              </p>
+              <p className="ant-upload-text">Drop a .agorpack file here, or click to choose one</p>
+              <p className="ant-upload-hint">
+                Nothing is imported until you review the contents on the next step.
+              </p>
+            </Upload.Dragger>
+            {progress !== null && <Progress percent={progress} status="active" />}
+          </Flex>
+        )}
+
+        {step === 1 && receipt && (
+          <Flex vertical gap="middle">
+            <Typography.Text type="secondary">
+              Exported from Agor {source?.agor_version}
+              {source?.exported_by.name ? ` by ${source.exported_by.name}` : ''} on{' '}
+              {new Date(receipt.manifest.created_at).toLocaleString()}. You will own everything
+              imported; schedules arrive paused.
+            </Typography.Text>
+            <Table<Row>
+              size="small"
+              rowKey="key"
+              pagination={false}
+              dataSource={rows}
+              rowSelection={{
+                selectedRowKeys: selected,
+                onChange: (keys) => setSelected(keys as string[]),
+                getCheckboxProps: (row) => ({
+                  disabled: Boolean(row.dry?.already_imported_branch_id),
+                  'aria-label': `Import ${row.display_name}`,
+                }),
+              }}
+              columns={[
+                {
+                  title: 'Teammate',
+                  key: 'teammate',
+                  render: (_: unknown, row) => (
+                    <Space direction="vertical" size={0}>
+                      <Typography.Text strong>
+                        {row.emoji ?? '🤖'} {row.display_name}
+                      </Typography.Text>
+                      <Typography.Text type="secondary">{contents(row)}</Typography.Text>
+                    </Space>
+                  ),
+                },
+                {
+                  title: 'Repository',
+                  key: 'repo',
+                  width: 180,
+                  render: (_: unknown, row) =>
+                    row.dry?.already_imported_branch_id ? (
+                      <Tag color="success">already imported</Tag>
+                    ) : (
+                      <Space direction="vertical" size={0}>
+                        <Typography.Text>{row.repo.slug}</Typography.Text>
+                        <Tag>
+                          {row.dry?.repo_status === 'existing'
+                            ? 'already here'
+                            : row.dry?.repo_status === 'framework'
+                              ? 'teammate framework'
+                              : 'will clone'}
+                        </Tag>
+                      </Space>
+                    ),
+                },
+                {
+                  title: 'Needs attention',
+                  key: 'warnings',
+                  render: (_: unknown, row) => (
+                    <Flex vertical gap={2}>
+                      {row.requirements.env_vars.length > 0 && (
+                        <span>
+                          {row.requirements.env_vars.length} environment variable
+                          {row.requirements.env_vars.length === 1 ? '' : 's'}
+                        </span>
+                      )}
+                      {(row.dry?.warnings ?? []).map((warning) => (
+                        <Typography.Text key={warning} type="warning">
+                          {warning}
+                        </Typography.Text>
+                      ))}
+                    </Flex>
+                  ),
+                },
+              ]}
+            />
+            <Flex align="center" gap={8} wrap>
+              <Typography.Text>Place on</Typography.Text>
+              <Select
+                style={{ minWidth: 260 }}
+                value={boardId ?? 'new'}
+                aria-label="Board"
+                onChange={(value) => setBoardId(value === 'new' ? null : value)}
+                options={[
+                  { value: 'new', label: 'A new board per teammate (from the pack)' },
+                  ...[...boardById.values()]
+                    .filter((board) => !board.archived)
+                    .map((board) => ({ value: board.board_id, label: board.name })),
+                ]}
+              />
+            </Flex>
+            {rows.some((row) => row.dry?.already_imported_branch_id) && (
+              <Alert
+                type="info"
+                showIcon
+                message="Teammates you already imported from this file are skipped."
+              />
+            )}
+          </Flex>
+        )}
+
+        {step === 2 && receipt && (
+          <ReconnectChecklist client={client} currentUser={currentUser} receipt={receipt} />
+        )}
+      </Flex>
+    </AdaptiveSettingsModal>
+  );
+};
