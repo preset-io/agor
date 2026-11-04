@@ -827,6 +827,81 @@ describe('scheduler HA occurrence recovery', () => {
     expect(prompt).not.toHaveBeenCalled();
   });
 
+  dbTest(
+    'skips cron runs and rejects manual runs while the creator must reconnect Claude',
+    async ({ db }) => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+      try {
+        const { creator, schedule } = await seedRunnableSchedule(
+          db,
+          { email: `scheduler-reconnect-${Math.random()}@example.com`, name: 'Schedule creator' },
+          { agentic_tool: 'claude-code' }
+        );
+        const { app, prompt } = createSchedulerApp(db);
+        const claudeReconnectRequired = vi.fn(async () => true);
+        const scheduler = new SchedulerService(db, app, { claudeReconnectRequired });
+
+        await (
+          scheduler as unknown as {
+            processSchedule(schedule: Schedule, now: number): Promise<void>;
+          }
+        ).processSchedule(schedule, NOW);
+        await expect(
+          scheduler.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).rejects.toMatchObject<ScheduleNotReadyError>({
+          code: 'schedule_claude_reconnect_required',
+        });
+
+        expect(claudeReconnectRequired).toHaveBeenCalledWith(expect.any(String), creator.user_id);
+        expect(prompt).not.toHaveBeenCalled();
+        expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+          0
+        );
+        const advanced = await new ScheduleRepository(db).findById(schedule.schedule_id);
+        expect(advanced?.next_run_at).toBe(NOW + 60 * 60 * 1000);
+        expect(advanced?.last_run_at).toBeFalsy();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    }
+  );
+
+  dbTest('runs the schedule when the Claude login check itself fails', async ({ db }) => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    try {
+      const { creator, schedule } = await seedRunnableSchedule(
+        db,
+        {
+          email: `scheduler-reconnect-open-${Math.random()}@example.com`,
+          name: 'Schedule creator',
+        },
+        { agentic_tool: 'claude-code' }
+      );
+      const { app, prompt } = createSchedulerApp(db);
+      const scheduler = new SchedulerService(db, app, {
+        claudeReconnectRequired: vi.fn(async () => {
+          throw new Error('grant lookup failed');
+        }),
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await scheduler.executeScheduleNow({
+          scheduleId: schedule.schedule_id,
+          triggeredBy: creator.user_id,
+        });
+        expect(String(warn.mock.calls.flat())).toContain('event="claude_login_check_failed"');
+      } finally {
+        warn.mockRestore();
+      }
+      expect(prompt).toHaveBeenCalledOnce();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   dbTest('retention defers active overflow occurrences until they are terminal', async ({ db }) => {
     const { creator, schedule: createdSchedule } = await seedRunnableSchedule(
       db,

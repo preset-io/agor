@@ -110,6 +110,7 @@ Because MCP is just JSON-RPC, you can bring any service into the loop: Agor’s 
 
 - **“Invalid cron expression.”** The UI validates the expression; edit the expression or pick a preset.
 - **No session fired.** Confirm the schedule is enabled and `Next run` is in the past. Remember the two-minute grace window.
+- **Claude schedule stopped producing runs.** If the schedule's creator uses **Sign in with Claude** and that login can no longer be refreshed, Agor skips the schedule's runs instead of starting sessions that would fail. **Run now** shows the reason. Reconnect Claude in Settings and the next run starts normally.
 - **Agent lacks permissions.** Switch permission mode to `auto` or attach the necessary MCP servers in advanced settings.
 - **Timezone surprises.** Everything evaluates in UTC today; adjust the cron or translate from your local time.
 

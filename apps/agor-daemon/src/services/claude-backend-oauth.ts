@@ -31,13 +31,65 @@ import { CLAUDE_CLIENT_ID, CLAUDE_OAUTH_BINDING, CLAUDE_TOKEN_URL } from './clau
 
 const LAUNCH_MARGIN_MS = 60 * 60 * 1000;
 
+export const CLAUDE_RECONNECT_REQUIRED_MESSAGE =
+  'Your Claude login needs to be reconnected. Reconnect Claude in Settings, then start a new task.';
+const RETRY_LATER_MESSAGE =
+  'Claude login could not be refreshed safely. Reconnect in Settings or start a new task later.';
+
+// Provider error text is never logged; only these closed codes are.
+const LOGGABLE_PROVIDER_ERRORS = new Set([
+  'invalid_grant',
+  'invalid_client',
+  'unauthorized_client',
+  'invalid_request',
+  'invalid_scope',
+  'unsupported_grant_type',
+  'rate_limit_error',
+  'overloaded_error',
+  'api_error',
+  'permission_error',
+  'authentication_error',
+]);
+
+interface ProviderResponseShape {
+  httpStatus?: number;
+  body: 'json' | 'non_json' | 'none';
+  providerError: string;
+}
+
+function providerErrorCode(error: unknown): string {
+  const code =
+    typeof error === 'string'
+      ? error
+      : error && typeof error === 'object' && typeof (error as { type?: unknown }).type === 'string'
+        ? (error as { type: string }).type
+        : undefined;
+  if (code === undefined) return error === undefined ? 'none' : 'other';
+  return LOGGABLE_PROVIDER_ERRORS.has(code) ? code : 'other';
+}
+
 class BackendRefreshFailure extends Error {
   constructor(
     readonly category: 'cancelled' | 'rejected' | 'invalid' | 'ambiguous',
+    readonly response: ProviderResponseShape,
     readonly retryMs = 0
   ) {
     super('Claude login refresh could not be completed. Reconnect in Settings.');
   }
+}
+
+/** A grant no refresh can recover: only a new sign-in makes it usable again. */
+function grantNeedsReconnect(row: ProviderOAuthGrant | null): boolean {
+  return (
+    !row ||
+    row.state === 'disconnected' ||
+    row.state === 'reauth_required' ||
+    row.state === 'ambiguous' ||
+    row.binding_version !== 1 ||
+    row.binding_fingerprint !== CLAUDE_OAUTH_BINDING ||
+    !row.sealed_access_token ||
+    !row.sealed_refresh_token
+  );
 }
 
 export interface ClaudeBackendOAuthDependencies {
@@ -138,6 +190,19 @@ export class ClaudeBackendOAuth {
     );
   }
 
+  /** True when the user's selected backend Claude login can only recover by signing in again. */
+  async reconnectRequired(tenantId: string, userId: UserID): Promise<boolean> {
+    const capability = this.capability();
+    if (!capability.available || capability.storage !== 'backend') return false;
+    return this.unit(tenantId, async (db) => {
+      const connection = await resolveProviderConnection('claude-code', { userId, db });
+      if (connection.source !== 'user' || !connection.managedOAuth) return false;
+      return grantNeedsReconnect(
+        await new UserProviderOAuthGrantRepository(db).get(tenantId, userId)
+      );
+    });
+  }
+
   /** Inventory/status never decrypts or refreshes. Saved is not provider validation. */
   async status(
     tenantId: string,
@@ -210,17 +275,30 @@ export class ClaudeBackendOAuth {
       });
     } catch (error) {
       throw new BackendRefreshFailure(
-        error instanceof OutboundPreDispatchAuthorityError ? 'cancelled' : 'ambiguous'
+        error instanceof OutboundPreDispatchAuthorityError ? 'cancelled' : 'ambiguous',
+        { body: 'none', providerError: 'none' }
       );
     }
     let body: Record<string, unknown>;
     try {
       body = (await response.json()) as Record<string, unknown>;
     } catch {
-      throw new BackendRefreshFailure('ambiguous');
+      throw new BackendRefreshFailure('ambiguous', {
+        httpStatus: response.status,
+        body: 'non_json',
+        providerError: 'none',
+      });
     }
+    const shape: ProviderResponseShape = {
+      httpStatus: response.status,
+      body: 'json',
+      providerError:
+        body && typeof body === 'object' && !Array.isArray(body)
+          ? providerErrorCode(body.error)
+          : 'none',
+    };
     if (!body || typeof body !== 'object' || Array.isArray(body))
-      throw new BackendRefreshFailure('ambiguous');
+      throw new BackendRefreshFailure('ambiguous', shape);
     if (body.error !== undefined) {
       if (
         response.ok ||
@@ -230,12 +308,13 @@ export class ClaudeBackendOAuth {
         body.access_token !== undefined ||
         body.refresh_token !== undefined
       )
-        throw new BackendRefreshFailure('ambiguous');
+        throw new BackendRefreshFailure('ambiguous', shape);
       if (['invalid_grant', 'invalid_client', 'unauthorized_client'].includes(body.error))
-        throw new BackendRefreshFailure('invalid');
+        throw new BackendRefreshFailure('invalid', shape);
       const retry = Number(response.headers.get('retry-after')) * 1000;
       throw new BackendRefreshFailure(
         'rejected',
+        shape,
         Math.min(300_000, Math.max(1000, Number.isFinite(retry) ? retry : 1000))
       );
     }
@@ -253,7 +332,7 @@ export class ClaudeBackendOAuth {
         (typeof body.token_type !== 'string' || body.token_type.toLowerCase() !== 'bearer')) ||
       (body.scope !== undefined && typeof body.scope !== 'string')
     )
-      throw new BackendRefreshFailure('ambiguous');
+      throw new BackendRefreshFailure('ambiguous', shape);
     return {
       accessToken: body.access_token,
       refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : refreshToken,
@@ -280,6 +359,11 @@ export class ClaudeBackendOAuth {
     const initial = await this.get(tenantId, userId);
     if (initial?.binding_version !== 1 || initial.binding_fingerprint !== CLAUDE_OAUTH_BINDING) {
       throw new Unavailable('Saved Claude login is unavailable. Reconnect in Settings.');
+    }
+    if (grantNeedsReconnect(initial)) {
+      throw new Unavailable(CLAUDE_RECONNECT_REQUIRED_MESSAGE, {
+        code: 'claude_reconnect_required',
+      });
     }
     const exact = (row: ProviderOAuthGrant | null): row is ProviderOAuthGrant =>
       !!row &&
@@ -417,25 +501,40 @@ export class ClaudeBackendOAuth {
         },
         classify: (error) =>
           error instanceof BackendRefreshFailure ? error.category : 'ambiguous',
-        settle: ({ fence }, outcome, error) =>
-          this.writeUnit(tenantId, async (db) => {
+        settle: async ({ fence }, outcome, error) => {
+          const state =
+            outcome === 'invalid'
+              ? 'reauth_required'
+              : outcome === 'ambiguous'
+                ? 'ambiguous'
+                : 'idle';
+          const response = error instanceof BackendRefreshFailure ? error.response : undefined;
+          const line =
+            `[claude_oauth.refresh] event=failed outcome=${outcome} grant_state=${state} ` +
+            `source=${response ? 'provider' : 'internal'} ` +
+            `http_status=${response?.httpStatus ?? 'none'} body=${response?.body ?? 'none'} ` +
+            `provider_error=${response?.providerError ?? 'none'}`;
+          if (outcome === 'cancelled') console.info(line);
+          else console.warn(line);
+          await this.writeUnit(tenantId, async (db) => {
             await new UserProviderOAuthGrantRepository(db).finish(
               tenantId,
               userId,
               fence,
-              outcome === 'invalid'
-                ? 'reauth_required'
-                : outcome === 'ambiguous'
-                  ? 'ambiguous'
-                  : 'idle',
+              state,
               error instanceof BackendRefreshFailure ? error.retryMs : 0
             );
-          }),
+          });
+        },
       }
-    ).catch(() => {
-      throw new Unavailable(
-        'Claude login could not be refreshed safely. Reconnect in Settings or start a new task later.'
-      );
+    ).catch(async () => {
+      const row = await this.get(tenantId, userId).catch(() => undefined);
+      if (row !== undefined && grantNeedsReconnect(row)) {
+        throw new Unavailable(CLAUDE_RECONNECT_REQUIRED_MESSAGE, {
+          code: 'claude_reconnect_required',
+        });
+      }
+      throw new Unavailable(RETRY_LATER_MESSAGE);
     });
   }
 }
