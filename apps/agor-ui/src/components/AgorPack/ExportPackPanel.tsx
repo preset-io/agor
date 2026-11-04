@@ -4,6 +4,8 @@ import {
   type AgorPackPreflightTeammate,
   type AgorPackSection,
   type AgorPackSessionMode,
+  agorPackArchivedNotes,
+  agorPackOutsideLinksNote,
 } from '@agor/core/types';
 import type { Branch } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
@@ -203,6 +205,27 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
                     {teammate.warnings.map((warning) => (
                       <span key={warning}>{warning}</span>
                     ))}
+                    {[
+                      ...agorPackArchivedNotes({
+                        sessions: sessions === 'none' ? 0 : teammate.archived.sessions,
+                        knowledge_documents: sections.includes('knowledge')
+                          ? teammate.archived.knowledge_documents
+                          : 0,
+                        artifacts:
+                          sections.includes('board') || sections.includes('artifacts')
+                            ? teammate.archived.artifacts
+                            : 0,
+                      }),
+                      sections.includes('knowledge')
+                        ? agorPackOutsideLinksNote(teammate.knowledge_outside_links)
+                        : null,
+                    ]
+                      .filter((note): note is string => Boolean(note))
+                      .map((note) => (
+                        <Typography.Text key={note} type="secondary">
+                          {note}
+                        </Typography.Text>
+                      ))}
                     {teammate.requirements.env_vars.length > 0 && (
                       <span>
                         Names only:{' '}

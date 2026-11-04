@@ -5,6 +5,7 @@
 
 import { AgorPackReader } from '@agor/core/agor-pack';
 import { fileByteSource } from '@agor/core/agor-pack/file-source';
+import { agorPackArchivedNotes, agorPackOutsideLinksNote } from '@agor/core/types';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
@@ -66,6 +67,12 @@ export default class PackInspect extends BaseCommand {
             : null,
         ].filter(Boolean);
         this.log(`  ${parts.join(' · ')}`);
+        for (const note of [
+          ...agorPackArchivedNotes(s.archived_skipped),
+          agorPackOutsideLinksNote(s.knowledge?.outside_links),
+        ]) {
+          if (note) this.log(chalk.dim(`  ${note}`));
+        }
         const r = teammate.requirements;
         if (r.env_vars.length) this.log(`  env vars: ${r.env_vars.map((v) => v.name).join(', ')}`);
         if (r.mcp_servers.length) this.log(`  MCP: ${r.mcp_servers.map((m) => m.name).join(', ')}`);

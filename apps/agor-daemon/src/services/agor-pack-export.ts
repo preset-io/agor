@@ -36,6 +36,7 @@ import {
   BoardRepository,
   BranchRepository,
   GatewayChannelRepository,
+  KnowledgeNamespaceRepository,
   KnowledgeTransferRepository,
   MCPServerRepository,
   MessagesRepository,
@@ -89,7 +90,7 @@ import {
   agorPackCollectExecutorCommandId,
   runAgorPackExecutorCommand,
 } from './agor-pack-executor.js';
-import { exportKnowledgeRepository } from './knowledge-transfers.js';
+import { exportKnowledgeRepository, previewKnowledgeExport } from './knowledge-transfers.js';
 
 export interface AgorPackServiceContext {
   app: Application;
@@ -260,20 +261,26 @@ export class AgorPackExporter {
     return { branch, repo };
   }
 
+  /** Sessions the request selects; archived ones are left out and counted. */
   private async selectSessions(
     branch: Branch,
     mode: AgorPackExportRequest['sessions'],
     includeOthers: boolean
-  ): Promise<Session[]> {
-    if (mode === 'none') return [];
+  ): Promise<{ sessions: Session[]; archived: number }> {
+    if (mode === 'none') return { sessions: [], archived: 0 };
     const all = await this.unit(() =>
       new SessionRepository(this.ctx.db).findAll({ branchId: branch.branch_id })
     );
     const since = Date.now() - RECENT_MS;
-    return all
+    const selected = all
       .filter((session) => includeOthers || session.created_by === this.ctx.user.user_id)
-      .filter((session) => mode === 'all' || Date.parse(session.last_updated) >= since)
-      .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+      .filter((session) => mode === 'all' || Date.parse(session.last_updated) >= since);
+    return {
+      sessions: selected
+        .filter((session) => !session.archived)
+        .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at)),
+      archived: selected.filter((session) => session.archived).length,
+    };
   }
 
   private async referencedMcpServers(
@@ -393,9 +400,10 @@ export class AgorPackExporter {
     for (const branchId of branchIds) {
       const { branch, repo } = await this.loadTeammate(branchId);
       const teammate = getTeammateConfig(branch);
-      const all = await this.unit(() =>
+      const everything = await this.unit(() =>
         new SessionRepository(this.ctx.db).findAll({ branchId: branch.branch_id })
       );
+      const all = everything.filter((s) => !s.archived);
       const since = Date.now() - RECENT_MS;
       const own = all.filter((s) => s.created_by === this.ctx.user.user_id);
       const others = all.filter((s) => s.created_by !== this.ctx.user.user_id);
@@ -404,8 +412,12 @@ export class AgorPackExporter {
       const schedules = await this.unit(() =>
         new ScheduleRepository(this.ctx.db).findByBranchId(branch.branch_id)
       );
-      const artifacts = await this.boardArtifacts(branch);
+      const { artifacts, archived: archivedArtifacts } = await this.boardArtifacts(branch);
       const { requirements } = await this.requirements(branch, schedules, artifacts, own);
+      const namespaceId = teammate?.kb?.primary_namespace_id;
+      const knowledge = namespaceId
+        ? await this.unit(() => previewKnowledgeExport(this.ctx.db, namespaceId))
+        : { documents: 0, archived: 0, outsideLinks: { count: 0, namespaces: [] } };
       const environment = this.environment(branch, repo);
       const warnings: string[] = [];
       if (environment.variants.some((variant) => variant.status !== 'ok')) {
@@ -429,15 +441,13 @@ export class AgorPackExporter {
         },
         schedules: schedules.length,
         artifacts: artifacts.length,
-        knowledge_documents: teammate?.kb?.primary_namespace_id
-          ? (
-              await this.unit(() =>
-                new KnowledgeTransferRepository(this.ctx.db).inventory(
-                  teammate.kb?.primary_namespace_id as string
-                )
-              )
-            ).total
-          : 0,
+        knowledge_documents: knowledge.documents,
+        knowledge_outside_links: knowledge.outsideLinks,
+        archived: {
+          sessions: everything.length - all.length,
+          knowledge_documents: knowledge.archived,
+          artifacts: archivedArtifacts,
+        },
         requirements,
         environment,
         switch_over: readSwitchOverState(branch),
@@ -454,27 +464,34 @@ export class AgorPackExporter {
     };
   }
 
-  /** Artifacts referenced by the teammate board that the exporter can see. */
-  private async boardArtifacts(branch: Branch): Promise<Artifact[]> {
-    if (!branch.board_id) return [];
+  /**
+   * Artifacts referenced by the teammate board that the exporter can see;
+   * archived ones are left out and counted.
+   */
+  private async boardArtifacts(
+    branch: Branch
+  ): Promise<{ artifacts: Artifact[]; archived: number }> {
+    if (!branch.board_id) return { artifacts: [], archived: 0 };
     const board = await this.unit(() =>
       new BoardRepository(this.ctx.db).findById(branch.board_id as string)
     );
     const ids = Object.values(board?.objects ?? {}).flatMap((object) =>
       object.type === 'artifact' ? [object.artifact_id] : []
     );
-    if (!ids.length) return [];
+    if (!ids.length) return { artifacts: [], archived: 0 };
     const artifacts = new ArtifactRepository(this.ctx.db);
     const visible = await this.unit(() =>
       artifacts.findBoardReferenceVisibleIds(ids, this.ctx.user.user_id)
     );
     const rows: Artifact[] = [];
+    let archived = 0;
     for (const id of ids) {
       if (!visible.has(id)) continue;
       const row = await this.unit(() => artifacts.findById(id));
-      if (row && !row.archived) rows.push(row);
+      if (row?.archived) archived += 1;
+      else if (row) rows.push(row);
     }
-    return rows;
+    return { artifacts: rows, archived };
   }
 
   /**
@@ -545,8 +562,15 @@ export class AgorPackExporter {
       git: null,
     };
 
-    // Board (+ artifacts referenced by it).
-    const artifacts = sections.has('artifacts') ? await this.boardArtifacts(branch) : [];
+    // Board (+ artifacts referenced by it). Archived artifacts stay behind.
+    const boardArtifacts = await this.boardArtifacts(branch);
+    const artifacts = sections.has('artifacts') ? boardArtifacts.artifacts : [];
+    const archivedSkipped = {
+      sessions: 0,
+      knowledge_documents: 0,
+      artifacts: sections.has('board') || sections.has('artifacts') ? boardArtifacts.archived : 0,
+    };
+    const archivedArtifactIds = new Set<string>();
     if (sections.has('board') && branch.board_id) {
       const boards = new BoardRepository(this.ctx.db);
       const blob = await this.unit(() => boards.toBlob(branch.board_id as string));
@@ -557,11 +581,23 @@ export class AgorPackExporter {
       const sequenceById = new Map(
         artifacts.map((artifact, i) => [artifact.artifact_id, packSequence(i)])
       );
+      if (boardArtifacts.archived) {
+        const repo = new ArtifactRepository(this.ctx.db);
+        for (const object of Object.values(blob.objects ?? {})) {
+          if (object.type !== 'artifact') continue;
+          const row = await this.unit(() => repo.findById(object.artifact_id));
+          if (row?.archived) archivedArtifactIds.add(object.artifact_id);
+        }
+      }
+      const objects: NonNullable<typeof blob.objects> = {};
       for (const [objectId, object] of Object.entries(blob.objects ?? {})) {
+        if (object.type === 'artifact' && archivedArtifactIds.has(object.artifact_id)) continue;
+        objects[objectId] = object;
         if (object.type !== 'artifact') continue;
         const sequence = sequenceById.get(object.artifact_id);
         if (sequence) artifactObjects[objectId] = sequence;
       }
+      blob.objects = objects;
       const file: AgorPackBoardFile = {
         version: 1,
         board: { ...blob, version: 1 } as unknown as Record<string, unknown>,
@@ -601,7 +637,15 @@ export class AgorPackExporter {
 
     // Knowledge (teammate memory namespace).
     const namespaceId = teammate.kb?.primary_namespace_id;
-    if (sections.has('knowledge') && namespaceId) {
+    const namespace =
+      sections.has('knowledge') && namespaceId
+        ? await this.unit(() => new KnowledgeNamespaceRepository(this.ctx.db).findById(namespaceId))
+        : null;
+    if (namespace?.archived) warnings.push('Knowledge is archived and was skipped.');
+    if (sections.has('knowledge') && namespaceId && namespace && !namespace.archived) {
+      archivedSkipped.knowledge_documents = await this.unit(() =>
+        new KnowledgeTransferRepository(this.ctx.db).archivedCount(namespaceId)
+      );
       const kb = await this.unit(() =>
         exportKnowledgeRepository(this.ctx.db, namespaceId, {
           includeHistory: sections.has('knowledge_history'),
@@ -619,18 +663,23 @@ export class AgorPackExporter {
           scrubbedJson(path('knowledge/history.json'), kb.history)
         );
       }
-      summary.knowledge = { documents: kb.documents, history_versions: kb.historyVersions };
+      summary.knowledge = {
+        documents: kb.documents,
+        history_versions: kb.historyVersions,
+        outside_links: kb.outsideLinks,
+      };
     }
 
     // Schedules.
     const schedules = await this.unit(() =>
       new ScheduleRepository(this.ctx.db).findByBranchId(branch.branch_id)
     );
-    const sessions = await this.selectSessions(
+    const { sessions, archived: archivedSessions } = await this.selectSessions(
       branch,
       request.sessions,
       request.include_others_sessions
     );
+    archivedSkipped.sessions = archivedSessions;
     const { requirements, servers } = await this.requirements(
       branch,
       schedules,
@@ -924,6 +973,7 @@ export class AgorPackExporter {
       );
     }
 
+    summary.archived_skipped = archivedSkipped;
     const environment = this.environment(branch, repo);
     if (environment.variants.some((variant) => variant.status === 'wont_run_in_cloud')) {
       warnings.push("Some environment variants won't run in Agor Cloud as configured.");

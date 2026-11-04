@@ -1,4 +1,8 @@
-import type { AgorPackImport } from '@agor/core/types';
+import {
+  type AgorPackImport,
+  agorPackArchivedNotes,
+  agorPackOutsideLinksNote,
+} from '@agor/core/types';
 import type { AgorClient, Board, User } from '@agor-live/client';
 import { InboxOutlined } from '@ant-design/icons';
 import {
@@ -225,6 +229,16 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
                         {row.emoji ?? '🤖'} {row.display_name}
                       </Typography.Text>
                       <Typography.Text type="secondary">{contents(row)}</Typography.Text>
+                      {[
+                        ...agorPackArchivedNotes(row.sections.archived_skipped),
+                        agorPackOutsideLinksNote(row.sections.knowledge?.outside_links),
+                      ]
+                        .filter((note): note is string => Boolean(note))
+                        .map((note) => (
+                          <Typography.Text key={note} type="secondary">
+                            {note}
+                          </Typography.Text>
+                        ))}
                     </Space>
                   ),
                 },

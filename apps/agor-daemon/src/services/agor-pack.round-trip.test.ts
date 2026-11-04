@@ -248,10 +248,21 @@ dbTest(
             namespace_id: namespace.namespace_id,
             path: 'docs/ideas.md',
             title: 'Ideas',
-            content_text: 'Ideas',
+            content_text: 'Ideas, see [the wiki](agor://kb/team-wiki/home.md).',
           },
           params(ada)
         );
+        // Archived Knowledge stays behind.
+        const old = (await docs.create(
+          {
+            namespace_id: namespace.namespace_id,
+            path: 'docs/old.md',
+            title: 'Old',
+            content_text: 'Old notes',
+          },
+          params(ada)
+        )) as { document_id: string };
+        await docs.remove(old.document_id, params(ada));
         const artifact = await new ArtifactRepository(db).create({
           board_id: board.board_id,
           branch_id: branch.branch_id,
@@ -292,6 +303,15 @@ dbTest(
           agentic_tool: 'claude-code',
           title: 'Second',
           genealogy: { parent_session_id: first.session_id, children: [] },
+        });
+        // Archived sessions stay behind too.
+        await sessions.create({
+          branch_id: branch.branch_id,
+          created_by: ada.user_id,
+          agentic_tool: 'claude-code',
+          title: 'Archived chat',
+          archived: true,
+          archived_reason: 'manual',
         });
         const task = await new TaskRepository(db).create({
           session_id: first.session_id,
@@ -341,6 +361,13 @@ dbTest(
         } as never)
       );
 
+      // ---- Preflight as Ada -----------------------------------------------------
+      const [preflight] = await new AgorPackExporter(ctx(ada)).preflight([seeded.branch.branch_id]);
+      expect(preflight?.sessions.own).toBe(2);
+      expect(preflight?.knowledge_documents).toBe(3);
+      expect(preflight?.archived).toEqual({ sessions: 1, knowledge_documents: 1, artifacts: 0 });
+      expect(preflight?.knowledge_outside_links).toEqual({ count: 1, namespaces: ['team-wiki'] });
+
       // ---- Export as Ada --------------------------------------------------------
       const writer = new AgorPackWriter();
       const chunks: Buffer[] = [];
@@ -380,9 +407,26 @@ dbTest(
       expect(messagesText).toContain('[redacted:github_token]');
       expect(messagesText).not.toContain(token);
       expect(messagesText).not.toContain(keyBody);
+      const entryPaths = reader.manifest.entries.map((entry) => entry.path);
+      expect(entryPaths.some((path) => path.includes('docs/old'))).toBe(false);
+      const sessionTitles = await Promise.all(
+        entryPaths
+          .filter((path) => /sessions\/[^/]+\.json$/.test(path))
+          .map(async (path) => JSON.parse(await reader.readText(path)).session.title)
+      );
+      expect(sessionTitles.sort()).toEqual(['First', 'Second']);
       reader.close();
       const sections = manifest.teammates[0]!.sections;
-      expect(sections.knowledge).toEqual({ documents: 3, history_versions: 1 });
+      expect(sections.knowledge).toEqual({
+        documents: 3,
+        history_versions: 1,
+        outside_links: { count: 1, namespaces: ['team-wiki'] },
+      });
+      expect(sections.archived_skipped).toEqual({
+        sessions: 1,
+        knowledge_documents: 1,
+        artifacts: 0,
+      });
       expect(sections.sessions?.count).toBe(2);
       expect(sections.uploads?.count).toBe(1);
       expect(sections.sessions?.redacted_values).toBe(2);
@@ -397,6 +441,8 @@ dbTest(
       });
       expect(applied.status).toBe('applied');
       const result = applied.results[0]!;
+      // The outside link was reported at export; it is not "unresolved" here.
+      expect(result.warnings.join(' ')).not.toMatch(/could not be resolved/);
 
       // Receipts are private to their importer.
       const outsider = new AgorPackImporter(ctx(ada), params(ada));

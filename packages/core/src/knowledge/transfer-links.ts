@@ -63,6 +63,45 @@ export function rewriteKnowledgeLinks(
   return { content: rewritten, unresolved };
 }
 
+const KNOWLEDGE_LINK = /^(?:agor:\/\/kb\/|\/(?:ui\/)?(?:kb|knowledge)\/)([^/]+)\/(.*?)([?#].*)?$/;
+
+/**
+ * A Knowledge link that targets another namespace (by slug) or a document id
+ * the transferred set does not contain. Transfers keep such links as-is.
+ */
+export function outsideKnowledgeLink(
+  url: string,
+  sourceSlug: string,
+  hasDocumentId: (id: string) => boolean
+): { slug: string } | { documentId: string } | null {
+  const match = KNOWLEDGE_LINK.exec(url);
+  if (!match) return null;
+  try {
+    if (match[1] === 'document' && url.startsWith('agor://kb/document/')) {
+      return hasDocumentId(match[2] as string) ? null : { documentId: match[2] as string };
+    }
+    const slug = decodeURIComponent(match[1] as string);
+    return slug === sourceSlug ? null : { slug };
+  } catch {
+    return null;
+  }
+}
+
+/** Every {@link outsideKnowledgeLink} in a Markdown body (content unchanged). */
+export function outsideKnowledgeLinks(
+  content: string,
+  sourceSlug: string,
+  hasDocumentId: (id: string) => boolean
+): Array<{ slug: string } | { documentId: string }> {
+  const found: Array<{ slug: string } | { documentId: string }> = [];
+  rewriteKnowledgeLinks(content, (url) => {
+    const outside = outsideKnowledgeLink(url, sourceSlug, hasDocumentId);
+    if (outside) found.push(outside);
+    return {};
+  });
+  return found;
+}
+
 export function rewriteTransferLinks(
   content: string,
   manifest: KnowledgeTransferManifest,
@@ -71,9 +110,7 @@ export function rewriteTransferLinks(
   const byId = new Map(manifest.documents.map((doc) => [doc.provenance.source_uuid, doc]));
   const byPath = new Map(manifest.documents.map((doc) => [doc.path, doc]));
   return rewriteKnowledgeLinks(content, (url) => {
-    const match = /^(?:agor:\/\/kb\/|\/(?:ui\/)?(?:kb|knowledge)\/)([^/]+)\/(.*?)([?#].*)?$/.exec(
-      url
-    );
+    const match = KNOWLEDGE_LINK.exec(url);
     if (!match) return {};
     try {
       const doc =

@@ -15,6 +15,7 @@ import {
   knowledgeRepositoryFiles,
   knowledgeTransferValidationIssues,
   knowledgeTransferValidationSummary,
+  outsideKnowledgeLinks,
   parseKnowledgeYaml,
   repositoryTransferManifest,
   rewriteTransferLinks,
@@ -30,6 +31,7 @@ import {
 import type {
   AgorPackAuthor,
   AgorPackKnowledgeHistory,
+  AgorPackOutsideLinks,
   AuthenticatedParams,
   KnowledgeTransferBody,
   KnowledgeTransferEntry,
@@ -406,6 +408,81 @@ export interface KnowledgeRepositoryExport {
   documents: number;
   history: AgorPackKnowledgeHistory | null;
   historyVersions: number;
+  /** Links to other namespaces, kept as-is (by target namespace slug). */
+  outsideLinks: AgorPackOutsideLinks;
+}
+
+/**
+ * Count links in `bodies` that point outside `sourceSlug`. Document-id links
+ * resolve to their namespace; one to a missing/archived document is broken,
+ * not outside, and is not counted.
+ */
+async function summarizeOutsideLinks(
+  db: TenantScopeAwareDatabase,
+  sourceSlug: string,
+  ownIds: Set<string>,
+  bodies: Iterable<string>
+): Promise<AgorPackOutsideLinks> {
+  const documents = new KnowledgeDocumentRepository(db);
+  const namespaces = new KnowledgeNamespaceRepository(db);
+  const slugs = new Set<string>();
+  let count = 0;
+  for (const body of bodies) {
+    for (const link of outsideKnowledgeLinks(body, sourceSlug, (id) => ownIds.has(id))) {
+      let slug: string | null = null;
+      if ('slug' in link) slug = link.slug;
+      else {
+        const doc = await documents.findById(link.documentId).catch(() => null);
+        if (doc && !doc.archived) {
+          slug = (await namespaces.findById(doc.namespace_id))?.slug ?? null;
+        }
+      }
+      if (!slug || slug === sourceSlug) continue;
+      count += 1;
+      slugs.add(slug);
+    }
+  }
+  return { count, namespaces: [...slugs].sort() };
+}
+
+/**
+ * What a teammate pack's Knowledge section would hold, for the export
+ * preflight: live documents, archived ones left out, and outside links.
+ * Must run inside a tenant database scope.
+ */
+export async function previewKnowledgeExport(
+  db: TenantScopeAwareDatabase,
+  namespaceId: string
+): Promise<{ documents: number; archived: number; outsideLinks: AgorPackOutsideLinks }> {
+  const ns = await new KnowledgeNamespaceRepository(db).findById(namespaceId);
+  if (!ns || ns.archived) {
+    return { documents: 0, archived: 0, outsideLinks: { count: 0, namespaces: [] } };
+  }
+  const transfers = new KnowledgeTransferRepository(db);
+  const versions = new KnowledgeDocumentVersionRepository(db);
+  const rows = [];
+  for (let cursor = ''; ; ) {
+    const page = await transfers.inventory(ns.namespace_id, cursor);
+    rows.push(...page.entries);
+    if (!page.next_cursor) break;
+    cursor = page.next_cursor;
+  }
+  const bodies: string[] = [];
+  for (const row of rows) {
+    if (row.mime_type !== 'text/markdown' || !row.version_id) continue;
+    const version = await versions.findById(row.version_id);
+    if (typeof version?.content_text === 'string') bodies.push(version.content_text);
+  }
+  return {
+    documents: rows.length,
+    archived: await transfers.archivedCount(ns.namespace_id),
+    outsideLinks: await summarizeOutsideLinks(
+      db,
+      ns.slug,
+      new Set(rows.map((row) => String(row.document_id))),
+      bodies
+    ),
+  };
 }
 
 /**
@@ -522,7 +599,13 @@ export async function exportKnowledgeRepository(
       historyVersions += entries.length;
     }
   }
-  return { files, documents: manifest.documents.length, history, historyVersions };
+  const outsideLinks = await summarizeOutsideLinks(
+    db,
+    ns.slug,
+    new Set(rows.map((row) => String(row.document_id))),
+    bodies.values()
+  );
+  return { files, documents: manifest.documents.length, history, historyVersions, outsideLinks };
 }
 
 /**
@@ -556,6 +639,7 @@ export async function importKnowledgeRepository(input: {
   }
   const source = validateTransferManifest(repositoryTransferManifest(index, decoded));
   const byId = new Map(decoded.map((doc) => [doc.header.agor.id, doc]));
+  const sourceIds = new Set(source.documents.map((doc) => String(doc.provenance.source_uuid)));
   const historyByPath = new Map(
     (input.history?.documents ?? []).map((doc) => [doc.path, doc.versions])
   );
@@ -566,7 +650,12 @@ export async function importKnowledgeRepository(input: {
   const localize = (body: string, file: string) => {
     const linked = rewriteTransferLinks(body, source, input.namespace.slug);
     const relative = importRepositoryLinks(linked.content, file, paths, input.namespace.slug);
-    unresolvedLinks += linked.unresolved + relative.unresolved;
+    // Links into other namespaces stay as-is by design; the export already
+    // reported them, so only genuinely broken links count here.
+    const outside = outsideKnowledgeLinks(body, source.namespace.slug, (id) =>
+      sourceIds.has(id)
+    ).length;
+    unresolvedLinks += linked.unresolved - outside + relative.unresolved;
     return relative.content;
   };
   for (const entry of source.documents) {

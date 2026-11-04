@@ -17,6 +17,8 @@ vi.mock('../../utils/agorPack', () => ({
       schedules: 1,
       artifacts: 1,
       knowledge_documents: 3,
+      knowledge_outside_links: { count: 2, namespaces: ['shared-docs'] },
+      archived: { sessions: 12, knowledge_documents: 1, artifacts: 0 },
       requirements: {
         env_vars: [{ name: 'LINEAR_API_KEY', scope: 'global', used_by: ['mcp:linear'] }],
         mcp_servers: [],
@@ -64,10 +66,18 @@ describe('ExportPackModal', () => {
     await waitFor(() => expect(within(dialog).getByText('LINEAR_API_KEY')).toBeInTheDocument());
     expect(within(dialog).getByText(/dev: won't run in Cloud/)).toBeInTheDocument();
     expect(within(dialog).getByText(/3 docs · 1 artifact · 1 schedule ·/)).toBeInTheDocument();
+    expect(within(dialog).getByText('12 archived sessions skipped')).toBeInTheDocument();
+    expect(within(dialog).getByText('1 archived Knowledge doc skipped')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        '2 links point to knowledge outside this teammate (kept as-is): shared-docs'
+      )
+    ).toBeInTheDocument();
 
     fireEvent.click(others);
     expect(others).toBeChecked();
     fireEvent.click(within(dialog).getByRole('radio', { name: 'None' }));
+    expect(within(dialog).queryByText('12 archived sessions skipped')).not.toBeInTheDocument();
     expect(others).toBeDisabled();
     expect(others).not.toBeChecked();
     fireEvent.click(within(dialog).getByRole('radio', { name: 'All' }));
@@ -116,13 +126,18 @@ const receipt: AgorPackImport = {
         repo: { slug: 'preset-io/agor-teammate', remote_url: null, local_home: true },
         sections: {
           board: { objects: 4 },
-          knowledge: { documents: 12, history_versions: 0 },
+          knowledge: {
+            documents: 12,
+            history_versions: 0,
+            outside_links: { count: 1, namespaces: ['team-wiki'] },
+          },
           artifacts: 2,
           schedules: 1,
           claude_memory: null,
           uploads: null,
           sessions: null,
           git: null,
+          archived_skipped: { sessions: 3, knowledge_documents: 0, artifacts: 1 },
         },
         requirements: {
           env_vars: [{ name: 'LINEAR_API_KEY', scope: 'global', used_by: [] }],
@@ -146,6 +161,13 @@ describe('ImportPackWizard', () => {
     expect(within(dialog).getByText(/Exported from Agor 0.30.0 by Kasia/)).toBeInTheDocument();
     expect(within(dialog).getByText(/12 docs · 2 artifacts · 1 schedule$/)).toBeInTheDocument();
     expect(within(dialog).getByText('teammate framework')).toBeInTheDocument();
+    expect(within(dialog).getByText('3 archived sessions skipped')).toBeInTheDocument();
+    expect(within(dialog).getByText('1 archived artifact skipped')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        '1 link points to knowledge outside this teammate (kept as-is): team-wiki'
+      )
+    ).toBeInTheDocument();
     expect(within(dialog).getByText(/uses docker/)).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Import 1 teammate' })).toBeEnabled();
   });

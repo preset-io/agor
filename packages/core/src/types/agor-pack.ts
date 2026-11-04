@@ -120,6 +120,48 @@ export const agorPackRequirementsSchema = z
   .strict();
 export type AgorPackRequirements = z.infer<typeof agorPackRequirementsSchema>;
 
+/** Knowledge links kept as-is because they point outside the teammate's namespace. */
+export const agorPackOutsideLinksSchema = z
+  .object({ count: nonNegativeInt, namespaces: z.array(shortText).max(100) })
+  .strict();
+export type AgorPackOutsideLinks = z.infer<typeof agorPackOutsideLinksSchema>;
+
+/** Archived rows a teammate pack leaves behind. */
+export const agorPackArchivedSkipsSchema = z
+  .object({
+    sessions: nonNegativeInt,
+    knowledge_documents: nonNegativeInt,
+    artifacts: nonNegativeInt,
+  })
+  .strict();
+export type AgorPackArchivedSkips = z.infer<typeof agorPackArchivedSkipsSchema>;
+
+function countOf(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+/** "12 archived sessions skipped" lines (non-zero counts only). */
+export function agorPackArchivedNotes(skips: AgorPackArchivedSkips | null | undefined): string[] {
+  if (!skips) return [];
+  return [
+    skips.sessions ? `${countOf(skips.sessions, 'archived session')} skipped` : null,
+    skips.knowledge_documents
+      ? `${countOf(skips.knowledge_documents, 'archived Knowledge doc')} skipped`
+      : null,
+    skips.artifacts ? `${countOf(skips.artifacts, 'archived artifact')} skipped` : null,
+  ].filter((note): note is string => note !== null);
+}
+
+/** "3 links point to knowledge outside this teammate (kept as-is): a, b". */
+export function agorPackOutsideLinksNote(
+  links: AgorPackOutsideLinks | null | undefined
+): string | null {
+  if (!links?.count) return null;
+  const verb = links.count === 1 ? 'points' : 'point';
+  const targets = links.namespaces.length ? `: ${links.namespaces.join(', ')}` : '';
+  return `${countOf(links.count, 'link')} ${verb} to knowledge outside this teammate (kept as-is)${targets}`;
+}
+
 /**
  * Section summaries recorded in the manifest so an import dry-run never has to
  * read the payload. Loose on purpose: a section added by a newer release is
@@ -128,7 +170,11 @@ export type AgorPackRequirements = z.infer<typeof agorPackRequirementsSchema>;
 export const agorPackTeammateSectionsSchema = z.looseObject({
   board: z.object({ objects: nonNegativeInt }).strict().nullable(),
   knowledge: z
-    .object({ documents: nonNegativeInt, history_versions: nonNegativeInt })
+    .object({
+      documents: nonNegativeInt,
+      history_versions: nonNegativeInt,
+      outside_links: agorPackOutsideLinksSchema.optional(),
+    })
     .strict()
     .nullable(),
   artifacts: nonNegativeInt.nullable(),
@@ -157,6 +203,8 @@ export const agorPackTeammateSectionsSchema = z.looseObject({
     })
     .strict()
     .nullable(),
+  /** Absent in packs from releases that did not skip archived rows. */
+  archived_skipped: agorPackArchivedSkipsSchema.optional(),
 });
 export type AgorPackTeammateSections = z.infer<typeof agorPackTeammateSectionsSchema>;
 
@@ -538,6 +586,9 @@ export interface AgorPackPreflightTeammate {
   schedules: number;
   artifacts: number;
   knowledge_documents: number;
+  knowledge_outside_links: AgorPackOutsideLinks;
+  /** Archived rows on the teammate that an export leaves out. */
+  archived: AgorPackArchivedSkips;
   requirements: AgorPackRequirements;
   environment: AgorPackTeammateSummary['environment'];
   switch_over: AgorPackSwitchOverState | null;
