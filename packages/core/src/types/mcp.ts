@@ -60,6 +60,11 @@ export interface MCPOAuthStatusResult {
   authenticated_server_ids: MCPServerID[];
 }
 
+/** Direct callback a custom server's OAuth flow registers for this workspace, when resolvable. */
+export interface MCPOAuthRedirectUriResult {
+  redirect_uri?: string;
+}
+
 export interface MCPOAuthRefreshResult {
   success: boolean;
   expires_at?: number;

@@ -131,6 +131,7 @@ import type {
   MCPOAuthDCRMode,
   MCPOAuthEffectivePolicy,
   MCPOAuthPendingFlowStatus,
+  MCPOAuthRedirectUriResult,
   MCPOAuthRelayCallback,
   MCPOAuthRuntimeCompatibilityMode,
   MCPOAuthStartFailure,
@@ -2468,6 +2469,22 @@ export async function registerMCPServices(
     return callbackUrl;
   }
 
+  /**
+   * The direct callback to show an admin, or undefined when a direct flow
+   * would be refused (no workspace address yet), so nobody allowlists a URL
+   * no flow will use.
+   */
+  async function displayMCPOAuthRedirectUri(
+    tenantId: string | undefined
+  ): Promise<string | undefined> {
+    try {
+      await resolveMcpOAuthReturnUrl(tenantId);
+      return await resolveMCPOAuthRedirectUri(tenantId);
+    } catch {
+      return undefined;
+    }
+  }
+
   type OAuthBrowserReservationClaim = {
     reservationToken: string;
     /** Immutable deadline retained after the one-shot map entry is consumed. */
@@ -4677,15 +4694,7 @@ export async function registerMCPServices(
         // The direct callback: a customer app's without the relay, or the one a
         // provider admin allowlists (the flow itself is unchanged).
         if (!entry.oauth?.configured_client && !entry.oauth?.redirect_allowlist) return undefined;
-        // Show nothing when a direct flow would be refused (no workspace
-        // address yet), so an admin never allowlists a URL no flow will use.
-        const tenantId = tenantIdFromParams(params);
-        try {
-          await resolveMcpOAuthReturnUrl(tenantId);
-          return await resolveMCPOAuthRedirectUri(tenantId);
-        } catch {
-          return undefined;
-        }
+        return displayMCPOAuthRedirectUri(tenantIdFromParams(params));
       },
       listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
       // Readiness is advisory and may not open credential material merely to
@@ -7024,6 +7033,17 @@ export async function registerMCPServices(
     },
   });
   app.service('mcp-servers/oauth-status').hooks({ before: { find: [ctx.requireAuth] } });
+
+  // The direct callback a custom (non-Catalog) server's OAuth flow registers
+  // for the caller's workspace, for the server form to show. Omitted when none
+  // can be resolved.
+  app.use('/mcp-servers/oauth-redirect-uri', {
+    async find(params?: AuthenticatedParams): Promise<MCPOAuthRedirectUriResult> {
+      const redirectUri = await displayMCPOAuthRedirectUri(tenantIdFromParams(params));
+      return redirectUri ? { redirect_uri: redirectUri } : {};
+    },
+  });
+  app.service('mcp-servers/oauth-redirect-uri').hooks({ before: { find: [ctx.requireAuth] } });
 
   // Authoritative, user-bound pending-attempt status. The UI polls this after
   // opening the provider page; realtime completion is only a latency hint.

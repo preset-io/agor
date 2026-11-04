@@ -127,6 +127,8 @@ Catalog's pre-connect readiness is advisory from catalog and saved-connection da
 
 For unsupported schemes, or a server that is not in the Catalog, use **My Servers → Add custom server** to enter its URL and authentication manually. **My Servers** lists your own servers plus the **Shared** (workspace) servers you may manage: admins always, and members when the workspace MCP policy lets them add shared servers. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
 
+When a custom server uses OAuth, the form shows the exact **Callback URL** for your workspace. Most servers register Agor automatically, so there is nothing to copy. If you register your own OAuth app, or the provider only accepts allowlisted redirect URLs, allow this URL there. If Agor can't resolve a callback yet, the form doesn't show one.
+
 Datadog now uses its [documented US1 endpoint](https://github.com/datadog-labs/mcp-server),
 `https://mcp.datadoghq.com/v1/mcp`, without additional toolsets or permissions.
 Saved rows are not automatically migrated from `/api/unstable/mcp-server/mcp`.
