@@ -2659,7 +2659,7 @@ export class SlackConnector implements GatewayConnector {
     // channel simply stops receiving messages, with no error anyone is
     // watching. The SDK default `{retries: 100, factor: 1.3}` has no ceiling
     // on the wait, so after a night offline the next apps.connections.open
-    // attempt is hours away. Retry forever, at most a minute apart.
+    // attempt is hours away. Retry forever, at most ten minutes apart.
     //
     // Its liveness is already bounded, by mechanisms of its own: a 5s
     // `clientPingTimeout` and a 30s `serverPingTimeout`, either of which
@@ -2668,7 +2668,7 @@ export class SlackConnector implements GatewayConnector {
     const socketMode = new SocketModeClient({
       appToken: this.config.app_token,
       logger: socketLogger.logger,
-      clientOptions: { retryConfig: { forever: true, factor: 1.3, maxTimeout: 60_000 } },
+      clientOptions: { retryConfig: { forever: true, factor: 1.3, maxTimeout: 600_000 } },
     });
     this.socketLogger = socketLogger;
     this.socketMode = socketMode;
