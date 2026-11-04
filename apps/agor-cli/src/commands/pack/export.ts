@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import {
   AGOR_PACK,
+  AGOR_PACK_DEFAULT_SESSION_MODE,
   AGOR_PACK_SECTIONS,
   type AgorPackExportRequest,
   type AgorPackManifest,
@@ -22,6 +23,9 @@ const SESSION_MODES: Record<string, AgorPackExportRequest['sessions']> = {
   '30d': 'last_30_days',
   all: 'all',
 };
+const DEFAULT_SESSIONS_FLAG = Object.keys(SESSION_MODES).find(
+  (key) => SESSION_MODES[key] === AGOR_PACK_DEFAULT_SESSION_MODE
+) as string;
 
 export default class PackExport extends BaseCommand {
   static override summary = 'Export AI teammates to a .agorpack file';
@@ -49,7 +53,7 @@ export default class PackExport extends BaseCommand {
     sessions: Flags.string({
       description: 'Session history to include',
       options: Object.keys(SESSION_MODES),
-      default: 'none',
+      default: DEFAULT_SESSIONS_FLAG,
     }),
     'include-others-sessions': Flags.boolean({
       description: "Also include other people's sessions on these teammates",
@@ -85,7 +89,7 @@ export default class PackExport extends BaseCommand {
       }>(daemonUrl, bearer, '/agor-pack/exports', {
         branch_ids: branchIds,
         sections: sections as AgorPackSection[],
-        sessions: SESSION_MODES[flags.sessions] ?? 'none',
+        sessions: SESSION_MODES[flags.sessions] ?? AGOR_PACK_DEFAULT_SESSION_MODE,
         include_others_sessions: flags['include-others-sessions'],
       } satisfies AgorPackExportRequest);
       const response = await packFetch(

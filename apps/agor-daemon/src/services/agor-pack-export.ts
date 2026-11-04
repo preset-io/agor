@@ -111,6 +111,11 @@ export function readSwitchOverState(branch: Branch): AgorPackSwitchOverState | n
   return state && typeof state === 'object' ? (state as AgorPackSwitchOverState) : null;
 }
 
+/** `pluralize(1, 'value')` → "1 value"; user-facing warnings read naturally at any count. */
+export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function iso(value: string | number | Date | null | undefined): string {
   if (value === null || value === undefined) return new Date(0).toISOString();
   return new Date(value).toISOString();
@@ -327,7 +332,7 @@ export class AgorPackExporter {
       }
       if (requirements.env_vars.length) {
         warnings.push(
-          `${requirements.env_vars.length} environment variable(s) travel by name only; set their values after import.`
+          `${pluralize(requirements.env_vars.length, 'environment variable')} ${requirements.env_vars.length === 1 ? 'travels' : 'travel'} by name only; set ${requirements.env_vars.length === 1 ? 'its value' : 'their values'} after import.`
         );
       }
       results.push({
@@ -685,7 +690,9 @@ export class AgorPackExporter {
         redacted_values: redacted,
       };
       if (redacted > 0) {
-        warnings.push(`${redacted} secret-shaped value(s) in session history were redacted.`);
+        warnings.push(
+          `${pluralize(redacted, 'secret-shaped value')} in session history ${redacted === 1 ? 'was' : 'were'} redacted.`
+        );
       }
     } else if (request.sessions !== 'none') {
       summary.sessions = {
@@ -750,7 +757,7 @@ export class AgorPackExporter {
       (collected.claudeMemory as AgorPackTeammateSummary['sections']['claude_memory']) ?? null;
     if (!localHome && summary.git && summary.git.unpushed_commits > 0) {
       warnings.push(
-        `${summary.git.unpushed_commits} unpushed commit(s) travel as a git bundle; pushing first is more reliable.`
+        `${pluralize(summary.git.unpushed_commits, 'unpushed commit')} ${summary.git.unpushed_commits === 1 ? 'travels' : 'travel'} as a git bundle; pushing first is more reliable.`
       );
     }
 
@@ -796,7 +803,7 @@ export class AgorPackExporter {
     writer.addBuffer(path('teammate.json'), scrubbedJson(path('teammate.json'), teammateFile));
     if (custom.length) {
       warnings.push(
-        `${custom.length} custom MCP server(s) will be recreated disabled, without credentials.`
+        `${pluralize(custom.length, 'custom MCP server')} will be recreated disabled, without credentials.`
       );
     }
 

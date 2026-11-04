@@ -10,6 +10,7 @@ import {
   switchOverTeammate,
 } from '../../utils/agorPack';
 import { useThemedMessage } from '../../utils/message';
+import { pluralize } from '../../utils/pluralize';
 import { ExportPackPanel } from '../AgorPack/ExportPackPanel';
 import { Tag } from '../Tag';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
@@ -124,7 +125,7 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
                 type="success"
                 showIcon
                 message={`Downloaded ${exported.filename}`}
-                description={`${exported.manifest.teammates.length} teammate(s), ${(exported.size / 1024 / 1024).toFixed(1)} MB.`}
+                description={`${pluralize(exported.manifest.teammates.length, 'teammate')}, ${(exported.size / 1024 / 1024).toFixed(1)} MB.`}
               />
             )}
             <Typography.Paragraph>
@@ -190,8 +191,8 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
                       </Typography.Text>
                       {state ? (
                         <Tag color="success">
-                          paused here · {state.disabled_schedule_ids.length} schedule(s),{' '}
-                          {state.disabled_channel_ids.length} channel(s)
+                          paused here · {pluralize(state.disabled_schedule_ids.length, 'schedule')},{' '}
+                          {pluralize(state.disabled_channel_ids.length, 'channel')}
                         </Tag>
                       ) : (
                         <Tag>running here</Tag>

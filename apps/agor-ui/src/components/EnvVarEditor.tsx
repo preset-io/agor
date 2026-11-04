@@ -29,6 +29,8 @@ export interface EnvVarEditorProps {
   loading?: Record<string, boolean>;
   /** Disable all fields */
   disabled?: boolean;
+  /** Hide the generic encryption/scope explainer when the host renders its own copy. */
+  hideDescription?: boolean;
   identityKey: string | null;
   operationScope: readonly unknown[] | null;
 }
@@ -70,6 +72,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   onDelete,
   loading = {},
   disabled = false,
+  hideDescription = false,
   identityKey,
   operationScope,
 }) => {
@@ -276,11 +279,13 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      <Text type="secondary">
-        Environment variables are encrypted at rest. <b>Global</b> vars are exported to every
-        session you own. <b>Session</b> vars are only exported to sessions where you explicitly
-        select them (configure per-session under Session → Settings → Env vars).
-      </Text>
+      {!hideDescription && (
+        <Text type="secondary">
+          Environment variables are encrypted at rest. <b>Global</b> vars are exported to every
+          session you own. <b>Session</b> vars are only exported to sessions where you explicitly
+          select them (configure per-session under Session → Settings → Env vars).
+        </Text>
+      )}
 
       {error && <ActionErrorNotice error={error} />}
 

@@ -4,9 +4,13 @@ import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { EnvVarEditor } from './EnvVarEditor';
 
-function renderEditor(envVars: ComponentProps<typeof EnvVarEditor>['envVars']) {
+function renderEditor(
+  envVars: ComponentProps<typeof EnvVarEditor>['envVars'],
+  extra: Partial<ComponentProps<typeof EnvVarEditor>> = {}
+) {
   const props = {
     envVars,
+    ...extra,
     onSave: vi.fn(async () => {}),
     onDelete: vi.fn(async () => {}),
     identityKey: 'user-a:member',
@@ -21,6 +25,14 @@ function renderEditor(envVars: ComponentProps<typeof EnvVarEditor>['envVars']) {
 }
 
 describe('EnvVarEditor', () => {
+  it('shows the scope explainer unless the host hides it', () => {
+    const { unmount } = renderEditor({});
+    expect(screen.getByText(/encrypted at rest/)).toBeInTheDocument();
+    unmount();
+    renderEditor({}, { hideDescription: true });
+    expect(screen.queryByText(/encrypted at rest/)).not.toBeInTheDocument();
+  });
+
   it('sorts existing environment variables alphabetically by key without mutating props', () => {
     const envVars = {
       Z_TOKEN: { set: true, scope: 'global' },

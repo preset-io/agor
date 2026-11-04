@@ -1,6 +1,6 @@
 import type { AgorPackImport } from '@agor/core/types';
 import type { Branch } from '@agor-live/client';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { mount } from '../../test/harness';
 import { ExportPackModal } from './ExportPackModal';
@@ -45,7 +45,7 @@ const ada = {
 } as unknown as Branch;
 
 describe('ExportPackModal', () => {
-  it('opens with every section checked, no sessions, and the preflight', async () => {
+  it('opens with every section checked, the last 30 days of sessions, and the preflight', async () => {
     mount(<ExportPackModal open teammates={[ada]} initialBranchIds={['b1']} onClose={vi.fn()} />);
     const dialog = await screen.findByRole('dialog');
     for (const label of [
@@ -58,12 +58,21 @@ describe('ExportPackModal', () => {
     ]) {
       expect(within(dialog).getByRole('checkbox', { name: label })).toBeChecked();
     }
-    expect(within(dialog).getByRole('radio', { name: 'None' })).toBeChecked();
-    expect(
-      within(dialog).getByRole('checkbox', { name: /other people's sessions/ })
-    ).toBeDisabled();
+    expect(within(dialog).getByRole('radio', { name: 'Last 30 days' })).toBeChecked();
+    const others = within(dialog).getByRole('checkbox', { name: /other people's sessions/ });
+    expect(others).toBeEnabled();
     await waitFor(() => expect(within(dialog).getByText('LINEAR_API_KEY')).toBeInTheDocument());
     expect(within(dialog).getByText(/dev: won't run in Cloud/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/3 docs · 1 artifact · 1 schedule ·/)).toBeInTheDocument();
+
+    fireEvent.click(others);
+    expect(others).toBeChecked();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'None' }));
+    expect(others).toBeDisabled();
+    expect(others).not.toBeChecked();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'All' }));
+    expect(others).toBeEnabled();
+    expect(others).toBeChecked();
   });
 });
 
@@ -135,7 +144,7 @@ describe('ImportPackWizard', () => {
     );
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(/Exported from Agor 0.30.0 by Kasia/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/12 docs · 2 artifacts · 1 schedules/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/12 docs · 2 artifacts · 1 schedule$/)).toBeInTheDocument();
     expect(within(dialog).getByText('teammate framework')).toBeInTheDocument();
     expect(within(dialog).getByText(/uses docker/)).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Import 1 teammate' })).toBeEnabled();

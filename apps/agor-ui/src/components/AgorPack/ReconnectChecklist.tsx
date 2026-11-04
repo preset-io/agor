@@ -1,4 +1,4 @@
-import type { AgorPackImport } from '@agor/core/types';
+import type { AgorPackImport, UpdateUserInput } from '@agor/core/types';
 import type { AgorClient, EnvVarScope, Schedule, User } from '@agor-live/client';
 import { Alert, Button, Flex, List, Space, Switch, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
@@ -84,10 +84,12 @@ export const ReconnectChecklist: React.FC<ReconnectChecklistProps> = ({
     if (!client || !currentUser) return;
     setSaving((prev) => ({ ...prev, [key]: true }));
     try {
-      await client.service('users').patch(currentUser.user_id, {
+      const updates: UpdateUserInput = {
         env_vars: { [key]: value },
         env_var_scopes: { [key]: scope },
-      });
+      };
+      // The daemon encrypts plaintext env vars; the client types patch as Partial<User>.
+      await client.service('users').patch(currentUser.user_id, updates as Partial<User>);
       setUserEnv((prev) => ({ ...prev, [key]: { set: true, scope, resource_id: null } }));
     } finally {
       setSaving((prev) => ({ ...prev, [key]: false }));
@@ -150,6 +152,7 @@ export const ReconnectChecklist: React.FC<ReconnectChecklistProps> = ({
             onSave={saveEnv}
             onDelete={async () => undefined}
             loading={saving}
+            hideDescription
             identityKey={authority.identityKey}
             operationScope={authority.operationScope}
           />

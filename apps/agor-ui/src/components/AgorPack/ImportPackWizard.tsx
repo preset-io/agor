@@ -16,6 +16,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { applyPackImport, getPackImport, uploadPack } from '../../utils/agorPack';
 import { useThemedMessage } from '../../utils/message';
+import { pluralize } from '../../utils/pluralize';
 import { AdaptiveSettingsModal } from '../SettingsModal/AdaptiveSettingsModal';
 import { Tag } from '../Tag';
 import { ReconnectChecklist } from './ReconnectChecklist';
@@ -38,11 +39,11 @@ function contents(row: Row): string {
   const s = row.sections;
   return [
     s.board ? 'board' : null,
-    s.knowledge ? `${s.knowledge.documents} docs` : null,
-    s.artifacts ? `${s.artifacts} artifacts` : null,
-    s.schedules ? `${s.schedules} schedules` : null,
-    s.sessions ? `${s.sessions.count} sessions` : null,
-    s.uploads?.count ? `${s.uploads.count} attachments` : null,
+    s.knowledge ? pluralize(s.knowledge.documents, 'doc') : null,
+    s.artifacts ? pluralize(s.artifacts, 'artifact') : null,
+    s.schedules ? pluralize(s.schedules, 'schedule') : null,
+    s.sessions ? pluralize(s.sessions.count, 'session') : null,
+    s.uploads?.count ? pluralize(s.uploads.count, 'attachment') : null,
     s.claude_memory?.files ? 'Claude memory' : null,
     s.git ? (s.git.mode === 'bundle' ? 'full git tree' : 'git changes') : null,
   ]
@@ -113,7 +114,7 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
       });
       setReceipt(result);
       setStep(2);
-      showSuccess(`Imported ${selected.length} teammate${selected.length === 1 ? '' : 's'}`);
+      showSuccess(`Imported ${pluralize(selected.length, 'teammate')}`);
     } catch (error) {
       showError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -140,7 +141,7 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
               disabled={selected.length === 0}
               onClick={handleApply}
             >
-              Import {selected.length} teammate{selected.length === 1 ? '' : 's'}
+              Import {pluralize(selected.length, 'teammate')}
             </Button>
           </Flex>
         ) : step === 2 ? (
@@ -244,8 +245,7 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
                     <Flex vertical gap={2}>
                       {row.requirements.env_vars.length > 0 && (
                         <span>
-                          {row.requirements.env_vars.length} environment variable
-                          {row.requirements.env_vars.length === 1 ? '' : 's'}
+                          {pluralize(row.requirements.env_vars.length, 'environment variable')}
                         </span>
                       )}
                       {(row.dry?.warnings ?? []).map((warning) => (

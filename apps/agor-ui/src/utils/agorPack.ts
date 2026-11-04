@@ -82,8 +82,8 @@ export function fetchPackPreflight(branchIds: string[]): Promise<AgorPackPreflig
 }
 
 /** Build the pack on the daemon, then download it as a file. */
-export async function exportPack(request: AgorPackExportRequest): Promise<AgorPackExportResult> {
-  const result = await json<AgorPackExportResult>('/agor-pack/exports', request);
+export async function exportPack(body: AgorPackExportRequest): Promise<AgorPackExportResult> {
+  const result = await json<AgorPackExportResult>('/agor-pack/exports', body);
   const response = await request(
     `/agor-pack/exports/${result.export_id}/${result.ref}?filename=${encodeURIComponent(result.filename)}`
   );

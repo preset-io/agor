@@ -82,7 +82,7 @@ import {
   agorPackMaterializeExecutorCommandId,
   runAgorPackExecutorCommand,
 } from './agor-pack-executor.js';
-import type { AgorPackServiceContext } from './agor-pack-export.js';
+import { type AgorPackServiceContext, pluralize } from './agor-pack-export.js';
 import { importKnowledgeRepository } from './knowledge-transfers.js';
 
 const KNOWN_SECTIONS = new Set([
@@ -467,7 +467,9 @@ export class AgorPackImporter {
       )) as Board & { import_skipped?: unknown[] };
       boardId = board.board_id;
       if (board.import_skipped?.length) {
-        warnings.push(`${board.import_skipped.length} board object(s) could not be imported.`);
+        warnings.push(
+          `${pluralize(board.import_skipped.length, 'board object')} could not be imported.`
+        );
       }
     } else {
       artifactObjects = {};
@@ -542,7 +544,9 @@ export class AgorPackImporter {
         importMetadata: { agor_pack: importedFrom },
       });
       if (kbResult.unresolvedLinks) {
-        warnings.push(`${kbResult.unresolvedLinks} Knowledge link(s) could not be resolved.`);
+        warnings.push(
+          `${pluralize(kbResult.unresolvedLinks, 'Knowledge link')} could not be resolved.`
+        );
       }
     }
 

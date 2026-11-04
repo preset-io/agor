@@ -54,6 +54,8 @@ export type AgorPackSection = (typeof AGOR_PACK_SECTIONS)[number];
 
 export const AGOR_PACK_SESSION_MODES = ['none', 'last_30_days', 'all'] as const;
 export type AgorPackSessionMode = (typeof AGOR_PACK_SESSION_MODES)[number];
+/** Session history included when the exporter doesn't choose (UI, CLI, and API). */
+export const AGOR_PACK_DEFAULT_SESSION_MODE: AgorPackSessionMode = 'last_30_days';
 
 const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/);
 const uuid = z.string().uuid();
@@ -67,7 +69,7 @@ export const agorPackExportRequestSchema = z
   .object({
     branch_ids: z.array(uuid).min(1).max(AGOR_PACK.maxTeammates),
     sections: z.array(z.enum(AGOR_PACK_SECTIONS)).max(AGOR_PACK_SECTIONS.length),
-    sessions: z.enum(AGOR_PACK_SESSION_MODES).default('none'),
+    sessions: z.enum(AGOR_PACK_SESSION_MODES).default(AGOR_PACK_DEFAULT_SESSION_MODE),
     include_others_sessions: z.boolean().default(false),
   })
   .strict();

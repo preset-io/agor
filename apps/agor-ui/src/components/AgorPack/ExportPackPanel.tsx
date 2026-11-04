@@ -1,4 +1,5 @@
 import {
+  AGOR_PACK_DEFAULT_SESSION_MODE,
   AGOR_PACK_SECTIONS,
   type AgorPackPreflightTeammate,
   type AgorPackSection,
@@ -22,6 +23,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { type AgorPackExportResult, exportPack, fetchPackPreflight } from '../../utils/agorPack';
 import { useThemedMessage } from '../../utils/message';
+import { pluralize } from '../../utils/pluralize';
 import { Tag } from '../Tag';
 
 const SECTION_LABELS: Record<AgorPackSection, string> = {
@@ -58,7 +60,7 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
   const { showError, showSuccess } = useThemedMessage();
   const [branchIds, setBranchIds] = useState<string[]>(initialBranchIds);
   const [sections, setSections] = useState<AgorPackSection[]>([...AGOR_PACK_SECTIONS]);
-  const [sessions, setSessions] = useState<AgorPackSessionMode>('none');
+  const [sessions, setSessions] = useState<AgorPackSessionMode>(AGOR_PACK_DEFAULT_SESSION_MODE);
   const [includeOthers, setIncludeOthers] = useState(false);
   const [preflight, setPreflight] = useState<AgorPackPreflightTeammate[] | null>(null);
   const [preflightError, setPreflightError] = useState<string | null>(null);
@@ -161,7 +163,7 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
         </Form.Item>
         <Form.Item style={{ marginBottom: 0 }}>
           <Checkbox
-            checked={includeOthers}
+            checked={sessions !== 'none' && includeOthers}
             disabled={sessions === 'none'}
             onChange={(event) => setIncludeOthers(event.target.checked)}
           >
@@ -189,8 +191,10 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
                     <Typography.Text strong>{teammate.display_name}</Typography.Text>
                     {teammate.local_home && <Tag>full tree</Tag>}
                     <Typography.Text type="secondary">
-                      {teammate.knowledge_documents} docs · {teammate.artifacts} artifacts ·{' '}
-                      {teammate.schedules} schedules · {teammate.sessions.own} of your sessions
+                      {pluralize(teammate.knowledge_documents, 'doc')} ·{' '}
+                      {pluralize(teammate.artifacts, 'artifact')} ·{' '}
+                      {pluralize(teammate.schedules, 'schedule')} · {teammate.sessions.own} of your
+                      sessions
                     </Typography.Text>
                   </Space>
                 }
