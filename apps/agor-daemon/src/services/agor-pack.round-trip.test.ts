@@ -696,7 +696,7 @@ dbTest(
             vi.setSystemTime(claimedUntil - 60_000);
             vi.advanceTimersByTime(60_000);
             for (let i = 0; i < 1000 && (await expiresAt()) <= claimedUntil; i++) {
-              await new Promise((resolve) => setImmediate(resolve));
+              await new Promise((resolve) => setTimeout(resolve, 5));
             }
             // ...so past the TTL it got when claimed, the sweep keeps the pack.
             vi.setSystemTime(claimedUntil + 30 * 60_000);

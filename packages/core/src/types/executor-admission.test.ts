@@ -12,7 +12,7 @@ describe('executor admission classes', () => {
       .map(([command]) => command)
       .sort();
     expect(agents).toEqual(['agentic-tool.invoke', 'prompt', 'zellij.attach', 'zellij.tab']);
-    expect(Object.keys(EXECUTOR_COMMAND_ADMISSION)).toHaveLength(32);
+    expect(Object.keys(EXECUTOR_COMMAND_ADMISSION)).toHaveLength(34);
     for (const admissionClass of Object.values(EXECUTOR_COMMAND_ADMISSION)) {
       expect(EXECUTOR_ADMISSION_CLASSES).toContain(admissionClass);
     }
@@ -23,6 +23,8 @@ describe('executor admission classes', () => {
     expect(executorAdmissionClassFor('git.clone')).toBe('utility');
     expect(executorAdmissionClassFor('branch.delete')).toBe('utility');
     expect(executorAdmissionClassFor('branch.archive')).toBe('utility');
+    expect(executorAdmissionClassFor('branch.pack.collect')).toBe('utility');
+    expect(executorAdmissionClassFor('branch.pack.materialize')).toBe('utility');
   });
 
   it.each([undefined, null, 42, '', 'unknown.command', 'toString', '__proto__', 'constructor'])(

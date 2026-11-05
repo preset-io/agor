@@ -164,7 +164,6 @@ const checks = [
     patterns: [/\bsetImmediate\s*\(/g],
     baseline: {
       // Test-only async flush helpers / event loop flushes.
-      'apps/agor-daemon/src/services/branches.test.ts': 1,
       'apps/agor-daemon/src/services/repos.test.ts': 1,
       // Executor-token revocation clears authority synchronously, then uses a
       // transport-only deferral helper to drain the terminal RPC ack before
