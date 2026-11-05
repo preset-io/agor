@@ -221,12 +221,13 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         case 'users':
           return canListUsers;
         case 'move-to-cloud':
-          return selfHosted && canListUsers;
+          // Members move their own teammates; admins can move anyone's.
+          return selfHosted && hasMinimumRole(currentUser?.role, ROLES.MEMBER);
         default:
           return true;
       }
     },
-    [isAdmin, canListUsers, selfHosted]
+    [isAdmin, canListUsers, selfHosted, currentUser?.role]
   );
 
   // One nav model feeds the desktop sidebar and the mobile index, so they cannot drift apart

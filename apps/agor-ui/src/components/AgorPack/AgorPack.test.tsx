@@ -3,7 +3,7 @@ import type { Branch } from '@agor-live/client';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { mount } from '../../test/harness';
-import { applyPackImport } from '../../utils/agorPack';
+import { applyPackImport, getPackImport } from '../../utils/agorPack';
 import { ExportPackModal } from './ExportPackModal';
 import { ImportPackWizard } from './ImportPackWizard';
 
@@ -191,5 +191,16 @@ describe('ImportPackWizard', () => {
       teammates: [receipt.manifest.teammates[0]!.key],
       board_id: null,
     });
+  });
+
+  it('opens the reconnect checklist for a deep-linked import id', async () => {
+    vi.mocked(getPackImport).mockResolvedValue({ ...receipt, status: 'applied', results: [] });
+    mount(
+      <ImportPackWizard open onClose={vi.fn()} boardById={new Map()} importId={receipt.import_id} />
+    );
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(getPackImport).toHaveBeenCalledWith(receipt.import_id));
+    expect(within(dialog).queryByText(/Drop a .agorpack file here/)).toBeNull();
+    expect(await within(dialog).findByRole('button', { name: 'Done' })).toBeInTheDocument();
   });
 });

@@ -87,9 +87,12 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
 
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [exportBranchIds, setExportBranchIds] = useState<string[] | null>(null);
-  // `?import=1` (the "Open Agor Cloud" deep link) opens the import wizard.
+  // `?import=1` (the "Open Agor Cloud" deep link) opens the import wizard;
+  // `?import=<import id>` (sent from a self-hosted install) opens its reconnect checklist.
   const [searchParams] = useSearchParams();
-  const [importOpen, setImportOpen] = useState(() => searchParams.get('import') === '1');
+  const importParam = searchParams.get('import');
+  const [importOpen, setImportOpen] = useState(() => Boolean(importParam));
+  const deepLinkedImportId = importParam && importParam !== '1' ? importParam : undefined;
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const teammatesLoaded = useAgorStore(selectTeammatesLoaded);
   const sessionCounts = useSessionCounts(client ?? null, 'branch_id', !!selectedBranch);
@@ -327,6 +330,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
           client={client}
           currentUser={currentUser}
           boardById={boardById}
+          importId={deepLinkedImportId}
           onClose={() => setImportOpen(false)}
         />
       )}

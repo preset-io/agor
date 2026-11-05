@@ -47,9 +47,12 @@ const ENVIRONMENT_TAG: Record<string, { color: string; label: string }> = {
 export interface ExportPackPanelProps {
   teammates: Branch[];
   initialBranchIds: string[];
-  /** Called after the file downloaded. */
-  onExported?: (result: AgorPackExportResult) => void;
+  /** Called after the file downloaded (or, with `download: false`, was staged). */
+  onExported?: (result: AgorPackExportResult) => void | Promise<void>;
   exportLabel?: string;
+  /** False: build the pack on the daemon without downloading it. */
+  download?: boolean;
+  exportIcon?: React.ReactNode;
 }
 
 /** Teammate picker, contents checkboxes, preflight, and the export action. */
@@ -58,6 +61,8 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
   initialBranchIds,
   onExported,
   exportLabel = 'Export .agorpack',
+  download = true,
+  exportIcon = <DownloadOutlined />,
 }) => {
   const { showError, showSuccess } = useThemedMessage();
   const [branchIds, setBranchIds] = useState<string[]>(initialBranchIds);
@@ -108,14 +113,17 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
   const handleExport = async () => {
     setExporting(true);
     try {
-      const result = await exportPack({
-        branch_ids: branchIds,
-        sections,
-        sessions,
-        include_others_sessions: sessions !== 'none' && includeOthers,
-      });
-      showSuccess(`Exported ${result.filename}`);
-      onExported?.(result);
+      const result = await exportPack(
+        {
+          branch_ids: branchIds,
+          sections,
+          sessions,
+          include_others_sessions: sessions !== 'none' && includeOthers,
+        },
+        { download }
+      );
+      if (download) showSuccess(`Exported ${result.filename}`);
+      await onExported?.(result);
     } catch (error) {
       showError(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -262,7 +270,7 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
       <Flex justify="flex-end">
         <Button
           type="primary"
-          icon={<DownloadOutlined />}
+          icon={exportIcon}
           loading={exporting}
           disabled={branchIds.length === 0 || preflight === null}
           onClick={handleExport}

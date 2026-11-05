@@ -5,6 +5,10 @@
  */
 
 import type {
+  AgorCloudLinkCompleteRequest,
+  AgorCloudLinkStartResult,
+  AgorCloudLinkStatus,
+  AgorCloudTransfer,
   AgorPackApplyRequest,
   AgorPackExportRequest,
   AgorPackImport,
@@ -65,9 +69,9 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
   return response;
 }
 
-async function json<T>(path: string, body?: unknown): Promise<T> {
+async function json<T>(path: string, body?: unknown, method?: string): Promise<T> {
   const response = await request(path, {
-    method: body === undefined ? 'GET' : 'POST',
+    method: method ?? (body === undefined ? 'GET' : 'POST'),
     ...(body === undefined
       ? {}
       : { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }),
@@ -81,9 +85,13 @@ export function fetchPackPreflight(branchIds: string[]): Promise<AgorPackPreflig
   ).then((result) => result.teammates);
 }
 
-/** Build the pack on the daemon, then download it as a file. */
-export async function exportPack(body: AgorPackExportRequest): Promise<AgorPackExportResult> {
+/** Build the pack on the daemon, then (unless `download: false`) download it as a file. */
+export async function exportPack(
+  body: AgorPackExportRequest,
+  { download = true }: { download?: boolean } = {}
+): Promise<AgorPackExportResult> {
   const result = await json<AgorPackExportResult>('/agor-pack/exports', body);
+  if (!download) return result;
   const response = await request(
     `/agor-pack/downloads/${result.export_id}/${result.ref}?filename=${encodeURIComponent(result.filename)}`
   );
@@ -145,4 +153,41 @@ export function switchOverTeammate(
   undo: boolean
 ): Promise<AgorPackSwitchOverResult> {
   return json<AgorPackSwitchOverResult>(`/agor-pack/switch-over/${branchId}`, { undo });
+}
+
+// ---------------------------------------------------------------------------
+// Sign in to Agor Cloud / Send (the daemon holds the Cloud session)
+// ---------------------------------------------------------------------------
+
+export function getCloudLink(): Promise<AgorCloudLinkStatus> {
+  return json<AgorCloudLinkStatus>('/agor-pack/cloud/link');
+}
+
+export function startCloudLink(returnTo: string): Promise<AgorCloudLinkStartResult> {
+  return json<AgorCloudLinkStartResult>('/agor-pack/cloud/link/start', { return_to: returnTo });
+}
+
+export function completeCloudLink(
+  body: AgorCloudLinkCompleteRequest
+): Promise<AgorCloudLinkStatus> {
+  return json<AgorCloudLinkStatus>('/agor-pack/cloud/link/complete', body);
+}
+
+export function disconnectCloudLink(): Promise<AgorCloudLinkStatus> {
+  return json<AgorCloudLinkStatus>('/agor-pack/cloud/link', undefined, 'DELETE');
+}
+
+export function startCloudTransfer(exportId: string, ref: string): Promise<AgorCloudTransfer> {
+  return json<AgorCloudTransfer>('/agor-pack/cloud/transfers', { export_id: exportId, ref });
+}
+
+export function getCloudTransfer(transferId: string): Promise<AgorCloudTransfer> {
+  return json<AgorCloudTransfer>(`/agor-pack/cloud/transfers/${transferId}`);
+}
+
+export function applyCloudTransfer(
+  transferId: string,
+  teammates: string[]
+): Promise<AgorCloudTransfer> {
+  return json<AgorCloudTransfer>(`/agor-pack/cloud/transfers/${transferId}/apply`, { teammates });
 }

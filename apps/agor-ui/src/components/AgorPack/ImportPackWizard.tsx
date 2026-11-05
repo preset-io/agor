@@ -1,29 +1,12 @@
-import {
-  type AgorPackImport,
-  agorPackArchivedNotes,
-  agorPackOutsideLinksNote,
-  pluralize,
-} from '@agor/core/types';
+import { type AgorPackImport, pluralize } from '@agor/core/types';
 import type { AgorClient, Board, User } from '@agor-live/client';
 import { InboxOutlined } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Flex,
-  Progress,
-  Select,
-  Space,
-  Spin,
-  Steps,
-  Table,
-  Typography,
-  Upload,
-} from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Button, Flex, Progress, Select, Spin, Steps, Typography, Upload } from 'antd';
+import { useEffect, useRef, useState } from 'react';
 import { applyPackImport, getPackImport, uploadPack } from '../../utils/agorPack';
 import { useThemedMessage } from '../../utils/message';
 import { AdaptiveSettingsModal } from '../SettingsModal/AdaptiveSettingsModal';
-import { Tag } from '../Tag';
+import { locked, PackReviewTable } from './PackReviewTable';
 import { ReconnectChecklist } from './ReconnectChecklist';
 
 export interface ImportPackWizardProps {
@@ -34,36 +17,8 @@ export interface ImportPackWizardProps {
   boardById: Map<string, Board>;
   /** Start on the review step for an already-uploaded pack (tests). */
   initialReceipt?: AgorPackImport;
-}
-
-type Row = AgorPackImport['manifest']['teammates'][number] & {
-  dry: AgorPackImport['dry_run'][number] | undefined;
-};
-
-function contents(row: Row): string {
-  const s = row.sections;
-  return [
-    s.board ? 'board' : null,
-    s.knowledge ? pluralize(s.knowledge.documents, 'doc') : null,
-    s.artifacts ? pluralize(s.artifacts, 'artifact') : null,
-    s.schedules ? pluralize(s.schedules, 'schedule') : null,
-    s.sessions ? pluralize(s.sessions.count, 'session') : null,
-    s.uploads?.count ? pluralize(s.uploads.count, 'attachment') : null,
-    s.claude_memory?.files ? 'Claude memory' : null,
-    s.git ? (s.git.mode === 'bundle' ? 'full git tree' : 'git changes') : null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
-
-/**
- * Already-imported teammates can't be imported twice; one whose file restore
- * failed stays selectable, and applying it again only retries the files.
- */
-function locked(receipt: AgorPackImport, key: string): boolean {
-  const imported = receipt.dry_run.find((d) => d.key === key)?.already_imported_branch_id;
-  if (!imported) return false;
-  return receipt.results.find((r) => r.key === key)?.filesystem !== 'failed';
+  /** Open the reconnect checklist of an import that already ran (`?import=<id>`). */
+  importId?: string;
 }
 
 export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
@@ -73,16 +28,37 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
   currentUser,
   boardById,
   initialReceipt,
+  importId,
 }) => {
   const { showError, showSuccess } = useThemedMessage();
   const [receipt, setReceipt] = useState<AgorPackImport | null>(initialReceipt ?? null);
-  const [step, setStep] = useState(initialReceipt ? 1 : 0);
+  const [step, setStep] = useState(initialReceipt ? 1 : importId ? 2 : 0);
   const [progress, setProgress] = useState<number | null>(null);
   const [selected, setSelected] = useState<string[]>(
     () => initialReceipt?.manifest.teammates.map((t) => t.key) ?? []
   );
   const [boardId, setBoardId] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
+
+  useEffect(() => {
+    if (!importId) return;
+    let cancelled = false;
+    getPackImport(importId)
+      .then((result) => {
+        if (cancelled) return;
+        lastStatus.current = result.status;
+        setReceipt(result);
+        setSelected(result.manifest.teammates.map((t) => t.key));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        showError(error instanceof Error ? error.message : String(error));
+        setStep(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [importId, showError]);
 
   // Apply (rows, then files) runs in the background; follow the receipt until done.
   const busy =
@@ -104,15 +80,6 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
     }
     lastStatus.current = receipt?.status;
   }, [receipt, showSuccess]);
-
-  const rows: Row[] = useMemo(
-    () =>
-      (receipt?.manifest.teammates ?? []).map((teammate) => ({
-        ...teammate,
-        dry: receipt?.dry_run.find((d) => d.key === teammate.key),
-      })),
-    [receipt]
-  );
 
   const handleFile = async (file: File) => {
     setProgress(0);
@@ -216,86 +183,7 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
               {new Date(receipt.manifest.created_at).toLocaleString()}. You will own everything
               imported; schedules arrive paused.
             </Typography.Text>
-            <Table<Row>
-              size="small"
-              rowKey="key"
-              pagination={false}
-              dataSource={rows}
-              rowSelection={{
-                selectedRowKeys: selected,
-                onChange: (keys) => setSelected(keys as string[]),
-                getCheckboxProps: (row) => ({
-                  disabled: locked(receipt, row.key),
-                  'aria-label': `Import ${row.display_name}`,
-                }),
-              }}
-              columns={[
-                {
-                  title: 'Teammate',
-                  key: 'teammate',
-                  render: (_: unknown, row) => (
-                    <Space orientation="vertical" size={0}>
-                      <Typography.Text strong>
-                        {row.emoji ?? '🤖'} {row.display_name}
-                      </Typography.Text>
-                      <Typography.Text type="secondary">{contents(row)}</Typography.Text>
-                      {[
-                        ...agorPackArchivedNotes(row.sections.archived_skipped),
-                        agorPackOutsideLinksNote(row.sections.knowledge?.outside_links),
-                      ]
-                        .filter((note): note is string => Boolean(note))
-                        .map((note) => (
-                          <Typography.Text key={note} type="secondary">
-                            {note}
-                          </Typography.Text>
-                        ))}
-                    </Space>
-                  ),
-                },
-                {
-                  title: 'Repository',
-                  key: 'repo',
-                  width: 180,
-                  render: (_: unknown, row) =>
-                    row.dry?.already_imported_branch_id ? (
-                      locked(receipt, row.key) ? (
-                        <Tag color="success">already imported</Tag>
-                      ) : (
-                        <Tag color="warning">files failed: select to retry</Tag>
-                      )
-                    ) : (
-                      <Space orientation="vertical" size={0}>
-                        <Typography.Text>{row.repo.slug}</Typography.Text>
-                        <Tag>
-                          {row.dry?.repo_status === 'existing'
-                            ? 'already here'
-                            : row.dry?.repo_status === 'framework'
-                              ? 'teammate framework'
-                              : 'will clone'}
-                        </Tag>
-                      </Space>
-                    ),
-                },
-                {
-                  title: 'Needs attention',
-                  key: 'warnings',
-                  render: (_: unknown, row) => (
-                    <Flex vertical gap={2}>
-                      {row.requirements.env_vars.length > 0 && (
-                        <span>
-                          {pluralize(row.requirements.env_vars.length, 'environment variable')}
-                        </span>
-                      )}
-                      {(row.dry?.warnings ?? []).map((warning) => (
-                        <Typography.Text key={warning} type="warning">
-                          {warning}
-                        </Typography.Text>
-                      ))}
-                    </Flex>
-                  ),
-                },
-              ]}
-            />
+            <PackReviewTable receipt={receipt} selected={selected} onSelect={setSelected} />
             <Flex align="center" gap={8} wrap>
               <Typography.Text>Place on</Typography.Text>
               <Select
@@ -311,16 +199,10 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
                 ]}
               />
             </Flex>
-            {rows.some((row) => row.dry?.already_imported_branch_id) && (
-              <Alert
-                type="info"
-                showIcon
-                message="Teammates you already imported from this file are skipped."
-              />
-            )}
           </Flex>
         )}
 
+        {step === 2 && !receipt && <Spin />}
         {step === 2 && receipt?.status === 'applying' && (
           <Alert
             type="info"
