@@ -31,6 +31,7 @@ import {
   resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolvePasswordPolicyRequirements,
+  resolveRefreshTokenTtlSeconds,
   resolveSdkWatchdogConfig,
   resolveTeammateFrameworkRepoUrl,
   resolveTenantContext,
@@ -1142,13 +1143,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const tenantTokenClaim = multiTenancy.auth_claim ?? 'tenant_id';
 
   // Access token TTL — short by design. The /authentication/refresh route
-  // (and the after-hook below) issues a 30-day refresh token so users stay
-  // logged in across browser restarts; the access token itself stays
+  // (and the after-hook and /auth/launch below) issues a refresh token so users
+  // stay logged in across browser restarts; the access token itself stays
   // short-lived so that a leaked one expires quickly. Both the auth-service
   // config AND the refresh endpoint MUST use this constant — if they drift,
   // the refresh path silently downgrades the security of the auth path.
   const ACCESS_TOKEN_TTL = '15m';
-  const REFRESH_TOKEN_TTL = '30d';
+  // Refresh token TTL in seconds (jsonwebtoken reads a numeric expiresIn as
+  // seconds). Comes from `daemon.refresh_token_ttl_seconds` or
+  // AGOR_REFRESH_TOKEN_TTL_SECONDS, validated at config load. All three issuers
+  // below MUST use this one value so login, launch and refresh never disagree.
+  const REFRESH_TOKEN_TTL_SECONDS = resolveRefreshTokenTtlSeconds(config);
 
   app.set('authentication', {
     secret: jwtSecret,
@@ -1265,7 +1270,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         createIssueBrowserTokensHook({
           jwtSecret,
           accessTokenTtl: ACCESS_TOKEN_TTL,
-          refreshTokenTtl: REFRESH_TOKEN_TTL,
+          refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
           tenantClaim: tenantTokenClaim,
           staticTenantId:
             multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
@@ -1289,7 +1294,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       provider: externalLaunchProvider,
       jwtSecret,
       accessTokenTtl: ACCESS_TOKEN_TTL,
-      refreshTokenTtl: REFRESH_TOKEN_TTL,
+      refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
       usersService,
       onAuthorizationInvalidated: (tenantId, userId) => {
         app.emit('realtime:authorization-invalidated', {
@@ -1317,7 +1322,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     createRefreshTokenService({
       jwtSecret,
       accessTokenTtl: ACCESS_TOKEN_TTL,
-      refreshTokenTtl: REFRESH_TOKEN_TTL,
+      refreshTokenTtl: REFRESH_TOKEN_TTL_SECONDS,
       tenantClaim: tenantTokenClaim,
       usersService,
     })
