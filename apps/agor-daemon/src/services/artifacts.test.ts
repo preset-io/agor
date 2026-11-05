@@ -2634,4 +2634,85 @@ describe('ArtifactsService.publishFromExecutor board authority', () => {
       (await boardRepo.findById(board.board_id))?.objects?.[`artifact-${published.artifact_id}`]
     ).toBeDefined();
   });
+
+  dbTest('authorizes a republish against the board the artifact is on', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    await seedUser(db, 'user-owner');
+    await seedUser(db, 'user-board-owner');
+    const boardRepo = new BoardRepository(db);
+    const artifacts = new ArtifactRepository(db);
+    // The artifact owner is only a Viewer on A (Editor lost) and owns B.
+    const boardA = await boardRepo.create({ name: 'A', created_by: 'user-board-owner' });
+    const boardB = await boardRepo.create({ name: 'B', created_by: 'user-owner' });
+    const repo = await new RepoRepository(db).create({
+      repo_id: generateId() as UUID,
+      slug: `artifact-republish-${generateId()}`,
+      name: 'Artifact Republish Repo',
+      repo_type: 'remote',
+      remote_url: 'https://github.com/test/repo.git',
+      local_path: '/tmp/artifact-republish',
+      default_branch: 'main',
+    });
+    const branchOn = (boardId: BoardID, name: string, uniqueId: number) =>
+      new BranchRepository(db).create({
+        branch_id: generateId() as BranchID,
+        repo_id: repo.repo_id,
+        board_id: boardId,
+        name,
+        ref: `refs/heads/${name}`,
+        branch_unique_id: uniqueId,
+        path: `/tmp/artifact-republish/${name}`,
+        created_by: 'user-owner' as UUID,
+        others_can: 'session',
+      });
+    const branchA = await branchOn(boardA.board_id, 'branch-a', 1);
+    const branchB = await branchOn(boardB.board_id, 'branch-b', 2);
+    const onA = await seedArtifact(db, boardA.board_id, { userId: 'user-owner' });
+    const onB = await seedArtifact(db, boardB.board_id, { userId: 'user-owner' });
+    const republish = (artifactId: string, branchId: string, boardId: string) =>
+      service.publishFromExecutor(
+        {
+          files: { '/index.js': 'console.log("replaced")' },
+          branch_id: branchId,
+          board_id: boardId,
+          artifact_id: artifactId,
+        },
+        {
+          provider: 'socketio',
+          user: { user_id: 'user-owner', email: 'user-owner@test.local', role: 'member' },
+          authentication: {
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-command',
+              session_id: 'artifact.publish',
+              branch_id: branchId,
+            },
+          },
+        } as never
+      );
+
+    // Naming an editable board B (and a branch on it) neither authorizes nor moves the artifact on A.
+    await expect(republish(onA.artifact_id, branchB.branch_id, boardB.board_id)).rejects.toThrow(
+      /must match the source branch board/
+    );
+    await expect(republish(onA.artifact_id, branchA.branch_id, boardB.board_id)).rejects.toThrow(
+      /Board Editor or Manager/
+    );
+    expect(await artifacts.findById(onA.artifact_id)).toMatchObject({
+      board_id: boardA.board_id,
+      files: onA.files,
+    });
+    expect((await artifacts.findById(onA.artifact_id))?.branch_id ?? null).toBe(
+      onA.branch_id ?? null
+    );
+
+    // An Editor of the stored board still republishes in place.
+    const updated = await republish(onB.artifact_id, branchB.branch_id, boardB.board_id);
+    expect(updated).toMatchObject({
+      board_id: boardB.board_id,
+      branch_id: branchB.branch_id,
+      files: { '/index.js': 'console.log("replaced")' },
+    });
+  });
 });

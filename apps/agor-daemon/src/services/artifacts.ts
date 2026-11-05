@@ -743,7 +743,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (!resolvedName) {
       throw new Error('name is required when creating a new artifact');
     }
-    const resolvedBoardId = (data.board_id ?? existing?.board_id) as BoardID | undefined;
+    // A republish stays on the artifact's stored board (moves go through updateMetadata), so authorize that board.
+    const resolvedBoardId = (existing ? existing.board_id : data.board_id) as BoardID | undefined;
     if (!resolvedBoardId) {
       throw new Error('boardId is required when creating a new artifact');
     }
