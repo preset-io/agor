@@ -165,7 +165,6 @@ import {
   cacheBranchAccess,
   ensureBranchPermission,
   ensureCanCreateSession,
-  ensureCanModifySchedule,
   ensureCanPromptInSession,
   ensureCanView,
   ensureSessionImmutability,
@@ -175,6 +174,7 @@ import {
   loadSession,
   loadSessionBranch,
   protectGatewaySourceMetadata,
+  protectScheduledRunMetadata,
   resolveSessionContext,
   scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranchesSql,
@@ -3389,6 +3389,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       return context;
     },
     protectGatewaySourceMetadata,
+    protectScheduledRunMetadata,
     // created_by and unix_username remain immutable identity/history stamps.
     // unix_username is load-bearing for delegated execution-home Sessions;
     // branch-home Sessions deliberately use the current prompt actor instead.
@@ -3414,6 +3415,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create sessions'),
         protectGatewaySourceMetadata,
+        protectScheduledRunMetadata,
         // Stamp session with creator's unix_username (MUST run first). Also
         setSessionUnixUsername(usersRepository, executionMode.unixUserMode),
         async (context: HookContext) => {
@@ -3580,8 +3582,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
   // Schedules hooks
   // ============================================================================
-  // Schedules inherit RBAC from the parent branch (same model as
-  // sessions).
+  // Schedules spawn unattended runs, so every write needs branch Manager ('all'), like run-now.
 
   const scheduleRepository = new ScheduleRepository(db);
 
@@ -3596,7 +3597,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create schedules'),
         loadBranch(branchRepository, 'branch_id'),
-        ensureCanCreateSession(superadminOpts),
+        // No superadmin bypass: the run executes as the caller, who must really be a Manager.
+        ensureBranchPermission('all', 'create schedules on this branch', {
+          allowSuperadmin: false,
+        }),
         enforcePublicWriteFields('Schedule', SCHEDULE_CREATE_WRITE_FIELDS),
         injectCreatedBy(),
         validateScheduleConfig(),
@@ -3606,7 +3610,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update schedules'),
         loadScheduleAndBranch(scheduleRepository, branchRepository),
-        ensureCanModifySchedule(superadminOpts),
+        ensureBranchPermission('all', 'modify schedules on this branch', superadminOpts),
         enforcePublicWriteFields('Schedule', SCHEDULE_PATCH_WRITE_FIELDS),
         // The following validators consume the current+patch shape.
         ensureCurrentScheduleLoaded(scheduleRepository),
