@@ -387,6 +387,96 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       }
     );
 
+    it('still logs a rejected refresh when reading the grant back fails', async () => {
+      const subject = await seed();
+      await save(subject);
+      let failReads = false;
+      const request = vi.fn(async (_url, options) => {
+        await options.assertCurrent();
+        failReads = true;
+        return response({ error: 'invalid_grant', error_description: refreshSentinel }, 400);
+      });
+      const backend = new ClaudeBackendOAuth(dbA, () => ready, { request, masterSecret });
+      const get = backend.get.bind(backend);
+      vi.spyOn(backend, 'get').mockImplementation(async (...args) => {
+        if (failReads) throw new Error('synthetic read failure');
+        return get(...args);
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await expect(
+          backend.resolve(subject.tenantId, subject.userId, async () => {}, 'task-under-test')
+        ).rejects.toThrow('could not be refreshed safely');
+        expect(
+          warn.mock.calls
+            .map((call) => String(call[0]))
+            .filter((line) => line.startsWith('[claude_oauth.refresh]'))
+        ).toEqual([
+          '[claude_oauth.refresh] event=failed task_id=task-under-test outcome=invalid grant_state=unchanged source=provider http_status=400 body=json provider_error=invalid_grant',
+        ]);
+        expect(JSON.stringify(warn.mock.calls)).not.toContain(refreshSentinel);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it.each([
+      [
+        'switches to an API key',
+        'api_key',
+        'Claude credential selection changed. Start a new task.',
+      ],
+      ['signs out of Claude', 'managed_oauth', CLAUDE_RECONNECT_REQUIRED_MESSAGE],
+    ] as const)(
+      'gives the right instruction when the user %s during a refresh',
+      async (_label, source, message) => {
+        const subject = await seed();
+        await save(subject);
+        let release!: () => void;
+        const blocked = new Promise<void>((r) => {
+          release = r;
+        });
+        let dispatch!: () => void;
+        const dispatched = new Promise<void>((r) => {
+          dispatch = r;
+        });
+        const request = vi.fn(async (_url, options) => {
+          await options.assertCurrent();
+          dispatch();
+          await blocked;
+          return response({ error: 'invalid_grant' }, 400);
+        });
+        const backend = new ClaudeBackendOAuth(dbA, () => ready, { request, masterSecret });
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const resolving = backend.resolve(subject.tenantId, subject.userId, async () => {});
+          const rejection = expect(resolving).rejects.toThrow(message);
+          await dispatched;
+          // Mirrors the credential coordinator: a source change or sign-out retires the grant.
+          await unit(dbB, subject.tenantId, async (db) => {
+            await executeRaw(
+              db,
+              sql`UPDATE users SET data = data || ${JSON.stringify({ agentic_credential_sources: { 'claude-code': source } })}::jsonb WHERE user_id = ${subject.userId}`
+            );
+            const generation = await new ClaudeOAuthAttemptRepository(db).allocateAttemptGeneration(
+              subject.tenantId,
+              subject.userId
+            );
+            await new UserProviderOAuthGrantRepository(db).retire(
+              subject.tenantId,
+              subject.userId,
+              generation
+            );
+          });
+          release();
+          await rejection;
+          expect((await backend.get(subject.tenantId, subject.userId))?.state).toBe('disconnected');
+        } finally {
+          warn.mockRestore();
+        }
+      }
+    );
+
     it('reports a reconnect only for the selected backend login that cannot refresh', async () => {
       const backend = new ClaudeBackendOAuth(dbA, () => ready, { masterSecret });
       const broken = await seed();
