@@ -178,6 +178,8 @@ dbTest(
       const importer = new AgorPackImporter(ctx(bea), params(bea));
       const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
       expect(staged.dry_run[0]).toMatchObject({ key: 't01', repo_status: 'existing' });
+      // Every section this release writes is known to its own importer.
+      expect(staged.dry_run[0]?.warnings.join(' ')).not.toMatch(/newer Agor/);
       const applied = await importer.apply(staged.import_id, {
         teammates: ['t01'],
         board_id: null,

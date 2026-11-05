@@ -69,6 +69,7 @@ import {
   agorPackSchedulesFileSchema,
   agorPackSessionFileSchema,
   agorPackTeammateFileSchema,
+  agorPackTeammateSectionsSchema,
   agorPackUploadFileSchema,
   type Board,
   type BoardExportBlob,
@@ -102,16 +103,8 @@ import {
 import { type AgorPackServiceContext, agorPackBlob } from './agor-pack-export.js';
 import { importKnowledgeRepository } from './knowledge-transfers.js';
 
-const KNOWN_SECTIONS = new Set([
-  'board',
-  'knowledge',
-  'artifacts',
-  'schedules',
-  'claude_memory',
-  'uploads',
-  'sessions',
-  'git',
-]);
+/** Sections this release reads; anything else came from a newer Agor. */
+const KNOWN_SECTIONS = new Set(Object.keys(agorPackTeammateSectionsSchema.shape));
 const TERMINAL_TASK_STATUSES = new Set<string>([
   TaskStatus.COMPLETED,
   TaskStatus.FAILED,
