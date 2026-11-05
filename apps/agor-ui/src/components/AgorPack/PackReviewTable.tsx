@@ -32,9 +32,17 @@ function contents(row: Row): string {
  * Already-imported teammates can't be imported twice; one whose file restore
  * failed stays selectable, and applying it again only retries the files.
  */
+/** The teammate's imported branch, from the dry-run or from an apply since. */
+export function importedBranchId(receipt: AgorPackImport, key: string): string | null {
+  return (
+    receipt.dry_run.find((d) => d.key === key)?.already_imported_branch_id ??
+    receipt.results.find((r) => r.key === key)?.branch_id ??
+    null
+  );
+}
+
 export function locked(receipt: AgorPackImport, key: string): boolean {
-  const imported = receipt.dry_run.find((d) => d.key === key)?.already_imported_branch_id;
-  if (!imported) return false;
+  if (!importedBranchId(receipt, key)) return false;
   return receipt.results.find((r) => r.key === key)?.filesystem !== 'failed';
 }
 
@@ -101,7 +109,7 @@ export const PackReviewTable: React.FC<PackReviewTableProps> = ({
             key: 'repo',
             width: 180,
             render: (_: unknown, row) =>
-              row.dry?.already_imported_branch_id ? (
+              importedBranchId(receipt, row.key) ? (
                 locked(receipt, row.key) ? (
                   <Tag color="success">already imported</Tag>
                 ) : (
@@ -138,7 +146,7 @@ export const PackReviewTable: React.FC<PackReviewTableProps> = ({
           },
         ]}
       />
-      {rows.some((row) => row.dry?.already_imported_branch_id) && (
+      {rows.some((row) => importedBranchId(receipt, row.key)) && (
         <Alert
           type="info"
           showIcon

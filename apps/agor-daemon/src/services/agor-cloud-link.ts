@@ -8,13 +8,19 @@
  * `/auth/launch`. The workspace session it returns (15 min access, 30 day
  * refresh) is sealed under the master secret in `app_variables`, one record
  * per user, and never leaves this process except as a Bearer to that same
- * workspace. Disconnect, Done, or 7 days without use forget it.
+ * workspace. Disconnect, Done, or 7 days without use (checked when next used)
+ * forget it; the session itself expires after 30 days.
+ *
+ * Every change is a compare-and-set on the stored ciphertext (freshly salted
+ * on each write, so it is a row version): a late refresh or sign-in never
+ * restores a link that was disconnected or replaced. Each sign-in gets a new
+ * `generation`, kept across refreshes, that transfers bind to.
  */
 
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { AgorConfig } from '@agor/core/config';
 import { AppVariableRepository, runWithTenantDatabaseScope } from '@agor/core/db';
-import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Conflict, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import {
   AGOR_CLOUD,
   type AgorCloudLinkCompleteRequest,
@@ -29,6 +35,8 @@ const LAUNCH_TIMEOUT_MS = 10_000;
 /** Refresh the workspace access token when less than this is left. */
 const REFRESH_MARGIN_MS = 60_000;
 const TOUCH_INTERVAL_MS = 5 * 60_000;
+const CAS_ATTEMPTS = 5;
+export const AGOR_CLOUD_LINK_CHANGED = 'Cloud connection changed; start again.';
 
 export type AgorCloudLinkContext = Pick<
   AgorPackServiceContext,
@@ -42,6 +50,8 @@ interface PendingSignIn {
 }
 
 interface StoredLink extends AgorCloudLinkPublic {
+  /** New on every sign-in, kept across refreshes: what a transfer is bound to. */
+  generation: string;
   cloud_user_id: string | null;
   access_token: string;
   refresh_token: string;
@@ -51,6 +61,8 @@ interface StoredLink extends AgorCloudLinkPublic {
 
 interface LinkRecord {
   pending?: PendingSignIn;
+  /** Claim id of the sign-in currently redeeming its launch code. */
+  completing?: string;
   link?: StoredLink;
 }
 
@@ -58,6 +70,8 @@ interface LinkRecord {
 export interface AgorCloudSession {
   workspaceUrl: string;
   accessToken: string;
+  generation: string;
+  cloudUserId: string | null;
 }
 
 export interface AgorCloudSettings {
@@ -167,45 +181,67 @@ export class AgorCloudLinkService {
     );
   }
 
-  private async read(): Promise<LinkRecord> {
-    const raw = await this.unit((variables) =>
-      variables.getPlain(AGOR_CLOUD.linkNamespace, this.ctx.user.user_id)
+  private async read(): Promise<{ record: LinkRecord; version: string | null }> {
+    const { value, version } = await this.unit((variables) =>
+      variables.getPlainVersioned(AGOR_CLOUD.linkNamespace, this.ctx.user.user_id)
     );
-    if (!raw) return {};
     try {
-      return JSON.parse(raw) as LinkRecord;
+      return { record: value ? (JSON.parse(value) as LinkRecord) : {}, version };
     } catch {
-      return {};
+      return { record: {}, version };
     }
   }
 
-  private async write(record: LinkRecord): Promise<void> {
-    await this.unit(async (variables) => {
-      if (!record.pending && !record.link) {
-        await variables.delete(AGOR_CLOUD.linkNamespace, this.ctx.user.user_id);
-        return;
-      }
-      await variables.setEncrypted(
-        AGOR_CLOUD.linkNamespace,
-        this.ctx.user.user_id,
-        JSON.stringify(record),
-        this.ctx.user.user_id
+  /**
+   * Read the record, let `change` derive the next one (null: leave it), and
+   * write it only if nobody wrote in between; a lost race re-reads and runs
+   * `change` again. Returns what was written, or null when `change` declined.
+   */
+  private async mutate(
+    change: (record: LinkRecord) => LinkRecord | null
+  ): Promise<LinkRecord | null> {
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
+      const { record, version } = await this.read();
+      const next = change(record);
+      if (!next) return null;
+      const empty = !next.pending && !next.completing && !next.link;
+      const written = await this.unit((variables) =>
+        variables.compareAndSetEncrypted(
+          AGOR_CLOUD.linkNamespace,
+          this.ctx.user.user_id,
+          version,
+          empty ? null : JSON.stringify(next),
+          this.ctx.user.user_id
+        )
       );
+      if (written) return next;
+    }
+    throw new Conflict('Your Agor Cloud connection changed while saving; try again.');
+  }
+
+  /** Change the caller's link only while it is still the same sign-in. */
+  private updateLink(generation: string, change: (link: StoredLink) => StoredLink | null) {
+    return this.mutate((record) => {
+      if (!record.link || record.link.generation !== generation) return null;
+      const next = change(record.link);
+      if (next) record.link = next;
+      else delete record.link;
+      return record;
     });
   }
 
   /** The caller's link, after forgetting one idle for too long. */
-  private async current(): Promise<LinkRecord> {
-    const record = await this.read();
-    if (record.link && Date.now() - record.link.last_used_at > AGOR_CLOUD.linkIdleMs) {
-      delete record.link;
-      await this.write(record);
+  private async current(): Promise<StoredLink | null> {
+    const { link } = (await this.read()).record;
+    if (link && Date.now() - link.last_used_at > AGOR_CLOUD.linkIdleMs) {
+      await this.updateLink(link.generation, () => null);
+      return null;
     }
-    return record;
+    return link ?? null;
   }
 
   async status(): Promise<AgorCloudLinkStatus> {
-    const { link } = await this.current();
+    const link = await this.current();
     return {
       console_url: this.settings.consoleUrl,
       link: link
@@ -224,13 +260,16 @@ export class AgorCloudLinkService {
     const target = validateReturnTo(returnTo);
     const state = randomBytes(32).toString('base64url');
     const expires = Date.now() + AGOR_CLOUD.stateTtlMs;
-    const record = await this.read();
-    record.pending = {
-      state_sha256: sha256(state).toString('hex'),
-      return_to: target,
-      expires_at: expires,
-    };
-    await this.write(record);
+    // A new sign-in supersedes any one still pending or redeeming.
+    await this.mutate((record) => {
+      delete record.completing;
+      record.pending = {
+        state_sha256: sha256(state).toString('hex'),
+        return_to: target,
+        expires_at: expires,
+      };
+      return record;
+    });
     const url = new URL(`${this.settings.consoleUrl}${AGOR_CLOUD.connectPath}`);
     url.searchParams.set('state', state);
     url.searchParams.set('return_to', target);
@@ -239,18 +278,40 @@ export class AgorCloudLinkService {
   }
 
   async complete(input: AgorCloudLinkCompleteRequest): Promise<AgorCloudLinkStatus> {
-    const record = await this.read();
-    const pending = record.pending;
-    // Single use: the state is spent by the first attempt, whatever happens next.
-    if (pending) {
+    // Claim the pending state atomically before anything else: it is spent by
+    // the first attempt, whatever happens next, and concurrent attempts lose.
+    const claim = randomUUID();
+    let pending: PendingSignIn | undefined;
+    const claimed = await this.mutate((record) => {
+      if (!record.pending) return null;
+      pending = record.pending;
       delete record.pending;
-      await this.write(record);
+      record.completing = claim;
+      return record;
+    });
+    if (!claimed || !pending) {
+      throw new BadRequest('This sign-in was already completed or has expired. Sign in again.');
     }
+    try {
+      return await this.redeem(input, pending, claim);
+    } catch (error) {
+      await this.mutate((record) => {
+        if (record.completing !== claim) return null;
+        delete record.completing;
+        return record;
+      }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async redeem(
+    input: AgorCloudLinkCompleteRequest,
+    pending: PendingSignIn,
+    claim: string
+  ): Promise<AgorCloudLinkStatus> {
     const presented = sha256(input.state);
-    const expected = pending ? Buffer.from(pending.state_sha256, 'hex') : null;
+    const expected = Buffer.from(pending.state_sha256, 'hex');
     if (
-      !pending ||
-      !expected ||
       expected.length !== presented.length ||
       !timingSafeEqual(expected, presented) ||
       pending.expires_at < Date.now()
@@ -286,7 +347,8 @@ export class AgorCloudLinkService {
       throw new BadRequest('Agor Cloud returned an unexpected sign-in response.');
     }
     const now = Date.now();
-    record.link = {
+    const link: StoredLink = {
+      generation: randomUUID(),
       workspace_url: workspaceUrl,
       workspace_display_name: input.workspace_display_name?.trim() || null,
       team_slug: input.team_slug?.trim() || null,
@@ -298,20 +360,33 @@ export class AgorCloudLinkService {
       access_expires_at: expiresAt(accessToken),
       last_used_at: now,
     };
-    await this.write(record);
+    // Only if this sign-in is still the current one (no Disconnect or newer
+    // sign-in meanwhile); otherwise its session is dropped.
+    const saved = await this.mutate((record) => {
+      if (record.completing !== claim) return null;
+      delete record.completing;
+      record.link = link;
+      return record;
+    });
+    if (!saved) throw new Conflict('This sign-in was cancelled. Sign in again.');
     return this.status();
   }
 
   /**
    * A workspace Bearer for the caller's link, refreshed when it is about to
-   * expire (or when `force` after a 401). Throws when there is no link.
+   * expire (or when `force`, after a 401). With `generation`, only for that
+   * sign-in: a disconnected or replaced link fails with
+   * {@link AGOR_CLOUD_LINK_CHANGED}.
    */
-  async session(force = false): Promise<AgorCloudSession> {
-    const record = await this.current();
-    const link = record.link;
+  async session(options: { force?: boolean; generation?: string } = {}): Promise<AgorCloudSession> {
+    const link = await this.current();
+    if (options.generation !== undefined && link?.generation !== options.generation) {
+      throw new Conflict(AGOR_CLOUD_LINK_CHANGED);
+    }
     if (!link) throw new NotAuthenticated('Sign in to Agor Cloud first.');
-    const refresh = force || link.access_expires_at - Date.now() < REFRESH_MARGIN_MS;
-    if (refresh) {
+    const host = new URL(link.workspace_url).host;
+    let current = link;
+    if (options.force || link.access_expires_at - Date.now() < REFRESH_MARGIN_MS) {
       let refreshed: Awaited<ReturnType<typeof postJson>>;
       try {
         refreshed = await postJson(
@@ -320,32 +395,62 @@ export class AgorCloudLinkService {
           LAUNCH_TIMEOUT_MS
         );
       } catch {
-        throw new BadRequest(`Could not reach ${new URL(link.workspace_url).host}.`);
+        throw new Unavailable(`Agor Cloud (${host}) is unreachable right now. Try again.`);
       }
-      const { accessToken, refreshToken } = refreshed.body as {
+      const { accessToken, refreshToken, error } = refreshed.body as {
         accessToken?: unknown;
         refreshToken?: unknown;
+        error?: unknown;
       };
-      if (typeof accessToken !== 'string' || typeof refreshToken !== 'string') {
-        // The Cloud session is gone (expired or revoked): forget it.
-        delete record.link;
-        await this.write(record);
-        throw new NotAuthenticated('Your Agor Cloud sign-in expired. Sign in again.');
+      if (
+        refreshed.status < 200 ||
+        refreshed.status >= 300 ||
+        typeof accessToken !== 'string' ||
+        typeof refreshToken !== 'string'
+      ) {
+        // Only a definitive rejection ends the Cloud session; anything else
+        // (5xx, 429, a malformed answer) keeps it for the next try.
+        if (
+          refreshed.status === 401 ||
+          refreshed.status === 403 ||
+          (refreshed.status === 400 && error === 'invalid_grant')
+        ) {
+          await this.updateLink(link.generation, () => null);
+          throw new NotAuthenticated('Your Agor Cloud sign-in expired. Sign in again.');
+        }
+        throw new Unavailable(`Agor Cloud (${host}) is unreachable right now. Try again.`);
       }
-      link.access_token = accessToken;
-      link.refresh_token = refreshToken;
-      link.access_expires_at = expiresAt(accessToken);
+      const saved = await this.updateLink(link.generation, (stored) => ({
+        ...stored,
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        access_expires_at: expiresAt(accessToken),
+        last_used_at: Date.now(),
+      }));
+      // Disconnected or replaced while refreshing: drop the new tokens.
+      if (!saved?.link) {
+        throw options.generation !== undefined
+          ? new Conflict(AGOR_CLOUD_LINK_CHANGED)
+          : new NotAuthenticated('Sign in to Agor Cloud first.');
+      }
+      current = saved.link;
+    } else if (Date.now() - link.last_used_at > TOUCH_INTERVAL_MS) {
+      // Re-sealing costs a key derivation; idle tracking only needs minutes.
+      await this.updateLink(link.generation, (stored) => ({ ...stored, last_used_at: Date.now() }));
     }
-    // Re-sealing costs a key derivation; idle tracking only needs minutes.
-    if (refresh || Date.now() - link.last_used_at > TOUCH_INTERVAL_MS) {
-      link.last_used_at = Date.now();
-      await this.write(record);
-    }
-    return { workspaceUrl: link.workspace_url, accessToken: link.access_token };
+    return {
+      workspaceUrl: current.workspace_url,
+      accessToken: current.access_token,
+      generation: current.generation,
+      cloudUserId: current.cloud_user_id,
+    };
   }
 
+  /** Forget the link (and any sign-in in progress) at once. */
   async disconnect(): Promise<AgorCloudLinkStatus> {
-    await this.write({});
+    await this.unit((variables) =>
+      variables.delete(AGOR_CLOUD.linkNamespace, this.ctx.user.user_id)
+    );
     return this.status();
   }
 }

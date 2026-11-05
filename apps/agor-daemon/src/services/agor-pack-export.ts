@@ -49,7 +49,7 @@ import {
   UploadRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { type Application, BadRequest, NotFound } from '@agor/core/feathers';
+import { type Application, BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import { generateId } from '@agor/core/ids';
 import {
   AGOR_PACK,
@@ -257,6 +257,15 @@ export class AgorPackExporter {
     const branch = await this.unit(() => this.branches.findById(branchId));
     if (!branch || branch.archived || !isTeammate(branch)) {
       throw new NotFound(`Teammate not found: ${branchId}`);
+    }
+    // Members move their own teammates (by primary owner); admins can move anyone's.
+    if (
+      !hasMinimumRole(this.ctx.user.role, ROLES.ADMIN) &&
+      (branch.primary_owner_user_id ?? branch.created_by) !== this.ctx.user.user_id
+    ) {
+      throw new Forbidden(
+        `Only the owner of ${getTeammateConfig(branch)?.displayName ?? 'this teammate'} or an admin can export it`
+      );
     }
     await this.unit(() =>
       ensureBranchWorkspaceAccess(

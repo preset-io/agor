@@ -34,7 +34,15 @@ const RETURN_TO = 'https://agor.example.test/ui/settings/move-to-cloud';
 
 let uploadsRoot = '';
 const realFetch = globalThis.fetch;
-const cloud = { launches: 0, refreshes: 0, failUploads: 0, uploads: 0, token: '' };
+const cloud: {
+  launches: number;
+  refreshes: number;
+  failUploads: number;
+  uploads: number;
+  token: string;
+  /** Runs first for every workspace request; a Response short-circuits it. */
+  hook?: (pathname: string, init?: RequestInit) => Promise<Response | undefined>;
+} = { launches: 0, refreshes: 0, failUploads: 0, uploads: 0, token: '' };
 
 const reply = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -46,6 +54,8 @@ function fakeCloud(fx: PackFixture, cloudUser: User) {
     if (!url.startsWith('https://')) return realFetch(input, init);
     const { origin, pathname, search } = new URL(url);
     if (origin !== WORKSPACE) throw new TypeError(`fetch failed: ${origin} is not the workspace`);
+    const hooked = await cloud.hook?.(pathname, init);
+    if (hooked) return hooked;
     if (pathname === '/auth/launch') {
       cloud.launches++;
       const { launch_code } = JSON.parse(String(init?.body));
@@ -76,7 +86,7 @@ function fakeCloud(fx: PackFixture, cloudUser: User) {
 beforeEach(async () => {
   uploadsRoot = await mkdtemp(join(tmpdir(), 'agor-cloud-link-'));
   vi.stubEnv('AGOR_MASTER_SECRET', 'agor-cloud-link-test-master-secret');
-  Object.assign(cloud, { launches: 0, refreshes: 0, failUploads: 0, uploads: 0 });
+  Object.assign(cloud, { launches: 0, refreshes: 0, failUploads: 0, uploads: 0, hook: undefined });
 });
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -329,4 +339,179 @@ dbTest(
       expect((await service.status()).link).toBeNull();
       await expect(service.session()).rejects.toThrow('Sign in to Agor Cloud first');
     })
+);
+
+/** Export Ada's teammate on the self-hosted side; returns the staged export. */
+async function stageExport(fx: PackFixture) {
+  const exported = await client(fx, fx.ada).call('POST', '/agor-pack/exports', {
+    branch_ids: [fx.seeded.branch.branch_id],
+    sections: ['board'],
+    sessions: 'none',
+    include_others_sessions: false,
+  });
+  expect(exported.status).toBe(201);
+  return exported.body as { export_id: string; ref: string };
+}
+
+async function pollTransfer(fx: PackFixture, id: string, until: (t: AgorCloudTransfer) => boolean) {
+  for (let i = 0; i < 100; i++) {
+    const { body } = await client(fx, fx.ada).call('GET', `/agor-pack/cloud/transfers/${id}`);
+    if (until(body)) return body as AgorCloudTransfer;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('transfer did not settle');
+}
+
+dbTest('a transfer stops when the user signs in again mid-upload', async ({ db }) =>
+  withFixture(db, async (fx) => {
+    const ada = client(fx, fx.ada);
+    expect((await ada.complete(await ada.start())).status).toBe(201);
+    const { export_id, ref } = await stageExport(fx);
+    cloud.hook = async (pathname, init) => {
+      if (pathname !== '/agor-pack/uploads') return undefined;
+      cloud.uploads++;
+      await new Response(init?.body as never).arrayBuffer();
+      // Relink while the first attempt is in flight, then fail it.
+      if (cloud.uploads === 1) expect((await ada.complete(await ada.start())).status).toBe(201);
+      return reply(503, { error: 'Service unavailable' });
+    };
+    const started = await ada.call('POST', '/agor-pack/cloud/transfers', { export_id, ref });
+    const done = await pollTransfer(
+      fx,
+      (started.body as AgorCloudTransfer).transfer_id,
+      (t) => t.status !== 'uploading'
+    );
+    expect(done).toMatchObject({
+      status: 'failed',
+      error: 'Cloud connection changed; start again.',
+    });
+    // The retry never went out under the new sign-in.
+    expect(cloud.uploads).toBe(1);
+  })
+);
+
+dbTest('a late refresh or sign-in never restores a disconnected link', async ({ db }) =>
+  withFixture(db, async (fx) => {
+    const ada = client(fx, fx.ada);
+    const row = () =>
+      fx.unit(() =>
+        new AppVariableRepository(fx.db).find(AGOR_CLOUD.linkNamespace, fx.ada.user_id)
+      );
+    // Late sign-in: Disconnect lands while the launch code is being redeemed.
+    const state = await ada.start();
+    cloud.hook = async (pathname) => {
+      if (pathname === '/auth/launch') await ada.call('DELETE', '/agor-pack/cloud/link');
+      return undefined;
+    };
+    expect((await ada.complete(state)).status).toBe(409);
+    expect(await row()).toBeNull();
+
+    // Late refresh: Disconnect lands while the refresh is in flight.
+    cloud.hook = undefined;
+    expect((await ada.complete(await ada.start())).status).toBe(201);
+    cloud.hook = async (pathname) => {
+      if (pathname === '/authentication/refresh') await ada.call('DELETE', '/agor-pack/cloud/link');
+      return undefined;
+    };
+    await expect(new AgorCloudLinkService(fx.ctx(fx.ada)).session({ force: true })).rejects.toThrow(
+      'Sign in to Agor Cloud first'
+    );
+    expect(cloud.refreshes).toBe(1);
+    expect(await row()).toBeNull();
+  })
+);
+
+dbTest('concurrent completions of one sign-in: exactly one redeems', async ({ db }) =>
+  withFixture(db, async (fx) => {
+    const ada = client(fx, fx.ada);
+    const state = await ada.start();
+    const results = await Promise.all([
+      ada.complete(state),
+      ada.complete(state),
+      ada.complete(state),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 400, 400]);
+    expect(cloud.launches).toBe(1);
+  })
+);
+
+dbTest('an applied transfer can import its remaining teammates later', async ({ db }) =>
+  withFixture(db, async (fx) => {
+    const ada = client(fx, fx.ada);
+    expect((await ada.complete(await ada.start())).status).toBe(201);
+    const { export_id, ref } = await stageExport(fx);
+    // A two-teammate receipt from the workspace: t01 applied, t02 not yet.
+    const receipt = (results: unknown[]) => ({
+      import_id: 'imp-1',
+      status: 'applied',
+      content_sha256: 'a'.repeat(64),
+      manifest: { teammates: [{ key: 't01' }, { key: 't02' }] },
+      dry_run: [],
+      results,
+      error: null,
+      created_at: '2026-11-05T00:00:00.000Z',
+      applied_at: '2026-11-05T00:00:00.000Z',
+    });
+    const applied: unknown[] = [];
+    cloud.hook = async (pathname, init) => {
+      if (pathname === '/agor-pack/uploads') {
+        await new Response(init?.body as never).arrayBuffer();
+        return reply(200, receipt([{ key: 't01', branch_id: 'b-t01' }]));
+      }
+      if (pathname === '/agor-pack/imports/imp-1/apply') {
+        applied.push(JSON.parse(String(init?.body)));
+        return reply(200, receipt([{ key: 't01' }, { key: 't02' }]));
+      }
+      return undefined;
+    };
+    const started = await ada.call('POST', '/agor-pack/cloud/transfers', { export_id, ref });
+    const id = (started.body as AgorCloudTransfer).transfer_id;
+    expect(await pollTransfer(fx, id, (t) => t.status !== 'uploading')).toMatchObject({
+      status: 'applied',
+    });
+    const more = await ada.call('POST', `/agor-pack/cloud/transfers/${id}/apply`, {
+      teammates: ['t02'],
+    });
+    expect(more.status).toBe(201);
+    expect(applied).toEqual([{ teammates: ['t02'], board_id: null }]);
+    expect((more.body as AgorCloudTransfer).import?.results).toHaveLength(2);
+  })
+);
+
+dbTest('a transient refresh failure keeps the link; a rejection forgets it', async ({ db }) =>
+  withFixture(db, async (fx) => {
+    const ada = client(fx, fx.ada);
+    expect((await ada.complete(await ada.start())).status).toBe(201);
+    const service = new AgorCloudLinkService(fx.ctx(fx.ada));
+    let answer = 503;
+    cloud.hook = async (pathname) =>
+      pathname === '/authentication/refresh'
+        ? reply(answer, { message: answer === 401 ? 'Invalid or expired refresh token' : 'busy' })
+        : undefined;
+    await expect(service.session({ force: true })).rejects.toThrow('is unreachable right now');
+    expect((await service.status()).link).not.toBeNull();
+    answer = 429;
+    await expect(service.session({ force: true })).rejects.toThrow('is unreachable right now');
+    expect((await service.status()).link).not.toBeNull();
+    answer = 401;
+    await expect(service.session({ force: true })).rejects.toThrow('sign-in expired');
+    expect((await service.status()).link).toBeNull();
+  })
+);
+
+// The owner rule runs before (and regardless of) the branch access check, so
+// a Manager grant would not help either: the answer is 403, not the access 400.
+dbTest("a member can't export a teammate they don't own", async ({ db }) =>
+  withFixture(db, async (fx) => {
+    const exported = await client(fx, fx.bea).call('POST', '/agor-pack/exports', {
+      branch_ids: [fx.seeded.branch.branch_id],
+      sections: ['board'],
+      sessions: 'none',
+      include_others_sessions: false,
+    });
+    expect(exported.status).toBe(403);
+    expect(JSON.stringify(exported.body)).toContain('Only the owner');
+    // The owner still can.
+    expect((await stageExport(fx)).export_id).toBeTruthy();
+  })
 );

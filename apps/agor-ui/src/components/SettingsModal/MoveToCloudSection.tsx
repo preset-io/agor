@@ -91,6 +91,9 @@ const hostOf = (url: string) => {
   }
 };
 
+/** The daemon's export rule: members move teammates they own; admins anyone's. */
+const ownerOf = (branch: Branch) => branch.primary_owner_user_id ?? branch.created_by;
+
 export interface MoveToCloudSectionProps {
   currentUser?: User | null;
   branchById: Map<string, Branch>;
@@ -115,7 +118,7 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
           (branch) =>
             !branch.archived &&
             isTeammate(branch) &&
-            (isAdmin || branch.created_by === currentUser?.user_id)
+            (isAdmin || ownerOf(branch) === currentUser?.user_id)
         )
         .sort((a, b) =>
           (getTeammateConfig(a)?.displayName ?? a.name).localeCompare(
@@ -127,7 +130,7 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
   const mine = useMemo(
     () =>
       teammates
-        .filter((branch) => branch.created_by === currentUser?.user_id)
+        .filter((branch) => ownerOf(branch) === currentUser?.user_id)
         .map((branch) => branch.branch_id),
     [teammates, currentUser?.user_id]
   );
@@ -171,11 +174,12 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
     };
   }, []);
 
-  // A staged pack opens on its review with every importable teammate selected.
+  // A staged pack opens on its review with every importable teammate selected
+  // (on an applied one: the teammates not imported yet).
   const showTransfer = useCallback((next: AgorCloudTransfer) => {
     setTransfer(next);
     const receipt = next.import;
-    if (next.status === 'staged' && receipt) {
+    if ((next.status === 'staged' || next.status === 'applied') && receipt) {
       setReviewKeys(receipt.dry_run.filter((d) => !locked(receipt, d.key)).map((d) => d.key));
     }
   }, []);
@@ -353,6 +357,11 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
                   : []),
               ]}
             />
+            <Typography.Text type="secondary">
+              This install keeps your Cloud sign-in until you disconnect or finish. It is also
+              forgotten after 7 days unused (checked the next time it is used); the Cloud session
+              itself expires after 30 days.
+            </Typography.Text>
             <Space>
               <Button type="primary" onClick={() => setStep(1)}>
                 Continue
@@ -418,28 +427,27 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
       );
     }
     if (!receipt) return null;
-    if (transfer.status === 'staged') {
-      return (
-        <Flex vertical gap="middle">
-          <Typography.Text type="secondary">
-            Here is what {host} will create. You will own everything imported; schedules arrive
-            paused and each teammate gets its own board.
-          </Typography.Text>
-          <PackReviewTable receipt={receipt} selected={reviewKeys} onSelect={setReviewKeys} />
-          <Flex justify="flex-end">
-            <Button
-              type="primary"
-              icon={<CloudUploadOutlined />}
-              loading={busy === 'apply'}
-              disabled={reviewKeys.length === 0}
-              onClick={apply}
-            >
-              Import {pluralize(reviewKeys.length, 'teammate')} into Agor Cloud
-            </Button>
-          </Flex>
+    const review = (
+      <Flex vertical gap="middle">
+        <Typography.Text type="secondary">
+          Here is what {host} will create. You will own everything imported; schedules arrive paused
+          and each teammate gets its own board.
+        </Typography.Text>
+        <PackReviewTable receipt={receipt} selected={reviewKeys} onSelect={setReviewKeys} />
+        <Flex justify="flex-end">
+          <Button
+            type="primary"
+            icon={<CloudUploadOutlined />}
+            loading={busy === 'apply'}
+            disabled={reviewKeys.length === 0}
+            onClick={apply}
+          >
+            Import {pluralize(reviewKeys.length, 'teammate')} into Agor Cloud
+          </Button>
         </Flex>
-      );
-    }
+      </Flex>
+    );
+    if (transfer.status === 'staged') return review;
     if (transfer.status === 'applying') {
       return (
         <Alert
@@ -465,27 +473,31 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
         />
       );
     }
+    const remaining = receipt.manifest.teammates.some((t) => !locked(receipt, t.key));
     return (
-      <Result
-        status="success"
-        title={`${pluralize(receipt.results.length, 'teammate')} imported into ${host}`}
-        subTitle="Open the reconnect checklist in Agor Cloud to add credentials and turn schedules back on. Files keep restoring in the background."
-        extra={[
-          <Button
-            key="open"
-            type="primary"
-            icon={<ExportOutlined />}
-            href={transfer.open_url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Open reconnect checklist in Agor Cloud
-          </Button>,
-          <Button key="next" onClick={() => setStep(3)}>
-            Next: switch over here
-          </Button>,
-        ]}
-      />
+      <Flex vertical gap="middle">
+        <Result
+          status="success"
+          title={`${pluralize(receipt.results.length, 'teammate')} imported into ${host}`}
+          subTitle="Open the reconnect checklist in Agor Cloud to add credentials and turn schedules back on. Files keep restoring in the background."
+          extra={[
+            <Button
+              key="open"
+              type="primary"
+              icon={<ExportOutlined />}
+              href={transfer.open_url}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open reconnect checklist in Agor Cloud
+            </Button>,
+            <Button key="next" onClick={() => setStep(3)}>
+              Next: switch over here
+            </Button>,
+          ]}
+        />
+        {remaining && review}
+      </Flex>
     );
   };
 

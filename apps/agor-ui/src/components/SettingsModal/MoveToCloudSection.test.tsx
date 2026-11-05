@@ -125,9 +125,12 @@ describe('MoveToCloudSection', () => {
     expect(await screen.findByText(/Sending to/)).toBeInTheDocument();
   });
 
-  it("doesn't offer a member other people's teammates", async () => {
+  it("doesn't offer a member teammates someone else owns (even ones they created)", async () => {
     vi.mocked(getCloudLink).mockResolvedValue(signedIn);
-    const others = new Map([['b2', teammate('b2', 'someone-else', 'Bea')]]);
+    // Created by this member, but owned by someone else: ownership decides.
+    const others = new Map([
+      ['b2', { ...teammate('b2', 'u1', 'Bea'), primary_owner_user_id: 'someone-else' } as Branch],
+    ]);
     mount(<MoveToCloudSection currentUser={member} branchById={others} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
     expect(await screen.findByText('You have no AI teammates to move yet.')).toBeInTheDocument();
@@ -178,5 +181,48 @@ describe('MoveToCloudSection', () => {
       name: /Open reconnect checklist in Agor Cloud/,
     });
     expect(open).toHaveAttribute('href', `${WORKSPACE}/ui/settings/teammates?import=imp-1`);
+  });
+
+  it('offers the teammates an earlier import left out', async () => {
+    vi.mocked(getCloudLink).mockResolvedValue(signedIn);
+    vi.mocked(exportPack).mockResolvedValue({
+      export_id: 'e1',
+      ref: 'r1',
+      size: 10,
+      filename: 'team.agorpack',
+      manifest: receipt.manifest,
+    });
+    const two = {
+      ...receipt,
+      status: 'applied',
+      dry_run: [...receipt.dry_run, { ...receipt.dry_run[0], key: 't02', display_name: 'Cy' }],
+      manifest: {
+        teammates: [
+          ...receipt.manifest.teammates,
+          { ...receipt.manifest.teammates[0], key: 't02', display_name: 'Cy' },
+        ],
+      },
+      results: [{ key: 't01', branch_id: 'cloud-b1', filesystem: 'ready' }],
+    } as unknown as AgorPackImport;
+    vi.mocked(startCloudTransfer).mockResolvedValue({
+      transfer_id: 'tr1',
+      status: 'applied',
+      bytes_sent: 10,
+      bytes_total: 10,
+      workspace_url: WORKSPACE,
+      import: two,
+      open_url: `${WORKSPACE}/ui/settings/teammates?import=imp-1`,
+    });
+    vi.mocked(applyCloudTransfer).mockReturnValue(new Promise(() => undefined));
+    mount(<MoveToCloudSection currentUser={member} branchById={branches} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+    const send = await screen.findByRole('button', { name: /Send to Agor Cloud/ });
+    await waitFor(() => expect(send).toBeEnabled());
+    fireEvent.click(send);
+    expect(await screen.findByText(/1 teammate imported into/)).toBeInTheDocument();
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Import 1 teammate into Agor Cloud/ })
+    );
+    expect(applyCloudTransfer).toHaveBeenCalledWith('tr1', ['t02']);
   });
 });

@@ -5,13 +5,16 @@
  * The daemon streams the staged file to the workspace's `/agor-pack/uploads`
  * with the linked session (whole-file retry: the workspace stages a pack once
  * per content hash, so a resend returns the same receipt), and proxies apply
- * and receipt reads. Transfer records live in this process: the UI polls the
- * daemon that started the send.
+ * and receipt reads. A transfer is bound to the sign-in it started with (its
+ * generation, workspace, and Cloud user): if the user disconnects or signs in
+ * again, every later request of that transfer stops instead of following the
+ * new link. Transfer records live in this process: the UI polls the daemon
+ * that started the send.
  */
 
 import { Readable, Transform } from 'node:stream';
 import { runWithTenantContext } from '@agor/core/db';
-import { BadRequest, NotFound } from '@agor/core/feathers';
+import { BadRequest, Conflict, NotFound } from '@agor/core/feathers';
 import { generateId } from '@agor/core/ids';
 import {
   AGOR_PACK,
@@ -20,7 +23,11 @@ import {
   agorCloudReconnectUrl,
 } from '@agor/core/types';
 import { getBlobStagingStore } from '../utils/upload-staging.js';
-import { type AgorCloudLinkContext, AgorCloudLinkService } from './agor-cloud-link.js';
+import {
+  AGOR_CLOUD_LINK_CHANGED,
+  type AgorCloudLinkContext,
+  AgorCloudLinkService,
+} from './agor-cloud-link.js';
 import { agorPackBlob } from './agor-pack-export.js';
 
 const UPLOAD_ATTEMPTS = 3;
@@ -33,6 +40,9 @@ interface TransferRecord extends AgorCloudTransfer {
   tenant_id: string;
   user_id: string;
   updated_at: number;
+  /** The sign-in this transfer was started with. */
+  link_generation: string;
+  cloud_user_id: string | null;
 }
 
 const transfers = new Map<string, TransferRecord>();
@@ -44,7 +54,14 @@ function prune(now = Date.now()): void {
 }
 
 function publicView(record: TransferRecord): AgorCloudTransfer {
-  const { tenant_id: _tenant, user_id: _user, updated_at: _updated, ...view } = record;
+  const {
+    tenant_id: _tenant,
+    user_id: _user,
+    updated_at: _updated,
+    link_generation: _generation,
+    cloud_user_id: _cloudUser,
+    ...view
+  } = record;
   return view;
 }
 
@@ -68,9 +85,15 @@ async function cloudError(response: Response): Promise<CloudHttpError> {
   return new CloudHttpError(message, response.status);
 }
 
-/** Network failures and 5xx are worth a whole-file resend; 4xx are not. */
+/**
+ * Network failures, 5xx, and 429 are worth a whole-file resend. Cloud 4xx are
+ * not, nor are our own refusals (a changed or expired link), which carry a
+ * Feathers status code.
+ */
 const retryable = (error: unknown) =>
-  !(error instanceof CloudHttpError) || error.status >= 500 || error.status === 429;
+  error instanceof CloudHttpError
+    ? error.status >= 500 || error.status === 429
+    : typeof (error as { code?: unknown })?.code !== 'number';
 
 export class AgorCloudTransferService {
   private readonly link: AgorCloudLinkService;
@@ -79,24 +102,39 @@ export class AgorCloudTransferService {
     this.link = new AgorCloudLinkService(ctx);
   }
 
-  /** Fetch a workspace route with the linked session, refreshing once on 401. */
-  private async cloudFetch(
-    path: string,
-    init: (bearer: string) => RequestInit
-  ): Promise<{ response: Response; workspaceUrl: string }> {
-    let session = await this.link.session();
-    let response = await fetch(`${session.workspaceUrl}${path}`, init(session.accessToken));
-    if (response.status === 401) {
-      await response.body?.cancel().catch(() => undefined);
-      session = await this.link.session(true);
-      response = await fetch(`${session.workspaceUrl}${path}`, init(session.accessToken));
+  /**
+   * The linked session, only while it is the sign-in this transfer started
+   * with (same generation, workspace, and Cloud user).
+   */
+  private async session(record: TransferRecord, force = false) {
+    const session = await this.link.session({ force, generation: record.link_generation });
+    if (
+      session.workspaceUrl !== record.workspace_url ||
+      session.cloudUserId !== record.cloud_user_id
+    ) {
+      throw new Conflict(AGOR_CLOUD_LINK_CHANGED);
     }
-    if (!response.ok) throw await cloudError(response);
-    return { response, workspaceUrl: session.workspaceUrl };
+    return session;
   }
 
-  private async cloudJson<T>(path: string, body?: unknown): Promise<T> {
-    const { response } = await this.cloudFetch(path, (bearer) => ({
+  /** Fetch a route of the transfer's workspace, refreshing the session once on 401. */
+  private async cloudFetch(
+    record: TransferRecord,
+    path: string,
+    init: (bearer: string) => RequestInit
+  ): Promise<Response> {
+    const url = `${record.workspace_url}${path}`;
+    let response = await fetch(url, init((await this.session(record)).accessToken));
+    if (response.status === 401) {
+      await response.body?.cancel().catch(() => undefined);
+      response = await fetch(url, init((await this.session(record, true)).accessToken));
+    }
+    if (!response.ok) throw await cloudError(response);
+    return response;
+  }
+
+  private async cloudJson<T>(record: TransferRecord, path: string, body?: unknown): Promise<T> {
+    const response = await this.cloudFetch(record, path, (bearer) => ({
       method: body === undefined ? 'GET' : 'POST',
       headers: {
         Authorization: `Bearer ${bearer}`,
@@ -129,16 +167,18 @@ export class AgorCloudTransferService {
     const store = getBlobStagingStore();
     // Bound to the creator, like the download route.
     const meta = await store.inspect(blob);
-    const { workspaceUrl } = await this.link.session();
+    const session = await this.link.session();
     const record: TransferRecord = {
       transfer_id: generateId(),
       status: 'uploading',
       bytes_sent: 0,
       bytes_total: meta.size,
-      workspace_url: workspaceUrl,
+      workspace_url: session.workspaceUrl,
       tenant_id: this.ctx.tenantId,
       user_id: this.ctx.user.user_id,
       updated_at: Date.now(),
+      link_generation: session.generation,
+      cloud_user_id: session.cloudUserId,
     };
     transfers.set(record.transfer_id, record);
     console.log(`[agor-cloud] transfer ${record.transfer_id} started (${meta.size} bytes)`);
@@ -158,7 +198,7 @@ export class AgorCloudTransferService {
     let lastError: unknown;
     for (let attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt++) {
       try {
-        const { response } = await this.cloudFetch('/agor-pack/uploads', (bearer) => {
+        const response = await this.cloudFetch(record, '/agor-pack/uploads', (bearer) => {
           record.bytes_sent = 0;
           const counter = new Transform({
             transform(chunk: Buffer, _encoding, callback) {
@@ -208,32 +248,43 @@ export class AgorCloudTransferService {
   /** The transfer, with the workspace receipt refreshed while it applies. */
   async get(transferId: string): Promise<AgorCloudTransfer> {
     const record = this.owned(transferId);
-    if (record.status === 'applying' && record.import) {
-      await this.track(record, () =>
-        this.cloudJson<AgorPackImport>(`/agor-pack/imports/${record.import?.import_id}`)
-      );
+    const importId = record.import?.import_id;
+    if (record.status === 'applying' && importId) {
+      try {
+        setReceipt(
+          record,
+          await this.cloudJson<AgorPackImport>(record, `/agor-pack/imports/${importId}`)
+        );
+      } catch (error) {
+        // The link changed under this transfer: stop following it.
+        if (!(error instanceof Conflict)) throw error;
+        record.status = 'failed';
+        record.error = error.message;
+        record.updated_at = Date.now();
+      }
     }
     return publicView(record);
   }
 
-  /** Apply the staged pack in the workspace (new board per teammate). */
+  /**
+   * Apply teammates of the staged pack in the workspace (new board per
+   * teammate). An applied receipt can apply its remaining teammates later;
+   * the workspace keeps the ones already imported as they are.
+   */
   async apply(transferId: string, teammates: string[]): Promise<AgorCloudTransfer> {
     const record = this.owned(transferId);
-    if (!record.import || (record.status !== 'staged' && record.status !== 'failed')) {
+    if (!record.import || record.status === 'uploading' || record.status === 'applying') {
       throw new BadRequest('This transfer is not ready to import');
     }
     const importId = record.import.import_id;
-    await this.track(record, () =>
-      this.cloudJson<AgorPackImport>(`/agor-pack/imports/${importId}/apply`, {
+    setReceipt(
+      record,
+      await this.cloudJson<AgorPackImport>(record, `/agor-pack/imports/${importId}/apply`, {
         teammates,
         board_id: null,
       })
     );
     return publicView(record);
-  }
-
-  private async track(record: TransferRecord, read: () => Promise<AgorPackImport>) {
-    setReceipt(record, await read());
   }
 }
 

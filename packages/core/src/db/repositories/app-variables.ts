@@ -200,6 +200,72 @@ export class AppVariableRepository {
     return this.set({ namespace, key, value, encrypted: true, updated_by: updatedBy ?? null });
   }
 
+  /** The plain value with its ciphertext, the version {@link compareAndSetEncrypted} takes. */
+  async getPlainVersioned(
+    namespace: string,
+    key: string
+  ): Promise<{ value: string | null; version: string | null }> {
+    const variable = await this.find(namespace, key);
+    return { value: await this.plainValue(variable), version: variable?.value_encrypted ?? null };
+  }
+
+  /**
+   * Write (or, with `value` null, delete) an encrypted value only if the row
+   * still holds the `expected` ciphertext; `expected` null means "only if
+   * there is no row". Every encryption is freshly salted, so the ciphertext
+   * read earlier doubles as a row version. True when the write applied.
+   */
+  async compareAndSetEncrypted(
+    namespace: string,
+    key: string,
+    expected: string | null,
+    value: string | null,
+    updatedBy?: UserID | null
+  ): Promise<boolean> {
+    const now = new Date();
+    if (expected === null) {
+      if (value === null) return !(await this.find(namespace, key));
+      const rows = await insert(this.db, appVariables)
+        .values({
+          ...currentTenantInsert(),
+          variable_id: generateId(),
+          namespace,
+          key,
+          value_text: null,
+          value_encrypted: encryptApiKey(value),
+          is_encrypted: true,
+          content_type: 'text/plain',
+          metadata: null,
+          updated_by: updatedBy ?? null,
+          created_at: now,
+          updated_at: now,
+        } satisfies AppVariableInsert)
+        .onConflictDoNothing()
+        .returning()
+        .all();
+      return rows.length === 1;
+    }
+    const matches = and(
+      eq(appVariables.namespace, namespace),
+      eq(appVariables.key, key),
+      eq(appVariables.value_encrypted, expected)
+    );
+    if (value === null) {
+      const rows = await deleteFrom(this.db, appVariables).where(matches).returning().all();
+      return rows.length === 1;
+    }
+    const rows = await update(this.db, appVariables)
+      .set({
+        value_encrypted: encryptApiKey(value),
+        updated_by: updatedBy ?? null,
+        updated_at: now,
+      })
+      .where(matches)
+      .returning()
+      .all();
+    return rows.length === 1;
+  }
+
   async delete(namespace: string, key: string): Promise<void> {
     await deleteFrom(this.db, appVariables)
       .where(and(eq(appVariables.namespace, namespace), eq(appVariables.key, key)))
