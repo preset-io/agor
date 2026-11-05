@@ -6,6 +6,7 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
+import { shortId } from '@agor/core/db';
 import type { AgorPackImport } from '@agor/core/types';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -82,7 +83,7 @@ export default class PackImport extends BaseCommand {
         }
         for (const result of receipt.results) {
           this.logToStderr(
-            chalk.green(`✓ ${result.display_name} → branch ${result.branch_id.slice(0, 8)}`) +
+            chalk.green(`✓ ${result.display_name} → branch ${shortId(result.branch_id)}`) +
               chalk.dim(` (files: ${result.filesystem})`)
           );
           for (const warning of result.warnings) this.logToStderr(chalk.yellow(`    ! ${warning}`));
