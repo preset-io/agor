@@ -139,40 +139,43 @@ export const ReconnectChecklist: React.FC<ReconnectChecklistProps> = ({
 
   return (
     <Flex vertical gap="middle">
-      <List
-        size="small"
-        bordered
-        header={<Typography.Text strong>Imported</Typography.Text>}
-        dataSource={receipt.results}
-        renderItem={(result) => (
-          <List.Item
-            actions={
-              result.filesystem === 'failed'
-                ? [
-                    <Button
-                      key="retry"
-                      size="small"
-                      loading={retrying === result.key}
-                      onClick={() => retryFiles(result.key)}
-                    >
-                      Retry
-                    </Button>,
-                  ]
-                : undefined
-            }
-          >
-            <Space wrap>
-              <Typography.Text>{result.display_name}</Typography.Text>
-              <Tag color={FILESYSTEM_TAG[result.filesystem]?.color}>
-                {FILESYSTEM_TAG[result.filesystem]?.label}
-              </Tag>
-              {result.filesystem_error && (
-                <Typography.Text type="danger">{result.filesystem_error}</Typography.Text>
-              )}
-            </Space>
-          </List.Item>
-        )}
-      />
+      {/* Nothing imported yet (still applying, or stopped before a teammate finished). */}
+      {receipt.results.length > 0 && (
+        <List
+          size="small"
+          bordered
+          header={<Typography.Text strong>Imported</Typography.Text>}
+          dataSource={receipt.results}
+          renderItem={(result) => (
+            <List.Item
+              actions={
+                result.filesystem === 'failed'
+                  ? [
+                      <Button
+                        key="retry"
+                        size="small"
+                        loading={retrying === result.key}
+                        onClick={() => retryFiles(result.key)}
+                      >
+                        Retry
+                      </Button>,
+                    ]
+                  : undefined
+              }
+            >
+              <Space wrap>
+                <Typography.Text>{result.display_name}</Typography.Text>
+                <Tag color={FILESYSTEM_TAG[result.filesystem]?.color}>
+                  {FILESYSTEM_TAG[result.filesystem]?.label}
+                </Tag>
+                {result.filesystem_error && (
+                  <Typography.Text type="danger">{result.filesystem_error}</Typography.Text>
+                )}
+              </Space>
+            </List.Item>
+          )}
+        />
+      )}
 
       {envRequirements.size > 0 && (
         <div>

@@ -183,6 +183,8 @@ describe('ImportPackWizard', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Import 1 teammate' }));
     expect(await within(dialog).findByText('The import stopped part-way')).toBeInTheDocument();
     expect(within(dialog).getByText(/clone failed/)).toBeInTheDocument();
+    // No empty "Imported" list while nothing has been imported yet.
+    expect(within(dialog).queryByText('Imported')).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Resume' }));
     await waitFor(() => expect(apply).toHaveBeenCalledTimes(2));
     expect(apply).toHaveBeenLastCalledWith(receipt.import_id, {
