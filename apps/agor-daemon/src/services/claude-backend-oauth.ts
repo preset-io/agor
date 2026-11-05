@@ -410,6 +410,26 @@ export class ClaudeBackendOAuth {
     )
       return deliver();
     type Claim = { row: ProviderOAuthGrant; fence: ProviderOAuthRefreshFence };
+    type Outcome = 'cancelled' | 'rejected' | 'invalid' | 'ambiguous';
+    const classify = (error: unknown): Outcome =>
+      error instanceof BackendRefreshFailure ? error.category : 'ambiguous';
+    const logFailure = (outcome: Outcome, error: unknown, grantState: string) => {
+      const response = error instanceof BackendRefreshFailure ? error.response : undefined;
+      const source = !response
+        ? 'internal'
+        : response.httpStatus === undefined
+          ? 'network'
+          : 'provider';
+      const line =
+        `[claude_oauth.refresh] event=failed task_id=${taskId ?? 'none'} outcome=${outcome} ` +
+        `grant_state=${grantState} source=${source} ` +
+        `http_status=${response?.httpStatus ?? 'none'} body=${response?.body ?? 'none'} ` +
+        `provider_error=${response?.providerError ?? 'none'}`;
+      if (outcome === 'cancelled') console.info(line);
+      else console.warn(line);
+    };
+    // The owner's last failure, so it is still logged when settle() never runs.
+    let failure: unknown;
     const observe = async (generation: number) => {
       const deadline = Date.now() + ROTATING_GRANT_OBSERVE_TIMEOUT_MS;
       do {
@@ -473,7 +493,12 @@ export class ClaudeBackendOAuth {
               this.masterSecret
             )
           );
-          return this.exchange(claim.row, refresh, () => currentClaim(claim));
+          try {
+            return await this.exchange(claim.row, refresh, () => currentClaim(claim));
+          } catch (error) {
+            failure = error;
+            throw error;
+          }
         },
         commit: ({ fence }, pair) =>
           this.writeUnit(tenantId, async (db) => {
@@ -493,15 +518,17 @@ export class ClaudeBackendOAuth {
         deliver,
         observe: ({ fence }) => observe(fence.refreshGeneration),
         recoverCommitted: async ({ fence }) => {
-          const row = await this.get(tenantId, userId);
+          const row = await this.get(tenantId, userId).catch((error) => {
+            logFailure(classify(failure), failure, 'unchanged');
+            throw error;
+          });
           return exact(row) &&
             row.state === 'idle' &&
             row.refresh_success_generation >= fence.refreshGeneration
             ? { value: await deliver() }
             : null;
         },
-        classify: (error) =>
-          error instanceof BackendRefreshFailure ? error.category : 'ambiguous',
+        classify,
         settle: async ({ fence }, outcome, error) => {
           const state =
             outcome === 'invalid'
@@ -509,7 +536,6 @@ export class ClaudeBackendOAuth {
               : outcome === 'ambiguous'
                 ? 'ambiguous'
                 : 'idle';
-          const response = error instanceof BackendRefreshFailure ? error.response : undefined;
           let settled = false;
           try {
             settled = await this.writeUnit(tenantId, (db) =>
@@ -522,27 +548,20 @@ export class ClaudeBackendOAuth {
               )
             );
           } finally {
-            const source = !response
-              ? 'internal'
-              : response.httpStatus === undefined
-                ? 'network'
-                : 'provider';
-            const line =
-              `[claude_oauth.refresh] event=failed task_id=${taskId ?? 'none'} outcome=${outcome} ` +
-              `grant_state=${settled ? state : 'unchanged'} source=${source} ` +
-              `http_status=${response?.httpStatus ?? 'none'} body=${response?.body ?? 'none'} ` +
-              `provider_error=${response?.providerError ?? 'none'}`;
-            if (outcome === 'cancelled') console.info(line);
-            else console.warn(line);
+            logFailure(outcome, error, settled ? state : 'unchanged');
           }
         },
       }
     ).catch(async () => {
-      const row = await this.get(tenantId, userId).catch(() => undefined);
-      if (row !== undefined && grantNeedsReconnect(row)) {
+      // Ask about the user's current selection, not this attempt's grant.
+      if (await this.reconnectRequired(tenantId, userId).catch(() => false)) {
         throw new Unavailable(CLAUDE_RECONNECT_REQUIRED_MESSAGE, {
           code: 'claude_reconnect_required',
         });
+      }
+      const row = await this.get(tenantId, userId).catch(() => undefined);
+      if (row !== undefined && !exact(row)) {
+        throw new Forbidden('Claude credential selection changed. Start a new task.');
       }
       throw new Unavailable(RETRY_LATER_MESSAGE);
     });
