@@ -70,7 +70,7 @@ export interface AgorPackRouteContext {
   config: DeepReadonly<AgorConfig>;
   agorVersion: string;
   /** The daemon's long authenticated route registrar. */
-  registerRoute: typeof registerAuthenticatedRoute;
+  registerLongAuthenticatedRoute: typeof registerAuthenticatedRoute;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   /** Upload auth middleware (JWT or personal API key) for the byte-stream routes. */
   streamAuth: (req: PackRequest, res: Response, next: NextFunction) => unknown;
@@ -107,7 +107,7 @@ export function sendPackError(res: Response, error: unknown): void {
 }
 
 export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
-  const { app, db, config, registerRoute, requireAuth, streamAuth } = ctx;
+  const { app, db, config, registerLongAuthenticatedRoute, requireAuth, streamAuth } = ctx;
   const multiTenancy = resolveMultiTenancyConfig(config as AgorConfig);
   const member = (action: string) => ({ role: ROLES.MEMBER, action });
 
@@ -127,7 +127,7 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
     }
   };
 
-  registerRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/agor-pack/preflight',
     {
@@ -148,7 +148,7 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
     requireAuth
   );
 
-  registerRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/agor-pack/exports',
     {
@@ -201,7 +201,7 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
     requireAuth
   );
 
-  registerRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/agor-pack/imports',
     {
@@ -213,7 +213,7 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
     requireAuth
   );
 
-  registerRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/agor-pack/imports/:importId/apply',
     {
@@ -242,7 +242,7 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
     requireAuth
   );
 
-  registerRoute(
+  registerLongAuthenticatedRoute(
     app,
     '/agor-pack/switch-over/:branchId',
     {

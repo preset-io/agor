@@ -244,6 +244,32 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   },
 
   // --------------------------------------------------------------------------
+  // `.agorpack` transfer (routes/agor-pack.ts). Long routes: tenant identity
+  // and write admission only; the pack services open a short unit per read or
+  // write, and apply hands its claimed run to deferWithTenantContext.
+  // --------------------------------------------------------------------------
+  'agor-pack/preflight': {
+    scopeClass: 'identity-only',
+    why: 'Reads each teammate (branch, sessions, Knowledge, schedules) in its own short unit.',
+  },
+  'agor-pack/exports': {
+    scopeClass: 'identity-only',
+    why: 'Streams a pack while reading rows in short units and running the executor collect leg; no transaction is held across the stream or the spawn.',
+  },
+  'agor-pack/imports': {
+    scopeClass: 'identity-only',
+    why: 'One short read of the caller-owned receipt.',
+  },
+  'agor-pack/imports/:importId/apply': {
+    scopeClass: 'identity-only',
+    why: 'Claims the receipt in one short unit; the run (repo clone, rows, files) is deferred with tenant context and opens its own unit per step.',
+  },
+  'agor-pack/switch-over/:branchId': {
+    scopeClass: 'identity-only',
+    why: 'Patches schedules and gateway channels through their services, each in its own scope, then saves the branch state in one short unit.',
+  },
+
+  // --------------------------------------------------------------------------
   // Repository `.agor.yml` import. The file is read by an executor, so like
   // retry-provisioning above it is a long route: no request-long transaction
   // is held across the spawn.

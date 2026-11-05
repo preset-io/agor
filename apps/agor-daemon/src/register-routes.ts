@@ -3169,7 +3169,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     db,
     config,
     agorVersion: AGOR_VERSION,
-    registerRoute: registerLongAuthenticatedRoute,
+    registerLongAuthenticatedRoute,
     requireAuth,
     streamAuth: createUploadAuthMiddleware({
       authentication: app.service('authentication'),

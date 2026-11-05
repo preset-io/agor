@@ -100,7 +100,14 @@ export async function createPackFixture(input: {
       config,
       agorVersion: '0.0.0-test',
       // The daemon's long-route registrar: tenant identity + write gate, no transaction.
-      registerRoute: (routeApp, path, service, authConfig, requireAuth, options = {}) =>
+      registerLongAuthenticatedRoute: (
+        routeApp,
+        path,
+        service,
+        authConfig,
+        requireAuth,
+        options = {}
+      ) =>
         registerAuthenticatedRoute(routeApp, path, service, authConfig, requireAuth, {
           ...options,
           around: [
