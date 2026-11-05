@@ -38,6 +38,7 @@ import {
 import { LocalUploadStagingStore } from '../src/host/local/upload-staging-store.js';
 import type { RegisterHooksContext } from '../src/register-hooks.js';
 import { createUploadAuthMiddleware } from '../src/register-routes.js';
+import { registerAgorCloudRoutes } from '../src/routes/agor-cloud.js';
 import { registerAgorPackRoutes } from '../src/routes/agor-pack.js';
 import { AgorPackExporter, type AgorPackServiceContext } from '../src/services/agor-pack-export.js';
 import { KnowledgeDocumentsService } from '../src/services/knowledge-documents.js';
@@ -94,40 +95,43 @@ export async function createPackFixture(input: {
         },
       });
     }
+    // The daemon's long-route registrar: tenant identity + write gate, no transaction.
+    const registerLongAuthenticatedRoute: typeof registerAuthenticatedRoute = (
+      routeApp,
+      path,
+      service,
+      authConfig,
+      requireAuth,
+      options = {}
+    ) =>
+      registerAuthenticatedRoute(routeApp, path, service, authConfig, requireAuth, {
+        ...options,
+        around: [
+          createTenantDatabaseScopeAroundHook({
+            db,
+            config,
+            jwtSecret: BOARD_METADATA_TEST_JWT_SECRET,
+            transaction: false,
+          }),
+          createTenantWriteAdmissionAroundHook(db),
+        ],
+      });
+    const requireAuth = authenticate({ strategies: ['jwt'] }) as (
+      context: HookContext
+    ) => Promise<HookContext>;
     registerAgorPackRoutes({
       app,
       db,
       config,
       agorVersion: '0.0.0-test',
-      // The daemon's long-route registrar: tenant identity + write gate, no transaction.
-      registerLongAuthenticatedRoute: (
-        routeApp,
-        path,
-        service,
-        authConfig,
-        requireAuth,
-        options = {}
-      ) =>
-        registerAuthenticatedRoute(routeApp, path, service, authConfig, requireAuth, {
-          ...options,
-          around: [
-            createTenantDatabaseScopeAroundHook({
-              db,
-              config,
-              jwtSecret: BOARD_METADATA_TEST_JWT_SECRET,
-              transaction: false,
-            }),
-            createTenantWriteAdmissionAroundHook(db),
-          ],
-        }),
-      requireAuth: authenticate({ strategies: ['jwt'] }) as (
-        context: HookContext
-      ) => Promise<HookContext>,
+      registerLongAuthenticatedRoute,
+      requireAuth,
       streamAuth: createUploadAuthMiddleware({
         authentication: app.service('authentication') as never,
         multiTenancy: resolveMultiTenancyConfig(config),
       }),
     });
+    registerAgorCloudRoutes({ app, db, config, registerLongAuthenticatedRoute, requireAuth });
   });
   Object.assign(server.app, {
     sessionTokenService: { generateCommandToken: async () => 'command-token' },

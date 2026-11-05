@@ -210,6 +210,7 @@ import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
+import { registerAgorCloudRoutes } from './routes/agor-cloud.js';
 import { registerAgorPackRoutes } from './routes/agor-pack.js';
 import { registerTeamsGatewayIngressRoute } from './routes/teams-gateway-ingress.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
@@ -3174,6 +3175,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       apiKeys: { resolveHostTenant: createApiKeyHostTenantResolver({ db, config }) },
     }),
   });
+  registerAgorCloudRoutes({ app, db, config, registerLongAuthenticatedRoute, requireAuth });
 
   // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
   (app as any).post(

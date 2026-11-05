@@ -554,6 +554,17 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: `${NO_CONSUMER} Lands as schedules/gateway-channels/branches.patched.`,
   },
+  'agor-pack/cloud/link': {
+    audience: 'none',
+    why: `${NO_CONSUMER} The caller's own Agor Cloud link status.`,
+  },
+  'agor-pack/cloud/link/start': { audience: 'none', why: NO_CONSUMER },
+  'agor-pack/cloud/link/complete': { audience: 'none', why: NO_CONSUMER },
+  'agor-pack/cloud/transfers': {
+    audience: 'none',
+    why: `${NO_CONSUMER} The sender polls its transfer.`,
+  },
+  'agor-pack/cloud/transfers/:transferId/apply': { audience: 'none', why: NO_CONSUMER },
   'widgets/:id/submit': {
     audience: 'none',
     why: 'Widget input is deliberately kept out of broadcast.',

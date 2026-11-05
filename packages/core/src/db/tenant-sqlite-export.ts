@@ -12,6 +12,7 @@
 
 import { is, sql } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
+import { AGOR_CLOUD } from '../types/agor-cloud';
 import type { Database } from './client';
 import { executeRaw } from './database-wrapper';
 import * as postgresSchema from './schema.postgres';
@@ -151,10 +152,11 @@ export async function exportSqliteTenantTableRows(
     );
     const rows = rowObjects(result);
     for (const row of rows) {
+      // Same non-portable rows the PostgreSQL exporter drops.
       if (
         tableName === 'app_variables' &&
-        row.namespace === TENANT_WRITE_GATE_NAMESPACE &&
-        row.key === TENANT_WRITE_GATE_KEY
+        ((row.namespace === TENANT_WRITE_GATE_NAMESPACE && row.key === TENANT_WRITE_GATE_KEY) ||
+          row.namespace === AGOR_CLOUD.linkNamespace)
       ) {
         continue;
       }
