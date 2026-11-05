@@ -28,6 +28,7 @@ import {
   type AgorPackByteSource,
   AgorPackFormatError,
   AgorPackReader,
+  AgorPackSecretError,
   teammatePackPath,
 } from '@agor/core/agor-pack';
 import { normalizeRepoUrl } from '@agor/core/config';
@@ -120,6 +121,24 @@ const INTERRUPTED = 'The import was interrupted; apply it again to resume.';
 
 const staleBefore = () => new Date(Date.now() - CLAIM_STALE_MS);
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/**
+ * What the importer sees when apply stops: request and pack errors as they
+ * are; anything else (a database or I/O failure carries query text and row
+ * values) only as a generic line, with the details in the server log.
+ */
+function receiptError(error: unknown): string {
+  const code = (error as { code?: unknown }).code;
+  if (
+    error instanceof AgorPackFormatError ||
+    error instanceof AgorPackSecretError ||
+    (typeof code === 'number' && code >= 400 && code < 500)
+  ) {
+    return errorText(error);
+  }
+  console.error('[agor-pack] apply failed:', error);
+  return 'Something went wrong while importing; details are in the server log';
+}
 
 /** The staged pack bytes of a receipt (`<scope>:<ref>`), owned by its importer. */
 function stagedPackBlob(
@@ -515,7 +534,7 @@ export class AgorPackImporter {
     } catch (error) {
       // Lost claim: a newer worker took over and owns the receipt now.
       if (error instanceof AgorPackImportClaimLostError) return;
-      await save({ status: 'failed', error: errorText(error), release: true }).catch(
+      await save({ status: 'failed', error: receiptError(error), release: true }).catch(
         () => undefined
       );
       throw error;

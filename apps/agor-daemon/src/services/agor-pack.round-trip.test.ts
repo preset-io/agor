@@ -345,7 +345,9 @@ dbTest('a failed apply resumes where it stopped: one teammate, the same ids', as
     }
 
     const failed = await importer.get(staged.import_id);
-    expect(failed).toMatchObject({ status: 'failed', error: 'injected failure', results: [] });
+    // Internal failures reach the importer only as a generic line.
+    expect(failed).toMatchObject({ status: 'failed', results: [] });
+    expect(failed.error).toMatch(/details are in the server log/);
     const partial = await fx.unit(() =>
       new AgorPackImportRepository(fx.db).findById(staged.import_id)
     );
