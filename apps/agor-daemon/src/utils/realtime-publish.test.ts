@@ -2852,12 +2852,75 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       configureRealtimePublish({ app, ...allowed });
 
       const result = await app.runPublish(
-        { board_object_id: 'o1', branch_id: 'b1' },
+        { board_object_id: 'o1', board_id: 'board-1', branch_id: 'b1' },
         { path: 'board-objects', method: 'patch', event: 'patched', params: {} }
       );
 
       expect(delivered(result)).toEqual([member, admin, service]);
       expect(delivered(result)).not.toContain(viewer);
+    });
+
+    it('publishes a branch placement only to users who can view both the branch and the board', async () => {
+      const both = { user: user('both') };
+      const branchOnly = { user: user('branch-only') };
+      const boardOnly = { user: user('board-only') };
+      const service = { user: { _isServiceAccount: true, role: 'service' } };
+      const app = allowlistApp([both, branchOnly, boardOnly, service]);
+      configureRealtimePublish({
+        app,
+        ...repos({
+          branch: branch('b1', 'none'),
+          permissions: { both: 'view', 'branch-only': 'view', 'board-only': 'none' },
+          boardPermissions: { both: true, 'branch-only': false, 'board-only': true },
+        }),
+      });
+
+      const result = await app.runPublish(
+        { object_id: 'o1', board_id: 'private-board', branch_id: 'b1', zone_id: 'z1' },
+        { path: 'board-objects', method: 'patch', event: 'patched', params: {} }
+      );
+
+      expect(delivered(result)).toEqual([both, service]);
+    });
+
+    it('strips canvas fields from branch events for branch viewers who cannot view the board', async () => {
+      const both = { user: user('both') };
+      const branchOnly = { user: user('branch-only') };
+      const app = allowlistApp([both, branchOnly]);
+      configureRealtimePublish({
+        app,
+        ...repos({
+          branch: branch('b1', 'none'),
+          permissions: { both: 'view', 'branch-only': 'view' },
+          boardPermissions: { both: true, 'branch-only': false },
+        }),
+      });
+      const row = {
+        branch_id: 'b1',
+        name: 'feature',
+        board_id: 'private-board',
+        board_object_id: 'o1',
+        position: { x: 1, y: 2 },
+        zone_id: 'z1',
+        zone_label: 'Secret zone',
+      };
+
+      const result = (await app.runPublish(row, {
+        path: 'branches',
+        method: 'patch',
+        event: 'patched',
+        params: {},
+      })) as unknown as FakeChannel[];
+
+      expect(delivered(result)).toEqual([both, branchOnly]);
+      const dataFor = (connection: unknown) =>
+        result.find((channel) => channel.connections.includes(connection))?.data;
+      expect(dataFor(both) ?? row).toEqual(row);
+      expect(dataFor(branchOnly)).toEqual({
+        branch_id: 'b1',
+        name: 'feature',
+        board_id: 'private-board',
+      });
     });
 
     it.each([

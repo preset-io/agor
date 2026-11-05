@@ -1741,9 +1741,12 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * @param branch - Branch to enrich
    * @returns Branch with board_object_id, position, zone_id, and zone_label added (if on a board)
    */
-  async enrichWithZoneInfo(branch: Branch): Promise<BranchWithZone> {
+  async enrichWithZoneInfo(
+    branch: Branch,
+    options?: { visibleToUserId?: UUID }
+  ): Promise<BranchWithZone> {
     // Use batch enrichment for single branch (same efficient query)
-    const enriched = await this.enrichManyWithZoneInfo([branch]);
+    const enriched = await this.enrichManyWithZoneInfo([branch], options);
     return enriched[0] || branch;
   }
 
@@ -1758,9 +1761,13 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * This is correct behavior - if there's no board_object, the branch isn't in a zone.
    *
    * @param branches - Array of branches to enrich
+   * @param options.visibleToUserId - Add canvas fields only where this user can view the board
    * @returns Array of branches with board object + zone info added (where applicable)
    */
-  async enrichManyWithZoneInfo(branches: Branch[]): Promise<BranchWithZone[]> {
+  async enrichManyWithZoneInfo(
+    branches: Branch[],
+    options?: { visibleToUserId?: UUID }
+  ): Promise<BranchWithZone[]> {
     // Quick path: if no branches, return empty array
     if (branches.length === 0) {
       return [];
@@ -1791,7 +1798,19 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       })
         .from(boardObjectsTable)
         .leftJoin(boardsTable, eq(boardObjectsTable.board_id, boardsTable.board_id))
-        .where(inArray(boardObjectsTable.branch_id, branchIds))
+        .where(
+          and(
+            inArray(boardObjectsTable.branch_id, branchIds),
+            // Seeing a branch never reveals its placement on a board the viewer cannot see.
+            options?.visibleToUserId
+              ? visibleBoardReferenceAccessExists(
+                  this.db,
+                  options.visibleToUserId,
+                  boardObjectsTable.board_id
+                )
+              : undefined
+          )
+        )
         .all();
 
       // Build a map of branch_id -> board object info for O(1) lookup

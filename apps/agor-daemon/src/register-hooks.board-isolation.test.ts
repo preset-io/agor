@@ -2,11 +2,13 @@ import {
   BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
+  BranchRepository,
   CapabilityPolicyRepository,
   CardRepository,
   createTenantScopedDatabaseProxy,
   GroupRepository,
   generateId,
+  RepoRepository,
   shortId,
   UserApiKeysRepository,
   UsersRepository,
@@ -530,6 +532,88 @@ dbTest(
       expect((await comments.findById(hiddenComment.comment_id))?.content).toBe('Secret comment');
     } finally {
       socket.close();
+      await server.close();
+    }
+  },
+  30000
+);
+
+dbTest(
+  'branch responses omit canvas fields from a board the viewer cannot see',
+  async ({ db: rawDb }) => {
+    const users = new UsersRepository(rawDb);
+    const owner = await users.create({ email: 'zone-owner@example.test', role: 'member' });
+    const viewer = await users.create({ email: 'zone-viewer@example.test', role: 'member' });
+    const boards = new BoardRepository(rawDb);
+    const hidden = await boards.create({
+      name: 'Hidden',
+      created_by: owner.user_id,
+      access_mode: 'private',
+    });
+    await boards.upsertBoardObject(hidden.board_id, 'zone-secret', {
+      ...ZONE,
+      label: 'Secret zone',
+    });
+    const repo = await new RepoRepository(rawDb).create({
+      repo_type: 'remote',
+      remote_url: 'https://example.test/zone-fixture.git',
+      slug: 'zone-fixture',
+      local_path: '/tmp/zone-fixture',
+      default_branch: 'main',
+    });
+    // The branch itself is shared with Others as Viewers; its board is not.
+    const branch = await new BranchRepository(rawDb).create({
+      repo_id: repo.repo_id,
+      board_id: hidden.board_id,
+      name: 'visible-branch',
+      ref: 'visible-branch',
+      branch_unique_id: 1,
+      created_by: owner.user_id,
+      primary_owner_user_id: owner.user_id,
+      permission_source: 'override',
+      others_can: 'view',
+    });
+    await new BoardObjectRepository(rawDb).create({
+      board_id: hidden.board_id,
+      branch_id: branch.branch_id,
+      position: { x: 3, y: 4 },
+      zone_id: 'zone-secret',
+    });
+    const db = createTenantScopedDatabaseProxy(rawDb, { label: 'branch-zone-test' });
+    const server = await boardMetadataTestApp(db, {
+      database: { dialect: 'sqlite' },
+      multi_tenancy: { mode: 'static', static_tenant_id: 'branch-zone-test' },
+      execution: {},
+    } as RegisterHooksContext['config']);
+    const read = async (userId: string, path: string) => {
+      const response = await fetch(`${server.url}${path}`, {
+        headers: server.headers(userId as UserID),
+      });
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    try {
+      expect((await read(owner.user_id, `/boards/${hidden.board_id}`)).board_id).toBe(
+        hidden.board_id
+      );
+      expect(await read(owner.user_id, `/branches/${branch.branch_id}`)).toMatchObject({
+        zone_id: 'zone-secret',
+        zone_label: 'Secret zone',
+        position: { x: 3, y: 4 },
+      });
+      const seen = await read(viewer.user_id, `/branches/${branch.branch_id}`);
+      expect(seen.branch_id).toBe(branch.branch_id);
+      for (const field of ['board_object_id', 'position', 'zone_id', 'zone_label']) {
+        expect(seen).not.toHaveProperty(field);
+      }
+      const listed = await read(viewer.user_id, '/branches');
+      const rows = Array.isArray(listed) ? listed : listed.data;
+      const row = rows.find(
+        (candidate: { branch_id: string }) => candidate.branch_id === branch.branch_id
+      );
+      expect(row).toBeDefined();
+      expect(row).not.toHaveProperty('zone_label');
+    } finally {
       await server.close();
     }
   },
