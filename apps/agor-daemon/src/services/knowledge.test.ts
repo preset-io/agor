@@ -55,7 +55,12 @@ async function seedNamespace(
   db: Database,
   slug = `kb-${Date.now()}-${Math.random().toString(16).slice(2)}`
 ) {
-  return new KnowledgeNamespaceRepository(db).create({ slug, display_name: slug });
+  // Document overlay tests run inside a namespace that is open to every member.
+  return new KnowledgeNamespaceRepository(db).create({
+    slug,
+    display_name: slug,
+    others_can: 'write',
+  });
 }
 
 async function seedDocument(

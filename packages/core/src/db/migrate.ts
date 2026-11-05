@@ -135,6 +135,23 @@ export function createMigrationImpactRegistry(
 }
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
+  // SQLite and PostgreSQL number the same Knowledge migration differently.
+  ...['0119_kb_namespace_others_can_tighten', '0120_kb_namespace_others_can_tighten'].map(
+    (name) =>
+      [
+        name,
+        {
+          requiresOfflineCutover: false,
+          impact: defineMigrationImpact({
+            classification: 'data',
+            userAction: 'none',
+            rollbackCompatibility: 'compatible',
+            summary:
+              'Owned, personal, teammate and private-default Knowledge namespaces stop granting write to every member. Owners and grantees keep access; owners can reopen it in namespace settings.',
+          }),
+        },
+      ] as const
+  ),
   // SQLite and PostgreSQL number the same Teams migration differently.
   ...['0117_teams_gateway_ha', '0118_teams_gateway_ha'].map(
     (name) =>
