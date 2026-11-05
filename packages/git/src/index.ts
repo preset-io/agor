@@ -3162,9 +3162,10 @@ export async function createPackBundle(
 
 /**
  * Text added by the commits a pack bundle would carry, per file (`+` lines of
- * each commit's patch; binary files excluded). The executor scans it so a
- * token committed in unpushed history — even one deleted later — never
- * travels inside `repo.bundle`.
+ * each commit's patch; binary files excluded). Merge commits contribute their
+ * dense combined diff (`--cc`), i.e. what the merge resolution introduced.
+ * The executor scans it so a token committed in unpushed history — even one
+ * deleted later — never travels inside `repo.bundle`.
  */
 export async function readPackHistoryAdditions(
   repoPath: string,
@@ -3177,6 +3178,7 @@ export async function readPackHistoryAdditions(
     'log',
     '--format=',
     '-p',
+    '--cc',
     '--no-color',
     '--no-ext-diff',
     '--no-textconv',
@@ -3186,15 +3188,23 @@ export async function readPackHistoryAdditions(
   ]);
   const additions = new Map<string, string[]>();
   let current: string[] | null = null;
+  let inHeader = false;
+  // Prefix columns per content line: one per parent (`@@@` hunks are combined).
+  let width = 1;
   for (const line of patch.split('\n')) {
-    if (line.startsWith('+++ ')) {
+    if (line.startsWith('diff ')) {
+      current = null;
+      inHeader = true;
+    } else if (inHeader && line.startsWith('+++ ')) {
       const file = line.slice(4).replace(/^b\//, '');
       current = additions.get(file) ?? [];
       additions.set(file, current);
-    } else if (line.startsWith('diff --git ')) {
-      current = null;
-    } else if (current && line.startsWith('+')) {
-      current.push(line.slice(1));
+    } else if (line.startsWith('@@')) {
+      inHeader = false;
+      width = (/^@+/.exec(line)?.[0].length ?? 2) - 1;
+    } else if (current && !inHeader) {
+      const prefix = line.slice(0, width);
+      if (prefix.includes('+') && !prefix.includes('-')) current.push(line.slice(width));
     }
   }
   return new Map([...additions].map(([file, lines]) => [file, lines.join('\n')]));
