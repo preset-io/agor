@@ -141,13 +141,14 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
       [
         name,
         {
-          requiresOfflineCutover: false,
+          // Older daemons still store write-for-everyone on new namespaces, so none may overlap.
+          requiresOfflineCutover: true,
           impact: defineMigrationImpact({
             classification: 'data',
-            userAction: 'none',
+            userAction: 'required',
             rollbackCompatibility: 'compatible',
             summary:
-              'Owned, personal, teammate and private-default Knowledge namespaces stop granting write to every member. Owners and grantees keep access; owners can reopen it in namespace settings.',
+              'Stops Knowledge namespaces granting write to every member. Stop all daemons first: older ones keep creating member-writable namespaces. Owners can reopen access in settings.',
           }),
         },
       ] as const

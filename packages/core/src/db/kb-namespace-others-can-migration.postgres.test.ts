@@ -10,7 +10,7 @@ import {
   readKbNamespaceOthersCan,
   seedKbNamespaceOthersCanCases,
 } from './kb-namespace-others-can-migration.test-support';
-import { runMigrations } from './migrate';
+import { OfflineMigrationCutoverRequiredError, runMigrations } from './migrate';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 const url = process.env.AGOR_TEST_POSTGRES_URL;
@@ -32,7 +32,8 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           )
         );
       }
-      await runMigrations(db);
+      await expect(runMigrations(db)).rejects.toBeInstanceOf(OfflineMigrationCutoverRequiredError);
+      await runMigrations(db, { allowOfflineCutover: true });
       for (const tenant of tenants) {
         await runWithTenantDatabaseScope(db, tenant, async (scoped) => {
           expect(await readKbNamespaceOthersCan(scoped, ids.get(tenant)!)).toEqual(

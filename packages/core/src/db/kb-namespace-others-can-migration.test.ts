@@ -11,7 +11,7 @@ import {
   readKbNamespaceOthersCan,
   seedKbNamespaceOthersCanCases,
 } from './kb-namespace-others-can-migration.test-support';
-import { runMigrations } from './migrate';
+import { OfflineMigrationCutoverRequiredError, runMigrations } from './migrate';
 
 it('stops personal, teammate and private-default namespaces granting write to everyone', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'agor-kb-others-can-sqlite-'));
@@ -24,7 +24,12 @@ it('stops personal, teammate and private-default namespaces granting write to ev
     expect(await readKbNamespaceOthersCan(db, ids)).toEqual(
       KB_NAMESPACE_OTHERS_CAN_CASES.map(([row]) => row.others_can)
     );
-    await runMigrations(db);
+    // An existing database refuses this migration until every older daemon is stopped.
+    await expect(runMigrations(db)).rejects.toBeInstanceOf(OfflineMigrationCutoverRequiredError);
+    expect(await readKbNamespaceOthersCan(db, ids)).toEqual(
+      KB_NAMESPACE_OTHERS_CAN_CASES.map(([row]) => row.others_can)
+    );
+    await runMigrations(db, { allowOfflineCutover: true });
     expect(await readKbNamespaceOthersCan(db, ids)).toEqual(
       KB_NAMESPACE_OTHERS_CAN_CASES.map(([, expected]) => expected)
     );
