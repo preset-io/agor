@@ -744,7 +744,7 @@ A branch can inherit its board's defaults or override the whole package. Choosin
 | Collaborator | Viewer access plus creating and prompting branch-home Sessions                      |
 | Manager      | Collaborator access plus branch, environment, session-lifecycle, and access control |
 
-File access is selected separately as `none`, `read`, or `read/write`. A Collaborator or Manager can open a terminal only with `read` or `read/write` file access.
+File access is selected separately as `none`, `read`, or `read/write`. A Collaborator or Manager can open a terminal only with `read` or `read/write` file access. Under the filesystem sandbox or delegated execution, they also need `read` or `read/write` file access to run prompts.
 
 Each access row names one person or group. A direct person entry wins over group memberships. Otherwise group entries combine and the highest file access wins. **Others** applies only to active members of the workspace who have no direct or group match.
 
