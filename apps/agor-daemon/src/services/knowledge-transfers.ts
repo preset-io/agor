@@ -8,25 +8,21 @@ import {
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden, NotFound } from '@agor/core/feathers';
 import {
-  decodeKnowledgeDocument,
-  encodeKnowledgeDocument,
-  exportRepositoryLinks,
-  importRepositoryLinks,
-  knowledgeRepositoryFiles,
+  completedTransferManifest,
+  decodeKnowledgeRepositoryFile,
+  knowledgeRepositoryWriter,
   knowledgeTransferValidationIssues,
   knowledgeTransferValidationSummary,
   outsideKnowledgeLinks,
   parseKnowledgeYaml,
-  repositoryTransferManifest,
-  rewriteTransferLinks,
-  serializeKnowledgeYaml,
+  planKnowledgeRepositoryImport,
   transferDigest,
   transferDocumentMetadata,
   transferEntryDigest,
+  transferInventoryEntry,
   transferRequestBytes,
   transferSha256,
   validateRepositoryManifest,
-  validateTransferManifest,
 } from '@agor/core/knowledge';
 import type {
   AgorPackAuthor,
@@ -35,6 +31,7 @@ import type {
   AuthenticatedParams,
   KnowledgeTransferBody,
   KnowledgeTransferEntry,
+  KnowledgeTransferInventoryEntry,
   KnowledgeTransferPage,
   KnowledgeTransferWriteResult,
   User,
@@ -445,6 +442,20 @@ async function summarizeOutsideLinks(
   return { count, namespaces: [...slugs].sort() };
 }
 
+/** Every live document row of a namespace, across inventory pages. */
+async function inventoryRows(
+  transfers: KnowledgeTransferRepository,
+  namespaceId: string
+): Promise<KnowledgeTransferInventoryEntry[]> {
+  const rows: KnowledgeTransferInventoryEntry[] = [];
+  for (let cursor = ''; ; ) {
+    const page = await transfers.inventory(namespaceId, cursor);
+    rows.push(...page.entries);
+    if (!page.next_cursor) return rows;
+    cursor = page.next_cursor;
+  }
+}
+
 /**
  * What a teammate pack's Knowledge section would hold, for the export
  * preflight: live documents, archived ones left out, and outside links.
@@ -460,13 +471,7 @@ export async function previewKnowledgeExport(
   }
   const transfers = new KnowledgeTransferRepository(db);
   const versions = new KnowledgeDocumentVersionRepository(db);
-  const rows = [];
-  for (let cursor = ''; ; ) {
-    const page = await transfers.inventory(ns.namespace_id, cursor);
-    rows.push(...page.entries);
-    if (!page.next_cursor) break;
-    cursor = page.next_cursor;
-  }
+  const rows = await inventoryRows(transfers, ns.namespace_id);
   const bodies: string[] = [];
   for (const row of rows) {
     if (row.mime_type !== 'text/markdown' || !row.version_id) continue;
@@ -501,13 +506,7 @@ export async function exportKnowledgeRepository(
   if (!ns || ns.archived) throw new NotFound('Knowledge namespace not found');
   const transfers = new KnowledgeTransferRepository(db);
   const versions = new KnowledgeDocumentVersionRepository(db);
-  const rows = [];
-  for (let cursor = ''; ; ) {
-    const page = await transfers.inventory(ns.namespace_id, cursor);
-    rows.push(...page.entries);
-    if (!page.next_cursor) break;
-    cursor = page.next_cursor;
-  }
+  const rows = await inventoryRows(transfers, ns.namespace_id);
   const documents: KnowledgeTransferEntry[] = [];
   const bodies = new Map<string, string>();
   const omissions = new Set<string>(['acl', 'graph', 'assets']);
@@ -519,59 +518,31 @@ export async function exportKnowledgeRepository(
     const version = await versions.findById(row.version_id);
     if (typeof version?.content_text !== 'string') continue;
     const key = `d${String(documents.length + 1).padStart(6, '0')}`;
-    documents.push({
-      key,
-      path: row.path,
-      title: row.title,
-      icon_emoji: row.icon_emoji,
-      kind: row.kind,
-      status: row.status,
-      sha256: transferSha256(version.content_text),
-      bytes: Buffer.byteLength(version.content_text, 'utf8'),
-      frontmatter: row.frontmatter,
-      provenance: row.provenance,
-    });
+    documents.push(
+      transferInventoryEntry(
+        row,
+        key,
+        transferSha256(version.content_text),
+        Buffer.byteLength(version.content_text, 'utf8')
+      )
+    );
     bodies.set(key, version.content_text);
   }
   if (!options.includeHistory) omissions.add('history');
-  const manifest = validateTransferManifest({
-    format: KNOWLEDGE_TRANSFER.format,
-    version: 1,
-    completed: true,
-    consistency: 'per-document-version; non-atomic-inventory',
+  const manifest = completedTransferManifest({
     exported_at: new Date().toISOString(),
     namespace: knowledgeNamespaceProjection(ns),
     documents,
     omissions: [...omissions].sort(),
   });
-  const fileByPath = knowledgeRepositoryFiles(manifest.documents.map((doc) => doc.path));
-  const files: KnowledgeRepositoryExport['files'] = [];
+  const repository = knowledgeRepositoryWriter(manifest);
+  const files: KnowledgeRepositoryExport['files'] = [
+    { path: KNOWLEDGE_REPOSITORY.manifest, content: repository.manifestYaml() },
+  ];
   for (const doc of manifest.documents) {
-    const file = fileByPath.get(doc.path) as string;
-    const links = exportRepositoryLinks(bodies.get(doc.key) as string, manifest, fileByPath, file);
-    const { key: _key, sha256: _sha, bytes: _bytes, frontmatter, provenance, ...attributes } = doc;
-    files.push({
-      path: file,
-      content: encodeKnowledgeDocument(
-        {
-          format: KNOWLEDGE_REPOSITORY.documentFormat,
-          version: 2,
-          agor: { id: String(provenance.source_uuid), ...attributes },
-          frontmatter,
-          provenance,
-        },
-        links.content
-      ),
-    });
+    const { file, content } = repository.document(doc, bodies.get(doc.key) as string);
+    files.push({ path: file, content });
   }
-  const index = validateRepositoryManifest({
-    format: manifest.format,
-    version: 2,
-    namespace: manifest.namespace,
-    documents: [...fileByPath.values()].sort(),
-    omissions: manifest.omissions,
-  });
-  files.unshift({ path: KNOWLEDGE_REPOSITORY.manifest, content: serializeKnowledgeYaml(index) });
 
   let history: AgorPackKnowledgeHistory | null = null;
   let historyVersions = 0;
@@ -627,39 +598,33 @@ export async function importKnowledgeRepository(input: {
 }): Promise<{ documents: number; unresolvedLinks: number }> {
   const manifestText = input.files.get(KNOWLEDGE_REPOSITORY.manifest);
   if (!manifestText) throw new BadRequest('Knowledge section is missing manifest.yaml');
-  const index = validateRepositoryManifest(parseKnowledgeYaml(manifestText));
-  const decoded = [];
-  const paths = new Map<string, string>();
-  for (const file of index.documents) {
-    const text = input.files.get(file);
-    if (text === undefined) throw new BadRequest(`Missing indexed Knowledge document: ${file}`);
-    const doc = decodeKnowledgeDocument(text);
-    decoded.push({ ...doc, file });
-    paths.set(file, doc.header.agor.path);
+  let plan: ReturnType<typeof planKnowledgeRepositoryImport>;
+  try {
+    const index = validateRepositoryManifest(parseKnowledgeYaml(manifestText));
+    plan = planKnowledgeRepositoryImport(
+      index,
+      index.documents.map((file) => decodeKnowledgeRepositoryFile(file, input.files.get(file))),
+      input.namespace.slug
+    );
+  } catch (error) {
+    throw new BadRequest(error instanceof Error ? error.message : 'Invalid Knowledge section');
   }
-  const source = validateTransferManifest(repositoryTransferManifest(index, decoded));
-  const byId = new Map(decoded.map((doc) => [doc.header.agor.id, doc]));
-  const sourceIds = new Set(source.documents.map((doc) => String(doc.provenance.source_uuid)));
   const historyByPath = new Map(
     (input.history?.documents ?? []).map((doc) => [doc.path, doc.versions])
   );
   const documents = new KnowledgeDocumentsService(input.db, input.app);
   const repository = new KnowledgeDocumentRepository(input.db);
   const written: string[] = [];
-  let unresolvedLinks = 0;
+  // Links into other namespaces stay as-is by design; the export already
+  // reported them, so only genuinely broken links count here.
+  let unresolvedLinks = plan.unresolved - plan.outside;
   const localize = (body: string, file: string) => {
-    const linked = rewriteTransferLinks(body, source, input.namespace.slug);
-    const relative = importRepositoryLinks(linked.content, file, paths, input.namespace.slug);
-    // Links into other namespaces stay as-is by design; the export already
-    // reported them, so only genuinely broken links count here.
-    const outside = outsideKnowledgeLinks(body, source.namespace.slug, (id) =>
-      sourceIds.has(id)
-    ).length;
-    unresolvedLinks += linked.unresolved - outside + relative.unresolved;
-    return relative.content;
+    const local = plan.localize(body, file);
+    unresolvedLinks += local.unresolved - local.outside;
+    return local.content;
   };
-  for (const entry of source.documents) {
-    const doc = byId.get(String(entry.provenance.source_uuid));
+  for (const entry of plan.manifest.documents) {
+    const doc = plan.documents.get(entry.key);
     if (!doc) continue;
     const metadata = { ...transferDocumentMetadata(entry), ...input.importMetadata };
     const steps = [
@@ -669,7 +634,7 @@ export async function importKnowledgeRepository(input: {
           version.originally_by.name ? ` (originally by ${version.originally_by.name})` : ''
         }`,
       })),
-      { content: localize(doc.body, doc.file), summary: 'Imported current Knowledge document' },
+      { content: doc.content, summary: 'Imported current Knowledge document' },
     ];
     let documentId = (
       await repository.findByNamespaceAndPath(input.namespace.namespace_id as never, entry.path)

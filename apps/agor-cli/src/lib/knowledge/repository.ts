@@ -1,13 +1,11 @@
 import {
-  decodeKnowledgeDocument,
-  importRepositoryLinks,
+  type DecodedKnowledgeRepositoryFile,
+  decodeKnowledgeRepositoryFile,
   parseKnowledgeYaml,
-  repositoryTransferManifest,
-  rewriteTransferLinks,
+  planKnowledgeRepositoryImport,
   transferDigest,
   transferSha256,
   validateRepositoryManifest,
-  validateTransferManifest,
 } from '@agor/core/knowledge';
 import { KNOWLEDGE_REPOSITORY, KNOWLEDGE_TRANSFER } from '@agor/core/types';
 import { RepositoryDirectory } from './repository-directory';
@@ -36,59 +34,33 @@ export async function loadKnowledgeRepository(
     throw new Error('Completed manifest.yaml is required');
   }
   const index = validateRepositoryManifest(parseKnowledgeYaml(text));
-  const decoded = [];
+  const decoded: DecodedKnowledgeRepositoryFile[] = [];
   const raw = new Map<string, string>();
-  const paths = new Map<string, string>();
   let bytes = 0;
   let metadataBytes = 0;
   onDocument?.(0, index.documents.length);
   for (const file of index.documents) {
     checkAbort();
     const content = await directory.read(file, KNOWLEDGE_REPOSITORY.maxFileBytes);
-    if (content === null) throw new Error(`Missing indexed Knowledge document: ${file}`);
-    let doc: ReturnType<typeof decodeKnowledgeDocument>;
-    try {
-      doc = decodeKnowledgeDocument(content);
-    } catch (error) {
-      throw new Error(`${file}: ${(error as Error).message}`);
-    }
+    const doc = decodeKnowledgeRepositoryFile(file, content);
     bytes += Buffer.byteLength(doc.body);
-    metadataBytes += Buffer.byteLength(content) - Buffer.byteLength(doc.body);
+    metadataBytes += Buffer.byteLength(content as string) - Buffer.byteLength(doc.body);
     if (
       bytes > KNOWLEDGE_TRANSFER.maxTotalBytes ||
       metadataBytes > KNOWLEDGE_TRANSFER.maxManifestBytes
     )
       throw new Error('Knowledge repository exceeds aggregate body/metadata limits');
     decoded.push(doc);
-    raw.set(file, transferSha256(content));
-    paths.set(file, doc.header.agor.path);
+    raw.set(file, transferSha256(content as string));
     onDocument?.(decoded.length, index.documents.length);
   }
-  const source = validateTransferManifest(repositoryTransferManifest(index, decoded));
-  const byId = new Map(
-    decoded.map((doc, i) => [doc.header.agor.id, { ...doc, file: index.documents[i] }])
+  const { manifest, documents, unresolved } = planKnowledgeRepositoryImport(
+    index,
+    decoded,
+    targetSlug
   );
-  const contentByKey = new Map<string, string>();
-  const fileByKey = new Map<string, string>();
-  let unresolved = 0;
-  for (const entry of source.documents) {
-    const doc = byId.get(String(entry.provenance.source_uuid))!;
-    // Rewrite original source URLs first; otherwise generated destination URLs
-    // are mistaken for unresolved source links when importing to a new namespace.
-    const linked = rewriteTransferLinks(doc.body, source, targetSlug ?? index.namespace.slug);
-    const relative = importRepositoryLinks(
-      linked.content,
-      doc.file,
-      paths,
-      targetSlug ?? index.namespace.slug
-    );
-    unresolved += linked.unresolved + relative.unresolved;
-    entry.sha256 = transferSha256(relative.content);
-    entry.bytes = Buffer.byteLength(relative.content);
-    contentByKey.set(entry.key, relative.content);
-    fileByKey.set(entry.key, doc.file);
-  }
-  const manifest = validateTransferManifest(source);
+  const contentByKey = new Map([...documents].map(([key, doc]) => [key, doc.content]));
+  const fileByKey = new Map([...documents].map(([key, doc]) => [key, doc.file]));
   const unlisted = (await directory.documentFiles()).filter((file) => !raw.has(file));
   return {
     manifest,

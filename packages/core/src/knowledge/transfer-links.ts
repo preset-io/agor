@@ -63,7 +63,9 @@ export function rewriteKnowledgeLinks(
   return { content: rewritten, unresolved };
 }
 
-const KNOWLEDGE_LINK = /^(?:agor:\/\/kb\/|\/(?:ui\/)?(?:kb|knowledge)\/)([^/]+)\/(.*?)([?#].*)?$/;
+/** Absolute Knowledge URL: `[1]` namespace slug (or `document`), `[2]` path or id, `[3]` suffix. */
+export const KNOWLEDGE_LINK =
+  /^(?:agor:\/\/kb\/|\/(?:ui\/)?(?:kb|knowledge)\/)([^/]+)\/(.*?)([?#].*)?$/;
 
 /**
  * A Knowledge link that targets another namespace (by slug) or a document id
@@ -102,14 +104,11 @@ export function outsideKnowledgeLinks(
   return found;
 }
 
-export function rewriteTransferLinks(
-  content: string,
-  manifest: KnowledgeTransferManifest,
-  targetSlug: string
-) {
+/** Resolve one source Knowledge URL to its `targetSlug` URL (see {@link rewriteTransferLinks}). */
+export function transferLinkResolver(manifest: KnowledgeTransferManifest, targetSlug: string) {
   const byId = new Map(manifest.documents.map((doc) => [doc.provenance.source_uuid, doc]));
   const byPath = new Map(manifest.documents.map((doc) => [doc.path, doc]));
-  return rewriteKnowledgeLinks(content, (url) => {
+  return (url: string): { value?: string; unresolved?: boolean } => {
     const match = KNOWLEDGE_LINK.exec(url);
     if (!match) return {};
     try {
@@ -127,5 +126,13 @@ export function rewriteTransferLinks(
     } catch {
       return { unresolved: true };
     }
-  });
+  };
+}
+
+export function rewriteTransferLinks(
+  content: string,
+  manifest: KnowledgeTransferManifest,
+  targetSlug: string
+) {
+  return rewriteKnowledgeLinks(content, transferLinkResolver(manifest, targetSlug));
 }
