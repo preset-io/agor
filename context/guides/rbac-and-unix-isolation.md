@@ -96,7 +96,8 @@ switches are enabled. Execution-home Sessions are never shareable. Filesystem
 access is a separate `none | read | write` dimension. Terminal access is
 derived: Collaborator or Manager plus non-`none` filesystem access. Sandbox
 mounts and `{branch_fs_access}` for delegated executors use the actual prompt
-actor's effective filesystem access, never the Session owner's.
+actor's effective filesystem access, never the Session owner's. Under either,
+the daemon refuses a prompt whose actor has `none` before launching.
 
 ### Principal resolution
 
