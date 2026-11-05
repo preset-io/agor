@@ -1,18 +1,28 @@
 import type { BranchID, SessionSdkHomeScope, Task, TaskID, UserID, UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
 import { tasks as tasksTable } from '../schema';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
+import { resolveSessionRuntimeBranchAccess } from './branch-access';
 import { BranchRepository } from './branches';
 import { CapabilityPolicyRepository } from './capability-policies';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository, type TaskRuntimeAuthorityScope } from './tasks';
 import { UsersRepository } from './users';
+
+// Delegates to the real projection; single tests can substitute one revision.
+vi.mock('./branch-access', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./branch-access')>();
+  return {
+    ...actual,
+    resolveSessionRuntimeBranchAccess: vi.fn(actual.resolveSessionRuntimeBranchAccess),
+  };
+});
 
 let branchUnique = (Date.now() % 1_000_000) + 7_000_000;
 
@@ -489,6 +499,24 @@ describe('scheduled initial Task launch authority', () => {
       await expect(seed.tasks.bindExecutorLaunchAuthority(followUpId)).resolves.toMatchObject({
         principal_user_id: seed.creator.user_id,
       });
+    }
+  );
+
+  dbTest(
+    'decides Manager authority from the same projection as the launch floor',
+    async ({ db }) => {
+      const seed = await seedScheduledInitialTask(db, TaskStatus.QUEUED);
+      await seed.persist(seed.initialTaskId);
+      const actual = await vi.importActual<typeof import('./branch-access')>('./branch-access');
+      // The launch read sees a demoted revision while the stored policy still says Manager.
+      vi.mocked(resolveSessionRuntimeBranchAccess).mockImplementationOnce(async (txDb, input) => {
+        const current = await actual.resolveSessionRuntimeBranchAccess(txDb, input);
+        return current && { ...current, can_manage_branch: false };
+      });
+
+      await expect(seed.tasks.bindExecutorLaunchAuthority(seed.initialTaskId)).rejects.toThrow(
+        'Authorization to launch this task is unavailable'
+      );
     }
   );
 

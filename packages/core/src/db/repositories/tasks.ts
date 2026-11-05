@@ -1430,11 +1430,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         throw new RepositoryError('Authorization to launch this task is unavailable');
       }
       if (
-        await isScheduledInitialTaskRevoked(txDb, {
-          sessionId: row.session_id,
-          taskId: fullId,
-          principalUserId: row.created_by,
-        })
+        await isScheduledInitialTaskRevoked(
+          txDb,
+          { sessionId: row.session_id, taskId: fullId, principalUserId: row.created_by },
+          access
+        )
       ) {
         throw new RepositoryError('Authorization to launch this task is unavailable');
       }

@@ -321,7 +321,9 @@ export async function resolveSessionRuntimeBranchAccess(
  */
 export async function isScheduledInitialTaskRevoked(
   db: Database,
-  input: { sessionId: SessionID | string; taskId: string; principalUserId: UserID | string }
+  input: { sessionId: SessionID | string; taskId: string; principalUserId: UserID | string },
+  // Pass the caller's own projection so one policy revision decides everything it binds.
+  resolvedAccess?: SessionRuntimeBranchAccess | null
 ): Promise<boolean> {
   const session = await select(db, {
     scheduled_from_branch: sessions.scheduled_from_branch,
@@ -344,10 +346,13 @@ export async function isScheduledInitialTaskRevoked(
     initialTaskId = first?.task_id ?? String(input.sessionId);
   }
   if (input.taskId !== initialTaskId) return false;
-  const access = await resolveSessionRuntimeBranchAccess(db, {
-    sessionId: input.sessionId,
-    principalUserId: input.principalUserId,
-  });
+  const access =
+    resolvedAccess !== undefined
+      ? resolvedAccess
+      : await resolveSessionRuntimeBranchAccess(db, {
+          sessionId: input.sessionId,
+          principalUserId: input.principalUserId,
+        });
   return (
     !access?.can_manage_branch || !hasMinimumRole(access.principal_role ?? undefined, ROLES.MEMBER)
   );
