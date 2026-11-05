@@ -3542,9 +3542,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       async find(params: RouteParams) {
         const sessionId = params.route?.id;
         if (!sessionId) throw new Error('Session ID required');
+        // Queued Tasks carry full prompts: require Session view through the hooked service.
+        const { query: _query, ...readParams } = params;
+        const session = await app.service('sessions').get(sessionId, readParams);
 
         const taskQueueRepo = new TaskRepository(db);
-        const queued = await taskQueueRepo.findQueued(sessionId as SessionID);
+        const queued = await taskQueueRepo.findQueued(session.session_id);
 
         return {
           total: queued.length,
