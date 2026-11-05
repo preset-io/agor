@@ -41,7 +41,10 @@ function logical(row: UploadRow, tenantId: TenantID): Upload {
   };
 }
 
-/** Tenant-explicit repository for upload metadata. It never returns storage keys. */
+/**
+ * Tenant-explicit repository for upload metadata. Only
+ * {@link UploadRepository.findOwnedWithStorageKey} returns storage keys.
+ */
 export class UploadRepository {
   constructor(private readonly db: Database) {}
 
@@ -117,17 +120,21 @@ export class UploadRepository {
   }
 
   async findOwned(tenantId: TenantID, ref: UploadRef): Promise<Upload | null> {
-    const row = await select(this.db).from(uploads).where(eq(uploads.upload_ref, ref)).one();
-    return row ? logical(row, tenantId) : null;
+    return (await this.findOwnedWithStorageKey(tenantId, ref))?.upload ?? null;
   }
 
-  /** Internal byte-store key of an upload (the ref itself unless published under another ref). */
-  async storageKey(ref: UploadRef): Promise<UploadRef | null> {
-    const row = await select(this.db, { storage_key: uploads.storage_key })
-      .from(uploads)
-      .where(eq(uploads.upload_ref, ref))
-      .one();
-    return (row?.storage_key as UploadRef | undefined) ?? null;
+  /**
+   * {@link findOwned} plus the internal byte-store key (the ref itself unless
+   * published under another ref). For the byte-store composition only.
+   */
+  async findOwnedWithStorageKey(
+    tenantId: TenantID,
+    ref: UploadRef
+  ): Promise<{ upload: Upload; storageKey: UploadRef } | null> {
+    const row = await select(this.db).from(uploads).where(eq(uploads.upload_ref, ref)).one();
+    return row
+      ? { upload: logical(row, tenantId), storageKey: row.storage_key as UploadRef }
+      : null;
   }
 
   /**
@@ -135,7 +142,11 @@ export class UploadRepository {
    * Fails if `to` exists, so an existing upload is never replaced.
    */
   async publishAs(from: UploadRef, to: UploadRef): Promise<void> {
-    if (await this.storageKey(to)) throw new RepositoryError('Upload ref is already published');
+    const taken = await select(this.db, { ref: uploads.upload_ref })
+      .from(uploads)
+      .where(eq(uploads.upload_ref, to))
+      .one();
+    if (taken) throw new RepositoryError('Upload ref is already published');
     const row = await update(this.db, uploads)
       .set({ upload_ref: to })
       .where(and(eq(uploads.upload_ref, from), eq(uploads.status, 'active')))
