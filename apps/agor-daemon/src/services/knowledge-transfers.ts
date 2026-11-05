@@ -690,38 +690,51 @@ export async function importKnowledgeRepository(input: {
       written.push(documentId);
       continue;
     }
-    for (const step of steps) {
-      if (!documentId) {
-        const created = await documents.create(
-          {
-            namespace_id: input.namespace.namespace_id as never,
-            path: entry.path,
-            title: entry.title,
-            icon_emoji: entry.icon_emoji,
-            kind: entry.kind,
-            status: entry.status,
-            content_text: step.content,
-            frontmatter: entry.frontmatter,
-            metadata,
-            change_summary: step.summary,
-          },
-          input.params
-        );
-        if (Array.isArray(created)) throw new Error('Unexpected bulk Knowledge result');
-        documentId = created.document_id;
-      } else {
-        await documents.patch(
-          documentId,
-          {
-            title: entry.title,
-            content_text: step.content,
-            frontmatter: entry.frontmatter,
-            change_summary: step.summary,
-          },
-          input.params
-        );
+    // The whole replay (history + current) is one transaction: a document
+    // is either fully imported or not at all, so a resume never repeats a
+    // version. Same unit and lock order as a Knowledge transfer write.
+    documentId = await runKnowledgePolicyTransaction(input.db, async (tx) => {
+      await new KnowledgeSemanticSettingsRepository(tx).lockAggregateForUpdate(tx);
+      // Scoped by runKnowledgePolicyTransaction; never escapes this unit.
+      const scoped = new KnowledgeDocumentsService(
+        tx as unknown as TenantScopeAwareDatabase,
+        input.app
+      );
+      let id = documentId;
+      for (const step of steps) {
+        if (!id) {
+          const created = await scoped.create(
+            {
+              namespace_id: input.namespace.namespace_id as never,
+              path: entry.path,
+              title: entry.title,
+              icon_emoji: entry.icon_emoji,
+              kind: entry.kind,
+              status: entry.status,
+              content_text: step.content,
+              frontmatter: entry.frontmatter,
+              metadata,
+              change_summary: step.summary,
+            },
+            input.params
+          );
+          if (Array.isArray(created)) throw new Error('Unexpected bulk Knowledge result');
+          id = created.document_id;
+        } else {
+          await scoped.patch(
+            id,
+            {
+              title: entry.title,
+              content_text: step.content,
+              frontmatter: entry.frontmatter,
+              change_summary: step.summary,
+            },
+            input.params
+          );
+        }
       }
-    }
+      return id;
+    });
     if (documentId) written.push(documentId);
   }
   for (const id of written) await documents.reconcileReferences(id, input.params);

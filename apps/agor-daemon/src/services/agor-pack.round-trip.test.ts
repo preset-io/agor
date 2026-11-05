@@ -531,6 +531,46 @@ dbTest(
     })
 );
 
+dbTest(
+  'a crash mid-Knowledge replay leaves no partial document; the resume writes each version once',
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { pack } = await fx.exportPack();
+      const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+      const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+      const request = { teammates: ['t01'], board_id: null };
+      // plan.md replays v1 (create) then v2 (patch); the process dies between them.
+      const patch = KnowledgeDocumentsService.prototype.patch;
+      let crashed = false;
+      const spy = vi
+        .spyOn(KnowledgeDocumentsService.prototype, 'patch')
+        .mockImplementation(function (this: KnowledgeDocumentsService, ...args) {
+          const data = args[1] as { content_text?: string };
+          if (!crashed && data.content_text === '# Plan\n\nv2') {
+            crashed = true;
+            return Promise.reject(new Error('crash mid-replay'));
+          }
+          return patch.apply(this, args);
+        });
+      try {
+        await expect(importer.apply(staged.import_id, request)).rejects.toThrow(/crash/);
+      } finally {
+        spy.mockRestore();
+      }
+      const [result] = (await importer.apply(staged.import_id, request)).results;
+      await fx.unit(async () => {
+        const plan = await new KnowledgeDocumentRepository(fx.db).findByNamespaceAndPath(
+          result!.knowledge_namespace_id as never,
+          'docs/plan.md'
+        );
+        const versions = await new KnowledgeDocumentVersionRepository(fx.db).findAll({
+          document_id: plan!.document_id,
+        });
+        expect(versions.map((v) => v.content_text)).toEqual(['# Plan\n\nv2', '# Plan\n\nv1']);
+      });
+    })
+);
+
 dbTest('a stale worker that kept running after a takeover cannot write', async ({ db: raw }) =>
   withFixture(raw, async (fx) => {
     const { pack } = await fx.exportPack();
