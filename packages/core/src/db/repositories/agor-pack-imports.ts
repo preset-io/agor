@@ -151,6 +151,20 @@ export class AgorPackImportRepository {
     return row ? toRecord(row) : null;
   }
 
+  /**
+   * Fence: refresh the claim only if `token` still holds it. Run it first in
+   * the same transaction as the writes it guards; on PostgreSQL the row lock
+   * it takes also holds off a takeover until that transaction commits.
+   */
+  async touchClaim(importId: string, token: string): Promise<boolean> {
+    const row = await update(this.db, agorPackImports)
+      .set({ claimed_at: new Date() })
+      .where(and(eq(agorPackImports.import_id, importId), eq(agorPackImports.claim_token, token)))
+      .returning()
+      .one();
+    return Boolean(row);
+  }
+
   /** Write as the claim holder (refreshing the claim); throws once it was lost. */
   async updateClaimed(
     importId: string,

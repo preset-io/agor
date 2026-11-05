@@ -6,7 +6,7 @@ import type {
   UploadRef,
   UserID,
 } from '@agor/core/types';
-import { asc, eq, lt } from 'drizzle-orm';
+import { and, asc, eq, lt, not, sql } from 'drizzle-orm';
 import type { Database, SystemDatabase } from '../client';
 import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
 import { stagedBlobs } from '../schema';
@@ -64,10 +64,23 @@ export class StagedBlobRepository {
     await deleteFrom(this.db, stagedBlobs).where(eq(stagedBlobs.blob_ref, ref)).run();
   }
 
+  /** Keep a blob for another TTL (an import that uses it was claimed again). */
+  async extend(ref: UploadRef, expiresAt: Date): Promise<void> {
+    await update(this.db, stagedBlobs)
+      .set({ expires_at: expiresAt })
+      .where(eq(stagedBlobs.blob_ref, ref))
+      .run();
+  }
+
+  /**
+   * Expired blobs, except a pack an import is still applying (its receipt
+   * points at `<scope>:<ref>`): those are never swept from under a worker.
+   */
   async findExpired(tenantId: TenantID, now: Date, limit?: number): Promise<StagedBlob[]> {
+    const inUse = sql`exists (select 1 from agor_pack_imports i where i.status = 'applying' and i.staging_ref = staged_blobs.scope_id || ':' || staged_blobs.blob_ref)`;
     let query = select(this.db)
       .from(stagedBlobs)
-      .where(lt(stagedBlobs.expires_at, now))
+      .where(and(lt(stagedBlobs.expires_at, now), not(inUse)))
       .orderBy(asc(stagedBlobs.expires_at));
     if (limit !== undefined) query = query.limit(limit);
     const rows = await query.all();

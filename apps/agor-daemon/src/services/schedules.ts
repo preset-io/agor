@@ -35,6 +35,7 @@ import type {
   Schedule,
   ScheduleAgenticToolConfig,
   ScheduleCreateData,
+  ScheduleID,
   SchedulePatchData,
   UserID,
   UUID,
@@ -45,6 +46,7 @@ import {
   materializedAgenticToolConfigurationToScheduleConfig,
   scheduleAgenticToolConfigToSource,
 } from '../utils/agentic-configuration-sources.js';
+import { importedRowId } from '../utils/imported-row-id.js';
 import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-boundary.js';
 
 /**
@@ -163,8 +165,10 @@ export class SchedulesService extends DrizzleService<
     if (data.mcp_server_ids?.length) {
       await this.validateMcpServers(data.mcp_server_ids, trustedCreatedBy);
     }
+    const scheduleId = importedRowId(params);
     const trustedData: PersistedScheduleCreateData = {
       ...data,
+      ...(scheduleId ? { schedule_id: scheduleId as ScheduleID } : {}),
       ...(agenticToolConfig ? { agentic_tool_config: agenticToolConfig } : {}),
       ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
       ...(prepared && typeof rawData.next_run_at === 'number'

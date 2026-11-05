@@ -84,6 +84,7 @@ import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
+import { importedRowId } from '../utils/imported-row-id.js';
 import { assertManagedBranchPath, managedBranchesRoot } from '../utils/managed-branch-path.js';
 import {
   getDaemonUrl,
@@ -884,6 +885,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     let branch = (await branchesService
       .create(
         {
+          ...(importedRowId(params) ? { branch_id: importedRowId(params) as BranchID } : {}),
           repo_id: repo.repo_id,
           name: data.name,
           path: branchPath,

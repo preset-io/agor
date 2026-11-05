@@ -3205,7 +3205,14 @@ export async function readPackHistoryAdditions(
  * prerequisites must already be present (fetched from `origin`, or none for a
  * local-home bundle); `git bundle verify` refuses otherwise.
  */
-export async function applyPackBundle(repoPath: string, bundlePath: string): Promise<string> {
+export async function applyPackBundle(
+  repoPath: string,
+  bundlePath: string,
+  /** Keys the temporary ref, so two concurrent applies never share one. */
+  key = 'head'
+): Promise<string> {
+  if (!/^[A-Za-z0-9._-]{1,120}$/.test(key)) throw new Error('Invalid pack ref key');
+  const ref = `refs/agor-pack/${key}`;
   const { git: transfer } = createLocalTransferGit(repoPath);
   try {
     await transfer.raw(['bundle', 'verify', '--quiet', bundlePath]);
@@ -3214,17 +3221,11 @@ export async function applyPackBundle(repoPath: string, bundlePath: string): Pro
       'The packed git history needs commits this checkout does not have; push the source branch and export again'
     );
   }
-  await transfer.raw([
-    'fetch',
-    '--no-tags',
-    '--no-write-fetch-head',
-    bundlePath,
-    'HEAD:refs/agor-pack/head',
-  ]);
+  await transfer.raw(['fetch', '--no-tags', '--no-write-fetch-head', bundlePath, `HEAD:${ref}`]);
   const { git } = createGit(repoPath);
-  const sha = (await git.raw(['rev-parse', '--verify', 'refs/agor-pack/head^{commit}'])).trim();
+  const sha = (await git.raw(['rev-parse', '--verify', `${ref}^{commit}`])).trim();
   await git.raw(['reset', '--hard', sha]);
-  await git.raw(['update-ref', '-d', 'refs/agor-pack/head']);
+  await git.raw(['update-ref', '-d', ref]);
   return sha;
 }
 

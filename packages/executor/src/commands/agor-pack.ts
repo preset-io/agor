@@ -13,8 +13,19 @@
  * symlinks, and secret-shaped text aborts a collection.
  */
 
+import { randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
@@ -217,15 +228,28 @@ export async function handleBranchPackCollect(
   }
 }
 
+/**
+ * Write next to the destination, then rename over it: a reader (or a second
+ * materialize of the same import) only ever sees the old or the new file.
+ */
 async function writeEntry(
   reader: AgorPackReader,
   entryPath: string,
   destination: string,
   mode: number
 ): Promise<void> {
-  await rm(destination, { force: true });
-  await pipeline(await reader.openStream(entryPath), createWriteStream(destination, { mode }));
-  await chmod(destination, mode);
+  const temporary = `${destination}.agor-pack-${randomUUID()}.tmp`;
+  try {
+    await pipeline(
+      await reader.openStream(entryPath),
+      createWriteStream(temporary, { mode, flags: 'wx' })
+    );
+    await chmod(temporary, mode);
+    await rename(temporary, destination);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 export async function handleBranchPackMaterialize(
@@ -268,7 +292,7 @@ export async function handleBranchPackMaterialize(
         await reader.openStream(`${prefix}git/repo.bundle`),
         createWriteStream(bundlePath, { mode: 0o600 })
       );
-      headSha = await applyPackBundle(branch.path, bundlePath);
+      headSha = await applyPackBundle(branch.path, bundlePath, `${p.importId}-${p.teammateKey}`);
     }
 
     if (reader.has(`${prefix}git/state.json`)) {

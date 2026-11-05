@@ -47,6 +47,7 @@ import {
 import { NotFoundError } from '@agor/core/utils/errors';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import type { ManualServiceEvent } from '../utils/emit-service-event.js';
+import { importedRowId } from '../utils/imported-row-id.js';
 import {
   type BoardObjectPatchedEventPayload,
   toBoardObjectPatchedEventPayload,
@@ -569,7 +570,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     // Hook chain enforces auth before we get here. The repository owns import
     // (validation, skipping unusable objects, artifact resolution, create);
     // after-hooks emit the `created` event.
-    return this.boardRepo.fromBlob(blob, params!.user!.user_id);
+    return this.boardRepo.fromBlob(blob, params!.user!.user_id, importedRowId(params));
   }
 
   /**

@@ -30,7 +30,11 @@ import {
   type PackFixture,
 } from '../../test/agor-pack-fixture';
 import type { RegisterHooksContext } from '../register-hooks';
-import { getUploadStagingStore, resetUploadStagingStoreForTests } from '../utils/upload-staging';
+import {
+  getBlobStagingStore,
+  getUploadStagingStore,
+  resetUploadStagingStoreForTests,
+} from '../utils/upload-staging';
 import { AgorPackExporter } from './agor-pack-export';
 import { AgorPackImporter } from './agor-pack-import';
 
@@ -344,14 +348,10 @@ dbTest('a failed apply resumes where it stopped: one teammate, the same ids', as
       new AgorPackImportRepository(fx.db).findById(staged.import_id)
     );
     const progress = partial!.progress.t01!;
-    expect(progress.steps).toEqual([
-      'repo',
-      'board',
-      'branch',
-      'knowledge',
-      'artifacts',
-      'schedules',
-    ]);
+    // Every id was planned (and saved) before the first row was created.
+    expect(Object.keys(progress.remap.sessions)).toHaveLength(2);
+    expect(Object.keys(progress.schedules)).toHaveLength(1);
+    expect(progress.knowledge_done).toBe(true);
     expect(partial!.claim_token).toBeNull();
 
     const applied = await importer.apply(staged.import_id, { teammates: ['t01'], board_id: null });
@@ -360,8 +360,8 @@ dbTest('a failed apply resumes where it stopped: one teammate, the same ids', as
     expect(result?.branch_id).toBe(progress.branch_id);
     expect(result?.board_id).toBe(progress.board_id);
     expect(result?.remap.sessions).toEqual(progress.remap.sessions);
-    expect(result?.remap.schedules).toEqual(progress.remap.schedules);
-    expect(result?.remap.artifacts).toEqual(progress.remap.artifacts);
+    expect(result?.remap.schedules).toEqual(Object.values(progress.schedules));
+    expect(Object.values(result?.remap.artifacts ?? {})).toEqual(Object.values(progress.artifacts));
     expect(await ownedCounts(fx, fx.bea.user_id)).toEqual({
       branches: 1,
       sessions: 2,
@@ -374,6 +374,108 @@ dbTest('a failed apply resumes where it stopped: one teammate, the same ids', as
       })
     );
     expect(messages).toHaveLength(1);
+  })
+);
+
+dbTest(
+  'a crash after a row commits: the retry adopts it under its planned id',
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { pack } = await fx.exportPack();
+      const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+      const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+      const request = { teammates: ['t01'], board_id: null };
+
+      // The board and the branch are committed; the process "dies" in the next
+      // step, before any later checkpoint is written.
+      const spy = vi
+        .spyOn(ArtifactRepository.prototype, 'create')
+        .mockRejectedValueOnce(new Error('crash after the branch committed'));
+      try {
+        await expect(importer.apply(staged.import_id, request)).rejects.toThrow(/crash/);
+      } finally {
+        spy.mockRestore();
+      }
+      const plan = (await fx.unit(() =>
+        new AgorPackImportRepository(fx.db).findById(staged.import_id)
+      ))!.progress.t01!;
+      expect(
+        await fx.unit(() => new BranchRepository(fx.db).findById(plan.branch_id))
+      ).toBeTruthy();
+      expect(await fx.unit(() => new BoardRepository(fx.db).findById(plan.board_id))).toBeTruthy();
+
+      const applied = await importer.apply(staged.import_id, request);
+      expect(applied.results[0]).toMatchObject({
+        branch_id: plan.branch_id,
+        board_id: plan.board_id,
+      });
+      expect(await ownedCounts(fx, fx.bea.user_id)).toEqual({
+        branches: 1,
+        sessions: 2,
+        schedules: 1,
+        artifacts: 1,
+      });
+      const branch = await fx.unit(() => new BranchRepository(fx.db).findById(plan.branch_id));
+      expect(branch?.name).toBe(plan.branch_name);
+      expect(
+        await fx.unit(() =>
+          new KnowledgeDocumentRepository(fx.db).findAll({
+            namespace_id: applied.results[0]!.knowledge_namespace_id,
+          } as never)
+        )
+      ).toHaveLength(3);
+    })
+);
+
+dbTest('a stale worker that kept running after a takeover cannot write', async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    const { pack } = await fx.exportPack();
+    const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+    const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+    const request = { teammates: ['t01'], board_id: null };
+    const stale = await importer.start(staged.import_id, request);
+    let takeover: Awaited<ReturnType<AgorPackImporter['start']>>;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 11 * 60 * 1000);
+      takeover = await new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea)).start(
+        staged.import_id,
+        request
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+    // The old worker wakes up and runs: every write is fenced off.
+    await stale.run();
+    expect((await ownedCounts(fx, fx.bea.user_id)).branches).toBe(0);
+    await takeover.run();
+    expect((await importer.get(staged.import_id)).status).toBe('applied');
+    expect(await ownedCounts(fx, fx.bea.user_id)).toMatchObject({ branches: 1, sessions: 2 });
+  })
+);
+
+dbTest('the sweep never removes the pack of an import that is applying', async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    const { pack } = await fx.exportPack();
+    const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+    const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+    const { run } = await importer.start(staged.import_id, { teammates: ['t01'], board_id: null });
+    const store = getBlobStagingStore();
+    const hour = 60 * 60 * 1000; // the fixture's blob TTL
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // Past expiry while applying: kept, and claiming again extends it.
+      vi.setSystemTime(Date.now() + 2 * hour);
+      expect(await store.cleanupExpired({ tenantId: TENANT })).toBe(0);
+      await run();
+      expect((await importer.get(staged.import_id)).status).toBe('applied');
+      expect(await store.cleanupExpired({ tenantId: TENANT })).toBe(0);
+      // Expired and no longer in use: swept.
+      vi.setSystemTime(Date.now() + 2 * hour);
+      expect(await store.cleanupExpired({ tenantId: TENANT })).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   })
 );
 

@@ -18,7 +18,11 @@ import type { BranchID, SessionID, TenantID, UploadRef } from '@agor/core/types'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPackFixture, expectPackRoutesIsolated } from '../../test/agor-pack-fixture';
 import type { RegisterHooksContext } from '../register-hooks';
-import { getUploadStagingStore, resetUploadStagingStoreForTests } from '../utils/upload-staging';
+import {
+  getBlobStagingStore,
+  getUploadStagingStore,
+  resetUploadStagingStoreForTests,
+} from '../utils/upload-staging';
 import { AgorPackImporter } from './agor-pack-import';
 
 vi.mock('../utils/spawn-executor', async (importOriginal) => ({
@@ -134,6 +138,33 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         const again = await importer.stage(Readable.from([pack]), pack.byteLength);
         expect(again.import_id).toBe(staged.import_id);
         expect((await importer.apply(again.import_id, request)).results).toEqual(applied.results);
+      } finally {
+        await fx.close();
+      }
+    }, 60_000);
+
+    it('the sweep keeps the pack of an applying import past its expiry', async () => {
+      const tenant = 'pack-pg-sweep' as TenantID;
+      const fx = await createPackFixture({ raw, tenant, config: CONFIG, uploadsRoot });
+      try {
+        const { pack } = await fx.exportPack();
+        const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+        const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+        const { run } = await importer.start(staged.import_id, {
+          teammates: ['t01'],
+          board_id: null,
+        });
+        const hour = 60 * 60 * 1000;
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+          vi.setSystemTime(Date.now() + 2 * hour);
+          expect(await getBlobStagingStore().cleanupExpired({ tenantId: tenant })).toBe(0);
+          await run();
+          vi.setSystemTime(Date.now() + 2 * hour);
+          expect(await getBlobStagingStore().cleanupExpired({ tenantId: tenant })).toBe(1);
+        } finally {
+          vi.useRealTimers();
+        }
       } finally {
         await fx.close();
       }

@@ -239,5 +239,7 @@ export interface BlobStagingStore {
     input: StagedBlobReadInput & { offset?: number; length?: number }
   ): Promise<NodeJS.ReadableStream>;
   delete(input: StagedBlobReadInput): Promise<void>;
+  /** Keep the blob for another full TTL (it is in use again). */
+  touch(input: StagedBlobReadInput): Promise<void>;
   cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now?: Date): Promise<number>;
 }

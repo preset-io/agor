@@ -558,35 +558,26 @@ export interface AgorPackDryRunTeammate {
   warnings: string[];
 }
 
-/** Apply steps of one teammate, in order; each commits before the next starts. */
-export const AGOR_PACK_APPLY_STEPS = [
-  'repo',
-  'board',
-  'branch',
-  'knowledge',
-  'artifacts',
-  'schedules',
-  'sessions',
-  'uploads',
-] as const;
-export type AgorPackApplyStep = (typeof AGOR_PACK_APPLY_STEPS)[number];
-
 /**
- * Resume state of a teammate that is not imported yet, saved on the receipt
- * after every step and every created row, so a retry skips finished steps and
- * reuses what an interrupted attempt already created.
+ * Apply plan of a teammate that is not imported yet: every id its rows get
+ * (and its branch name), allocated once and saved on the receipt before any
+ * row is created. Each create uses its planned id and adopts a row that
+ * already exists, so a retry after any crash never makes a second copy.
  */
 export interface AgorPackTeammateProgress {
-  steps: AgorPackApplyStep[];
-  repo_id?: string;
-  board_id?: string;
-  branch_id?: string;
-  /** Rows done inside a step (`artifact:<seq>`, `schedule:<n>`, `session:<id>`, `upload:<ref>`). */
-  done: string[];
-  /** Artifact sequence in the pack → new artifact id. */
+  repo_id: string;
+  board_id: string;
+  branch_id: string;
+  branch_name: string;
+  /** Artifact sequence in the pack → planned artifact id. */
   artifacts: Record<string, string>;
-  /** Pack attachment ref → new ref, fixed before any message is written. */
+  /** Schedule index in the pack → planned schedule id. */
+  schedules: Record<string, string>;
+  /** Pack attachment ref → planned new ref (rewritten into messages). */
   upload_refs: Record<string, string>;
+  /** Knowledge has no row id of its own; this flag commits with its writes. */
+  knowledge_done: boolean;
+  /** `sessions` holds the planned session ids. */
   remap: AgorPackTeammateResult['remap'];
   warnings: string[];
 }

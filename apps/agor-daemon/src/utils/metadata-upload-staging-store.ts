@@ -146,7 +146,8 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
 
 /**
  * Blob port: the `staged_blobs` row is the ownership and expiry authority,
- * checked before every byte operation. Bytes sit in their own adapter
+ * checked before every byte operation. Bytes are staged without an adapter
+ * expiry, so only the row (which an in-use import extends) decides when they go. Bytes sit in their own adapter
  * namespace; adapters bind each object to a (tenant, id, id) tuple, which for
  * blobs is (tenant, scope, creator).
  */
@@ -190,7 +191,7 @@ class MetadataBlobStagingStore implements BlobStagingStore {
         provenance: 'import',
         body: input.body,
         sizeHint: input.sizeHint,
-        ttlMs: this.ttlMs,
+        ttlMs: 0,
       });
       await this.unit(owner.tenantId, () => this.repository.complete(ref, metadata.size));
       return metadata;
@@ -237,6 +238,13 @@ class MetadataBlobStagingStore implements BlobStagingStore {
       offset: input.offset,
       length: input.length,
     });
+  }
+
+  async touch(input: StagedBlobReadInput): Promise<void> {
+    if (!(await this.authorize(input, false))) return;
+    await this.unit(input.tenantId, () =>
+      this.repository.extend(input.ref, new Date(Date.now() + this.ttlMs))
+    );
   }
 
   async delete(input: StagedBlobReadInput): Promise<void> {
