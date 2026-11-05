@@ -159,7 +159,14 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
         }
         const exportId = generateId();
         const context = serviceContext(params);
+        const exporter = new AgorPackExporter(context);
+        // Refusals (unknown teammate, not the owner, no access) answer before
+        // any pack stream exists.
+        const teammates = await handle(() => exporter.authorize(parsed.data.branch_ids));
         const writer = new AgorPackWriter();
+        // A failure can abort the stream before staging listens to it; the
+        // export call below still rejects and the staged write is awaited.
+        writer.output.on('error', () => undefined);
         // The finished pack is staged so a failure anywhere surfaces as a
         // clean error instead of a truncated download.
         const staged = getBlobStagingStore().stage({
@@ -175,7 +182,7 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
         });
         let manifest: Awaited<ReturnType<AgorPackExporter['export']>>;
         try {
-          manifest = await handle(() => new AgorPackExporter(context).export(parsed.data, writer));
+          manifest = await handle(() => exporter.export(parsed.data, writer, teammates));
         } catch (error) {
           writer.abort(error instanceof Error ? error : new Error(String(error)));
           await staged.catch(() => undefined);

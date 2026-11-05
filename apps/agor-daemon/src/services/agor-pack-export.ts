@@ -544,11 +544,24 @@ export class AgorPackExporter {
    * Stream the pack into `writer` and finish it. The caller owns `writer.output`
    * (pipe it before calling) and aborts the writer on error.
    */
-  async export(request: AgorPackExportRequest, writer: AgorPackWriter): Promise<AgorPackManifest> {
-    const sections = new Set(request.sections);
-    const unique = [...new Set(request.branch_ids)];
+  /**
+   * Every teammate of an export, checked (exists, owner or admin, full
+   * access, repo). Run it before any streaming starts so a refusal is a clean
+   * HTTP error, not an aborted stream.
+   */
+  async authorize(branchIds: string[]): Promise<Array<{ branch: Branch; repo: Repo }>> {
     const loaded = [];
-    for (const id of unique) loaded.push(await this.loadTeammate(id));
+    for (const id of new Set(branchIds)) loaded.push(await this.loadTeammate(id));
+    return loaded;
+  }
+
+  async export(
+    request: AgorPackExportRequest,
+    writer: AgorPackWriter,
+    authorized?: Array<{ branch: Branch; repo: Repo }>
+  ): Promise<AgorPackManifest> {
+    const sections = new Set(request.sections);
+    const loaded = authorized ?? (await this.authorize(request.branch_ids));
     const teammates: AgorPackTeammateSummary[] = [];
     for (const [index, { branch, repo }] of loaded.entries()) {
       teammates.push(
