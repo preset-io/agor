@@ -159,6 +159,7 @@ import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import {
   ensureMinimumRole,
+  rejectNonScalarExternalId,
   requireAdminForEnvConfig,
   requireMinimumRole,
 } from './utils/authorization.js';
@@ -1665,7 +1666,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         typeof context.id === 'string'
           ? await boardCommentsRepository.findVisibleById(user.user_id as UUID, context.id)
           : undefined;
-      if (typeof context.id === 'string' && !existing) {
+      // Every non-create comment method authorizes the stored comment.
+      if (context.method !== 'create' && !existing) {
         throw new Forbidden(`Board resource is unavailable to ${action}`);
       }
       if (existing) context.id = existing.comment_id;
@@ -1741,7 +1743,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ? await cardRepository.findVisibleById(user.user_id as UUID, context.id)
             : await cardRepository.findById(context.id)
           : undefined;
-      if (typeof context.id === 'string' && requiresVisibleResolution && !existing) {
+      // Every non-create card method authorizes the stored card, never only the payload board.
+      if (requiresVisibleResolution && context.method !== 'create' && !existing) {
         throw new Forbidden(`Board resource is unavailable to ${action}`);
       }
       if (existing) context.id = existing.card_id;
@@ -2042,7 +2045,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
   safeService('board-objects')?.hooks({
     before: {
-      all: [typedValidateQuery(boardObjectQueryValidator), requireAuth],
+      all: [rejectNonScalarExternalId, typedValidateQuery(boardObjectQueryValidator), requireAuth],
       // Board-objects may reference a branch or may be loose board/card/layout
       // rows. The service composes this marker into an object-specific SQL
       // predicate: branch-bound rows require branch access; loose rows require
@@ -2089,7 +2092,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('cards')?.hooks({
     before: {
-      all: [requireAuth],
+      all: [rejectNonScalarExternalId, requireAuth],
       find: [scopeFindToAccessibleBoardsSql(superadminOpts)],
       get: [cardAccess('view', 'view this card')],
       create: [
@@ -2143,7 +2146,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('artifacts')?.hooks({
     before: {
-      all: [requireAuth],
+      all: [rejectNonScalarExternalId, requireAuth],
       find: [scopeFindToAccessibleBranchesSql(superadminOpts)],
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
       publishFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'publish artifacts')],
@@ -2373,7 +2376,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('board-comments')?.hooks({
     before: {
-      all: [typedValidateQuery(boardCommentQueryValidator), requireAuth],
+      all: [rejectNonScalarExternalId, typedValidateQuery(boardCommentQueryValidator), requireAuth],
       find: [scopeFindToAccessibleBoardsSql(superadminOpts)],
       get: [boardCommentAccess('view', 'view this board comment')],
       create: [
@@ -3843,7 +3846,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('boards')?.hooks({
     before: {
-      all: [typedValidateQuery(boardQueryValidator), requireAuth],
+      all: [rejectNonScalarExternalId, typedValidateQuery(boardQueryValidator), requireAuth],
       find: [scopeFindToAccessibleBoardsSql(superadminOpts)],
       get: [ensureCanViewBoard('view this board')],
       findBySlug: [ensureCanViewBoard('view this board')],

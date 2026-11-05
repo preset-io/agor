@@ -702,6 +702,37 @@ describe('ArtifactsService.updateMetadata', () => {
     ).toBe('Renamed');
   });
 
+  dbTest('rejects moving off a board the owner no longer edits', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const boardRepo = new BoardRepository(db);
+    await seedUser(db, 'user-board-owner');
+    // Others are Viewers on a board someone else owns.
+    const source = await boardRepo.create({ name: 'Source', created_by: 'user-board-owner' });
+    const own = await seedBoard(db);
+    const artifact = await seedArtifact(db, source.board_id, { userId: 'user-owner' });
+    const objectKey = `artifact-${artifact.artifact_id}`;
+
+    await expect(
+      service.updateMetadata(artifact.artifact_id, { board_id: own.board_id }, 'user-owner')
+    ).rejects.toThrow(/Board Editor or Manager/);
+    await expect(
+      service.deleteArtifact(artifact.artifact_id, 'user-owner', 'member')
+    ).rejects.toThrow(/Board Editor or Manager/);
+    expect((await boardRepo.findById(source.board_id))?.objects?.[objectKey]).toBeDefined();
+    expect((await boardRepo.findById(own.board_id))?.objects?.[objectKey]).toBeUndefined();
+    expect(await new ArtifactRepository(db).findById(artifact.artifact_id)).not.toBeNull();
+
+    // Admins keep their override for both.
+    await service.updateMetadata(
+      artifact.artifact_id,
+      { board_id: own.board_id },
+      'user-admin',
+      'admin'
+    );
+    await service.deleteArtifact(artifact.artifact_id, 'user-admin', 'admin');
+    expect(await new ArtifactRepository(db).findById(artifact.artifact_id)).toBeNull();
+  });
+
   dbTest('rejects move to a nonexistent board without mutating the row', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const artifactRepo = new ArtifactRepository(db);
@@ -2537,5 +2568,70 @@ describe('ArtifactsService agor_api_url grant on a hosted cell', () => {
     expect(envB).toMatch(/^REACT_APP_AGOR_API_URL=$/m);
     expect(envB).not.toContain(ORIGIN_A);
     expect(envB).not.toContain(new URL(hosted.cellBaseUrl).host);
+  });
+});
+
+describe('ArtifactsService.publishFromExecutor board authority', () => {
+  dbTest('needs Board Editor even when branch access allows publishing', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    await seedUser(db, 'user-owner');
+    await seedUser(db, 'user-board-owner');
+    const boardRepo = new BoardRepository(db);
+    const board = await boardRepo.create({ name: 'View only', created_by: 'user-board-owner' });
+    const repo = await new RepoRepository(db).create({
+      repo_id: generateId() as UUID,
+      slug: `artifact-publish-${generateId()}`,
+      name: 'Artifact Publish Repo',
+      repo_type: 'remote',
+      remote_url: 'https://github.com/test/repo.git',
+      local_path: '/tmp/artifact-publish',
+      default_branch: 'main',
+    });
+    // Others are branch Collaborators but only board Viewers.
+    const branch = await new BranchRepository(db).create({
+      branch_id: generateId() as BranchID,
+      repo_id: repo.repo_id,
+      board_id: board.board_id,
+      name: 'shared-branch',
+      ref: 'refs/heads/shared-branch',
+      branch_unique_id: 1,
+      path: '/tmp/artifact-publish/shared-branch',
+      created_by: 'user-board-owner' as UUID,
+      others_can: 'session',
+    });
+    const executorParams = (userId: string, role: string) => ({
+      provider: 'socketio',
+      user: { user_id: userId, email: `${userId}@test.local`, role },
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-command',
+          session_id: 'artifact.publish',
+          branch_id: branch.branch_id,
+        },
+      },
+    });
+    const publish = (userId: string, role = 'member') =>
+      service.publishFromExecutor(
+        {
+          files: { '/index.js': 'console.log("hi")' },
+          branch_id: branch.branch_id,
+          board_id: board.board_id,
+          name: 'Planted',
+        },
+        executorParams(userId, role) as never
+      );
+
+    await expect(publish('user-owner')).rejects.toThrow(/Board Editor or Manager/);
+    expect(
+      await new ArtifactRepository(db).findByBoardId(board.board_id, { userId: 'user-owner' })
+    ).toHaveLength(0);
+    expect(Object.keys((await boardRepo.findById(board.board_id))?.objects ?? {})).toHaveLength(0);
+
+    const published = await publish('user-board-owner');
+    expect(
+      (await boardRepo.findById(board.board_id))?.objects?.[`artifact-${published.artifact_id}`]
+    ).toBeDefined();
   });
 });

@@ -1,4 +1,5 @@
 import {
+  BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
   CapabilityPolicyRepository,
@@ -6,14 +7,17 @@ import {
   createTenantScopedDatabaseProxy,
   GroupRepository,
   generateId,
+  shortId,
   UserApiKeysRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { BoardID, CardID, UserID } from '@agor/core/types';
+import { type BoardID, type CardID, toShortId, type UserID } from '@agor/core/types';
+import { io as createSocketClient } from 'socket.io-client';
 import { expect } from 'vitest';
 import { dbTest } from '../../../packages/core/src/db/test-helpers.js';
 import { boardMetadataTestApp } from '../test/board-metadata-app.js';
 import type { RegisterHooksContext } from './register-hooks.js';
+import { createBoardCommentsService } from './services/board-comments.js';
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 
@@ -192,7 +196,7 @@ dbTest(
         sharedCard
       );
       // Hidden, missing and ambiguous board IDs give the same answer and never name hidden boards.
-      for (const boardId of [hidden.board_id, hidden.board_id.slice(0, 4), generateId()]) {
+      for (const boardId of [hidden.board_id, toShortId(hidden.board_id, 4), generateId()]) {
         const result = await call(memberKey, 'agor_boards_get', { boardId });
         expect(result.isError).toBe(true);
         expect(result.text).toContain('Board not found');
@@ -202,7 +206,7 @@ dbTest(
       // Short IDs resolve only among visible cards, so ambiguity errors never name hidden ones.
       for (const name of ['agor_cards_get', 'agor_cards_archive', 'agor_cards_unarchive']) {
         expect(
-          (await call(memberKey, name, { cardId: hiddenCard.slice(0, 4) })).text
+          (await call(memberKey, name, { cardId: toShortId(hiddenCard, 4) })).text
         ).not.toContain(hiddenCard);
       }
 
@@ -241,9 +245,9 @@ dbTest(
       // A slug that is another board's ID prefix authorizes and writes the same (own) board.
       const decoy = await ok(memberKey, 'agor_boards_create', {
         name: 'Decoy',
-        slug: hidden.board_id.slice(0, 18),
+        slug: shortId(hidden.board_id),
       });
-      expect(decoy.slug).toBe(hidden.board_id.slice(0, 18));
+      expect(decoy.slug).toBe(shortId(hidden.board_id));
       await ok(memberKey, 'agor_boards_update', {
         boardId: decoy.slug,
         name: 'Decoy renamed',
@@ -420,6 +424,112 @@ dbTest(
       expect(sharedBoard).not.toHaveProperty('access_mode');
       expect(sharedBoard).not.toHaveProperty('default_others_can');
     } finally {
+      await server.close();
+    }
+  },
+  30000
+);
+
+dbTest(
+  'Socket.IO array IDs cannot reach a hidden card or comment through an editable board',
+  async ({ db: rawDb }) => {
+    const users = new UsersRepository(rawDb);
+    const owner = await users.create({ email: 'sock-owner@example.test', role: 'member' });
+    const member = await users.create({ email: 'sock-member@example.test', role: 'member' });
+    const boards = new BoardRepository(rawDb);
+    const hidden = await boards.create({
+      name: 'Hidden',
+      created_by: owner.user_id,
+      access_mode: 'private',
+    });
+    const editable = await boards.create({ name: 'Mine', created_by: member.user_id });
+    const cards = new CardRepository(rawDb);
+    const hiddenCard = await cards.create({
+      board_id: hidden.board_id,
+      title: 'Secret',
+      created_by: owner.user_id,
+    });
+    const comments = new BoardCommentsRepository(rawDb);
+    const hiddenComment = await comments.create({
+      board_id: hidden.board_id,
+      created_by: member.user_id,
+      content: 'Secret comment',
+    });
+    const db = createTenantScopedDatabaseProxy(rawDb, { label: 'board-isolation-socket-test' });
+    const server = await boardMetadataTestApp(
+      db,
+      {
+        database: { dialect: 'sqlite' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'board-isolation-socket-test' },
+        execution: {},
+      } as RegisterHooksContext['config'],
+      true,
+      false,
+      false,
+      async (app) => {
+        app.use('card-types', createCardTypesService(db));
+        app.use('cards', createCardsService(db));
+        app.use('board-comments', createBoardCommentsService(db));
+      }
+    );
+    const token = server.headers(member.user_id as UserID).authorization.slice(7);
+    const socket = createSocketClient(server.url, {
+      transports: ['websocket'],
+      forceNew: true,
+      auth: { token },
+    });
+    const emit = (...args: unknown[]) =>
+      new Promise<{ error?: { message?: string }; result?: unknown }>((resolve) => {
+        socket.emit(...(args as [string]), (error: { message?: string } | null, result: unknown) =>
+          resolve({ error: error ?? undefined, result })
+        );
+      });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once('connect', () => resolve());
+        socket.once('connect_error', reject);
+      });
+      const attempts: unknown[][] = [
+        [
+          'patch',
+          'cards',
+          [hiddenCard.card_id],
+          { board_id: editable.board_id, title: 'Tampered' },
+          {},
+        ],
+        [
+          'update',
+          'cards',
+          [hiddenCard.card_id],
+          { board_id: editable.board_id, title: 'Tampered' },
+          {},
+        ],
+        ['get', 'cards', [hiddenCard.card_id], {}],
+        ['remove', 'cards', [hiddenCard.card_id], {}],
+        ['patch', 'cards', { card_id: hiddenCard.card_id }, { board_id: editable.board_id }, {}],
+        ['get', 'board-comments', [hiddenComment.comment_id], {}],
+        ['patch', 'board-comments', [hiddenComment.comment_id], { content: 'Tampered' }, {}],
+        ['remove', 'board-comments', [hiddenComment.comment_id], {}],
+      ];
+      for (const attempt of attempts) {
+        const { error, result } = await emit(...attempt);
+        // Rejected as malformed before any record hook or adapter sees the array/object.
+        expect(
+          error,
+          `${attempt[0]} ${attempt[1]} returned ${JSON.stringify(result)}`
+        ).toMatchObject({
+          name: 'BadRequest',
+          message: 'Resource ID must be a single string',
+        });
+        expect(JSON.stringify(result ?? null)).not.toContain('Secret');
+      }
+      expect(await cards.findById(hiddenCard.card_id)).toMatchObject({
+        title: 'Secret',
+        board_id: hidden.board_id,
+      });
+      expect((await comments.findById(hiddenComment.comment_id))?.content).toBe('Secret comment');
+    } finally {
+      socket.close();
       await server.close();
     }
   },
