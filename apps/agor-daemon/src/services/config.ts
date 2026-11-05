@@ -234,7 +234,12 @@ export class ConfigService {
           await this.assertNativeAuthHomeMatchesSession(tool, userId, sessionId, internalParams);
         }
       };
-      const managed = await this.claudeBackendOAuth.resolve(authority.tenantId, userId, assertTask);
+      const managed = await this.claudeBackendOAuth.resolve(
+        authority.tenantId,
+        userId,
+        assertTask,
+        taskId
+      );
       result = { ...result, ...managed, apiKey: undefined, managedOAuth: undefined };
     }
     if (result.useNativeAuth && tool === 'claude-code') {
