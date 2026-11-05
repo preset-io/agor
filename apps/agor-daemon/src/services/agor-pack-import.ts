@@ -40,6 +40,7 @@ import {
   AgorPackImportRepository,
   ArtifactRepository,
   assertTenantWritable,
+  BoardObjectRepository,
   BoardRepository,
   BranchRepository,
   MessagesRepository,
@@ -57,6 +58,7 @@ import { generateId } from '@agor/core/ids';
 import {
   AGOR_PACK_CLAIM_STALE_MS,
   type AgorPackApplyRequest,
+  type AgorPackBoardFile,
   type AgorPackDryRunTeammate,
   type AgorPackImport,
   type AgorPackManifest,
@@ -107,6 +109,7 @@ import {
 } from './agor-pack-executor.js';
 import { type AgorPackServiceContext, agorPackBlob } from './agor-pack-export.js';
 import { importKnowledgeRepository } from './knowledge-transfers.js';
+import { ensureTeammateKnowledgeNamespace } from './teammate-knowledge.js';
 
 /** Sections this release reads; anything else came from a newer Agor. */
 const KNOWN_SECTIONS = new Set(Object.keys(agorPackTeammateSectionsSchema.shape));
@@ -798,7 +801,10 @@ export class AgorPackImporter {
         )
       );
     }
-    let branch = (await this.unit(() => branchRepo.findById(state.branch_id))) as Branch;
+    let branch = await this.finishBranch(
+      (await this.unit(() => branchRepo.findById(state.branch_id))) as Branch,
+      existingBoardId ? null : (boardFile?.placement ?? null)
+    );
     if (!branch.agor_pack?.imported_from) {
       // Provenance is server-managed and kept out of template-visible context
       // (also set when an earlier attempt stopped right after the create).
@@ -1214,6 +1220,61 @@ export class AgorPackImporter {
       remap,
       warnings,
     };
+  }
+
+  /**
+   * What `repos.createBranch` does after the branch row commits: Knowledge
+   * namespace, board placement, primary teammate, provisioning. Each step is
+   * idempotent (a no-op when already done), so a branch an earlier attempt
+   * created but did not finish is completed here. A `creating` checkout may
+   * still be owned by an executor and is left alone; one that failed (or was
+   * marked failed as interrupted at startup) goes through the normal retry.
+   */
+  private async finishBranch(
+    branch: Branch,
+    placement: AgorPackBoardFile['placement'] | null
+  ): Promise<Branch> {
+    const { branch: ready } = await this.write(() =>
+      ensureTeammateKnowledgeNamespace(
+        this.ctx.db,
+        branch.branch_id as BranchID,
+        this.ctx.user.user_id as UserID
+      )
+    );
+    const boardId = ready.board_id;
+    if (boardId) {
+      const placed = await this.unit(() =>
+        new BoardObjectRepository(this.ctx.db).findByBranchId(ready.branch_id as BranchID)
+      );
+      if (!placed) {
+        await this.unit(() =>
+          this.ctx.app.service('board-objects').create(
+            {
+              board_id: boardId,
+              branch_id: ready.branch_id,
+              position: placement?.position ?? { x: 100, y: 100 },
+              ...(placement?.zone_object_id ? { zone_id: placement.zone_object_id } : {}),
+            },
+            this.params
+          )
+        );
+      }
+      const board = await this.write(() =>
+        new BoardRepository(this.ctx.db).setPrimaryTeammateIfUnset(boardId, ready.branch_id)
+      );
+      if (board) {
+        emitServiceEvent(this.ctx.app, {
+          path: 'boards',
+          event: 'patched',
+          data: board,
+          params: this.params,
+          id: board.board_id,
+        });
+      }
+    }
+    if (ready.filesystem_status !== 'failed') return ready;
+    const repos = this.ctx.app.service('repos') as unknown as ReposServiceImpl;
+    return this.unit(() => repos.retryBranchProvisioning(ready.branch_id, this.params));
   }
 
   /**

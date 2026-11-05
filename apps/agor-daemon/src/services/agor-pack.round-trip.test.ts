@@ -7,6 +7,7 @@ import { AgorPackReader, bufferByteSource } from '@agor/core/agor-pack';
 import {
   AgorPackImportRepository,
   ArtifactRepository,
+  BoardObjectRepository,
   BoardRepository,
   BranchRepository,
   eq,
@@ -35,8 +36,10 @@ import {
   expectPackRoutesIsolated,
   type PackFixture,
 } from '../../test/agor-pack-fixture';
+import type { ReposServiceImpl } from '../declarations';
 import type { RegisterHooksContext } from '../register-hooks';
 import type { MetadataUploadStagingStore } from '../utils/metadata-upload-staging-store';
+import { spawnExecutorFireAndForget } from '../utils/spawn-executor';
 import {
   getBlobStagingStore,
   getUploadStagingStore,
@@ -45,6 +48,7 @@ import {
 import { runAgorPackExecutorCommand } from './agor-pack-executor';
 import { AgorPackExporter } from './agor-pack-export';
 import { AgorPackImporter } from './agor-pack-import';
+import { BranchesService } from './branches';
 import { KnowledgeDocumentsService } from './knowledge-documents';
 
 vi.mock('../utils/spawn-executor', async (importOriginal) => ({
@@ -528,6 +532,68 @@ dbTest(
           } as never)
         )
       ).toHaveLength(3);
+    })
+);
+
+dbTest(
+  'a crash right after the branch row commits: the resume finishes the branch',
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { pack } = await fx.exportPack();
+      const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+      const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+      const request = { teammates: ['t01'], board_id: null };
+      // branches.create committed the row, then the process died: no Knowledge
+      // namespace, board placement, primary teammate, or provisioning dispatch.
+      const spy = vi
+        .spyOn(
+          BranchesService.prototype as unknown as {
+            maybeEnsureTeammateKnowledgeNamespace: () => Promise<unknown>;
+          },
+          'maybeEnsureTeammateKnowledgeNamespace'
+        )
+        .mockRejectedValueOnce(new Error('crash after the branch row committed'));
+      try {
+        await expect(importer.apply(staged.import_id, request)).rejects.toThrow(/crash/);
+      } finally {
+        spy.mockRestore();
+      }
+      const plan = (await fx.unit(() =>
+        new AgorPackImportRepository(fx.db).findById(staged.import_id)
+      ))!.progress.t01!;
+      const branches = new BranchRepository(fx.db);
+      const half = await fx.unit(() => branches.findById(plan.branch_id));
+      expect(getTeammateConfig(half!)?.kb).toBeUndefined();
+      expect(half?.filesystem_status).toBe('creating');
+      // The restart's startup watchdog marks the interrupted checkout failed.
+      const repos = fx.server.app.service('repos') as unknown as ReposServiceImpl;
+      await fx.unit(() => repos.reconcileStuckCreatingBranches(fx.params(fx.bea)));
+      const spawn = vi.mocked(spawnExecutorFireAndForget);
+      spawn.mockClear();
+
+      const applied = await importer.apply(staged.import_id, request);
+      expect(applied.status).toBe('applied');
+      const result = applied.results[0]!;
+      expect(result.branch_id).toBe(plan.branch_id);
+      await fx.unit(async () => {
+        const branch = await branches.findById(plan.branch_id);
+        const kb = getTeammateConfig(branch!)?.kb;
+        expect(kb?.primary_namespace_id).toBe(result.knowledge_namespace_id);
+        expect(
+          await new KnowledgeDocumentRepository(fx.db).findAll({
+            namespace_id: kb?.primary_namespace_id,
+          } as never)
+        ).toHaveLength(3);
+        expect(
+          await new BoardObjectRepository(fx.db).findByBranchId(plan.branch_id as BranchID)
+        ).toMatchObject({ board_id: plan.board_id });
+        expect(
+          (await new BoardRepository(fx.db).findById(plan.board_id))?.primary_teammate_id
+        ).toBe(plan.branch_id);
+        // Provisioning went through the normal retry path again.
+        expect(branch?.filesystem_status).toBe('creating');
+      });
+      expect(spawn.mock.calls.map(([payload]) => payload.command)).toContain('git.branch.add');
     })
 );
 
