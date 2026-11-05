@@ -11,7 +11,7 @@ import {
   runWithTenantDatabaseScope,
   ScheduleRepository,
 } from '@agor/core/db';
-import { BadRequest } from '@agor/core/feathers';
+import { BadRequest, Forbidden } from '@agor/core/feathers';
 import {
   type AgorPackSwitchOverState,
   type AuthenticatedParams,
@@ -20,7 +20,8 @@ import {
   type UserRole,
 } from '@agor/core/types';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
-import { type AgorPackServiceContext, readSwitchOverState } from './agor-pack-export.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
+import type { AgorPackServiceContext } from './agor-pack-export.js';
 
 export interface SwitchOverResult {
   branch_id: string;
@@ -46,12 +47,14 @@ export async function switchOverTeammate(
       ctx.user.user_id,
       ctx.user.role as UserRole,
       'all',
-      'read',
+      'write',
       ctx.config.execution?.allow_superadmin === true
     )
-  );
+  ).catch(() => {
+    throw new Forbidden('You need full access to this teammate to switch it over');
+  });
   const warnings: string[] = [];
-  const current = readSwitchOverState(branch);
+  const current = branch.agor_pack?.switch_over ?? null;
   const schedules = ctx.app.service('schedules');
   const channels = ctx.app.service('gateway-channels');
   let next: AgorPackSwitchOverState | null;
@@ -101,13 +104,18 @@ export async function switchOverTeammate(
     next = null;
   }
 
-  // custom_context patches merge, so Undo writes an explicit null.
-  await ctx.app
-    .service('branches')
-    .patch(
-      branch.branch_id,
-      { custom_context: { ...(branch.custom_context ?? {}), move_to_cloud: next } },
-      params
-    );
+  // Server-managed (never in custom_context, which feeds prompt templates).
+  const saved = await unit(() =>
+    branches.update(branch.branch_id, {
+      agor_pack: { ...(branch.agor_pack ?? {}), switch_over: next },
+    })
+  );
+  emitServiceEvent(ctx.app, {
+    path: 'branches',
+    event: 'patched',
+    data: saved,
+    params,
+    id: saved.branch_id,
+  });
   return { branch_id: branchId, switch_over: next, warnings };
 }

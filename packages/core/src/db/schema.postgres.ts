@@ -928,6 +928,9 @@ export const branches = pgTable(
         // Custom context for templates (accessible as {{custom.*}})
         custom_context?: Record<string, unknown>;
 
+        // `.agorpack` provenance and switch-over state (never in templates)
+        agor_pack?: import('@agor/core/types').AgorPackBranchState;
+
         // Default MCP servers for new sessions in this branch
         mcp_server_ids?: string[];
 
@@ -3851,6 +3854,11 @@ export const agorPackImports = pgTable(
     manifest: t.json<import('@agor/core/types').AgorPackManifest>('manifest').notNull(),
     dry_run: t.json<import('@agor/core/types').AgorPackDryRunTeammate[]>('dry_run'),
     results: t.json<import('@agor/core/types').AgorPackTeammateResult[]>('results'),
+    progress:
+      t.json<Record<string, import('@agor/core/types').AgorPackTeammateProgress>>('progress'),
+    /** Apply claim: one worker at a time across processes; stale after a timeout. */
+    claim_token: text('claim_token'),
+    claimed_at: t.timestamp('claimed_at'),
     error: text('error'),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at').notNull(),
@@ -3863,6 +3871,30 @@ export const agorPackImports = pgTable(
       table.owner_user_id,
       table.content_sha256
     ),
+  })
+);
+
+/**
+ * Daemon-staged blobs that are not session attachments (`.agorpack` files and
+ * executor pack fragments). Bytes live in the upload store under their own
+ * namespace; this row is the ownership authority and the sweep's expiry index.
+ */
+export const stagedBlobs = pgTable(
+  'staged_blobs',
+  {
+    blob_ref: text('blob_ref').primaryKey(),
+    tenant_id: text('tenant_id').notNull().default('default'),
+    kind: text('kind', { enum: ['agor-pack'] }).notNull(),
+    scope_id: varchar('scope_id', { length: 36 }).notNull(),
+    created_by: varchar('created_by', { length: 36 }).notNull(),
+    size_bytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    status: text('status', { enum: ['pending', 'active'] }).notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+  },
+  (table) => ({
+    scopeIdx: index('staged_blobs_scope_idx').on(table.tenant_id, table.kind, table.scope_id),
+    expiryIdx: index('staged_blobs_expiry_idx').on(table.expires_at),
   })
 );
 

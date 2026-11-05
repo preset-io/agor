@@ -33,7 +33,8 @@ import { TASKS_SERVICE_TRANSPORT_METHODS, TasksService } from '../src/services/t
 import { createUsersService } from '../src/services/users.js';
 import { configureChannels, createSocketIOConfig } from '../src/setup/socketio.js';
 
-const JWT_SECRET = 'board-metadata-disposable-test-secret';
+export const BOARD_METADATA_TEST_JWT_SECRET = 'board-metadata-disposable-test-secret';
+const JWT_SECRET = BOARD_METADATA_TEST_JWT_SECRET;
 
 /** Real REST/auth/hooks/repositories; only unrelated daemon services are inert. */
 export async function boardMetadataTestApp(

@@ -3,6 +3,7 @@ import type { Branch } from '@agor-live/client';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { mount } from '../../test/harness';
+import { applyPackImport } from '../../utils/agorPack';
 import { ExportPackModal } from './ExportPackModal';
 import { ImportPackWizard } from './ImportPackWizard';
 
@@ -170,5 +171,23 @@ describe('ImportPackWizard', () => {
     ).toBeInTheDocument();
     expect(within(dialog).getByText(/uses docker/)).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Import 1 teammate' })).toBeEnabled();
+  });
+
+  it('offers to resume an import that stopped part-way', async () => {
+    const apply = vi.mocked(applyPackImport);
+    apply.mockResolvedValue({ ...receipt, status: 'failed', error: 'clone failed', results: [] });
+    mount(
+      <ImportPackWizard open onClose={vi.fn()} boardById={new Map()} initialReceipt={receipt} />
+    );
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Import 1 teammate' }));
+    expect(await within(dialog).findByText('The import stopped part-way')).toBeInTheDocument();
+    expect(within(dialog).getByText(/clone failed/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(apply).toHaveBeenCalledTimes(2));
+    expect(apply).toHaveBeenLastCalledWith(receipt.import_id, {
+      teammates: [receipt.manifest.teammates[0]!.key],
+      board_id: null,
+    });
   });
 });

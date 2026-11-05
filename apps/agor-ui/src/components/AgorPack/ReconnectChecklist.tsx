@@ -13,7 +13,7 @@ export interface ReconnectChecklistProps {
   client?: AgorClient | null;
   currentUser?: User | null;
   receipt: AgorPackImport;
-  /** Called with the receipt after a retry, so the wizard can follow it. */
+  /** Called with the receipt after a retry, so the wizard follows it until done. */
   onReceipt?: (receipt: AgorPackImport) => void;
 }
 
@@ -47,14 +47,7 @@ export const ReconnectChecklist: React.FC<ReconnectChecklistProps> = ({
         teammates: [key],
         board_id: null,
       });
-      onReceipt?.({
-        ...updated,
-        results: updated.results.map((result) =>
-          result.key === key
-            ? { ...result, filesystem: 'pending', filesystem_error: undefined }
-            : result
-        ),
-      });
+      onReceipt?.(updated);
     } catch (error) {
       showError(`Retry failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {

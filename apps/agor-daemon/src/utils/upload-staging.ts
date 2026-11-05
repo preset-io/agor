@@ -5,7 +5,7 @@ import {
   getAgorHome,
   getManagedStorageSegments,
 } from '@agor/core/config';
-import { AGOR_PACK, type UploadStagingStore } from '@agor/core/types';
+import { AGOR_PACK, type BlobStagingStore, type UploadStagingStore } from '@agor/core/types';
 import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import { MetadataUploadStagingStore } from './metadata-upload-staging-store.js';
 import { parseS3UploadLocation, S3UploadStagingStore } from './s3-upload-staging-store.js';
@@ -28,23 +28,19 @@ let factory: UploadStagingStoreFactory = () =>
 let instance: UploadStagingStore | undefined;
 
 /**
- * `.agorpack` files and executor pack fragments are staged as raw bytes in the
- * same object store as uploads, under their own `agor-packs` namespace, with
- * the pack size limit and a short TTL. They have no `uploads` row: the owner
- * binding is (tenant, import/export id, branch-or-id, user), which the pack
- * routes re-check on every read.
+ * `.agorpack` files and executor pack fragments are blobs of the same upload
+ * store (see `MetadataUploadStagingStore.blobs`): their own byte namespace
+ * (`agor-packs`, pack size limit, short TTL), their own owner rows, and the
+ * same expiry sweep as attachments.
  */
 const PACK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-let packFactory: UploadStagingStoreFactory = () =>
-  new LocalUploadStagingStore((tenantId) => join(getUploadDirectory(tenantId), 'agor-packs'), {
-    maxBytes: AGOR_PACK.maxBytes,
-    ttlMs: PACK_TTL_MS,
-  });
-let packInstance: UploadStagingStore | undefined;
 
-export function getAgorPackStagingStore(): UploadStagingStore {
-  packInstance ??= packFactory();
-  return packInstance;
+export function getBlobStagingStore(): BlobStagingStore {
+  const store = getUploadStagingStore();
+  if (!(store instanceof MetadataUploadStagingStore) || !store.blobs) {
+    throw new Error('Pack staging requires the database-backed upload store');
+  }
+  return store.blobs;
 }
 
 /** Application composition seam used by local self-hosted and Cloud adapters. */
@@ -73,15 +69,13 @@ export function configureUploadStagingStoreFromConfig(
       const adapter = s3Factory
         ? s3Factory(url, config)
         : new S3UploadStagingStore(parseS3UploadLocation(url), { maxBytes, ttlMs });
-      return db ? new MetadataUploadStagingStore(db, adapter) : adapter;
-    });
-    packFactory = () => {
-      const url = new URL(location);
-      url.pathname = `${url.pathname.replace(/\/$/, '')}/agor-packs`;
+      if (!db) return adapter;
+      const packUrl = new URL(location);
+      packUrl.pathname = `${packUrl.pathname.replace(/\/$/, '')}/agor-packs`;
       // Same injected adapter as uploads (Cloud owns S3 construction), with
       // the pack size and TTL limits instead of the upload ones.
-      return s3Factory
-        ? s3Factory(url, {
+      const packBytes = s3Factory
+        ? s3Factory(packUrl, {
             ...config,
             uploads: {
               ...config.uploads,
@@ -89,12 +83,12 @@ export function configureUploadStagingStoreFromConfig(
               max_age_days: PACK_TTL_MS / (24 * 60 * 60 * 1000),
             },
           })
-        : new S3UploadStagingStore(parseS3UploadLocation(url), {
+        : new S3UploadStagingStore(parseS3UploadLocation(packUrl), {
             maxBytes: AGOR_PACK.maxBytes,
             ttlMs: PACK_TTL_MS,
           });
-    };
-    packInstance = undefined;
+      return new MetadataUploadStagingStore(db, adapter, { bytes: packBytes, ttlMs: PACK_TTL_MS });
+    });
     return;
   }
   const expanded = expandHomePath(location);
@@ -102,19 +96,20 @@ export function configureUploadStagingStoreFromConfig(
     config.multi_tenancy?.filesystem_isolation_enabled === true ||
     config.multi_tenancy?.mode === 'required_from_auth';
   configureUploadStagingStore(() => {
-    const adapter = new LocalUploadStagingStore(
-      (tenantId) => resolveLocalUploadDirectory(expanded, tenantId, tenantSeparated),
-      { maxBytes, ttlMs }
-    );
-    return db ? new MetadataUploadStagingStore(db, adapter) : adapter;
+    const root = (tenantId: string) =>
+      resolveLocalUploadDirectory(expanded, tenantId, tenantSeparated);
+    const adapter = new LocalUploadStagingStore(root, { maxBytes, ttlMs });
+    if (!db) return adapter;
+    return new MetadataUploadStagingStore(db, adapter, {
+      bytes: localPackBytes((tenantId) => join(root(tenantId), 'agor-packs')),
+      ttlMs: PACK_TTL_MS,
+    });
   });
-  packFactory = () =>
-    new LocalUploadStagingStore(
-      (tenantId) =>
-        join(resolveLocalUploadDirectory(expanded, tenantId, tenantSeparated), 'agor-packs'),
-      { maxBytes: AGOR_PACK.maxBytes, ttlMs: PACK_TTL_MS }
-    );
-  packInstance = undefined;
+}
+
+/** Local byte namespace for pack blobs (tests compose it the same way). */
+export function localPackBytes(root: (tenantId: string) => string): UploadStagingStore {
+  return new LocalUploadStagingStore(root, { maxBytes: AGOR_PACK.maxBytes, ttlMs: PACK_TTL_MS });
 }
 
 export function getUploadStagingStore(): UploadStagingStore {
@@ -126,10 +121,4 @@ export function resetUploadStagingStoreForTests(): void {
   configureUploadLimits(50 * 1024 * 1024);
   factory = () => new LocalUploadStagingStore((tenantId) => getUploadDirectory(tenantId));
   instance = undefined;
-  packFactory = () =>
-    new LocalUploadStagingStore((tenantId) => join(getUploadDirectory(tenantId), 'agor-packs'), {
-      maxBytes: AGOR_PACK.maxBytes,
-      ttlMs: PACK_TTL_MS,
-    });
-  packInstance = undefined;
 }

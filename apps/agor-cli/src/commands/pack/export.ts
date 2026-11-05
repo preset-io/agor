@@ -95,7 +95,7 @@ export default class PackExport extends BaseCommand {
       const response = await packFetch(
         daemonUrl,
         bearer,
-        `/agor-pack/exports/${result.export_id}/${result.ref}`
+        `/agor-pack/downloads/${result.export_id}/${result.ref}`
       );
       const output = flags.output.endsWith(AGOR_PACK.extension)
         ? flags.output

@@ -63,7 +63,6 @@ import {
   type AgorPackRequirements,
   type AgorPackSchedule,
   type AgorPackSessionFile,
-  type AgorPackSwitchOverState,
   type AgorPackTeammateFile,
   type AgorPackTeammateSummary,
   type AgorPackUploadFile,
@@ -74,18 +73,20 @@ import {
   isTeammate,
   type MCPServer,
   type MCPServerID,
+  pluralize,
   type Repo,
   type Schedule,
   type Session,
+  type StagedBlobReadInput,
   type TenantID,
   UPLOAD_VIRTUAL_URL_PREFIX,
   type UploadRef,
   type User,
+  type UserID,
   type UserRole,
-  type UUID,
 } from '@agor/core/types';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
-import { getAgorPackStagingStore, getUploadStagingStore } from '../utils/upload-staging.js';
+import { getBlobStagingStore, getUploadStagingStore } from '../utils/upload-staging.js';
 import {
   agorPackCollectExecutorCommandId,
   runAgorPackExecutorCommand,
@@ -108,15 +109,19 @@ const UPLOAD_LINK = new RegExp(
   'g'
 );
 
-/** Switch-over state recorded on a source branch (see agor-pack-switch-over). */
-export function readSwitchOverState(branch: Branch): AgorPackSwitchOverState | null {
-  const state = (branch.custom_context as Record<string, unknown> | undefined)?.move_to_cloud;
-  return state && typeof state === 'object' ? (state as AgorPackSwitchOverState) : null;
-}
-
-/** `pluralize(1, 'value')` → "1 value"; user-facing warnings read naturally at any count. */
-export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
+/** A pack blob of this import/export, owned by the caller. */
+export function agorPackBlob(
+  ctx: Pick<AgorPackServiceContext, 'tenantId' | 'user'>,
+  scopeId: string,
+  ref: string
+): StagedBlobReadInput {
+  return {
+    tenantId: ctx.tenantId,
+    kind: 'agor-pack',
+    scopeId,
+    createdBy: ctx.user.user_id as UserID,
+    ref: ref as UploadRef,
+  };
 }
 
 function iso(value: string | number | Date | null | undefined): string {
@@ -450,7 +455,7 @@ export class AgorPackExporter {
         },
         requirements,
         environment,
-        switch_over: readSwitchOverState(branch),
+        switch_over: branch.agor_pack?.switch_over ?? null,
         warnings,
       });
     }
@@ -908,7 +913,7 @@ export class AgorPackExporter {
       branch,
       params: { exportId, includeClaudeMemory: sections.has('claude_memory') },
     });
-    await this.copyFragment(key, branch, exportId, String(collected.fragmentRef), writer);
+    await this.copyFragment(key, exportId, String(collected.fragmentRef), writer);
     summary.git = collected.git as AgorPackTeammateSummary['sections']['git'];
     summary.claude_memory =
       (collected.claudeMemory as AgorPackTeammateSummary['sections']['claude_memory']) ?? null;
@@ -999,18 +1004,12 @@ export class AgorPackExporter {
   /** Re-key the executor's fragment entries into this teammate's folder. */
   private async copyFragment(
     key: string,
-    branch: Branch,
     exportId: string,
     ref: string,
     writer: AgorPackWriter
   ): Promise<void> {
-    const store = getAgorPackStagingStore();
-    const owner = {
-      tenantId: this.ctx.tenantId,
-      sessionId: exportId as UUID,
-      branchId: branch.branch_id,
-      ref: ref as UploadRef,
-    };
+    const store = getBlobStagingStore();
+    const owner = agorPackBlob(this.ctx, exportId, ref);
     try {
       const meta = await store.inspect(owner);
       await forEachPackFragmentEntry(

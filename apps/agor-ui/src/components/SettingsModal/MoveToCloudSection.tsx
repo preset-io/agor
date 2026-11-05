@@ -1,4 +1,4 @@
-import type { AgorPackSwitchOverState } from '@agor/core/types';
+import { type AgorPackSwitchOverState, pluralize } from '@agor/core/types';
 import type { Branch, User } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { CloudUploadOutlined, ExportOutlined } from '@ant-design/icons';
@@ -10,7 +10,6 @@ import {
   switchOverTeammate,
 } from '../../utils/agorPack';
 import { useThemedMessage } from '../../utils/message';
-import { pluralize } from '../../utils/pluralize';
 import { ExportPackPanel } from '../AgorPack/ExportPackPanel';
 import { Tag } from '../Tag';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';

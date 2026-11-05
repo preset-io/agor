@@ -210,7 +210,10 @@ is created. You own everything you import; the original author is kept as
 "originally by". Schedules arrive paused, custom MCP servers arrive disabled
 without credentials, and sessions arrive as archived, read-only history. A
 reconnect checklist then walks through the credentials and schedules to turn
-back on. Importing the same file again changes nothing.
+back on. Importing the same file again changes nothing. The import runs in the
+background (cloning a repository can take a while); if it stops part-way, for
+example because a clone failed or the server restarted, **Resume** continues
+where it stopped without creating a second copy.
 
 On a self-hosted install, **Settings → Move to Agor Cloud** wraps this: export,
 import in your Cloud workspace, then **Switch over** to pause the teammate's

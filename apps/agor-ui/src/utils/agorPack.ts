@@ -85,7 +85,7 @@ export function fetchPackPreflight(branchIds: string[]): Promise<AgorPackPreflig
 export async function exportPack(body: AgorPackExportRequest): Promise<AgorPackExportResult> {
   const result = await json<AgorPackExportResult>('/agor-pack/exports', body);
   const response = await request(
-    `/agor-pack/exports/${result.export_id}/${result.ref}?filename=${encodeURIComponent(result.filename)}`
+    `/agor-pack/downloads/${result.export_id}/${result.ref}?filename=${encodeURIComponent(result.filename)}`
   );
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
@@ -105,7 +105,7 @@ export async function uploadPack(
   const send = (token: string | null) =>
     new Promise<{ status: number; body: string }>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', `${daemonUrl()}/agor-pack/imports`);
+      xhr.open('POST', `${daemonUrl()}/agor-pack/uploads`);
       if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       xhr.setRequestHeader('Content-Type', 'application/zip');
       xhr.upload.onprogress = (event) => {

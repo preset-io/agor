@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { runWithTenantDatabaseScope, UploadRepository } from '@agor/core/db';
+import { runWithTenantDatabaseScope, StagedBlobRepository, UploadRepository } from '@agor/core/db';
 import type {
+  BlobStagingStore,
+  StagedBlob,
+  StagedBlobOwner,
+  StagedBlobReadInput,
   UploadMetadata,
   UploadOwner,
   UploadReadInput,
@@ -15,12 +19,16 @@ import type {
  */
 export class MetadataUploadStagingStore implements UploadStagingStore {
   private readonly repository: UploadRepository;
+  /** Non-attachment blobs (`.agorpack` files), when a blob byte namespace is configured. */
+  readonly blobs?: BlobStagingStore;
 
   constructor(
     private readonly db: ConstructorParameters<typeof UploadRepository>[0],
-    private readonly bytes: UploadStagingStore
+    private readonly bytes: UploadStagingStore,
+    blobs?: { bytes: UploadStagingStore; ttlMs: number }
   ) {
     this.repository = new UploadRepository(db);
+    if (blobs) this.blobs = new MetadataBlobStagingStore(db, blobs.bytes, blobs.ttlMs);
   }
 
   async stage(input: UploadStageInput): Promise<UploadMetadata> {
@@ -131,6 +139,124 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
       if (deleted) removed++;
     }
     // Also reconcile adapter-owned partial/orphan records.
+    await this.bytes.cleanupExpired(owner, now);
+    return removed;
+  }
+}
+
+/**
+ * Blob port: the `staged_blobs` row is the ownership and expiry authority,
+ * checked before every byte operation. Bytes sit in their own adapter
+ * namespace; adapters bind each object to a (tenant, id, id) tuple, which for
+ * blobs is (tenant, scope, creator).
+ */
+class MetadataBlobStagingStore implements BlobStagingStore {
+  private readonly repository: StagedBlobRepository;
+
+  constructor(
+    private readonly db: ConstructorParameters<typeof UploadRepository>[0],
+    private readonly bytes: UploadStagingStore,
+    private readonly ttlMs: number
+  ) {
+    this.repository = new StagedBlobRepository(db);
+  }
+
+  private unit<T>(tenantId: string, work: () => Promise<T>): Promise<T> {
+    return runWithTenantDatabaseScope(this.db, tenantId, work);
+  }
+
+  private byteInput(owner: StagedBlobOwner, ref: UploadRef): UploadReadInput {
+    return {
+      tenantId: owner.tenantId,
+      sessionId: owner.scopeId as UploadReadInput['sessionId'],
+      branchId: owner.createdBy as unknown as UploadReadInput['branchId'],
+      ref,
+    };
+  }
+
+  async stage(input: Parameters<BlobStagingStore['stage']>[0]): Promise<UploadMetadata> {
+    const ref = `upl_${randomUUID()}` as UploadRef;
+    const { owner } = input;
+    await this.unit(owner.tenantId, () =>
+      this.repository.reserve(owner, ref, new Date(Date.now() + this.ttlMs))
+    );
+    const byteOwner = this.byteInput(owner, ref);
+    try {
+      const metadata = await this.bytes.stage({
+        reservedRef: ref,
+        owner: { ...byteOwner, createdBy: owner.createdBy },
+        name: input.name,
+        mimeType: input.mimeType,
+        provenance: 'import',
+        body: input.body,
+        sizeHint: input.sizeHint,
+        ttlMs: this.ttlMs,
+      });
+      await this.unit(owner.tenantId, () => this.repository.complete(ref, metadata.size));
+      return metadata;
+    } catch (error) {
+      await this.bytes
+        .delete(byteOwner)
+        .then(() => this.unit(owner.tenantId, () => this.repository.remove(ref)))
+        .catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async authorize(input: StagedBlobReadInput, active = true): Promise<StagedBlob | null> {
+    const blob = await this.unit(input.tenantId, () =>
+      this.repository.find(input.tenantId, input.ref)
+    );
+    if (!blob) return null;
+    if (
+      (active && blob.status !== 'active') ||
+      blob.kind !== input.kind ||
+      blob.scopeId !== input.scopeId ||
+      blob.createdBy !== input.createdBy
+    ) {
+      throw Object.assign(new Error('Upload not found'), { status: 404 });
+    }
+    return blob;
+  }
+
+  async inspect(input: StagedBlobReadInput): Promise<UploadMetadata> {
+    if (!(await this.authorize(input))) {
+      throw Object.assign(new Error('Upload not found'), { status: 404 });
+    }
+    return this.bytes.inspect(this.byteInput(input, input.ref));
+  }
+
+  async read(
+    input: StagedBlobReadInput & { offset?: number; length?: number }
+  ): Promise<NodeJS.ReadableStream> {
+    if (!(await this.authorize(input))) {
+      throw Object.assign(new Error('Upload not found'), { status: 404 });
+    }
+    return this.bytes.read({
+      ...this.byteInput(input, input.ref),
+      offset: input.offset,
+      length: input.length,
+    });
+  }
+
+  async delete(input: StagedBlobReadInput): Promise<void> {
+    if (!(await this.authorize(input, false))) return;
+    await this.bytes.delete(this.byteInput(input, input.ref));
+    await this.unit(input.tenantId, () => this.repository.remove(input.ref));
+  }
+
+  async cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now = new Date()): Promise<number> {
+    const expired = await this.unit(owner.tenantId, () =>
+      this.repository.findExpired(owner.tenantId, now)
+    );
+    let removed = 0;
+    for (const blob of expired) {
+      const deleted = await this.delete({ ...blob, tenantId: owner.tenantId }).then(
+        () => true,
+        () => false
+      );
+      if (deleted) removed++;
+    }
     await this.bytes.cleanupExpired(owner, now);
     return removed;
   }

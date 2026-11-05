@@ -42,7 +42,7 @@ export default class PackImport extends BaseCommand {
       const daemonUrl = this.daemonUrl as string;
       const { size } = await stat(args.file);
       this.logToStderr(chalk.dim(`Uploading ${args.file} (${size} bytes)…`));
-      const response = await packFetch(daemonUrl, bearer, '/agor-pack/imports', {
+      const response = await packFetch(daemonUrl, bearer, '/agor-pack/uploads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/zip', 'Content-Length': String(size) },
         body: Readable.toWeb(createReadStream(args.file)) as never,
@@ -68,6 +68,18 @@ export default class PackImport extends BaseCommand {
           `/agor-pack/imports/${receipt.import_id}/apply`,
           { teammates: keys, board_id: boardId }
         );
+        // Apply runs in the background; follow the receipt until the rows are in.
+        while (receipt.status === 'applying') {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          receipt = await packJson<AgorPackImport>(
+            daemonUrl,
+            bearer,
+            `/agor-pack/imports/${receipt.import_id}`
+          );
+        }
+        if (receipt.status === 'failed') {
+          throw new Error(`${receipt.error ?? 'apply failed'} (run the command again to resume)`);
+        }
         for (const result of receipt.results) {
           this.logToStderr(
             chalk.green(`✓ ${result.display_name} → branch ${result.branch_id.slice(0, 8)}`) +

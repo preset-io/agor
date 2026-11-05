@@ -78,6 +78,9 @@ function migrationTenantTables(): string[] {
   const agorPackImportsMigration = readRepoFile(
     'packages/core/drizzle/postgres/0120_agor_pack_imports.sql'
   );
+  const agorPackStagingMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0121_agor_pack_staging.sql'
+  );
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
@@ -99,6 +102,7 @@ function migrationTenantTables(): string[] {
         ...transferMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...openCodeCheckpointMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...agorPackImportsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...agorPackStagingMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...capabilityPoliciesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...teamsGatewayHaMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
@@ -128,6 +132,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0112_kb_import_receipts.sql'),
     readRepoFile('packages/core/drizzle/postgres/0117_opencode_checkpoint_attempts.sql'),
     readRepoFile('packages/core/drizzle/postgres/0120_agor_pack_imports.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0121_agor_pack_staging.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [

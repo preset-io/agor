@@ -2,52 +2,37 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { AgorPackReader, AgorPackWriter, bufferByteSource } from '@agor/core/agor-pack';
+import { AgorPackReader, bufferByteSource } from '@agor/core/agor-pack';
 import {
+  AgorPackImportRepository,
   ArtifactRepository,
   BoardRepository,
   BranchRepository,
-  createTenantScopedDatabaseProxy,
-  generateId,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
   MessagesRepository,
-  RepoRepository,
-  runWithTenantDatabaseScope,
   ScheduleRepository,
   SessionRepository,
-  TaskRepository,
   UploadRepository,
-  UsersRepository,
 } from '@agor/core/db';
 import {
   type BranchID,
   getTeammateConfig,
   type SessionID,
   type TenantID,
-  UPLOAD_VIRTUAL_URL_PREFIX,
   type UploadRef,
-  type User,
-  type UUID,
 } from '@agor/core/types';
 import { afterEach, beforeEach, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
-import { boardMetadataTestApp } from '../../test/board-metadata-app';
-import { LocalUploadStagingStore } from '../host/local/upload-staging-store';
-import type { RegisterHooksContext } from '../register-hooks';
-import { MetadataUploadStagingStore } from '../utils/metadata-upload-staging-store';
 import {
-  configureUploadStagingStore,
-  getAgorPackStagingStore,
-  getUploadStagingStore,
-  resetUploadStagingStoreForTests,
-} from '../utils/upload-staging';
-import { AgorPackExporter, type AgorPackServiceContext } from './agor-pack-export';
+  createPackFixture,
+  expectPackRoutesIsolated,
+  type PackFixture,
+} from '../../test/agor-pack-fixture';
+import type { RegisterHooksContext } from '../register-hooks';
+import { getUploadStagingStore, resetUploadStagingStoreForTests } from '../utils/upload-staging';
+import { AgorPackExporter } from './agor-pack-export';
 import { AgorPackImporter } from './agor-pack-import';
-import { KnowledgeDocumentsService } from './knowledge-documents';
-import { ReposService } from './repos';
-import { createSchedulesService } from './schedules';
-import { ensureTeammateKnowledgeNamespace } from './teammate-knowledge';
 
 vi.mock('../utils/spawn-executor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/spawn-executor')>()),
@@ -57,56 +42,16 @@ vi.mock('../utils/spawn-executor', async (importOriginal) => ({
 }));
 
 // The executor leg stages a fragment exactly like `branch.pack.collect` does.
-vi.mock('./agor-pack-executor', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./agor-pack-executor')>()),
-  runAgorPackExecutorCommand: vi.fn(
-    async (
-      ctx: { tenantId: TenantID; user: { user_id: string } },
-      input: { params: { exportId: string }; branch: { branch_id: string } }
-    ) => {
-      const writer = new AgorPackWriter();
-      const chunks: Buffer[] = [];
-      writer.output.on('data', (chunk: Buffer) => chunks.push(chunk));
-      const done = new Promise((resolve) => writer.output.on('end', resolve));
-      writer.addJson('teammates/t00/git/state.json', {
-        version: 1,
-        head_sha: 'a'.repeat(40),
-        ref: 'ada',
-        deleted: [],
-      });
-      writer.addBuffer('teammates/t00/sdk-home/claude/projects/-src-ada/memory/MEMORY.md', '# me');
-      writer.finishFragment();
-      await done;
-      const staged = await getAgorPackStagingStore().stage({
-        owner: {
-          tenantId: ctx.tenantId,
-          sessionId: input.params.exportId as UUID,
-          branchId: input.branch.branch_id as UUID,
-          createdBy: ctx.user.user_id as UUID,
-        },
-        name: 'fragment.zip',
-        mimeType: 'application/zip',
-        provenance: 'import',
-        body: Readable.from([Buffer.concat(chunks)]),
-      });
-      return {
-        fragmentRef: staged.ref,
-        git: {
-          mode: 'bundle',
-          head_sha: 'a'.repeat(40),
-          unpushed_commits: 3,
-          dirty_files: 0,
-          deleted_files: 0,
-          bundle: false,
-          skipped_files: [],
-        },
-        claudeMemory: { files: 1, bytes: 4 },
-      };
-    }
-  ),
-}));
+vi.mock('./agor-pack-executor', async (importOriginal) =>
+  (await import('../../test/agor-pack-executor-mock')).packExecutorMock(importOriginal as never)
+);
 
 const TENANT = 'pack-test' as TenantID;
+const CONFIG = {
+  database: { dialect: 'sqlite' },
+  execution: {},
+  multi_tenancy: { mode: 'static', static_tenant_id: TENANT },
+} as RegisterHooksContext['config'];
 let uploadsRoot = '';
 
 beforeEach(async () => {
@@ -117,234 +62,50 @@ afterEach(async () => {
   await rm(uploadsRoot, { recursive: true, force: true });
 });
 
+async function withFixture(
+  raw: Parameters<typeof createPackFixture>[0]['raw'],
+  work: (fx: PackFixture) => Promise<void>
+) {
+  const fx = await createPackFixture({ raw, tenant: TENANT, config: CONFIG, uploadsRoot });
+  try {
+    await work(fx);
+  } finally {
+    await fx.close();
+  }
+}
+
+/** Teammate rows an importer owns on a repo (branches, sessions, schedules, artifacts). */
+async function ownedCounts(fx: PackFixture, userId: string) {
+  return fx.unit(async () => {
+    const branches = (
+      await new BranchRepository(fx.db).findAll({ repo_id: fx.seeded.repo.repo_id } as never)
+    ).filter((b) => b.created_by === userId && getTeammateConfig(b)?.displayName === 'Ada');
+    const ids = new Set(branches.map((b) => b.branch_id));
+    const sessions = (await new SessionRepository(fx.db).findAll()).filter((session) =>
+      ids.has(session.branch_id)
+    );
+    const schedules = (
+      await Promise.all(
+        branches.map((b) => new ScheduleRepository(fx.db).findByBranchId(b.branch_id as never))
+      )
+    ).flat();
+    const artifacts = (await new ArtifactRepository(fx.db).findAll()).filter(
+      (a) => a.created_by === userId
+    );
+    return {
+      branches: branches.length,
+      sessions: sessions.length,
+      schedules: schedules.length,
+      artifacts: artifacts.length,
+    };
+  });
+}
+
 dbTest(
   'a teammate round-trips into another user with new ids, importer ownership, and idempotency',
-  async ({ db: raw }) => {
-    const db = createTenantScopedDatabaseProxy(raw, { label: 'agor-pack-round-trip' });
-    const unit = <T>(work: () => Promise<T>) => runWithTenantDatabaseScope(db, TENANT, work);
-    configureUploadStagingStore(
-      () =>
-        new MetadataUploadStagingStore(
-          db,
-          new LocalUploadStagingStore((tenant) => join(uploadsRoot, tenant), { ttlMs: 0 })
-        )
-    );
-    const config = {
-      database: { dialect: 'sqlite' },
-      execution: {},
-      multi_tenancy: { mode: 'static', static_tenant_id: TENANT },
-    } as RegisterHooksContext['config'];
-    const server = await boardMetadataTestApp(db, config, false, false, false, async (app) => {
-      await app.unuse('repos');
-      app.use('repos', new ReposService(db, app), {
-        methods: ['find', 'get', 'create', 'patch', 'createBranch', 'cloneRepository'],
-      } as never);
-      await app.unuse('schedules');
-      app.use('schedules', createSchedulesService(db));
-      app.use('artifacts', {
-        async find() {
-          return [];
-        },
-      });
-    });
-    Object.assign(server.app, {
-      sessionTokenService: { generateCommandToken: vi.fn(async () => 'command-token') },
-    });
-    try {
-      const [ada, bea] = await unit(async () => [
-        await new UsersRepository(db).create({
-          email: 'ada@example.test',
-          name: 'Ada',
-          role: 'member',
-        }),
-        await new UsersRepository(db).create({
-          email: 'bea@example.test',
-          name: 'Bea',
-          role: 'member',
-        }),
-      ]);
-      const params = (user: User) => ({
-        user,
-        tenant: { tenant_id: TENANT, source: 'explicit' as const },
-      });
-      const ctx = (user: User): AgorPackServiceContext => ({
-        app: server.app,
-        db,
-        config,
-        tenantId: TENANT,
-        user,
-        agorVersion: '0.0.0-test',
-      });
-
-      // ---- Seed Ada's teammate ------------------------------------------------
-      const seeded = await unit(async () => {
-        const repo = await new RepoRepository(db).create({
-          name: 'Example',
-          slug: 'example/repo',
-          repo_type: 'remote',
-          local_path: '/fictional/example',
-          default_branch: 'main',
-          remote_url: 'https://example.test/repo.git',
-          clone_status: 'ready',
-        });
-        const board = await new BoardRepository(db).create({
-          name: "Ada's board",
-          created_by: ada.user_id,
-          objects: {
-            'zone-1': {
-              type: 'zone',
-              x: 0,
-              y: 0,
-              width: 800,
-              height: 600,
-              label: 'Doing',
-            } as never,
-          },
-        });
-        const branch = await new BranchRepository(db).create({
-          branch_id: generateId() as BranchID,
-          repo_id: repo.repo_id,
-          board_id: board.board_id,
-          name: 'ada',
-          ref: 'ada',
-          path: '/fictional/worktrees/example/repo/ada',
-          branch_unique_id: 1,
-          created_by: ada.user_id,
-          storage_mode: 'clone',
-          filesystem_status: 'ready',
-          custom_context: { teammate: { kind: 'teammate', displayName: 'Ada', emoji: '🦊' } },
-        });
-        const { namespace } = await ensureTeammateKnowledgeNamespace(
-          db,
-          branch.branch_id,
-          ada.user_id
-        );
-        const docs = new KnowledgeDocumentsService(db, server.app);
-        await docs.create(
-          {
-            namespace_id: namespace.namespace_id,
-            path: 'docs/plan.md',
-            title: 'Plan',
-            content_text: '# Plan\n\nv1',
-          },
-          params(ada)
-        );
-        const plan = await new KnowledgeDocumentRepository(db).findByNamespaceAndPath(
-          namespace.namespace_id,
-          'docs/plan.md'
-        );
-        await docs.patch(plan!.document_id, { content_text: '# Plan\n\nv2' }, params(ada));
-        await docs.create(
-          {
-            namespace_id: namespace.namespace_id,
-            path: 'docs/notes.md',
-            title: 'Notes',
-            content_text: `See [the plan](agor://kb/${namespace.slug}/docs/plan.md).`,
-          },
-          params(ada)
-        );
-        await docs.create(
-          {
-            namespace_id: namespace.namespace_id,
-            path: 'docs/ideas.md',
-            title: 'Ideas',
-            content_text: 'Ideas, see [the wiki](agor://kb/team-wiki/home.md).',
-          },
-          params(ada)
-        );
-        // Archived Knowledge stays behind.
-        const old = (await docs.create(
-          {
-            namespace_id: namespace.namespace_id,
-            path: 'docs/old.md',
-            title: 'Old',
-            content_text: 'Old notes',
-          },
-          params(ada)
-        )) as { document_id: string };
-        await docs.remove(old.document_id, params(ada));
-        const artifact = await new ArtifactRepository(db).create({
-          board_id: board.board_id,
-          branch_id: branch.branch_id,
-          name: 'Dashboard',
-          files: { '/App.js': 'export default () => null;' },
-          public: false,
-          created_by: ada.user_id,
-        });
-        await new BoardRepository(db).upsertBoardObject(board.board_id, 'artifact-a', {
-          type: 'artifact',
-          artifact_id: artifact.artifact_id,
-          x: 10,
-          y: 10,
-          width: 400,
-          height: 300,
-        } as never);
-        await new ScheduleRepository(db).create({
-          branch_id: branch.branch_id,
-          name: 'Daily digest',
-          cron_expression: '0 9 * * *',
-          timezone_mode: 'utc',
-          prompt: 'Summarize',
-          agentic_tool_config: { agentic_tool: 'claude-code' },
-          enabled: true,
-          created_by: ada.user_id,
-        } as never);
-        const sessions = new SessionRepository(db);
-        const first = await sessions.create({
-          branch_id: branch.branch_id,
-          created_by: ada.user_id,
-          agentic_tool: 'claude-code',
-          sdk_session_id: 'sdk-resume-state',
-          title: 'First',
-        });
-        const second = await sessions.create({
-          branch_id: branch.branch_id,
-          created_by: ada.user_id,
-          agentic_tool: 'claude-code',
-          title: 'Second',
-          genealogy: { parent_session_id: first.session_id, children: [] },
-        });
-        // Archived sessions stay behind too.
-        await sessions.create({
-          branch_id: branch.branch_id,
-          created_by: ada.user_id,
-          agentic_tool: 'claude-code',
-          title: 'Archived chat',
-          archived: true,
-          archived_reason: 'manual',
-        });
-        const task = await new TaskRepository(db).create({
-          session_id: first.session_id,
-          created_by: ada.user_id,
-          full_prompt: 'Hello',
-          status: 'completed',
-        });
-        return { repo, board, branch, namespace, artifact, first, second, task };
-      });
-      const upload = await getUploadStagingStore().stage({
-        owner: {
-          tenantId: TENANT,
-          sessionId: seeded.first.session_id,
-          branchId: seeded.branch.branch_id,
-          createdBy: ada.user_id as UUID,
-        },
-        name: 'chart.png',
-        mimeType: 'image/png',
-        provenance: 'browser',
-        body: Readable.from([Buffer.from('png-bytes')]),
-      });
-      await unit(() =>
-        new MessagesRepository(db).create({
-          session_id: seeded.first.session_id,
-          task_id: seeded.task.task_id,
-          type: 'user',
-          role: 'user',
-          index: 0,
-          timestamp: new Date().toISOString(),
-          content_preview: 'chart',
-          content: `look [chart](${UPLOAD_VIRTUAL_URL_PREFIX}${upload.ref})`,
-        } as never)
-      );
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { db, unit, ctx, params, ada, bea, seeded, upload } = fx;
       // Secrets after a newline (JSON-escaped as \n) and a whole private key.
       const token = `ghp_${'a'.repeat(36)}`;
       const keyBody = 'b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ';
@@ -369,29 +130,7 @@ dbTest(
       expect(preflight?.knowledge_outside_links).toEqual({ count: 1, namespaces: ['team-wiki'] });
 
       // ---- Export as Ada --------------------------------------------------------
-      const writer = new AgorPackWriter();
-      const chunks: Buffer[] = [];
-      writer.output.on('data', (chunk: Buffer) => chunks.push(chunk));
-      const ended = new Promise((resolve) => writer.output.on('end', resolve));
-      const manifest = await new AgorPackExporter(ctx(ada)).export(
-        {
-          branch_ids: [seeded.branch.branch_id],
-          sections: [
-            'board',
-            'knowledge',
-            'knowledge_history',
-            'artifacts',
-            'schedules',
-            'claude_memory',
-            'uploads',
-          ],
-          sessions: 'all',
-          include_others_sessions: false,
-        },
-        writer
-      );
-      await ended;
-      const pack = Buffer.concat(chunks);
+      const { pack, manifest } = await fx.exportPack();
       const reader = await AgorPackReader.open(bufferByteSource(pack));
       expect(reader.has('teammates/t01/sdk-home/claude/projects/-src-ada/memory/MEMORY.md')).toBe(
         true
@@ -459,10 +198,12 @@ dbTest(
         expect(result.board_id).not.toBe(seeded.board.board_id);
         const teammate = getTeammateConfig(branch!);
         expect(teammate?.displayName).toBe('Ada');
-        expect(
-          (branch?.custom_context?.teammate as { imported_from?: { originally_by?: unknown } })
-            ?.imported_from?.originally_by
-        ).toEqual({ name: 'Ada', email: 'ada@example.test' });
+        // Provenance is server-managed branch data, not template-visible context.
+        expect(branch?.agor_pack?.imported_from?.originally_by).toEqual({
+          name: 'Ada',
+          email: 'ada@example.test',
+        });
+        expect(JSON.stringify(branch?.custom_context ?? {})).not.toContain('imported_from');
 
         // Knowledge landed in the new teammate's own namespace with links rewritten.
         expect(result.knowledge_namespace_id).toBe(teammate?.kb?.primary_namespace_id);
@@ -565,8 +306,124 @@ dbTest(
         new BranchRepository(db).findAll({ repo_id: seeded.repo.repo_id } as never)
       );
       expect(teammates.filter((b) => getTeammateConfig(b)?.displayName === 'Ada')).toHaveLength(2);
+      // The progress log is cleared once a teammate's result is recorded.
+      const receipt = await unit(() => new AgorPackImportRepository(db).findById(staged.import_id));
+      expect(receipt?.progress).toEqual({});
+      expect(receipt?.claim_token).toBeNull();
+    })
+);
+
+dbTest('a failed apply resumes where it stopped: one teammate, the same ids', async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    const { pack } = await fx.exportPack();
+    const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+    const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+
+    // Fail on the second session, after the first one and every earlier step landed.
+    const create = SessionRepository.prototype.create;
+    let calls = 0;
+    const spy = vi.spyOn(SessionRepository.prototype, 'create').mockImplementation(function (
+      this: SessionRepository,
+      ...args
+    ) {
+      calls += 1;
+      if (calls === 2) return Promise.reject(new Error('injected failure'));
+      return create.apply(this, args);
+    });
+    try {
+      await expect(
+        importer.apply(staged.import_id, { teammates: ['t01'], board_id: null })
+      ).rejects.toThrow(/injected failure/);
     } finally {
-      await server.close();
+      spy.mockRestore();
     }
-  }
+
+    const failed = await importer.get(staged.import_id);
+    expect(failed).toMatchObject({ status: 'failed', error: 'injected failure', results: [] });
+    const partial = await fx.unit(() =>
+      new AgorPackImportRepository(fx.db).findById(staged.import_id)
+    );
+    const progress = partial!.progress.t01!;
+    expect(progress.steps).toEqual([
+      'repo',
+      'board',
+      'branch',
+      'knowledge',
+      'artifacts',
+      'schedules',
+    ]);
+    expect(partial!.claim_token).toBeNull();
+
+    const applied = await importer.apply(staged.import_id, { teammates: ['t01'], board_id: null });
+    expect(applied.status).toBe('applied');
+    const [result] = applied.results;
+    expect(result?.branch_id).toBe(progress.branch_id);
+    expect(result?.board_id).toBe(progress.board_id);
+    expect(result?.remap.sessions).toEqual(progress.remap.sessions);
+    expect(result?.remap.schedules).toEqual(progress.remap.schedules);
+    expect(result?.remap.artifacts).toEqual(progress.remap.artifacts);
+    expect(await ownedCounts(fx, fx.bea.user_id)).toEqual({
+      branches: 1,
+      sessions: 2,
+      schedules: 1,
+      artifacts: 1,
+    });
+    const messages = await fx.unit(() =>
+      new MessagesRepository(fx.db).findAll({
+        sessionId: result!.remap.sessions[fx.seeded.first.session_id] as SessionID,
+      })
+    );
+    expect(messages).toHaveLength(1);
+  })
+);
+
+dbTest('concurrent applies: one claims the import, the other is refused', async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    const { pack } = await fx.exportPack();
+    const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+    const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+    const request = { teammates: ['t01'], board_id: null };
+    const outcomes = await Promise.allSettled([
+      importer.apply(staged.import_id, request),
+      new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea)).apply(staged.import_id, request),
+    ]);
+    expect(outcomes.map((o) => o.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(
+      String((outcomes.find((o) => o.status === 'rejected') as PromiseRejectedResult).reason)
+    ).toMatch(/already being applied/);
+    expect((await ownedCounts(fx, fx.bea.user_id)).branches).toBe(1);
+
+    // A worker that died holding the claim: refused while fresh, then shown
+    // as interrupted and taken over once stale.
+    await fx.unit(() =>
+      new AgorPackImportRepository(fx.db).claim(
+        staged.import_id,
+        fx.bea.user_id,
+        'dead-worker',
+        new Date(0),
+        { status: 'applying' }
+      )
+    );
+    await expect(importer.apply(staged.import_id, request)).rejects.toThrow(
+      /already being applied/
+    );
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 11 * 60 * 1000);
+      expect(await importer.get(staged.import_id)).toMatchObject({
+        status: 'failed',
+        error: expect.stringMatching(/interrupted/),
+      });
+      expect((await importer.apply(staged.import_id, request)).status).toBe('applied');
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await ownedCounts(fx, fx.bea.user_id)).branches).toBe(1);
+  })
+);
+
+dbTest("pack routes never serve another user's export, import, or teammate", async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    await expectPackRoutesIsolated(fx, expect);
+  })
 );

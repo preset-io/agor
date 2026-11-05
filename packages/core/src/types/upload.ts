@@ -195,3 +195,49 @@ export interface UploadStagingStore {
   delete(input: UploadReadInput): Promise<void>;
   cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now?: Date): Promise<number>;
 }
+
+/**
+ * Daemon-staged files that are not session attachments. They have their own
+ * owner (the import/export they belong to and its user) instead of a
+ * session/branch, their own byte namespace, and the same expiry sweep.
+ */
+export type StagedBlobKind = 'agor-pack';
+
+export interface StagedBlobOwner {
+  tenantId: TenantID;
+  kind: StagedBlobKind;
+  /** The import or export the bytes belong to. */
+  scopeId: string;
+  createdBy: UserID;
+}
+
+export type StagedBlobReadInput = StagedBlobOwner & { ref: UploadRef };
+
+export interface StagedBlob {
+  ref: UploadRef;
+  tenantId: TenantID;
+  kind: StagedBlobKind;
+  scopeId: string;
+  createdBy: UserID;
+  size: number;
+  status: 'pending' | 'active';
+  createdAt: string;
+  expiresAt: string;
+}
+
+/** Blob port of the upload staging store; every call re-checks the full owner. */
+export interface BlobStagingStore {
+  stage(input: {
+    owner: StagedBlobOwner;
+    name: string;
+    mimeType: string;
+    body: NodeJS.ReadableStream;
+    sizeHint?: number;
+  }): Promise<UploadMetadata>;
+  inspect(input: StagedBlobReadInput): Promise<UploadMetadata>;
+  read(
+    input: StagedBlobReadInput & { offset?: number; length?: number }
+  ): Promise<NodeJS.ReadableStream>;
+  delete(input: StagedBlobReadInput): Promise<void>;
+  cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now?: Date): Promise<number>;
+}

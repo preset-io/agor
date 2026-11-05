@@ -2,8 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   expiredByTenant: new Map<string, any[]>(),
+  expiredBlobsByTenant: new Map<string, any[]>(),
   discovered: [] as string[],
+  discoveredBlobs: [] as string[],
   deletes: [] as any[],
+  blobDeletes: [] as any[],
   configured: 0,
   systemOptions: undefined as unknown,
 }));
@@ -40,6 +43,12 @@ vi.mock('@agor/core/db', () => ({
       return (state.expiredByTenant.get(tenantId) ?? []).slice(0, limit);
     }
   },
+  StagedBlobRepository: class {
+    async findExpired(tenantId: string, _now: Date, limit: number) {
+      return (state.expiredBlobsByTenant.get(tenantId) ?? []).slice(0, limit);
+    }
+  },
+  findExpiredStagedBlobTenantIds: async () => state.discoveredBlobs,
 }));
 vi.mock('./utils/upload-staging.js', () => ({
   configureUploadStagingStoreFromConfig: () => {
@@ -48,6 +57,11 @@ vi.mock('./utils/upload-staging.js', () => ({
   getUploadStagingStore: () => ({
     delete: async (input: unknown) => {
       state.deletes.push(input);
+    },
+  }),
+  getBlobStagingStore: () => ({
+    delete: async (input: unknown) => {
+      state.blobDeletes.push(input);
     },
   }),
 }));
@@ -64,8 +78,11 @@ const row = (tenantId: string, suffix: string) => ({
 describe('deployment-local upload maintenance', () => {
   beforeEach(() => {
     state.expiredByTenant.clear();
+    state.expiredBlobsByTenant.clear();
     state.discovered = [];
+    state.discoveredBlobs = [];
     state.deletes = [];
+    state.blobDeletes = [];
     state.configured = 0;
     state.systemOptions = undefined;
   });
@@ -122,5 +139,32 @@ describe('deployment-local upload maintenance', () => {
     expect(result).toMatchObject({ dryRun: true, expired: 1, deleted: 0 });
     expect(state.configured).toBe(0);
     expect(state.deletes).toHaveLength(0);
+  });
+
+  it('also sweeps expired staged pack blobs, including tenants that only have blobs', async () => {
+    state.discovered = ['tenant-a'];
+    state.discoveredBlobs = ['tenant-a', 'tenant-b'];
+    state.expiredByTenant.set('tenant-a', [row('tenant-a', 'one')]);
+    const blob = (tenantId: string, ref: string) => ({
+      tenantId,
+      kind: 'agor-pack',
+      scopeId: 'import-1',
+      createdBy: 'user-1',
+      ref,
+    });
+    state.expiredBlobsByTenant.set('tenant-a', [blob('tenant-a', 'upl_pack_a')]);
+    state.expiredBlobsByTenant.set('tenant-b', [blob('tenant-b', 'upl_pack_b')]);
+    const result = await cleanupExpiredUploads({
+      db: { postgres: true } as never,
+      config: { multi_tenancy: { mode: 'required_from_auth' } },
+      allTenants: true,
+    });
+
+    expect(result).toMatchObject({ tenantsExamined: 2, expired: 3, deleted: 3, failed: 0 });
+    expect(state.deletes).toHaveLength(1);
+    expect(state.blobDeletes.map((input) => [input.tenantId, input.ref])).toEqual([
+      ['tenant-a', 'upl_pack_a'],
+      ['tenant-b', 'upl_pack_b'],
+    ]);
   });
 });

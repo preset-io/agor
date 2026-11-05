@@ -6,6 +6,7 @@ import {
   type AgorPackSessionMode,
   agorPackArchivedNotes,
   agorPackOutsideLinksNote,
+  pluralize,
 } from '@agor/core/types';
 import type { Branch } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
@@ -25,7 +26,6 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { type AgorPackExportResult, exportPack, fetchPackPreflight } from '../../utils/agorPack';
 import { useThemedMessage } from '../../utils/message';
-import { pluralize } from '../../utils/pluralize';
 import { Tag } from '../Tag';
 
 const SECTION_LABELS: Record<AgorPackSection, string> = {

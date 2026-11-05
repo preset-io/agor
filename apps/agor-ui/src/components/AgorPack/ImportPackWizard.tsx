@@ -2,6 +2,7 @@ import {
   type AgorPackImport,
   agorPackArchivedNotes,
   agorPackOutsideLinksNote,
+  pluralize,
 } from '@agor/core/types';
 import type { AgorClient, Board, User } from '@agor-live/client';
 import { InboxOutlined } from '@ant-design/icons';
@@ -12,15 +13,15 @@ import {
   Progress,
   Select,
   Space,
+  Spin,
   Steps,
   Table,
   Typography,
   Upload,
 } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { applyPackImport, getPackImport, uploadPack } from '../../utils/agorPack';
 import { useThemedMessage } from '../../utils/message';
-import { pluralize } from '../../utils/pluralize';
 import { AdaptiveSettingsModal } from '../SettingsModal/AdaptiveSettingsModal';
 import { Tag } from '../Tag';
 import { ReconnectChecklist } from './ReconnectChecklist';
@@ -83,17 +84,26 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
   const [boardId, setBoardId] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
 
-  // Files restore in the background after apply; follow the receipt until done.
-  const pending = receipt?.results.some((r) => r.filesystem === 'pending') ?? false;
+  // Apply (rows, then files) runs in the background; follow the receipt until done.
+  const busy =
+    receipt?.status === 'applying' ||
+    (receipt?.results.some((r) => r.filesystem === 'pending') ?? false);
+  const lastStatus = useRef(receipt?.status);
   useEffect(() => {
-    if (!receipt || step !== 2 || !pending) return;
+    if (!receipt || step !== 2 || !busy) return;
     const timer = setInterval(() => {
       getPackImport(receipt.import_id)
         .then(setReceipt)
         .catch(() => undefined);
     }, 3000);
     return () => clearInterval(timer);
-  }, [receipt, step, pending]);
+  }, [receipt, step, busy]);
+  useEffect(() => {
+    if (lastStatus.current === 'applying' && receipt?.status === 'applied') {
+      showSuccess(`Imported ${pluralize(receipt.results.length, 'teammate')}`);
+    }
+    lastStatus.current = receipt?.status;
+  }, [receipt, showSuccess]);
 
   const rows: Row[] = useMemo(
     () =>
@@ -126,9 +136,9 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
         teammates: selected,
         board_id: boardId,
       });
+      lastStatus.current = result.status;
       setReceipt(result);
       setStep(2);
-      showSuccess(`Imported ${pluralize(selected.length, 'teammate')}`);
     } catch (error) {
       showError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -311,6 +321,27 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
           </Flex>
         )}
 
+        {step === 2 && receipt?.status === 'applying' && (
+          <Alert
+            type="info"
+            showIcon
+            icon={<Spin size="small" />}
+            message={`Importing… ${receipt.results.length} of ${pluralize(selected.length, 'teammate')} done`}
+          />
+        )}
+        {step === 2 && receipt?.status === 'failed' && (
+          <Alert
+            type="error"
+            showIcon
+            message="The import stopped part-way"
+            description={`${receipt.error ?? 'Unknown error'}. Resuming continues where it stopped; nothing is imported twice.`}
+            action={
+              <Button size="small" loading={applying} onClick={handleApply}>
+                Resume
+              </Button>
+            }
+          />
+        )}
         {step === 2 && receipt && (
           <ReconnectChecklist
             client={client}

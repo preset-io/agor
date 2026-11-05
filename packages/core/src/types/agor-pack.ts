@@ -136,7 +136,8 @@ export const agorPackArchivedSkipsSchema = z
   .strict();
 export type AgorPackArchivedSkips = z.infer<typeof agorPackArchivedSkipsSchema>;
 
-function countOf(count: number, singular: string, plural = `${singular}s`): string {
+/** `pluralize(1, 'artifact')` → "1 artifact"; `pluralize(2, 'artifact')` → "2 artifacts". */
+export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
@@ -144,11 +145,11 @@ function countOf(count: number, singular: string, plural = `${singular}s`): stri
 export function agorPackArchivedNotes(skips: AgorPackArchivedSkips | null | undefined): string[] {
   if (!skips) return [];
   return [
-    skips.sessions ? `${countOf(skips.sessions, 'archived session')} skipped` : null,
+    skips.sessions ? `${pluralize(skips.sessions, 'archived session')} skipped` : null,
     skips.knowledge_documents
-      ? `${countOf(skips.knowledge_documents, 'archived Knowledge doc')} skipped`
+      ? `${pluralize(skips.knowledge_documents, 'archived Knowledge doc')} skipped`
       : null,
-    skips.artifacts ? `${countOf(skips.artifacts, 'archived artifact')} skipped` : null,
+    skips.artifacts ? `${pluralize(skips.artifacts, 'archived artifact')} skipped` : null,
   ].filter((note): note is string => note !== null);
 }
 
@@ -159,7 +160,7 @@ export function agorPackOutsideLinksNote(
   if (!links?.count) return null;
   const verb = links.count === 1 ? 'points' : 'point';
   const targets = links.namespaces.length ? `: ${links.namespaces.join(', ')}` : '';
-  return `${countOf(links.count, 'link')} ${verb} to knowledge outside this teammate (kept as-is)${targets}`;
+  return `${pluralize(links.count, 'link')} ${verb} to knowledge outside this teammate (kept as-is)${targets}`;
 }
 
 /**
@@ -557,6 +558,39 @@ export interface AgorPackDryRunTeammate {
   warnings: string[];
 }
 
+/** Apply steps of one teammate, in order; each commits before the next starts. */
+export const AGOR_PACK_APPLY_STEPS = [
+  'repo',
+  'board',
+  'branch',
+  'knowledge',
+  'artifacts',
+  'schedules',
+  'sessions',
+  'uploads',
+] as const;
+export type AgorPackApplyStep = (typeof AGOR_PACK_APPLY_STEPS)[number];
+
+/**
+ * Resume state of a teammate that is not imported yet, saved on the receipt
+ * after every step and every created row, so a retry skips finished steps and
+ * reuses what an interrupted attempt already created.
+ */
+export interface AgorPackTeammateProgress {
+  steps: AgorPackApplyStep[];
+  repo_id?: string;
+  board_id?: string;
+  branch_id?: string;
+  /** Rows done inside a step (`artifact:<seq>`, `schedule:<n>`, `session:<id>`, `upload:<ref>`). */
+  done: string[];
+  /** Artifact sequence in the pack → new artifact id. */
+  artifacts: Record<string, string>;
+  /** Pack attachment ref → new ref, fixed before any message is written. */
+  upload_refs: Record<string, string>;
+  remap: AgorPackTeammateResult['remap'];
+  warnings: string[];
+}
+
 export interface AgorPackImport {
   import_id: string;
   status: AgorPackImportStatus;
@@ -567,6 +601,20 @@ export interface AgorPackImport {
   error: string | null;
   created_at: string;
   applied_at: string | null;
+}
+
+/** Where an imported teammate came from (on the imported branch). */
+export interface AgorPackImportedFrom {
+  pack_id: string;
+  source_branch_id: string;
+  originally_by: AgorPackAuthor;
+  imported_at: string;
+}
+
+/** `Branch.agor_pack`: server-managed, never exposed to prompt templates. */
+export interface AgorPackBranchState {
+  imported_from?: AgorPackImportedFrom;
+  switch_over?: AgorPackSwitchOverState | null;
 }
 
 /** Recorded on a source branch by "Switch over"; cleared by Undo. */

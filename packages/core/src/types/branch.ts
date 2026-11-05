@@ -1,4 +1,5 @@
 // src/types/branch.ts
+import type { AgorPackBranchState } from './agor-pack';
 import type { BranchDeletionStatus } from './branch-deletion';
 import type { BoardID, BranchID, UUID } from './id';
 import type { KnowledgeEditPolicy, KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
@@ -354,6 +355,12 @@ export interface Branch {
    * Also stores teammate config under the 'teammate' key.
    */
   custom_context?: Record<string, unknown>;
+
+  /**
+   * `.agorpack` provenance ("imported from") and "Switch over" state. Kept out
+   * of custom_context so it never reaches prompt templates. Server-managed.
+   */
+  agor_pack?: AgorPackBranchState;
 
   // ===== MCP Server Configuration =====
 

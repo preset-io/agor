@@ -1,37 +1,34 @@
 /**
  * HTTP routes for `.agorpack` teammate export/import ("Move to Agor Cloud").
  *
- * Packs are binary and can be large, so every route is a raw Express route
- * (no Feathers service, no request-long transaction). Each handler resolves
- * the caller (browser JWT or personal API key) and tenant itself, requires
- * MEMBER, and opens short tenant database units for every read/write.
+ * JSON routes are long authenticated routes (standard auth, MEMBER, tenant
+ * identity and write gate, no request-long transaction; services open short
+ * tenant units). The two byte-stream routes use the upload auth middleware
+ * (browser JWT or, for the CLI, a personal API key). Executor data-plane
+ * routes take a command token bound to one export/import, like
+ * `/executor/uploads/:ref/content`.
  *
  *   GET  /agor-pack/preflight?branch_ids=…        counts, requirements, warnings
  *   POST /agor-pack/exports                       build a pack → { export_id, ref, … }
- *   GET  /agor-pack/exports/:exportId/:ref        download it (creator only)
- *   POST /executor/agor-pack/fragments/:exportId  executor → daemon fragment upload
- *   POST /agor-pack/imports                       upload a pack (raw body) → dry-run
+ *   GET  /agor-pack/downloads/:exportId/:ref      download it (creator only)
+ *   POST /agor-pack/uploads                       upload a pack (raw body) → dry-run receipt
  *   GET  /agor-pack/imports/:importId             receipt, results, filesystem state
- *   POST /agor-pack/imports/:importId/apply       { teammates, board_id } → results
- *   GET  /executor/agor-pack/imports/:id/content  executor download of the staged pack
+ *   POST /agor-pack/imports/:importId/apply       { teammates, board_id } → receipt (applying)
  *   POST /agor-pack/switch-over/:branchId         { undo } pause/resume the source copy
+ *   POST /executor/agor-pack/fragments/:exportId  executor → daemon fragment upload
+ *   GET  /executor/agor-pack/imports/:id/content  executor download of the staged pack
  */
 
 import { Transform } from 'node:stream';
 import { AgorPackFormatError, AgorPackSecretError, AgorPackWriter } from '@agor/core/agor-pack';
-import {
-  type AgorConfig,
-  isMissingTenantContextError,
-  resolveMultiTenancyConfig,
-  resolveTenantContext,
-} from '@agor/core/config';
+import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   AgorPackImportRepository,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { type Application, BadRequest, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, BadRequest } from '@agor/core/feathers';
 import { generateId } from '@agor/core/ids';
 import {
   AGOR_PACK,
@@ -39,132 +36,80 @@ import {
   agorPackApplyRequestSchema,
   agorPackExportRequestSchema,
   type DeepReadonly,
+  type HookContext,
   hasMinimumRole,
-  PERSONAL_API_KEY_PREFIX,
   ROLES,
   type TenantID,
-  type UploadRef,
   type User,
-  type UUID,
+  type UserID,
 } from '@agor/core/types';
 import type { NextFunction, Request, Response } from 'express';
-import { createApiKeyHostTenantResolver } from '../auth/api-key-host-tenant.js';
 import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import { authenticateBearerHttpRequest } from '../register-routes.js';
 import {
   agorPackCollectExecutorCommandId,
   agorPackMaterializeExecutorCommandId,
 } from '../services/agor-pack-executor.js';
-import { AgorPackExporter, type AgorPackServiceContext } from '../services/agor-pack-export.js';
+import {
+  AgorPackExporter,
+  type AgorPackServiceContext,
+  agorPackBlob,
+} from '../services/agor-pack-export.js';
 import { AgorPackImporter, openStagedPack } from '../services/agor-pack-import.js';
 import { switchOverTeammate } from '../services/agor-pack-switch-over.js';
-import { getAgorPackStagingStore } from '../utils/upload-staging.js';
+import type { registerAuthenticatedRoute } from '../utils/authorization.js';
+import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
+import { getBlobStagingStore } from '../utils/upload-staging.js';
 
 type PackRequest = Request & { feathers?: AuthenticatedParams };
-
-interface PackAuthenticationService {
-  create(
-    data: { strategy: 'jwt'; accessToken: string },
-    params: AuthenticatedParams
-  ): Promise<{ user?: User; authentication?: { payload?: unknown } }>;
-  authenticate(
-    data: { strategy: 'api-key'; apiKey: string },
-    params: AuthenticatedParams,
-    ...strategies: string[]
-  ): Promise<{ user?: User; authentication?: { payload?: unknown } }>;
-}
+type RouteParams = AuthenticatedParams & { route?: Record<string, string> };
 
 export interface AgorPackRouteContext {
   app: Application;
   db: TenantScopeAwareDatabase;
   config: DeepReadonly<AgorConfig>;
   agorVersion: string;
+  /** The daemon's long authenticated route registrar. */
+  registerRoute: typeof registerAuthenticatedRoute;
+  requireAuth: (context: HookContext) => Promise<HookContext>;
+  /** Upload auth middleware (JWT or personal API key) for the byte-stream routes. */
+  streamAuth: (req: PackRequest, res: Response, next: NextFunction) => unknown;
 }
 
-/** Map pack errors to clean HTTP statuses without leaking internals. */
+/** Pack format/secret refusals are the caller's input, not server faults. */
+function packError(error: unknown): unknown {
+  return error instanceof AgorPackFormatError || error instanceof AgorPackSecretError
+    ? new BadRequest(error.message)
+    : error;
+}
+
+/** Map errors on the raw routes to clean HTTP statuses without leaking internals. */
 export function sendPackError(res: Response, error: unknown): void {
   if (res.headersSent) {
     res.destroy();
     return;
   }
+  const mapped = packError(error);
   const status =
-    error instanceof AgorPackFormatError || error instanceof AgorPackSecretError
-      ? 400
-      : typeof (error as { code?: unknown }).code === 'number'
-        ? ((error as { code: number }).code as number)
-        : typeof (error as { status?: unknown }).status === 'number'
-          ? ((error as { status: number }).status as number)
-          : 500;
+    typeof (mapped as { code?: unknown }).code === 'number'
+      ? ((mapped as { code: number }).code as number)
+      : typeof (mapped as { status?: unknown }).status === 'number'
+        ? ((mapped as { status: number }).status as number)
+        : 500;
   const message =
     status >= 500
       ? 'Pack operation failed'
-      : error instanceof Error
-        ? error.message
+      : mapped instanceof Error
+        ? mapped.message
         : 'Bad request';
   if (status >= 500) console.error('[agor-pack]', error);
   res.status(status).json({ error: message });
 }
 
 export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
-  const { app, db, config } = ctx;
+  const { app, db, config, registerRoute, requireAuth, streamAuth } = ctx;
   const multiTenancy = resolveMultiTenancyConfig(config as AgorConfig);
-  const resolveApiKeyHostTenant = createApiKeyHostTenantResolver({
-    db,
-    config: config as AgorConfig,
-  });
-  const authentication = () =>
-    app.service('authentication') as unknown as PackAuthenticationService;
-
-  /**
-   * Browser JWT or personal API key (the CLI). An API key carries no signed
-   * tenant, so the tenant comes from static config or the trusted Host,
-   * exactly as the Feathers REST transport resolves it.
-   */
-  const authenticate = async (req: PackRequest): Promise<AuthenticatedParams> => {
-    const header = req.headers.authorization;
-    const token = typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7) : '';
-    if (!token) throw new NotAuthenticated('Authentication required');
-    let params: AuthenticatedParams;
-    if (token.startsWith(PERSONAL_API_KEY_PREFIX)) {
-      const headers = req.headers as Record<string, unknown>;
-      let tenant: AuthenticatedParams['tenant'];
-      try {
-        tenant = resolveTenantContext(multiTenancy, { params: { headers }, headers });
-      } catch (error) {
-        if (!isMissingTenantContextError(error) || !resolveApiKeyHostTenant) throw error;
-        tenant = await resolveApiKeyHostTenant(headers);
-      }
-      const base: AuthenticatedParams = { headers, tenant, provider: 'rest' };
-      const result = await authentication().authenticate(
-        { strategy: 'api-key', apiKey: token },
-        base,
-        'api-key'
-      );
-      params = { ...base, user: result.user, authentication: result.authentication as never };
-    } else {
-      params = await authenticateBearerHttpRequest({
-        authentication: authentication(),
-        multiTenancy,
-        headers: req.headers as Record<string, unknown>,
-        token,
-      });
-    }
-    if (!params.user || !params.tenant?.tenant_id) {
-      throw new NotAuthenticated('Authentication required');
-    }
-    if (!hasMinimumRole(params.user.role, ROLES.MEMBER)) {
-      throw Object.assign(new Error('Members only'), { code: 403 });
-    }
-    return params;
-  };
-
-  /**
-   * Run pack work in the caller's trusted tenant context, like the long
-   * authenticated routes: executor tokens, deferred events, and nested
-   * service calls all read the ambient tenant.
-   */
-  const inTenant = <T>(params: AuthenticatedParams, work: () => Promise<T>): Promise<T> =>
-    runWithTenantContext(params.tenant?.tenant_id as TenantID, work);
+  const member = (action: string) => ({ role: ROLES.MEMBER, action });
 
   const serviceContext = (params: AuthenticatedParams): AgorPackServiceContext => ({
     app,
@@ -174,96 +119,172 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
     user: params.user as User,
     agorVersion: ctx.agorVersion,
   });
+  const handle = async <T>(work: () => Promise<T>): Promise<T> => {
+    try {
+      return await work();
+    } catch (error) {
+      throw packError(error);
+    }
+  };
+
+  registerRoute(
+    app,
+    '/agor-pack/preflight',
+    {
+      async find(params: RouteParams) {
+        const raw = String((params.query as { branch_ids?: unknown })?.branch_ids ?? '');
+        const branchIds = [...new Set(raw.split(',').filter(Boolean))];
+        if (branchIds.length === 0 || branchIds.length > AGOR_PACK.maxTeammates) {
+          throw new BadRequest('branch_ids is required');
+        }
+        return {
+          teammates: await handle(() =>
+            new AgorPackExporter(serviceContext(params)).preflight(branchIds)
+          ),
+        };
+      },
+    },
+    { find: member('export teammates') },
+    requireAuth
+  );
+
+  registerRoute(
+    app,
+    '/agor-pack/exports',
+    {
+      async create(data: unknown, params: RouteParams) {
+        const parsed = agorPackExportRequestSchema.safeParse(data);
+        if (!parsed.success) {
+          throw new BadRequest(`Invalid export request: ${parsed.error.issues[0]?.message ?? ''}`);
+        }
+        const exportId = generateId();
+        const context = serviceContext(params);
+        const writer = new AgorPackWriter();
+        // The finished pack is staged so a failure anywhere surfaces as a
+        // clean error instead of a truncated download.
+        const staged = getBlobStagingStore().stage({
+          owner: {
+            tenantId: context.tenantId,
+            kind: 'agor-pack',
+            scopeId: exportId,
+            createdBy: context.user.user_id as UserID,
+          },
+          name: `export${AGOR_PACK.extension}`,
+          mimeType: AGOR_PACK.mimeType,
+          body: writer.output,
+        });
+        let manifest: Awaited<ReturnType<AgorPackExporter['export']>>;
+        try {
+          manifest = await handle(() => new AgorPackExporter(context).export(parsed.data, writer));
+        } catch (error) {
+          writer.abort(error instanceof Error ? error : new Error(String(error)));
+          await staged.catch(() => undefined);
+          throw error;
+        }
+        const metadata = await staged;
+        const first = manifest.teammates[0]?.display_name ?? 'teammates';
+        const slug =
+          first
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-|-$/g, '') || 'teammates';
+        return {
+          export_id: exportId,
+          ref: metadata.ref,
+          size: metadata.size,
+          filename: `${slug}${manifest.teammates.length > 1 ? `-and-${manifest.teammates.length - 1}-more` : ''}${AGOR_PACK.extension}`,
+          manifest,
+        };
+      },
+    },
+    { create: member('export teammates') },
+    requireAuth
+  );
+
+  registerRoute(
+    app,
+    '/agor-pack/imports',
+    {
+      async get(importId: string, params: RouteParams) {
+        return new AgorPackImporter(serviceContext(params), params).get(importId);
+      },
+    },
+    { get: member('import teammates') },
+    requireAuth
+  );
+
+  registerRoute(
+    app,
+    '/agor-pack/imports/:importId/apply',
+    {
+      async create(data: unknown, params: RouteParams) {
+        const parsed = agorPackApplyRequestSchema.safeParse(data);
+        if (!parsed.success) {
+          throw new BadRequest(`Invalid apply request: ${parsed.error.issues[0]?.message ?? ''}`);
+        }
+        const importId = String(params.route?.importId ?? '');
+        const importer = new AgorPackImporter(serviceContext(params), params);
+        const { receipt, run } = await handle(() => importer.start(importId, parsed.data));
+        // Rows, then files once each branch checkout is ready; the client
+        // follows progress on the receipt.
+        deferWithTenantContext(
+          params,
+          async () => {
+            await run();
+            await importer.materializePending(importId, parsed.data.teammates);
+          },
+          (error) => console.error('[agor-pack] apply failed', error)
+        );
+        return receipt;
+      },
+    },
+    { create: member('import teammates') },
+    requireAuth
+  );
+
+  registerRoute(
+    app,
+    '/agor-pack/switch-over/:branchId',
+    {
+      async create(data: { undo?: unknown } | undefined, params: RouteParams) {
+        return switchOverTeammate(
+          serviceContext(params),
+          params,
+          String(params.route?.branchId ?? ''),
+          data?.undo === true
+        );
+      },
+    },
+    { create: member('switch teammates over') },
+    requireAuth
+  );
 
   // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
   const express = app as any;
 
-  express.get('/agor-pack/preflight', async (req: PackRequest, res: Response) => {
-    try {
-      const params = await authenticate(req);
-      const raw = String(req.query.branch_ids ?? '');
-      const branchIds = [...new Set(raw.split(',').filter(Boolean))];
-      if (branchIds.length === 0 || branchIds.length > AGOR_PACK.maxTeammates) {
-        throw new BadRequest('branch_ids is required');
-      }
-      const teammates = await inTenant(params, () =>
-        new AgorPackExporter(serviceContext(params)).preflight(branchIds)
-      );
-      res.json({ teammates });
-    } catch (error) {
-      sendPackError(res, error);
+  /** The upload auth middleware authenticated the caller; packs are MEMBER+. */
+  const caller = (req: PackRequest): AuthenticatedParams => {
+    const params = req.feathers;
+    if (!params?.user || !params.tenant?.tenant_id) {
+      throw Object.assign(new Error('Authentication required'), { code: 401 });
     }
-  });
-
-  express.post('/agor-pack/exports', async (req: PackRequest, res: Response) => {
-    try {
-      const params = await authenticate(req);
-      const parsed = agorPackExportRequestSchema.safeParse(req.body);
-      if (!parsed.success) {
-        throw new BadRequest(`Invalid export request: ${parsed.error.issues[0]?.message ?? ''}`);
-      }
-      const exportId = generateId();
-      const context = serviceContext(params);
-      const writer = new AgorPackWriter();
-      const store = getAgorPackStagingStore();
-      // The finished pack is staged (bytes only, no uploads row) so a failure
-      // anywhere surfaces as a clean error instead of a truncated download.
-      const staged = store.stage({
-        owner: {
-          tenantId: context.tenantId,
-          sessionId: exportId as UUID,
-          branchId: context.user.user_id as UUID,
-          createdBy: context.user.user_id,
-        },
-        name: `export${AGOR_PACK.extension}`,
-        mimeType: AGOR_PACK.mimeType,
-        provenance: 'import',
-        body: writer.output,
-      });
-      let manifest: Awaited<ReturnType<AgorPackExporter['export']>>;
-      try {
-        manifest = await inTenant(params, () =>
-          new AgorPackExporter(context).export(parsed.data, writer)
-        );
-      } catch (error) {
-        writer.abort(error instanceof Error ? error : new Error(String(error)));
-        await staged.catch(() => undefined);
-        throw error;
-      }
-      const metadata = await staged;
-      const first = manifest.teammates[0]?.display_name ?? 'teammates';
-      const slug =
-        first
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-|-$/g, '') || 'teammates';
-      res.json({
-        export_id: exportId,
-        ref: metadata.ref,
-        size: metadata.size,
-        filename: `${slug}${manifest.teammates.length > 1 ? `-and-${manifest.teammates.length - 1}-more` : ''}${AGOR_PACK.extension}`,
-        manifest,
-      });
-    } catch (error) {
-      sendPackError(res, error);
+    if (!hasMinimumRole(params.user.role, ROLES.MEMBER)) {
+      throw Object.assign(new Error('Members only'), { code: 403 });
     }
-  });
+    return params;
+  };
 
   express.get(
-    '/agor-pack/exports/:exportId/:ref',
+    '/agor-pack/downloads/:exportId/:ref',
+    streamAuth,
     async (req: PackRequest & { params: { exportId: string; ref: string } }, res: Response) => {
       try {
-        const params = await authenticate(req);
-        const owner = {
-          tenantId: params.tenant?.tenant_id as TenantID,
-          sessionId: req.params.exportId as UUID,
-          // Bound to the creator: nobody else's id opens it.
-          branchId: params.user?.user_id as UUID,
-          ref: req.params.ref as UploadRef,
-        };
-        const store = getAgorPackStagingStore();
-        const meta = await store.inspect(owner);
-        const stream = await store.read(owner);
+        const params = caller(req);
+        // Bound to the creator: nobody else's id opens it.
+        const blob = agorPackBlob(serviceContext(params), req.params.exportId, req.params.ref);
+        const store = getBlobStagingStore();
+        const meta = await store.inspect(blob);
+        const stream = await store.read(blob);
         const filename = String(req.query.filename ?? `teammates${AGOR_PACK.extension}`).replace(
           /[^A-Za-z0-9._-]/g,
           '_'
@@ -284,14 +305,30 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
     }
   );
 
+  express.post('/agor-pack/uploads', streamAuth, async (req: PackRequest, res: Response) => {
+    try {
+      const params = caller(req);
+      const size = Number.parseInt(String(req.headers['content-length'] ?? ''), 10);
+      if (!Number.isSafeInteger(size) || size <= 0) {
+        throw Object.assign(new Error('Content-Length is required'), { code: 411 });
+      }
+      if (size > AGOR_PACK.maxBytes) {
+        throw Object.assign(new Error('Pack exceeds the maximum size'), { code: 413 });
+      }
+      const result = await runWithTenantContext(params.tenant?.tenant_id as TenantID, () =>
+        new AgorPackImporter(serviceContext(params), params).stage(req, size)
+      );
+      res.json(result);
+    } catch (error) {
+      req.resume();
+      sendPackError(res, error);
+    }
+  });
+
   // Executor → daemon: the git/Claude-home fragment of one teammate export.
   express.post(
     '/executor/agor-pack/fragments/:exportId',
-    async (
-      req: PackRequest & { params: { exportId: string } },
-      res: Response,
-      _next: NextFunction
-    ) => {
+    async (req: PackRequest & { params: { exportId: string } }, res: Response) => {
       try {
         const header = req.headers.authorization;
         if (typeof header !== 'string' || !header.startsWith('Bearer ')) {
@@ -299,7 +336,7 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
           return;
         }
         const params = await authenticateBearerHttpRequest({
-          authentication: authentication(),
+          authentication: app.service('authentication'),
           multiTenancy,
           headers: req.headers as Record<string, unknown>,
           token: header.slice(7),
@@ -337,97 +374,19 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
           },
         });
         req.pipe(limiter);
-        const staged = await getAgorPackStagingStore().stage({
+        const staged = await getBlobStagingStore().stage({
           owner: {
             tenantId: params.tenant.tenant_id,
-            sessionId: req.params.exportId as UUID,
-            branchId: branchId as UUID,
-            createdBy: params.user.user_id as UUID,
+            kind: 'agor-pack',
+            scopeId: req.params.exportId,
+            createdBy: params.user.user_id as UserID,
           },
           name: 'fragment.zip',
           mimeType: AGOR_PACK.mimeType,
-          provenance: 'import',
           body: limiter,
           sizeHint: size,
         });
         res.json({ ref: staged.ref });
-      } catch (error) {
-        sendPackError(res, error);
-      }
-    }
-  );
-
-  express.post('/agor-pack/imports', async (req: PackRequest, res: Response) => {
-    try {
-      const params = await authenticate(req);
-      const size = Number.parseInt(String(req.headers['content-length'] ?? ''), 10);
-      if (!Number.isSafeInteger(size) || size <= 0) {
-        throw Object.assign(new Error('Content-Length is required'), { code: 411 });
-      }
-      if (size > AGOR_PACK.maxBytes) {
-        throw Object.assign(new Error('Pack exceeds the maximum size'), { code: 413 });
-      }
-      const result = await inTenant(params, () =>
-        new AgorPackImporter(serviceContext(params), params).stage(req, size)
-      );
-      res.json(result);
-    } catch (error) {
-      req.resume();
-      sendPackError(res, error);
-    }
-  });
-
-  express.get(
-    '/agor-pack/imports/:importId',
-    async (req: PackRequest & { params: { importId: string } }, res: Response) => {
-      try {
-        const params = await authenticate(req);
-        res.json(
-          await inTenant(params, () =>
-            new AgorPackImporter(serviceContext(params), params).get(req.params.importId)
-          )
-        );
-      } catch (error) {
-        sendPackError(res, error);
-      }
-    }
-  );
-
-  express.post(
-    '/agor-pack/imports/:importId/apply',
-    async (req: PackRequest & { params: { importId: string } }, res: Response) => {
-      try {
-        const params = await authenticate(req);
-        const parsed = agorPackApplyRequestSchema.safeParse(req.body);
-        if (!parsed.success) {
-          throw new BadRequest(`Invalid apply request: ${parsed.error.issues[0]?.message ?? ''}`);
-        }
-        const importer = new AgorPackImporter(serviceContext(params), params);
-        const result = await inTenant(params, () =>
-          importer.apply(req.params.importId, parsed.data)
-        );
-        res.json(result);
-        // Files land once each branch checkout is ready; progress is on the receipt.
-        void inTenant(params, () =>
-          importer.materializePending(req.params.importId, parsed.data.teammates)
-        ).catch((error: unknown) => console.error('[agor-pack] materialize failed', error));
-      } catch (error) {
-        sendPackError(res, error);
-      }
-    }
-  );
-
-  express.post(
-    '/agor-pack/switch-over/:branchId',
-    async (req: PackRequest & { params: { branchId: string } }, res: Response) => {
-      try {
-        const params = await authenticate(req);
-        const undo = (req.body as { undo?: unknown } | undefined)?.undo === true;
-        res.json(
-          await inTenant(params, () =>
-            switchOverTeammate(serviceContext(params), params, req.params.branchId, undo)
-          )
-        );
       } catch (error) {
         sendPackError(res, error);
       }
@@ -445,7 +404,7 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
           return;
         }
         const params = await authenticateBearerHttpRequest({
-          authentication: authentication(),
+          authentication: app.service('authentication'),
           multiTenancy,
           headers: req.headers as Record<string, unknown>,
           token: header.slice(7),
