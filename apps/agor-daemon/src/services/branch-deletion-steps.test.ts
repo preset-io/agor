@@ -355,10 +355,18 @@ test('the upload step deletes an upload published under another ref, unless its 
       await expect(service.create({ ...input, action: 'upload' }, params)).rejects.toThrow(
         'reconciliation'
       );
-      await update(db, uploads)
-        .set({ storage_key: other })
-        .where(eq(uploads.upload_ref, other))
-        .run();
+      // Also when the first row's key is its own ref: another row sharing it blocks.
+      const keys = { [planned]: attempt, [other]: other };
+      const [first, second] = [planned, other].sort() as [UploadRef, UploadRef];
+      const setKey = (ref: UploadRef, key: string) =>
+        update(db, uploads).set({ storage_key: key }).where(eq(uploads.upload_ref, ref)).run();
+      await setKey(first, first);
+      await setKey(second, first);
+      await expect(service.create({ ...input, action: 'upload' }, params)).rejects.toThrow(
+        'reconciliation'
+      );
+      await setKey(first, keys[first] as string);
+      await setKey(second, keys[second] as string);
       for (let i = 0; i < 2; i++)
         expect(await service.create({ ...input, action: 'upload' }, params)).toEqual({
           remaining: true,

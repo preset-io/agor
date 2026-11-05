@@ -178,10 +178,10 @@ export class BranchDeletionStepsService {
             .where(eq(sessions.session_id, row.session_id))
             .one();
           // Bytes may sit under another key (an import publishes under a planned
-          // ref); the store resolves it. That key must belong to this row alone.
-          const sharedKey =
-            row.storage_key !== row.upload_ref &&
-            (await select(tx, { ref: uploads.upload_ref })
+          // ref); the store resolves it. Either way the key must belong to this
+          // row alone, or deleting it would take another upload's bytes.
+          const sharedKey = Boolean(
+            await select(tx, { ref: uploads.upload_ref })
               .from(uploads)
               .where(
                 and(
@@ -193,7 +193,8 @@ export class BranchDeletionStepsService {
                 )
               )
               .limit(1)
-              .one());
+              .one()
+          );
           if (
             row.branch_id !== claim.branch_id ||
             (session && session.branch_id !== claim.branch_id) ||
