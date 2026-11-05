@@ -14,3 +14,19 @@ export async function patchUserPreferences(
     .service('users')
     .patch(userId, { preferences: { ...latest.preferences, ...partial } })) as User;
 }
+
+/** Hide or unhide a global MCP server's connect row for this user. */
+export async function setMcpServerHidden(
+  client: AgorClient,
+  userId: string,
+  mcpServerId: string,
+  hidden: boolean
+): Promise<User> {
+  const latest = (await client.service('users').get(userId)) as User;
+  const current = new Set(latest.preferences?.hidden_mcp_server_ids ?? []);
+  if (hidden) current.add(mcpServerId);
+  else current.delete(mcpServerId);
+  return (await client.service('users').patch(userId, {
+    preferences: { ...latest.preferences, hidden_mcp_server_ids: [...current] },
+  })) as User;
+}

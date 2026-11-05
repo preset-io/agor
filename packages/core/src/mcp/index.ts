@@ -33,6 +33,19 @@ export {
   normalizeDiscoveredMCPCapabilities,
 } from '../tools/mcp/server-validation';
 export {
+  activeSessionMcpServers,
+  HIDDEN_MCP_SERVER_IDS_PREFERENCE,
+  mcpServerConfigWarning,
+  mcpServerRequiresUserConnection,
+  type ResolveSessionMcpEntriesInput,
+  readHiddenMcpServerIds,
+  resolveSessionMcpEntries,
+  type SessionMcpEntry,
+  type SessionMcpEntryState,
+  type SessionMcpLinkState,
+  type SessionMcpServerLike,
+} from './effective-set';
+export {
   canConfigureMCPServers,
   isAtLeastMemberRole,
   isMcpGrantSubjectEntitled,
@@ -60,6 +73,7 @@ export {
 } from './runtime-refresh';
 export {
   AGOR_MCP_SERVER_NAME,
+  type EffectiveSessionMcpContext,
   getMcpServersForSession,
   type MCPAuthHeadersRepository,
   MCPOAuthAuthorityUnavailableError,

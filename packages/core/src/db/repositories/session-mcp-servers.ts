@@ -4,7 +4,13 @@
  * Manages the many-to-many relationship between sessions and MCP servers.
  */
 
-import type { MCPServer, MCPServerID, SessionID, SessionMCPServer } from '@agor/core/types';
+import type {
+  MCPServer,
+  MCPServerID,
+  Session,
+  SessionID,
+  SessionMCPServer,
+} from '@agor/core/types';
 import { and, eq } from 'drizzle-orm';
 import { isMCPServerUsableInSession, MCPServerNotUsableError } from '../../mcp/ownership';
 import type { Database } from '../client';
@@ -42,7 +48,7 @@ export class SessionMCPServerRepository {
   private async resolveUsablePair(
     sessionId: SessionID,
     serverId: MCPServerID
-  ): Promise<{ server: MCPServer }> {
+  ): Promise<{ server: MCPServer; session: Session }> {
     const session = await this.sessionRepo.findById(sessionId);
     if (!session) {
       throw new EntityNotFoundError('Session', sessionId);
@@ -57,7 +63,7 @@ export class SessionMCPServerRepository {
       throw new MCPServerNotUsableError(serverId, sessionId);
     }
 
-    return { server };
+    return { server, session };
   }
 
   /**
@@ -151,6 +157,58 @@ export class SessionMCPServerRepository {
   }
 
   /**
+   * Switch a server on or off for one session, creating the link if needed.
+   * A link with `enabled: false` on a global server is the per-session
+   * opt-out (`mcp/effective-set.ts`). Switching a global server back on in a
+   * session that inherits globals drops the opt-out instead of adding a
+   * redundant link. Returns whether an enabled link exists afterwards.
+   */
+  async setServerEnabled(
+    sessionId: SessionID,
+    serverId: MCPServerID,
+    enabled: boolean
+  ): Promise<{ linked: boolean }> {
+    try {
+      const { server, session } = await this.resolveUsablePair(sessionId, serverId);
+      const pair = and(
+        eq(sessionMcpServers.session_id, sessionId),
+        eq(sessionMcpServers.mcp_server_id, serverId)
+      );
+      if (enabled && server.scope === 'global' && !session.mcp_selection_explicit) {
+        await deleteFrom(this.db, sessionMcpServers).where(pair).run();
+        return { linked: false };
+      }
+      await insert(this.db, sessionMcpServers)
+        .values({ session_id: sessionId, mcp_server_id: serverId, enabled, added_at: new Date() })
+        .onConflictDoNothing()
+        .run();
+      await update(this.db, sessionMcpServers).set({ enabled }).where(pair).run();
+      return { linked: enabled };
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) throw error;
+      if (error instanceof MCPServerNotUsableError) throw error;
+      throw new RepositoryError(
+        `Failed to switch MCP server for session: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /** Every link of a session with its enabled flag, opt-outs included. */
+  async listLinks(
+    sessionId: SessionID
+  ): Promise<Array<{ mcp_server_id: MCPServerID; enabled: boolean }>> {
+    const rows = await select(this.db)
+      .from(sessionMcpServers)
+      .where(eq(sessionMcpServers.session_id, sessionId))
+      .all();
+    return rows.map((row: { mcp_server_id: string; enabled: unknown }) => ({
+      mcp_server_id: row.mcp_server_id as MCPServerID,
+      enabled: Boolean(row.enabled),
+    }));
+  }
+
+  /**
    * List MCP servers for a session
    */
   async listServers(sessionId: SessionID, enabledOnly = false): Promise<MCPServer[]> {
@@ -234,22 +292,39 @@ export class SessionMCPServerRepository {
 
   /**
    * Set MCP servers for a session (bulk operation)
-   * Replaces existing relationships with new ones
+   * Replaces the enabled links. Per-session opt-outs of global servers
+   * (disabled links) are kept unless `disabledServerIds` replaces them too.
    */
   async setServers(
     sessionId: SessionID,
     serverIds: MCPServerID[],
-    options: { markSelectionExplicit?: boolean } = {}
+    options: { markSelectionExplicit?: boolean; disabledServerIds?: MCPServerID[] } = {}
   ): Promise<void> {
     try {
       // Treat the replacement as a set at the repository boundary as well as
       // in the MCP tool. This protects callers that use the repository/service
       // directly from duplicate-key failures during the atomic insert.
       const uniqueServerIds = [...new Set(serverIds)];
+      const enabledIds = new Set(uniqueServerIds);
+      const keptOptOuts = async () => {
+        const ids: MCPServerID[] = [];
+        for (const link of await this.listLinks(sessionId)) {
+          if (link.enabled) continue;
+          const server = await this.mcpServerRepo.findById(link.mcp_server_id);
+          if (server?.scope === 'global') ids.push(link.mcp_server_id);
+        }
+        return ids;
+      };
+      const disabledIds = [...new Set(options.disabledServerIds ?? (await keptOptOuts()))].filter(
+        (serverId) => !enabledIds.has(serverId)
+      );
 
       // Validate the complete replacement before deleting anything, so one
       // private/foreign server cannot partially alter the existing set.
       for (const serverId of uniqueServerIds) {
+        await this.resolveUsablePair(sessionId, serverId);
+      }
+      for (const serverId of options.disabledServerIds ? disabledIds : []) {
         await this.resolveUsablePair(sessionId, serverId);
       }
 
@@ -277,11 +352,14 @@ export class SessionMCPServerRepository {
             .where(eq(sessionMcpServers.session_id, sessionId))
             .run();
 
-          if (uniqueServerIds.length > 0) {
-            const inserts: SessionMCPServerInsert[] = uniqueServerIds.map((serverId) => ({
+          if (uniqueServerIds.length > 0 || disabledIds.length > 0) {
+            const inserts: SessionMCPServerInsert[] = [
+              ...uniqueServerIds.map((serverId) => ({ serverId, enabled: true })),
+              ...disabledIds.map((serverId) => ({ serverId, enabled: false })),
+            ].map(({ serverId, enabled }) => ({
               session_id: sessionId,
               mcp_server_id: serverId,
-              enabled: true,
+              enabled,
               added_at: new Date(),
             }));
 

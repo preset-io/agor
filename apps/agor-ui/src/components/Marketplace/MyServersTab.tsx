@@ -1,3 +1,4 @@
+import { mcpServerConfigWarning } from '@agor/core/mcp/effective-set';
 import { isMcpGrantSubjectEntitled } from '@agor/core/mcp/member-policy';
 import type {
   MCPMarketplaceOverview,
@@ -36,6 +37,8 @@ import {
 import { useThemedMessage } from '@/utils/message';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { mcpServerRemoved } from '../../store/agorRealtimeActions';
+import { useAgorStore } from '../../store/agorStore';
+import { selectMcpServerById } from '../../store/selectors';
 import {
   canDeleteMcpServer,
   canEditMcpServer,
@@ -202,6 +205,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   );
   const guard = useAuthorityOperationGuard(mutationAuthorityKey);
   const { showError, showInfo, showSuccess, showWarning } = useThemedMessage();
+  // Full rows (with auth config) for the admin health warning.
+  const mcpServerById = useAgorStore(selectMcpServerById);
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
   const busyRef = useRef<ReadonlySet<string>>(busy);
   busyRef.current = busy;
@@ -810,6 +815,17 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     }
   };
 
+  // Admin health: a server no user can sign in to, flagged here rather than in prompts.
+  const renderConfigWarning = (server: MCPMarketplaceServer) => {
+    const full = mcpServerById.get(server.mcp_server_id);
+    const warning = full && mcpServerConfigWarning(full);
+    return warning ? (
+      <Tooltip title={warning}>
+        <Tag color="warning">Misconfigured</Tag>
+      </Tooltip>
+    ) : null;
+  };
+
   const renderServerIdentity = (server: MCPMarketplaceServer) => (
     <Flex gap={token.marginSM} align="center" style={{ minWidth: 0 }}>
       <Avatar shape="square">{marketplaceServerTitle(server).charAt(0).toUpperCase()}</Avatar>
@@ -823,6 +839,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           </Text>
           {server.shared ? <Tag>Shared</Tag> : <Tag>Private</Tag>}
           {!server.enabled && <Tag color="default">Disabled</Tag>}
+          {renderConfigWarning(server)}
         </Space>
       </Flex>
     </Flex>

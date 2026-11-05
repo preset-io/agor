@@ -4,10 +4,8 @@
  * Shared logic for determining which MCP servers should be attached to a session.
  * Used by agentic-tool runtime adapters to ensure consistent behavior.
  *
- * Scoping Rules:
- * - ALL shared global-scoped MCPs are included in every session
- * - PLUS any session-scoped MCPs that are explicitly assigned to this session
- * - MINUS any server private to a user other than the current prompt actor
+ * Scoping Rules: see `effective-set.ts` (enabled session links, plus enabled
+ * global servers that work for the prompt actor, minus per-session opt-outs).
  *
  * Template Resolution:
  * MCP server env vars can contain Handlebars templates like {{ user.env.GITHUB_TOKEN }}.
@@ -21,6 +19,11 @@
 
 import { resolveMCPAuthHeaders } from '../tools/mcp/jwt-auth';
 import type { MCPServer, MCPServerFilters, MCPServerID, Session, SessionID } from '../types';
+import {
+  activeSessionMcpServers,
+  resolveSessionMcpEntries,
+  type SessionMcpLinkState,
+} from './effective-set';
 import { isMCPServerUsableBy } from './ownership';
 import {
   buildMCPTemplateContextFromEnv,
@@ -53,17 +56,41 @@ export interface MCPAuthHeadersRepository {
   ): Promise<Record<string, { authorization?: string; error?: string }>>;
 }
 
-/** Runtime set, not just the junction-table inventory shown by attachment UIs. */
+/** Inputs beyond the session's enabled links; see `effective-set.ts`. */
+export interface EffectiveSessionMcpContext {
+  /** Every junction row, including per-session opt-outs (`enabled: false`). */
+  links?: readonly SessionMcpLinkState[];
+  /** Servers the acting user holds a usable OAuth grant for. */
+  connectedServerIds: ReadonlySet<string>;
+  hiddenServerIds?: ReadonlySet<string>;
+}
+
+/**
+ * Runtime set, not just the junction-table inventory shown by attachment UIs:
+ * the `active` entries of {@link resolveSessionMcpEntries}. `attached` holds
+ * the linked servers (all of `context.links` when given, else enabled ones).
+ */
 export async function resolveEffectiveSessionMcpServers(
   session: Pick<Session, 'mcp_selection_explicit'>,
   attached: MCPServer[],
   loadGlobal: () => Promise<MCPServer[]>,
-  forUserId: string | undefined
+  forUserId: string | undefined,
+  context: EffectiveSessionMcpContext
 ): Promise<MCPServer[]> {
-  const global = session.mcp_selection_explicit ? [] : await loadGlobal();
-  return [
-    ...new Map([...global, ...attached].map((server) => [server.mcp_server_id, server])).values(),
-  ].filter((server) => isMCPServerUsableBy(server, forUserId));
+  const globalServers = session.mcp_selection_explicit ? [] : await loadGlobal();
+  return activeSessionMcpServers(
+    resolveSessionMcpEntries({
+      selectionExplicit: session.mcp_selection_explicit,
+      links:
+        context.links ??
+        attached.map((server) => ({ mcp_server_id: server.mcp_server_id, enabled: true })),
+      linkedServers: attached,
+      globalServers,
+      connectedServerIds: context.connectedServerIds,
+      hiddenServerIds: context.hiddenServerIds,
+      forUserId,
+    })
+  );
 }
 
 const DEBUG_MCP_SCOPING =

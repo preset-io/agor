@@ -1008,14 +1008,19 @@ export class MCPEgressGateway {
                 : 'This phase mediates only bounded Streamable HTTP; stdio and legacy SSE fail closed'
           );
         }
+        const sessionLinks = new SessionMCPServerRepository(tenantDb);
         if (server.scope !== 'global' || session.mcp_selection_explicit) {
-          const attached = await new SessionMCPServerRepository(tenantDb).listServers(
-            claims.session_id as SessionID,
-            true
-          );
+          const attached = await sessionLinks.listServers(claims.session_id as SessionID, true);
           if (!attached.some((candidate) => candidate.mcp_server_id === server.mcp_server_id)) {
             throw new MCPEgressGatewayError(403, 'server_detached', 'MCP server was detached');
           }
+        } else if (
+          // A disabled link on a global server is a per-session opt-out.
+          (await sessionLinks.listLinks(claims.session_id as SessionID)).some(
+            (link) => link.mcp_server_id === server.mcp_server_id && !link.enabled
+          )
+        ) {
+          throw new MCPEgressGatewayError(403, 'server_detached', 'MCP server was detached');
         }
         const branchRepository = new BranchRepository(tenantDb);
         const branch = await branchRepository.findById(session.branch_id);

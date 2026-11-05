@@ -1,7 +1,7 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
 import { ROLES } from '@agor-live/client';
 import { ApiOutlined, ShopOutlined } from '@ant-design/icons';
-import { Tag as AntTag, Button, Flex, Space, Typography, theme } from 'antd';
+import { Tag as AntTag, Button, Flex, Space, Switch, Tooltip, Typography, theme } from 'antd';
 import React from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
 import { useMCPCatalogModal } from '@/contexts/MCPCatalogModalContext';
@@ -13,10 +13,12 @@ import { formatActionError } from '../../utils/connectionErrors';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { updateSessionMcpServers } from '../../utils/sessionMcpServers';
+import { setMcpServerHidden } from '../../utils/userPreferences';
 import { MCPServerEditModal, MCPServerPill } from '../MCPServer';
 import { summarizeSessionMcpServers } from '../MCPServer/mcp-session-summary';
 import { MCPServerSelect } from '../MCPServerSelect';
 import { Tag } from '../Tag';
+import { useSessionMcpEffectiveView } from './useSessionMcpEffectiveView';
 
 export interface SessionMcpFooterControlProps {
   client: AgorClient | null;
@@ -219,10 +221,44 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
     }
   }, [editingServer, mcpServerById]);
 
-  const summary = React.useMemo(
+  // The runtime's effective set (global servers included). Until it loads,
+  // fall back to the session's own links.
+  const effective = useSessionMcpEffectiveView(client, sessionId, callerAuthorityReady, [
+    sessionMcpServerIds,
+    userAuthenticatedMcpServerIds,
+    mcpServerById,
+    authGeneration,
+  ]);
+  const entryServer = React.useCallback(
+    (entry: { mcp_server_id: string; server: MCPServer }) =>
+      mcpServerById.get(entry.mcp_server_id) ?? entry.server,
+    [mcpServerById]
+  );
+  const activeIds = React.useMemo(
     () =>
-      summarizeSessionMcpServers(sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds),
-    [sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds]
+      effective.entries
+        ? effective.entries
+            .filter((entry) => entry.state === 'active')
+            .map((entry) => entry.mcp_server_id)
+        : sessionMcpServerIds,
+    [effective.entries, sessionMcpServerIds]
+  );
+  const globalEntries = React.useMemo(
+    () =>
+      (effective.entries ?? []).filter(
+        (entry) => entry.source === 'global' && entry.state !== 'hidden'
+      ),
+    [effective.entries]
+  );
+  const hiddenEntries = React.useMemo(
+    () => (effective.entries ?? []).filter((entry) => entry.state === 'hidden'),
+    [effective.entries]
+  );
+  const toConnectCount = globalEntries.filter((entry) => entry.state === 'needs_connect').length;
+
+  const summary = React.useMemo(
+    () => summarizeSessionMcpServers(activeIds, mcpServerById, userAuthenticatedMcpServerIds),
+    [activeIds, mcpServerById, userAuthenticatedMcpServerIds]
   );
 
   const attachedServers = React.useMemo(
@@ -232,18 +268,30 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
         .filter((server): server is MCPServer => Boolean(server)),
     [sessionMcpServerIds, mcpServerById]
   );
+  // Session-specific links; global servers get their own rows below.
+  const linkedServers = React.useMemo(
+    () =>
+      attachedServers.filter(
+        (server) => !globalEntries.some((entry) => entry.mcp_server_id === server.mcp_server_id)
+      ),
+    [attachedServers, globalEntries]
+  );
 
   const unauthedServers = React.useMemo(
     () =>
-      attachedServers.filter((server) => mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)),
-    [attachedServers, userAuthenticatedMcpServerIds]
+      activeIds
+        .map((id) => mcpServerById.get(id))
+        .filter((server): server is MCPServer => Boolean(server))
+        .filter((server) => mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)),
+    [activeIds, mcpServerById, userAuthenticatedMcpServerIds]
   );
+  const connectSuffix = toConnectCount > 0 ? ` ${toConnectCount} more available to connect.` : '';
   const badgeTitle =
-    unauthedServers.length === 1
+    (unauthedServers.length === 1
       ? `${unauthedServers[0].display_name || unauthedServers[0].name} isn’t connected. Open to connect.`
       : unauthedServers.length > 1
         ? `${unauthedServers.length} MCP servers aren’t connected. Open to connect.`
-        : `${summary.tooltip}. Open to add or change MCP servers.`;
+        : `${summary.tooltip}. Open to add or change MCP servers.`) + connectSuffix;
   const badgeAccessibleName = `MCP servers. ${badgeTitle}`;
 
   const handleChange = async (nextIds: string[]) => {
@@ -280,6 +328,63 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
     }
   };
 
+  const [switching, setSwitching] = React.useState<string | null>(null);
+  const [showHidden, setShowHidden] = React.useState(false);
+  const runEntryAction = async (
+    serverId: string,
+    label: string,
+    action: () => Promise<unknown>
+  ) => {
+    const operation = operationGuard.begin();
+    if (!client || !operation.isCurrent() || switching) return;
+    setSwitching(serverId);
+    try {
+      await action();
+      if (!operation.isCurrent()) return;
+      effective.refresh();
+    } catch (err) {
+      if (!operation.isCurrent()) return;
+      showError(formatActionError(label, err, { idempotent: true }));
+    } finally {
+      if (operation.isCurrent()) setSwitching(null);
+    }
+  };
+  const handleGlobalSwitch = (serverId: string, enabled: boolean) =>
+    runEntryAction(serverId, enabled ? 'turn on MCP server' : 'turn off MCP server', () =>
+      // A disabled link switches a global server off for this session only.
+      client!.service(`sessions/${sessionId}/mcp-servers`).patch(serverId, { enabled })
+    );
+  const handleHide = (serverId: string, hidden: boolean) =>
+    runEntryAction(serverId, hidden ? 'hide MCP server' : 'show MCP server', () =>
+      currentUserId
+        ? setMcpServerHidden(client!, currentUserId, serverId, hidden)
+        : Promise.resolve()
+    );
+  const entryActionAllowed = oauthActionAllowed && !switching;
+
+  const renderServerPill = (server: MCPServer, needsAuth: boolean) => (
+    <MCPServerPill
+      key={server.mcp_server_id}
+      server={server}
+      needsAuth={needsAuth}
+      client={client}
+      authorityKey={durableAuthorityKey}
+      actionAllowed={oauthActionAllowed}
+      actionBlockedReason={
+        !connectionReady
+          ? 'Reconnect to Agor before changing OAuth credentials.'
+          : 'Your account can no longer change OAuth credentials.'
+      }
+      configureAllowed={editMutationAllowed}
+      configureBlockedReason={
+        !connectionReady
+          ? 'Reconnect to Agor before changing saved credentials.'
+          : 'Only an administrator can change saved credentials.'
+      }
+      onEdit={editMutationAllowed ? handleEditServer : undefined}
+    />
+  );
+
   const content = (
     <div style={{ width: 340, maxWidth: 'min(340px, 80vw)' }}>
       <Space orientation="vertical" size={10} style={{ width: '100%' }}>
@@ -304,31 +409,100 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
           </Typography.Paragraph>
         </div>
 
-        {attachedServers.length > 0 && (
+        {linkedServers.length > 0 && (
           <Space size={6} wrap>
-            {attachedServers.map((server) => (
-              <MCPServerPill
-                key={server.mcp_server_id}
-                server={server}
-                needsAuth={mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)}
-                client={client}
-                authorityKey={durableAuthorityKey}
-                actionAllowed={oauthActionAllowed}
-                actionBlockedReason={
-                  !connectionReady
-                    ? 'Reconnect to Agor before changing OAuth credentials.'
-                    : 'Your account can no longer change OAuth credentials.'
-                }
-                configureAllowed={editMutationAllowed}
-                configureBlockedReason={
-                  !connectionReady
-                    ? 'Reconnect to Agor before changing saved credentials.'
-                    : 'Only an administrator can change saved credentials.'
-                }
-                onEdit={editMutationAllowed ? handleEditServer : undefined}
-              />
-            ))}
+            {linkedServers.map((server) =>
+              renderServerPill(server, mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds))
+            )}
           </Space>
+        )}
+
+        {globalEntries.length > 0 && (
+          <Flex vertical gap={token.marginXXS} data-testid="session-mcp-global-servers">
+            {globalEntries.map((entry) => {
+              const server = entryServer(entry);
+              const label = server.display_name || server.name;
+              const toConnect = entry.state === 'needs_connect';
+              return (
+                <Flex
+                  key={entry.mcp_server_id}
+                  align="center"
+                  justify="space-between"
+                  gap={token.marginXS}
+                  data-mcp-entry-state={entry.state}
+                >
+                  <Space
+                    size={4}
+                    style={{ minWidth: 0, opacity: entry.state === 'active' ? 1 : 0.55 }}
+                  >
+                    {renderServerPill(
+                      server,
+                      toConnect || mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)
+                    )}
+                    <AntTag bordered={false} style={{ marginInlineEnd: 0 }}>
+                      Global
+                    </AntTag>
+                  </Space>
+                  {toConnect ? (
+                    <Tooltip title="Stop showing this server until you unhide it">
+                      <Button
+                        type="text"
+                        size="small"
+                        aria-label={`Hide ${label}`}
+                        disabled={!entryActionAllowed || !currentUserId}
+                        onClick={() => void handleHide(entry.mcp_server_id, true)}
+                      >
+                        Hide
+                      </Button>
+                    </Tooltip>
+                  ) : (
+                    <Switch
+                      size="small"
+                      checked={entry.state === 'active'}
+                      loading={switching === entry.mcp_server_id}
+                      disabled={!entryActionAllowed}
+                      aria-label={`Use ${label} in this session`}
+                      onChange={(checked) => void handleGlobalSwitch(entry.mcp_server_id, checked)}
+                    />
+                  )}
+                </Flex>
+              );
+            })}
+          </Flex>
+        )}
+
+        {hiddenEntries.length > 0 && (
+          <div>
+            <Button
+              type="link"
+              size="small"
+              style={{ padding: 0 }}
+              onClick={() => setShowHidden((v) => !v)}
+            >
+              {showHidden ? 'Hide hidden servers' : `Show hidden (${hiddenEntries.length})`}
+            </Button>
+            {showHidden &&
+              hiddenEntries.map((entry) => {
+                const server = entryServer(entry);
+                const label = server.display_name || server.name;
+                return (
+                  <Flex key={entry.mcp_server_id} align="center" justify="space-between">
+                    <Typography.Text type="secondary" ellipsis>
+                      {label}
+                    </Typography.Text>
+                    <Button
+                      type="text"
+                      size="small"
+                      aria-label={`Unhide ${label}`}
+                      disabled={!entryActionAllowed || !currentUserId}
+                      onClick={() => void handleHide(entry.mcp_server_id, false)}
+                    >
+                      Unhide
+                    </Button>
+                  </Flex>
+                );
+              })}
+          </div>
         )}
 
         <MCPServerSelect
@@ -438,6 +612,11 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
           >
             {summary.attachedCount}
           </AntTag>
+          {toConnectCount > 0 && (
+            <span style={{ marginInlineStart: token.marginXXS, color: token.colorTextSecondary }}>
+              {isMobile ? `+${toConnectCount}` : `· ${toConnectCount} to connect`}
+            </span>
+          )}
         </Tag>
       </button>
 

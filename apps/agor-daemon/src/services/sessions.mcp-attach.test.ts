@@ -137,7 +137,8 @@ describe('SessionsService create-time MCP attachment', () => {
                 (await new SessionRepository(db).findById(id))!,
                 await links.listServers(id, enabled),
                 global,
-                caller
+                caller,
+                { connectedServerIds: new Set([gmail.mcp_server_id]) }
               ),
           },
           mcpServerRepo: servers,
@@ -164,7 +165,9 @@ describe('SessionsService create-time MCP attachment', () => {
       expect(global).not.toHaveBeenCalled();
       expect(auth).not.toHaveBeenCalled();
       expect(
-        await resolveEffectiveSessionMcpServers(stored!, [gmail], global, user.user_id)
+        await resolveEffectiveSessionMcpServers(stored!, [gmail], global, user.user_id, {
+          connectedServerIds: new Set(),
+        })
       ).toEqual([gmail]);
       expect(global).not.toHaveBeenCalled();
       await expect(
@@ -172,12 +175,18 @@ describe('SessionsService create-time MCP attachment', () => {
       ).rejects.toThrow('mcp_selection_explicit is server-managed');
       const omitted = await service.create(base, { _agenticConfigResolved: true } as never);
       expect(omitted.mcp_selection_explicit).toBeUndefined();
-      expect(await resolveEffectiveSessionMcpServers(omitted, [], global, user.user_id)).toEqual([
-        gmail,
-        sharedServer,
-      ]);
+      const connected = { connectedServerIds: new Set([gmail.mcp_server_id]) };
       expect(
-        await resolveEffectiveSessionMcpServers(omitted, [], global, 'different-caller')
+        await resolveEffectiveSessionMcpServers(omitted, [], global, user.user_id, connected)
+      ).toEqual([gmail, sharedServer]);
+      // An unconnected per-user OAuth global server is not loaded.
+      expect(
+        await resolveEffectiveSessionMcpServers(omitted, [], global, user.user_id, {
+          connectedServerIds: new Set(),
+        })
+      ).toEqual([sharedServer]);
+      expect(
+        await resolveEffectiveSessionMcpServers(omitted, [], global, 'different-caller', connected)
       ).toEqual([sharedServer]);
     }
   );
@@ -469,7 +478,8 @@ describe('SessionsService child MCP selection intent', () => {
       stored!,
       await new SessionMCPServerRepository(db).listServers(session.session_id, true),
       async () => [global],
-      userId
+      userId,
+      { connectedServerIds: new Set([global.mcp_server_id]) }
     );
   }
 

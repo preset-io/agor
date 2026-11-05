@@ -212,7 +212,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             stored!,
             await links.listServers(session.session_id),
             global,
-            owner.user.user_id
+            owner.user.user_id,
+            { connectedServerIds: new Set() }
           )
         ).toEqual([]);
         expect(global).not.toHaveBeenCalled();

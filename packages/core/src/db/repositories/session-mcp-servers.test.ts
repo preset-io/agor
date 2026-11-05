@@ -746,3 +746,61 @@ describe('SessionMCPServerRepository error handling', () => {
     expect(rel2?.enabled).toBe(true);
   });
 });
+
+// ============================================================================
+// Per-session opt-out of global servers
+// ============================================================================
+
+describe('SessionMCPServerRepository per-session opt-out', () => {
+  dbTest('switches a global server off without an existing link and back on', async ({ db }) => {
+    const { session, server1 } = await setupTestData(db);
+    const repo = new SessionMCPServerRepository(db);
+
+    expect(await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false)).toEqual({
+      linked: false,
+    });
+    expect(await repo.listLinks(session.session_id)).toEqual([
+      { mcp_server_id: server1.mcp_server_id, enabled: false },
+    ]);
+    expect(await repo.listServers(session.session_id, true)).toEqual([]);
+
+    // Inheriting sessions drop the opt-out instead of adding a redundant link.
+    expect(await repo.setServerEnabled(session.session_id, server1.mcp_server_id, true)).toEqual({
+      linked: false,
+    });
+    expect(await repo.listLinks(session.session_id)).toEqual([]);
+  });
+
+  dbTest('links a global server when switched on in an explicit selection', async ({ db }) => {
+    const { session, server1 } = await setupTestData(db);
+    const repo = new SessionMCPServerRepository(db);
+    await repo.setServers(session.session_id, [], { markSelectionExplicit: true });
+
+    expect(await repo.setServerEnabled(session.session_id, server1.mcp_server_id, true)).toEqual({
+      linked: true,
+    });
+    expect(await repo.listLinks(session.session_id)).toEqual([
+      { mcp_server_id: server1.mcp_server_id, enabled: true },
+    ]);
+  });
+
+  dbTest('keeps global opt-outs across a link replacement unless replaced', async ({ db }) => {
+    const { session, server1, server2, server3 } = await setupTestData(db);
+    const repo = new SessionMCPServerRepository(db);
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false);
+
+    await repo.setServers(session.session_id, [server2.mcp_server_id]);
+    const kept = await repo.listLinks(session.session_id);
+    expect(kept).toHaveLength(2);
+    expect(kept).toContainEqual({ mcp_server_id: server1.mcp_server_id, enabled: false });
+    expect(kept).toContainEqual({ mcp_server_id: server2.mcp_server_id, enabled: true });
+
+    await repo.setServers(session.session_id, [server2.mcp_server_id], {
+      disabledServerIds: [server3.mcp_server_id],
+    });
+    const replaced = await repo.listLinks(session.session_id);
+    expect(replaced).toHaveLength(2);
+    expect(replaced).toContainEqual({ mcp_server_id: server3.mcp_server_id, enabled: false });
+    expect(replaced).toContainEqual({ mcp_server_id: server2.mcp_server_id, enabled: true });
+  });
+});

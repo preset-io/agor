@@ -64,6 +64,8 @@ export interface McpServerSummary {
   oauth_authenticated: boolean;
   has_custom_headers: boolean;
   enabled: boolean;
+  /** In `attached_mcp_servers`: `global` when inherited from a workspace-wide server. */
+  source?: 'global' | 'session';
   recovery?: MCPAuthRecovery;
 }
 
@@ -152,41 +154,28 @@ export async function summarizeMcpServer(
 }
 
 /**
- * List MCP servers attached to a session (via the `session-mcp-servers`
- * junction), enriched with OAuth status. Used by `agor_sessions_get_current`
- * and `agor_sessions_get` to expose `attached_mcp_servers` in their payload.
+ * The session's effective MCP set (what its agent actually loads), global
+ * servers included and tagged `source: 'global'`, enriched with OAuth status.
+ * Used by `agor_sessions_get_current` and `agor_sessions_get` to expose
+ * `attached_mcp_servers`. It reads the same `effective` view of the session
+ * route as the session MCP pill, so tools, UI, and runtime agree.
  */
 export async function listAttachedMcpServers(
   ctx: McpContext,
-  sessionId: string,
-  opts: { includeDisabled?: boolean } = {}
+  sessionId: string
 ): Promise<McpServerSummary[]> {
-  await ctx.app.service('sessions').get(sessionId, ctx.baseServiceParams);
-  const sessionMCPServers = await ctx.app.service('session-mcp-servers').find({
+  const view = (await ctx.app.service('/sessions/:id/mcp-servers').find({
     ...ctx.baseServiceParams,
-    query: {
-      session_id: sessionId,
-      ...(opts.includeDisabled ? {} : { enabled: true }),
-      $limit: 100,
-    },
-  });
-  const data = Array.isArray(sessionMCPServers) ? sessionMCPServers : sessionMCPServers.data;
+    route: { id: sessionId },
+    query: { effective: true },
+  })) as { entries: Array<{ source: 'global' | 'session'; state: string; server: MCPServer }> };
   const summaries: McpServerSummary[] = [];
-  for (const sms of data as Array<{ mcp_server_id: string }>) {
-    try {
-      const mcpServer = await ctx.app
-        .service('mcp-servers')
-        .get(sms.mcp_server_id, ctx.baseServiceParams);
-      // The attached row belongs to the Session, but private credentials must
-      // belong to the current prompt actor. Personal sharing never lends the
-      // Session owner's private MCP credential to a collaborator.
-      if (mcpServer.owner_user_id && mcpServer.owner_user_id !== ctx.userId) {
-        continue;
-      }
-      summaries.push(await summarizeMcpServer(ctx, mcpServer));
-    } catch (error) {
-      console.warn(`Failed to fetch MCP server ${sms.mcp_server_id}:`, error);
-    }
+  for (const entry of view.entries) {
+    if (entry.state !== 'active') continue;
+    // Private credentials must belong to the current prompt actor. Personal
+    // sharing never lends the Session owner's private MCP credential.
+    if (entry.server.owner_user_id && entry.server.owner_user_id !== ctx.userId) continue;
+    summaries.push({ ...(await summarizeMcpServer(ctx, entry.server)), source: entry.source });
   }
   return summaries;
 }
@@ -842,11 +831,18 @@ async function attachMcpServerToSession(ctx: McpContext, sessionId: string, mcpS
   );
 }
 
+/** A global server is switched off for the session (opt-out); a session link is removed. */
 async function removeMcpServerFromSession(ctx: McpContext, sessionId: string, mcpServerId: string) {
-  return ctx.app.service('/sessions/:id/mcp-servers').remove(mcpServerId, {
-    ...ctx.baseServiceParams,
-    route: { id: sessionId },
-  });
+  const params = { ...ctx.baseServiceParams, route: { id: sessionId } };
+  const mcpServer: MCPServer = await ctx.app
+    .service('mcp-servers')
+    .get(mcpServerId, ctx.baseServiceParams);
+  if (mcpServer.scope === 'global') {
+    return ctx.app
+      .service('/sessions/:id/mcp-servers')
+      .patch(mcpServerId, { enabled: false }, params);
+  }
+  return ctx.app.service('/sessions/:id/mcp-servers').remove(mcpServerId, params);
 }
 
 async function resolveTargetSessionId(ctx: McpContext, sessionId?: string) {
@@ -1064,7 +1060,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_mcp_servers_create',
     {
       description:
-        'Register a new MCP server definition. Permissions are service-enforced: admins always may, members only when the workspace `mcp_member_policy` allows it, and members are limited to remote transports and to servers owned by themselves. Scope matters: enabled `global` servers are automatically in each session\'s effective MCP set; `session` scoped servers must be linked with `agor_sessions_add_mcp_server` (or `attachToCurrentSession` / `attachToSessionId`). Start simple for remote OAuth: `name` + `url` + `auth:{type:"oauth"}`; add endpoint/client fields only if discovery/DCR fails. For stdio use `transport:"stdio"` + `command` (+ `args`). Use `auth`, not Authorization headers. Use secure Catalog or MCP Settings for OAuth app client secrets, never chat; `oauth_client_secret` accepts only a `{{ user.env.NAME }}` reference. Prefer environment references for other credentials too.',
+        'Register a new MCP server definition. Permissions are service-enforced: admins always may, members only when the workspace `mcp_member_policy` allows it, and members are limited to remote transports and to servers owned by themselves. Scope matters: enabled `global` servers are automatically in each session\'s effective MCP set (per-user OAuth ones once that user has connected them; a session can switch one off); `session` scoped servers must be linked with `agor_sessions_add_mcp_server` (or `attachToCurrentSession` / `attachToSessionId`). Start simple for remote OAuth: `name` + `url` + `auth:{type:"oauth"}`; add endpoint/client fields only if discovery/DCR fails. For stdio use `transport:"stdio"` + `command` (+ `args`). Use `auth`, not Authorization headers. Use secure Catalog or MCP Settings for OAuth app client secrets, never chat; `oauth_client_secret` accepts only a `{{ user.env.NAME }}` reference. Prefer environment references for other credentials too.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: mcpServerCreateSchema,
     },
@@ -1236,7 +1232,7 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_sessions_remove_mcp_server',
     {
       description:
-        'Remove a session-specific MCP server link from a session. Defaults to current session when `sessionId` is omitted. Permissions are service-enforced by the same session-scoped route as the UI. This only removes the session link; it does not delete the registered MCP server. Note: enabled global MCP servers remain effective for all sessions and cannot be removed from just one session with this link-removal tool.',
+        'Remove an MCP server from a session. Defaults to current session when `sessionId` is omitted. Permissions are service-enforced by the same session-scoped route as the UI. A session-specific server has its link removed; a global server is switched off for this session only (other sessions keep it; `agor_sessions_add_mcp_server` turns it back on). It never deletes the registered MCP server.',
       annotations: { destructiveHint: true, idempotentHint: true },
       inputSchema: z.strictObject({
         mcpServerId: mcpRequiredId(
@@ -1273,13 +1269,19 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
     'agor_sessions_set_mcp_servers',
     {
       description:
-        'Atomically replace the session-specific MCP links for a session. Defaults to current session when `sessionId` is omitted. The complete replacement is validated before any link changes are committed, so a rejected private server leaves the existing set unchanged. This manages session links only and never changes global-server inheritance: enabled global MCP servers stay effective even if omitted here, unless the session was created with an explicit MCP selection.',
+        'Atomically replace the session-specific MCP links for a session. Defaults to current session when `sessionId` is omitted. The complete replacement is validated before any link changes are committed, so a rejected private server leaves the existing set unchanged. Enabled global MCP servers stay effective even if omitted from `mcpServerIds` (unless the session was created with an explicit MCP selection); pass `disabledGlobalMcpServerIds` to switch specific global servers off for this session.',
       annotations: { destructiveHint: true, idempotentHint: true },
       inputSchema: z.strictObject({
         mcpServerIds: z
           .array(mcpRequiredId('mcpServerIds[]', 'MCP server', 'MCP server ID'))
           .describe(
             'Exact desired set of session-specific MCP server IDs. Pass [] to remove all session-specific links.'
+          ),
+        disabledGlobalMcpServerIds: z
+          .array(mcpRequiredId('disabledGlobalMcpServerIds[]', 'MCP server', 'MCP server ID'))
+          .optional()
+          .describe(
+            'Optional exact set of global MCP server IDs switched off for this session. Omit to keep the current per-session opt-outs; pass [] to switch every global server back on.'
           ),
         sessionId: mcpOptionalId(
           'sessionId',
@@ -1297,9 +1299,19 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       const desired = [
         ...new Set(await Promise.all(args.mcpServerIds.map((id) => resolveMcpServerId(ctx, id)))),
       ];
+      const disabledGlobal = args.disabledGlobalMcpServerIds
+        ? [
+            ...new Set(
+              await Promise.all(
+                args.disabledGlobalMcpServerIds.map((id) => resolveMcpServerId(ctx, id))
+              )
+            ),
+          ]
+        : undefined;
       const currentResult = await ctx.app.service('/sessions/:id/mcp-servers').find({
         ...ctx.baseServiceParams,
         route: { id: target.sessionId },
+        query: { enabledOnly: true },
       });
       const currentServers = (
         Array.isArray(currentResult) ? currentResult : currentResult.data
@@ -1313,7 +1325,10 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
       try {
         await ctx.app.service('/sessions/:id/mcp-servers').update(
           null,
-          { mcpServerIds: desired },
+          {
+            mcpServerIds: desired,
+            ...(disabledGlobal ? { disabledMcpServerIds: disabledGlobal } : {}),
+          },
           {
             ...ctx.baseServiceParams,
             route: { id: target.sessionId },
@@ -1344,8 +1359,9 @@ export function registerMcpServerTools(server: McpServer, ctx: McpContext): void
         added_mcp_server_ids: toAdd,
         removed_mcp_server_ids: toRemove,
         unchanged_mcp_server_ids: desired.filter((id) => currentSet.has(id)),
+        ...(disabledGlobal ? { disabled_global_mcp_server_ids: disabledGlobal } : {}),
         next_steps: [
-          'Verify with agor_sessions_get_current/agor_sessions_get. Enabled global MCP servers remain effective even if not listed here.',
+          'Verify with agor_sessions_get_current/agor_sessions_get. Enabled global MCP servers remain effective unless listed in disabledGlobalMcpServerIds.',
           'Restart or re-prompt an existing agent if its MCP client does not hot-reload MCP link changes.',
         ],
       });

@@ -395,6 +395,31 @@ async function harness(options: HarnessOptions) {
 const initialize = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' });
 
 describe('authoritative MCP gateway real transport', () => {
+  it('rejects a global-server capability after a per-session opt-out, before outbound access', async () => {
+    const h = await harness({
+      server: {
+        transport: 'http',
+        scope: 'global',
+        url: 'https://mcp.example.test/mcp',
+        auth: { type: 'none' },
+      },
+    });
+    await new SessionMCPServerRepository(h.rawDb).setServerEnabled(
+      h.session.session_id,
+      h.server.mcp_server_id,
+      false
+    );
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network forbidden'));
+    try {
+      await expect(h.request('POST', initialize)).rejects.toMatchObject({
+        code: 'server_detached',
+      });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      fetch.mockRestore();
+    }
+  });
+
   it('rejects an old global-server capability after explicit empty selection, before outbound access', async () => {
     const h = await harness({
       server: {
