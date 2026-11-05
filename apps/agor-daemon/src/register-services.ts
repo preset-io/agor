@@ -342,6 +342,7 @@ import {
   MCP_OAUTH_START_BUDGET_MS,
   mcpOAuthStartPhaseRunner,
 } from './services/mcp-oauth-start-phases.js';
+import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
 import {
   acquireMCPOAuthGrant,
   MCPClientCredentialsConfigurationError,
@@ -369,7 +370,6 @@ import {
 } from './services/schedules.js';
 import { createSessionCountsService } from './services/session-counts.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
-import { loadAuthenticatedMcpServerIds } from './services/session-mcp-effective.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
@@ -7004,9 +7004,16 @@ export async function registerMCPServices(
       const userId = params?.user?.user_id;
       if (!userId) return { authenticated_server_ids: [] };
       try {
-        const authenticatedServerIds = await loadAuthenticatedMcpServerIds(db, {
-          user_id: userId as UserID,
-          role: params?.user?.role,
+        const userTokenRepo = new UserMCPOAuthTokenRepository(db);
+        const serverRepo = new MCPServerRepository(db);
+        const authenticatedServerIds = await resolveAuthenticatedServerIds({
+          viewer: { user_id: userId as UserID, role: params?.user?.role },
+          listForUser: (id) => userTokenRepo.listStatusForSubject(id),
+          listShared: () => userTokenRepo.listStatusForSubject(null),
+          findServers: (serverIds) => serverRepo.findByIds(serverIds),
+          requireGrantBinding: true,
+          isGrantBoundToServer: (server, grant) =>
+            isMCPOAuthGrantAuthorizedForServer(db, server, grant),
         });
         return { authenticated_server_ids: authenticatedServerIds };
       } catch (error) {
