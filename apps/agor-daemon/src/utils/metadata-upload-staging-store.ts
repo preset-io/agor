@@ -32,9 +32,7 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
   }
 
   async stage(input: UploadStageInput): Promise<UploadMetadata> {
-    // Only trusted daemon code (an `.agorpack` import restoring an attachment
-    // under its original ref) passes a reserved ref; requests never do.
-    const ref = input.reservedRef ?? (`upl_${randomUUID()}` as UploadRef);
+    const ref = `upl_${randomUUID()}` as UploadRef;
     await runWithTenantDatabaseScope(this.db, input.owner.tenantId, () =>
       this.repository.reserve(input.owner, {
         ref,
@@ -81,16 +79,24 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     return upload;
   }
 
+  /** Byte-store input for an upload: its bytes may sit under another key (see publishAs). */
+  private async byteInput<T extends UploadReadInput>(input: T): Promise<T> {
+    const key = await runWithTenantDatabaseScope(this.db, input.tenantId, () =>
+      this.repository.storageKey(input.ref)
+    );
+    return key && key !== input.ref ? { ...input, ref: key } : input;
+  }
+
   async inspect(input: UploadReadInput): Promise<UploadMetadata> {
     await this.authorize(input);
-    return this.bytes.inspect(input);
+    return { ...(await this.bytes.inspect(await this.byteInput(input))), ref: input.ref };
   }
 
   async read(
     input: UploadReadInput & { offset?: number; length?: number }
   ): Promise<NodeJS.ReadableStream> {
     await this.authorize(input);
-    return this.bytes.read(input);
+    return this.bytes.read(await this.byteInput(input));
   }
 
   async consume(input: UploadReadInput): Promise<void> {
@@ -101,7 +107,7 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     if (existing.sessionId !== input.sessionId || existing.branchId !== input.branchId) {
       throw Object.assign(new Error('Upload not found'), { status: 404 });
     }
-    await this.bytes.consume(input);
+    await this.bytes.consume(await this.byteInput(input));
     await runWithTenantDatabaseScope(this.db, input.tenantId, () =>
       this.repository.remove(input.tenantId, input.ref)
     );
@@ -115,10 +121,21 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     if (existing.sessionId !== input.sessionId || existing.branchId !== input.branchId) {
       throw Object.assign(new Error('Upload not found'), { status: 404 });
     }
-    await this.bytes.delete(input);
+    await this.bytes.delete(await this.byteInput(input));
     await runWithTenantDatabaseScope(this.db, input.tenantId, () =>
       this.repository.remove(input.tenantId, input.ref)
     );
+  }
+
+  /**
+   * Publish a staged upload (`attempt`) under a planned `ref`, in the
+   * caller's transaction. Its bytes keep their attempt key; an existing `ref`
+   * is never replaced (this throws instead), so a caller that loses the race
+   * deletes only its own attempt.
+   */
+  async publishAs(attempt: UploadReadInput, ref: UploadRef): Promise<void> {
+    await this.authorize(attempt);
+    await this.repository.publishAs(attempt.ref, ref);
   }
 
   async cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now = new Date()): Promise<number> {
@@ -157,7 +174,7 @@ class MetadataBlobStagingStore implements BlobStagingStore {
   constructor(
     private readonly db: ConstructorParameters<typeof UploadRepository>[0],
     private readonly bytes: UploadStagingStore,
-    private readonly ttlMs: number
+    readonly ttlMs: number
   ) {
     this.repository = new StagedBlobRepository(db);
   }
@@ -240,17 +257,26 @@ class MetadataBlobStagingStore implements BlobStagingStore {
     });
   }
 
-  async touch(input: StagedBlobReadInput): Promise<void> {
-    if (!(await this.authorize(input, false))) return;
-    await this.unit(input.tenantId, () =>
-      this.repository.extend(input.ref, new Date(Date.now() + this.ttlMs))
-    );
-  }
-
   async delete(input: StagedBlobReadInput): Promise<void> {
     if (!(await this.authorize(input, false))) return;
     await this.bytes.delete(this.byteInput(input, input.ref));
     await this.unit(input.tenantId, () => this.repository.remove(input.ref));
+  }
+
+  /**
+   * Remove an expired blob: the row goes first, in one conditional statement
+   * (still expired, no live import claim), and the bytes only if that
+   * statement removed it, so a concurrent claim can never lose its pack.
+   */
+  async sweepExpired(input: StagedBlobReadInput, now = new Date()): Promise<boolean> {
+    const removed = await this.unit(input.tenantId, () =>
+      this.repository.removeIfExpired(input.ref, now)
+    );
+    if (!removed) return false;
+    await this.bytes.delete(this.byteInput(input, input.ref)).catch((error: unknown) => {
+      console.error('[upload-staging] swept blob bytes could not be deleted:', error);
+    });
+    return true;
   }
 
   async cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now = new Date()): Promise<number> {
@@ -259,11 +285,7 @@ class MetadataBlobStagingStore implements BlobStagingStore {
     );
     let removed = 0;
     for (const blob of expired) {
-      const deleted = await this.delete({ ...blob, tenantId: owner.tenantId }).then(
-        () => true,
-        () => false
-      );
-      if (deleted) removed++;
+      if (await this.sweepExpired({ ...blob, tenantId: owner.tenantId }, now)) removed++;
     }
     await this.bytes.cleanupExpired(owner, now);
     return removed;

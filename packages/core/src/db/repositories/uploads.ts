@@ -121,6 +121,29 @@ export class UploadRepository {
     return row ? logical(row, tenantId) : null;
   }
 
+  /** Internal byte-store key of an upload (the ref itself unless published under another ref). */
+  async storageKey(ref: UploadRef): Promise<UploadRef | null> {
+    const row = await select(this.db, { storage_key: uploads.storage_key })
+      .from(uploads)
+      .where(eq(uploads.upload_ref, ref))
+      .one();
+    return (row?.storage_key as UploadRef | undefined) ?? null;
+  }
+
+  /**
+   * Publish a completed upload under another ref (its bytes keep their key).
+   * Fails if `to` exists, so an existing upload is never replaced.
+   */
+  async publishAs(from: UploadRef, to: UploadRef): Promise<void> {
+    if (await this.storageKey(to)) throw new RepositoryError('Upload ref is already published');
+    const row = await update(this.db, uploads)
+      .set({ upload_ref: to })
+      .where(and(eq(uploads.upload_ref, from), eq(uploads.status, 'active')))
+      .returning()
+      .one();
+    if (!row) throw new RepositoryError('Upload to publish is not active');
+  }
+
   async listByUploader(tenantId: TenantID, userId: UserID): Promise<Upload[]> {
     const rows = await select(this.db)
       .from(uploads)

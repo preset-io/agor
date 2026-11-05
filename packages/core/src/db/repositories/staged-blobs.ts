@@ -1,15 +1,16 @@
-import type {
-  StagedBlob,
-  StagedBlobKind,
-  StagedBlobOwner,
-  TenantID,
-  UploadRef,
-  UserID,
+import {
+  AGOR_PACK_CLAIM_STALE_MS,
+  type StagedBlob,
+  type StagedBlobKind,
+  type StagedBlobOwner,
+  type TenantID,
+  type UploadRef,
+  type UserID,
 } from '@agor/core/types';
-import { and, asc, eq, lt, not, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, isNotNull, lt, not, type SQL, sql } from 'drizzle-orm';
 import type { Database, SystemDatabase } from '../client';
 import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
-import { stagedBlobs } from '../schema';
+import { agorPackImports, stagedBlobs } from '../schema';
 import { RepositoryError } from './base';
 
 type Row = typeof stagedBlobs.$inferSelect;
@@ -64,28 +65,59 @@ export class StagedBlobRepository {
     await deleteFrom(this.db, stagedBlobs).where(eq(stagedBlobs.blob_ref, ref)).run();
   }
 
-  /** Keep a blob for another TTL (an import that uses it was claimed again). */
-  async extend(ref: UploadRef, expiresAt: Date): Promise<void> {
-    await update(this.db, stagedBlobs)
+  /**
+   * Keep a blob for another TTL (an import that uses it was claimed again).
+   * False when the row is gone (swept): the pack must be uploaded again. On
+   * PostgreSQL the row lock it takes makes a concurrent conditional delete
+   * re-check the new expiry instead of removing the blob.
+   */
+  async extend(ref: UploadRef, expiresAt: Date): Promise<boolean> {
+    const row = await update(this.db, stagedBlobs)
       .set({ expires_at: expiresAt })
       .where(eq(stagedBlobs.blob_ref, ref))
-      .run();
+      .returning()
+      .one();
+    return Boolean(row);
   }
 
-  /**
-   * Expired blobs, except a pack an import is still applying (its receipt
-   * points at `<scope>:<ref>`): those are never swept from under a worker.
-   */
+  /** Expired blobs the sweep may remove (see {@link removeIfExpired}). */
   async findExpired(tenantId: TenantID, now: Date, limit?: number): Promise<StagedBlob[]> {
-    const inUse = sql`exists (select 1 from agor_pack_imports i where i.status = 'applying' and i.staging_ref = staged_blobs.scope_id || ':' || staged_blobs.blob_ref)`;
     let query = select(this.db)
       .from(stagedBlobs)
-      .where(and(lt(stagedBlobs.expires_at, now), not(inUse)))
+      .where(sweepable(now))
       .orderBy(asc(stagedBlobs.expires_at));
     if (limit !== undefined) query = query.limit(limit);
     const rows = await query.all();
     return rows.map((row: Row) => logical(row, tenantId));
   }
+
+  /**
+   * The sweep's only delete: one conditional statement, so a blob is removed
+   * only if it is still expired and no import holds a live claim on it at
+   * that moment. Bytes may be deleted only when this returns true.
+   */
+  async removeIfExpired(ref: UploadRef, now: Date): Promise<boolean> {
+    const row = await deleteFrom(this.db, stagedBlobs)
+      .where(and(eq(stagedBlobs.blob_ref, ref), sweepable(now)))
+      .returning()
+      .one();
+    return Boolean(row);
+  }
+}
+
+/**
+ * Expired, and not the pack of an import a live worker is applying (its
+ * receipt points at `<scope>:<ref>`). A claim not refreshed within
+ * AGOR_PACK_CLAIM_STALE_MS belongs to a dead worker and protects nothing, so
+ * an abandoned import's bytes are eventually reclaimed.
+ */
+function sweepable(now: Date): SQL | undefined {
+  const liveClaim = sql`exists (select 1 from ${agorPackImports} where ${and(
+    eq(agorPackImports.status, 'applying'),
+    isNotNull(agorPackImports.claim_token),
+    gte(agorPackImports.claimed_at, new Date(now.getTime() - AGOR_PACK_CLAIM_STALE_MS))
+  )} and ${agorPackImports.staging_ref} = ${stagedBlobs.scope_id} || ':' || ${stagedBlobs.blob_ref})`;
+  return and(lt(stagedBlobs.expires_at, now), not(liveClaim));
 }
 
 /** Narrow system-scope discovery for the upload maintenance sweep. */

@@ -7,6 +7,7 @@
 import { Readable } from 'node:stream';
 import { AgorPackWriter } from '@agor/core/agor-pack';
 import type { TenantID } from '@agor/core/types';
+import { vi } from 'vitest';
 import { getBlobStagingStore } from '../src/utils/upload-staging.js';
 
 export async function packExecutorMock(
@@ -14,47 +15,53 @@ export async function packExecutorMock(
 ) {
   return {
     ...(await importOriginal()),
-    runAgorPackExecutorCommand: async (
-      ctx: { tenantId: TenantID; user: { user_id: string } },
-      input: { params: { exportId: string } }
-    ) => {
-      const writer = new AgorPackWriter();
-      const chunks: Buffer[] = [];
-      writer.output.on('data', (chunk: Buffer) => chunks.push(chunk));
-      const done = new Promise((resolve) => writer.output.on('end', resolve));
-      writer.addJson('teammates/t00/git/state.json', {
-        version: 1,
-        head_sha: 'a'.repeat(40),
-        ref: 'ada',
-        deleted: [],
-      });
-      writer.addBuffer('teammates/t00/sdk-home/claude/projects/-src-ada/memory/MEMORY.md', '# me');
-      writer.finishFragment();
-      await done;
-      const staged = await getBlobStagingStore().stage({
-        owner: {
-          tenantId: ctx.tenantId,
-          kind: 'agor-pack',
-          scopeId: input.params.exportId,
-          createdBy: ctx.user.user_id as never,
-        },
-        name: 'fragment.zip',
-        mimeType: 'application/zip',
-        body: Readable.from([Buffer.concat(chunks)]),
-      });
-      return {
-        fragmentRef: staged.ref,
-        git: {
-          mode: 'bundle',
+    runAgorPackExecutorCommand: vi.fn(
+      async (
+        ctx: { tenantId: TenantID; user: { user_id: string } },
+        input: { command: string; params: { exportId: string } }
+      ) => {
+        if (input.command === 'branch.pack.materialize') return {};
+        const writer = new AgorPackWriter();
+        const chunks: Buffer[] = [];
+        writer.output.on('data', (chunk: Buffer) => chunks.push(chunk));
+        const done = new Promise((resolve) => writer.output.on('end', resolve));
+        writer.addJson('teammates/t00/git/state.json', {
+          version: 1,
           head_sha: 'a'.repeat(40),
-          unpushed_commits: 3,
-          dirty_files: 0,
-          deleted_files: 0,
-          bundle: false,
-          skipped_files: [],
-        },
-        claudeMemory: { files: 1, bytes: 4 },
-      };
-    },
+          ref: 'ada',
+          deleted: [],
+        });
+        writer.addBuffer(
+          'teammates/t00/sdk-home/claude/projects/-src-ada/memory/MEMORY.md',
+          '# me'
+        );
+        writer.finishFragment();
+        await done;
+        const staged = await getBlobStagingStore().stage({
+          owner: {
+            tenantId: ctx.tenantId,
+            kind: 'agor-pack',
+            scopeId: input.params.exportId,
+            createdBy: ctx.user.user_id as never,
+          },
+          name: 'fragment.zip',
+          mimeType: 'application/zip',
+          body: Readable.from([Buffer.concat(chunks)]),
+        });
+        return {
+          fragmentRef: staged.ref,
+          git: {
+            mode: 'bundle',
+            head_sha: 'a'.repeat(40),
+            unpushed_commits: 3,
+            dirty_files: 0,
+            deleted_files: 0,
+            bundle: false,
+            skipped_files: [],
+          },
+          claudeMemory: { files: 1, bytes: 4 },
+        };
+      }
+    ),
   };
 }

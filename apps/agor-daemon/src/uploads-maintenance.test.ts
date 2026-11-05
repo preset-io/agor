@@ -60,8 +60,9 @@ vi.mock('./utils/upload-staging.js', () => ({
     },
   }),
   getBlobStagingStore: () => ({
-    delete: async (input: unknown) => {
+    sweepExpired: async (input: unknown) => {
       state.blobDeletes.push(input);
+      return true;
     },
   }),
 }));

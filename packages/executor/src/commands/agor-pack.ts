@@ -252,6 +252,15 @@ async function writeEntry(
   }
 }
 
+/**
+ * Idempotent for the same pack content: the bundle resets to one commit,
+ * deletes are forced, and every file is written to a temp file and renamed
+ * over its target, so a repeated (or, rarely, concurrent) run converges on
+ * the same checkout. The daemon fences on its claim right before starting
+ * this command and on every result write, and the pack download is bound to
+ * the claim; an executor that already holds the pack when a takeover happens
+ * finishes its writes (accepted residual window: same content, idempotent).
+ */
 export async function handleBranchPackMaterialize(
   payload: BranchPackMaterializePayload,
   options: CommandOptions
@@ -270,7 +279,7 @@ export async function handleBranchPackMaterialize(
     }
     const packPath = join(work, 'pack.agorpack');
     const response = await fetch(
-      `${daemonUrl}/executor/agor-pack/imports/${p.importId}/content?key=${p.teammateKey}`,
+      `${daemonUrl}/executor/agor-pack/imports/${p.importId}/content?key=${p.teammateKey}&claim=${p.claimToken}`,
       {
         headers: { Authorization: `Bearer ${payload.sessionToken}` },
       }
@@ -292,7 +301,12 @@ export async function handleBranchPackMaterialize(
         await reader.openStream(`${prefix}git/repo.bundle`),
         createWriteStream(bundlePath, { mode: 0o600 })
       );
-      headSha = await applyPackBundle(branch.path, bundlePath, `${p.importId}-${p.teammateKey}`);
+      // The temporary ref belongs to this attempt only (import, teammate, claim).
+      headSha = await applyPackBundle(
+        branch.path,
+        bundlePath,
+        `${p.importId}-${p.teammateKey}-${p.claimToken}`
+      );
     }
 
     if (reader.has(`${prefix}git/state.json`)) {

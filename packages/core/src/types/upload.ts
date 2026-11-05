@@ -227,6 +227,8 @@ export interface StagedBlob {
 
 /** Blob port of the upload staging store; every call re-checks the full owner. */
 export interface BlobStagingStore {
+  /** How long a blob is kept after it was staged or last claimed for use. */
+  readonly ttlMs: number;
   stage(input: {
     owner: StagedBlobOwner;
     name: string;
@@ -239,7 +241,7 @@ export interface BlobStagingStore {
     input: StagedBlobReadInput & { offset?: number; length?: number }
   ): Promise<NodeJS.ReadableStream>;
   delete(input: StagedBlobReadInput): Promise<void>;
-  /** Keep the blob for another full TTL (it is in use again). */
-  touch(input: StagedBlobReadInput): Promise<void>;
+  /** Sweep one expired blob if it is still expired and not in use; true when removed. */
+  sweepExpired(input: StagedBlobReadInput, now?: Date): Promise<boolean>;
   cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now?: Date): Promise<number>;
 }

@@ -410,12 +410,13 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
         const branchId = claims?.branch_id;
         const tenantId = params.tenant?.tenant_id;
         const key = String(req.query.key ?? '');
+        const claim = String(req.query.claim ?? '');
         if (
           typeof branchId !== 'string' ||
           !tenantId ||
           !matchesExecutorCommandRuntimeScope(
             params,
-            agorPackMaterializeExecutorCommandId(req.params.importId, key),
+            agorPackMaterializeExecutorCommandId(req.params.importId, key, claim),
             branchId
           )
         ) {
@@ -427,6 +428,11 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
         );
         if (!record || record.owner_user_id !== params.user?.user_id) {
           res.status(404).json({ error: 'Import not found' });
+          return;
+        }
+        // Only the attempt that currently holds the apply claim may fetch it.
+        if (!claim || record.claim_token !== claim) {
+          res.status(409).json({ error: 'This import attempt is no longer current' });
           return;
         }
         const { source } = await openStagedPack({ tenantId: tenantId as TenantID }, record);

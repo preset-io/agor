@@ -135,8 +135,8 @@ export async function cleanupExpiredUploads(
     remaining -= blobRows.length;
     for (const blob of dryRun ? [] : blobRows) {
       try {
-        await blobs?.delete({ ...blob, tenantId });
-        deleted++;
+        // Conditional: skipped if an import claimed the pack since it was listed.
+        if (await blobs?.sweepExpired({ ...blob, tenantId }, now)) deleted++;
       } catch {
         failed++;
       }

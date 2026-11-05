@@ -31,9 +31,17 @@ export function agorPackCollectExecutorCommandId(exportId: string): string {
   return `agor-pack.collect:${component(exportId)}`;
 }
 
-/** Command identity that also authorizes the staged-pack download callback. */
-export function agorPackMaterializeExecutorCommandId(importId: string, key: string): string {
-  return `agor-pack.materialize:${component(importId)}:${component(key)}`;
+/**
+ * Command identity that also authorizes the staged-pack download callback.
+ * Bound to the apply attempt (its claim token), so an executor started by a
+ * worker that has since lost its claim can no longer fetch the pack.
+ */
+export function agorPackMaterializeExecutorCommandId(
+  importId: string,
+  key: string,
+  claimToken: string
+): string {
+  return `agor-pack.materialize:${component(importId)}:${component(key)}:${component(claimToken)}`;
 }
 
 export interface AgorPackExecutorContext {

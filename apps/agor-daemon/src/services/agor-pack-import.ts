@@ -47,12 +47,14 @@ import {
   runWithTenantDatabaseTransaction,
   ScheduleRepository,
   SessionRepository,
+  StagedBlobRepository,
   TaskRepository,
   UploadRepository,
 } from '@agor/core/db';
 import { BadRequest, Conflict, NotFound } from '@agor/core/feathers';
 import { generateId } from '@agor/core/ids';
 import {
+  AGOR_PACK_CLAIM_STALE_MS,
   type AgorPackApplyRequest,
   type AgorPackDryRunTeammate,
   type AgorPackImport,
@@ -96,6 +98,7 @@ import {
 import type { BoardsServiceImpl, ReposServiceImpl } from '../declarations.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { withImportedRowId } from '../utils/imported-row-id.js';
+import { MetadataUploadStagingStore } from '../utils/metadata-upload-staging-store.js';
 import { getBlobStagingStore, getUploadStagingStore } from '../utils/upload-staging.js';
 import {
   agorPackMaterializeExecutorCommandId,
@@ -114,12 +117,11 @@ const TERMINAL_TASK_STATUSES = new Set<string>([
 ]);
 const READY_POLL_MS = 2_000;
 const READY_TIMEOUT_MS = 15 * 60 * 1000;
-/** A claim not refreshed for this long belongs to a dead worker and can be taken over. */
-const CLAIM_STALE_MS = 10 * 60 * 1000;
+
 const CLAIM_HEARTBEAT_MS = 60 * 1000;
 const INTERRUPTED = 'The import was interrupted; apply it again to resume.';
 
-const staleBefore = () => new Date(Date.now() - CLAIM_STALE_MS);
+const staleBefore = () => new Date(Date.now() - AGOR_PACK_CLAIM_STALE_MS);
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
@@ -241,7 +243,14 @@ export class AgorPackImporter {
   }
 
   async get(importId: string): Promise<AgorPackImport> {
-    return publicImport(await this.load(importId));
+    const record = await this.load(importId);
+    if (record.status === 'applying' && !liveClaim(record)) {
+      // A dead worker's import: record it as failed (resumable), so it stops
+      // counting as in use and its pack is eventually reclaimed.
+      await this.write(() => this.receipts().failStale(staleBefore(), INTERRUPTED));
+      return publicImport(await this.load(importId));
+    }
+    return publicImport(record);
   }
 
   /**
@@ -250,6 +259,9 @@ export class AgorPackImporter {
    */
   async stage(body: NodeJS.ReadableStream, size: number): Promise<AgorPackImport> {
     const store = getBlobStagingStore();
+    await this.write(() => this.receipts().failStale(staleBefore(), INTERRUPTED)).catch(
+      () => undefined
+    );
     await store.cleanupExpired({ tenantId: this.ctx.tenantId }).catch(() => 0);
     const scope = generateId();
     const staged = await store.stage({
@@ -410,6 +422,19 @@ export class AgorPackImporter {
       await this.ctx.app.service('boards').get(request.board_id, this.params);
     }
     const token = randomUUID();
+    // Keep the staged pack for another TTL first: once extended it is no
+    // longer expired, so the sweep's conditional delete cannot remove it; if
+    // the sweep already removed it, this fails and nothing is claimed.
+    const blob = stagedPackBlob(this.ctx, record);
+    const kept =
+      blob &&
+      (await this.write(() =>
+        new StagedBlobRepository(this.ctx.db).extend(
+          blob.ref,
+          new Date(Date.now() + getBlobStagingStore().ttlMs)
+        )
+      ));
+    if (!kept) throw new Conflict('The pack file is no longer staged; upload it again');
     const claimed = await this.write(() =>
       this.receipts().claim(importId, this.ctx.user.user_id, token, staleBefore(), {
         status: 'applying',
@@ -456,9 +481,6 @@ export class AgorPackImporter {
     let results = [...claimed.results];
     const progress = { ...claimed.progress };
     try {
-      // The bytes stay while an import is applying; claiming again extends them.
-      const blob = stagedPackBlob(this.ctx, claimed);
-      if (blob) await getBlobStagingStore().touch(blob);
       const todo = claimed.manifest.teammates.filter(
         (t) => request.teammates.includes(t.key) && !results.some((r) => r.key === t.key)
       );
@@ -523,9 +545,7 @@ export class AgorPackImporter {
         for (const result of results) {
           if (!request.teammates.includes(result.key)) continue;
           if (result.filesystem !== 'pending') continue;
-          // Fence right before handing the files leg to an executor.
-          await fenced(async () => undefined);
-          const patch = await this.materialize(claimed, result);
+          const patch = await this.materialize(claimed, result, token, fenced);
           results = results.map((r) => (r.key === result.key ? { ...r, ...patch } : r));
           await save({ results });
         }
@@ -1088,10 +1108,15 @@ export class AgorPackImporter {
       });
     }
 
-    // 7. Attachments under their planned refs. Bytes stream outside a
-    // transaction; the ref makes the stage idempotent (an active upload is
-    // adopted, a reservation an interrupted attempt left is replaced).
+    // 7. Attachments under their planned refs. Bytes are staged as this
+    // attempt's own upload (a fresh ref), then published under the planned
+    // ref in a claim-fenced transaction that never replaces an existing one.
+    // A failed or lost attempt deletes only its own upload, never the
+    // planned ref another attempt may already have published.
     const uploadStore = getUploadStagingStore();
+    if (!(uploadStore instanceof MetadataUploadStagingStore)) {
+      throw new Error('Attachment import requires the database-backed upload store');
+    }
     const uploadRows = new UploadRepository(this.ctx.db);
     for (const entry of reader.list(path('uploads/'))) {
       if (!entry.path.endsWith('.json')) continue;
@@ -1099,33 +1124,43 @@ export class AgorPackImporter {
       const sessionId = remap.sessions[meta.source_session_id];
       const ref = state.upload_refs[meta.ref] as UploadRef | undefined;
       if (!sessionId || !ref) continue;
-      await fenced(async () => undefined);
-      const existing = await this.unit(() => uploadRows.findOwned(this.ctx.tenantId, ref));
-      if (existing?.status === 'active') {
-        if (!remap.uploads.includes(ref)) remap.uploads.push(ref);
-        continue;
+      const published = async () =>
+        (await uploadRows.findOwned(this.ctx.tenantId, ref))?.status === 'active';
+      if (!(await this.unit(published))) {
+        await fenced(async () => undefined);
+        const owner = {
+          tenantId: this.ctx.tenantId,
+          sessionId: sessionId as SessionID,
+          branchId: branch.branch_id as BranchID,
+        };
+        let attempt: UploadRef | null = null;
+        try {
+          attempt = (
+            await uploadStore.stage({
+              owner: { ...owner, createdBy: userId as UUID },
+              name: meta.name,
+              mimeType: meta.mime_type,
+              provenance: 'import',
+              body: await reader.openStream(path(`uploads/${meta.ref}.data`)),
+              sizeHint: meta.size,
+              ttlMs: 0,
+            })
+          ).ref;
+          const own = attempt;
+          const settled = await fenced(async () => {
+            if (await published()) return false;
+            await uploadStore.publishAs({ ...owner, ref: own }, ref);
+            return true;
+          });
+          if (!settled) await uploadStore.delete({ ...owner, ref: own });
+        } catch (error) {
+          if (attempt) await uploadStore.delete({ ...owner, ref: attempt }).catch(() => undefined);
+          if (error instanceof AgorPackImportClaimLostError) throw error;
+          warn(`Attachment "${meta.name}" could not be restored.`);
+          continue;
+        }
       }
-      const owner = {
-        tenantId: this.ctx.tenantId,
-        sessionId: sessionId as SessionID,
-        branchId: branch.branch_id as BranchID,
-      };
-      try {
-        if (existing) await uploadStore.delete({ ...owner, ref });
-        await uploadStore.stage({
-          reservedRef: ref,
-          owner: { ...owner, createdBy: userId as UUID },
-          name: meta.name,
-          mimeType: meta.mime_type,
-          provenance: 'import',
-          body: await reader.openStream(path(`uploads/${meta.ref}.data`)),
-          sizeHint: meta.size,
-          ttlMs: 0,
-        });
-        remap.uploads.push(ref);
-      } catch {
-        warn(`Attachment "${meta.name}" could not be restored.`);
-      }
+      if (!remap.uploads.includes(ref)) remap.uploads.push(ref);
     }
 
     const hasFiles =
@@ -1149,7 +1184,9 @@ export class AgorPackImporter {
    */
   private async materialize(
     record: AgorPackImportRecord,
-    result: AgorPackTeammateResult
+    result: AgorPackTeammateResult,
+    claimToken: string,
+    fenced: <T>(work: () => Promise<T>) => Promise<T>
   ): Promise<Partial<AgorPackTeammateResult>> {
     const importId = record.import_id;
     const key = result.key;
@@ -1169,14 +1206,19 @@ export class AgorPackImporter {
         );
       }
       const slug = await this.teammateSlug(record, key);
+      // Re-check the claim after the (possibly long) provisioning wait, right
+      // before the handoff; the executor's pack download is bound to it too,
+      // and its result is saved only while this claim is still current.
+      await fenced(async () => undefined);
       await runAgorPackExecutorCommand(this.ctx, {
         command: 'branch.pack.materialize',
-        commandId: agorPackMaterializeExecutorCommandId(importId, key),
+        commandId: agorPackMaterializeExecutorCommandId(importId, key, claimToken),
         branch,
-        params: { importId, teammateKey: key, sourceClaudeProjectSlug: slug },
+        params: { importId, teammateKey: key, claimToken, sourceClaudeProjectSlug: slug },
       });
       return { filesystem: 'ready', filesystem_error: undefined };
     } catch (error) {
+      if (error instanceof AgorPackImportClaimLostError) throw error;
       console.error(`[agor-pack] materialize ${importId}/${key} failed:`, error);
       return { filesystem: 'failed', filesystem_error: errorText(error) };
     }

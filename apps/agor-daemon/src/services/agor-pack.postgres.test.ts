@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import {
+  AgorPackImportRepository,
   BranchRepository,
   createDatabase,
   type Database,
@@ -155,9 +156,13 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           board_id: null,
         });
         const hour = 60 * 60 * 1000;
+        const receipts = new AgorPackImportRepository(fx.db);
+        const token = (await fx.unit(() => receipts.findById(staged.import_id)))!.claim_token!;
         vi.useFakeTimers({ toFake: ['Date'] });
         try {
           vi.setSystemTime(Date.now() + 2 * hour);
+          // A live worker's heartbeat keeps the claim (and so the pack) in use.
+          await fx.unit(() => receipts.touchClaim(staged.import_id, token));
           expect(await getBlobStagingStore().cleanupExpired({ tenantId: tenant })).toBe(0);
           await run();
           vi.setSystemTime(Date.now() + 2 * hour);

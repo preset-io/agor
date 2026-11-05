@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,11 +31,13 @@ import {
   type PackFixture,
 } from '../../test/agor-pack-fixture';
 import type { RegisterHooksContext } from '../register-hooks';
+import type { MetadataUploadStagingStore } from '../utils/metadata-upload-staging-store';
 import {
   getBlobStagingStore,
   getUploadStagingStore,
   resetUploadStagingStoreForTests,
 } from '../utils/upload-staging';
+import { runAgorPackExecutorCommand } from './agor-pack-executor';
 import { AgorPackExporter } from './agor-pack-export';
 import { AgorPackImporter } from './agor-pack-import';
 
@@ -465,22 +468,146 @@ dbTest('the sweep never removes the pack of an import that is applying', async (
     const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
     const { run } = await importer.start(staged.import_id, { teammates: ['t01'], board_id: null });
     const store = getBlobStagingStore();
+    const receipts = new AgorPackImportRepository(fx.db);
+    const token = (await fx.unit(() => receipts.findById(staged.import_id)))!.claim_token!;
     const hour = 60 * 60 * 1000; // the fixture's blob TTL
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
-      // Past expiry while applying: kept, and claiming again extends it.
+      // Past expiry while a live worker (heartbeat) applies: kept.
       vi.setSystemTime(Date.now() + 2 * hour);
+      await fx.unit(() => receipts.touchClaim(staged.import_id, token));
       expect(await store.cleanupExpired({ tenantId: TENANT })).toBe(0);
       await run();
       expect((await importer.get(staged.import_id)).status).toBe('applied');
-      expect(await store.cleanupExpired({ tenantId: TENANT })).toBe(0);
       // Expired and no longer in use: swept.
-      vi.setSystemTime(Date.now() + 2 * hour);
       expect(await store.cleanupExpired({ tenantId: TENANT })).toBe(1);
     } finally {
       vi.useRealTimers();
     }
   })
+);
+
+dbTest('the files leg re-checks the claim after waiting for the checkout', async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    const { pack } = await fx.exportPack();
+    const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+    const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+    const request = { teammates: ['t01'], board_id: null };
+    const [result] = (await importer.apply(staged.import_id, request)).results;
+    expect(result?.filesystem).toBe('pending');
+    const executor = vi.mocked(runAgorPackExecutorCommand);
+    executor.mockClear();
+
+    // The files leg waits for the checkout; meanwhile another worker takes over.
+    const done = (await importer.start(staged.import_id, request)).run({ files: true });
+    await fx.unit(() =>
+      new AgorPackImportRepository(fx.db).claim(
+        staged.import_id,
+        fx.bea.user_id,
+        'other-worker',
+        new Date(Date.now() + 60_000)
+      )
+    );
+    await fx.unit(() =>
+      new BranchRepository(fx.db).update(result!.branch_id, { filesystem_status: 'ready' })
+    );
+    await done;
+    expect(executor.mock.calls.map(([, input]) => input.command)).not.toContain(
+      'branch.pack.materialize'
+    );
+    const receipt = await fx.unit(() =>
+      new AgorPackImportRepository(fx.db).findById(staged.import_id)
+    );
+    expect(receipt?.claim_token).toBe('other-worker');
+  })
+);
+
+dbTest('a lost attachment attempt deletes only its own upload', async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    const store = getUploadStagingStore() as MetadataUploadStagingStore;
+    const owner = {
+      tenantId: TENANT,
+      sessionId: fx.seeded.first.session_id,
+      branchId: fx.seeded.branch.branch_id,
+    };
+    const planned = `upl_${randomUUID()}` as UploadRef;
+    const attempt = async (text: string) =>
+      (
+        await store.stage({
+          owner: { ...owner, createdBy: fx.ada.user_id as never },
+          name: 'note.txt',
+          mimeType: 'text/plain',
+          provenance: 'import',
+          body: Readable.from([Buffer.from(text)]),
+          ttlMs: 0,
+        })
+      ).ref;
+    const winner = await attempt('winner');
+    await fx.unit(() => store.publishAs({ ...owner, ref: winner }, planned));
+    // A second attempt for the same planned ref loses: its publish refuses to
+    // replace the published upload, and it deletes only its own.
+    const loser = await attempt('loser');
+    await expect(fx.unit(() => store.publishAs({ ...owner, ref: loser }, planned))).rejects.toThrow(
+      /already published/
+    );
+    await store.delete({ ...owner, ref: loser });
+    const bytes: Buffer[] = [];
+    for await (const chunk of await store.read({ ...owner, ref: planned }))
+      bytes.push(chunk as Buffer);
+    expect(Buffer.concat(bytes).toString()).toBe('winner');
+    const uploads = new UploadRepository(fx.db);
+    expect(await fx.unit(() => uploads.findOwned(TENANT, loser))).toBeNull();
+    expect(await fx.unit(() => uploads.findOwned(TENANT, planned))).toMatchObject({
+      status: 'active',
+    });
+  })
+);
+
+dbTest('a claim fails cleanly once the sweep removed the pack', async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    const { pack } = await fx.exportPack();
+    const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+    const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+      expect(await getBlobStagingStore().cleanupExpired({ tenantId: TENANT })).toBe(1);
+      await expect(
+        importer.start(staged.import_id, { teammates: ['t01'], board_id: null })
+      ).rejects.toThrow(/upload it again/);
+    } finally {
+      vi.useRealTimers();
+    }
+    // The claim rolled back with it: nothing is left "applying".
+    const receipt = await fx.unit(() =>
+      new AgorPackImportRepository(fx.db).findById(staged.import_id)
+    );
+    expect(receipt).toMatchObject({ status: 'staged', claim_token: null });
+  })
+);
+
+dbTest(
+  'an import abandoned while applying is marked failed and its pack reclaimed',
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { pack } = await fx.exportPack();
+      const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+      const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+      // Claimed, then the worker dies before doing anything.
+      await importer.start(staged.import_id, { teammates: ['t01'], board_id: null });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+        expect(await importer.get(staged.import_id)).toMatchObject({ status: 'failed' });
+        const receipt = await fx.unit(() =>
+          new AgorPackImportRepository(fx.db).findById(staged.import_id)
+        );
+        expect(receipt?.status).toBe('failed');
+        expect(await getBlobStagingStore().cleanupExpired({ tenantId: TENANT })).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    })
 );
 
 dbTest('concurrent applies: one claims the import, the other is refused', async ({ db: raw }) =>

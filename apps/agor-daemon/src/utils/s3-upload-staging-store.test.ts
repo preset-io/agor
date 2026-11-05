@@ -47,6 +47,9 @@ vi.mock('@agor/core/db', () => ({
     async findOwned(_tenantId: string, ref: string) {
       return repositoryState.rows.find((row) => row.ref === ref) ?? null;
     }
+    async storageKey(ref: string) {
+      return repositoryState.rows.find((row) => row.ref === ref)?.ref ?? null;
+    }
     async findExpired(_tenantId: string, now: Date) {
       return repositoryState.rows.filter(
         (row) => row.expiresAt && Date.parse(row.expiresAt) < now.getTime()

@@ -165,6 +165,20 @@ export class AgorPackImportRepository {
     return Boolean(row);
   }
 
+  /**
+   * Imports left `applying` by a dead worker (claim older than `staleBefore`)
+   * become `failed` with `error`, so they read as resumable and stop counting
+   * as in use. The stale claim itself stays: any later claim may take it over.
+   */
+  async failStale(staleBefore: Date, error: string): Promise<void> {
+    await update(this.db, agorPackImports)
+      .set({ status: 'failed', error, updated_at: new Date() })
+      .where(
+        and(eq(agorPackImports.status, 'applying'), lt(agorPackImports.claimed_at, staleBefore))
+      )
+      .run();
+  }
+
   /** Write as the claim holder (refreshing the claim); throws once it was lost. */
   async updateClaimed(
     importId: string,

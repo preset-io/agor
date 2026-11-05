@@ -215,32 +215,44 @@ it('materializes history, files, deletions, and renames the Claude project slug'
       }) as AgorPackManifest
   );
   const pack = await out;
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async () => new Response(new Uint8Array(pack), { status: 200 }))
-  );
+  const fetchPack = vi.fn(async () => new Response(new Uint8Array(pack), { status: 200 }));
+  vi.stubGlobal('fetch', fetchPack);
+  const importId = generateId();
+  const materialize = (claimToken: string) =>
+    handleBranchPackMaterialize(
+      {
+        command: 'branch.pack.materialize',
+        sessionToken: 'token',
+        daemonUrl: 'http://daemon.test',
+        params: {
+          branchId,
+          localHome: true,
+          branchHome: join(tenantRoot, 'branch-homes', branchId),
+          tenantDataRoot: tenantRoot,
+          importId,
+          teammateKey: 't01',
+          claimToken,
+          sourceClaudeProjectSlug: '-src-ada',
+        },
+      } as BranchPackMaterializePayload,
+      {}
+    );
 
-  const result = await handleBranchPackMaterialize(
-    {
-      command: 'branch.pack.materialize',
-      sessionToken: 'token',
-      daemonUrl: 'http://daemon.test',
-      params: {
-        branchId,
-        localHome: true,
-        branchHome: join(tenantRoot, 'branch-homes', branchId),
-        tenantDataRoot: tenantRoot,
-        importId: generateId(),
-        teammateKey: 't01',
-        sourceClaudeProjectSlug: '-src-ada',
-      },
-    } as BranchPackMaterializePayload,
-    {}
-  );
+  const firstClaim = generateId();
+  const result = await materialize(firstClaim);
   expect(result).toMatchObject({
     success: true,
     data: { head_sha: head, files: 1, claude_files: 2 },
   });
+  // The pack download is bound to this attempt's claim.
+  expect(String(fetchPack.mock.calls[0]?.[0])).toContain(`claim=${firstClaim}`);
+  // Same pack again (a retry or a second attempt): same checkout, and no
+  // attempt's temporary ref is left behind.
+  expect(await materialize(generateId())).toMatchObject({
+    success: true,
+    data: { head_sha: head, files: 1, claude_files: 2 },
+  });
+  expect((await simpleGit(destination).raw(['for-each-ref', 'refs/agor-pack/'])).trim()).toBe('');
   expect((await simpleGit(destination).revparse('HEAD')).trim()).toBe(head);
   expect(await readFile(join(destination, 'keep.txt'), 'utf8')).toBe('keep');
   await expect(stat(join(destination, 'gone.txt'))).rejects.toThrow();

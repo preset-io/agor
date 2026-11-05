@@ -559,6 +559,12 @@ export interface AgorPackDryRunTeammate {
 }
 
 /**
+ * An apply claim not refreshed for this long belongs to a dead worker: it can
+ * be taken over, and its staged pack is no longer protected from the sweep.
+ */
+export const AGOR_PACK_CLAIM_STALE_MS = 10 * 60 * 1000;
+
+/**
  * Apply plan of a teammate that is not imported yet: every id its rows get
  * (and its branch name), allocated once and saved on the receipt before any
  * row is created. Each create uses its planned id and adopts a row that

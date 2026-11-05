@@ -673,6 +673,8 @@ export const BranchPackMaterializePayloadSchema = BasePayloadSchema.extend({
     ...packBranchHomeParams,
     importId: z.string().uuid(),
     teammateKey: z.string().regex(/^t[0-9]{2,3}$/),
+    /** The apply attempt this run belongs to (its claim token). */
+    claimToken: z.string().uuid(),
     /** Claude project slug of the source branch path (renamed to this branch's). */
     sourceClaudeProjectSlug: z.string().max(4096).nullable(),
   }),
