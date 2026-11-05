@@ -624,7 +624,7 @@ export async function exportKnowledgeRepository(
  * owns (an imported teammate's memory namespace). Same decoding and link
  * rewriting as `agor kb import`, but documents land in the given namespace and
  * inherit its visibility defaults. A path that already exists (seeded) is
- * overwritten. Older versions, when present, are replayed oldest-first before
+ * overwritten unless it already holds the pack's content. Older versions, when present, are replayed oldest-first before
  * the current content so the document's history reads naturally.
  */
 export async function importKnowledgeRepository(input: {
@@ -654,6 +654,7 @@ export async function importKnowledgeRepository(input: {
   );
   const documents = new KnowledgeDocumentsService(input.db, input.app);
   const repository = new KnowledgeDocumentRepository(input.db);
+  const versions = new KnowledgeDocumentVersionRepository(input.db);
   const written: string[] = [];
   // Links into other namespaces stay as-is by design; the export already
   // reported them, so only genuinely broken links count here.
@@ -676,9 +677,19 @@ export async function importKnowledgeRepository(input: {
       })),
       { content: doc.content, summary: 'Imported current Knowledge document' },
     ];
-    let documentId = (
-      await repository.findByNamespaceAndPath(input.namespace.namespace_id as never, entry.path)
-    )?.document_id as string | undefined;
+    const existing = await repository.findByNamespaceAndPath(
+      input.namespace.namespace_id as never,
+      entry.path
+    );
+    let documentId = existing?.document_id as string | undefined;
+    const current = existing?.current_version_id
+      ? await versions.findById(existing.current_version_id)
+      : null;
+    if (documentId && current?.content_text === doc.content) {
+      // Already imported (a resumed import): don't replay its history again.
+      written.push(documentId);
+      continue;
+    }
     for (const step of steps) {
       if (!documentId) {
         const created = await documents.create(

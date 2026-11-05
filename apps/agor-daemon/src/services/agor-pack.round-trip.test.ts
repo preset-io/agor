@@ -16,6 +16,7 @@ import {
   MessagesRepository,
   ScheduleRepository,
   SessionRepository,
+  StagedBlobRepository,
   UploadRepository,
   update,
 } from '@agor/core/db';
@@ -557,30 +558,58 @@ dbTest('a stale worker that kept running after a takeover cannot write', async (
   })
 );
 
-dbTest('the sweep never removes the pack of an import that is applying', async ({ db: raw }) =>
-  withFixture(raw, async (fx) => {
-    const { pack } = await fx.exportPack();
-    const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
-    const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
-    const { run } = await importer.start(staged.import_id, { teammates: ['t01'], board_id: null });
-    const store = getBlobStagingStore();
-    const receipts = new AgorPackImportRepository(fx.db);
-    const token = (await fx.unit(() => receipts.findById(staged.import_id)))!.claim_token!;
-    const hour = 60 * 60 * 1000; // the fixture's blob TTL
-    vi.useFakeTimers({ toFake: ['Date'] });
-    try {
-      // Past expiry while a live worker (heartbeat) applies: kept.
-      vi.setSystemTime(Date.now() + 2 * hour);
-      await fx.unit(() => receipts.touchClaim(staged.import_id, token));
-      expect(await store.cleanupExpired({ tenantId: TENANT })).toBe(0);
-      await run();
-      expect((await importer.get(staged.import_id)).status).toBe('applied');
-      // Expired and no longer in use: swept.
-      expect(await store.cleanupExpired({ tenantId: TENANT })).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  })
+dbTest(
+  "the heartbeat keeps a live import's pack past its TTL; afterwards the sweep takes it",
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { pack } = await fx.exportPack();
+      const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+      const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+      const store = getBlobStagingStore();
+      const receipt = await fx.unit(() =>
+        new AgorPackImportRepository(fx.db).findById(staged.import_id)
+      );
+      const ref = receipt!.staging_ref!.split(':')[1] as UploadRef;
+      const expiresAt = async () =>
+        Date.parse(
+          (await fx.unit(() => new StagedBlobRepository(fx.db).find(TENANT, ref)))!.expiresAt
+        );
+      const hour = 60 * 60 * 1000; // the fixture's blob TTL
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+      try {
+        const { run } = await importer.start(staged.import_id, {
+          teammates: ['t01'],
+          board_id: null,
+        });
+        const claimedUntil = await expiresAt();
+        const create = ArtifactRepository.prototype.create;
+        const spy = vi
+          .spyOn(ArtifactRepository.prototype, 'create')
+          .mockImplementation(async function (this: ArtifactRepository, ...args) {
+            // A long step: the heartbeat fires while it runs...
+            vi.setSystemTime(claimedUntil - 60_000);
+            vi.advanceTimersByTime(60_000);
+            for (let i = 0; i < 1000 && (await expiresAt()) <= claimedUntil; i++) {
+              await new Promise((resolve) => setImmediate(resolve));
+            }
+            // ...so past the TTL it got when claimed, the sweep keeps the pack.
+            vi.setSystemTime(claimedUntil + 30 * 60_000);
+            expect(await store.cleanupExpired({ tenantId: TENANT })).toBe(0);
+            return create.apply(this, args);
+          });
+        try {
+          await run();
+        } finally {
+          spy.mockRestore();
+        }
+        expect((await importer.get(staged.import_id)).status).toBe('applied');
+        // Nothing refreshes it any more: a TTL later it is swept.
+        vi.setSystemTime(Date.now() + 2 * hour);
+        expect(await store.cleanupExpired({ tenantId: TENANT })).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    })
 );
 
 dbTest('the files leg re-checks the claim after waiting for the checkout', async ({ db: raw }) =>

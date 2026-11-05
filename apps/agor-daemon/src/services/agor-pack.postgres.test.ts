@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import {
-  AgorPackImportRepository,
+  ArtifactRepository,
+  acquireTenantWriteGate,
   BranchRepository,
   createDatabase,
   type Database,
@@ -11,8 +12,11 @@ import {
   initializeDatabase,
   KnowledgeDocumentRepository,
   MessagesRepository,
+  releaseTenantWriteGate,
   SessionRepository,
+  select,
   sql,
+  stagedBlobs,
   UploadRepository,
 } from '@agor/core/db';
 import type { BranchID, SessionID, TenantID, UploadRef } from '@agor/core/types';
@@ -144,7 +148,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       }
     }, 60_000);
 
-    it('the sweep keeps the pack of an applying import past its expiry', async () => {
+    it('each apply step keeps the pack for another TTL; afterwards the sweep takes it', async () => {
       const tenant = 'pack-pg-sweep' as TenantID;
       const fx = await createPackFixture({ raw, tenant, config: CONFIG, uploadsRoot });
       try {
@@ -156,20 +160,53 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           board_id: null,
         });
         const hour = 60 * 60 * 1000;
-        const receipts = new AgorPackImportRepository(fx.db);
-        const token = (await fx.unit(() => receipts.findById(staged.import_id)))!.claim_token!;
         vi.useFakeTimers({ toFake: ['Date'] });
         try {
-          vi.setSystemTime(Date.now() + 2 * hour);
-          // A live worker's heartbeat keeps the claim (and so the pack) in use.
-          await fx.unit(() => receipts.touchClaim(staged.import_id, token));
+          // Mid-run, past the TTL the pack got when claimed; the next step's
+          // claim check extends it again.
+          const create = ArtifactRepository.prototype.create;
+          const spy = vi.spyOn(ArtifactRepository.prototype, 'create').mockImplementation(function (
+            this: ArtifactRepository,
+            ...args
+          ) {
+            vi.setSystemTime(Date.now() + 2 * hour);
+            return create.apply(this, args);
+          });
+          try {
+            await run();
+          } finally {
+            spy.mockRestore();
+          }
           expect(await getBlobStagingStore().cleanupExpired({ tenantId: tenant })).toBe(0);
-          await run();
           vi.setSystemTime(Date.now() + 2 * hour);
           expect(await getBlobStagingStore().cleanupExpired({ tenantId: tenant })).toBe(1);
         } finally {
           vi.useRealTimers();
         }
+      } finally {
+        await fx.close();
+      }
+    }, 60_000);
+
+    it('a pack upload is refused, and nothing staged, while the tenant write gate is held', async () => {
+      const tenant = 'pack-pg-gated' as TenantID;
+      const fx = await createPackFixture({ raw, tenant, config: CONFIG, uploadsRoot });
+      try {
+        const { pack } = await fx.exportPack();
+        const blobs = () => fx.unit(() => select(fx.db).from(stagedBlobs).all());
+        const before = (await blobs()).length;
+        const { generation } = await acquireTenantWriteGate(raw, tenant);
+        try {
+          await expect(
+            new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea)).stage(
+              Readable.from([pack]),
+              pack.byteLength
+            )
+          ).rejects.toThrow(/write/i);
+        } finally {
+          await releaseTenantWriteGate(raw, tenant, { generation });
+        }
+        expect(await blobs()).toHaveLength(before);
       } finally {
         await fx.close();
       }

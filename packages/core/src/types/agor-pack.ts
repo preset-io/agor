@@ -564,7 +564,8 @@ export interface AgorPackDryRunTeammate {
 
 /**
  * An apply claim not refreshed for this long belongs to a dead worker: it can
- * be taken over, and its staged pack is no longer protected from the sweep.
+ * be taken over. (Its staged pack expires one blob TTL after the last
+ * heartbeat.)
  */
 export const AGOR_PACK_CLAIM_STALE_MS = 10 * 60 * 1000;
 

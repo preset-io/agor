@@ -10,9 +10,10 @@
  * - Apply is resumable: one claimed worker (a conditional update on the
  *   receipt, so it holds across processes) runs in the background. Every id
  *   a teammate's rows get is planned once and saved on the receipt before any
- *   row exists; each create uses its planned id, adopts an existing row, and
- *   runs in a transaction that re-checks the claim. A retry after a failure,
- *   a crash, or a takeover converges on exactly one copy.
+ *   row exists; each step re-checks the claim, then creates with its planned
+ *   id or adopts an existing row (receipt writes are claim-conditional). A
+ *   retry after a failure, a crash, or a takeover converges on exactly one
+ *   copy.
  * - Schedules arrive disabled, custom MCP servers disabled and without
  *   credentials, sessions archived as read-only history without SDK resume
  *   state (prompting them is refused), attachments get fresh `upl_` refs
@@ -259,9 +260,8 @@ export class AgorPackImporter {
    */
   async stage(body: NodeJS.ReadableStream, size: number): Promise<AgorPackImport> {
     const store = getBlobStagingStore();
-    await this.write(() => this.receipts().failStale(staleBefore(), INTERRUPTED)).catch(
-      () => undefined
-    );
+    // Also the write admission check: nothing is staged while the tenant is gated.
+    await this.write(() => this.receipts().failStale(staleBefore(), INTERRUPTED));
     await store.cleanupExpired({ tenantId: this.ctx.tenantId }).catch(() => 0);
     const scope = generateId();
     const staged = await store.stage({
@@ -461,9 +461,27 @@ export class AgorPackImporter {
     files: boolean
   ): Promise<void> {
     const importId = claimed.import_id;
-    // Every mutation runs in a native transaction that first re-checks the
-    // claim (`fenced`): once another worker took over, this one cannot write.
-    // The heartbeat keeps a live worker's claim from going stale between steps.
+    const blob = stagedPackBlob(this.ctx, claimed);
+    // Before each step: refresh the claim (throws once another worker took
+    // over) and keep the staged pack for another TTL. Run on a timer too, it
+    // is the heartbeat; a dead worker's pack expires one TTL after its last.
+    // Creates are idempotent by planned id and receipt writes are
+    // token-conditional (`save`), so steps need no transaction of their own.
+    const check = () =>
+      this.write(async () => {
+        if (!(await this.receipts().touchClaim(importId, token))) {
+          throw new AgorPackImportClaimLostError();
+        }
+        if (blob) {
+          await new StagedBlobRepository(this.ctx.db).extend(
+            blob.ref,
+            new Date(Date.now() + getBlobStagingStore().ttlMs)
+          );
+        }
+      });
+    // Pure repository writes that must land whole (a session with its tasks
+    // and messages, an attachment's publish) re-check the claim in their
+    // transaction, so a stale worker cannot write them.
     const fenced = <T>(work: () => Promise<T>): Promise<T> =>
       runWithTenantDatabaseTransaction(this.ctx.db, this.ctx.tenantId, async () => {
         await assertTenantWritable(this.ctx.db, this.ctx.tenantId);
@@ -475,7 +493,7 @@ export class AgorPackImporter {
     const save = (patch: Parameters<AgorPackImportRepository['updateClaimed']>[2]) =>
       this.write(() => this.receipts().updateClaimed(importId, token, patch));
     const heartbeat = setInterval(() => {
-      void save({}).catch(() => undefined);
+      void check().catch(() => undefined);
     }, CLAIM_HEARTBEAT_MS);
     heartbeat.unref?.();
     let results = [...claimed.results];
@@ -496,7 +514,7 @@ export class AgorPackImporter {
               teammatePackPath(teammate.key, 'teammate.json'),
               agorPackTeammateFileSchema
             );
-            const repo = await this.ensureRepo(file, () => save({}));
+            const repo = await this.ensureRepo(file, check);
             let plan = progress[teammate.key];
             if (!plan) {
               plan = await this.plan(reader, teammate, file, repo, request.board_id);
@@ -515,7 +533,7 @@ export class AgorPackImporter {
               repo,
               request.board_id,
               state,
-              fenced,
+              { check, fenced },
               persist
             );
             results = [...results, result];
@@ -545,7 +563,7 @@ export class AgorPackImporter {
         for (const result of results) {
           if (!request.teammates.includes(result.key)) continue;
           if (result.filesystem !== 'pending') continue;
-          const patch = await this.materialize(claimed, result, token, fenced);
+          const patch = await this.materialize(claimed, result, token, check);
           results = results.map((r) => (r.key === result.key ? { ...r, ...patch } : r));
           await save({ results });
         }
@@ -668,10 +686,10 @@ export class AgorPackImporter {
   }
 
   /**
-   * One teammate from its plan. Every row is created with its planned id in
-   * a fenced transaction that first checks whether the row already exists
-   * (then it is adopted), so steps are idempotent: a retry after any crash
-   * converges on exactly one teammate with the planned ids.
+   * One teammate from its plan. Every step re-checks the claim, then creates
+   * its row with the planned id unless it already exists (then it is
+   * adopted), so steps are idempotent: a retry after any crash converges on
+   * exactly one teammate with the planned ids.
    */
   private async applyTeammate(
     reader: AgorPackReader,
@@ -680,7 +698,10 @@ export class AgorPackImporter {
     repo: Repo,
     existingBoardId: string | null,
     state: AgorPackTeammateProgress,
-    fenced: <T>(work: () => Promise<T>) => Promise<T>,
+    {
+      check,
+      fenced,
+    }: { check: () => Promise<void>; fenced: <T>(work: () => Promise<T>) => Promise<T> },
     persist: () => Promise<void>
   ): Promise<AgorPackTeammateResult> {
     const path = (relative: string) => teammatePackPath(summary.key, relative);
@@ -709,8 +730,8 @@ export class AgorPackImporter {
       )) {
         if (object.type === 'artifact') artifactObjects[id] = object;
       }
-      await fenced(async () => {
-        if (await boards.findById(state.board_id)) return;
+      await check();
+      if (!(await this.unit(() => boards.findById(state.board_id)))) {
         const blob = (boardFile?.board ?? {
           name: `${file.teammate.displayName}'s Board`,
           icon: file.teammate.emoji,
@@ -719,30 +740,37 @@ export class AgorPackImporter {
         const objects = Object.fromEntries(
           Object.entries(boardBlob.objects ?? {}).filter(([id]) => !artifactObjects[id])
         );
-        const slugTaken = boardBlob.slug ? await boards.findBySlug(boardBlob.slug as string) : null;
+        const slugTaken = boardBlob.slug
+          ? await this.unit(() => boards.findBySlug(boardBlob.slug as string))
+          : null;
         const service = this.ctx.app.service('boards') as unknown as BoardsServiceImpl;
-        const board = (await service.fromBlob(
-          { ...boardBlob, ...(slugTaken ? { slug: undefined } : {}), objects },
-          withImportedRowId(this.params, state.board_id)
+        const board = (await this.unit(() =>
+          service.fromBlob(
+            { ...boardBlob, ...(slugTaken ? { slug: undefined } : {}), objects },
+            withImportedRowId(this.params, state.board_id)
+          )
         )) as Board & { import_skipped?: unknown[] };
         if (board.import_skipped?.length) {
           warn(`${pluralize(board.import_skipped.length, 'board object')} could not be imported.`);
         }
-      });
+      }
     }
     const boardId = state.board_id;
 
     // 2. Branch (KB namespace and primary-teammate wiring happen in branches.create).
-    await fenced(async () => {
-      if (!(await branchRepo.findById(state.branch_id))) {
-        // A branch created now has a fresh Knowledge namespace to fill.
-        state.knowledge_done = false;
-        if (await branchRepo.findByRepoAndName(repo.repo_id as UUID, state.branch_name)) {
-          // Taken since planning by someone else; ours does not exist, so re-picking is safe.
-          state.branch_name = await this.uniqueBranchName(repo.repo_id, file.branch.name);
-        }
-        const repos = this.ctx.app.service('repos') as unknown as ReposServiceImpl;
-        await repos.createBranch(
+    await check();
+    if (!(await this.unit(() => branchRepo.findById(state.branch_id)))) {
+      // A branch created now has a fresh Knowledge namespace to fill.
+      state.knowledge_done = false;
+      if (
+        await this.unit(() => branchRepo.findByRepoAndName(repo.repo_id as UUID, state.branch_name))
+      ) {
+        // Taken since planning by someone else; ours does not exist, so re-picking is safe.
+        state.branch_name = await this.uniqueBranchName(repo.repo_id, file.branch.name);
+      }
+      const repos = this.ctx.app.service('repos') as unknown as ReposServiceImpl;
+      await this.unit(() =>
+        repos.createBranch(
           repo.repo_id,
           {
             name: state.branch_name,
@@ -767,17 +795,22 @@ export class AgorPackImporter {
             custom_context: { teammate: { kind: 'teammate', ...file.teammate } },
           },
           withImportedRowId(this.params, state.branch_id)
-        );
-        // Provenance is server-managed and kept out of template-visible context.
-        await branchRepo.update(state.branch_id, { agor_pack: { imported_from: importedFrom } });
-      }
-      await persist();
-    });
-    const branch = (await this.unit(() => branchRepo.findById(state.branch_id))) as Branch;
+        )
+      );
+    }
+    let branch = (await this.unit(() => branchRepo.findById(state.branch_id))) as Branch;
+    if (!branch.agor_pack?.imported_from) {
+      // Provenance is server-managed and kept out of template-visible context
+      // (also set when an earlier attempt stopped right after the create).
+      branch = await this.write(() =>
+        branchRepo.update(state.branch_id, { agor_pack: { imported_from: importedFrom } })
+      );
+    }
+    await persist();
     const kb = getTeammateConfig(branch)?.kb;
 
-    // 3. Knowledge into the teammate's own namespace, with its done-flag in
-    // the same transaction.
+    // 3. Knowledge into the teammate's own namespace (documents that already
+    // hold their content are skipped on a resume), then its done-flag.
     if (
       !state.knowledge_done &&
       kb?.primary_namespace_id &&
@@ -793,8 +826,9 @@ export class AgorPackImporter {
       const history = reader.has(path('knowledge/history.json'))
         ? await reader.readJson(path('knowledge/history.json'), agorPackKnowledgeHistorySchema)
         : null;
-      await fenced(async () => {
-        const kbResult = await importKnowledgeRepository({
+      await check();
+      const kbResult = await this.unit(() =>
+        importKnowledgeRepository({
           db: this.ctx.db,
           app: this.ctx.app,
           params: this.params,
@@ -802,13 +836,13 @@ export class AgorPackImporter {
           files,
           history,
           importMetadata: { agor_pack: importedFrom },
-        });
-        if (kbResult.unresolvedLinks) {
-          warn(`${pluralize(kbResult.unresolvedLinks, 'Knowledge link')} could not be resolved.`);
-        }
-        state.knowledge_done = true;
-        await persist();
-      });
+        })
+      );
+      if (kbResult.unresolvedLinks) {
+        warn(`${pluralize(kbResult.unresolvedLinks, 'Knowledge link')} could not be resolved.`);
+      }
+      state.knowledge_done = true;
+      await persist();
     }
 
     // 4. Artifacts with their planned ids, then their board objects.
@@ -818,7 +852,8 @@ export class AgorPackImporter {
       const artifactId = state.artifacts[sequence];
       if (!artifactId) continue;
       const artifact = await reader.readJson(entry.path, agorPackArtifactFileSchema);
-      const row = await fenced(async () => {
+      await check();
+      const row = await this.write(async () => {
         if (await artifacts.findById(artifactId)) return null;
         return artifacts.create({
           artifact_id: artifactId as UUID,
@@ -861,7 +896,8 @@ export class AgorPackImporter {
       }
     }
     if (Object.keys(rewired).length > 0) {
-      const board = await fenced(() => boards.batchUpsertBoardObjects(boardId, rewired));
+      await check();
+      const board = await this.write(() => boards.batchUpsertBoardObjects(boardId, rewired));
       emitServiceEvent(this.ctx.app, {
         path: 'boards',
         event: 'patched',
@@ -893,7 +929,8 @@ export class AgorPackImporter {
       try {
         const service = mcpServers;
         if (!service) throw new Error('MCP servers are not available here');
-        const createdServer = (await fenced(() =>
+        await check();
+        const createdServer = (await this.unit(() =>
           service.create(
             {
               name: server.name,
@@ -976,12 +1013,14 @@ export class AgorPackImporter {
           retention: schedule.retention,
         };
         try {
-          await fenced(async () => {
-            if (await scheduleRepo.findById(scheduleId)) return;
-            await this.ctx.app
-              .service('schedules')
-              .create(data as never, withImportedRowId(this.params, scheduleId));
-          });
+          await check();
+          if (!(await this.unit(() => scheduleRepo.findById(scheduleId)))) {
+            await this.unit(() =>
+              this.ctx.app
+                .service('schedules')
+                .create(data as never, withImportedRowId(this.params, scheduleId))
+            );
+          }
           if (!remap.schedules.includes(scheduleId)) remap.schedules.push(scheduleId);
         } catch (error) {
           if (error instanceof AgorPackImportClaimLostError) throw error;
@@ -1127,7 +1166,7 @@ export class AgorPackImporter {
       const published = async () =>
         (await uploadRows.findOwned(this.ctx.tenantId, ref))?.status === 'active';
       if (!(await this.unit(published))) {
-        await fenced(async () => undefined);
+        await check();
         const owner = {
           tenantId: this.ctx.tenantId,
           sessionId: sessionId as SessionID,
@@ -1186,7 +1225,7 @@ export class AgorPackImporter {
     record: AgorPackImportRecord,
     result: AgorPackTeammateResult,
     claimToken: string,
-    fenced: <T>(work: () => Promise<T>) => Promise<T>
+    check: () => Promise<void>
   ): Promise<Partial<AgorPackTeammateResult>> {
     const importId = record.import_id;
     const key = result.key;
@@ -1209,7 +1248,7 @@ export class AgorPackImporter {
       // Re-check the claim after the (possibly long) provisioning wait, right
       // before the handoff; the executor's pack download is bound to it too,
       // and its result is saved only while this claim is still current.
-      await fenced(async () => undefined);
+      await check();
       await runAgorPackExecutorCommand(this.ctx, {
         command: 'branch.pack.materialize',
         commandId: agorPackMaterializeExecutorCommandId(importId, key, claimToken),
