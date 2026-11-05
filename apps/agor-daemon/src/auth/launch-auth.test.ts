@@ -149,7 +149,8 @@ describe('one-time launch auth service', () => {
   function service(
     config = baseConfig(),
     usersService = makeUsersService(db),
-    onAuthorizationInvalidated?: (tenantId: string, userId: UserID) => void
+    onAuthorizationInvalidated?: (tenantId: string, userId: UserID) => void,
+    refreshTokenTtl = 2_592_000
   ) {
     const { settings } = resolveExternalLaunchSettings(config);
     return createLaunchAuthService({
@@ -158,7 +159,7 @@ describe('one-time launch auth service', () => {
       provider: settings,
       jwtSecret: RUNTIME_JWT_SECRET,
       accessTokenTtl: '15m',
-      refreshTokenTtl: '30d',
+      refreshTokenTtl,
       usersService,
       onAuthorizationInvalidated,
     });
@@ -498,6 +499,20 @@ execution:
         },
       }).create({ launchCode: 'code' })
     ).rejects.toBeInstanceOf(NotAuthenticated);
+  });
+
+  it('issues the launch refresh token with the configured lifetime in seconds', async () => {
+    mockExchange(signClaims());
+    const result = await service(baseConfig(), makeUsersService(db), undefined, 604_800).create({
+      launchCode: 'one-time-code',
+    });
+
+    const refresh = jwt.verify(result.refreshToken, RUNTIME_JWT_SECRET, {
+      issuer: 'agor',
+      audience: 'https://agor.dev',
+    }) as { type: string; exp: number; iat: number };
+    expect(refresh.type).toBe('refresh');
+    expect(refresh.exp - refresh.iat).toBe(604_800);
   });
 
   it('creates a local user and issues normal runtime tokens', async () => {

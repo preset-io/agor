@@ -114,7 +114,7 @@ export interface LaunchAuthServiceOptions {
   provider: ResolvedExternalLaunchProvider;
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
-  refreshTokenTtl: SignOptions['expiresIn'];
+  refreshTokenTtl: number;
   usersService: { get(id: UserID, params?: Params): Promise<User> };
   onAuthorizationInvalidated?: (tenantId: string, userId: UserID) => void;
 }
@@ -741,7 +741,7 @@ function issueRuntimeTokens(
   user: User,
   jwtSecret: string,
   accessTokenTtl: SignOptions['expiresIn'],
-  refreshTokenTtl: SignOptions['expiresIn'],
+  refreshTokenTtl: number,
   tenantClaim = 'tenant_id',
   tenantId?: string
 ): LaunchAuthResult {

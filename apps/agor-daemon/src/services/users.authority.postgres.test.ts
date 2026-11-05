@@ -286,7 +286,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const refreshService = createRefreshTokenService({
         jwtSecret,
         accessTokenTtl: '15m',
-        refreshTokenTtl: '30d',
+        refreshTokenTtl: 2_592_000,
         usersService: {
           get: async (...args: Parameters<UsersService['get']>) => {
             const snapshot = await service.get(...args);
