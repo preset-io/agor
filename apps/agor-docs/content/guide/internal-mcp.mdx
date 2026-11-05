@@ -36,7 +36,7 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 | **Sessions**          | Introspect the current session, list siblings, spawn child sessions with prompts, archive/complete work                      |
 | **Repositories**      | List repositories, clone remote repos, register local repos, manage repo metadata                                            |
 | **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards, request policy-approved cleanup |
-| **Board Zones**       | Create zones on boards, update zone properties (position, size, color), manage zone triggers                                 |
+| **Board Zones**       | Create zones, place branches/cards with coordinates or anchors, reposition without triggers, manage zone triggers            |
 | **Tasks**             | Fetch task history, cancel selected queued tasks, reorder pending work                                                       |
 | **Environments**      | Start, stop, health-check, and read logs for branch environments                                                             |
 | **Cards & Artifacts** | Create, move, and update cards and card types; publish, update, and inspect artifacts                                        |
@@ -46,6 +46,56 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 | **Users**             | Create users, update profiles or avatars, assign roles                                                                       |
 
 Because tools route through FeathersJS services, every action emits the same events the UI listens to. Real-time updates appear instantly for everyone watching the board.
+
+### Precise board placement
+
+`agor_branches_set_zone`, `agor_branches_create` (with `zoneId`),
+`agor_cards_create`, and `agor_cards_move` accept an optional `position`:
+
+- `{ "x": 10, "y": 10 }` places the entity's top-left corner relative to the
+  zone's top-left, **not** the canvas origin. Coordinates clamp to the zone's
+  bounds, accounting for entity size; explicit coordinates need not keep padding.
+- An anchor: `top-left`, `top-center`, `top-right`, `center-left`, `center`,
+  `center-right`, `bottom-left`, `bottom-center`, or `bottom-right`.
+  Anchors account for entity size and adaptive padding (80 for branches, 60 for
+  cards). An entity larger than its zone starts at zero on the overflowing axis.
+- Omit `position` to keep random placement within the zone's padding.
+
+For example, pass these arguments to `agor_branches_set_zone`:
+
+```json
+{ "branchId": "01abcdef", "zoneId": "zone-review", "position": "top-left" }
+```
+
+Or to `agor_cards_move`:
+
+```json
+{ "cardId": "01abcdef", "zoneId": "zone-review", "position": { "x": 10, "y": 10 } }
+```
+
+`set_zone` retains its existing trigger behavior, including automatic
+`always_new` triggers. Branch creation with `zoneId` only pins; it does not run
+triggers.
+
+To reposition **without running triggers or changing zone membership**, use
+`agor_boards_set_position`. Find `object_id` with
+`agor_boards_get({ boardId, includeEntities: true })`, or use the branch's
+`board_object_id`:
+
+```json
+{ "objectId": "board-object-id", "position": "bottom-right" }
+```
+
+For an unpinned entity, pass absolute canvas coordinates instead:
+
+```json
+{ "objectId": "board-object-id", "position": { "x": -100, "y": 250 } }
+```
+
+Anchors require a zone. Card creation/moves without a zone, and branch
+`set_zone` with `zoneId: null`, also accept absolute coordinates. Branch creation
+requires `zoneId` when `position` is supplied. Placement uses the same board
+capability checks as moving entities on the canvas.
 
 ### Managing a Session's pending queue
 
@@ -385,8 +435,8 @@ during a rolling deploy, were not escaped.
 Two things the block deliberately does not claim, because no code path carries
 them:
 
-- **It is not human approval.** The Agor user is the account the *calling
-  agent* ran under. A relay saying a person authorized something is that
+- **It is not human approval.** The Agor user is the account the _calling
+  agent_ ran under. A relay saying a person authorized something is that
   agent's assertion, not Agor's.
 - **It authenticates the hop, not the content.** A genuine session that
   ingested a poisoned page, issue body, or tool result emits a genuinely

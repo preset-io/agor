@@ -1,12 +1,13 @@
 import type { AgorClient, Board, BoardEntityObject, Branch, Repo } from '@agor-live/client';
-import { EnvironmentOutlined } from '@ant-design/icons';
-import { Skeleton, Tag, Tooltip, Typography, theme } from 'antd';
+import { DragOutlined, EnvironmentOutlined } from '@ant-design/icons';
+import { Button, Skeleton, Tag, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
 import { BranchBoardLocatorIcon } from '../BranchBoardLocatorIcon';
 import { BranchStateTag } from '../BranchFilesystemRecovery';
+import { BranchPlacementModal } from '../BranchModal/BranchPlacementModal';
 import { CompactNotice } from '../CompactNotice';
 import { RepoPill } from '../Pill';
 
@@ -24,6 +25,8 @@ export interface BoardBranchListProps {
   repoById: Map<string, Repo>;
   client: AgorClient | null;
   onAfterBranchClick?: () => void;
+  /** Effective board-edit capability; independent of branch metadata editing. */
+  canMoveBranches?: boolean;
 }
 
 /**
@@ -39,6 +42,7 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
   repoById,
   client,
   onAfterBranchClick,
+  canMoveBranches = false,
 }) => {
   const { token } = theme.useToken();
   const recenterMap = useRecenterMap();
@@ -48,7 +52,17 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  const [placementBranch, setPlacementBranch] = useState<Branch | null>(null);
+  const [placementOpen, setPlacementOpen] = useState(false);
   const boardId = board?.board_id;
+
+  // Drop the selected row when its board or mutation access is no longer available.
+  useEffect(() => {
+    if (!canMoveBranches || !client || placementBranch?.board_id !== boardId) {
+      setPlacementOpen(false);
+      setPlacementBranch(null);
+    }
+  }, [canMoveBranches, client, boardId, placementBranch]);
 
   const loadBranches = useCallback(async () => {
     if (!client || !boardId) return;
@@ -226,6 +240,25 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
                     </Tag>
                   )}
                   <BranchStateTag branch={branch} style={{ marginInlineEnd: 0, flexShrink: 0 }} />
+                  {canMoveBranches && client && (
+                    <Tooltip title="Move on board…">
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<DragOutlined />}
+                        aria-label={`Move ${branch.name} on board`}
+                        disabled={
+                          branch.archived || !!branch.deletion_status || branch.board_id !== boardId
+                        }
+                        style={{ flexShrink: 0 }}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setPlacementBranch(branch);
+                          setPlacementOpen(true);
+                        }}
+                      />
+                    </Tooltip>
+                  )}
                   <BranchBoardLocatorIcon branch={branch} size={14} />
                 </div>
 
@@ -279,6 +312,17 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
           })
         )}
       </section>
+
+      {canMoveBranches && client && placementBranch && placementBranch.board_id === boardId && (
+        <BranchPlacementModal
+          key={placementBranch.branch_id}
+          client={client}
+          branch={placementBranch}
+          open={placementOpen}
+          onClose={() => setPlacementOpen(false)}
+          afterClose={() => setPlacementBranch(null)}
+        />
+      )}
 
       {/* Board Info Footer */}
       {footerText && (

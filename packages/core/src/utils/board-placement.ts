@@ -1,4 +1,4 @@
-import type { BoardPosition, ZoneBoardObject } from '../types/board.js';
+import type { BoardPlacementSpec, BoardPosition, ZoneBoardObject } from '../types/board.js';
 
 /** Standard branch card dimensions used for zone placement calculations */
 export const BRANCH_CARD_WIDTH = 500;
@@ -128,26 +128,52 @@ export function computeZoneRelativePosition(
   zone: Pick<ZoneBoardObject, 'width' | 'height'>,
   options?: { entityWidth?: number; entityHeight?: number; desiredPadding?: number }
 ): BoardPosition {
-  const entityWidth = options?.entityWidth ?? BRANCH_CARD_WIDTH;
-  const entityHeight = options?.entityHeight ?? BRANCH_CARD_HEIGHT;
-  const desiredPadding = options?.desiredPadding ?? ZONE_DESIRED_PADDING;
+  return resolveZoneRelativePosition(zone, undefined, options);
+}
 
-  const maxPaddingX = Math.max(0, (zone.width - entityWidth) / 2);
-  const maxPaddingY = Math.max(0, (zone.height - entityHeight) / 2);
-  const paddingX = Math.min(desiredPadding, maxPaddingX);
-  const paddingY = Math.min(desiredPadding, maxPaddingY);
-
-  const jitterRangeX = Math.max(0, zone.width - entityWidth - 2 * paddingX);
-  const jitterRangeY = Math.max(0, zone.height - entityHeight - 2 * paddingY);
-
-  if (zone.width < entityWidth || zone.height < entityHeight) {
-    console.warn(
-      `⚠️  Zone is smaller than entity (${zone.width}x${zone.height} < ${entityWidth}x${entityHeight}), entity may overflow zone bounds`
-    );
+/**
+ * Resolve a zone-relative top-left position without modifying the zone or spec.
+ * Explicit coordinates use the full bounds; anchors use adaptive padding.
+ * An oversized entity is pinned to zero on the overflowing axis.
+ * Omitted specs preserve random placement; inject random for deterministic callers/tests.
+ */
+export function resolveZoneRelativePosition(
+  zone: Pick<ZoneBoardObject, 'width' | 'height'>,
+  spec?: BoardPlacementSpec,
+  options?: {
+    entityWidth?: number;
+    entityHeight?: number;
+    desiredPadding?: number;
+    random?: () => number;
   }
-
+): BoardPosition {
+  const maxX = Math.max(0, zone.width - (options?.entityWidth ?? BRANCH_CARD_WIDTH));
+  const maxY = Math.max(0, zone.height - (options?.entityHeight ?? BRANCH_CARD_HEIGHT));
+  const padding = Math.max(0, options?.desiredPadding ?? ZONE_DESIRED_PADDING);
+  const paddingX = Math.min(padding, maxX / 2);
+  const paddingY = Math.min(padding, maxY / 2);
+  let position: BoardPosition;
+  if (typeof spec === 'object') {
+    position = spec;
+  } else {
+    const random = options?.random ?? Math.random;
+    const horizontal =
+      spec === undefined ? random() : spec.endsWith('left') ? 0 : spec.endsWith('right') ? 1 : 0.5;
+    const vertical =
+      spec === undefined
+        ? random()
+        : spec.startsWith('top')
+          ? 0
+          : spec.startsWith('bottom')
+            ? 1
+            : 0.5;
+    position = {
+      x: paddingX + horizontal * (maxX - 2 * paddingX),
+      y: paddingY + vertical * (maxY - 2 * paddingY),
+    };
+  }
   return {
-    x: paddingX + Math.random() * jitterRangeX,
-    y: paddingY + Math.random() * jitterRangeY,
+    x: Math.min(maxX, Math.max(0, position.x)),
+    y: Math.min(maxY, Math.max(0, position.y)),
   };
 }

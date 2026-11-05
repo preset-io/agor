@@ -576,3 +576,88 @@ describe('management ownership transfer tool', () => {
     );
   });
 });
+
+describe('agor_boards_set_position', () => {
+  it.each(['branch', 'card'])(
+    'repositions a %s without changing zone or running triggers',
+    async (entityType) => {
+      const baseServiceParams = { provider: 'mcp', tenant: { tenant_id: 'tenant-a' } };
+      const get = vi.fn().mockResolvedValue({
+        object_id: 'object-1',
+        board_id: 'board-1',
+        zone_id: 'zone-1',
+        entity_type: entityType,
+      });
+      const patch = vi.fn().mockResolvedValue({});
+      const boardGet = vi.fn().mockResolvedValue({
+        objects: {
+          'zone-1': {
+            type: 'zone',
+            x: 1000,
+            y: 2000,
+            width: 1000,
+            height: 800,
+            trigger: { behavior: 'always_new', template: 'Do not run' },
+          },
+        },
+      });
+      const handler = registerAndCaptureHandler('agor_boards_set_position', {
+        userId: 'caller',
+        baseServiceParams,
+        app: {
+          service(name: string) {
+            if (name === 'board-objects') return { get, patch };
+            if (name === 'boards') return { get: boardGet };
+            throw new Error(`Unexpected service: ${name}`);
+          },
+        },
+      });
+      await handler({ objectId: 'object-1', position: 'bottom-right' });
+      expect(get).toHaveBeenCalledWith('object-1', baseServiceParams);
+      expect(boardGet).toHaveBeenCalledWith('board-1', baseServiceParams);
+      expect(patch).toHaveBeenCalledWith(
+        'object-1',
+        {
+          position: entityType === 'branch' ? { x: 420, y: 520 } : { x: 540, y: 590 },
+        },
+        baseServiceParams
+      );
+    }
+  );
+
+  it('uses absolute coordinates outside a zone and rejects anchors before patch', async () => {
+    const patch = vi.fn().mockResolvedValue({});
+    const handler = registerAndCaptureHandler('agor_boards_set_position', {
+      userId: 'caller',
+      app: {
+        service: () => ({
+          get: async () => ({ object_id: 'object-1', entity_type: 'branch' }),
+          patch,
+        }),
+      },
+    });
+    await handler({ objectId: 'object-1', position: { x: -100, y: 10 } });
+    expect(patch).toHaveBeenCalledWith('object-1', { position: { x: -100, y: 10 } }, {});
+    patch.mockClear();
+    await expect(handler({ objectId: 'object-1', position: 'center' })).rejects.toThrow(
+      /requires a zone/
+    );
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid positions in the schema', () => {
+    const config = registerAndCaptureConfig('agor_boards_set_position', {
+      app: {},
+      userId: 'caller',
+    });
+    for (const position of [
+      'left',
+      { x: 1 },
+      { x: Infinity, y: 1 },
+      { x: NaN, y: 1 },
+      { x: '10', y: 10 },
+    ]) {
+      expect(config.inputSchema?.safeParse({ objectId: 'object-1', position }).success).toBe(false);
+    }
+  });
+});

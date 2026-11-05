@@ -8,6 +8,7 @@ import {
 import type {
   Board,
   BoardID,
+  BoardPosition,
   Branch,
   BranchFilesystemAction,
   BranchID,
@@ -24,7 +25,7 @@ import {
   OWNERSHIP_TRANSFER_SERVICES,
   resolveRepoCleanupPolicy,
 } from '@agor/core/types';
-import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
+import { resolveZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -54,6 +55,7 @@ import {
   waitForBranchRefResolution,
 } from '../branch-ref-resolution.js';
 import { branchCapabilityPolicySchema } from '../capability-policy-schema.js';
+import { mcpPlacement } from '../placement-schema.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -750,10 +752,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             'If branchName conflicts with an existing branch, automatically append a numeric suffix ' +
               '(e.g., "my-feature" → "my-feature-2", "my-feature-3"). Defaults to true. Set to false to get an error on conflict instead.'
           ),
+        position: mcpPlacement
+          .optional()
+          .describe('Zone-relative {x,y} or anchor. Requires zoneId; omit for random placement.'),
         zoneId: mcpOptionalString(
           'zoneId',
           'Zone ID to pin the branch to (e.g., "zone-1770152859108"). ' +
-            'Places the branch inside the zone with automatic positioning (pin only, no trigger). ' +
+            'Places the branch inside the zone with random positioning unless position is supplied (pin only, no trigger). ' +
             'For zone trigger behavior (prompt templates), use agor_branches_set_zone after creation.'
         ),
         issueUrl: mcpOptionalString('issueUrl', 'Issue URL to associate with the branch.'),
@@ -852,6 +857,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         : undefined;
       const createBoardArg = typeof args.createBoard === 'boolean' ? args.createBoard : undefined;
       const zoneId = coerceString(args.zoneId);
+      if (args.position !== undefined && !zoneId) throw new Error('position requires zoneId');
       const autoSuffix = typeof args.autoSuffix === 'boolean' ? args.autoSuffix : true;
 
       if (!BRANCH_NAME_PATTERN.test(branchName)) {
@@ -1029,6 +1035,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const storageMode = args.storage_mode as 'worktree' | 'clone' | undefined;
       const cloneDepth = typeof args.clone_depth === 'number' ? args.clone_depth : undefined;
 
+      let position: BoardPosition | undefined;
+      if (args.position !== undefined && zoneId) {
+        const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
+        const zone = board.objects?.[zoneId];
+        if (zone?.type !== 'zone') throw new Error(`Zone ${zoneId} not found on board ${boardId}`);
+        position = resolveZoneRelativePosition(zone, args.position);
+      }
+
       // `createBranch` is deliberately NOT a Feathers transport method (it takes
       // `(id, data)`), so this direct call bypasses the around hooks that enter
       // the tenant database scope for the HTTP `/repos/:id/branches` route. In
@@ -1051,6 +1065,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
             boardId,
             ...(zoneId ? { zoneId } : {}),
+            ...(position ? { position } : {}),
             ...(variant ? { environment_variant: variant } : {}),
             ...(storageMode ? { storage_mode: storageMode } : {}),
             ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
@@ -1378,13 +1393,14 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_set_zone',
     {
       description:
-        "Pin a branch to a zone on a board, clear its current zone pin with zoneId:null, and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session on the branch being moved (targetSessionId must live on that branch — cross-branch targets are rejected, since the trigger prompt acts on the moved branch's files). A remote orchestrator on a different branch does NOT target itself here; to be notified when the work finishes, register a completion callback instead (agor_sessions_create with enableCallback:true and omit callbackSessionId for the current caller, or agor_sessions_prompt callback). Only supply callbackSessionId for an intentional authorized alternate destination.",
+        "Pin a branch to a zone on a board, clear its current zone pin with zoneId:null, and optionally trigger the zone's prompt template. Accepts zone-relative {x,y} or an anchor in position; omitted position uses random placement. Creates board association. To reposition without running triggers, use agor_boards_set_position. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session on the branch being moved (targetSessionId must live on that branch — cross-branch targets are rejected, since the trigger prompt acts on the moved branch's files). A remote orchestrator on a different branch does NOT target itself here; to be notified when the work finishes, register a completion callback instead (agor_sessions_create with enableCallback:true and omit callbackSessionId for the current caller, or agor_sessions_prompt callback). Only supply callbackSessionId for an intentional authorized alternate destination.",
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',
           'Branch',
           'Branch ID to pin to the zone (UUIDv7 or short ID)'
         ),
+        position: mcpPlacement.optional(),
         zoneId: z
           .union([
             mcpRequiredString(
@@ -1414,6 +1430,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const zoneId = args.zoneId === null ? null : coerceString(args.zoneId)!;
       const rawTargetSessionId = coerceString(args.targetSessionId);
       const triggerTemplate = args.triggerTemplate === true;
+
+      if (zoneId === null && typeof args.position === 'string')
+        throw new Error('An anchor requires a zone');
 
       if (zoneId === null && (triggerTemplate || rawTargetSessionId)) {
         throw new Error(
@@ -1480,6 +1499,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams)
         );
         if (!boardObject) {
+          if (args.position !== undefined)
+            throw new Error('Branch has no board placement to reposition');
           return textResult({
             branch,
             zone_id: null,
@@ -1489,7 +1510,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
 
         const updatedBoardObject = await boardObjectsService.patch(
           boardObject.object_id,
-          { zone_id: null },
+          {
+            zone_id: null,
+            ...(typeof args.position === 'object' ? { position: args.position } : {}),
+          },
           ctx.baseServiceParams
         );
 
@@ -1515,7 +1539,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
 
       // Calculate position RELATIVE to zone (not absolute canvas coordinates)
       // The UI expects relative positions and adds zone.x/zone.y when rendering
-      const { x: relativeX, y: relativeY } = computeZoneRelativePosition(zone as ZoneBoardObject);
+      const { x: relativeX, y: relativeY } = resolveZoneRelativePosition(
+        zone as ZoneBoardObject,
+        args.position
+      );
 
       let boardObject: import('@agor/core/types').BoardEntityObject | null =
         await runWithMcpTenantDatabaseScope(ctx, () =>
@@ -1534,7 +1561,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           ctx.baseServiceParams
         );
       } else {
-        // Update existing board object with zone and center position
+        // Update existing board object with zone and resolved position
         boardObject = await boardObjectsService.patch(
           boardObject.object_id,
           {
