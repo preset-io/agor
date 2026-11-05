@@ -295,7 +295,9 @@ default.
 - A change applies to tokens issued after the restart. Refresh tokens already issued keep their
   own expiry, so active browsers move to the new lifetime at their next refresh, and an idle
   browser's old token still works until it expires.
-- Changing a user's password still invalidates all of that user's tokens at once.
+- Signing out of the UI only discards that browser's copy of the tokens. A refresh token copied
+  elsewhere stays usable until it expires. Changing a user's password is what invalidates all of
+  that user's tokens at once.
 
 ## Local password policy
 
