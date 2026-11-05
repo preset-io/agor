@@ -195,8 +195,10 @@ authority immediately before Prompt admission. Creating or editing a schedule
 requires branch Manager, the same bar as run-now, because it spawns unattended
 work on that branch. The scheduler re-checks that its creator is still a
 workspace member and branch Manager at every fire, and checks that plus prompt
-authority again before its initial Prompt, so revocation races and crash
-recovery fail closed. Session occurrence fields (`schedule_id`, `scheduled_run_at`,
+authority again before its initial Prompt. The initial Task's fenced admission
+and its executor launch binding repeat the Manager and member check, so
+revocation races and crash recovery (including an initial Task persisted before
+a crash) fail closed; later prompts keep ordinary prompt authority. Session occurrence fields (`schedule_id`, `scheduled_run_at`,
 `scheduled_from_branch`, `custom_context.scheduled_run`) are scheduler-owned and
 rejected on external Session writes.
 

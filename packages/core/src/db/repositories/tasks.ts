@@ -89,6 +89,7 @@ import {
   resolveSessionRuntimeBranchAccess,
   visibleSessionReferenceAccessExists,
 } from './branch-access';
+import { isScheduledInitialTaskRevoked } from './capability-policies';
 import { ExecutorSessionTokenAuthorityRepository } from './executor-session-token-authorities';
 import { deepMerge } from './merge-utils';
 import { acceptOpenCodeCheckpoint, assertNoOpenOpenCodeCheckpoint } from './opencode-checkpoints';
@@ -1426,6 +1427,15 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         principalUserId: row.created_by,
       });
       if (!access?.can_prompt_session) {
+        throw new RepositoryError('Authorization to launch this task is unavailable');
+      }
+      if (
+        await isScheduledInitialTaskRevoked(txDb, {
+          sessionId: row.session_id,
+          taskId: fullId,
+          principalUserId: row.created_by,
+        })
+      ) {
         throw new RepositoryError('Authorization to launch this task is unavailable');
       }
 
