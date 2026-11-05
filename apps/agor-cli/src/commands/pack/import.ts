@@ -6,12 +6,12 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
-import { shortId } from '@agor/core/db';
 import type { AgorPackImport } from '@agor/core/types';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
-import { packFetch, packJson } from '../../lib/pack/http';
+import { packFetch } from '../../lib/pack/http';
+import { applyPack, printDryRun } from '../../lib/pack/options';
 
 export default class PackImport extends BaseCommand {
   static override summary = 'Import AI teammates from a .agorpack file';
@@ -50,44 +50,19 @@ export default class PackImport extends BaseCommand {
         duplex: 'half',
       } as RequestInit);
       let receipt = (await response.json()) as AgorPackImport;
-      for (const teammate of receipt.dry_run) {
-        const done = teammate.already_imported_branch_id ? chalk.green(' (already imported)') : '';
-        this.logToStderr(
-          `  ${chalk.bold(teammate.key)} ${teammate.display_name} — repo ${teammate.repo_status}${done}`
-        );
-        for (const warning of teammate.warnings) this.logToStderr(chalk.yellow(`    ! ${warning}`));
-      }
+      printDryRun((line) => this.logToStderr(line), receipt);
       if (flags.apply) {
-        const keys = flags.teammates
-          ? flags.teammates.split(',').map((key) => key.trim())
-          : receipt.manifest.teammates.map((t) => t.key);
-        let boardId: string | null = null;
-        if (flags.board) boardId = (await client.service('boards').get(flags.board)).board_id;
-        receipt = await packJson<AgorPackImport>(
+        const boardId = flags.board
+          ? (await client.service('boards').get(flags.board)).board_id
+          : null;
+        receipt = await applyPack({
           daemonUrl,
           bearer,
-          `/agor-pack/imports/${receipt.import_id}/apply`,
-          { teammates: keys, board_id: boardId }
-        );
-        // Apply runs in the background; follow the receipt until the rows are in.
-        while (receipt.status === 'applying') {
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          receipt = await packJson<AgorPackImport>(
-            daemonUrl,
-            bearer,
-            `/agor-pack/imports/${receipt.import_id}`
-          );
-        }
-        if (receipt.status === 'failed') {
-          throw new Error(`${receipt.error ?? 'apply failed'} (run the command again to resume)`);
-        }
-        for (const result of receipt.results) {
-          this.logToStderr(
-            chalk.green(`✓ ${result.display_name} → branch ${shortId(result.branch_id)}`) +
-              chalk.dim(` (files: ${result.filesystem})`)
-          );
-          for (const warning of result.warnings) this.logToStderr(chalk.yellow(`    ! ${warning}`));
-        }
+          receipt,
+          teammates: flags.teammates,
+          boardId,
+          log: (line) => this.logToStderr(line),
+        });
       }
       this.log(JSON.stringify(receipt));
     } catch (error) {

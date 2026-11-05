@@ -216,10 +216,42 @@ background (cloning a repository can take a while); if it stops part-way, for
 example because a clone failed or the server restarted, **Resume** continues
 where it stopped without creating a second copy.
 
-On a self-hosted install, **Settings → Move to Agor Cloud** wraps this: export,
-import in your Cloud workspace, then **Switch over** to pause the teammate's
-schedules and gateway channels on the old install (Undo resumes them). The CLI
-equivalents are `agor pack export`, `agor pack inspect`, and `agor pack import`.
+### Moving to Agor Cloud
+
+On a self-hosted install, **Settings → Move to Agor Cloud** moves your own
+teammates (admins can move anyone's):
+
+1. **Sign in to Agor Cloud** opens the Cloud console in your browser. Sign in,
+   pick the workspace, and you come back to Settings. Agor shows the workspace
+   address and connects only when you click **Connect**.
+2. **Send to Agor Cloud** packs the teammates you pick and sends them straight
+   to that workspace, with progress.
+3. Review what the workspace will create, then **Import into Agor Cloud**. Each
+   teammate gets its own board. **Open reconnect checklist in Agor Cloud** takes
+   you to the workspace to reconnect credentials and turn schedules back on.
+4. **Switch over** pauses the teammate's schedules and gateway channels on this
+   install (Undo resumes them). **Done** forgets the Cloud sign-in.
+
+Your self-hosted install keeps the Cloud sign-in encrypted with its master
+secret (`AGOR_MASTER_SECRET`) and never hands it to the browser. It is
+forgotten when you click **Disconnect** or **Done**, or after 7 days without
+use. The install needs outbound HTTPS to your Cloud workspace.
+
+**Download a .agorpack file instead** keeps the manual route: download the file
+here, then use **Import .agorpack** in the Cloud workspace.
+
+To script it, `agor pack send <teammate-id> --cloud-url <workspace URL>
+--api-key-env AGOR_CLOUD_API_KEY --apply` sends teammates with a personal API
+key from the Cloud workspace. The other CLI commands are `agor pack export`,
+`agor pack inspect`, and `agor pack import`.
+
+A test or private Agor Cloud can be configured in `~/.agor/config.yaml`:
+
+```yaml
+agor_cloud:
+  console_url: https://console.agor.cloud # where Sign in to Agor Cloud starts
+  workspace_host_suffixes: [agor.cloud, cloud.agor.live] # workspaces it may connect to
+```
 
 ## Real-world examples
 
