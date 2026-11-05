@@ -9,14 +9,18 @@ import {
   ArtifactRepository,
   BoardRepository,
   BranchRepository,
+  eq,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
+  kbDocuments,
   MessagesRepository,
   ScheduleRepository,
   SessionRepository,
   UploadRepository,
+  update,
 } from '@agor/core/db';
 import {
+  AGOR_PACK,
   type BranchID,
   getTeammateConfig,
   type SessionID,
@@ -40,6 +44,7 @@ import {
 import { runAgorPackExecutorCommand } from './agor-pack-executor';
 import { AgorPackExporter } from './agor-pack-export';
 import { AgorPackImporter } from './agor-pack-import';
+import { KnowledgeDocumentsService } from './knowledge-documents';
 
 vi.mock('../utils/spawn-executor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/spawn-executor')>()),
@@ -133,7 +138,12 @@ dbTest(
       const [preflight] = await new AgorPackExporter(ctx(ada)).preflight([seeded.branch.branch_id]);
       expect(preflight?.sessions.own).toBe(2);
       expect(preflight?.knowledge_documents).toBe(3);
-      expect(preflight?.archived).toEqual({ sessions: 1, knowledge_documents: 1, artifacts: 0 });
+      expect(preflight?.archived).toEqual({
+        sessions: 1,
+        knowledge_documents: 1,
+        artifacts: 0,
+        private_knowledge_documents: 0,
+      });
       expect(preflight?.knowledge_outside_links).toEqual({ count: 1, namespaces: ['team-wiki'] });
 
       // ---- Export as Ada --------------------------------------------------------
@@ -320,6 +330,92 @@ dbTest(
       expect(receipt?.progress).toEqual({});
       expect(receipt?.claim_token).toBeNull();
     })
+);
+
+dbTest("the export leaves out Knowledge docs the exporter can't read", async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    const { db, unit, ada, bea, seeded } = fx;
+    // Another user's private doc (with history) in the teammate's namespace.
+    await unit(async () => {
+      const docs = new KnowledgeDocumentsService(db, fx.server.app);
+      const doc = (await docs.create(
+        {
+          namespace_id: seeded.namespace.namespace_id,
+          path: 'docs/bea.md',
+          title: 'Bea',
+          visibility: 'private',
+          content_text: 'bea-private-v1',
+        },
+        fx.params(ada)
+      )) as { document_id: string };
+      await docs.patch(doc.document_id, { content_text: 'bea-private-v2' }, fx.params(ada));
+      await update(db, kbDocuments)
+        .set({ created_by: bea.user_id })
+        .where(eq(kbDocuments.document_id, doc.document_id))
+        .run();
+    });
+    const [preflight] = await new AgorPackExporter(fx.ctx(ada)).preflight([
+      seeded.branch.branch_id,
+    ]);
+    expect(preflight?.knowledge_documents).toBe(3);
+    expect(preflight?.archived.private_knowledge_documents).toBe(1);
+
+    const { pack, manifest } = await fx.exportPack();
+    const sections = manifest.teammates[0]!.sections;
+    expect(sections.knowledge?.documents).toBe(3);
+    expect(sections.archived_skipped?.private_knowledge_documents).toBe(1);
+    const reader = await AgorPackReader.open(bufferByteSource(pack));
+    const knowledge = (
+      await Promise.all(
+        reader.list('teammates/t01/knowledge/').map((entry) => reader.readText(entry.path))
+      )
+    ).join('\n');
+    reader.close();
+    expect(knowledge).toContain('# Plan');
+    expect(knowledge).not.toMatch(/bea-private|docs\/bea/);
+  })
+);
+
+dbTest("the export leaves out a board the exporter can't view", async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    const spy = vi.spyOn(BoardRepository.prototype, 'canViewResolved').mockResolvedValue(false);
+    try {
+      const [preflight] = await new AgorPackExporter(fx.ctx(fx.ada)).preflight([
+        fx.seeded.branch.branch_id,
+      ]);
+      expect(preflight?.artifacts).toBe(0);
+      expect(preflight?.warnings.join(' ')).toMatch(/can't view this teammate's board/);
+
+      const { pack, manifest } = await fx.exportPack();
+      const teammate = manifest.teammates[0]!;
+      expect(teammate.sections.board).toBeNull();
+      expect(teammate.sections.artifacts).toBe(0);
+      expect(teammate.warnings.join(' ')).toMatch(/can't view this teammate's board/);
+      const reader = await AgorPackReader.open(bufferByteSource(pack));
+      expect(reader.has('teammates/t01/board.json')).toBe(false);
+      reader.close();
+    } finally {
+      spy.mockRestore();
+    }
+  })
+);
+
+dbTest('a text attachment too large to scan for secrets stays behind', async ({ db: raw }) =>
+  withFixture(raw, async (fx) => {
+    const limits = AGOR_PACK as { maxTextEntryBytes: number };
+    const limit = limits.maxTextEntryBytes;
+    // The fixture's attachment ("png-bytes") has no NUL byte: it reads as text.
+    limits.maxTextEntryBytes = 4;
+    let manifest: Awaited<ReturnType<typeof fx.exportPack>>['manifest'];
+    try {
+      ({ manifest } = await fx.exportPack());
+    } finally {
+      limits.maxTextEntryBytes = limit;
+    }
+    const teammate = manifest.teammates[0]!;
+    expect(teammate.sections.uploads).toEqual({ count: 0, bytes: 0 });
+    expect(teammate.warnings.join(' ')).toMatch(/too large to check for secrets/);
+  })
 );
 
 dbTest('a failed apply resumes where it stopped: one teammate, the same ids', async ({ db: raw }) =>

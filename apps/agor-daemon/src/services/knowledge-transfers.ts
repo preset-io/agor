@@ -49,7 +49,7 @@ import {
 import { z } from 'zod';
 import { runKnowledgePolicyTransaction } from '../knowledge/policy-transaction.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-import { isKnowledgeAdmin } from './knowledge-access.js';
+import { canReadKnowledgeDocument, isKnowledgeAdmin } from './knowledge-access.js';
 import { KnowledgeDocumentsService } from './knowledge-documents.js';
 
 function parseTransfer<T>(
@@ -407,6 +407,8 @@ export interface KnowledgeRepositoryExport {
   historyVersions: number;
   /** Links to other namespaces, kept as-is (by target namespace slug). */
   outsideLinks: AgorPackOutsideLinks;
+  /** Live documents the exporter may not read, left out. */
+  privateSkipped: number;
 }
 
 /**
@@ -416,6 +418,7 @@ export interface KnowledgeRepositoryExport {
  */
 async function summarizeOutsideLinks(
   db: TenantScopeAwareDatabase,
+  user: User,
   sourceSlug: string,
   ownIds: Set<string>,
   bodies: Iterable<string>
@@ -430,7 +433,7 @@ async function summarizeOutsideLinks(
       if ('slug' in link) slug = link.slug;
       else {
         const doc = await documents.findById(link.documentId).catch(() => null);
-        if (doc && !doc.archived) {
+        if (doc && !doc.archived && (await canReadKnowledgeDocument(namespaces, doc, user))) {
           slug = (await namespaces.findById(doc.namespace_id))?.slug ?? null;
         }
       }
@@ -442,36 +445,59 @@ async function summarizeOutsideLinks(
   return { count, namespaces: [...slugs].sort() };
 }
 
-/** Every live document row of a namespace, across inventory pages. */
+/**
+ * Every live document row of a namespace the user may read, across inventory
+ * pages, and how many were left out by document visibility.
+ */
 async function inventoryRows(
-  transfers: KnowledgeTransferRepository,
-  namespaceId: string
-): Promise<KnowledgeTransferInventoryEntry[]> {
+  db: TenantScopeAwareDatabase,
+  namespaceId: string,
+  user: User
+): Promise<{ rows: KnowledgeTransferInventoryEntry[]; privateSkipped: number }> {
+  const transfers = new KnowledgeTransferRepository(db);
+  const documents = new KnowledgeDocumentRepository(db);
+  const namespaces = new KnowledgeNamespaceRepository(db);
   const rows: KnowledgeTransferInventoryEntry[] = [];
+  let privateSkipped = 0;
   for (let cursor = ''; ; ) {
     const page = await transfers.inventory(namespaceId, cursor);
-    rows.push(...page.entries);
-    if (!page.next_cursor) return rows;
+    for (const row of page.entries) {
+      const doc = await documents.findById(row.document_id);
+      if (doc && (await canReadKnowledgeDocument(namespaces, doc, user))) rows.push(row);
+      else privateSkipped += 1;
+    }
+    if (!page.next_cursor) return { rows, privateSkipped };
     cursor = page.next_cursor;
   }
 }
 
 /**
  * What a teammate pack's Knowledge section would hold, for the export
- * preflight: live documents, archived ones left out, and outside links.
- * Must run inside a tenant database scope.
+ * preflight: documents `user` may read, archived and private ones left out,
+ * and outside links. Must run inside a tenant database scope.
  */
 export async function previewKnowledgeExport(
   db: TenantScopeAwareDatabase,
-  namespaceId: string
-): Promise<{ documents: number; archived: number; outsideLinks: AgorPackOutsideLinks }> {
+  namespaceId: string,
+  user: User
+): Promise<{
+  documents: number;
+  archived: number;
+  privateSkipped: number;
+  outsideLinks: AgorPackOutsideLinks;
+}> {
   const ns = await new KnowledgeNamespaceRepository(db).findById(namespaceId);
   if (!ns || ns.archived) {
-    return { documents: 0, archived: 0, outsideLinks: { count: 0, namespaces: [] } };
+    return {
+      documents: 0,
+      archived: 0,
+      privateSkipped: 0,
+      outsideLinks: { count: 0, namespaces: [] },
+    };
   }
   const transfers = new KnowledgeTransferRepository(db);
   const versions = new KnowledgeDocumentVersionRepository(db);
-  const rows = await inventoryRows(transfers, ns.namespace_id);
+  const { rows, privateSkipped } = await inventoryRows(db, ns.namespace_id, user);
   const bodies: string[] = [];
   for (const row of rows) {
     if (row.mime_type !== 'text/markdown' || !row.version_id) continue;
@@ -481,8 +507,10 @@ export async function previewKnowledgeExport(
   return {
     documents: rows.length,
     archived: await transfers.archivedCount(ns.namespace_id),
+    privateSkipped,
     outsideLinks: await summarizeOutsideLinks(
       db,
+      user,
       ns.slug,
       new Set(rows.map((row) => String(row.document_id))),
       bodies
@@ -493,20 +521,24 @@ export async function previewKnowledgeExport(
 /**
  * Export a namespace's current Markdown documents as Knowledge repository v2
  * files — the same encoders and link rewriting as `agor kb export`, without
- * the HTTP round trips. Must run inside a tenant database scope. Optional
+ * the HTTP round trips. Only documents `options.user` may read are exported
+ * (with their history). Must run inside a tenant database scope. Optional
  * history carries up to {@link PACK_HISTORY_VERSIONS_PER_DOCUMENT} older
  * versions per document, oldest first.
  */
 export async function exportKnowledgeRepository(
   db: TenantScopeAwareDatabase,
   namespaceId: string,
-  options: { includeHistory: boolean; authorOf: (userId: string | null) => Promise<AgorPackAuthor> }
+  options: {
+    user: User;
+    includeHistory: boolean;
+    authorOf: (userId: string | null) => Promise<AgorPackAuthor>;
+  }
 ): Promise<KnowledgeRepositoryExport> {
   const ns = await new KnowledgeNamespaceRepository(db).findById(namespaceId);
   if (!ns || ns.archived) throw new NotFound('Knowledge namespace not found');
-  const transfers = new KnowledgeTransferRepository(db);
   const versions = new KnowledgeDocumentVersionRepository(db);
-  const rows = await inventoryRows(transfers, ns.namespace_id);
+  const { rows, privateSkipped } = await inventoryRows(db, ns.namespace_id, options.user);
   const documents: KnowledgeTransferEntry[] = [];
   const bodies = new Map<string, string>();
   const omissions = new Set<string>(['acl', 'graph', 'assets']);
@@ -572,11 +604,19 @@ export async function exportKnowledgeRepository(
   }
   const outsideLinks = await summarizeOutsideLinks(
     db,
+    options.user,
     ns.slug,
     new Set(rows.map((row) => String(row.document_id))),
     bodies.values()
   );
-  return { files, documents: manifest.documents.length, history, historyVersions, outsideLinks };
+  return {
+    files,
+    documents: manifest.documents.length,
+    history,
+    historyVersions,
+    outsideLinks,
+    privateSkipped,
+  };
 }
 
 /**

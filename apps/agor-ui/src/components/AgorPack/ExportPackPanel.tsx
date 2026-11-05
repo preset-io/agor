@@ -211,6 +211,9 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
                         knowledge_documents: sections.includes('knowledge')
                           ? teammate.archived.knowledge_documents
                           : 0,
+                        private_knowledge_documents: sections.includes('knowledge')
+                          ? teammate.archived.private_knowledge_documents
+                          : 0,
                         artifacts:
                           sections.includes('board') || sections.includes('artifacts')
                             ? teammate.archived.artifacts

@@ -126,12 +126,13 @@ export const agorPackOutsideLinksSchema = z
   .strict();
 export type AgorPackOutsideLinks = z.infer<typeof agorPackOutsideLinksSchema>;
 
-/** Archived rows a teammate pack leaves behind. */
+/** Archived rows a teammate pack leaves behind (plus Knowledge docs the exporter can't read). */
 export const agorPackArchivedSkipsSchema = z
   .object({
     sessions: nonNegativeInt,
     knowledge_documents: nonNegativeInt,
     artifacts: nonNegativeInt,
+    private_knowledge_documents: nonNegativeInt.optional(),
   })
   .strict();
 export type AgorPackArchivedSkips = z.infer<typeof agorPackArchivedSkipsSchema>;
@@ -150,6 +151,9 @@ export function agorPackArchivedNotes(skips: AgorPackArchivedSkips | null | unde
       ? `${pluralize(skips.knowledge_documents, 'archived Knowledge doc')} skipped`
       : null,
     skips.artifacts ? `${pluralize(skips.artifacts, 'archived artifact')} skipped` : null,
+    skips.private_knowledge_documents
+      ? `${pluralize(skips.private_knowledge_documents, 'private Knowledge doc')} skipped`
+      : null,
   ].filter((note): note is string => note !== null);
 }
 

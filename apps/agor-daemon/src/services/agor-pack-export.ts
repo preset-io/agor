@@ -53,6 +53,7 @@ import { type Application, BadRequest, NotFound } from '@agor/core/feathers';
 import { generateId } from '@agor/core/ids';
 import {
   AGOR_PACK,
+  type AgorPackArchivedSkips,
   type AgorPackArtifactFile,
   type AgorPackAuthor,
   type AgorPackBoardFile,
@@ -67,14 +68,17 @@ import {
   type AgorPackTeammateSummary,
   type AgorPackUploadFile,
   type Artifact,
+  type Board,
   type Branch,
   type DeepReadonly,
   getTeammateConfig,
+  hasMinimumRole,
   isTeammate,
   type MCPServer,
   type MCPServerID,
   pluralize,
   type Repo,
+  ROLES,
   type Schedule,
   type Session,
   type StagedBlobReadInput,
@@ -103,6 +107,7 @@ export interface AgorPackServiceContext {
 }
 
 const RECENT_MS = AGOR_PACK.recentSessionDays * 24 * 60 * 60 * 1000;
+const BOARD_HIDDEN_WARNING = "You can't view this teammate's board, so it stays out of the pack.";
 const USER_ENV_TEMPLATE = /\{\{\s*user\.env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
 const UPLOAD_LINK = new RegExp(
   `${UPLOAD_VIRTUAL_URL_PREFIX.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(upl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})`,
@@ -134,8 +139,14 @@ function looksLikeText(buffer: Buffer): boolean {
   return !buffer.subarray(0, 8192).includes(0);
 }
 
-/** Buffer a stream up to `limit` bytes; null (stream drained) when it is larger. */
-async function readBounded(stream: NodeJS.ReadableStream, limit: number): Promise<Buffer | null> {
+/**
+ * Buffer a stream up to `limit` bytes. Larger streams are drained and only
+ * their first chunk is kept (`content` null), enough to tell text from binary.
+ */
+async function readBounded(
+  stream: NodeJS.ReadableStream,
+  limit: number
+): Promise<{ content: Buffer | null; head: Buffer }> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of stream as AsyncIterable<Buffer | string>) {
@@ -143,11 +154,12 @@ async function readBounded(stream: NodeJS.ReadableStream, limit: number): Promis
     size += buffer.byteLength;
     if (size > limit) {
       (stream as unknown as { destroy?: () => void }).destroy?.();
-      return null;
+      return { content: null, head: chunks[0] ?? buffer };
     }
     chunks.push(buffer);
   }
-  return Buffer.concat(chunks);
+  const content = Buffer.concat(chunks);
+  return { content, head: content };
 }
 
 function envNamesIn(value: unknown, into: Set<string>): void {
@@ -418,13 +430,20 @@ export class AgorPackExporter {
         new ScheduleRepository(this.ctx.db).findByBranchId(branch.branch_id)
       );
       const { artifacts, archived: archivedArtifacts } = await this.boardArtifacts(branch);
+      const boardHidden = Boolean(branch.board_id) && !(await this.viewableBoard(branch));
       const { requirements } = await this.requirements(branch, schedules, artifacts, own);
       const namespaceId = teammate?.kb?.primary_namespace_id;
       const knowledge = namespaceId
-        ? await this.unit(() => previewKnowledgeExport(this.ctx.db, namespaceId))
-        : { documents: 0, archived: 0, outsideLinks: { count: 0, namespaces: [] } };
+        ? await this.unit(() => previewKnowledgeExport(this.ctx.db, namespaceId, this.ctx.user))
+        : {
+            documents: 0,
+            archived: 0,
+            privateSkipped: 0,
+            outsideLinks: { count: 0, namespaces: [] },
+          };
       const environment = this.environment(branch, repo);
       const warnings: string[] = [];
+      if (boardHidden) warnings.push(BOARD_HIDDEN_WARNING);
       if (environment.variants.some((variant) => variant.status !== 'ok')) {
         warnings.push("Some environment variants won't run in Agor Cloud as configured.");
       }
@@ -452,6 +471,7 @@ export class AgorPackExporter {
           sessions: everything.length - all.length,
           knowledge_documents: knowledge.archived,
           artifacts: archivedArtifacts,
+          private_knowledge_documents: knowledge.privateSkipped,
         },
         requirements,
         environment,
@@ -470,16 +490,28 @@ export class AgorPackExporter {
   }
 
   /**
+   * The teammate board when the exporter may view it (same rule as the boards
+   * service: admins, or `board.view`). Null when there is none or it is hidden.
+   */
+  private async viewableBoard(branch: Branch): Promise<Board | null> {
+    if (!branch.board_id) return null;
+    return this.unit(async () => {
+      const boards = new BoardRepository(this.ctx.db);
+      const board = await boards.findById(branch.board_id as string);
+      if (!board) return null;
+      if (hasMinimumRole(this.ctx.user.role, ROLES.ADMIN)) return board;
+      return (await boards.canViewResolved(board, this.ctx.user.user_id)) ? board : null;
+    });
+  }
+
+  /**
    * Artifacts referenced by the teammate board that the exporter can see;
    * archived ones are left out and counted.
    */
   private async boardArtifacts(
     branch: Branch
   ): Promise<{ artifacts: Artifact[]; archived: number }> {
-    if (!branch.board_id) return { artifacts: [], archived: 0 };
-    const board = await this.unit(() =>
-      new BoardRepository(this.ctx.db).findById(branch.board_id as string)
-    );
+    const board = await this.viewableBoard(branch);
     const ids = Object.values(board?.objects ?? {}).flatMap((object) =>
       object.type === 'artifact' ? [object.artifact_id] : []
     );
@@ -570,15 +602,17 @@ export class AgorPackExporter {
     // Board (+ artifacts referenced by it). Archived artifacts stay behind.
     const boardArtifacts = await this.boardArtifacts(branch);
     const artifacts = sections.has('artifacts') ? boardArtifacts.artifacts : [];
-    const archivedSkipped = {
+    const archivedSkipped: AgorPackArchivedSkips = {
       sessions: 0,
       knowledge_documents: 0,
       artifacts: sections.has('board') || sections.has('artifacts') ? boardArtifacts.archived : 0,
     };
     const archivedArtifactIds = new Set<string>();
-    if (sections.has('board') && branch.board_id) {
+    const board = sections.has('board') ? await this.viewableBoard(branch) : null;
+    if (sections.has('board') && branch.board_id && !board) warnings.push(BOARD_HIDDEN_WARNING);
+    if (board) {
       const boards = new BoardRepository(this.ctx.db);
-      const blob = await this.unit(() => boards.toBlob(branch.board_id as string));
+      const blob = await this.unit(() => boards.toBlob(board.board_id));
       const placement = await this.unit(() =>
         new BoardObjectRepository(this.ctx.db).findByBranchId(branch.branch_id)
       );
@@ -653,10 +687,12 @@ export class AgorPackExporter {
       );
       const kb = await this.unit(() =>
         exportKnowledgeRepository(this.ctx.db, namespaceId, {
+          user: this.ctx.user,
           includeHistory: sections.has('knowledge_history'),
           authorOf: (id) => this.authorOf(id),
         })
       );
+      if (kb.privateSkipped) archivedSkipped.private_knowledge_documents = kb.privateSkipped;
       for (const file of kb.files) {
         const entry = path(`knowledge/${file.path}`);
         assertNoSecrets(entry, file.content);
@@ -863,8 +899,15 @@ export class AgorPackExporter {
           warnings.push(`Attachment ${row.displayName} is no longer available and was skipped.`);
           continue;
         }
-        // Attachments are user files: a text one carrying a token stays behind.
-        const content = await readBounded(stream, AGOR_PACK.maxTextEntryBytes);
+        // Attachments are user files: a text one carrying a token stays behind,
+        // and so does one too large to scan.
+        const { content, head } = await readBounded(stream, AGOR_PACK.maxTextEntryBytes);
+        if (content === null && looksLikeText(head)) {
+          warnings.push(
+            `Attachment ${row.displayName} is too large to check for secrets and was skipped.`
+          );
+          continue;
+        }
         if (
           content &&
           looksLikeText(content) &&
