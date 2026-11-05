@@ -36,7 +36,7 @@ import {
 
 const JWT_SECRET = 'password-token-invalidation-test-secret';
 const ACCESS_TOKEN_TTL = '15m';
-const REFRESH_TOKEN_TTL = '30d';
+const REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60;
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;

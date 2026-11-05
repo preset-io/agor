@@ -150,7 +150,7 @@ describe('one-time launch auth service', () => {
     config = baseConfig(),
     usersService = makeUsersService(db),
     onAuthorizationInvalidated?: (tenantId: string, userId: UserID) => void,
-    refreshTokenTtl: number | '30d' = '30d'
+    refreshTokenTtl = 2_592_000
   ) {
     const { settings } = resolveExternalLaunchSettings(config);
     return createLaunchAuthService({

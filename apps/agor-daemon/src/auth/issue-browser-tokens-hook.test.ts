@@ -7,7 +7,7 @@ import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from './runtime-tokens';
 
 const JWT_SECRET = 'issue-browser-tokens-hook-test-secret';
 const ACCESS_TOKEN_TTL = '15m';
-const REFRESH_TOKEN_TTL = '30d';
+const REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60;
 const ORIGINAL_TOKEN = 'original-machine-token';
 
 function makeHook() {

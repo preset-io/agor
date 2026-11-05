@@ -132,7 +132,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         provider: settings,
         jwtSecret: RUNTIME_SECRET,
         accessTokenTtl: '15m',
-        refreshTokenTtl: '30d',
+        refreshTokenTtl: 2_592_000,
         usersService: usersService(db),
       });
     }
