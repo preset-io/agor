@@ -94,6 +94,23 @@ test('local login receives a browser access + refresh token pair', async () => {
   expect(refreshPayload.sub).toBe('user-1');
 });
 
+test('local login refresh token lives exactly the configured number of seconds', async () => {
+  const hook = createIssueBrowserTokensHook({
+    jwtSecret: JWT_SECRET,
+    accessTokenTtl: ACCESS_TOKEN_TTL,
+    refreshTokenTtl: 604_800,
+    tenantClaim: 'tenant_id',
+    staticTenantId: 'default',
+  });
+
+  const result = (await hook(makeContext(undefined, 'local'))).result;
+
+  const refreshPayload = verifyToken(result.refreshToken);
+  expect(Number(refreshPayload.exp) - Number(refreshPayload.iat)).toBe(604_800);
+  const accessPayload = verifyToken(result.accessToken);
+  expect(Number(accessPayload.exp) - Number(accessPayload.iat)).toBe(15 * 60);
+});
+
 test('api-key login (no JWT payload) receives a browser access + refresh token pair', async () => {
   const context = makeContext(undefined, 'api-key');
 
