@@ -86,10 +86,10 @@ import {
   resolveByShortIdPrefix,
 } from './base';
 import {
+  isScheduledInitialTaskRevoked,
   resolveSessionRuntimeBranchAccess,
   visibleSessionReferenceAccessExists,
 } from './branch-access';
-import { isScheduledInitialTaskRevoked } from './capability-policies';
 import { ExecutorSessionTokenAuthorityRepository } from './executor-session-token-authorities';
 import { deepMerge } from './merge-utils';
 import { acceptOpenCodeCheckpoint, assertNoOpenOpenCodeCheckpoint } from './opencode-checkpoints';

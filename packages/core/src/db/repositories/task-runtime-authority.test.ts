@@ -384,7 +384,8 @@ describe('Task runtime heartbeat authority (SQLite)', () => {
 describe('scheduled initial Task launch authority', () => {
   async function seedScheduledInitialTask(
     db: Database,
-    persistedStatus: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED
+    persistedStatus: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED,
+    snapshotInitialTaskId = true
   ) {
     const users = new UsersRepository(db);
     const owner = await users.create({
@@ -427,7 +428,11 @@ describe('scheduled initial Task launch authority', () => {
       scheduled_from_branch: true,
       scheduled_run_at: Date.parse('2026-08-28T00:00:00.000Z'),
       custom_context: {
-        scheduled_run: { rendered_prompt: 'Run', run_index: 1, initial_task_id: initialTaskId },
+        scheduled_run: {
+          rendered_prompt: 'Run',
+          run_index: 1,
+          ...(snapshotInitialTaskId ? { initial_task_id: initialTaskId } : {}),
+        },
       },
     });
     const tasks = new TaskRepository(db);
@@ -468,6 +473,24 @@ describe('scheduled initial Task launch authority', () => {
       }
     );
   }
+
+  dbTest(
+    'refuses a legacy initial Task without a snapshotted ID after demotion',
+    async ({ db }) => {
+      const seed = await seedScheduledInitialTask(db, TaskStatus.QUEUED, false);
+      await seed.persist(seed.initialTaskId);
+      const followUpId = generateId() as TaskID;
+      await seed.persist(followUpId);
+      await seed.setRole('collaborator');
+
+      await expect(seed.tasks.bindExecutorLaunchAuthority(seed.initialTaskId)).rejects.toThrow(
+        'Authorization to launch this task is unavailable'
+      );
+      await expect(seed.tasks.bindExecutorLaunchAuthority(followUpId)).resolves.toMatchObject({
+        principal_user_id: seed.creator.user_id,
+      });
+    }
+  );
 
   dbTest('refuses the initial Task once its creator drops below member', async ({ db }) => {
     const seed = await seedScheduledInitialTask(db, TaskStatus.QUEUED);

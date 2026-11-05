@@ -49,7 +49,6 @@ import {
   branchPermissionEntries,
   groupMemberships,
   groups,
-  sessions,
   users,
 } from '../schema';
 import { currentTenantInsert, EntityNotFoundError, RepositoryError } from './base';
@@ -1196,39 +1195,4 @@ export class CapabilityPolicyRepository {
       })
     );
   }
-}
-
-/**
- * Whether a schedule's initial Task has lost the authority needed to start.
- *
- * That Task runs unattended as the schedule's creator, so it needs the bar for
- * writing the schedule (branch Manager and workspace member), not ordinary
- * own-session prompt authority. Every other Task returns false.
- */
-export async function isScheduledInitialTaskRevoked(
-  db: Database,
-  input: { sessionId: string; taskId: string; principalUserId: string }
-): Promise<boolean> {
-  const session = await select(db, {
-    branch_id: sessions.branch_id,
-    scheduled_from_branch: sessions.scheduled_from_branch,
-    data: sessions.data,
-  })
-    .from(sessions)
-    .where(eq(sessions.session_id, input.sessionId))
-    .one();
-  if (!session?.scheduled_from_branch) return false;
-  // Same legacy fallback the scheduler uses when no initial Task ID was snapshotted.
-  const initialTaskId =
-    session.data?.custom_context?.scheduled_run?.initial_task_id ?? input.sessionId;
-  if (input.taskId !== initialTaskId) return false;
-  const access = await new CapabilityPolicyRepository(db).resolveLegacyBranchAccess(
-    session.branch_id as BranchID,
-    input.principalUserId as UserID
-  );
-  const principal = await select(db, { role: users.role })
-    .from(users)
-    .where(eq(users.user_id, input.principalUserId))
-    .one();
-  return access.can !== 'all' || !hasMinimumRole(principal?.role, ROLES.MEMBER);
 }
