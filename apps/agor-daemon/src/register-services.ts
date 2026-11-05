@@ -1489,7 +1489,7 @@ export function createExecuteHandler(
       cwd = branchMounts.path;
       sandboxBaseRepoPath = branchMounts.baseRepoPath;
       branchSdkHomeIntent = branchMounts.sdkHome;
-      // The sandbox and delegated launchers mount no branch for 'none', so fail fast with a clear message.
+      // The sandbox mounts no branch for 'none' and delegated launchers must not either, so fail fast with a clear message.
       const mountsByBranchAccess =
         sandboxCfg?.enabled === true || config.execution?.unix_user_mode === 'delegated';
       if (mountsByBranchAccess && principalBranchAccess === 'none') {
