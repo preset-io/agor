@@ -5,17 +5,16 @@
  * install. Patterns are token *shapes*, so a hit is a strong signal.
  */
 
+import { ENCRYPTED_ENVELOPE_PATTERN } from '../db/encryption';
+
 export interface SecretPattern {
   id: string;
   pattern: RegExp;
 }
 
 export const AGOR_PACK_SECRET_PATTERNS: readonly SecretPattern[] = [
-  // Agor's AES-GCM envelope (`salt:iv:tag:data`, hex) from db/encryption.ts.
-  {
-    id: 'agor_encrypted_value',
-    pattern: /\b[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]{2,}\b/,
-  },
+  // Agor's AES-GCM envelope (`salt:iv:tag:data`, hex).
+  { id: 'agor_encrypted_value', pattern: ENCRYPTED_ENVELOPE_PATTERN },
   { id: 'agor_api_key', pattern: /\bagor_sk_[A-Za-z0-9_-]{16,}/ },
   { id: 'slack_token', pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/ },
   { id: 'slack_app_token', pattern: /\bxapp-[0-9]+-[A-Za-z0-9-]{10,}/ },

@@ -1,8 +1,8 @@
 /**
- * A self-hosted SQLite install must export the same canonical JSONL that
- * PostgreSQL's `to_jsonb(row)::text` produces for the same data, so archives
- * from either dialect import and verify alike. Seeds a tenant in PostgreSQL,
- * copies its rows into a migrated SQLite file, exports both, and diffs.
+ * A self-hosted SQLite install must export archives a PostgreSQL runtime
+ * imports to the same rows. Seeds a tenant in PostgreSQL, copies its rows into
+ * a migrated SQLite file, deletes the PostgreSQL tenant, exports the SQLite
+ * file, imports it back, and compares PostgreSQL's own canonical exports.
  *
  *   AGOR_DB_DIALECT=postgresql AGOR_TEST_POSTGRES_URL=… \
  *     pnpm --filter @agor/core exec vitest run src/db/tenant-sqlite-export.postgres.test.ts
@@ -31,13 +31,12 @@ import { TaskRepository } from './repositories/tasks';
 import { UsersRepository } from './repositories/users';
 import * as pg from './schema.postgres';
 import { exportTenantTableRows } from './tenant-database-io';
+import { deleteTenant } from './tenant-delete';
 import { exportTenant } from './tenant-export';
 import { importTenant } from './tenant-import';
-import { MOVED_BRANCH_MESSAGE } from './tenant-layout';
 import { buildTenantInsertOrder } from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 import { rewrapTenantSecrets } from './tenant-secret-rewrap';
-import { exportSqliteTenantTableRows } from './tenant-sqlite-export';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -74,7 +73,7 @@ function toSqliteValue(value: unknown, columnType: string): unknown {
   return value;
 }
 
-describe.skipIf(!postgresUrl || !usesPostgresSchema)('SQLite export ≡ PostgreSQL export', () => {
+describe.skipIf(!postgresUrl || !usesPostgresSchema)('SQLite export → PostgreSQL import', () => {
   let pgDb: Database;
   let sqliteDb: Database;
   let scratch: string;
@@ -91,7 +90,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('SQLite export ≡ PostgreS
     await rm(scratch, { recursive: true, force: true });
   });
 
-  it('produces byte-identical JSONL for every movable table', async () => {
+  it('imports every movable table to the rows PostgreSQL held', async () => {
     await runWithTenantDatabaseScope(pgDb, TENANT, async (scoped) => {
       const owner = await new UsersRepository(scoped).create({
         user_id: generateId() as UserID,
@@ -161,6 +160,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('SQLite export ≡ PostgreS
         next_run_at: 4_102_444_800_000,
         created_by: owner.user_id,
       } as never);
+      await executeRaw(
+        scoped,
+        sql`INSERT INTO app_variables (tenant_id, variable_id, namespace, key, value_text, value_encrypted, is_encrypted, metadata, updated_by, created_at, updated_at)
+            VALUES (${TENANT}, ${generateId()}, 'tenant.secrets', 'TOKEN', NULL, ${encryptApiKey('xoxb-secret', 'k')}, true, '{"b": [1, null], "a": "x"}'::jsonb, NULL, '2026-11-04T10:00:00.123Z', '2026-11-04T10:00:00.123Z')`
+      );
     });
 
     // Copy the PostgreSQL tenant rows into SQLite (FK order differs by dialect).
@@ -193,23 +197,22 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('SQLite export ≡ PostgreS
       }
     }
 
-    const differences: string[] = [];
-    let compared = 0;
-    for (const table of buildTenantInsertOrder()) {
-      const fromPostgres = await runWithTenantDatabaseScope(pgDb, TENANT, (scoped) =>
-        exportTenantTableRows(scoped, table.name, TENANT)
-      );
-      const fromSqlite = await exportSqliteTenantTableRows(sqliteDb, table.name, TENANT);
-      const sqliteJsonl = fromSqlite.lines.length ? `${fromSqlite.lines.join('\n')}\n` : '';
-      compared += fromPostgres.rowCount;
-      if (sqliteJsonl !== fromPostgres.jsonl) {
-        differences.push(
-          `${table.name}\n  pg:     ${fromPostgres.jsonl}\n  sqlite: ${sqliteJsonl}`
-        );
-      }
-    }
-    expect(compared).toBeGreaterThan(6);
-    expect(differences).toEqual([]);
+    const exportAll = () =>
+      runWithTenantDatabaseScope(pgDb, TENANT, async (scoped) => {
+        const out: Record<string, string> = {};
+        for (const table of buildTenantInsertOrder()) {
+          out[table.name] = (await exportTenantTableRows(scoped, table.name, TENANT)).jsonl;
+        }
+        return out;
+      });
+    const before = await exportAll();
+    await deleteTenant(pgDb, TENANT, { databaseOnly: true });
+
+    const archive = join(scratch, 'roundtrip');
+    await exportTenant(sqliteDb, TENANT, { archivePath: archive, agorRelease: 'test' });
+    const result = await importTenant(pgDb, { archivePath: archive });
+    expect(result.database.totalRows).toBeGreaterThan(6);
+    expect(await exportAll()).toEqual(before);
   });
 
   it('moves a SQLite install into PostgreSQL with resealed secrets and a clone layout', async () => {
@@ -308,11 +311,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('SQLite export ≡ PostgreS
       )[0] as {
         storage_mode: string;
         filesystem_status: string;
-        data: { path: string; error_message?: string };
+        data: { path: string };
       };
-      expect(branch).toMatchObject({ storage_mode: 'clone', filesystem_status: 'failed' });
+      expect(branch).toMatchObject({ storage_mode: 'clone', filesystem_status: 'deleted' });
       expect(branch.data.path).toBe(`/cell/${moved}/worktrees/acme/app/feature`);
-      expect(branch.data.error_message).toBe(MOVED_BRANCH_MESSAGE);
     });
   });
 });

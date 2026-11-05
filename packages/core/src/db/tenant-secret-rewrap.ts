@@ -20,13 +20,16 @@ import { is, sql } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import type { Database } from './client';
 import { executeRaw } from './database-wrapper';
-import { decryptApiKey, encryptApiKey } from './encryption';
+import { decryptApiKey, ENCRYPTED_ENVELOPE_PATTERN, encryptApiKey } from './encryption';
 import * as postgresSchema from './schema.postgres';
 import { assertPortabilityDatabaseSupported } from './tenant-catalog';
 import { buildTenantInsertOrder } from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
-const ENVELOPE = /(?<![0-9a-f:])[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]*(?![0-9a-f:])/g;
+const ENVELOPE = new RegExp(
+  ENCRYPTED_ENVELOPE_PATTERN.source,
+  `${ENCRYPTED_ENVELOPE_PATTERN.flags}g`
+);
 
 export class TenantSecretRewrapError extends Error {
   constructor(message: string) {

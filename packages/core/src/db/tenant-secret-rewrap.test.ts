@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { decryptApiKey, encryptApiKey } from './encryption';
+import { decryptApiKey, ENCRYPTED_ENVELOPE_PATTERN, encryptApiKey } from './encryption';
 import {
   countSourceOnlyEnvelopes,
   emptySecretRewrapCounts,
   rewrapEnvelopesInText,
 } from './tenant-secret-rewrap';
-import { canonicalJsonbText, timestamptzJsonText } from './tenant-sqlite-export';
 
 const keys = { fromKey: 'source-key', toKey: 'transfer-key' };
 
@@ -45,19 +44,14 @@ describe('rewrapEnvelopesInText', () => {
   });
 });
 
-describe('canonical jsonb text', () => {
-  it('orders keys like jsonb (shorter first, then bytewise) with jsonb separators', () => {
-    expect(canonicalJsonbText({ bb: 1, a: [true, null], ab: { y: 'é"\n', x: 1.5 } })).toBe(
-      '{"a": [true, null], "ab": {"x": 1.5, "y": "é\\"\\n"}, "bb": 1}'
-    );
-  });
-
-  it('renders timestamptz like a UTC session, trimming fractional zeros', () => {
-    expect(timestamptzJsonText(Date.UTC(2026, 10, 4, 10, 0, 0, 0))).toBe(
-      '2026-11-04T10:00:00+00:00'
-    );
-    expect(timestamptzJsonText(Date.UTC(2026, 10, 4, 10, 0, 0, 120))).toBe(
-      '2026-11-04T10:00:00.12+00:00'
-    );
+describe('ENCRYPTED_ENVELOPE_PATTERN', () => {
+  it('matches the envelopes decryption accepts and nothing run together with them', () => {
+    const sealed = encryptApiKey('xoxb-secret', keys.fromKey);
+    expect(ENCRYPTED_ENVELOPE_PATTERN.test(`token=${sealed};`)).toBe(true);
+    expect(ENCRYPTED_ENVELOPE_PATTERN.test(sealed.toUpperCase())).toBe(true);
+    expect(ENCRYPTED_ENVELOPE_PATTERN.test(encryptApiKey('', keys.fromKey))).toBe(true);
+    expect(ENCRYPTED_ENVELOPE_PATTERN.test(`${sealed}a`)).toBe(false);
+    expect(ENCRYPTED_ENVELOPE_PATTERN.test(`ab${sealed}`)).toBe(false);
+    expect(ENCRYPTED_ENVELOPE_PATTERN.test(`${sealed}:00`)).toBe(false);
   });
 });

@@ -1,9 +1,11 @@
 /**
  * `--target-layout clone`: rewrite moved branch and repository rows for a
  * destination that re-clones from remotes instead of receiving checkouts.
- * Every branch becomes clone storage at the destination's managed path; its
- * checkout is re-provisioned by "Retry provisioning". Local-home teammates
- * (no remote) keep `ready` because their trees travel in the archive's files.
+ * Every branch becomes clone storage at the destination's managed path with
+ * `filesystem_status: 'deleted'` (no checkout on disk), which the branch
+ * restore path (retry provisioning, or unarchive) re-clones from the remote.
+ * Local-home teammates (no remote) keep their status because their trees
+ * travel in the archive's files.
  * Repository rows point at the destination's managed path and are marked for
  * re-clone.
  */
@@ -15,8 +17,6 @@ export interface CloneLayoutPaths {
   repoPath(repoSlug: string): string;
 }
 
-export const MOVED_BRANCH_MESSAGE =
-  'Moved to this workspace without its checkout. Retry provisioning to clone it from the repository.';
 export const MOVED_REPO_MESSAGE =
   'Moved to this workspace without a local copy. Clone it again to restore it.';
 
@@ -86,9 +86,9 @@ export function createCloneLayoutTransform(
         const localHome = teammate?.localHome === true;
         row.storage_mode = 'clone';
         row.data = { ...(row.data ?? {}), path };
-        if (!localHome && row.filesystem_status !== 'preserved') {
-          row.filesystem_status = 'failed';
-          row.data.error_message = MOVED_BRANCH_MESSAGE;
+        if (!localHome) {
+          row.filesystem_status = 'deleted';
+          delete row.data.error_message;
         }
         return JSON.stringify(row);
       });

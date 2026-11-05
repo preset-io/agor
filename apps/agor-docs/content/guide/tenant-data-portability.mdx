@@ -240,9 +240,10 @@ agor tenant export --tenant-id <destination-tenant-id> --archive ./move \
   --transfer-key-out ./transfer.key --files-subset
 ```
 
-- A SQLite export emits the same canonical rows a PostgreSQL export would.
-  Compatibility is checked by release (the compiled schema), not by migration
-  numbering, so the destination refuses an archive from another release.
+- A SQLite export writes each row in the PostgreSQL column shapes; import
+  re-canonicalises it like any other archive. Compatibility is checked by
+  release (the compiled schema), not by migration numbering, so the
+  destination refuses an archive from another release.
 - `--transfer-key-out` reseals every stored secret under a new one-time key and
   writes that key to the given file (it never enters the archive). Hand it to
   the destination operator separately.
@@ -258,7 +259,9 @@ AGOR_TRANSFER_KEY=… agor tenant rewrap-secrets --tenant-id <tenant-id> --from-
 ```
 
 `--target-layout clone` rewrites branches as clones at the destination's paths
-and marks repositories and branches for re-clone ("Retry provisioning").
+and marks repositories for re-clone. Branches arrive with their files
+unavailable; restoring a branch clones it again from its remote (uncommitted or
+unpushed changes don't move).
 `rewrap-secrets` reseals the secrets under the destination's master key and
 fails unless nothing remains readable with the transfer key. OAuth grants and
 other deployment-bound credentials never move; people reconnect them.
