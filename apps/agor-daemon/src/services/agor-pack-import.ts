@@ -118,6 +118,7 @@ const READY_POLL_MS = 2_000;
 const READY_TIMEOUT_MS = 15 * 60 * 1000;
 /** A claim not refreshed for this long belongs to a dead worker and can be taken over. */
 const CLAIM_STALE_MS = 10 * 60 * 1000;
+const CLAIM_HEARTBEAT_MS = 60 * 1000;
 const INTERRUPTED = 'The import was interrupted; apply it again to resume.';
 
 const staleBefore = () => new Date(Date.now() - CLAIM_STALE_MS);
@@ -145,7 +146,15 @@ export async function openStagedPack(
   const blob = stagedPackBlob(ctx, record);
   if (!blob) throw new Conflict('The pack file is no longer staged; upload it again');
   const store = getBlobStagingStore();
-  const meta = await store.inspect(blob);
+  const meta = await store.inspect(blob).catch((error: unknown) => {
+    if (
+      (error as { status?: number }).status === 404 ||
+      (error as { status?: number }).status === 410
+    ) {
+      throw new Conflict('The pack file is no longer staged; upload it again');
+    }
+    throw error;
+  });
   return {
     source: {
       size: meta.size,
@@ -172,10 +181,17 @@ function publicImport(record: AgorPackImportRecord): AgorPackImport {
     claimed_at: _claimedAt,
     ...rest
   } = record;
-  // A worker that died mid-apply leaves `applying` behind; say so.
-  return rest.status === 'applying' && !liveClaim(record)
-    ? { ...rest, status: 'failed', error: rest.error ?? INTERRUPTED }
-    : rest;
+  if (record.claim_token === null || liveClaim(record)) return rest;
+  // A worker that died leaves `applying` or pending files behind; say so.
+  return {
+    ...rest,
+    ...(rest.status === 'applying' ? { status: 'failed', error: rest.error ?? INTERRUPTED } : {}),
+    results: rest.results.map((result) =>
+      result.filesystem === 'pending'
+        ? { ...result, filesystem: 'failed', filesystem_error: INTERRUPTED }
+        : result
+    ),
+  };
 }
 
 function emptyProgress(): AgorPackTeammateProgress {
@@ -259,16 +275,18 @@ export class AgorPackImporter {
     const existing = await this.unit(() =>
       this.receipts().findByContent(this.ctx.user.user_id, manifest.content_sha256)
     );
-    if (existing && liveClaim(existing)) {
-      // A worker is reading the current bytes; keep them.
+    // Same content: keep the bytes already staged (a worker may be reading
+    // them); only swap in the new upload when they are gone.
+    if (existing && (liveClaim(existing) || (await this.isStaged(existing)))) {
       await discard();
-      return publicImport(existing);
+      if (liveClaim(existing)) return publicImport(existing);
+      const dryRun = await this.dryRun(manifest, existing.results);
+      return publicImport(
+        await this.write(() => this.receipts().update(existing.import_id, { dry_run: dryRun }))
+      );
     }
     const dryRun = await this.dryRun(manifest, existing?.results ?? []);
     if (existing) {
-      // Keep the freshest bytes so teammates not yet imported can still be applied.
-      const previous = stagedPackBlob(this.ctx, existing);
-      if (previous) await store.delete(previous).catch(() => undefined);
       const updated = await this.write(() =>
         this.receipts().update(existing.import_id, {
           staging_ref: pending.staging_ref,
@@ -277,16 +295,38 @@ export class AgorPackImporter {
       );
       return publicImport(updated);
     }
-    const created = await this.write(() =>
-      this.receipts().create({
-        owner_user_id: this.ctx.user.user_id,
-        content_sha256: manifest.content_sha256,
-        staging_ref: pending.staging_ref,
-        manifest,
-        dry_run: dryRun,
-      })
-    );
+    let created: AgorPackImportRecord;
+    try {
+      created = await this.write(() =>
+        this.receipts().create({
+          owner_user_id: this.ctx.user.user_id,
+          content_sha256: manifest.content_sha256,
+          staging_ref: pending.staging_ref,
+          manifest,
+          dry_run: dryRun,
+        })
+      );
+    } catch (error) {
+      // The same file uploaded twice at once: the other upload's receipt wins.
+      await discard();
+      const winner = await this.unit(() =>
+        this.receipts().findByContent(this.ctx.user.user_id, manifest.content_sha256)
+      );
+      if (!winner) throw error;
+      return publicImport(winner);
+    }
     return publicImport(created);
+  }
+
+  private async isStaged(record: AgorPackImportRecord): Promise<boolean> {
+    const blob = stagedPackBlob(this.ctx, record);
+    if (!blob) return false;
+    return getBlobStagingStore()
+      .inspect(blob)
+      .then(
+        () => true,
+        () => false
+      );
   }
 
   private async findRepoByRemote(remoteUrl: string): Promise<Repo | null> {
@@ -345,15 +385,16 @@ export class AgorPackImporter {
   /**
    * Claim the import for applying the selected teammates. Returns at once
    * with the claimed receipt and `run`, which the caller starts in the
-   * background; it settles when every row is in (the files leg runs after,
-   * see {@link materializePending}).
+   * background. One claim covers the whole run: the rows, then (with
+   * `files`) each selected teammate's files leg, so no second worker, upload,
+   * or retry can interleave with it.
    * Already-imported teammates are kept as they are; a teammate that an
    * earlier attempt left part-way resumes from its last finished step.
    */
   async start(
     importId: string,
     request: AgorPackApplyRequest
-  ): Promise<{ receipt: AgorPackImport; run: () => Promise<void> }> {
+  ): Promise<{ receipt: AgorPackImport; run: (options?: { files?: boolean }) => Promise<void> }> {
     const record = await this.load(importId);
     const selected = record.manifest.teammates.filter((t) => request.teammates.includes(t.key));
     if (selected.length !== new Set(request.teammates).size) {
@@ -371,10 +412,13 @@ export class AgorPackImporter {
       })
     );
     if (!claimed) throw new Conflict('This import is already being applied');
-    return { receipt: publicImport(claimed), run: () => this.run(claimed, token, request) };
+    return {
+      receipt: publicImport(claimed),
+      run: (options) => this.run(claimed, token, request, options?.files === true),
+    };
   }
 
-  /** {@link start} and wait for the rows (in-process callers and tests). */
+  /** {@link start} and wait for the rows (in-process callers and tests; no files leg). */
   async apply(importId: string, request: AgorPackApplyRequest): Promise<AgorPackImport> {
     await (await this.start(importId, request)).run();
     return this.get(importId);
@@ -383,11 +427,26 @@ export class AgorPackImporter {
   private async run(
     claimed: AgorPackImportRecord,
     token: string,
-    request: AgorPackApplyRequest
+    request: AgorPackApplyRequest,
+    files: boolean
   ): Promise<void> {
     const importId = claimed.import_id;
-    const save = (patch: Parameters<AgorPackImportRepository['updateClaimed']>[2]) =>
-      this.write(() => this.receipts().updateClaimed(importId, token, patch));
+    // The claim is refreshed on a timer, so it only goes stale when this
+    // process is gone; if it is ever taken over, every later write stops.
+    let lost = false;
+    const save = async (patch: Parameters<AgorPackImportRepository['updateClaimed']>[2]) => {
+      if (lost) throw new AgorPackImportClaimLostError();
+      try {
+        return await this.write(() => this.receipts().updateClaimed(importId, token, patch));
+      } catch (error) {
+        if (error instanceof AgorPackImportClaimLostError) lost = true;
+        throw error;
+      }
+    };
+    const heartbeat = setInterval(() => {
+      void save({}).catch(() => undefined);
+    }, CLAIM_HEARTBEAT_MS);
+    heartbeat.unref?.();
     let results = [...claimed.results];
     const progress = { ...claimed.progress };
     try {
@@ -410,7 +469,7 @@ export class AgorPackImporter {
             // the whole teammate: on PostgreSQL that is one transaction across
             // branch provisioning, Knowledge writes, and attachment staging)
             // and is saved on the receipt before the next one starts.
-            const state = progress[teammate.key] ?? emptyProgress();
+            const state = await this.resumable(progress[teammate.key]);
             const persist = async () => {
               progress[teammate.key] = state;
               await save({ progress });
@@ -421,7 +480,10 @@ export class AgorPackImporter {
               file,
               request.board_id,
               state,
-              persist
+              persist,
+              () => {
+                if (lost) throw new AgorPackImportClaimLostError();
+              }
             );
             results = [...results, result];
             delete progress[teammate.key];
@@ -431,20 +493,31 @@ export class AgorPackImporter {
           reader.close();
         }
       }
-      // Selected teammates whose files failed earlier go back to pending; the
-      // files leg (materializePending) retries them next.
-      results = results.map((result) =>
-        request.teammates.includes(result.key) && result.filesystem === 'failed'
-          ? { ...result, filesystem: 'pending', filesystem_error: undefined }
-          : result
-      );
+      // Selected teammates whose files failed earlier are retried below; show
+      // them as pending meanwhile.
+      if (files) {
+        results = results.map((result) =>
+          request.teammates.includes(result.key) && result.filesystem === 'failed'
+            ? { ...result, filesystem: 'pending', filesystem_error: undefined }
+            : result
+        );
+      }
       await save({
         results,
         status: 'applied',
         error: null,
         applied_at: claimed.applied_at ? new Date(claimed.applied_at) : new Date(),
-        release: true,
       });
+      if (files) {
+        for (const result of results) {
+          if (!request.teammates.includes(result.key)) continue;
+          if (result.filesystem !== 'pending') continue;
+          const patch = await this.materialize(claimed, result);
+          results = results.map((r) => (r.key === result.key ? { ...r, ...patch } : r));
+          await save({ results });
+        }
+      }
+      await save({ release: true });
     } catch (error) {
       // Lost claim: a newer worker took over and owns the receipt now.
       if (error instanceof AgorPackImportClaimLostError) return;
@@ -452,7 +525,31 @@ export class AgorPackImporter {
         () => undefined
       );
       throw error;
+    } finally {
+      clearInterval(heartbeat);
     }
+  }
+
+  /**
+   * Saved progress, unless a row it recorded was deleted since (say, the
+   * half-imported branch was removed to clean up): then the teammate starts over.
+   */
+  private async resumable(
+    state: AgorPackTeammateProgress | undefined
+  ): Promise<AgorPackTeammateProgress> {
+    if (!state) return emptyProgress();
+    const gone = await this.unit(async () => {
+      if (state.repo_id && !(await new RepoRepository(this.ctx.db).findById(state.repo_id))) {
+        return true;
+      }
+      if (state.board_id && !(await new BoardRepository(this.ctx.db).findById(state.board_id))) {
+        return true;
+      }
+      return Boolean(
+        state.branch_id && !(await new BranchRepository(this.ctx.db).findById(state.branch_id))
+      );
+    });
+    return gone ? emptyProgress() : state;
   }
 
   private async ensureRepo(
@@ -526,19 +623,22 @@ export class AgorPackImporter {
     file: AgorPackTeammateFile,
     existingBoardId: string | null,
     state: AgorPackTeammateProgress,
-    persist: () => Promise<void>
+    persist: () => Promise<void>,
+    assertClaimed: () => void
   ): Promise<AgorPackTeammateResult> {
     const path = (relative: string) => teammatePackPath(summary.key, relative);
     const userId = this.ctx.user.user_id;
     const { remap, warnings } = state;
     const step = async (name: AgorPackApplyStep, work: () => Promise<void>) => {
       if (state.steps.includes(name)) return;
+      assertClaimed();
       await work();
       state.steps.push(name);
       await persist();
     };
     const item = async (id: string, work: () => Promise<void>) => {
       if (state.done.includes(id)) return;
+      assertClaimed();
       await work();
       state.done.push(id);
       await persist();
@@ -595,7 +695,6 @@ export class AgorPackImporter {
             ...boardBlob,
             ...(slugTaken ? { slug: undefined } : {}),
             objects,
-            custom_context: { ...(boardBlob.custom_context ?? {}), imported_from: importedFrom },
           },
           this.params
         )
@@ -768,7 +867,8 @@ export class AgorPackImporter {
         mcpServers = null; // MCP disabled on this deployment
       }
       const usable = (mcpServers
-        ? await mcpServers.find({ ...this.params, query: { $limit: 1000 } }).catch(() => [])
+        ? // Not swallowed: a failed lookup on a retry would create the servers twice.
+          await mcpServers.find({ ...this.params, query: { $limit: 1000 } })
         : []) as unknown as { data: ServerRef[] } | ServerRef[];
       for (const server of Array.isArray(usable) ? usable : usable.data) {
         serverIdByName.set(server.name, server.mcp_server_id);
@@ -985,6 +1085,7 @@ export class AgorPackImporter {
           const flush = async () => {
             if (!batch.length) return;
             const rows = batch.splice(0, batch.length);
+            assertClaimed();
             await this.write(() => messagesRepo.createMany(rows));
           };
           for (const line of (await reader.readText(messagesPath)).split('\n')) {
@@ -1062,62 +1163,17 @@ export class AgorPackImporter {
   }
 
   /**
-   * Patch one teammate's result under a short claim, so the files leg never
-   * overwrites results an apply worker is writing (it waits for it instead).
+   * Files leg of one teammate (inside the apply claim): wait for the branch
+   * checkout, then let the executor write the teammate's git history, files,
+   * and Claude memory into it. Returns the result patch; never throws.
    */
-  private async updateResult(
-    importId: string,
-    key: string,
-    patch: Partial<AgorPackTeammateResult>
-  ): Promise<void> {
-    const deadline = Date.now() + CLAIM_STALE_MS;
-    for (;;) {
-      const token = randomUUID();
-      const claimed = await this.write(() =>
-        this.receipts().claim(importId, this.ctx.user.user_id, token, staleBefore())
-      );
-      if (claimed) {
-        const results = claimed.results.map((result) =>
-          result.key === key ? { ...result, ...patch } : result
-        );
-        await this.write(() =>
-          this.receipts().updateClaimed(importId, token, { results, release: true })
-        );
-        return;
-      }
-      if (Date.now() > deadline) throw new Conflict('This import is busy; retry shortly');
-      await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS));
-    }
-  }
-
-  /**
-   * Run the filesystem leg for the selected teammates that still need it
-   * (pending, or failed on an earlier attempt), one at a time.
-   */
-  async materializePending(importId: string, keys: string[]): Promise<void> {
-    const record = await this.load(importId);
-    for (const result of record.results) {
-      if (!keys.includes(result.key)) continue;
-      if (result.filesystem === 'pending' || result.filesystem === 'failed') {
-        await this.materialize(importId, result.key);
-      }
-    }
-  }
-
-  /**
-   * Filesystem leg: wait for the branch checkout, then let the executor write
-   * the teammate's git history, files, and Claude memory into it.
-   */
-  async materialize(importId: string, key: string): Promise<void> {
+  private async materialize(
+    record: AgorPackImportRecord,
+    result: AgorPackTeammateResult
+  ): Promise<Partial<AgorPackTeammateResult>> {
+    const importId = record.import_id;
+    const key = result.key;
     try {
-      const record = await this.load(importId);
-      const result = record.results.find((r) => r.key === key);
-      const summary = record.manifest.teammates.find((t) => t.key === key);
-      if (!result || !summary) return;
-      await this.updateResult(importId, key, {
-        filesystem: 'pending',
-        filesystem_error: undefined,
-      });
       const branches = new BranchRepository(this.ctx.db);
       const deadline = Date.now() + READY_TIMEOUT_MS;
       let branch = await this.unit(() => branches.findById(result.branch_id));
@@ -1139,13 +1195,10 @@ export class AgorPackImporter {
         branch,
         params: { importId, teammateKey: key, sourceClaudeProjectSlug: slug },
       });
-      await this.updateResult(importId, key, { filesystem: 'ready' });
+      return { filesystem: 'ready', filesystem_error: undefined };
     } catch (error) {
       console.error(`[agor-pack] materialize ${importId}/${key} failed:`, error);
-      await this.updateResult(importId, key, {
-        filesystem: 'failed',
-        filesystem_error: errorText(error),
-      }).catch(() => undefined);
+      return { filesystem: 'failed', filesystem_error: errorText(error) };
     }
   }
 

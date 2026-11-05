@@ -229,10 +229,7 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
         // follows progress on the receipt.
         deferWithTenantContext(
           params,
-          async () => {
-            await run();
-            await importer.materializePending(importId, parsed.data.teammates);
-          },
+          () => run({ files: true }),
           (error) => console.error('[agor-pack] apply failed', error)
         );
         return receipt;
