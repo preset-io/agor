@@ -28,6 +28,7 @@ import type { AgorPackServiceContext } from './agor-pack-export.js';
 const LAUNCH_TIMEOUT_MS = 10_000;
 /** Refresh the workspace access token when less than this is left. */
 const REFRESH_MARGIN_MS = 60_000;
+const TOUCH_INTERVAL_MS = 5 * 60_000;
 
 export type AgorCloudLinkContext = Pick<
   AgorPackServiceContext,
@@ -309,7 +310,8 @@ export class AgorCloudLinkService {
     const record = await this.current();
     const link = record.link;
     if (!link) throw new NotAuthenticated('Sign in to Agor Cloud first.');
-    if (force || link.access_expires_at - Date.now() < REFRESH_MARGIN_MS) {
+    const refresh = force || link.access_expires_at - Date.now() < REFRESH_MARGIN_MS;
+    if (refresh) {
       let refreshed: Awaited<ReturnType<typeof postJson>>;
       try {
         refreshed = await postJson(
@@ -334,8 +336,11 @@ export class AgorCloudLinkService {
       link.refresh_token = refreshToken;
       link.access_expires_at = expiresAt(accessToken);
     }
-    link.last_used_at = Date.now();
-    await this.write(record);
+    // Re-sealing costs a key derivation; idle tracking only needs minutes.
+    if (refresh || Date.now() - link.last_used_at > TOUCH_INTERVAL_MS) {
+      link.last_used_at = Date.now();
+      await this.write(record);
+    }
     return { workspaceUrl: link.workspace_url, accessToken: link.access_token };
   }
 
