@@ -915,11 +915,28 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const newBoardId = updates.board_id ?? oldBoardId;
     const moving = newBoardId !== oldBoardId;
 
+    const placementChanged =
+      updates.x !== undefined ||
+      updates.y !== undefined ||
+      updates.width !== undefined ||
+      updates.height !== undefined;
+
     if (moving) {
       const destBoard = await this.boardRepo.findById(newBoardId);
       if (!destBoard) {
         throw new Error(`Destination board ${newBoardId} not found`);
       }
+    }
+    // Writing the artifact's board object is a board edit, like any other canvas object.
+    if (
+      (moving || placementChanged) &&
+      userId &&
+      !isAdmin &&
+      !(await this.boardRepo.canMutate(newBoardId, userId as UUID).catch(() => false))
+    ) {
+      throw new Forbidden(
+        'Board Editor or Manager access is required to place an artifact on this board'
+      );
     }
 
     let currentPlacement: { x: number; y: number; width: number; height: number } | null = null;
@@ -976,12 +993,6 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (Object.keys(dbUpdates).length > 0) {
       updated = await this.artifactRepo.update(fullArtifactId, dbUpdates);
     }
-
-    const placementChanged =
-      updates.x !== undefined ||
-      updates.y !== undefined ||
-      updates.width !== undefined ||
-      updates.height !== undefined;
 
     if (moving || placementChanged) {
       const placement = {

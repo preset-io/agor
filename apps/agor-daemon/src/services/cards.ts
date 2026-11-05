@@ -10,22 +10,30 @@
 import { PAGINATION } from '@agor/core/config';
 import {
   BoardObjectRepository,
+  BoardRepository,
   CardRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import type {
-  AuthenticatedParams,
-  BoardEntityObject,
-  BoardID,
-  Card,
-  CardID,
-  CardTypeID,
-  CardWithType,
-  QueryParams,
-  UUID,
-  ZoneBoardObject,
+import { NotFound } from '@agor/core/feathers';
+import {
+  type AuthenticatedParams,
+  type BoardEntityObject,
+  type BoardID,
+  type Card,
+  type CardID,
+  type CardTypeID,
+  type CardWithType,
+  hasMinimumRole,
+  type QueryParams,
+  ROLES,
+  type UUID,
+  type ZoneBoardObject,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import {
+  authorizeCallerBoard,
+  type BoardRouteAccessMode,
+} from '../utils/board-route-authorization';
 
 export type CardParams = QueryParams<{
   board_id?: BoardID;
@@ -42,6 +50,7 @@ export type CardParams = QueryParams<{
 export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams> {
   private cardRepo: CardRepository;
   private boardObjectRepo: BoardObjectRepository;
+  private boardRepo: BoardRepository;
 
   constructor(db: TenantScopeAwareDatabase) {
     const cardRepo = new CardRepository(db);
@@ -55,6 +64,25 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
     });
     this.cardRepo = cardRepo;
     this.boardObjectRepo = new BoardObjectRepository(db);
+    this.boardRepo = new BoardRepository(db);
+  }
+
+  /** Load a card and authorize the caller on its board; these custom methods never run Feathers hooks. */
+  private async authorizedCard(
+    id: string,
+    mode: BoardRouteAccessMode,
+    action: string,
+    params?: CardParams
+  ): Promise<Card> {
+    const user = params?.user;
+    // Like the cards hook, resolve RBAC callers' short IDs only among cards they can see.
+    const card =
+      params?.provider && user && !user._isServiceAccount && !hasMinimumRole(user.role, ROLES.ADMIN)
+        ? await this.cardRepo.findVisibleById(user.user_id as UUID, id)
+        : await this.cardRepo.findById(id);
+    await authorizeCallerBoard(this.boardRepo, params, card?.board_id, mode, action);
+    if (!card) throw new NotFound(`Card ${id} not found`);
+    return card;
   }
 
   /**
@@ -138,6 +166,7 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
     },
     params?: CardParams
   ): Promise<{ card: Card; boardObject: BoardEntityObject }> {
+    await authorizeCallerBoard(this.boardRepo, params, data.board_id, 'mutate', 'create cards');
     // Create the card
     const card = await this.cardRepo.create({
       ...data,
@@ -181,8 +210,14 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   /**
    * Get card with resolved CardType info
    */
-  async getWithType(id: string): Promise<CardWithType | null> {
-    return this.cardRepo.findByIdWithType(id);
+  async getWithType(id: string, params?: CardParams): Promise<CardWithType | null> {
+    const card = await this.authorizedCard(id, 'view', 'view this card', params).catch(
+      (error: unknown) => {
+        if (error instanceof NotFound) return null;
+        throw error;
+      }
+    );
+    return card ? this.cardRepo.findByIdWithType(card.card_id) : null;
   }
 
   /**
@@ -225,15 +260,17 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   /**
    * Archive a card
    */
-  async archive(id: string): Promise<Card> {
-    return this.cardRepo.archive(id);
+  async archive(id: string, params?: CardParams): Promise<Card> {
+    const card = await this.authorizedCard(id, 'mutate', 'archive this card', params);
+    return this.cardRepo.archive(card.card_id);
   }
 
   /**
    * Unarchive a card
    */
-  async unarchive(id: string): Promise<Card> {
-    return this.cardRepo.unarchive(id);
+  async unarchive(id: string, params?: CardParams): Promise<Card> {
+    const card = await this.authorizedCard(id, 'mutate', 'unarchive this card', params);
+    return this.cardRepo.unarchive(card.card_id);
   }
 
   /**
@@ -242,9 +279,17 @@ export class CardsService extends DrizzleService<Card, Partial<Card>, CardParams
   async moveToZone(
     cardId: CardID,
     zoneId: string | null,
-    zoneData?: ZoneBoardObject
+    zoneData?: ZoneBoardObject,
+    params?: CardParams
   ): Promise<BoardEntityObject> {
     const boardObj = await this.boardObjectRepo.findByCardId(cardId);
+    await authorizeCallerBoard(
+      this.boardRepo,
+      params,
+      boardObj?.board_id,
+      'mutate',
+      'move this card'
+    );
     if (!boardObj) {
       throw new Error(`Card ${cardId} has no board placement`);
     }

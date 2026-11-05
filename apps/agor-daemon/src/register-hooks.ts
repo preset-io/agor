@@ -24,6 +24,7 @@ import {
   wrapV1AsV2,
 } from '@agor/core/config';
 import {
+  AmbiguousIdError,
   ArtifactRepository,
   assertTenantWritable,
   attachHiddenTenant,
@@ -161,6 +162,7 @@ import {
   requireAdminForEnvConfig,
   requireMinimumRole,
 } from './utils/authorization.js';
+import { authorizeCallerBoard } from './utils/board-route-authorization.js';
 import {
   cacheBranchAccess,
   ensureBranchPermission,
@@ -1610,23 +1612,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     mode: 'view' | 'mutate',
     action: string
   ): Promise<HookContext> => {
-    if (!context.params.provider) return context;
-    const user = context.params.user;
-    if (!user) throw new NotAuthenticated('Authentication required');
-    if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return context;
-    let allowed = false;
-    if (boardId) {
-      try {
-        allowed =
-          mode === 'view'
-            ? await boardRepository.canView(boardId, user.user_id as UUID)
-            : await boardRepository.canMutate(boardId, user.user_id as UUID);
-      } catch {
-        // Preserve the same non-enumerating denial for missing, foreign-tenant,
-        // and inaccessible boards.
-      }
-    }
-    if (!allowed) throw new Forbidden(`Board resource is unavailable to ${action}`);
+    await authorizeCallerBoard(boardRepository, context.params, boardId, mode, action);
     return context;
   };
 
@@ -3723,18 +3709,35 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       const id = boardIdentifierFromHookContext(context);
       if (!id) throw new BadRequest('Board ID is required');
 
-      const board = await boardRepository.findBySlugOrId(id);
+      // A canonical UUID is an ID; otherwise exact slug first, else an ID prefix among visible boards.
+      // Hidden, missing and ambiguous identifiers converge on one denial.
+      let board: Board | null = null;
+      try {
+        const bySlug = isValidUUID(id) ? null : await boardRepository.findBySlug(id);
+        board = bySlug
+          ? (await boardRepository.canViewResolved(bySlug, user.user_id as UserID))
+            ? bySlug
+            : null
+          : await boardRepository.findVisibleById(user.user_id as UUID, id);
+      } catch (error) {
+        if (!(error instanceof AmbiguousIdError)) throw error;
+      }
       if (!board) throw new Forbidden(`Board not found: ${id}`);
-      const allowed =
-        mode === 'view'
-          ? await boardRepository.canViewResolved(board, user.user_id as UserID)
-          : await boardRepository.canMutateResolved(board, user.user_id as UserID);
-      if (!allowed) {
-        throw new Forbidden(
-          mode === 'view'
-            ? `You need board access to ${action}`
-            : `You need Board Editor or Manager access to ${action}`
-        );
+      if (
+        mode === 'mutate' &&
+        !(await boardRepository.canMutateResolved(board, user.user_id as UserID))
+      ) {
+        throw new Forbidden(`You need Board Editor or Manager access to ${action}`);
+      }
+      // Hand the service the authorized board's ID, never the raw slug/prefix it would re-resolve differently.
+      if (typeof context.id === 'string') context.id = board.board_id;
+      else if (typeof context.params.route?.id === 'string') {
+        context.params.route = { ...context.params.route, id: board.board_id };
+      } else if (typeof context.data === 'string') {
+        // findBySlug takes an exact slug, which is what the check above matched.
+        if (context.method !== 'findBySlug') context.data = board.board_id;
+      } else if (context.data && typeof context.data === 'object') {
+        context.data = { ...context.data, boardId: board.board_id };
       }
       if (context.path === 'boards' && context.method === 'get' && context.id) {
         // The same tenant transaction and caller authority immediately enter
@@ -3884,6 +3887,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               objectsCount: Object.keys(result.objects || {}).length,
             });
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
@@ -3904,6 +3909,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
@@ -3924,6 +3931,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
@@ -3979,6 +3988,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               context.params
             );
             context.result = result.board;
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
@@ -3998,6 +4009,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
@@ -4019,6 +4032,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result.board;
             // Manually emit 'patched' event for WebSocket broadcasting
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',

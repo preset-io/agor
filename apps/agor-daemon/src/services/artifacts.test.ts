@@ -654,6 +654,54 @@ describe('ArtifactsService.updateMetadata', () => {
     ).rejects.toThrow(/Forbidden/i);
   });
 
+  dbTest('rejects moving onto a board the owner can only view', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    const boardRepo = new BoardRepository(db);
+    const boardA = await seedBoard(db);
+    const artifact = await seedArtifact(db, boardA.board_id, { userId: 'user-owner' });
+    await seedUser(db, 'user-board-owner');
+    // A shared board grants Others only Viewer.
+    const viewOnly = await boardRepo.create({ name: 'View only', created_by: 'user-board-owner' });
+
+    await expect(
+      service.updateMetadata(artifact.artifact_id, { board_id: viewOnly.board_id }, 'user-owner')
+    ).rejects.toThrow(/Board Editor or Manager/);
+    expect((await new ArtifactRepository(db).findById(artifact.artifact_id))?.board_id).toBe(
+      boardA.board_id
+    );
+    expect(
+      (await boardRepo.findById(viewOnly.board_id))?.objects?.[`artifact-${artifact.artifact_id}`]
+    ).toBeUndefined();
+
+    // Admins keep the existing override.
+    const moved = await service.updateMetadata(
+      artifact.artifact_id,
+      { board_id: viewOnly.board_id },
+      'user-admin',
+      'admin'
+    );
+    expect(moved.board_id).toBe(viewOnly.board_id);
+  });
+
+  dbTest('rejects repositioning on a board the owner can only view', async ({ db }) => {
+    const service = new ArtifactsService(db, makeFakeApp());
+    await seedUser(db, 'user-owner');
+    await seedUser(db, 'user-board-owner');
+    const viewOnly = await new BoardRepository(db).create({
+      name: 'View only',
+      created_by: 'user-board-owner',
+    });
+    const artifact = await seedArtifact(db, viewOnly.board_id, { userId: 'user-owner' });
+
+    await expect(
+      service.updateMetadata(artifact.artifact_id, { x: 5 }, 'user-owner')
+    ).rejects.toThrow(/Board Editor or Manager/);
+    // Metadata-only edits stay owner-only and need no board edit.
+    expect(
+      (await service.updateMetadata(artifact.artifact_id, { name: 'Renamed' }, 'user-owner')).name
+    ).toBe('Renamed');
+  });
+
   dbTest('rejects move to a nonexistent board without mutating the row', async ({ db }) => {
     const service = new ArtifactsService(db, makeFakeApp());
     const artifactRepo = new ArtifactRepository(db);

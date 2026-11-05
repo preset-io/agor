@@ -1,9 +1,47 @@
 import { AmbiguousIdError, type BoardRepository, EntityNotFoundError } from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import type { HookContext, UUID } from '@agor/core/types';
+import type { AuthenticatedParams, HookContext, UUID } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 
 export type BoardRouteAccessMode = 'view' | 'mutate';
+
+/**
+ * Authorize an external caller against one board's current policy.
+ *
+ * Shared by board-content hooks and by non-transport service methods, which
+ * Feathers never runs hooks for. Internal calls (no provider), service
+ * accounts, and admins pass; mutations also need the workspace Member role.
+ * Missing, foreign-tenant, and inaccessible boards converge on the same
+ * non-enumerating denial.
+ */
+export async function authorizeCallerBoard(
+  boardRepository: Pick<BoardRepository, 'canView' | 'canMutate'>,
+  params: Pick<AuthenticatedParams, 'provider' | 'user'> | undefined,
+  boardId: string | undefined,
+  mode: BoardRouteAccessMode,
+  action: string
+): Promise<void> {
+  if (!params?.provider) return;
+  const user = params.user;
+  if (!user) throw new NotAuthenticated('Authentication required');
+  if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return;
+  // Mutations keep the hooks' workspace Member floor even when a board grants more.
+  if (mode === 'mutate' && !hasMinimumRole(user.role, ROLES.MEMBER)) {
+    throw new Forbidden(`You need member access to ${action}`);
+  }
+  let allowed = false;
+  if (boardId) {
+    try {
+      allowed =
+        mode === 'view'
+          ? await boardRepository.canView(boardId, user.user_id as UUID)
+          : await boardRepository.canMutate(boardId, user.user_id as UUID);
+    } catch {
+      // Same denial for missing, foreign-tenant, and inaccessible boards.
+    }
+  }
+  if (!allowed) throw new Forbidden(`Board resource is unavailable to ${action}`);
+}
 
 /**
  * Resolve and authorize a nested board route without exposing hidden targets.
