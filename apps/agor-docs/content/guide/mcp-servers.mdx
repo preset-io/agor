@@ -213,7 +213,8 @@ attached by an MCP Catalog "Start new session", keep global servers, and later
 link edits never change it. It is not inferred from an empty
 attachment table on older sessions. The built-in Agor MCP remains available.
 `attached_mcp_servers` reports the session's effective set, global servers
-included (tagged `source: "global"`).
+included (tagged `source: "global"`), plus global servers waiting for you to
+connect them (`state: "needs_connect"`).
 
 OAuth badges reflect the last saved-grant check, refreshed when the UI loads or
 reconnects and after explicit OAuth actions/events. Idle tabs do not scan all
@@ -235,8 +236,8 @@ is on only when it can work for the person prompting:
   waiting (for example **MCP 2 · 3 to connect**). **Hide** removes the row for
   you; **Show hidden** brings it back.
 - Use the switch next to a global server to turn it off for just this session.
-  Agents can do the same with `agor_sessions_remove_mcp_server`, or with
-  `disabledGlobalMcpServerIds` on `agor_sessions_set_mcp_servers`.
+  Agents can do the same with `agor_sessions_remove_mcp_server`. Forks and
+  subsessions keep the setting.
 
 A per-user OAuth server set to the `client_credentials` grant can't be signed
 into by anyone. It never loads, and **My Servers** marks it **Misconfigured** for

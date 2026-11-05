@@ -37,7 +37,14 @@ export async function updateSessionMcpServers(
     ...currentIds
       .filter((id) => !next.has(id))
       .map(async (id) => {
-        await client.service(`sessions/${sessionId}/mcp-servers`).remove(id);
+        const service = client.service(`sessions/${sessionId}/mcp-servers`);
+        // Deleting a global server's link would re-inherit it; a disabled
+        // link switches it off for this session instead.
+        if (agorStore.getState().mcpServerById.get(id)?.scope === 'global') {
+          await service.patch(id, { enabled: false });
+        } else {
+          await service.remove(id);
+        }
         sessionMcpRemoved({ session_id: sessionId, mcp_server_id: id });
       }),
   ]);

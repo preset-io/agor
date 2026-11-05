@@ -71,31 +71,14 @@ export class SessionMCPServersService {
     return this.sessionMCPRepo.removeServer(sessionId, serverId);
   }
 
-  /**
-   * Toggle MCP server enabled state for session
-   */
-  async toggleServer(
-    sessionId: SessionID,
-    serverId: MCPServerID,
-    enabled: boolean,
-    _params?: SessionMCPParams
-  ): Promise<void> {
-    return this.sessionMCPRepo.toggleServer(sessionId, serverId, enabled);
-  }
-
   /** Switch a server on/off for one session (opt-out of a global server). */
   async setServerEnabled(
     sessionId: SessionID,
     serverId: MCPServerID,
     enabled: boolean,
     _params?: SessionMCPParams
-  ): Promise<{ linked: boolean }> {
+  ): Promise<void> {
     return this.sessionMCPRepo.setServerEnabled(sessionId, serverId, enabled);
-  }
-
-  /** Every link with its enabled flag, opt-outs included. */
-  async listLinks(sessionId: SessionID, _params?: SessionMCPParams) {
-    return this.sessionMCPRepo.listLinks(sessionId);
   }
 
   /**
@@ -116,7 +99,7 @@ export class SessionMCPServersService {
     sessionId: SessionID,
     serverIds: MCPServerID[],
     _params?: SessionMCPParams,
-    options?: { markSelectionExplicit?: boolean; disabledServerIds?: MCPServerID[] }
+    options?: { markSelectionExplicit?: boolean }
   ): Promise<void> {
     return this.sessionMCPRepo.setServers(sessionId, serverIds, options);
   }

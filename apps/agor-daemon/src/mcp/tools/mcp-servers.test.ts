@@ -238,10 +238,11 @@ describe('listAttachedMcpServers prompt identity', () => {
       'sess-1'
     );
 
-    // The effective set: active entries only, global ones tagged.
-    expect(result.map((server) => [server.mcp_server_id, server.source])).toEqual([
-      ['actor-private', 'session'],
-      ['shared', 'global'],
+    // The effective set plus servers one Connect away, global ones tagged.
+    expect(result.map((server) => [server.mcp_server_id, server.source, server.state])).toEqual([
+      ['actor-private', 'session', 'active'],
+      ['shared', 'global', 'active'],
+      ['to-connect', 'global', 'needs_connect'],
     ]);
     expect(findCalls).toEqual([
       expect.objectContaining({ route: { id: 'sess-1' }, query: { effective: true } }),
@@ -986,32 +987,6 @@ describe('agor_mcp_servers_create/update/attach', () => {
       removed_mcp_server_ids: ['full-remove'],
       unchanged_mcp_server_ids: ['full-keep'],
     });
-  });
-
-  it('passes per-session global opt-outs through the same atomic replacement', async () => {
-    const updateCalls: Array<unknown> = [];
-    const app = makeFakeApp({
-      '/sessions/:id/mcp-servers': {
-        find: async () => [],
-        update: async (id: unknown, data: unknown, params: unknown) => {
-          updateCalls.push({ id, data, params });
-          return data;
-        },
-      },
-    });
-
-    const set = await captureTool(
-      { app, userId: 'user-1', sessionId: 'sess-current' },
-      'agor_sessions_set_mcp_servers'
-    );
-    const result = await set({ mcpServerIds: [], disabledGlobalMcpServerIds: ['notion'] });
-
-    expect(updateCalls[0]).toMatchObject({
-      data: { mcpServerIds: [], disabledMcpServerIds: ['full-notion'] },
-    });
-    expect(JSON.parse(result.content[0].text).disabled_global_mcp_server_ids).toEqual([
-      'full-notion',
-    ]);
   });
 
   it('marks set session-specific MCP links as an MCP error when replacement fails', async () => {

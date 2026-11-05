@@ -83,7 +83,6 @@ import {
   isMCPServerUsableBy,
   MCP_RUNTIME_PROVIDER_CAPABILITIES,
   mcpRuntimeProviderCapability,
-  resolveSessionMcpEntries,
 } from '@agor/core/mcp';
 import { escapePromptProvenanceSentinels } from '@agor/core/templates/prompt-provenance';
 import type {
@@ -229,7 +228,7 @@ import {
   type SchedulerService,
 } from './services/scheduler.js';
 import { runSessionInitializationStages } from './services/session-initialization.js';
-import { loadSessionMcpUserContext } from './services/session-mcp-effective.js';
+import { resolveSessionMcpViewForSession } from './services/session-mcp-effective.js';
 import { createSpawnPromptService } from './services/session-spawn-prompt';
 import {
   lockTenantAuthorizationFence,
@@ -4987,6 +4986,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     return session;
   };
 
+  /** Read-only MCP views need only session view access (they carry no credentials). */
+  const loadSessionForMcpView = async (sessionId: string, params: RouteParams) => {
+    if (!params.user) throw new NotAuthenticated('Authentication required');
+    await app.service('sessions').get(sessionId, { ...params, query: {} });
+    return (await sessionsService.get(sessionId, { provider: undefined })) as Session;
+  };
+
   const projectMcpServersForExecutor = async (
     servers: MCPServer[],
     session: Session,
@@ -5470,11 +5476,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           params.query?.effective === 'true' || params.query?.effective === true;
         const session =
           effectiveView && !authenticatedTaskExecutorRuntimeScope(params)
-            ? await (async () => {
-                if (!params.user) throw new NotAuthenticated('Authentication required');
-                await app.service('sessions').get(id, { ...params, query: {} });
-                return (await sessionsService.get(id, { provider: undefined })) as Session;
-              })()
+            ? await loadSessionForMcpView(id, params)
             : await authorizeAndLoadSessionForMcpConfig(id, params, {
                 allowExecutorProjection: true,
               });
@@ -5579,10 +5581,34 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             server: redactMCPServerSecrets(entry.server),
           }));
         }
-        const resolveSet = includeGlobal || effectiveView;
+        const exposeSecrets =
+          !(params as RouteParams & { _forceMcpRuntimeRedaction?: boolean })
+            ._forceMcpRuntimeRedaction &&
+          shouldExposeMCPServerSecrets(params, {
+            allowSessionToken: true,
+            sessionId: id,
+          });
+        if (includeGlobal || effectiveView) {
+          const entries = await resolveSessionMcpViewForSession(db, session, credentialUserId);
+          if (effectiveView) {
+            return {
+              selection_explicit: session.mcp_selection_explicit === true,
+              entries: entries.map((entry) => ({
+                mcp_server_id: entry.server.mcp_server_id,
+                source: entry.source,
+                state: entry.state,
+                server: redactMCPServerSecrets(entry.server),
+              })),
+            };
+          }
+          const servers = activeSessionMcpServers(entries);
+          return exposeSecrets
+            ? projectMcpServersForExecutor(servers, session, params)
+            : servers.map(redactMCPServerSecrets);
+        }
         const sessionServerRefs = await sessionMCPServersService.listServers(
           id as import('@agor/core/types').SessionID,
-          resolveSet ? false : enabledOnly,
+          enabledOnly,
           params
         );
         const sessionServers = await Promise.all(
@@ -5594,62 +5620,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             }
           })
         );
-        const exposeSecrets =
-          !(params as RouteParams & { _forceMcpRuntimeRedaction?: boolean })
-            ._forceMcpRuntimeRedaction &&
-          shouldExposeMCPServerSecrets(params, {
-            allowSessionToken: true,
-            sessionId: id,
-          });
-        if (!resolveSet) {
-          const servers = sessionServers.filter((server) =>
-            isMCPServerUsableBy(server, credentialUserId)
-          );
-          return exposeSecrets
-            ? projectMcpServersForExecutor(servers, session, params)
-            : servers.map(redactMCPServerSecrets);
-        }
-        const globalQuery = {
-          scope: 'global',
-          enabled: true,
-          ...(userId ? { forUserId: userId } : {}),
-          // Private global servers belong to the current prompt actor. Shared
-          // rows remain available and resolve per-user OAuth for this same ID.
-          usableByUserId: credentialUserId,
-          $limit: 1000,
-        };
-        // Explicit selections never inherit globals; only the pill lists them (as off).
-        const globalResult =
-          effectiveView || !session.mcp_selection_explicit
-            ? await mcpService.find({ ...params, provider: undefined, query: globalQuery })
-            : [];
-        const [links, userContext] = await Promise.all([
-          sessionMCPServersService.listLinks(id as import('@agor/core/types').SessionID, params),
-          loadSessionMcpUserContext(db, credentialUserId).catch(() => {
-            console.warn('[mcp-runtime] session_mcp_user_context_unavailable');
-            return { connectedServerIds: new Set<string>(), hiddenServerIds: new Set<string>() };
-          }),
-        ]);
-        const entries = resolveSessionMcpEntries({
-          selectionExplicit: session.mcp_selection_explicit,
-          links,
-          linkedServers: sessionServers,
-          globalServers: Array.isArray(globalResult) ? globalResult : globalResult.data,
-          ...userContext,
-          forUserId: credentialUserId,
-        });
-        if (effectiveView) {
-          return {
-            selection_explicit: session.mcp_selection_explicit === true,
-            entries: entries.map((entry) => ({
-              mcp_server_id: entry.server.mcp_server_id,
-              source: entry.source,
-              state: entry.state,
-              server: redactMCPServerSecrets(entry.server),
-            })),
-          };
-        }
-        const servers = activeSessionMcpServers(entries);
+        const servers = sessionServers.filter((server) =>
+          isMCPServerUsableBy(server, credentialUserId)
+        );
         return exposeSecrets
           ? projectMcpServersForExecutor(servers, session, params)
           : servers.map(redactMCPServerSecrets);
@@ -5695,11 +5668,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         return relationship;
       },
-      async update(
-        _id: string | null,
-        data: { mcpServerIds?: unknown; disabledMcpServerIds?: unknown },
-        params: RouteParams
-      ) {
+      async update(_id: string | null, data: { mcpServerIds?: unknown }, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
         if (!Array.isArray(data?.mcpServerIds)) {
@@ -5710,19 +5679,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         ) {
           throw new BadRequest('mcpServerIds must contain strings');
         }
-        // Optional: the exact set of global servers switched off for this session.
-        if (
-          data.disabledMcpServerIds !== undefined &&
-          !(
-            Array.isArray(data.disabledMcpServerIds) &&
-            data.disabledMcpServerIds.every((serverId) => typeof serverId === 'string')
-          )
-        ) {
-          throw new BadRequest('disabledMcpServerIds must be an array of strings');
-        }
-        const disabledServerIds = data.disabledMcpServerIds as
-          | Array<import('@agor/core/types').MCPServerID>
-          | undefined;
 
         await authorizeAndLoadSessionForMcpConfig(id, params);
         const serverIds = [...new Set(data.mcpServerIds)] as Array<
@@ -5736,19 +5692,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const removedServerIds = existing
           .map((item) => item.mcp_server_id)
           .filter((serverId) => !serverIds.includes(serverId));
-        const revokedServerIds = [
-          ...new Set([
-            ...removedServerIds,
-            ...(disabledServerIds ?? []).filter((serverId) => !serverIds.includes(serverId)),
-          ]),
-        ];
         try {
-          await coordinateSessionMcpRevocation(id, revokedServerIds, params, () =>
+          await coordinateSessionMcpRevocation(id, removedServerIds, params, () =>
             sessionMCPServersService.setServers(
               id as import('@agor/core/types').SessionID,
               serverIds,
-              params,
-              disabledServerIds ? { disabledServerIds } : undefined
+              params
             )
           );
         } catch (error) {
@@ -5761,7 +5710,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const replacement = {
           session_id: id,
           mcp_server_ids: serverIds,
-          ...(disabledServerIds ? { disabled_mcp_server_ids: disabledServerIds } : {}),
         };
         emitServiceEvent(app, {
           path: 'session-mcp-servers',
@@ -5834,14 +5782,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             throw error;
           }
         };
-        const { linked } = await (data.enabled
+        await (data.enabled
           ? toggle()
           : coordinateSessionMcpRevocation(id, [mcpId], params, toggle));
         // Link events describe enabled links, which is what clients hold.
         const relationship = { session_id: id, mcp_server_id: mcpId, enabled: data.enabled };
         emitServiceEvent(app, {
           path: 'session-mcp-servers',
-          event: linked ? 'created' : 'removed',
+          event: data.enabled ? 'created' : 'removed',
           data: relationship,
           params,
         });

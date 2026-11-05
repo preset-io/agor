@@ -73,7 +73,6 @@ export {
 } from './runtime-refresh';
 export {
   AGOR_MCP_SERVER_NAME,
-  type EffectiveSessionMcpContext,
   getMcpServersForSession,
   type MCPAuthHeadersRepository,
   MCPOAuthAuthorityUnavailableError,
@@ -82,7 +81,6 @@ export {
   type MCPScopingServerRepository,
   type MCPScopingSessionRepository,
   type MCPServerWithSource,
-  resolveEffectiveSessionMcpServers,
   resolveScopedMCPAuthHeaders,
 } from './scoping';
 export {

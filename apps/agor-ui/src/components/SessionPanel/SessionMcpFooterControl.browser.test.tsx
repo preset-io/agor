@@ -128,3 +128,45 @@ it('switches a global server off for just this session', async () => {
     expect(find.mock.calls.filter(([params]) => params.query.effective)).toHaveLength(2)
   );
 });
+
+it('switches a linked global server off when it is deselected', async () => {
+  // A global server switched back on in this session is an enabled link, so it
+  // also shows in the attach picker. Deselecting it must not re-inherit it.
+  agorStore.setState({ mcpServerById: new Map([[docs.mcp_server_id, docs]]) });
+  find.mockImplementation(async ({ query }: { query: Record<string, unknown> }) =>
+    query.effective
+      ? {
+          entries: [{ mcp_server_id: 'docs', source: 'global', state: 'active', server: docs }],
+        }
+      : [docs]
+  );
+  const remove = vi.fn();
+  (client as unknown as { service: () => unknown }).service = () => ({
+    find,
+    patch,
+    remove,
+    create: vi.fn(),
+  });
+  render(
+    <SessionMcpFooterControl
+      client={client}
+      currentUserId="user-a"
+      sessionId="session-id"
+      sessionMcpServerIds={['docs']}
+      mcpServerById={new Map([[docs.mcp_server_id, docs]])}
+      userAuthenticatedMcpServerIds={new Set()}
+    />,
+    { wrapper: Wrapper }
+  );
+  await userEvent.click(await screen.findByRole('button', { name: /^MCP servers\. 1 MCP/ }));
+  const dialog = await screen.findByRole('dialog', { name: 'Session MCP servers' });
+  const tagRemove = await waitFor(() => {
+    const control = dialog.querySelector('.ant-select-selection-item-remove');
+    if (!control) throw new Error('no selected tag yet');
+    return control as HTMLElement;
+  });
+  await waitFor(() => expect(dialog.querySelector('.ant-select-disabled')).toBeNull());
+  await userEvent.click(tagRemove);
+  await waitFor(() => expect(patch).toHaveBeenCalledWith('docs', { enabled: false }));
+  expect(remove).not.toHaveBeenCalled();
+});

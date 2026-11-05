@@ -4,13 +4,7 @@
  * Manages the many-to-many relationship between sessions and MCP servers.
  */
 
-import type {
-  MCPServer,
-  MCPServerID,
-  Session,
-  SessionID,
-  SessionMCPServer,
-} from '@agor/core/types';
+import type { MCPServer, MCPServerID, SessionID, SessionMCPServer } from '@agor/core/types';
 import { and, eq } from 'drizzle-orm';
 import { isMCPServerUsableInSession, MCPServerNotUsableError } from '../../mcp/ownership';
 import type { Database } from '../client';
@@ -48,7 +42,7 @@ export class SessionMCPServerRepository {
   private async resolveUsablePair(
     sessionId: SessionID,
     serverId: MCPServerID
-  ): Promise<{ server: MCPServer; session: Session }> {
+  ): Promise<{ server: MCPServer }> {
     const session = await this.sessionRepo.findById(sessionId);
     if (!session) {
       throw new EntityNotFoundError('Session', sessionId);
@@ -63,7 +57,7 @@ export class SessionMCPServerRepository {
       throw new MCPServerNotUsableError(serverId, sessionId);
     }
 
-    return { server, session };
+    return { server };
   }
 
   /**
@@ -130,11 +124,23 @@ export class SessionMCPServerRepository {
   }
 
   /**
-   * Toggle MCP server enabled state for session
+   * Switch a server on or off for one session, creating the link if needed.
+   * A link with `enabled: false` on a global server is the per-session
+   * opt-out (`mcp/effective-set.ts`); `enabled: true` is the same link
+   * `addServer` writes.
    */
-  async toggleServer(sessionId: SessionID, serverId: MCPServerID, enabled: boolean): Promise<void> {
+  async setServerEnabled(
+    sessionId: SessionID,
+    serverId: MCPServerID,
+    enabled: boolean
+  ): Promise<void> {
     try {
-      const result = await update(this.db, sessionMcpServers)
+      await this.resolveUsablePair(sessionId, serverId);
+      await insert(this.db, sessionMcpServers)
+        .values({ session_id: sessionId, mcp_server_id: serverId, enabled, added_at: new Date() })
+        .onConflictDoNothing()
+        .run();
+      await update(this.db, sessionMcpServers)
         .set({ enabled })
         .where(
           and(
@@ -143,47 +149,6 @@ export class SessionMCPServerRepository {
           )
         )
         .run();
-
-      if (result.rowsAffected === 0) {
-        throw new EntityNotFoundError('SessionMCPServer', `${sessionId}/${serverId}`);
-      }
-    } catch (error) {
-      if (error instanceof EntityNotFoundError) throw error;
-      throw new RepositoryError(
-        `Failed to toggle MCP server: ${error instanceof Error ? error.message : String(error)}`,
-        error
-      );
-    }
-  }
-
-  /**
-   * Switch a server on or off for one session, creating the link if needed.
-   * A link with `enabled: false` on a global server is the per-session
-   * opt-out (`mcp/effective-set.ts`). Switching a global server back on in a
-   * session that inherits globals drops the opt-out instead of adding a
-   * redundant link. Returns whether an enabled link exists afterwards.
-   */
-  async setServerEnabled(
-    sessionId: SessionID,
-    serverId: MCPServerID,
-    enabled: boolean
-  ): Promise<{ linked: boolean }> {
-    try {
-      const { server, session } = await this.resolveUsablePair(sessionId, serverId);
-      const pair = and(
-        eq(sessionMcpServers.session_id, sessionId),
-        eq(sessionMcpServers.mcp_server_id, serverId)
-      );
-      if (enabled && server.scope === 'global' && !session.mcp_selection_explicit) {
-        await deleteFrom(this.db, sessionMcpServers).where(pair).run();
-        return { linked: false };
-      }
-      await insert(this.db, sessionMcpServers)
-        .values({ session_id: sessionId, mcp_server_id: serverId, enabled, added_at: new Date() })
-        .onConflictDoNothing()
-        .run();
-      await update(this.db, sessionMcpServers).set({ enabled }).where(pair).run();
-      return { linked: enabled };
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
       if (error instanceof MCPServerNotUsableError) throw error;
@@ -293,12 +258,12 @@ export class SessionMCPServerRepository {
   /**
    * Set MCP servers for a session (bulk operation)
    * Replaces the enabled links. Per-session opt-outs of global servers
-   * (disabled links) are kept unless `disabledServerIds` replaces them too.
+   * (disabled links) are kept.
    */
   async setServers(
     sessionId: SessionID,
     serverIds: MCPServerID[],
-    options: { markSelectionExplicit?: boolean; disabledServerIds?: MCPServerID[] } = {}
+    options: { markSelectionExplicit?: boolean } = {}
   ): Promise<void> {
     try {
       // Treat the replacement as a set at the repository boundary as well as
@@ -306,25 +271,17 @@ export class SessionMCPServerRepository {
       // directly from duplicate-key failures during the atomic insert.
       const uniqueServerIds = [...new Set(serverIds)];
       const enabledIds = new Set(uniqueServerIds);
-      const keptOptOuts = async () => {
-        const ids: MCPServerID[] = [];
-        for (const link of await this.listLinks(sessionId)) {
-          if (link.enabled) continue;
-          const server = await this.mcpServerRepo.findById(link.mcp_server_id);
-          if (server?.scope === 'global') ids.push(link.mcp_server_id);
-        }
-        return ids;
-      };
-      const disabledIds = [...new Set(options.disabledServerIds ?? (await keptOptOuts()))].filter(
-        (serverId) => !enabledIds.has(serverId)
-      );
+      // Opt-outs of global servers survive a link replacement.
+      const disabledIds: MCPServerID[] = [];
+      for (const link of await this.listLinks(sessionId)) {
+        if (link.enabled || enabledIds.has(link.mcp_server_id)) continue;
+        const server = await this.mcpServerRepo.findById(link.mcp_server_id);
+        if (server?.scope === 'global') disabledIds.push(link.mcp_server_id);
+      }
 
       // Validate the complete replacement before deleting anything, so one
       // private/foreign server cannot partially alter the existing set.
       for (const serverId of uniqueServerIds) {
-        await this.resolveUsablePair(sessionId, serverId);
-      }
-      for (const serverId of options.disabledServerIds ? disabledIds : []) {
         await this.resolveUsablePair(sessionId, serverId);
       }
 

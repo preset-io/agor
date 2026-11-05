@@ -297,7 +297,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_get',
     {
       description:
-        'Get detailed information about a specific session, including genealogy, current state, and the MCP servers currently attached to it (with OAuth status — check `attached_mcp_servers[].oauth_authenticated` to spot servers needing auth). The response includes a `url` field with a clickable link to view the session in the UI.',
+        'Get detailed information about a specific session, including genealogy, current state, and its effective MCP servers (with OAuth status — check `attached_mcp_servers[].oauth_authenticated` to spot servers needing auth; entries with `state: "needs_connect"` are global servers not loaded until the user connects them, offer `agor_widgets_request_oauth` only if the task needs one). The response includes a `url` field with a clickable link to view the session in the UI.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId(

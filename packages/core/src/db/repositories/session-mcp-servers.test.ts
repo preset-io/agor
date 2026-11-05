@@ -149,7 +149,7 @@ describe('SessionMCPServerRepository.addServer', () => {
     const repo = new SessionMCPServerRepository(db);
 
     await repo.addServer(session.session_id, server1.mcp_server_id);
-    await repo.toggleServer(session.session_id, server1.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false);
     await repo.addServer(session.session_id, server1.mcp_server_id);
 
     const relationship = await repo.getRelationship(session.session_id, server1.mcp_server_id);
@@ -295,16 +295,16 @@ describe('SessionMCPServerRepository.removeServer', () => {
 });
 
 // ============================================================================
-// toggleServer
+// setServerEnabled
 // ============================================================================
 
-describe('SessionMCPServerRepository.toggleServer', () => {
+describe('SessionMCPServerRepository.setServerEnabled', () => {
   dbTest('should disable MCP server', async ({ db }) => {
     const { session, server1 } = await setupTestData(db);
     const repo = new SessionMCPServerRepository(db);
 
     await repo.addServer(session.session_id, server1.mcp_server_id);
-    await repo.toggleServer(session.session_id, server1.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false);
 
     const relationship = await repo.getRelationship(session.session_id, server1.mcp_server_id);
     expect(relationship?.enabled).toBe(false);
@@ -315,20 +315,11 @@ describe('SessionMCPServerRepository.toggleServer', () => {
     const repo = new SessionMCPServerRepository(db);
 
     await repo.addServer(session.session_id, server1.mcp_server_id);
-    await repo.toggleServer(session.session_id, server1.mcp_server_id, false);
-    await repo.toggleServer(session.session_id, server1.mcp_server_id, true);
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, true);
 
     const relationship = await repo.getRelationship(session.session_id, server1.mcp_server_id);
     expect(relationship?.enabled).toBe(true);
-  });
-
-  dbTest('should throw EntityNotFoundError for non-existent relationship', async ({ db }) => {
-    const { session, server1 } = await setupTestData(db);
-    const repo = new SessionMCPServerRepository(db);
-
-    await expect(
-      repo.toggleServer(session.session_id, server1.mcp_server_id, false)
-    ).rejects.toThrow(EntityNotFoundError);
   });
 
   dbTest('should allow toggling multiple times', async ({ db }) => {
@@ -337,15 +328,15 @@ describe('SessionMCPServerRepository.toggleServer', () => {
 
     await repo.addServer(session.session_id, server1.mcp_server_id);
 
-    await repo.toggleServer(session.session_id, server1.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false);
     let rel = await repo.getRelationship(session.session_id, server1.mcp_server_id);
     expect(rel?.enabled).toBe(false);
 
-    await repo.toggleServer(session.session_id, server1.mcp_server_id, true);
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, true);
     rel = await repo.getRelationship(session.session_id, server1.mcp_server_id);
     expect(rel?.enabled).toBe(true);
 
-    await repo.toggleServer(session.session_id, server1.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false);
     rel = await repo.getRelationship(session.session_id, server1.mcp_server_id);
     expect(rel?.enabled).toBe(false);
   });
@@ -385,7 +376,7 @@ describe('SessionMCPServerRepository.listServers', () => {
     await repo.addServer(session.session_id, server1.mcp_server_id);
     await repo.addServer(session.session_id, server2.mcp_server_id);
     await repo.addServer(session.session_id, server3.mcp_server_id);
-    await repo.toggleServer(session.session_id, server2.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server2.mcp_server_id, false);
 
     const allServers = await repo.listServers(session.session_id, false);
     expect(allServers).toHaveLength(3);
@@ -404,8 +395,8 @@ describe('SessionMCPServerRepository.listServers', () => {
 
     await repo.addServer(session.session_id, server1.mcp_server_id);
     await repo.addServer(session.session_id, server2.mcp_server_id);
-    await repo.toggleServer(session.session_id, server1.mcp_server_id, false);
-    await repo.toggleServer(session.session_id, server2.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server2.mcp_server_id, false);
 
     const servers = await repo.listServers(session.session_id, false);
     expect(servers).toHaveLength(2);
@@ -566,7 +557,7 @@ describe('SessionMCPServerRepository.getRelationship', () => {
     const repo = new SessionMCPServerRepository(db);
 
     await repo.addServer(session.session_id, server1.mcp_server_id);
-    await repo.toggleServer(session.session_id, server1.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false);
 
     const relationship = await repo.getRelationship(session.session_id, server1.mcp_server_id);
     expect(relationship?.enabled).toBe(false);
@@ -620,7 +611,7 @@ describe('SessionMCPServerRepository.count', () => {
     await repo.addServer(session.session_id, server1.mcp_server_id);
     await repo.addServer(session.session_id, server2.mcp_server_id);
     await repo.addServer(session.session_id, server3.mcp_server_id);
-    await repo.toggleServer(session.session_id, server2.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server2.mcp_server_id, false);
 
     const totalCount = await repo.count(session.session_id, false);
     expect(totalCount).toBe(3);
@@ -635,8 +626,8 @@ describe('SessionMCPServerRepository.count', () => {
 
     await repo.addServer(session.session_id, server1.mcp_server_id);
     await repo.addServer(session.session_id, server2.mcp_server_id);
-    await repo.toggleServer(session.session_id, server1.mcp_server_id, false);
-    await repo.toggleServer(session.session_id, server2.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false);
+    await repo.setServerEnabled(session.session_id, server2.mcp_server_id, false);
 
     const enabledCount = await repo.count(session.session_id, true);
     expect(enabledCount).toBe(0);
@@ -737,7 +728,7 @@ describe('SessionMCPServerRepository error handling', () => {
     await repo.addServer(session2.session_id, server.mcp_server_id);
 
     // Disable in session1, keep enabled in session2
-    await repo.toggleServer(session1.session_id, server.mcp_server_id, false);
+    await repo.setServerEnabled(session1.session_id, server.mcp_server_id, false);
 
     const rel1 = await repo.getRelationship(session1.session_id, server.mcp_server_id);
     const rel2 = await repo.getRelationship(session2.session_id, server.mcp_server_id);
@@ -756,36 +747,21 @@ describe('SessionMCPServerRepository per-session opt-out', () => {
     const { session, server1 } = await setupTestData(db);
     const repo = new SessionMCPServerRepository(db);
 
-    expect(await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false)).toEqual({
-      linked: false,
-    });
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false);
     expect(await repo.listLinks(session.session_id)).toEqual([
       { mcp_server_id: server1.mcp_server_id, enabled: false },
     ]);
     expect(await repo.listServers(session.session_id, true)).toEqual([]);
 
-    // Inheriting sessions drop the opt-out instead of adding a redundant link.
-    expect(await repo.setServerEnabled(session.session_id, server1.mcp_server_id, true)).toEqual({
-      linked: false,
-    });
-    expect(await repo.listLinks(session.session_id)).toEqual([]);
-  });
-
-  dbTest('links a global server when switched on in an explicit selection', async ({ db }) => {
-    const { session, server1 } = await setupTestData(db);
-    const repo = new SessionMCPServerRepository(db);
-    await repo.setServers(session.session_id, [], { markSelectionExplicit: true });
-
-    expect(await repo.setServerEnabled(session.session_id, server1.mcp_server_id, true)).toEqual({
-      linked: true,
-    });
+    // "On" is the same enabled link `addServer` writes.
+    await repo.setServerEnabled(session.session_id, server1.mcp_server_id, true);
     expect(await repo.listLinks(session.session_id)).toEqual([
       { mcp_server_id: server1.mcp_server_id, enabled: true },
     ]);
   });
 
-  dbTest('keeps global opt-outs across a link replacement unless replaced', async ({ db }) => {
-    const { session, server1, server2, server3 } = await setupTestData(db);
+  dbTest('keeps global opt-outs across a link replacement', async ({ db }) => {
+    const { session, server1, server2 } = await setupTestData(db);
     const repo = new SessionMCPServerRepository(db);
     await repo.setServerEnabled(session.session_id, server1.mcp_server_id, false);
 
@@ -795,12 +771,10 @@ describe('SessionMCPServerRepository per-session opt-out', () => {
     expect(kept).toContainEqual({ mcp_server_id: server1.mcp_server_id, enabled: false });
     expect(kept).toContainEqual({ mcp_server_id: server2.mcp_server_id, enabled: true });
 
-    await repo.setServers(session.session_id, [server2.mcp_server_id], {
-      disabledServerIds: [server3.mcp_server_id],
-    });
-    const replaced = await repo.listLinks(session.session_id);
-    expect(replaced).toHaveLength(2);
-    expect(replaced).toContainEqual({ mcp_server_id: server3.mcp_server_id, enabled: false });
-    expect(replaced).toContainEqual({ mcp_server_id: server2.mcp_server_id, enabled: true });
+    // Listing a server in the replacement switches it back on.
+    await repo.setServers(session.session_id, [server1.mcp_server_id]);
+    expect(await repo.listLinks(session.session_id)).toEqual([
+      { mcp_server_id: server1.mcp_server_id, enabled: true },
+    ]);
   });
 });
