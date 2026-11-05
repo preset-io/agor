@@ -48,6 +48,13 @@ export interface ResolveSessionMcpEntriesInput<S extends SessionMcpServerLike> {
   hiddenServerIds?: ReadonlySet<string>;
   /** Acting user; private servers of anybody else never enter the set. */
   forUserId: string | undefined;
+  /**
+   * Session membership only (credential/egress scope checks): skip the
+   * connection, hide, and config-warning filters, so every linked or
+   * inherited server that is not switched off reads `active`. Whether the
+   * user can authenticate is the credential path's own decision.
+   */
+  membershipOnly?: boolean;
 }
 
 /** Per-user OAuth: each user signs in for themselves before it can work. */
@@ -92,7 +99,10 @@ export function resolveSessionMcpEntries<S extends SessionMcpServerLike>(
   for (const server of input.globalServers) {
     const id = server.mcp_server_id;
     if (entries.has(id) || linkById.has(id) || !usable(server) || !server.enabled) continue;
-    const connected = !mcpServerRequiresUserConnection(server) || input.connectedServerIds.has(id);
+    const connected =
+      input.membershipOnly ||
+      !mcpServerRequiresUserConnection(server) ||
+      input.connectedServerIds.has(id);
     // Nobody can sign in to it; the admin sees a warning instead.
     if (!connected && mcpServerConfigWarning(server)) continue;
     let state: SessionMcpEntryState;

@@ -96,6 +96,17 @@ describe('resolveSessionMcpEntries', () => {
     expect(resolve({ globalServers: [foreign] })).toEqual({});
   });
 
+  it('answers membership only for scope checks: connection and config warnings ignored', () => {
+    expect(
+      resolve({
+        membershipOnly: true,
+        links: [{ mcp_server_id: 'open', enabled: false }],
+        linkedServers: [open],
+      })
+    ).toEqual({ open: 'off', 'per-user': 'active', shared: 'active', machine: 'active' });
+    expect(resolve({ membershipOnly: true, selectionExplicit: true }).machine).toBe('off');
+  });
+
   it('feeds the runtime only active servers', () => {
     const entries = resolveSessionMcpEntries({
       links: [],

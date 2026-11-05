@@ -48,18 +48,26 @@ describe('register-services /mcp-servers/oauth-auth-headers authorization', () =
             afterAuthHeaders.indexOf("app.service('mcp-servers/oauth-auth-headers')")
         );
 
-  it('rejects normal provider users and checks session-token requests against attached servers', () => {
+  // The scope itself is the session's effective-set membership, assembled once
+  // in `services/session-mcp-effective.ts` (shared with the egress gateway).
+  const scopeHelper = readFileSync(
+    new URL('./services/session-mcp-effective.ts', import.meta.url),
+    'utf8'
+  );
+
+  it('rejects normal provider users and checks session-token requests against session scope', () => {
     expect(authHeadersBlock).toContain('trusted executor paths');
     expect(authHeadersBlock).toContain('shouldExposeMCPServerSecretsForSessionToken');
-    expect(authHeadersBlock).toContain('SessionMCPServerRepository');
-    expect(authHeadersBlock).toContain("scope: 'global'");
-    expect(authHeadersBlock).toContain('usableByUserId: userId');
+    expect(authHeadersBlock).toContain('sessionMcpScopeServerIds(db, executorSession, userId)');
     expect(authHeadersBlock).toContain('allowedServerIds');
     expect(authHeadersBlock).toContain('server_not_in_session_scope');
+    expect(scopeHelper).toContain('SessionMCPServerRepository');
+    expect(scopeHelper).toContain('membershipOnly: true');
   });
 
   it('scopes the global set to what the session may use', () => {
-    expect(authHeadersBlock).toContain('usableByUserId: userId');
+    expect(scopeHelper).toContain("scope: 'global'");
+    expect(scopeHelper).toContain('usableByUserId: actingUserId');
   });
 });
 

@@ -4,7 +4,8 @@
  * session's links and their servers, the enabled global servers, which servers
  * the acting user has connected, and which global servers they hid. The
  * session MCP route (runtime + pill), OAuth header issuance, and the egress
- * gateway all ask it whether a server is `active`.
+ * gateway all ask it whether a server is `active` (the latter two in
+ * membership-only mode).
  */
 
 import {
@@ -61,15 +62,14 @@ async function loadSessionMcpUserContext(
 }
 
 /**
- * `withUserContext: false` skips the connection/hide lookup: unconnected
- * per-user servers then read `needs_connect` instead of `active`, which is all
- * a scope check needs.
+ * `membershipOnly` answers session membership for scope checks: it skips the
+ * connection/hide lookup and filters (see `resolveSessionMcpEntries`).
  */
 export async function resolveSessionMcpViewForSession(
   db: SessionMcpDatabase,
   session: Pick<Session, 'session_id' | 'created_by' | 'mcp_selection_explicit'>,
   actingUserId: string,
-  options: { withUserContext?: boolean } = {}
+  options: { membershipOnly?: boolean } = {}
 ): Promise<SessionMcpEntry[]> {
   const servers = new MCPServerRepository(db);
   const noUserContext = {
@@ -79,7 +79,7 @@ export async function resolveSessionMcpViewForSession(
   const [links, globalServers, userContext] = await Promise.all([
     new SessionMCPServerRepository(db).listLinks(session.session_id),
     servers.findAll({ scope: 'global', enabled: true, usableByUserId: actingUserId }),
-    options.withUserContext === false
+    options.membershipOnly
       ? noUserContext
       : loadSessionMcpUserContext(db, actingUserId).catch(() => {
           console.warn('[mcp-runtime] session_mcp_user_context_unavailable');
@@ -97,6 +97,7 @@ export async function resolveSessionMcpViewForSession(
     globalServers,
     ...userContext,
     forUserId: actingUserId,
+    membershipOnly: options.membershipOnly,
   });
 }
 
@@ -111,9 +112,9 @@ export async function sessionMcpScopeServerIds(
   actingUserId: string
 ): Promise<Set<string>> {
   const entries = await resolveSessionMcpViewForSession(db, session, actingUserId, {
-    withUserContext: false,
+    membershipOnly: true,
   });
   return new Set(
-    entries.filter((entry) => entry.state !== 'off').map((entry) => entry.server.mcp_server_id)
+    entries.filter((entry) => entry.state === 'active').map((entry) => entry.server.mcp_server_id)
   );
 }
