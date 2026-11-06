@@ -20,6 +20,7 @@ import type {
   ExecutorResult,
   PromptPayload,
 } from '../payload-types.js';
+import { handleBranchPackCollect, handleBranchPackMaterialize } from './agor-pack.js';
 import {
   handleBranchArtifactLand,
   handleBranchArtifactPublish,
@@ -267,6 +268,8 @@ registerCommand('branch.knowledge.write', handleBranchKnowledgeWrite);
 registerCommand('branch.knowledge.read', handleBranchKnowledgeRead);
 registerCommand('branch.gateway.slack-file-upload', handleBranchSlackFileUpload);
 registerCommand('branch.upload.materialize', handleBranchUploadMaterialize);
+registerCommand('branch.pack.collect', handleBranchPackCollect);
+registerCommand('branch.pack.materialize', handleBranchPackMaterialize);
 registerCommand('branch.agor-yml.import', handleBranchAgorYmlImport);
 registerCommand('branch.agor-yml.export', handleBranchAgorYmlExport);
 registerCommand('environment.lifecycle', handleEnvironmentLifecycle);

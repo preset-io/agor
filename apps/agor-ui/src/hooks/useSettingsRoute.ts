@@ -18,7 +18,9 @@ export const SETTINGS_SECTIONS = [
   'gateway',
   'groups',
   'users',
+  'move-to-cloud',
   'about',
+  'import',
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];

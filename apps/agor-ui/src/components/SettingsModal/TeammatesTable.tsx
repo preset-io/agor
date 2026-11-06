@@ -7,13 +7,23 @@ import type {
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
+import {
+  AimOutlined,
+  DownloadOutlined,
+  EditOutlined,
+  PlusOutlined,
+  RobotOutlined,
+} from '@ant-design/icons';
 import { Button, Empty, Input, Spin, Tooltip, Typography, theme } from 'antd';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useAgorStore } from '../../store/agorStore';
 import { selectTeammatesLoaded } from '../../store/userScope';
+import { ExportPackModal } from '../AgorPack/ExportPackModal';
+import { canExportTeammate } from '../AgorPack/packCheck';
+import { PACK_COPY } from '../AgorPack/packCopy';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
@@ -76,6 +86,19 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
 
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
+  const [exportTeammate, setExportTeammate] = useState<Branch | null>(null);
+  // Import moved to Settings → Import; keep old `?import=…` links working.
+  const [searchParams] = useSearchParams();
+  const importLink = searchParams.get('import');
+  const navigate = useNavigate();
+  const location = useLocation();
+  useEffect(() => {
+    if (!importLink) return;
+    navigate(`/settings/import/?import=${encodeURIComponent(importLink)}`, {
+      replace: true,
+      state: location.state,
+    });
+  }, [importLink, navigate, location.state]);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const teammatesLoaded = useAgorStore(selectTeammatesLoaded);
   const sessionCounts = useSessionCounts(client ?? null, 'branch_id', !!selectedBranch);
@@ -167,9 +190,23 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 104,
+      width: 136,
       render: (_: unknown, record: Branch) => (
         <SettingsActionGroup>
+          {canExportTeammate(currentUser, record) && (
+            <Tooltip title={PACK_COPY.menuExport}>
+              <Button
+                type="text"
+                size="small"
+                icon={<DownloadOutlined />}
+                aria-label={PACK_COPY.menuExport}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExportTeammate(record);
+                }}
+              />
+            </Tooltip>
+          )}
           {record.board_id && (
             <Tooltip title="Center map on teammate">
               <Button
@@ -273,6 +310,10 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
             style: { cursor: onRowClick ? 'pointer' : 'default' },
           })}
         />
+      )}
+
+      {exportTeammate && (
+        <ExportPackModal open teammate={exportTeammate} onClose={() => setExportTeammate(null)} />
       )}
 
       {/* Archive/Delete Modal */}

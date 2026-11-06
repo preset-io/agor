@@ -29,6 +29,13 @@ export interface EnvVarEditorProps {
   loading?: Record<string, boolean>;
   /** Disable all fields */
   disabled?: boolean;
+  /** Hide the generic encryption/scope explainer when the host renders its own copy. */
+  hideDescription?: boolean;
+  /**
+   * Narrow hosts (a drawer): one stacked row per variable with its value field
+   * underneath, no scope/delete columns and no "add" form.
+   */
+  compact?: boolean;
   identityKey: string | null;
   operationScope: readonly unknown[] | null;
 }
@@ -70,6 +77,8 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   onDelete,
   loading = {},
   disabled = false,
+  hideDescription = false,
+  compact = false,
   identityKey,
   operationScope,
 }) => {
@@ -274,13 +283,72 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
     [envVars]
   );
 
+  if (compact) {
+    return (
+      <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+        {error && <ActionErrorNotice error={error} />}
+        {dataSource.map((row) => {
+          const editing = editingKey === row.key;
+          return (
+            <Space key={row.key} orientation="vertical" size={4} style={{ width: '100%' }}>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                <code style={{ wordBreak: 'break-all' }}>{row.key}</code>
+                <Tag color={row.isSet ? 'success' : 'default'} style={{ marginInlineEnd: 0 }}>
+                  {row.isSet ? 'Set (encrypted)' : 'Not Set'}
+                </Tag>
+              </Space>
+              {row.isSet && !editing ? (
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0 }}
+                  onClick={() => {
+                    setEditingKey(row.key);
+                    setEditingValue('');
+                  }}
+                  disabled={disabled}
+                >
+                  Update
+                </Button>
+              ) : (
+                <Space.Compact style={{ width: '100%' }}>
+                  <Input.Password
+                    placeholder="Value"
+                    aria-label={`${row.key} value`}
+                    value={editing ? editingValue : ''}
+                    onChange={(e) => {
+                      setEditingKey(row.key);
+                      setEditingValue(e.target.value);
+                    }}
+                    onPressEnter={() => handleUpdate(row.key, row.scope)}
+                    disabled={disabled}
+                  />
+                  <Button
+                    type="primary"
+                    onClick={() => handleUpdate(row.key, row.scope)}
+                    loading={loading[row.key]}
+                    disabled={disabled || !editing || !editingValue.trim()}
+                  >
+                    Save
+                  </Button>
+                </Space.Compact>
+              )}
+            </Space>
+          );
+        })}
+      </Space>
+    );
+  }
+
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
-      <Text type="secondary">
-        Environment variables are encrypted at rest. <b>Global</b> vars are exported to every
-        session you own. <b>Session</b> vars are only exported to sessions where you explicitly
-        select them (configure per-session under Session → Settings → Env vars).
-      </Text>
+      {!hideDescription && (
+        <Text type="secondary">
+          Environment variables are encrypted at rest. <b>Global</b> vars are exported to every
+          session you own. <b>Session</b> vars are only exported to sessions where you explicitly
+          select them (configure per-session under Session → Settings → Env vars).
+        </Text>
+      )}
 
       {error && <ActionErrorNotice error={error} />}
 

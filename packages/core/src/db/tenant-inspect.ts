@@ -28,7 +28,7 @@ export interface TenantTableCount {
 export interface TenantInspectionResult {
   tenantId: string;
   database: {
-    dialect: 'postgresql';
+    dialect: TenantDatabaseIdentity['dialect'];
     schemaVersion: string;
     migrationCount: number;
     /** Number of movable tenant-owned tables. */

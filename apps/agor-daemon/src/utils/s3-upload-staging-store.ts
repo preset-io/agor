@@ -30,6 +30,7 @@ const PROVENANCE = new Set([
   'gateway-discord',
   'gateway-teams',
   'mcp-slack',
+  'import',
 ]);
 
 interface ParsedS3Metadata {

@@ -1390,11 +1390,16 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * Creates a new board with fresh IDs and timestamps. Objects that cannot be
    * imported are skipped and reported in `import_skipped`.
    */
-  async fromBlob(blob: BoardExportBlob, userId: string): Promise<BoardImportResult> {
+  async fromBlob(
+    blob: BoardExportBlob,
+    userId: string,
+    boardId?: string
+  ): Promise<BoardImportResult> {
     const { blob: importable, skipped } = await this.prepareBoardImport(blob, userId);
-    const board: BoardImportResult = await this.create(
-      mapBoardExportBlobToCreateData(importable, userId)
-    );
+    const board: BoardImportResult = await this.create({
+      ...mapBoardExportBlobToCreateData(importable, userId),
+      ...(boardId ? { board_id: boardId as BoardID } : {}),
+    });
     if (skipped.length) board.import_skipped = skipped;
     return board;
   }

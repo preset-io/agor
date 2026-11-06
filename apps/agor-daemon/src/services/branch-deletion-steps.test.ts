@@ -6,10 +6,22 @@ import {
   eq,
   generateId,
   runWithTenantContext,
+  SessionRepository,
   select,
+  UploadRepository,
+  update,
+  uploads,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { type AuthenticatedParams, branchDeletionCommandId, type TenantID } from '@agor/core/types';
+import {
+  type AuthenticatedParams,
+  branchDeletionCommandId,
+  type SessionID,
+  type TenantID,
+  type UploadRef,
+  type UploadStagingStore,
+  type UUID,
+} from '@agor/core/types';
 import { expect, vi } from 'vitest';
 import { seedEnvironmentCommandBranch } from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
 import { ownedDbTest as test } from '../../../../packages/core/src/db/test-helpers';
@@ -17,6 +29,10 @@ import {
   EXECUTOR_COMMAND_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
 } from '../auth/executor-session-token';
+import {
+  configureUploadStagingStore,
+  resetUploadStagingStoreForTests,
+} from '../utils/upload-staging';
 import { BranchDeletionStepsService } from './branch-deletion-steps';
 
 test('deletion steps require exact authenticated command, tenant and invocation, and reject ordinary users', async ({
@@ -247,4 +263,121 @@ test('a settled storage_not_writable failure stores an actionable, retryable err
     deletion_error: expect.stringMatching(/not writable by the Agor daemon user.*retry deletion/),
   });
   expect((await maintenance.claim(branch.branch_id, 'delete')).acquired).toBe(true);
+});
+
+test('the upload step deletes an upload published under another ref, unless its key is shared', async ({
+  db,
+}) => {
+  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const tenant = 'default' as TenantID;
+  const repository = new UploadRepository(db);
+  const session = await new SessionRepository(db).create({
+    branch_id: branch.branch_id,
+    created_by: user.user_id,
+    agentic_tool: 'claude-code',
+  });
+  const owner = {
+    tenantId: tenant,
+    sessionId: session.session_id as SessionID,
+    branchId: branch.branch_id,
+    createdBy: user.user_id as UUID,
+  };
+  const stage = async (ref: UploadRef) => {
+    const metadata = {
+      ref,
+      name: 'note.txt',
+      mimeType: 'text/plain',
+      size: 1,
+      createdAt: new Date().toISOString(),
+      expiresAt: null,
+      provenance: 'import' as const,
+    };
+    await repository.reserve(owner, metadata);
+    await repository.complete(owner, metadata);
+  };
+  const attempt = `upl_${generateId()}` as UploadRef;
+  const planned = `upl_${generateId()}` as UploadRef;
+  const other = `upl_${generateId()}` as UploadRef;
+  await stage(attempt);
+  await repository.publishAs(attempt, planned);
+  // A second row pointing at the same bytes must be reconciled first.
+  await stage(other);
+  await update(db, uploads)
+    .set({ storage_key: attempt })
+    .where(eq(uploads.upload_ref, other))
+    .run();
+  const maintenance = new BranchMaintenanceRepository(db);
+  const { claim } = await maintenance.claim(branch.branch_id, 'delete', user.user_id);
+  const invocation = await maintenance.beginExecution(claim);
+  const app = {
+    get: () => ({ execution: {} }),
+    service: () => ({ emit: vi.fn() }),
+  } as unknown as Application;
+  const service = new BranchDeletionStepsService(
+    createTenantScopedDatabaseProxy(db, { requireScope: true }),
+    app
+  );
+  const params = {
+    provider: 'rest',
+    user,
+    tenant: { tenant_id: tenant, source: 'explicit' },
+    authentication: {
+      strategy: 'jwt',
+      payload: {
+        type: EXECUTOR_SESSION_TOKEN_TYPE,
+        purpose: EXECUTOR_COMMAND_TOKEN_PURPOSE,
+        tenant_id: tenant,
+        sub: user.user_id,
+        session_id: branchDeletionCommandId(invocation),
+        branch_id: branch.branch_id,
+      },
+    },
+  } as unknown as AuthenticatedParams;
+  const input = {
+    branch_id: branch.branch_id,
+    operation_id: claim.operation_id,
+    generation: claim.generation,
+    execution_id: invocation,
+  };
+  // The store resolves the storage key itself; the step deletes by ref.
+  const deleted: UploadRef[] = [];
+  configureUploadStagingStore(
+    () =>
+      ({
+        delete: async (target: { ref: UploadRef }) => {
+          deleted.push(target.ref);
+        },
+      }) as unknown as UploadStagingStore
+  );
+  try {
+    await runWithTenantContext(tenant, async () => {
+      await service.create({ ...input, action: 'claim' }, params);
+      await expect(service.create({ ...input, action: 'upload' }, params)).rejects.toThrow(
+        'reconciliation'
+      );
+      // Also when the first row's key is its own ref: another row sharing it blocks.
+      const keys = { [planned]: attempt, [other]: other };
+      const [first, second] = [planned, other].sort() as [UploadRef, UploadRef];
+      const setKey = (ref: UploadRef, key: string) =>
+        update(db, uploads).set({ storage_key: key }).where(eq(uploads.upload_ref, ref)).run();
+      await setKey(first, first);
+      await setKey(second, first);
+      await expect(service.create({ ...input, action: 'upload' }, params)).rejects.toThrow(
+        'reconciliation'
+      );
+      await setKey(first, keys[first] as string);
+      await setKey(second, keys[second] as string);
+      for (let i = 0; i < 2; i++)
+        expect(await service.create({ ...input, action: 'upload' }, params)).toEqual({
+          remaining: true,
+        });
+      expect(await service.create({ ...input, action: 'upload' }, params)).toEqual({
+        remaining: false,
+      });
+    });
+  } finally {
+    resetUploadStagingStoreForTests();
+  }
+  expect(deleted.sort()).toEqual([planned, other].sort());
+  expect(await select(db).from(uploads).all()).toEqual([]);
 });

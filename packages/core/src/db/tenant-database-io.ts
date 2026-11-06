@@ -285,7 +285,9 @@ export async function deriveExpectedTenantTableSnapshots(
   db: Database,
   archivePath: string,
   archivedTables: readonly TenantArchiveTable[],
-  destinationTenantId: string
+  destinationTenantId: string,
+  /** Same row rewrite the restore applies (e.g. a clone layout). */
+  transform: (tableName: string, lines: string[]) => string[] = (_table, lines) => lines
 ): Promise<TenantTableSnapshot[]> {
   const archivedByName = new Map(archivedTables.map((table) => [table.name, table]));
   const snapshots: TenantTableSnapshot[] = [];
@@ -295,8 +297,16 @@ export async function deriveExpectedTenantTableSnapshots(
       snapshots.push({ name: table.name, rowCount: 0, sha256: EMPTY_TABLE_SHA256 });
       continue;
     }
-    const lines = splitTenantJsonlLines(await readTableJsonl(archivePath, table.name));
-    const rewritten = await rewriteRowsToCanonicalText(db, table.name, lines, destinationTenantId);
+    const lines = transform(
+      table.name,
+      splitTenantJsonlLines(await readTableJsonl(archivePath, table.name))
+    );
+    // Live snapshots order rows by canonical text (COLLATE "C", i.e. bytes).
+    // A rewrite (transfer-key reseal, tenant id, clone layout) can change that
+    // order relative to the archive, so sort the same way before hashing.
+    const rewritten = (
+      await rewriteRowsToCanonicalText(db, table.name, lines, destinationTenantId)
+    ).sort((a, b) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8')));
     snapshots.push({
       name: table.name,
       rowCount: rewritten.length,

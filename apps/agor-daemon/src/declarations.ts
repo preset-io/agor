@@ -284,6 +284,12 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
       pull_request_url?: string;
       boardId: string;
       zoneId?: string;
+      custom_context?: Record<string, unknown>;
+      notes?: string | null;
+      position?: { x: number; y: number };
+      environment_variant?: string;
+      storage_mode?: 'worktree' | 'clone';
+      clone_depth?: number;
     },
     params?: FeathersParams
   ): Promise<Branch>;

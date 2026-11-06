@@ -1,7 +1,9 @@
 import {
+  completedTransferManifest,
   serializeTransferManifest,
   transferDigest,
   transferEntryDigest,
+  transferInventoryEntry,
   transferRequestBytes,
   transferSha256,
   validateTransferManifest,
@@ -289,18 +291,7 @@ export async function exportSnapshot(
           ))!,
           'utf8'
         );
-      documents.push({
-        key: action.key,
-        path: action.row.path,
-        title: action.row.title,
-        icon_emoji: action.row.icon_emoji,
-        kind: action.row.kind,
-        status: action.row.status,
-        sha256: sha256!,
-        bytes: length,
-        frontmatter: action.row.frontmatter,
-        provenance: action.row.provenance,
-      });
+      documents.push(transferInventoryEntry(action.row, action.key, sha256!, length));
     }
     checkAbort(options.signal);
     failures.finish(
@@ -311,11 +302,7 @@ export async function exportSnapshot(
     const final = await inventory(client, options.namespace, progress, options.signal);
     if (transferDigest({ sourceIdentity: options.sourceIdentity, ...final }) !== fingerprint)
       throw new Error('Source changed during export; no new completed manifest was published');
-    const manifest = validateTransferManifest({
-      format: KNOWLEDGE_TRANSFER.format,
-      version: 1,
-      completed: true,
-      consistency: 'per-document-version; non-atomic-inventory',
+    const manifest = completedTransferManifest({
       exported_at,
       namespace: source.namespace,
       documents,

@@ -1,11 +1,13 @@
 import {
   AppstoreOutlined,
   BranchesOutlined,
+  CloudUploadOutlined,
   ClusterOutlined,
   ControlOutlined,
   CreditCardOutlined,
   ExperimentOutlined,
   FolderOutlined,
+  ImportOutlined,
   InfoCircleOutlined,
   MessageOutlined,
   RobotOutlined,
@@ -115,10 +117,20 @@ export function buildSettingsNav({
       mobileTitle: 'About',
       rows: [
         {
+          section: 'move-to-cloud',
+          label: 'Move to Agor Cloud',
+          icon: <CloudUploadOutlined />,
+        },
+        {
           section: 'about',
           label: 'About',
           mobileLabel: 'About Agor',
           icon: <InfoCircleOutlined />,
+        },
+        {
+          section: 'import',
+          label: 'Import',
+          icon: <ImportOutlined />,
         },
       ],
     },

@@ -41,7 +41,10 @@ function logical(row: UploadRow, tenantId: TenantID): Upload {
   };
 }
 
-/** Tenant-explicit repository for upload metadata. It never returns storage keys. */
+/**
+ * Tenant-explicit repository for upload metadata. Only
+ * {@link UploadRepository.findOwnedWithStorageKey} returns storage keys.
+ */
 export class UploadRepository {
   constructor(private readonly db: Database) {}
 
@@ -117,8 +120,39 @@ export class UploadRepository {
   }
 
   async findOwned(tenantId: TenantID, ref: UploadRef): Promise<Upload | null> {
+    return (await this.findOwnedWithStorageKey(tenantId, ref))?.upload ?? null;
+  }
+
+  /**
+   * {@link findOwned} plus the internal byte-store key (the ref itself unless
+   * published under another ref). For the byte-store composition only.
+   */
+  async findOwnedWithStorageKey(
+    tenantId: TenantID,
+    ref: UploadRef
+  ): Promise<{ upload: Upload; storageKey: UploadRef } | null> {
     const row = await select(this.db).from(uploads).where(eq(uploads.upload_ref, ref)).one();
-    return row ? logical(row, tenantId) : null;
+    return row
+      ? { upload: logical(row, tenantId), storageKey: row.storage_key as UploadRef }
+      : null;
+  }
+
+  /**
+   * Publish a completed upload under another ref (its bytes keep their key).
+   * Fails if `to` exists, so an existing upload is never replaced.
+   */
+  async publishAs(from: UploadRef, to: UploadRef): Promise<void> {
+    const taken = await select(this.db, { ref: uploads.upload_ref })
+      .from(uploads)
+      .where(eq(uploads.upload_ref, to))
+      .one();
+    if (taken) throw new RepositoryError('Upload ref is already published');
+    const row = await update(this.db, uploads)
+      .set({ upload_ref: to })
+      .where(and(eq(uploads.upload_ref, from), eq(uploads.status, 'active')))
+      .returning()
+      .one();
+    if (!row) throw new RepositoryError('Upload to publish is not active');
   }
 
   async listByUploader(tenantId: TenantID, userId: UserID): Promise<Upload[]> {

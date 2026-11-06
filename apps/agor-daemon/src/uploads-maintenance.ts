@@ -1,16 +1,19 @@
 import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   assertValidTenantId,
+  findExpiredStagedBlobTenantIds,
   isPostgresDatabaseHandle,
   type RawDatabase,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
+  StagedBlobRepository,
   UploadMaintenanceDiscoveryRepository,
   UploadRepository,
 } from '@agor/core/db';
 import type { TenantID } from '@agor/core/types';
 import {
   configureUploadStagingStoreFromConfig,
+  getBlobStagingStore,
   getUploadStagingStore,
 } from './utils/upload-staging.js';
 
@@ -59,18 +62,26 @@ async function resolveMaintenanceTenants(options: UploadCleanupOptions): Promise
   return runWithSystemDatabaseScope(
     options.db,
     'upload maintenance tenant discovery',
-    (systemDb) =>
-      new UploadMaintenanceDiscoveryRepository(systemDb).findExpiredTenantIds(
-        options.now ?? new Date(),
-        options.limit ?? 500
-      ),
+    async (systemDb) => {
+      const now = options.now ?? new Date();
+      const limit = options.limit ?? 500;
+      const tenants = new Set([
+        ...(await new UploadMaintenanceDiscoveryRepository(systemDb).findExpiredTenantIds(
+          now,
+          limit
+        )),
+        ...(await findExpiredStagedBlobTenantIds(systemDb, now, limit)),
+      ]);
+      return [...tenants].sort().slice(0, limit);
+    },
     { capability: 'upload_maintenance' }
   );
 }
 
 /**
- * Delete a bounded set of expired uploads using exact metadata-derived keys.
- * This never lists object storage and is intended for deployment-local jobs.
+ * Delete a bounded set of expired uploads and staged pack blobs using exact
+ * metadata-derived keys. This never lists object storage and is intended for
+ * deployment-local jobs.
  */
 export async function cleanupExpiredUploads(
   options: UploadCleanupOptions
@@ -82,9 +93,11 @@ export async function cleanupExpiredUploads(
   const now = options.now ?? new Date();
   const tenants = await resolveMaintenanceTenants({ ...options, limit, now });
   const repository = new UploadRepository(options.db);
+  const blobRepository = new StagedBlobRepository(options.db);
   const dryRun = options.dryRun === true;
   if (!dryRun) configureUploadStagingStoreFromConfig(options.config, undefined, options.db);
   const store = dryRun ? undefined : getUploadStagingStore();
+  const blobs = dryRun ? undefined : getBlobStagingStore();
 
   let expired = 0;
   let deleted = 0;
@@ -99,9 +112,8 @@ export async function cleanupExpiredUploads(
     );
     expired += rows.length;
     remaining -= rows.length;
-    if (dryRun) continue;
 
-    for (const upload of rows) {
+    for (const upload of dryRun ? [] : rows) {
       try {
         await store?.delete({
           tenantId,
@@ -110,6 +122,21 @@ export async function cleanupExpiredUploads(
           ref: upload.ref,
         });
         deleted++;
+      } catch {
+        failed++;
+      }
+    }
+
+    if (remaining === 0) break;
+    const blobRows = await runWithTenantDatabaseScope(options.db, tenantId, () =>
+      blobRepository.findExpired(tenantId, now, remaining)
+    );
+    expired += blobRows.length;
+    remaining -= blobRows.length;
+    for (const blob of dryRun ? [] : blobRows) {
+      try {
+        // Conditional: skipped if an import claimed the pack since it was listed.
+        if (await blobs?.sweepExpired({ ...blob, tenantId }, now)) deleted++;
       } catch {
         failed++;
       }

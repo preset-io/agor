@@ -4,9 +4,13 @@ import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { EnvVarEditor } from './EnvVarEditor';
 
-function renderEditor(envVars: ComponentProps<typeof EnvVarEditor>['envVars']) {
+function renderEditor(
+  envVars: ComponentProps<typeof EnvVarEditor>['envVars'],
+  extra: Partial<ComponentProps<typeof EnvVarEditor>> = {}
+) {
   const props = {
     envVars,
+    ...extra,
     onSave: vi.fn(async () => {}),
     onDelete: vi.fn(async () => {}),
     identityKey: 'user-a:member',
@@ -21,6 +25,14 @@ function renderEditor(envVars: ComponentProps<typeof EnvVarEditor>['envVars']) {
 }
 
 describe('EnvVarEditor', () => {
+  it('shows the scope explainer unless the host hides it', () => {
+    const { unmount } = renderEditor({});
+    expect(screen.getByText(/encrypted at rest/)).toBeInTheDocument();
+    unmount();
+    renderEditor({}, { hideDescription: true });
+    expect(screen.queryByText(/encrypted at rest/)).not.toBeInTheDocument();
+  });
+
   it('sorts existing environment variables alphabetically by key without mutating props', () => {
     const envVars = {
       Z_TOKEN: { set: true, scope: 'global' },
@@ -97,5 +109,34 @@ describe('EnvVarEditor failures', () => {
     fireEvent.click(screen.getByRole('button', { name: /add/i }));
     expect(await screen.findByText("Couldn't save the variable.")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/variable name/i)).toHaveValue('MY_TOKEN');
+  });
+
+  it('stacks one row per variable in compact mode (narrow drawers), with its value field', async () => {
+    const onSave = vi.fn(async () => {});
+    render(
+      <AntApp>
+        <EnvVarEditor
+          compact
+          envVars={{
+            GITHUB_TOKEN: { set: false, scope: 'global' },
+            NPM_TOKEN: { set: true, scope: 'global' },
+          }}
+          onSave={onSave}
+          onDelete={vi.fn(async () => {})}
+          identityKey="user-a:member"
+          operationScope={['user-a:member', 1]}
+        />
+      </AntApp>
+    );
+    // No table columns, no add form.
+    expect(screen.queryByRole('columnheader')).toBeNull();
+    expect(screen.queryByText('Add New Variable')).toBeNull();
+    expect(screen.getByText('Not Set')).toBeInTheDocument();
+    expect(screen.getByText('Set (encrypted)')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('GITHUB_TOKEN value'), { target: { value: 'ghp-x' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+    expect(onSave).toHaveBeenCalledWith('GITHUB_TOKEN', 'ghp-x', 'global');
   });
 });

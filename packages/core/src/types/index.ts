@@ -3,6 +3,7 @@
 export type { PermissionDecision, PermissionRequest } from '../permissions';
 export * from './agentic-tool';
 export * from './agentic-tool-preset';
+export * from './agor-pack';
 export * from './artifact';
 export * from './artifact-grants';
 export * from './board';

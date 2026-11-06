@@ -23,10 +23,12 @@
  */
 
 import { createHash } from 'node:crypto';
-import { sql } from 'drizzle-orm';
+import { is, sql } from 'drizzle-orm';
+import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import type { Database } from './client';
 import { executeRaw, isPostgresDatabase } from './database-wrapper';
 import { checkMigrationStatus } from './migrate';
+import * as postgresSchema from './schema.postgres';
 import { buildTenantDeletionManifest } from './tenant-deletion-manifest';
 import { IMPERATIVE_TENANT_TABLES } from './tenant-imperative-tables';
 import {
@@ -56,7 +58,11 @@ export class TenantCatalogError extends Error {
  * tenant-owned table classifications, plus a fingerprint over all of them.
  */
 export interface TenantDatabaseIdentity {
-  dialect: 'postgresql';
+  /**
+   * Source dialect. A `sqlite` archive comes from a single-tenant self-hosted
+   * install and is importable into PostgreSQL when the schema keys match.
+   */
+  dialect: 'postgresql' | 'sqlite';
   /** Last applied migration tag (the schema version). */
   schemaVersion: string;
   /** Applied migration tags, in applied order. Import requires an exact match. */
@@ -72,6 +78,67 @@ export interface TenantDatabaseIdentity {
   presentImperativeTables: string[];
   /** SHA-256 over the canonical form of every field above. */
   fingerprint: string;
+  /**
+   * Dialect-independent schema identity: the movable tables and their
+   * PostgreSQL columns as compiled into this release. Two installs on the same
+   * Agor release agree on it whatever their dialect or migration numbering.
+   */
+  schemaKey?: string;
+  /** Agor release that produced the archive (informational, for errors). */
+  agorRelease?: string;
+}
+
+/** Dialect-independent identity of the movable tenant schema in this build. */
+export function computeTenantSchemaKey(): string {
+  const tables = tenantPortabilityTableNames().map((name) => {
+    const table = Object.values(postgresSchema).find(
+      (value) => is(value, PgTable) && getTableConfig(value).name === name
+    ) as PgTable | undefined;
+    const columns = table
+      ? getTableConfig(table)
+          .columns.map((column) => column.name)
+          .sort()
+      : [];
+    return { name, columns };
+  });
+  return createHash('sha256').update(JSON.stringify(tables)).digest('hex');
+}
+
+/**
+ * Identity of a single-tenant SQLite install for export. SQLite has no tenant
+ * catalog to cross-check; the compiled PostgreSQL manifest defines the table
+ * set, and the migration ledger must be fully applied.
+ */
+export async function resolveSqliteTenantDatabaseIdentity(
+  db: Database,
+  options: { agorRelease?: string } = {}
+): Promise<TenantDatabaseIdentity> {
+  const { schemaVersion, migrations } = await resolveTenantMigrationLedger(db);
+  const tenantTables = tenantPortabilityTableNames();
+  const nonPortableTenantTables = nonPortableTenantTableNames();
+  const fingerprint = createHash('sha256')
+    .update(
+      JSON.stringify({
+        dialect: 'sqlite',
+        schemaVersion,
+        migrations,
+        tenantTables,
+        nonPortableTenantTables,
+        presentImperativeTables: [],
+      })
+    )
+    .digest('hex');
+  return {
+    dialect: 'sqlite',
+    schemaVersion,
+    migrations,
+    tenantTables,
+    nonPortableTenantTables,
+    presentImperativeTables: [],
+    fingerprint,
+    schemaKey: computeTenantSchemaKey(),
+    ...(options.agorRelease ? { agorRelease: options.agorRelease } : {}),
+  };
 }
 
 /**
@@ -234,5 +301,6 @@ export async function resolveTenantDatabaseIdentity(db: Database): Promise<Tenan
     nonPortableTenantTables,
     presentImperativeTables,
     fingerprint,
+    schemaKey: computeTenantSchemaKey(),
   };
 }

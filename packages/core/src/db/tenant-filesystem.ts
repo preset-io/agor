@@ -593,13 +593,18 @@ async function materializeEntries(
  */
 export async function copyTenantFilesystemInto(
   root: string,
-  destinationFilesDir: string
+  destinationFilesDir: string,
+  /** Keep only matching relative paths (directories on the way are kept). */
+  include?: (relativePath: string) => boolean
 ): Promise<{
   entries: TenantFilesystemEntry[];
   skippedSpecialCount: number;
   unsafeSymlinkCount: number;
 }> {
-  const walk = await walkTenantFilesystemTree(root);
+  const fullWalk = await walkTenantFilesystemTree(root);
+  const walk = include
+    ? { ...fullWalk, entries: fullWalk.entries.filter((entry) => include(entry.path)) }
+    : fullWalk;
   await mkdir(destinationFilesDir, { recursive: true });
   // Canonical root once, so each opened file is proven to resolve inside it.
   // Skip resolution when there is nothing to read (absent/empty root would make

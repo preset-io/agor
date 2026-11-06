@@ -131,6 +131,14 @@ function isHexOfBytes(value: string, bytes: number): boolean {
 }
 
 /**
+ * An encrypted envelope embedded in text: exactly the shape `parseEnvelope`
+ * accepts, not run together with more hex or colons. Not global (safe for
+ * `test`); copy it with the `g` flag to find every occurrence.
+ */
+export const ENCRYPTED_ENVELOPE_PATTERN =
+  /(?<![0-9a-f:])[0-9a-f]{32}:[0-9a-f]{32}:[0-9a-f]{32}:(?:[0-9a-f]{2})*(?![0-9a-f:])/i;
+
+/**
  * Check if a string is encrypted
  */
 export function isEncrypted(value: string): boolean {

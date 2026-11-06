@@ -56,6 +56,7 @@ import {
   sortSessions,
 } from '../../utils/sessionSearch';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
+import { ImportedSessionTag, isImportedSession } from '../AgorPack/ImportedSessionTag';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { HighlightMatch } from '../HighlightMatch';
@@ -68,6 +69,7 @@ import {
   getSessionRowTitleStyle,
   isSessionRowFailed,
   isSessionRowRead,
+  RowActionsShownContext,
   SessionRowLogo,
   SessionStatusMark,
 } from '../SessionRow';
@@ -232,7 +234,9 @@ const SessionItemWithActions: React.FC<{
         }
       }}
     >
-      {children}
+      <RowActionsShownContext.Provider value={showActions}>
+        {children}
+      </RowActionsShownContext.Provider>
       {actionsRevealed && (
         <div
           style={{
@@ -690,7 +694,11 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     return isGatewaySessionCore(session);
   }, []);
 
-  const activeSessions = useMemo(() => sessions.filter((s) => !s.archived), [sessions]);
+  // Imported history is archived but listed (read-only, tagged "Imported").
+  const activeSessions = useMemo(
+    () => sessions.filter((s) => !s.archived || isImportedSession(s)),
+    [sessions]
+  );
   const gatewayRootSessions = useMemo(
     () => activeSessions.filter((s) => !s.scheduled_from_branch && isGatewaySession(s)),
     [activeSessions, isGatewaySession]
@@ -1028,6 +1036,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 </Typography.Text>
               )}
             </div>
+            <ImportedSessionTag session={session} />
             <SessionStatusMark session={session} />
           </div>
         </button>
@@ -1215,6 +1224,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
                 {hiddenChildCount}
               </Typography.Text>
             )}
+            <ImportedSessionTag session={session} />
             <SessionStatusMark session={session} />
           </Flex>
         </button>
@@ -1462,6 +1472,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
               <Flex align="center" gap={token.marginXS} flex={1} style={{ minWidth: 0 }}>
                 <SessionRowLogo tool={session.agentic_tool} />
                 {renderSessionTitle(session)}
+                <ImportedSessionTag session={session} />
                 <SessionStatusMark session={session} />
               </Flex>
             </button>

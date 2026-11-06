@@ -65,6 +65,7 @@ import {
   type TenantFilesystemEntry,
   tenantFilesystemEntriesEqual,
 } from './tenant-filesystem';
+import { type CloneLayoutPaths, createCloneLayoutTransform } from './tenant-layout';
 import {
   buildTenantInsertOrder,
   TENANT_IN_FLIGHT_PAYLOAD_COLUMN,
@@ -97,6 +98,11 @@ export interface TenantImportOptions {
   filesystemRoot?: string;
   /** Human-readable audit sink (secret-safe). Defaults to a no-op. */
   log?: (message: string) => void;
+  /**
+   * Re-provision branches as clones at the destination's layout instead of
+   * expecting the source's checkouts (see `tenant-layout.ts`).
+   */
+  targetLayout?: { kind: 'clone'; paths: CloneLayoutPaths };
 }
 
 type PortionState = 'empty' | 'matches' | 'conflict';
@@ -206,7 +212,8 @@ async function restoreDatabase(
   tenantId: string,
   manifest: TenantArchiveManifest,
   archivePath: string,
-  log: (message: string) => void
+  log: (message: string) => void,
+  transform: (tableName: string, lines: string[]) => string[]
 ): Promise<number> {
   const insertOrder = buildTenantInsertOrder();
   const archivedByName = new Map(manifest.database.tables.map((table) => [table.name, table]));
@@ -222,7 +229,10 @@ async function restoreDatabase(
     for (const table of insertOrder) {
       const archived = archivedByName.get(table.name);
       if (!archived || archived.rowCount === 0) continue;
-      const lines = splitTenantJsonlLines(await readTableJsonl(archivePath, table.name));
+      const lines = transform(
+        table.name,
+        splitTenantJsonlLines(await readTableJsonl(archivePath, table.name))
+      );
       if (lines.length !== archived.rowCount) {
         throw new MalformedArchiveError(
           `Archive table ${table.name} declares ${archived.rowCount} row(s) but contains ${lines.length}`
@@ -292,14 +302,27 @@ export async function importTenant(
 
   // The live schema must be exactly the schema the archive was produced against.
   const identity = await resolveTenantDatabaseIdentity(db);
-  const archiveMigrations = manifest.database.identity.migrations;
-  const sameLedger =
-    identity.migrations.length === archiveMigrations.length &&
-    identity.migrations.every((tag, index) => tag === archiveMigrations[index]);
-  if (!sameLedger || identity.fingerprint !== manifest.database.identity.fingerprint) {
-    throw new MalformedArchiveError(
-      `Refusing to import: live database identity (schemaVersion=${identity.schemaVersion}) does not match the archive (schemaVersion=${manifest.database.identity.schemaVersion})`
-    );
+  const archived = manifest.database.identity;
+  if (archived.dialect !== identity.dialect) {
+    // A self-hosted SQLite archive: migration ledgers differ by dialect, so
+    // compatibility is the compiled schema of the same Agor release.
+    if (!archived.schemaKey || archived.schemaKey !== identity.schemaKey) {
+      throw new MalformedArchiveError(
+        `Refusing to import: the archive was exported by a different Agor release${
+          archived.agorRelease ? ` (${archived.agorRelease})` : ''
+        }; upgrade the source to this destination's release and export again`
+      );
+    }
+  } else {
+    const archiveMigrations = archived.migrations;
+    const sameLedger =
+      identity.migrations.length === archiveMigrations.length &&
+      identity.migrations.every((tag, index) => tag === archiveMigrations[index]);
+    if (!sameLedger || identity.fingerprint !== archived.fingerprint) {
+      throw new MalformedArchiveError(
+        `Refusing to import: live database identity (schemaVersion=${identity.schemaVersion}) does not match the archive (schemaVersion=${archived.schemaVersion})`
+      );
+    }
   }
 
   // The archive must carry exactly the live catalog's movable tenant tables —
@@ -315,11 +338,25 @@ export async function importTenant(
   // — lets a same-tenant import AND a re-home both recognise an already-applied
   // restore, so a database committed before a filesystem-tail failure is not
   // stranded as an unretryable conflict.
+  // A layout rewrite is applied identically to the expected snapshots and the
+  // restore, so a re-run still recognises an already-applied import.
+  const repoLines = manifest.database.tables.some(
+    (table) => table.name === 'repos' && table.rowCount > 0
+  )
+    ? splitTenantJsonlLines(await readTableJsonl(options.archivePath, 'repos'))
+    : [];
+  const transform =
+    options.targetLayout?.kind === 'clone'
+      ? createCloneLayoutTransform(options.targetLayout.paths, (name) =>
+          name === 'repos' ? repoLines : []
+        )
+      : (_table: string, lines: string[]) => lines;
   const expectedSnapshots = await deriveExpectedTenantTableSnapshots(
     db,
     options.archivePath,
     manifest.database.tables,
-    tenantId
+    tenantId,
+    transform
   );
   const expectedByName = new Map(
     expectedSnapshots.map((snapshot) => [
@@ -371,7 +408,14 @@ export async function importTenant(
   let databaseRestored = false;
   let restoredRows = 0;
   if (dbClassification.state === 'empty') {
-    restoredRows = await restoreDatabase(db, tenantId, manifest, options.archivePath, log);
+    restoredRows = await restoreDatabase(
+      db,
+      tenantId,
+      manifest,
+      options.archivePath,
+      log,
+      transform
+    );
     databaseRestored = true;
   }
 

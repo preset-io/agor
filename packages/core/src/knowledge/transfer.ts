@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type {
   KnowledgeTransferEntry,
+  KnowledgeTransferInventoryEntry,
   KnowledgeTransferManifest,
   KnowledgeTransferWrite,
 } from '../types/knowledge-transfer';
@@ -46,6 +47,38 @@ export function validateTransferManifest(value: unknown): KnowledgeTransferManif
   if (bytes > KNOWLEDGE_TRANSFER.maxTotalBytes)
     throw new Error('Namespace exceeds transfer byte limit');
   return manifest;
+}
+/** A completed version 1 transfer manifest around exported documents, validated. */
+export function completedTransferManifest(
+  fields: Pick<KnowledgeTransferManifest, 'exported_at' | 'namespace' | 'documents' | 'omissions'>
+): KnowledgeTransferManifest {
+  return validateTransferManifest({
+    format: KNOWLEDGE_TRANSFER.format,
+    version: 1,
+    completed: true,
+    consistency: 'per-document-version; non-atomic-inventory',
+    ...fields,
+  });
+}
+/** Manifest entry for an inventoried document whose exported body has `sha256`/`bytes`. */
+export function transferInventoryEntry(
+  row: KnowledgeTransferInventoryEntry,
+  key: string,
+  sha256: string,
+  bytes: number
+): KnowledgeTransferEntry {
+  return {
+    key,
+    path: row.path,
+    title: row.title,
+    icon_emoji: row.icon_emoji,
+    kind: row.kind,
+    status: row.status,
+    sha256,
+    bytes,
+    frontmatter: row.frontmatter,
+    provenance: row.provenance,
+  };
 }
 /** Same encoded-request accounting for CLI planning and daemon admission. */
 export function transferRequestBytes(request: KnowledgeTransferWrite): number {

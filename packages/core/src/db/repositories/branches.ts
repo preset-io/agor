@@ -294,6 +294,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         environment_instance: branch.environment_instance,
         last_used: branch.last_used ?? new Date(now).toISOString(),
         custom_context: branch.custom_context,
+        agor_pack: branch.agor_pack,
         mcp_server_ids: branch.mcp_server_ids,
       },
     };

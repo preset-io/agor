@@ -41,7 +41,9 @@ export type UploadProvenance =
   | 'gateway-slack'
   | 'gateway-discord'
   | 'gateway-teams'
-  | 'mcp-slack';
+  | 'mcp-slack'
+  /** Restored from a `.agor` import (and the staged pack itself). */
+  | 'import';
 export type UploadStatus = 'pending' | 'active' | 'deleting';
 
 export interface UploadOwner {
@@ -191,5 +193,70 @@ export interface UploadStagingStore {
   ): Promise<NodeJS.ReadableStream>;
   consume(input: UploadReadInput): Promise<void>;
   delete(input: UploadReadInput): Promise<void>;
+  cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now?: Date): Promise<number>;
+}
+
+/**
+ * Daemon-staged files that are not session attachments. They have their own
+ * owner (the import/export they belong to and its user) instead of a
+ * session/branch, their own byte namespace, and the same expiry sweep.
+ */
+/** `agor-pack-chunk`: one part of a resumable pack upload (and its bookkeeping). */
+export type StagedBlobKind = 'agor-pack' | 'agor-pack-chunk';
+
+export interface StagedBlobOwner {
+  tenantId: TenantID;
+  kind: StagedBlobKind;
+  /** The import or export the bytes belong to. */
+  scopeId: string;
+  createdBy: UserID;
+}
+
+export type StagedBlobReadInput = StagedBlobOwner & { ref: UploadRef };
+
+export interface StagedBlob {
+  ref: UploadRef;
+  tenantId: TenantID;
+  kind: StagedBlobKind;
+  scopeId: string;
+  createdBy: UserID;
+  size: number;
+  status: 'pending' | 'active';
+  createdAt: string;
+  expiresAt: string;
+}
+
+/** Blob port of the upload staging store; every call re-checks the full owner. */
+export interface BlobStagingStore {
+  /** How long a blob is kept after it was staged or last claimed for use. */
+  readonly ttlMs: number;
+  stage(input: {
+    owner: StagedBlobOwner;
+    name: string;
+    mimeType: string;
+    body: NodeJS.ReadableStream;
+    sizeHint?: number;
+  }): Promise<UploadMetadata>;
+  /**
+   * A complete row without bytes under a caller-derived key, written by one
+   * conditional insert (no pending state); `owner.scopeId` is its value.
+   * False when the key already exists.
+   */
+  putRecord(owner: StagedBlobOwner, ref: UploadRef): Promise<boolean>;
+  /** Remove a `putRecord` row: ownership-checked, metadata only (it has no bytes). */
+  deleteRecord(input: Omit<StagedBlobOwner, 'scopeId'> & { ref: UploadRef }): Promise<void>;
+  /** The caller's row under `ref` (any scope), or null. */
+  findRecord(
+    input: Omit<StagedBlobOwner, 'scopeId'> & { ref: UploadRef }
+  ): Promise<StagedBlob | null>;
+  inspect(input: StagedBlobReadInput): Promise<UploadMetadata>;
+  read(
+    input: StagedBlobReadInput & { offset?: number; length?: number }
+  ): Promise<NodeJS.ReadableStream>;
+  delete(input: StagedBlobReadInput): Promise<void>;
+  /** The caller's blobs of one kind whose scope starts with `scopePrefix`. */
+  list(input: Omit<StagedBlobOwner, 'scopeId'> & { scopePrefix: string }): Promise<StagedBlob[]>;
+  /** Sweep one expired blob if it is still expired and not in use; true when removed. */
+  sweepExpired(input: StagedBlobReadInput, now?: Date): Promise<boolean>;
   cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now?: Date): Promise<number>;
 }

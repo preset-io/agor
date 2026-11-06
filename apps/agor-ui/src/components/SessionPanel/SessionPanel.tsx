@@ -91,6 +91,8 @@ import {
 import { describeSessionStatus } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
+import { ImportedSessionBar } from '../AgorPack/ImportedSessionBar';
+import { isImportedSession } from '../AgorPack/ImportedSessionTag';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
@@ -1923,7 +1925,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         </div>
 
         {/* Footer is unavailable for historical sessions whose runtime was removed. */}
-        {sessionFooter}
+        {isImportedSession(session) ? <ImportedSessionBar /> : sessionFooter}
 
         <Modal
           title="Reopen without confirmed cleanup?"

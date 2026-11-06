@@ -3,6 +3,7 @@
  */
 
 export * from './agentic-tool-presets';
+export * from './agor-pack-imports';
 export * from './app-variables';
 export * from './artifact-trust';
 export * from './artifacts';
@@ -53,6 +54,7 @@ export * from './session-env-selections';
 export * from './session-mcp-servers';
 export * from './session-relationships';
 export * from './sessions';
+export * from './staged-blobs';
 export * from './tasks';
 export * from './teams-conversation-addresses';
 export * from './teams-message-deliveries';

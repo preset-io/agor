@@ -1490,6 +1490,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
     if (params?.provider && Object.hasOwn(data, 'provisioning_operation'))
       throw new BadRequest('Provisioning ownership is server-managed.');
+    if (params?.provider && Object.hasOwn(data, 'agor_pack'))
+      throw new BadRequest('Teammate pack state is server-managed.');
     if (params?.provider && Object.hasOwn(data, 'filesystem_status')) {
       const token = (params as AuthenticatedParams).authentication?.payload;
       if (

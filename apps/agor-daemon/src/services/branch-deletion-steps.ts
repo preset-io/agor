@@ -177,10 +177,28 @@ export class BranchDeletionStepsService {
             .from(sessions)
             .where(eq(sessions.session_id, row.session_id))
             .one();
+          // Bytes may sit under another key (an import publishes under a planned
+          // ref); the store resolves it. Either way the key must belong to this
+          // row alone, or deleting it would take another upload's bytes.
+          const sharedKey = Boolean(
+            await select(tx, { ref: uploads.upload_ref })
+              .from(uploads)
+              .where(
+                and(
+                  sql`${uploads.upload_ref} <> ${row.upload_ref}`,
+                  or(
+                    eq(uploads.upload_ref, row.storage_key),
+                    eq(uploads.storage_key, row.storage_key)
+                  )
+                )
+              )
+              .limit(1)
+              .one()
+          );
           if (
             row.branch_id !== claim.branch_id ||
             (session && session.branch_id !== claim.branch_id) ||
-            row.storage_key !== row.upload_ref
+            sharedKey
           )
             throw new BadRequest('Upload ownership requires reconciliation');
           return row;

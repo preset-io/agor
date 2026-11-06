@@ -1,11 +1,8 @@
 import {
   decodeKnowledgeDocument,
-  encodeKnowledgeDocument,
-  exportRepositoryLinks,
-  knowledgeRepositoryFiles,
+  knowledgeRepositoryWriter,
   parseKnowledgeYaml,
   portableKnowledgeFile,
-  serializeKnowledgeYaml,
   transferCanonical,
   transferSha256,
   validateRepositoryManifest,
@@ -196,17 +193,7 @@ export async function exportKnowledge(
         const manifest = validateTransferManifest(
           JSON.parse((await snapshot.read('manifest.json', KNOWLEDGE_TRANSFER.maxManifestBytes))!)
         );
-        const files = knowledgeRepositoryFiles(
-          manifest.documents.map((doc) => doc.path),
-          previous
-        );
-        const index = validateRepositoryManifest({
-          format: manifest.format,
-          version: 2,
-          namespace: manifest.namespace,
-          documents: [...files.values()].sort(),
-          omissions: manifest.omissions,
-        });
+        const repository = knowledgeRepositoryWriter(manifest, previous);
         const publication: KnowledgeRepositoryPublication = {
           version: 2,
           sourceIdentity: options.sourceIdentity,
@@ -214,8 +201,6 @@ export async function exportKnowledge(
           next: { version: 2, files: {} },
         };
         let unresolved = 0;
-        let bodyBytes = 0;
-        let metadataBytes = 0;
         const stage = async (file: string, content: string) => {
           abort(options.signal);
           const after = transferSha256(content);
@@ -230,44 +215,17 @@ export async function exportKnowledge(
           publication.writes.push({ file, before, after });
         };
         for (const doc of manifest.documents) {
-          const file = files.get(doc.path)!;
           const body = await snapshot.read(
             `${doc.key}-${doc.sha256}.md`,
             KNOWLEDGE_TRANSFER.maxDocumentBytes
           );
           if (body === null || transferSha256(body) !== doc.sha256)
             throw new Error('Export snapshot checksum mismatch');
-          const links = exportRepositoryLinks(body, manifest, files, file);
-          unresolved += links.unresolved;
-          const {
-            key: _key,
-            sha256: _sha,
-            bytes: _bytes,
-            frontmatter,
-            provenance,
-            ...attributes
-          } = doc;
-          const encoded = encodeKnowledgeDocument(
-            {
-              format: KNOWLEDGE_REPOSITORY.documentFormat,
-              version: 2,
-              agor: { id: String(provenance.source_uuid), ...attributes },
-              frontmatter,
-              provenance,
-            },
-            links.content
-          );
-          bodyBytes += Buffer.byteLength(links.content);
-          metadataBytes += Buffer.byteLength(encoded) - Buffer.byteLength(links.content);
-          if (
-            Buffer.byteLength(links.content) > KNOWLEDGE_TRANSFER.maxDocumentBytes ||
-            bodyBytes > KNOWLEDGE_TRANSFER.maxTotalBytes ||
-            metadataBytes > KNOWLEDGE_TRANSFER.maxManifestBytes
-          )
-            throw new Error('Repository exceeds serialized body/metadata limits');
-          await stage(file, encoded);
+          const encoded = repository.document(doc, body);
+          unresolved += encoded.unresolved;
+          await stage(encoded.file, encoded.content);
         }
-        await stage(KNOWLEDGE_REPOSITORY.manifest, serializeKnowledgeYaml(index));
+        await stage(KNOWLEDGE_REPOSITORY.manifest, repository.manifestYaml());
         const journal = transferCanonical(publication);
         if (Buffer.byteLength(journal) > KNOWLEDGE_TRANSFER.maxManifestBytes)
           throw new Error('Export publication journal exceeds limit');
@@ -277,7 +235,7 @@ export async function exportKnowledge(
           (file) => !Object.hasOwn(publication.next.files, file)
         );
         progress.summary(
-          `Repository complete: ${index.documents.length} documents; ${unresolved} unresolved links; ${retained.length} old files retained, not imported.`
+          `Repository complete: ${repository.index.documents.length} documents; ${unresolved} unresolved links; ${retained.length} old files retained, not imported.`
         );
         return {
           ...result,

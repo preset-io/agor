@@ -23,6 +23,7 @@ import {
   ENV_VAR_CONSTRAINTS,
   environmentCommandCapabilities,
   isEnvVarAllowed,
+  isMissingTenantContextError,
   permanentBranchDeletionCapability,
   type ResolvedDeploymentConfig,
   type ResolvedExternalLaunchProvider,
@@ -132,6 +133,7 @@ import {
   MCP_MEMBER_POLICY_CHANGED_EVENT,
   MessageRole,
   normalizeRole,
+  PERSONAL_API_KEY_PREFIX,
   ROLES,
   SessionStatus,
   TaskStatus,
@@ -143,6 +145,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
+import { createApiKeyHostTenantResolver } from './auth/api-key-host-tenant.js';
 import {
   gatewaySlackUploadExecutorCommandId,
   uploadMaterializeExecutorCommandId,
@@ -209,6 +212,7 @@ import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
+import { registerAgorPackRoutes } from './routes/agor-pack.js';
 import { registerTeamsGatewayIngressRoute } from './routes/teams-gateway-ingress.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
@@ -871,14 +875,50 @@ function recordUploadAuthFailure(res: any, diagnostics: UploadAuthFailureDiagnos
   res.locals.uploadAuthFailure = diagnostics;
 }
 
-export function createUploadAuthMiddleware(input: {
-  authentication: {
-    create(
-      data: { strategy: 'jwt'; accessToken: string },
-      params: AuthenticatedParams
-    ): Promise<{ user?: User; authentication?: { payload?: unknown } }>;
-  };
+/**
+ * Authenticate a personal API key (the CLI) on a raw HTTP route. A key carries
+ * no signed tenant, so the tenant comes from static config or the trusted
+ * Host, exactly as the Feathers REST transport resolves it.
+ */
+export async function authenticateApiKeyHttpRequest(input: {
+  authentication: ApiKeyHttpAuthenticationService;
   multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
+  resolveHostTenant?: ReturnType<typeof createApiKeyHostTenantResolver>;
+  headers: Record<string, unknown>;
+  apiKey: string;
+}): Promise<AuthenticatedParams> {
+  let tenant: AuthenticatedParams['tenant'];
+  try {
+    tenant = resolveTenantContext(input.multiTenancy, {
+      params: { headers: input.headers },
+      headers: input.headers,
+    });
+  } catch (error) {
+    if (!isMissingTenantContextError(error) || !input.resolveHostTenant) throw error;
+    tenant = await input.resolveHostTenant(input.headers);
+  }
+  const base: AuthenticatedParams = { headers: input.headers, tenant, provider: 'rest' };
+  const result = await input.authentication.authenticate(
+    { strategy: 'api-key', apiKey: input.apiKey },
+    base,
+    'api-key'
+  );
+  return { ...base, user: result.user, authentication: result.authentication as never };
+}
+
+interface ApiKeyHttpAuthenticationService {
+  authenticate(
+    data: { strategy: 'api-key'; apiKey: string },
+    params: AuthenticatedParams,
+    ...strategies: string[]
+  ): Promise<{ user?: User; authentication?: { payload?: unknown } }>;
+}
+
+export function createUploadAuthMiddleware(input: {
+  authentication: BearerHttpAuthenticationService & Partial<ApiKeyHttpAuthenticationService>;
+  multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
+  /** Also accept personal API keys (opt-in per route, e.g. `.agor` transfers). */
+  apiKeys?: { resolveHostTenant?: ReturnType<typeof createApiKeyHostTenantResolver> };
 }) {
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 middleware request augmentation
   return async (req: any, res: any, next: NextFunction) => {
@@ -891,12 +931,23 @@ export function createUploadAuthMiddleware(input: {
       }
 
       try {
-        req.feathers = await authenticateBearerHttpRequest({
-          authentication: input.authentication,
-          multiTenancy: input.multiTenancy,
-          headers: req.headers,
-          token,
-        });
+        req.feathers =
+          input.apiKeys &&
+          input.authentication.authenticate &&
+          token.startsWith(PERSONAL_API_KEY_PREFIX)
+            ? await authenticateApiKeyHttpRequest({
+                authentication: input.authentication as ApiKeyHttpAuthenticationService,
+                multiTenancy: input.multiTenancy,
+                resolveHostTenant: input.apiKeys.resolveHostTenant,
+                headers: req.headers,
+                apiKey: token,
+              })
+            : await authenticateBearerHttpRequest({
+                authentication: input.authentication,
+                multiTenancy: input.multiTenancy,
+                headers: req.headers,
+                token,
+              });
       } catch (error) {
         // Decoded without verification purely so the failure log can report
         // the token's claimed subject and expiry; it grants nothing.
@@ -2367,6 +2418,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // archived local ancestors and descendants keep their own state, so
         // the Session can intentionally appear as a root until they are
         // restored separately.
+        // Sessions imported from a .agor are history without SDK resume
+        // state; reviving one would start an agent with none of that context.
+        if (session.archived && session.archived_reason === 'imported') {
+          throw new BadRequest(
+            'Imported session history is read-only. Start a new session on this branch to continue.'
+          );
+        }
+
         if (session.archived) {
           console.log(
             `📦 [Prompt] Auto-unarchiving session ${shortId(id)} (was archived: ${session.archived_reason || 'unknown reason'})`
@@ -3121,6 +3180,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const uploadAuthMiddleware = createUploadAuthMiddleware({
     authentication: app.service('authentication'),
     multiTenancy,
+  });
+
+  registerAgorPackRoutes({
+    app,
+    db,
+    config,
+    agorVersion: AGOR_VERSION,
+    registerLongAuthenticatedRoute,
+    requireAuth,
+    streamAuth: createUploadAuthMiddleware({
+      authentication: app.service('authentication'),
+      multiTenancy,
+      apiKeys: { resolveHostTenant: createApiKeyHostTenantResolver({ db, config }) },
+    }),
   });
 
   // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type

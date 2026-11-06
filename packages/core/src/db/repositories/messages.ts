@@ -329,6 +329,47 @@ export class MessagesRepository {
   }
 
   /**
+   * Bulk insert one session's messages (imported history) in a single
+   * admission transaction with bounded batches. No per-message create hook:
+   * imported rows are history, not new turns.
+   */
+  async createMany(inputs: MessageCreate[]): Promise<number> {
+    if (inputs.length === 0) return 0;
+    const sessionId = inputs[0]!.session_id;
+    const rows = inputs.map((input) => {
+      const message: Message = {
+        ...input,
+        message_id: input.message_id ?? (generateId() as MessageID),
+      };
+      if (!isCanonicalFullUuid(message.message_id)) {
+        throw new MessageIdentifierIntegrityError('message_id');
+      }
+      if (message.session_id !== sessionId || !isCanonicalFullUuid(message.session_id)) {
+        throw new MessageIdentifierIntegrityError('session_id');
+      }
+      if (message.task_id && !isCanonicalFullUuid(message.task_id)) {
+        throw new MessageIdentifierIntegrityError('task_id');
+      }
+      return this.messageToRow(message);
+    });
+    return this.runMetadataMutation(() =>
+      runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await this.assertSessionBelongsToTenant(tx, sessionId);
+          for (let offset = 0; offset < rows.length; offset += 200) {
+            await insert(tx, messages)
+              .values(rows.slice(offset, offset + 200))
+              .run();
+          }
+          return rows.length;
+        },
+        { sqliteImmediate: true }
+      )
+    );
+  }
+
+  /**
    * Get message by ID
    */
   async findById(messageId: MessageID): Promise<Message | null> {

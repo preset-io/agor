@@ -64,6 +64,14 @@ export class KnowledgeTransferRepository {
       .one();
     return row ? transferLiveDigest(row, row) : null;
   }
+  /** Archived documents in a namespace (left out of transfers). */
+  async archivedCount(namespaceId: string): Promise<number> {
+    const row = await select(this.db, { total: sql<number>`count(*)` })
+      .from(kbDocuments)
+      .where(and(eq(kbDocuments.namespace_id, namespaceId), eq(kbDocuments.archived, true)))
+      .one();
+    return Number(row?.total ?? 0);
+  }
   async inventory(
     namespaceId: string,
     cursor = ''

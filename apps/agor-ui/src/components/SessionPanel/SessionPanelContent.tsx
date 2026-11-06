@@ -16,6 +16,8 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { formatActionError } from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
 import { canSessionStartTurn } from '../../utils/sessionTurn';
+import { ImportedSessionLine } from '../AgorPack/ImportedSessionBar';
+import { isImportedSession } from '../AgorPack/ImportedSessionTag';
 import { BranchHeaderPill } from '../BranchHeaderPill';
 import { BranchMetadataRow } from '../BranchMetadataRow';
 import { ConversationView } from '../ConversationView';
@@ -100,6 +102,12 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
 
     // Get repo from branch
     const repo = branch ? repoById.get(branch.repo_id) || null : null;
+
+    // Read-only imported history opens with its "Imported from …" line (stable for React.memo).
+    const importedIntro = React.useMemo(
+      () => (isImportedSession(session) ? <ImportedSessionLine session={session} /> : undefined),
+      [session]
+    );
 
     // Stable callback for ConversationView's onScrollRef to prevent breaking React.memo
     const handleScrollRef = React.useCallback(
@@ -310,6 +318,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
             }
             onOpenAgenticToolSettings={onOpenAgenticToolSettings}
             canStartTurn={canSessionStartTurn(session, queuedTasks.length)}
+            intro={importedIntro}
           />
         </SessionConversationLayout>
 

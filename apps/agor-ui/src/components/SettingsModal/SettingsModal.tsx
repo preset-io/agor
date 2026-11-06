@@ -21,6 +21,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useAuthenticatedAuthorityScope } from '@/hooks/useAuthorityOperationGuard';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useAuthConfigSnapshot } from '../../hooks/useAuthConfig';
 import { useBranchSessions } from '../../hooks/useBranchSessions';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
@@ -37,6 +38,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { ImportPackSection } from '../AgorPack/ImportPackSection';
 import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { AboutTab } from './AboutTab';
@@ -48,6 +50,7 @@ import { BranchesTable } from './BranchesTable';
 import { CardTypesPanel } from './CardTypesPanel';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { GroupsTable } from './GroupsTable';
+import { MoveToCloudSection } from './MoveToCloudSection';
 import { ReposTable } from './ReposTable';
 import { SettingsDrillProvider, useDrillShell } from './SettingsDrill';
 import { buildSettingsNav, settingsSectionMobileLabel } from './settingsNavigation';
@@ -191,6 +194,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   // MCP servers are not configured here at all: everyone manages them in the
   // MCP Catalog's My Servers tab, under the tenant's `mcp_member_policy`.
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  // Move to Agor Cloud only makes sense on a self-hosted install: Cloud
+  // workspaces are reached through launch authentication.
+  const authConfigSnapshot = useAuthConfigSnapshot();
+  const selfHosted = authConfigSnapshot.config?.externalLaunch?.enabled !== true;
 
   // The daemon serves the user roster to members
   // (`ensureMinimumRole(params, ROLES.MEMBER, 'list users')`), so Users stays
@@ -211,11 +218,15 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           return isAdmin;
         case 'users':
           return canListUsers;
+        case 'move-to-cloud':
+          return selfHosted && canListUsers;
+        case 'import':
+          return canListUsers;
         default:
           return true;
       }
     },
-    [isAdmin, canListUsers]
+    [isAdmin, canListUsers, selfHosted]
   );
 
   // One nav model feeds the desktop sidebar and the mobile index, so they cannot drift apart
@@ -466,6 +477,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             />
           )
         );
+      case 'move-to-cloud':
+        return <MoveToCloudSection currentUser={currentUser} branchById={branchById} />;
+      case 'import':
+        return <ImportPackSection selfHosted={selfHosted} onClose={onClose} />;
       case 'card-types':
         return <CardTypesPanel client={client} cardTypeById={cardTypeById} />;
       case 'cards':

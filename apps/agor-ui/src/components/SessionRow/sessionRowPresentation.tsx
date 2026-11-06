@@ -4,6 +4,7 @@ import { ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { GlobalToken } from 'antd';
 import { theme } from 'antd';
 import type React from 'react';
+import { createContext } from 'react';
 import { describeSessionStatus, isSessionFailed, READY_STATUS } from '../../utils/sessionStatus';
 import { ToolIcon } from '../ToolIcon';
 
@@ -147,3 +148,9 @@ export function getSessionRowStateLabel(session: Session): string | null {
   const kind = getStatusMarkKind(session);
   return kind ? getStatusMarkCopy(session, kind).label.toLowerCase() : null;
 }
+
+/**
+ * True while a row's hover actions are shown. Trailing row content that sits
+ * where the actions appear (e.g. the "Imported" tag) hides itself meanwhile.
+ */
+export const RowActionsShownContext = createContext(false);

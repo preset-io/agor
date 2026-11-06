@@ -119,6 +119,12 @@ export interface ConversationViewProps {
   emptyStateMessage?: string;
 
   /**
+   * Shown above the transcript (and instead of the empty-state prompt), e.g.
+   * the "Imported from …" line of read-only imported history.
+   */
+  intro?: React.ReactNode;
+
+  /**
    * Whether the view is currently visible/active (pauses sockets when false)
    */
   isActive?: boolean;
@@ -163,6 +169,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     scheduledFromBranch,
     scheduledRunAt,
     emptyStateMessage = 'No messages yet. Send a prompt to start the conversation.',
+    intro,
     isActive = true,
     genealogy,
     teammateEmoji,
@@ -556,6 +563,10 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       );
     }
 
+    if (tasks.length === 0 && intro) {
+      return <div style={{ padding: '12px 0' }}>{intro}</div>;
+    }
+
     if (tasks.length === 0) {
       return (
         <div
@@ -694,6 +705,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       >
         <HistoryTextChoices.Provider value={textChoiceContext}>
           <div ref={contentRef}>
+            {intro}
             {/* Genealogy Banner */}
             <GenealogyBanner />
 

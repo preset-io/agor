@@ -6,6 +6,9 @@
  * stderr. No row or file contents, and no secrets, are ever printed.
  */
 
+import { randomBytes } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
+import { getTenantDataRoot } from '@agor/core/config';
 import { createDatabase, getDatabaseUrl } from '@agor/core/db';
 import {
   assertValidTenantId,
@@ -53,6 +56,22 @@ export default class TenantExport extends Command {
     'operation-id': Flags.string({
       description: 'Operation id to bind into the archive manifest (generated when omitted)',
     }),
+    'transfer-key-out': Flags.string({
+      description:
+        'Reseal every secret under a new one-time transfer key and write that key to this file ' +
+        '(0600, must not exist). The key never enters the archive; hand it to the destination ' +
+        'operator separately for `agor tenant rewrap-secrets`.',
+    }),
+    'source-key-env': Flags.string({
+      description: 'Env var holding the source master secret (with --transfer-key-out)',
+      default: 'AGOR_MASTER_SECRET',
+    }),
+    'files-subset': Flags.boolean({
+      description:
+        'Export only branch SDK homes, uploads, and local-home teammate trees; repositories and ' +
+        'other checkouts are re-cloned at the destination (pair with import --target-layout clone)',
+      default: false,
+    }),
   };
 
   async run(): Promise<void> {
@@ -76,11 +95,29 @@ export default class TenantExport extends Command {
         const resolved = await resolveTenantFilesystem(tenantId);
         if (resolved) {
           filesystemRoot = resolved.root;
+        } else if (flags['files-subset']) {
+          // Self-hosted (no isolation): the data home holds the subset paths.
+          filesystemRoot = getTenantDataRoot();
         } else {
           this.logToStderr(
             chalk.dim('  Filesystem isolation is disabled; exporting the database only.')
           );
         }
+      }
+      let transferKey: { fromKey: string; toKey: string } | undefined;
+      if (flags['transfer-key-out']) {
+        const fromKey = process.env[flags['source-key-env']];
+        if (!fromKey) {
+          this.logToStderr(chalk.red(`  ${flags['source-key-env']} is not set.`));
+          await flushStderr();
+          process.exit(EXIT_INVALID_INPUT);
+        }
+        transferKey = { fromKey: fromKey as string, toKey: randomBytes(32).toString('hex') };
+        // Write the key first (exclusive): an export without its key is useless.
+        await writeFile(flags['transfer-key-out'], `${transferKey.toKey}\n`, {
+          flag: 'wx',
+          mode: 0o600,
+        });
       }
 
       this.logToStderr(
@@ -91,6 +128,9 @@ export default class TenantExport extends Command {
         archivePath: flags.archive,
         ...(flags['operation-id'] ? { operationId: flags['operation-id'] } : {}),
         ...(filesystemRoot ? { filesystemRoot } : {}),
+        ...(transferKey ? { transferKey } : {}),
+        filesSubset: flags['files-subset'],
+        agorRelease: this.config.version,
         log: (message) => this.logToStderr(chalk.dim(`  ${message}`)),
       });
       await writeStdoutJson(result);
@@ -105,9 +145,7 @@ export default class TenantExport extends Command {
       this.logToStderr(formatPortabilityError(error));
       if (error instanceof TenantPortabilityUnsupportedError) {
         this.logToStderr(
-          chalk.dim(
-            '  Point the command at a PostgreSQL database (AGOR_DB_DIALECT=postgresql, DATABASE_URL=…).'
-          )
+          chalk.dim('  Check the database configuration (AGOR_DB_DIALECT, DATABASE_URL).')
         );
       }
       await flushStderr();

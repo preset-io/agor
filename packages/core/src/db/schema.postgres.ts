@@ -149,7 +149,7 @@ export const sessions = pgTable(
     // Archive state (cascaded from branch archive)
     archived: t.bool('archived').notNull().default(false),
     archived_reason: text('archived_reason', {
-      enum: ['branch_archived', 'manual', 'parent_archived', 'btw_completed'],
+      enum: ['branch_archived', 'manual', 'parent_archived', 'btw_completed', 'imported'],
     }),
 
     // JSON blob for everything else (cross-DB via json() type)
@@ -927,6 +927,9 @@ export const branches = pgTable(
 
         // Custom context for templates (accessible as {{custom.*}})
         custom_context?: Record<string, unknown>;
+
+        // `.agor` provenance and switch-over state (never in templates)
+        agor_pack?: import('@agor/core/types').AgorPackBranchState;
 
         // Default MCP servers for new sessions in this branch
         mcp_server_ids?: string[];
@@ -2673,7 +2676,7 @@ export const uploads = pgTable(
       .notNull()
       .default('active'),
     provenance: text('provenance', {
-      enum: ['browser', 'gateway-slack', 'gateway-discord', 'gateway-teams', 'mcp-slack'],
+      enum: ['browser', 'gateway-slack', 'gateway-discord', 'gateway-teams', 'mcp-slack', 'import'],
     }).notNull(),
     created_at: t.timestamp('created_at').notNull(),
     expires_at: t.timestamp('expires_at'),
@@ -3831,6 +3834,67 @@ export const kbImportReceipts = pgTable(
       table.slug,
       table.entry_key
     ),
+  })
+);
+
+/**
+ * `.agor` import receipts: one row per (owner, pack content). Caches the
+ * dry-run, records the per-teammate result/remap for idempotent re-import,
+ * and points at the staged pack bytes. No FKs: receipts are history.
+ */
+export const agorPackImports = pgTable(
+  'agor_pack_imports',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    import_id: varchar('import_id', { length: 36 }).primaryKey(),
+    owner_user_id: varchar('owner_user_id', { length: 36 }).notNull(),
+    content_sha256: text('content_sha256').notNull(),
+    staging_ref: text('staging_ref'),
+    status: text('status', { enum: ['staged', 'applying', 'applied', 'failed'] }).notNull(),
+    manifest: t.json<import('@agor/core/types').AgorPackManifest>('manifest').notNull(),
+    dry_run: t.json<import('@agor/core/types').AgorPackDryRunTeammate[]>('dry_run'),
+    results: t.json<import('@agor/core/types').AgorPackTeammateResult[]>('results'),
+    progress:
+      t.json<Record<string, import('@agor/core/types').AgorPackTeammateProgress>>('progress'),
+    /** Apply claim: one worker at a time across processes; stale after a timeout. */
+    claim_token: text('claim_token'),
+    claimed_at: t.timestamp('claimed_at'),
+    error: text('error'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    applied_at: t.timestamp('applied_at'),
+  },
+  (table) => ({
+    tenantIdx: index('agor_pack_imports_tenant_idx').on(table.tenant_id),
+    contentUnique: uniqueIndex('agor_pack_imports_content_unique').on(
+      table.tenant_id,
+      table.owner_user_id,
+      table.content_sha256
+    ),
+  })
+);
+
+/**
+ * Daemon-staged blobs that are not session attachments (`.agor` files and
+ * executor pack fragments). Bytes live in the upload store under their own
+ * namespace; this row is the ownership authority and the sweep's expiry index.
+ */
+export const stagedBlobs = pgTable(
+  'staged_blobs',
+  {
+    blob_ref: text('blob_ref').primaryKey(),
+    tenant_id: text('tenant_id').notNull().default('default'),
+    kind: text('kind', { enum: ['agor-pack', 'agor-pack-chunk'] }).notNull(),
+    scope_id: varchar('scope_id', { length: 36 }).notNull(),
+    created_by: varchar('created_by', { length: 36 }).notNull(),
+    size_bytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    status: text('status', { enum: ['pending', 'active'] }).notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+  },
+  (table) => ({
+    scopeIdx: index('staged_blobs_scope_idx').on(table.tenant_id, table.kind, table.scope_id),
+    expiryIdx: index('staged_blobs_expiry_idx').on(table.expires_at),
   })
 );
 

@@ -14,6 +14,9 @@ export default defineConfig({
     'db/index': 'src/db/index.ts',
     'db/session-guard': 'src/db/session-guard.ts', // Defensive programming for deleted sessions
     'tenant-portability/index': 'src/tenant-portability/index.ts',
+    'agor-pack/index': 'src/agor-pack/index.ts', // .agor format: paths, secret scan, zip reader/writer
+    'agor-pack/file-source': 'src/agor-pack/file-source.ts', // Node-only file-backed pack byte source
+    'agor-pack/upload-client': 'src/agor-pack/upload-client.ts', // Browser-safe resumable upload client
     'git/index': 'src/git/index.ts',
     'git/pure': 'src/git/pure.ts',
     'git/exec': 'src/git/exec.ts',

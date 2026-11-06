@@ -6,12 +6,19 @@ import {
   KNOWLEDGE_TRANSFER,
   type KnowledgeRepositoryHeader,
   type KnowledgeRepositoryManifest,
+  type KnowledgeTransferEntry,
   type KnowledgeTransferManifest,
   knowledgeRepositoryHeaderSchema,
   knowledgeRepositoryManifestSchema,
 } from '../types/knowledge-transfer.js';
-import { transferCanonical, transferSha256 } from './transfer.js';
-import { encodeMarkdownUrlSegment, rewriteKnowledgeLinks } from './transfer-links.js';
+import { transferCanonical, transferSha256, validateTransferManifest } from './transfer.js';
+import {
+  encodeMarkdownUrlSegment,
+  KNOWLEDGE_LINK,
+  outsideKnowledgeLink,
+  rewriteKnowledgeLinks,
+  transferLinkResolver,
+} from './transfer-links.js';
 
 /** Parse bounded, non-executable YAML. Never expose parser snippets/private values. */
 export function parseKnowledgeYaml(text: string): unknown {
@@ -267,9 +274,7 @@ export function exportRepositoryLinks(
 ) {
   const byId = new Map(source.documents.map((doc) => [doc.provenance.source_uuid, doc.path]));
   return rewriteKnowledgeLinks(content, (url) => {
-    const match = /^(?:agor:\/\/kb\/|\/(?:ui\/)?(?:kb|knowledge)\/)([^/]+)\/(.*?)([?#].*)?$/.exec(
-      url
-    );
+    const match = KNOWLEDGE_LINK.exec(url);
     if (!match) return {};
     try {
       const path =
@@ -311,4 +316,139 @@ export function importRepositoryLinks(
       return { unresolved: true };
     }
   });
+}
+
+/**
+ * Repository v2 writer shared by `agor kb export` and the `.agor` exporter:
+ * maps logical paths to portable files (keeping `previous` names), rewrites
+ * links to relative files and enforces the serialized limits the reader checks.
+ */
+export function knowledgeRepositoryWriter(
+  manifest: KnowledgeTransferManifest,
+  previous?: Map<string, string>
+) {
+  const files = knowledgeRepositoryFiles(
+    manifest.documents.map((doc) => doc.path),
+    previous
+  );
+  const index = validateRepositoryManifest({
+    format: manifest.format,
+    version: 2,
+    namespace: manifest.namespace,
+    documents: [...files.values()].sort(),
+    omissions: manifest.omissions,
+  });
+  let bodyBytes = 0;
+  let metadataBytes = 0;
+  return {
+    files,
+    index,
+    /** Encode one manifest document whose current Markdown is `body`. */
+    document(doc: KnowledgeTransferEntry, body: string) {
+      const file = files.get(doc.path);
+      if (!file) throw new Error('Document is not in the repository plan');
+      const links = exportRepositoryLinks(body, manifest, files, file);
+      const {
+        key: _key,
+        sha256: _sha,
+        bytes: _bytes,
+        frontmatter,
+        provenance,
+        ...attributes
+      } = doc;
+      const content = encodeKnowledgeDocument(
+        {
+          format: KNOWLEDGE_REPOSITORY.documentFormat,
+          version: 2,
+          agor: { id: String(provenance.source_uuid), ...attributes },
+          frontmatter,
+          provenance,
+        },
+        links.content
+      );
+      bodyBytes += Buffer.byteLength(links.content);
+      metadataBytes += Buffer.byteLength(content) - Buffer.byteLength(links.content);
+      if (
+        bodyBytes > KNOWLEDGE_TRANSFER.maxTotalBytes ||
+        metadataBytes > KNOWLEDGE_TRANSFER.maxManifestBytes
+      )
+        throw new Error('Repository exceeds serialized body/metadata limits');
+      return { file, content, unresolved: links.unresolved };
+    },
+    /** `manifest.yaml` contents. */
+    manifestYaml: () => serializeKnowledgeYaml(index),
+  };
+}
+
+export type DecodedKnowledgeRepositoryFile = ReturnType<typeof decodeKnowledgeDocument> & {
+  file: string;
+};
+
+/** Decode one file listed in `manifest.yaml`; errors name the file. */
+export function decodeKnowledgeRepositoryFile(
+  file: string,
+  text: string | null | undefined
+): DecodedKnowledgeRepositoryFile {
+  if (text === null || text === undefined)
+    throw new Error(`Missing indexed Knowledge document: ${file}`);
+  try {
+    return { ...decodeKnowledgeDocument(text), file };
+  } catch (error) {
+    throw new Error(`${file}: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Import plan for a decoded repository v2 (in `index.documents` order), shared
+ * by `agor kb import` and the `.agor` importer. Source Knowledge URLs and
+ * relative file links are rewritten to `targetSlug`; manifest entries describe
+ * the rewritten bodies. `unresolved` counts every link left as-is; `outside`
+ * is the subset that points at other namespaces or documents outside the
+ * repository, which transfers keep by design. `localize` applies the same
+ * rewriting to any other body of a document (e.g. an older version).
+ */
+export function planKnowledgeRepositoryImport(
+  index: KnowledgeRepositoryManifest,
+  decoded: DecodedKnowledgeRepositoryFile[],
+  targetSlug = index.namespace.slug
+) {
+  const source = validateTransferManifest(repositoryTransferManifest(index, decoded));
+  const paths = new Map(decoded.map((doc) => [doc.file, doc.header.agor.path]));
+  const sourceIds = new Set(source.documents.map((doc) => String(doc.provenance.source_uuid)));
+  const resolve = transferLinkResolver(source, targetSlug);
+  const localize = (body: string, file: string) => {
+    let outside = 0;
+    // Rewrite original source URLs first; otherwise generated destination URLs
+    // are mistaken for unresolved source links when importing to a new namespace.
+    const linked = rewriteKnowledgeLinks(body, (url) => {
+      const result = resolve(url);
+      if (
+        result.unresolved &&
+        outsideKnowledgeLink(url, source.namespace.slug, (id) => sourceIds.has(id))
+      )
+        outside++;
+      return result;
+    });
+    const relative = importRepositoryLinks(linked.content, file, paths, targetSlug);
+    return {
+      content: relative.content,
+      unresolved: linked.unresolved + relative.unresolved,
+      outside,
+    };
+  };
+  const byId = new Map(decoded.map((doc) => [doc.header.agor.id, doc]));
+  const documents = new Map<string, { file: string; content: string }>();
+  let unresolved = 0;
+  let outside = 0;
+  for (const entry of source.documents) {
+    const doc = byId.get(String(entry.provenance.source_uuid));
+    if (!doc) throw new Error('Repository document identity mismatch');
+    const local = localize(doc.body, doc.file);
+    unresolved += local.unresolved;
+    outside += local.outside;
+    entry.sha256 = transferSha256(local.content);
+    entry.bytes = Buffer.byteLength(local.content);
+    documents.set(entry.key, { file: doc.file, content: local.content });
+  }
+  return { manifest: validateTransferManifest(source), documents, unresolved, outside, localize };
 }

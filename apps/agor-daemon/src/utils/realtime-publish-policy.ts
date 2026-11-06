@@ -543,6 +543,17 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'The DOM answer goes back to the one agent that asked, in-process.',
   },
   'artifacts/:id/trust': { audience: 'none', why: `${NO_CONSUMER} Lands as artifacts.patched.` },
+  'agor-pack/preflight': { audience: 'none', why: NO_CONSUMER },
+  'agor-pack/exports': { audience: 'none', why: `${NO_CONSUMER} The manifest is the exporter's.` },
+  'agor-pack/imports': { audience: 'none', why: NO_CONSUMER },
+  'agor-pack/imports/:importId/apply': {
+    audience: 'none',
+    why: `${NO_CONSUMER} The importer polls the receipt; created rows publish as their own services.`,
+  },
+  'agor-pack/switch-over/:branchId': {
+    audience: 'none',
+    why: `${NO_CONSUMER} Lands as schedules/gateway-channels/branches.patched.`,
+  },
   'widgets/:id/submit': {
     audience: 'none',
     why: 'Widget input is deliberately kept out of broadcast.',

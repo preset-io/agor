@@ -8,17 +8,30 @@ import {
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden, NotFound } from '@agor/core/feathers';
 import {
+  completedTransferManifest,
+  decodeKnowledgeRepositoryFile,
+  knowledgeRepositoryWriter,
   knowledgeTransferValidationIssues,
   knowledgeTransferValidationSummary,
+  outsideKnowledgeLinks,
+  parseKnowledgeYaml,
+  planKnowledgeRepositoryImport,
   transferDigest,
   transferDocumentMetadata,
   transferEntryDigest,
+  transferInventoryEntry,
   transferRequestBytes,
   transferSha256,
+  validateRepositoryManifest,
 } from '@agor/core/knowledge';
 import type {
+  AgorPackAuthor,
+  AgorPackKnowledgeHistory,
+  AgorPackOutsideLinks,
   AuthenticatedParams,
   KnowledgeTransferBody,
+  KnowledgeTransferEntry,
+  KnowledgeTransferInventoryEntry,
   KnowledgeTransferPage,
   KnowledgeTransferWriteResult,
   User,
@@ -26,6 +39,7 @@ import type {
 } from '@agor/core/types';
 import {
   hasMinimumRole,
+  KNOWLEDGE_REPOSITORY,
   KNOWLEDGE_TRANSFER,
   knowledgeTransferHash,
   knowledgeTransferSlug,
@@ -35,7 +49,7 @@ import {
 import { z } from 'zod';
 import { runKnowledgePolicyTransaction } from '../knowledge/policy-transaction.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-import { isKnowledgeAdmin } from './knowledge-access.js';
+import { canReadKnowledgeDocument, isKnowledgeAdmin } from './knowledge-access.js';
 import { KnowledgeDocumentsService } from './knowledge-documents.js';
 
 function parseTransfer<T>(
@@ -66,6 +80,33 @@ const querySchema = z
   .strict();
 type TransferParams = AuthenticatedParams & { query?: Record<string, unknown> };
 
+type KnowledgeNamespaceRow = NonNullable<
+  Awaited<ReturnType<KnowledgeNamespaceRepository['findBySlug']>>
+>;
+
+function knowledgeNamespaceProjection(ns: KnowledgeNamespaceRow) {
+  return {
+    slug: ns.slug,
+    display_name: ns.display_name,
+    description: ns.description ?? null,
+    provenance: JSON.parse(
+      JSON.stringify({
+        source_uuid: ns.namespace_id,
+        kind: ns.kind,
+        owner_user_id: ns.owner_user_id,
+        created_by: ns.created_by,
+        visibility_default: ns.visibility_default,
+        others_can: ns.others_can,
+        repo_id: ns.repo_id,
+        branch_id: ns.branch_id,
+        created_at: ns.created_at,
+        updated_at: ns.updated_at,
+        metadata: ns.metadata ?? null,
+      })
+    ),
+  };
+}
+
 /** One request is one bounded DB unit. No local files, jobs or source-supplied identities. */
 export class KnowledgeTransfersService {
   constructor(
@@ -86,27 +127,7 @@ export class KnowledgeTransfersService {
     return namespace;
   }
   private namespaceProjection(ns: Awaited<ReturnType<KnowledgeNamespaceRepository['findBySlug']>>) {
-    if (!ns) return null;
-    return {
-      slug: ns.slug,
-      display_name: ns.display_name,
-      description: ns.description ?? null,
-      provenance: JSON.parse(
-        JSON.stringify({
-          source_uuid: ns.namespace_id,
-          kind: ns.kind,
-          owner_user_id: ns.owner_user_id,
-          created_by: ns.created_by,
-          visibility_default: ns.visibility_default,
-          others_can: ns.others_can,
-          repo_id: ns.repo_id,
-          branch_id: ns.branch_id,
-          created_at: ns.created_at,
-          updated_at: ns.updated_at,
-          metadata: ns.metadata ?? null,
-        })
-      ),
-    };
+    return ns ? knowledgeNamespaceProjection(ns) : null;
   }
   private async destination(owner: UserID, bundle: string, slug: string) {
     const receipt = await new KnowledgeTransferRepository(this.db).receipt(owner, bundle, slug, '');
@@ -369,4 +390,360 @@ export class KnowledgeTransfersService {
       return { target_id: created.document_id, skipped: false };
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// In-process repository export/import for `.agor`
+// ---------------------------------------------------------------------------
+
+/** Older versions kept per document when "+version history" is exported. */
+const PACK_HISTORY_VERSIONS_PER_DOCUMENT = 50;
+
+export interface KnowledgeRepositoryExport {
+  /** Repository v2 files: `manifest.yaml` and `docs/**.md`, as `agor kb export` writes them. */
+  files: Array<{ path: string; content: string }>;
+  documents: number;
+  history: AgorPackKnowledgeHistory | null;
+  historyVersions: number;
+  /** Links to other namespaces, kept as-is (by target namespace slug). */
+  outsideLinks: AgorPackOutsideLinks;
+  /** Live documents the exporter may not read, left out. */
+  privateSkipped: number;
+}
+
+/**
+ * Count links in `bodies` that point outside `sourceSlug`. Document-id links
+ * resolve to their namespace; one to a missing/archived document is broken,
+ * not outside, and is not counted.
+ */
+async function summarizeOutsideLinks(
+  db: TenantScopeAwareDatabase,
+  user: User,
+  sourceSlug: string,
+  ownIds: Set<string>,
+  bodies: Iterable<string>
+): Promise<AgorPackOutsideLinks> {
+  const documents = new KnowledgeDocumentRepository(db);
+  const namespaces = new KnowledgeNamespaceRepository(db);
+  const slugs = new Set<string>();
+  let count = 0;
+  for (const body of bodies) {
+    for (const link of outsideKnowledgeLinks(body, sourceSlug, (id) => ownIds.has(id))) {
+      let slug: string | null = null;
+      if ('slug' in link) slug = link.slug;
+      else {
+        const doc = await documents.findById(link.documentId).catch(() => null);
+        if (doc && !doc.archived && (await canReadKnowledgeDocument(namespaces, doc, user))) {
+          slug = (await namespaces.findById(doc.namespace_id))?.slug ?? null;
+        }
+      }
+      if (!slug || slug === sourceSlug) continue;
+      count += 1;
+      slugs.add(slug);
+    }
+  }
+  return { count, namespaces: [...slugs].sort() };
+}
+
+/**
+ * Every live document row of a namespace the user may read, across inventory
+ * pages, and how many were left out by document visibility.
+ */
+async function inventoryRows(
+  db: TenantScopeAwareDatabase,
+  namespaceId: string,
+  user: User
+): Promise<{ rows: KnowledgeTransferInventoryEntry[]; privateSkipped: number }> {
+  const transfers = new KnowledgeTransferRepository(db);
+  const documents = new KnowledgeDocumentRepository(db);
+  const namespaces = new KnowledgeNamespaceRepository(db);
+  const rows: KnowledgeTransferInventoryEntry[] = [];
+  let privateSkipped = 0;
+  for (let cursor = ''; ; ) {
+    const page = await transfers.inventory(namespaceId, cursor);
+    for (const row of page.entries) {
+      const doc = await documents.findById(row.document_id);
+      if (doc && (await canReadKnowledgeDocument(namespaces, doc, user))) rows.push(row);
+      else privateSkipped += 1;
+    }
+    if (!page.next_cursor) return { rows, privateSkipped };
+    cursor = page.next_cursor;
+  }
+}
+
+/**
+ * What a teammate pack's Knowledge section would hold, for the export
+ * preflight: documents `user` may read, archived and private ones left out,
+ * and outside links. Must run inside a tenant database scope.
+ */
+export async function previewKnowledgeExport(
+  db: TenantScopeAwareDatabase,
+  namespaceId: string,
+  user: User
+): Promise<{
+  documents: number;
+  /** Markdown body size, for the export size estimate. */
+  bytes: number;
+  archived: number;
+  privateSkipped: number;
+  outsideLinks: AgorPackOutsideLinks;
+}> {
+  const ns = await new KnowledgeNamespaceRepository(db).findById(namespaceId);
+  if (!ns || ns.archived) {
+    return {
+      documents: 0,
+      bytes: 0,
+      archived: 0,
+      privateSkipped: 0,
+      outsideLinks: { count: 0, namespaces: [] },
+    };
+  }
+  const transfers = new KnowledgeTransferRepository(db);
+  const versions = new KnowledgeDocumentVersionRepository(db);
+  const { rows, privateSkipped } = await inventoryRows(db, ns.namespace_id, user);
+  const bodies: string[] = [];
+  for (const row of rows) {
+    if (row.mime_type !== 'text/markdown' || !row.version_id) continue;
+    const version = await versions.findById(row.version_id);
+    if (typeof version?.content_text === 'string') bodies.push(version.content_text);
+  }
+  return {
+    documents: rows.length,
+    bytes: bodies.reduce((sum, body) => sum + Buffer.byteLength(body), 0),
+    archived: await transfers.archivedCount(ns.namespace_id),
+    privateSkipped,
+    outsideLinks: await summarizeOutsideLinks(
+      db,
+      user,
+      ns.slug,
+      new Set(rows.map((row) => String(row.document_id))),
+      bodies
+    ),
+  };
+}
+
+/**
+ * Export a namespace's current Markdown documents as Knowledge repository v2
+ * files — the same encoders and link rewriting as `agor kb export`, without
+ * the HTTP round trips. Only documents `options.user` may read are exported
+ * (with their history). Must run inside a tenant database scope. Optional
+ * history carries up to {@link PACK_HISTORY_VERSIONS_PER_DOCUMENT} older
+ * versions per document, oldest first.
+ */
+export async function exportKnowledgeRepository(
+  db: TenantScopeAwareDatabase,
+  namespaceId: string,
+  options: {
+    user: User;
+    includeHistory: boolean;
+    authorOf: (userId: string | null) => Promise<AgorPackAuthor>;
+  }
+): Promise<KnowledgeRepositoryExport> {
+  const ns = await new KnowledgeNamespaceRepository(db).findById(namespaceId);
+  if (!ns || ns.archived) throw new NotFound('Knowledge namespace not found');
+  const versions = new KnowledgeDocumentVersionRepository(db);
+  const { rows, privateSkipped } = await inventoryRows(db, ns.namespace_id, options.user);
+  const documents: KnowledgeTransferEntry[] = [];
+  const bodies = new Map<string, string>();
+  const omissions = new Set<string>(['acl', 'graph', 'assets']);
+  for (const row of rows) {
+    if (row.mime_type !== 'text/markdown' || !row.version_id) {
+      omissions.add('non-markdown documents');
+      continue;
+    }
+    const version = await versions.findById(row.version_id);
+    if (typeof version?.content_text !== 'string') continue;
+    const key = `d${String(documents.length + 1).padStart(6, '0')}`;
+    documents.push(
+      transferInventoryEntry(
+        row,
+        key,
+        transferSha256(version.content_text),
+        Buffer.byteLength(version.content_text, 'utf8')
+      )
+    );
+    bodies.set(key, version.content_text);
+  }
+  if (!options.includeHistory) omissions.add('history');
+  const manifest = completedTransferManifest({
+    exported_at: new Date().toISOString(),
+    namespace: knowledgeNamespaceProjection(ns),
+    documents,
+    omissions: [...omissions].sort(),
+  });
+  const repository = knowledgeRepositoryWriter(manifest);
+  const files: KnowledgeRepositoryExport['files'] = [
+    { path: KNOWLEDGE_REPOSITORY.manifest, content: repository.manifestYaml() },
+  ];
+  for (const doc of manifest.documents) {
+    const { file, content } = repository.document(doc, bodies.get(doc.key) as string);
+    files.push({ path: file, content });
+  }
+
+  let history: AgorPackKnowledgeHistory | null = null;
+  let historyVersions = 0;
+  if (options.includeHistory) {
+    history = { version: 1, documents: [] };
+    for (const row of rows) {
+      if (!row.version_id || row.mime_type !== 'text/markdown') continue;
+      const older = (await versions.findAll({ document_id: row.document_id as never }))
+        .filter((v) => v.version_id !== row.version_id && typeof v.content_text === 'string')
+        .slice(0, PACK_HISTORY_VERSIONS_PER_DOCUMENT)
+        .reverse();
+      if (older.length === 0) continue;
+      const entries = [];
+      for (const v of older) {
+        entries.push({
+          version_number: v.version_number,
+          title: null,
+          content: v.content_text as string,
+          change_summary: v.change_summary ?? null,
+          created_at: new Date(v.created_at).toISOString(),
+          originally_by: await options.authorOf(v.created_by ?? null),
+        });
+      }
+      history.documents.push({ path: row.path, versions: entries });
+      historyVersions += entries.length;
+    }
+  }
+  const outsideLinks = await summarizeOutsideLinks(
+    db,
+    options.user,
+    ns.slug,
+    new Set(rows.map((row) => String(row.document_id))),
+    bodies.values()
+  );
+  return {
+    files,
+    documents: manifest.documents.length,
+    history,
+    historyVersions,
+    outsideLinks,
+    privateSkipped,
+  };
+}
+
+/**
+ * Import Knowledge repository v2 files into an EXISTING namespace the caller
+ * owns (an imported teammate's memory namespace). Same decoding and link
+ * rewriting as `agor kb import`, but documents land in the given namespace and
+ * inherit its visibility defaults. A path that already exists (seeded) is
+ * overwritten unless it already holds the pack's content. Older versions, when present, are replayed oldest-first before
+ * the current content so the document's history reads naturally.
+ */
+export async function importKnowledgeRepository(input: {
+  db: TenantScopeAwareDatabase;
+  app?: Application;
+  params: AuthenticatedParams;
+  namespace: { namespace_id: string; slug: string };
+  files: Map<string, string>;
+  history: AgorPackKnowledgeHistory | null;
+  importMetadata: Record<string, unknown>;
+}): Promise<{ documents: number; unresolvedLinks: number }> {
+  const manifestText = input.files.get(KNOWLEDGE_REPOSITORY.manifest);
+  if (!manifestText) throw new BadRequest('Knowledge section is missing manifest.yaml');
+  let plan: ReturnType<typeof planKnowledgeRepositoryImport>;
+  try {
+    const index = validateRepositoryManifest(parseKnowledgeYaml(manifestText));
+    plan = planKnowledgeRepositoryImport(
+      index,
+      index.documents.map((file) => decodeKnowledgeRepositoryFile(file, input.files.get(file))),
+      input.namespace.slug
+    );
+  } catch (error) {
+    throw new BadRequest(error instanceof Error ? error.message : 'Invalid Knowledge section');
+  }
+  const historyByPath = new Map(
+    (input.history?.documents ?? []).map((doc) => [doc.path, doc.versions])
+  );
+  const documents = new KnowledgeDocumentsService(input.db, input.app);
+  const repository = new KnowledgeDocumentRepository(input.db);
+  const versions = new KnowledgeDocumentVersionRepository(input.db);
+  const written: string[] = [];
+  // Links into other namespaces stay as-is by design; the export already
+  // reported them, so only genuinely broken links count here.
+  let unresolvedLinks = plan.unresolved - plan.outside;
+  const localize = (body: string, file: string) => {
+    const local = plan.localize(body, file);
+    unresolvedLinks += local.unresolved - local.outside;
+    return local.content;
+  };
+  for (const entry of plan.manifest.documents) {
+    const doc = plan.documents.get(entry.key);
+    if (!doc) continue;
+    const metadata = { ...transferDocumentMetadata(entry), ...input.importMetadata };
+    const steps = [
+      ...(historyByPath.get(entry.path) ?? []).map((version) => ({
+        content: localize(version.content, doc.file),
+        // The original change summary when the source had one.
+        summary:
+          version.change_summary ??
+          `Imported version ${version.version_number}${
+            version.originally_by.name ? ` (originally by ${version.originally_by.name})` : ''
+          }`,
+      })),
+      { content: doc.content, summary: 'Imported current Knowledge document' },
+    ];
+    const existing = await repository.findByNamespaceAndPath(
+      input.namespace.namespace_id as never,
+      entry.path
+    );
+    let documentId = existing?.document_id as string | undefined;
+    const current = existing?.current_version_id
+      ? await versions.findById(existing.current_version_id)
+      : null;
+    if (documentId && current?.content_text === doc.content) {
+      // Already imported (a resumed import): don't replay its history again.
+      written.push(documentId);
+      continue;
+    }
+    // The whole replay (history + current) is one transaction: a document
+    // is either fully imported or not at all, so a resume never repeats a
+    // version. Same unit and lock order as a Knowledge transfer write.
+    documentId = await runKnowledgePolicyTransaction(input.db, async (tx) => {
+      await new KnowledgeSemanticSettingsRepository(tx).lockAggregateForUpdate(tx);
+      // Scoped by runKnowledgePolicyTransaction; never escapes this unit.
+      const scoped = new KnowledgeDocumentsService(
+        tx as unknown as TenantScopeAwareDatabase,
+        input.app
+      );
+      let id = documentId;
+      for (const step of steps) {
+        if (!id) {
+          const created = await scoped.create(
+            {
+              namespace_id: input.namespace.namespace_id as never,
+              path: entry.path,
+              title: entry.title,
+              icon_emoji: entry.icon_emoji,
+              kind: entry.kind,
+              status: entry.status,
+              content_text: step.content,
+              frontmatter: entry.frontmatter,
+              metadata,
+              change_summary: step.summary,
+            },
+            input.params
+          );
+          if (Array.isArray(created)) throw new Error('Unexpected bulk Knowledge result');
+          id = created.document_id;
+        } else {
+          await scoped.patch(
+            id,
+            {
+              title: entry.title,
+              content_text: step.content,
+              frontmatter: entry.frontmatter,
+              change_summary: step.summary,
+            },
+            input.params
+          );
+        }
+      }
+      return id;
+    });
+    if (documentId) written.push(documentId);
+  }
+  for (const id of written) await documents.reconcileReferences(id, input.params);
+  return { documents: written.length, unresolvedLinks };
 }
