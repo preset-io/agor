@@ -4827,4 +4827,108 @@ describe('durable single-attempt cleanup and explicit retry', () => {
       );
     }
   );
+
+  dbTest('discovers due gateway final replies and updates metadata', async ({ db }) => {
+    const repo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+
+    // 1. Task with delivery obligation completed and pending
+    const dueTask = await repo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.COMPLETED,
+        metadata: {
+          gateway_reply_metadata: { processing_comment_id: 101 },
+          gateway_task_source: {
+            channel_type: 'github',
+            gateway_channel_id: 'chan-1',
+            thread_id: 'owner/repo#1',
+            thread_session_map_id: 'map-101',
+            provider_user_id: 'user-1',
+          },
+        },
+      })
+    );
+
+    // 2. Running task (non-terminal) with processing_comment_id -> NOT due
+    await repo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        metadata: {
+          gateway_reply_metadata: { processing_comment_id: 102 },
+        },
+      })
+    );
+
+    // 3. Completed task without processing_comment_id -> NOT due
+    await repo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.COMPLETED,
+      })
+    );
+
+    // 4. Completed task already delivered -> NOT due
+    await repo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.COMPLETED,
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 104,
+            delivery_status: 'delivered',
+          },
+        },
+      })
+    );
+
+    // 5. Completed task with future next_retry_at -> NOT due
+    const futureTask = await repo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.COMPLETED,
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 105,
+            delivery_status: 'pending',
+            next_retry_at: new Date(Date.now() + 60_000).toISOString(),
+          },
+        },
+      })
+    );
+
+    // Initial discovery
+    const dueRefs = await repo.findDueGatewayFinalReplyRefs();
+    expect(dueRefs.map((r) => r.task_id)).toEqual([dueTask.task_id]);
+    expect(dueRefs[0].thread_session_map_id).toBe('map-101');
+
+    // Update metadata to claim (processing)
+    await repo.updateGatewayReplyMetadata(dueTask.task_id, {
+      delivery_status: 'processing',
+      claimed_at: new Date().toISOString(),
+    });
+
+    // While processing and not stale -> NOT due
+    expect(await repo.findDueGatewayFinalReplyRefs()).toEqual([]);
+
+    // Stale processing claim -> discovered for recovery
+    const recoveredRefs = await repo.findDueGatewayFinalReplyRefs({
+      staleClaimTimeoutMs: 0,
+    });
+    expect(recoveredRefs.map((r) => r.task_id)).toEqual([dueTask.task_id]);
+
+    // Mark delivered
+    await repo.updateGatewayReplyMetadata(dueTask.task_id, {
+      delivery_status: 'delivered',
+      delivered_at: new Date().toISOString(),
+    });
+    expect(await repo.findDueGatewayFinalReplyRefs({ staleClaimTimeoutMs: 0 })).toEqual([]);
+
+    // Advance time past future task's next_retry_at
+    const futureDue = await repo.findDueGatewayFinalReplyRefs({
+      now: new Date(Date.now() + 120_000),
+    });
+    expect(futureDue.map((r) => r.task_id)).toEqual([futureTask.task_id]);
+  });
 });
