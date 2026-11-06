@@ -10,9 +10,10 @@
  *
  *   <id>:i      zero bytes; its name records `<sha256>-<size>-<chunk size>`
  *   <id>:<n>    chunk n
- *   <id>:d      zero bytes after `complete`; its name is the receipt's import id.
- *               Its key is derived from (tenant, creator, upload), so it is
- *               published once; chunks are deleted only after it exists.
+ *
+ * After `complete`, a bytes-less record whose key is derived from (tenant,
+ * creator, upload) maps the upload to its receipt (its scope is the import
+ * id). One conditional insert publishes it; chunks go only after it exists.
  *
  * `<id>` is derived from (sha256, size, chunk size), so starting the same file again
  * resumes it, and a `complete` whose response was lost can be repeated.
@@ -42,7 +43,6 @@ import type { AgorPackImporter } from './agor-pack-import.js';
 const KIND = 'agor-pack-chunk';
 const UPLOAD_ID = /^[0-9a-f]{24}$/;
 const INFO = 'i';
-const DONE = 'd';
 
 function httpError(message: string, code: number): Error {
   return Object.assign(new Error(message), { code });
@@ -123,7 +123,7 @@ export class AgorPackChunkedUploads {
       chunk_size: chunkSize,
       chunks: agorPackChunkCount(size, chunkSize),
       received: [...received].sort((a, b) => a - b),
-      import_id: await this.marker(pieces, DONE),
+      import_id: await this.doneImportId(uploadId),
     };
   }
 
@@ -133,14 +133,13 @@ export class AgorPackChunkedUploads {
     }
   }
 
-  private async stageEmpty(scopeId: string, name: string, ref?: UploadRef): Promise<void> {
+  private async stageEmpty(scopeId: string, name: string): Promise<void> {
     await this.store.stage({
       owner: this.owner(scopeId),
       name,
       mimeType: 'application/octet-stream',
       body: Readable.from([]),
       sizeHint: 0,
-      ...(ref ? { ref } : {}),
     });
   }
 
@@ -153,19 +152,27 @@ export class AgorPackChunkedUploads {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
   }
 
+  private doneRef(uploadId: string): UploadRef {
+    return `upl_${this.derivedId(uploadId, 'done')}` as UploadRef;
+  }
+
+  /** The receipt a completed upload maps to, if it completed. */
+  private async doneImportId(uploadId: string): Promise<string | null> {
+    const record = await this.store.findRecord({
+      tenantId: this.ctx.tenantId,
+      kind: KIND,
+      createdBy: this.ctx.user.user_id as UserID,
+      ref: this.doneRef(uploadId),
+    });
+    return record?.status === 'active' ? record.scopeId : null;
+  }
+
   /**
-   * Publish the completed marker under its derived key: the first completer
-   * inserts it, a concurrent one's insert fails on the key. True when ours.
+   * Publish the completion record (one conditional insert of a complete row):
+   * true when ours, false when another completer's is already there.
    */
   private publishDone(uploadId: string, importId: string): Promise<boolean> {
-    return this.stageEmpty(
-      `${uploadId}:${DONE}`,
-      importId,
-      `upl_${this.derivedId(uploadId, 'done')}` as UploadRef
-    ).then(
-      () => true,
-      () => false
-    );
+    return this.store.putRecord(this.owner(importId), this.doneRef(uploadId));
   }
 
   /** Start or resume the upload of a (size, sha256) file. */
@@ -177,10 +184,13 @@ export class AgorPackChunkedUploads {
     await this.writable();
     const uploadId = agorPackChunkedUploadId(input.sha256, input.size, chunkBytes);
     let pieces = await this.pieces(uploadId);
-    const done = await this.marker(pieces, DONE);
+    const done = await this.doneImportId(uploadId);
     // A finished upload is reused only while its receipt can still be applied.
     if (done && !(await importer.isUsable(done))) {
       await this.drop(pieces);
+      await this.store
+        .delete({ ...this.owner(done), ref: this.doneRef(uploadId) })
+        .catch(() => undefined);
       pieces = [];
     }
     if (!(await this.marker(pieces, INFO))) {
@@ -273,7 +283,7 @@ export class AgorPackChunkedUploads {
     uploadId: string,
     importer: AgorPackImporter
   ): Promise<AgorPackImport | null> {
-    const done = await this.marker(await this.pieces(uploadId), DONE);
+    const done = await this.doneImportId(uploadId);
     return done ? importer.get(done) : null;
   }
 
@@ -330,14 +340,10 @@ export class AgorPackChunkedUploads {
       if (finished) return finished;
       throw error;
     }
+    // A failure here leaves no record and keeps the chunks: a retry finishes.
     if (!(await this.publishDone(uploadId, receipt.import_id))) {
-      // Another completer's marker (it may still be writing it). Without one
-      // the chunks stay: they are the only way to finish the upload.
-      let finished: AgorPackImport | null = null;
-      for (let attempt = 0; attempt < 25 && !finished; attempt++) {
-        finished = await this.finished(uploadId, importer);
-        if (!finished) await new Promise((resolve) => setTimeout(resolve, 200));
-      }
+      // Another completer recorded it first (a complete row, never pending).
+      const finished = await this.finished(uploadId, importer);
       if (!finished) throw new Error('The completed upload could not be recorded');
       receipt = finished;
     }

@@ -22,6 +22,7 @@ import {
   assertNoSecretsDeep,
   classifyEnvironmentVariants,
   claudeProjectSlug,
+  decodeQueryName,
   forEachPackFragmentEntry,
   packSequence,
   redactSecretsDeep,
@@ -265,7 +266,10 @@ export function sanitizeMcpUrl(url: string): { url: string; changed: boolean } {
       if (eq < 0) return part;
       const name = part.slice(0, eq);
       const value = part.slice(eq + 1);
-      if (!CREDENTIAL_NAME.test(name) || isEnvReference(value) || value === '') return part;
+      // Classify the decoded name: `%74oken` is `token`.
+      if (!CREDENTIAL_NAME.test(decodeQueryName(name)) || isEnvReference(value) || value === '') {
+        return part;
+      }
       changed = true;
       return `${name}=${REDACTED}`;
     });
