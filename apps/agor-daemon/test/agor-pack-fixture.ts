@@ -39,6 +39,7 @@ import {
   type User,
   type UUID,
 } from '@agor/core/types';
+import { vi } from 'vitest';
 import { LocalUploadStagingStore } from '../src/host/local/upload-staging-store.js';
 import type { RegisterHooksContext } from '../src/register-hooks.js';
 import { createUploadAuthMiddleware } from '../src/register-routes.js';
@@ -62,6 +63,7 @@ import {
 } from '../src/utils/tenant-db-scope.js';
 import {
   configureUploadStagingStore,
+  getBlobStagingStore,
   getUploadStagingStore,
   localPackBytes,
 } from '../src/utils/upload-staging.js';
@@ -707,6 +709,26 @@ export async function expectChunkedUploadWorks(
     openGate();
     expect((await slow).import_id).toBe(quick.import_id);
     expect(quick.import_id).toBe(receipt.import_id);
+
+    // Publishing the completion record fails (storage down): nothing is
+    // recorded, the chunks stay, and a retry completes.
+    const retried = await uploadAll(8192);
+    const blobs = getBlobStagingStore();
+    const failOnce = vi.spyOn(blobs, 'putRecord').mockRejectedValueOnce(new Error('storage down'));
+    try {
+      await expect(fx.unit(() => uploads().complete(retried.upload_id, real))).rejects.toThrow(
+        /storage down/
+      );
+    } finally {
+      failOnce.mockRestore();
+    }
+    const kept = (await (
+      await fetch(`${base}/${retried.upload_id}`, { headers: as(bea) })
+    ).json()) as AgorPackChunkedUpload;
+    expect(kept.import_id).toBeNull();
+    expect(kept.received).toHaveLength(kept.chunks);
+    const completed = await fx.unit(() => uploads().complete(retried.upload_id, real));
+    expect(completed.import_id).toBe(receipt.import_id);
   } finally {
     setAgorPackChunkBytesForTests();
   }

@@ -198,18 +198,11 @@ class MetadataBlobStagingStore implements BlobStagingStore {
   }
 
   async stage(input: Parameters<BlobStagingStore['stage']>[0]): Promise<UploadMetadata> {
-    const ref = input.ref ?? (`upl_${randomUUID()}` as UploadRef);
+    const ref = `upl_${randomUUID()}` as UploadRef;
     const { owner } = input;
-    const expiresAt = new Date(Date.now() + this.ttlMs);
-    if (input.ref) {
-      // A caller-derived key is claimed by the row insert, before any byte.
-      const reserved = await this.unit(owner.tenantId, () =>
-        this.repository.reserveIfAbsent(owner, ref, expiresAt)
-      );
-      if (!reserved) throw Object.assign(new Error('Blob already exists'), { status: 409 });
-    } else {
-      await this.unit(owner.tenantId, () => this.repository.reserve(owner, ref, expiresAt));
-    }
+    await this.unit(owner.tenantId, () =>
+      this.repository.reserve(owner, ref, new Date(Date.now() + this.ttlMs))
+    );
     const byteOwner = this.byteInput(owner, ref);
     try {
       const metadata = await this.bytes.stage({
@@ -231,6 +224,21 @@ class MetadataBlobStagingStore implements BlobStagingStore {
         .catch(() => undefined);
       throw error;
     }
+  }
+
+  async putRecord(owner: StagedBlobOwner, ref: UploadRef): Promise<boolean> {
+    return this.unit(owner.tenantId, () =>
+      this.repository.insertRecordIfAbsent(owner, ref, new Date(Date.now() + this.ttlMs))
+    );
+  }
+
+  async findRecord(
+    input: Omit<StagedBlobOwner, 'scopeId'> & { ref: UploadRef }
+  ): Promise<StagedBlob | null> {
+    const row = await this.unit(input.tenantId, () =>
+      this.repository.find(input.tenantId, input.ref)
+    );
+    return row && row.kind === input.kind && row.createdBy === input.createdBy ? row : null;
   }
 
   private async authorize(input: StagedBlobReadInput, active = true): Promise<StagedBlob | null> {

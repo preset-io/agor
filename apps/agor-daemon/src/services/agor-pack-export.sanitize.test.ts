@@ -110,6 +110,16 @@ describe('mixed literal and reference credentials', () => {
       'https://example.test/mcp?token=Bearer%20{{ user.env.TOKEN }}',
       'https://example.test/mcp?token=[redacted]',
     ],
+    // Names are classified decoded and case-insensitively.
+    [
+      'https://example.test/mcp?%74oken=literal-secret',
+      'https://example.test/mcp?%74oken=[redacted]',
+    ],
+    [
+      'https://example.test/mcp?API%5FKey=plainsecret123&region=eu',
+      'https://example.test/mcp?API%5FKey=[redacted]&region=eu',
+    ],
+    ['https://example.test/mcp?ToKeN=literal-secret', 'https://example.test/mcp?ToKeN=[redacted]'],
   ])('%s → %s', (input, expected) => {
     const { url } = sanitizeMcpUrl(input);
     expect(url).toBe(expected);

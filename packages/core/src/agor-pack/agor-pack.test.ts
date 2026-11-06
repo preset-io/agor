@@ -365,6 +365,10 @@ describe('secret scan: credentials in URLs', () => {
     'https://{{ user.env.USER }}:{{ user.env.PASS }}x@example.test/auth',
     'https://api.example.test/v1?api_key={{ user.env.KEY }}plainsecret',
     'https://api.example.test/v1?api_key=sk{{ user.env.KEY }}',
+    // Encoded or mixed-case names are the same names.
+    'https://api.example.test/v1?%74oken=literal-secret',
+    'https://api.example.test/v1?region=eu&API%5FKey=plainsecret123',
+    'https://api.example.test/v1?ToKeN=literal-secret',
   ])('catches %s', (text) => {
     expect(scanForSecrets(text).map((hit) => hit.id)).not.toEqual([]);
   });
@@ -377,6 +381,7 @@ describe('secret scan: credentials in URLs', () => {
     'https://api.example.test/v1?page=2&sort=desc',
     'https://api.example.test/v1?token={{ user.env.TOKEN }}&region=eu',
     'https://alice:{{ user.env.PASS }}@example.test/auth',
+    'https://api.example.test/v1?%70age=2&sort=desc',
   ])('ignores %s', (text) => {
     expect(scanForSecrets(text)).toEqual([]);
   });
@@ -415,5 +420,13 @@ describe('older packs', () => {
         sessions: 'last_30_days',
       }).success
     ).toBe(false);
+  });
+});
+
+describe('redacting encoded credential names', () => {
+  it('redacts a credential behind a percent-encoded name', () => {
+    const { text, redacted } = redactSecrets('see https://x.test/a?%74oken=literal-secret ok');
+    expect(redacted).toBe(1);
+    expect(text).not.toContain('literal-secret');
   });
 });

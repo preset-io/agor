@@ -63,7 +63,26 @@ export interface SecretScanHit {
 }
 
 /** Pattern ids found in `text` (never the matched value). */
-export function scanForSecrets(text: string): SecretScanHit[] {
+/** A query parameter name, percent-decoded and lowercased (`%74oKen` → `token`). */
+export function decodeQueryName(name: string): string {
+  try {
+    return decodeURIComponent(name.replace(/\+/g, ' ')).toLowerCase();
+  } catch {
+    return name.toLowerCase();
+  }
+}
+
+/** Decode percent-encoded query parameter names so name-based patterns see them. */
+function withDecodedQueryNames(text: string): string {
+  if (!text.includes('%')) return text;
+  return text.replace(
+    /([?&])([^=&#\s"']*%[0-9A-Fa-f]{2}[^=&#\s"']*)=/g,
+    (_whole, separator: string, name: string) => `${separator}${decodeQueryName(name)}=`
+  );
+}
+
+export function scanForSecrets(raw: string): SecretScanHit[] {
+  const text = withDecodedQueryNames(raw);
   const hits: SecretScanHit[] = [];
   for (const { id, pattern } of AGOR_PACK_SECRET_PATTERNS) {
     if (pattern.test(text)) hits.push({ id });
@@ -74,7 +93,7 @@ export function scanForSecrets(text: string): SecretScanHit[] {
 /** Replace every secret-shaped value with a marker; returns the count. */
 export function redactSecrets(text: string): { text: string; redacted: number } {
   let redacted = 0;
-  let out = text;
+  let out = withDecodedQueryNames(text);
   for (const { id, pattern } of AGOR_PACK_SECRET_PATTERNS) {
     const global = new RegExp(pattern.source, `${pattern.flags.replace('g', '')}g`);
     out = out.replace(global, () => {

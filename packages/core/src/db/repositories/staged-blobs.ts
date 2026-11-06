@@ -49,10 +49,15 @@ export class StagedBlobRepository {
   }
 
   /**
-   * `reserve` for a caller-derived key: one conditional insert, false (and no
-   * error, so an enclosing transaction stays usable) when the key exists.
+   * A complete, bytes-less row under a caller-derived key in one conditional
+   * insert: false (no error, so an enclosing transaction stays usable) when
+   * the key exists.
    */
-  async reserveIfAbsent(owner: StagedBlobOwner, ref: UploadRef, expiresAt: Date): Promise<boolean> {
+  async insertRecordIfAbsent(
+    owner: StagedBlobOwner,
+    ref: UploadRef,
+    expiresAt: Date
+  ): Promise<boolean> {
     const rows = await insert(this.db, stagedBlobs)
       .values({
         blob_ref: ref,
@@ -60,7 +65,7 @@ export class StagedBlobRepository {
         scope_id: owner.scopeId,
         created_by: owner.createdBy,
         size_bytes: 0,
-        status: 'pending',
+        status: 'active',
         created_at: new Date(),
         expires_at: expiresAt,
       })

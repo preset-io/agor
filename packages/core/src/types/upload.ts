@@ -236,9 +236,17 @@ export interface BlobStagingStore {
     mimeType: string;
     body: NodeJS.ReadableStream;
     sizeHint?: number;
-    /** A caller-derived key: staging fails, writing nothing, if it exists. */
-    ref?: UploadRef;
   }): Promise<UploadMetadata>;
+  /**
+   * A complete row without bytes under a caller-derived key, written by one
+   * conditional insert (no pending state); `owner.scopeId` is its value.
+   * False when the key already exists.
+   */
+  putRecord(owner: StagedBlobOwner, ref: UploadRef): Promise<boolean>;
+  /** The caller's row under `ref` (any scope), or null. */
+  findRecord(
+    input: Omit<StagedBlobOwner, 'scopeId'> & { ref: UploadRef }
+  ): Promise<StagedBlob | null>;
   inspect(input: StagedBlobReadInput): Promise<UploadMetadata>;
   read(
     input: StagedBlobReadInput & { offset?: number; length?: number }
