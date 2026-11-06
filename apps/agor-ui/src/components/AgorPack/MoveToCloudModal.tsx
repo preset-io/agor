@@ -298,28 +298,35 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
     [onMoveChange]
   );
 
-  // On open: the link, and a move that is still running (reopening shows it).
+  // On open (also after a reload): the link, and the move the daemon has for
+  // it. A running move always shows; a finished one shows while it is for the
+  // current sign-in and covers the teammates this was opened for.
+  const initialKey = initialBranchIds?.join(',');
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    getCloudLink()
-      .then((status) => !cancelled && setCloud(status))
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setCloud({ console_url: AGOR_CLOUD.defaultConsoleUrl, link: null });
-        setCloudError(error instanceof Error ? error.message : String(error));
-      });
-    getLatestCloudMove()
-      .then((latest) => {
-        if (cancelled || latest?.status !== 'moving') return;
-        showMove(latest);
-        setStep(3);
-      })
-      .catch(() => undefined);
+    const status = getCloudLink().catch((error: unknown) => {
+      setCloudError(error instanceof Error ? error.message : String(error));
+      return { console_url: AGOR_CLOUD.defaultConsoleUrl, link: null } as AgorCloudLinkStatus;
+    });
+    const latest = getLatestCloudMove().catch(() => null);
+    void Promise.all([status, latest]).then(([linkStatus, last]) => {
+      if (cancelled) return;
+      setCloud(linkStatus);
+      if (!last) return;
+      const wanted = initialKey ? initialKey.split(',') : [];
+      const restore =
+        last.status === 'moving' ||
+        (last.workspace_url === linkStatus.link?.workspace_url &&
+          wanted.every((id) => last.items.some((item) => item.branch_id === id)));
+      if (!restore) return;
+      showMove(last);
+      setStep(3);
+    });
     return () => {
       cancelled = true;
     };
-  }, [open, showMove]);
+  }, [open, showMove, initialKey]);
 
   // Waiting for the sign-in in the other tab: it lands on the daemon.
   useEffect(() => {
@@ -871,7 +878,12 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
           <InfoCircleOutlined /> {PACK_COPY.progClose}
         </Typography.Text>
       ),
-      footer: <Button onClick={onClose}>{PACK_COPY.doneClose}</Button>,
+      footer: (
+        <>
+          {move.status === 'finished' && moreButton}
+          <Button onClick={onClose}>{PACK_COPY.doneClose}</Button>
+        </>
+      ),
     };
   };
 
@@ -951,6 +963,19 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
     }));
   }, [allPreflight]);
 
+  /** Leave a finished move and start another (signed in, so from Choose). */
+  const moreButton = (
+    <Button
+      type="link"
+      onClick={() => {
+        setMove(null);
+        setStep(link ? 1 : 0);
+      }}
+    >
+      Move more teammates
+    </Button>
+  );
+
   const view = done ? null : [renderSignIn, renderChoose, renderCheck, renderMove][step]?.();
 
   return (
@@ -970,6 +995,7 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
       footer={
         done ? (
           <Flex justify="flex-end" gap={8}>
+            {moreButton}
             <Button onClick={onClose}>{PACK_COPY.doneClose}</Button>
             <Button
               type="primary"

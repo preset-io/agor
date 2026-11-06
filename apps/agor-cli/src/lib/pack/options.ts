@@ -5,8 +5,10 @@ import { createReadStream } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { uploadPackChunked } from '@agor/core/agor-pack/upload-client';
+import { loadConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import {
+  AGOR_CLOUD,
   AGOR_PACK_DEFAULT_SESSION_MODE,
   type AgorPackExportRequest,
   type AgorPackImport,
@@ -46,6 +48,19 @@ export function exportRequest(
     sessions: SESSION_MODES[flags.sessions] ?? AGOR_PACK_DEFAULT_SESSION_MODE,
     include_others_sessions: flags['include-others-sessions'],
   };
+}
+
+/**
+ * Whether `host` is an Agor Cloud workspace (`agor_cloud.workspace_host_suffixes`,
+ * or the default Cloud hosts): `agor pack send` refuses those.
+ */
+export async function isAgorCloudHost(host: string): Promise<boolean> {
+  const configured = await loadConfig()
+    .then((config) => config.agor_cloud?.workspace_host_suffixes)
+    .catch(() => undefined);
+  const suffixes = configured ?? AGOR_CLOUD.defaultWorkspaceHostSuffixes;
+  const name = host.toLowerCase();
+  return suffixes.some((suffix) => name === suffix || name.endsWith(`.${suffix}`));
 }
 
 type Log = (line: string) => void;

@@ -304,7 +304,15 @@ dbTest(
       expect(item).toMatchObject({ status: 'done', import_id: expect.any(String) });
       expect(item?.bytes_sent).toBe(item?.bytes_total);
       expect(cloud.chunks).toBe(2);
-      expect(item?.open_url).toBe(`${WORKSPACE}/ui/settings/import?import=${item?.import_id}`);
+      // Through the console's launch-init, so a signed-out browser signs in first.
+      const open = new URL(item?.open_url as string);
+      expect(`${open.origin}${open.pathname}`).toBe(
+        `https://console.example.test${AGOR_CLOUD.launchInitPath}`
+      );
+      expect(open.searchParams.get('return_host')).toBe(new URL(WORKSPACE).host);
+      expect(open.searchParams.get('return_to')).toBe(
+        `/ui/settings/import?import=${item?.import_id}`
+      );
       // Reopening the modal finds it.
       expect((await ada.call('GET', '/agor-pack/cloud/moves')).body).toMatchObject({
         move: { move_id: id, status: 'finished' },

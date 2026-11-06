@@ -23,7 +23,7 @@ import {
   type AgorCloudMoveItem,
   type AgorPackExportOptions,
   type AgorPackImport,
-  agorCloudReconnectUrl,
+  agorCloudFinishSetupUrl,
   getTeammateConfig,
 } from '@agor/core/types';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
@@ -367,7 +367,11 @@ export class AgorCloudMoveService {
       throw new Error(receipt.error ?? 'The import in Agor Cloud stopped');
     }
     item.status = 'done';
-    item.open_url = agorCloudReconnectUrl(record.workspace_url, receipt.import_id);
+    item.open_url = agorCloudFinishSetupUrl(
+      this.link.settings.consoleUrl,
+      record.workspace_url,
+      receipt.import_id
+    );
     touch();
     console.log(`[agor-cloud] move ${record.move_id}: ${item.branch_id} done`);
   }

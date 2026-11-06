@@ -248,11 +248,13 @@ can move anyone's.
 4. **Move**: this Agor exports each teammate, sends it to the workspace in
    resumable chunks, and imports it there on a new board, one teammate after
    another. You can close the window; keep the server on until the move is done.
-   Opening the modal again shows the progress. If a teammate fails, **Retry**
+   Opening the modal again, even after a reload, shows the progress or the
+   result. If a teammate fails, **Retry**
    sends the same file again; nothing is imported twice.
 
-When it's done, **Open Agor Cloud** opens **Finish setup** in the workspace,
-where you reconnect accounts and turn schedules on. Back here, **Switch over**
+When it's done, **Open Agor Cloud** opens **Finish setup** in the workspace
+(signing you in to it first if needed), where you reconnect accounts and turn
+schedules on. Back here, **Switch over**
 pauses the teammate's schedules and gateway channels on this install, and
 **Switch back** resumes them.
 
@@ -273,10 +275,11 @@ network.
 **Download an .agor file instead** keeps the manual route: download the file
 here, then import it in the workspace's **Settings → Import**.
 
-To script it, `agor pack send <teammate-id> --cloud-url <workspace URL>
---api-key-env AGOR_CLOUD_API_KEY --apply` sends teammates with a personal API
-key from the Cloud workspace. The other CLI commands are `agor pack export`,
-`agor pack inspect`, and `agor pack import`.
+The CLI commands are `agor pack export`, `agor pack inspect`, and
+`agor pack import`. `agor pack send <teammate-id> --to <URL>
+--api-key-env VAR [--apply]` copies teammates to another self-hosted Agor with a
+personal API key from it; it doesn't work with Agor Cloud workspaces (use
+**Move to Agor Cloud** or an `.agor` file).
 
 A test or private Agor Cloud can be configured in `~/.agor/config.yaml`:
 

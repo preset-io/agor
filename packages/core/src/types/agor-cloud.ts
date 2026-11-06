@@ -26,6 +26,12 @@ export const AGOR_CLOUD = {
   /** Workspace hosts the daemon will redeem a launch code at. */
   defaultWorkspaceHostSuffixes: ['agor.cloud', 'cloud.agor.live'],
   connectPath: '/connect/self-hosted',
+  /**
+   * The console's launch-init (direct entry): it signs the browser in, mints a
+   * launch code for the workspace at `return_host`, and lands on the
+   * site-relative `return_to` there.
+   */
+  launchInitPath: '/api/launch-codes/init',
   /** Launch-code purpose the console records in the team audit log. */
   launchPurpose: 'self_hosted_import',
   /** `app_variables` namespace of the sealed per-user link (key: user id). */
@@ -128,9 +134,25 @@ export interface AgorCloudMove {
   items: AgorCloudMoveItem[];
 }
 
-/** The Cloud UI route that opens Finish setup for one import. */
-export function agorCloudReconnectUrl(workspaceUrl: string, importId: string): string {
-  return `${workspaceUrl.replace(/\/$/, '')}/ui/settings/import?import=${encodeURIComponent(importId)}`;
+/** The workspace UI route that opens Finish setup for one import (Settings → Import). */
+export function agorPackImportPath(importId: string): string {
+  return `/ui/settings/import?import=${encodeURIComponent(importId)}`;
+}
+
+/**
+ * Finish setup for an import in an Agor Cloud workspace, entered through the
+ * console's launch-init so a browser that isn't signed in to the workspace
+ * signs in first and still lands on the import.
+ */
+export function agorCloudFinishSetupUrl(
+  consoleUrl: string,
+  workspaceUrl: string,
+  importId: string
+): string {
+  const url = new URL(`${consoleUrl.replace(/\/+$/, '')}${AGOR_CLOUD.launchInitPath}`);
+  url.searchParams.set('return_host', new URL(workspaceUrl).host);
+  url.searchParams.set('return_to', agorPackImportPath(importId));
+  return url.toString();
 }
 
 const HOSTNAME_PATTERN =

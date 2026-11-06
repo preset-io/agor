@@ -268,4 +268,17 @@ describe('Settings → Agor Cloud', () => {
     fireEvent.click(within(modal).getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(retryCloudMove).toHaveBeenCalledWith('m1', 'b1'));
   });
+
+  it('after a reload, reopening shows a finished move for this sign-in; Move more starts over', async () => {
+    vi.mocked(getCloudLink).mockResolvedValue(signedIn);
+    vi.mocked(getLatestCloudMove).mockResolvedValue(
+      move('done', { open_url: 'https://console.agor.cloud/api/launch-codes/init?x=1' })
+    );
+    mount(<MoveToCloudSection currentUser={member} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Move to Agor Cloud/ }));
+    const modal = await dialog();
+    expect(await within(modal).findByText('Ada is ready in Agor Cloud')).toBeInTheDocument();
+    fireEvent.click(within(modal).getByRole('button', { name: 'Move more teammates' }));
+    expect(await within(modal).findByText('Choose what to move')).toBeInTheDocument();
+  });
 });
