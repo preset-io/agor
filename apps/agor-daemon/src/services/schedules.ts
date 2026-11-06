@@ -3,13 +3,15 @@
  *
  * Provides REST + WebSocket API for first-class schedules. Uses the
  * DrizzleService adapter with `ScheduleRepository`. RBAC is wired in
- * `register-hooks.ts` and mirrors the sessions service shape:
+ * `register-hooks.ts`. Every write needs the branch Manager tier because a
+ * schedule spawns unattended runs, the same bar as triggering one:
  *   - find:    view (via scopeScheduleQuery)
  *   - get:     view (via loadScheduleAndBranch + ensureBranchPermission)
- *   - create:  session
- *   - patch:   session for own / all for others
+ *   - create:  all
+ *   - patch:   all, and only the creator (or a superadmin) may edit
  *   - remove:  all
- *   - run-now: all (custom REST verb in register-routes.ts)
+ *   - run-now: all, creator only (custom REST verb in register-routes.ts)
+ * The scheduler re-checks the creator's Manager access at every fire.
  */
 
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';

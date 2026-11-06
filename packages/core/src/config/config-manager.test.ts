@@ -15,6 +15,7 @@ import {
   assertValidRawConfig,
   ConfigAlreadyExistsError,
   createInitialConfig,
+  DEFAULT_REFRESH_TOKEN_TTL_SECONDS,
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   expandHomePath,
@@ -40,6 +41,7 @@ import {
   resolveBranchStorageConfig,
   resolveEffectiveConfig,
   resolveExecutionSecurityMode,
+  resolveRefreshTokenTtlSeconds,
   resolveTeammateFrameworkRepoUrl,
   rewriteConfigForTests,
   saveConfigForTests,
@@ -136,6 +138,90 @@ describe('resolveEffectiveConfig', () => {
     ).toBe(true);
     expect(() => resolveEffectiveConfig({}, { AGOR_WEBSOCKET_COMPRESSION: 'off' })).toThrow(
       /AGOR_WEBSOCKET_COMPRESSION must be one of/
+    );
+  });
+
+  it('resolves daemon.refresh_token_ttl_seconds with env over YAML and no default injected', () => {
+    const ttl = (config: AgorConfig, env: NodeJS.ProcessEnv) =>
+      resolveRefreshTokenTtlSeconds(resolveEffectiveConfig(config, env));
+    expect(resolveEffectiveConfig({}, {}).daemon?.refresh_token_ttl_seconds).toBeUndefined();
+    expect(DEFAULT_REFRESH_TOKEN_TTL_SECONDS).toBe(2_592_000);
+    expect(ttl({}, {})).toBe(2_592_000);
+    expect(ttl({ daemon: { refresh_token_ttl_seconds: 604_800 } }, {})).toBe(604_800);
+    expect(ttl({}, { AGOR_REFRESH_TOKEN_TTL_SECONDS: '604800' })).toBe(604_800);
+    expect(
+      ttl(
+        { daemon: { refresh_token_ttl_seconds: 604_800 } },
+        { AGOR_REFRESH_TOKEN_TTL_SECONDS: '86400' }
+      )
+    ).toBe(86_400);
+    expect(
+      ttl(
+        { daemon: { refresh_token_ttl_seconds: 604_800 } },
+        { AGOR_REFRESH_TOKEN_TTL_SECONDS: '' }
+      )
+    ).toBe(604_800);
+  });
+
+  it.each([
+    '7d',
+    '0',
+    '3599',
+    '7776001',
+    '1.5',
+    '-3600',
+    '+3600',
+    ' 3600',
+    '1e4',
+    '0x1000',
+    '99999999999999999999',
+  ])('rejects AGOR_REFRESH_TOKEN_TTL_SECONDS=%j', (value) => {
+    expect(() => resolveEffectiveConfig({}, { AGOR_REFRESH_TOKEN_TTL_SECONDS: value })).toThrow(
+      'Config error: AGOR_REFRESH_TOKEN_TTL_SECONDS must be an integer between 3600 and 7776000'
+    );
+  });
+
+  it('fails closed when an unvalidated config reaches the refresh-token resolver', () => {
+    for (const value of ['7d', 0, 1.5, 7_776_001]) {
+      expect(() =>
+        resolveRefreshTokenTtlSeconds({
+          daemon: { refresh_token_ttl_seconds: value as unknown as number },
+        })
+      ).toThrow('Config error: daemon.refresh_token_ttl_seconds must be an integer');
+    }
+  });
+
+  it('accepts the refresh-token lifetime bounds', () => {
+    for (const value of [3_600, 7_776_000]) {
+      expect(() =>
+        assertValidRawConfig({ daemon: { refresh_token_ttl_seconds: value } })
+      ).not.toThrow();
+      expect(
+        resolveEffectiveConfig({}, { AGOR_REFRESH_TOKEN_TTL_SECONDS: String(value) }).daemon
+          ?.refresh_token_ttl_seconds
+      ).toBe(value);
+    }
+  });
+
+  it.each([
+    '7d',
+    '604800',
+    0,
+    -3600,
+    3_599,
+    7_776_001,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    true,
+    null,
+  ])('rejects daemon.refresh_token_ttl_seconds: %j', (value) => {
+    expect(() =>
+      assertValidRawConfig({
+        daemon: { refresh_token_ttl_seconds: value as unknown as number },
+      })
+    ).toThrow(
+      'Config error: daemon.refresh_token_ttl_seconds must be an integer between 3600 and 7776000'
     );
   });
 
@@ -622,6 +708,22 @@ describe('loadConfig', () => {
     await fs.writeFile(configPath, 'execution:\n  branch_rbac: "true"\n', 'utf-8');
 
     await expect(loadConfig()).rejects.toThrow(/execution\.branch_rbac must be a boolean/);
+  });
+
+  it('loads an integer refresh-token lifetime and rejects a duration string from YAML', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, 'daemon:\n  refresh_token_ttl_seconds: 604800\n', 'utf-8');
+    await expect(loadConfig()).resolves.toMatchObject({
+      daemon: { refresh_token_ttl_seconds: 604_800 },
+    });
+
+    await fs.writeFile(configPath, 'daemon:\n  refresh_token_ttl_seconds: 7d\n', 'utf-8');
+    __resetConfigCacheForTests();
+    await expect(loadConfig()).rejects.toThrow(
+      'Config error: daemon.refresh_token_ttl_seconds must be an integer between 3600 and 7776000'
+    );
   });
 
   it('accepts branch_storage.borrow_base_objects and rejects a non-boolean value', async () => {

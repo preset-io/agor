@@ -86,6 +86,7 @@ import {
   resolveByShortIdPrefix,
 } from './base';
 import {
+  isScheduledInitialTaskRevoked,
   resolveSessionRuntimeBranchAccess,
   visibleSessionReferenceAccessExists,
 } from './branch-access';
@@ -1426,6 +1427,15 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         principalUserId: row.created_by,
       });
       if (!access?.can_prompt_session) {
+        throw new RepositoryError('Authorization to launch this task is unavailable');
+      }
+      if (
+        await isScheduledInitialTaskRevoked(
+          txDb,
+          { sessionId: row.session_id, taskId: fullId, principalUserId: row.created_by },
+          access
+        )
+      ) {
         throw new RepositoryError('Authorization to launch this task is unavailable');
       }
 

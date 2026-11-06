@@ -98,7 +98,8 @@ export function issueRuntimeTokenPair(
   user: Pick<User, 'user_id'>,
   jwtSecret: string,
   accessTokenTtl: SignOptions['expiresIn'],
-  refreshTokenTtl: SignOptions['expiresIn'],
+  /** Refresh-token lifetime in whole seconds (jsonwebtoken reads a number as seconds). */
+  refreshTokenTtl: number,
   extraClaims: Record<string, unknown> = {}
 ): RuntimeTokenPair {
   return {

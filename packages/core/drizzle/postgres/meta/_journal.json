@@ -829,6 +829,13 @@
       "breakpoints": true
     },
     {
+      "idx": 119,
+      "version": "7",
+      "when": 1790129001303,
+      "tag": "0120_kb_namespace_others_can_tighten",
+      "breakpoints": true
+    },
+    {
       "idx": 120,
       "version": "7",
       "when": 1790129001403,

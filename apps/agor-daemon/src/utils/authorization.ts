@@ -2,11 +2,28 @@
  * Authorization utilities for Feathers services and custom routes.
  */
 
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, UserRole } from '@agor/core/types';
 import { BRANCH_ENVIRONMENT_SNAPSHOT_FIELDS, hasMinimumRole, ROLES } from '@agor/core/types';
 
 export type Role = UserRole;
+
+const SINGLE_RECORD_METHODS = new Set(['get', 'update', 'patch', 'remove']);
+
+/**
+ * Reject array/object resource IDs from transports (a Socket.IO client can send any JSON).
+ *
+ * Record hooks authorize string IDs, while adapters stringify whatever they receive,
+ * so a non-scalar ID could skip the record check and still reach a row.
+ */
+export function rejectNonScalarExternalId(context: HookContext): HookContext {
+  if (!context.params.provider || !SINGLE_RECORD_METHODS.has(context.method)) return context;
+  const id: unknown = context.id;
+  if (id === null || id === undefined || typeof id === 'string' || typeof id === 'number') {
+    return context;
+  }
+  throw new BadRequest('Resource ID must be a single string');
+}
 
 /**
  * Ensure the request is authenticated and has the minimum required role.

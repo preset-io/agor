@@ -311,6 +311,7 @@ Some migrations change authorization, distributed ownership, or callback protoco
 - `0100_claude_oauth_attempts` (PostgreSQL) / `0103_claude_oauth_attempts` (SQLite) moves Claude paste-back attempts and credential-file mutations into generation-fenced authority. Old daemons do not participate in that protocol and must not overlap the new cohort.
 - `0102_mcp_oauth_client_registrations` (PostgreSQL only) moves Dynamic Client Registration ownership into encrypted UUID/CAS authority. SQLite deliberately keeps process-local registration and has no matching migration.
 - `0105_mcp_oauth_grant_attribution` (both databases) retires historical shared MCP OAuth grants while preserving per-user grants. Follow the [shared-grant upgrade checklist](/guide/mcp-servers#upgrade-shared-grant-attribution-0105-both-databases) for inventory, quiescing exchanges/refreshes, reauthorization ownership, post-cutover verification, and backup restoration limits.
+- `0120_kb_namespace_others_can_tighten` (PostgreSQL) / `0119_kb_namespace_others_can_tighten` (SQLite) stops Knowledge namespaces from letting every member write. Older daemons still create namespaces and teammate homes that every member can write, so they must not keep running after the migration. See [Knowledge permissions](/guide/knowledge#permissions-and-control-plane-fit).
 
 Rolling old and new daemons against the same database across any cutover is not supported.
 

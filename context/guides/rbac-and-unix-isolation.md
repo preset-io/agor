@@ -96,7 +96,8 @@ switches are enabled. Execution-home Sessions are never shareable. Filesystem
 access is a separate `none | read | write` dimension. Terminal access is
 derived: Collaborator or Manager plus non-`none` filesystem access. Sandbox
 mounts and `{branch_fs_access}` for delegated executors use the actual prompt
-actor's effective filesystem access, never the Session owner's.
+actor's effective filesystem access, never the Session owner's. Under either,
+the daemon refuses a prompt whose actor has `none` before launching.
 
 ### Principal resolution
 
@@ -190,9 +191,16 @@ of `override` branches only clear caches or do nothing.
 Internal runtime callers do not rely on provider-only Feathers hooks. Gateway
 inbound traffic checks Collaborator access before Session creation, binds a
 durable platform thread to the configured branch, and resolves shared-session
-authority immediately before Prompt admission. The scheduler checks its
-creator at Session admission and again before its initial Prompt so revocation
-races and crash recovery fail closed.
+authority immediately before Prompt admission. Creating or editing a schedule
+requires branch Manager, the same bar as run-now, because it spawns unattended
+work on that branch. The scheduler re-checks that its creator is still a
+workspace member and branch Manager at every fire, and checks that plus prompt
+authority again before its initial Prompt. The initial Task's fenced admission
+and its executor launch binding repeat the Manager and member check, so
+revocation races and crash recovery (including an initial Task persisted before
+a crash) fail closed; later prompts keep ordinary prompt authority. Session occurrence fields (`schedule_id`, `scheduled_run_at`,
+`scheduled_from_branch`, `custom_context.scheduled_run`) are scheduler-owned and
+rejected on external Session writes.
 
 Task launch and heartbeat use the narrower
 `resolveSessionRuntimeBranchAccess` point projection in `branch-access.ts`.

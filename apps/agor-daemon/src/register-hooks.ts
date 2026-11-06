@@ -24,6 +24,7 @@ import {
   wrapV1AsV2,
 } from '@agor/core/config';
 import {
+  AmbiguousIdError,
   ArtifactRepository,
   assertTenantWritable,
   attachHiddenTenant,
@@ -158,14 +159,15 @@ import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { buildSessionCreatedAnalyticsProperties } from './utils/analytics-payloads.js';
 import {
   ensureMinimumRole,
+  rejectNonScalarExternalId,
   requireAdminForEnvConfig,
   requireMinimumRole,
 } from './utils/authorization.js';
+import { authorizeCallerBoard } from './utils/board-route-authorization.js';
 import {
   cacheBranchAccess,
   ensureBranchPermission,
   ensureCanCreateSession,
-  ensureCanModifySchedule,
   ensureCanPromptInSession,
   ensureCanView,
   ensureSessionImmutability,
@@ -175,6 +177,7 @@ import {
   loadSession,
   loadSessionBranch,
   protectGatewaySourceMetadata,
+  protectScheduledRunMetadata,
   resolveSessionContext,
   scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranchesSql,
@@ -1610,23 +1613,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     mode: 'view' | 'mutate',
     action: string
   ): Promise<HookContext> => {
-    if (!context.params.provider) return context;
-    const user = context.params.user;
-    if (!user) throw new NotAuthenticated('Authentication required');
-    if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return context;
-    let allowed = false;
-    if (boardId) {
-      try {
-        allowed =
-          mode === 'view'
-            ? await boardRepository.canView(boardId, user.user_id as UUID)
-            : await boardRepository.canMutate(boardId, user.user_id as UUID);
-      } catch {
-        // Preserve the same non-enumerating denial for missing, foreign-tenant,
-        // and inaccessible boards.
-      }
-    }
-    if (!allowed) throw new Forbidden(`Board resource is unavailable to ${action}`);
+    await authorizeCallerBoard(boardRepository, context.params, boardId, mode, action);
     return context;
   };
 
@@ -1636,11 +1623,21 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       if (!context.params.provider) return context;
       const user = context.params.user;
       if (!user) throw new NotAuthenticated('Authentication required');
-      if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return context;
-
       const data = context.data as
         | { board_id?: BoardID; branch_id?: import('@agor/core/types').BranchID }
         | undefined;
+      if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) {
+        // The bypass skips RBAC, not tenancy: a new placement's board and branch must be in this tenant.
+        if (context.method === 'create') {
+          const [board, branch] = await Promise.all([
+            data?.board_id ? boardRepository.findById(data.board_id).catch(() => null) : null,
+            data?.branch_id ? branchRepository.findById(data.branch_id).catch(() => null) : null,
+          ]);
+          if (!board || !branch) throw new Forbidden(`Board resource is unavailable to ${action}`);
+        }
+        return context;
+      }
+
       if (context.method === 'create') {
         if (!data?.board_id || !data.branch_id) {
           throw new Forbidden(`Board resource is unavailable to ${action}`);
@@ -1679,7 +1676,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         typeof context.id === 'string'
           ? await boardCommentsRepository.findVisibleById(user.user_id as UUID, context.id)
           : undefined;
-      if (typeof context.id === 'string' && !existing) {
+      // Every non-create comment method authorizes the stored comment.
+      if (context.method !== 'create' && !existing) {
         throw new Forbidden(`Board resource is unavailable to ${action}`);
       }
       if (existing) context.id = existing.comment_id;
@@ -1755,7 +1753,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             ? await cardRepository.findVisibleById(user.user_id as UUID, context.id)
             : await cardRepository.findById(context.id)
           : undefined;
-      if (typeof context.id === 'string' && requiresVisibleResolution && !existing) {
+      // Every non-create card method authorizes the stored card, never only the payload board.
+      if (requiresVisibleResolution && context.method !== 'create' && !existing) {
         throw new Forbidden(`Board resource is unavailable to ${action}`);
       }
       if (existing) context.id = existing.card_id;
@@ -2056,7 +2055,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
   safeService('board-objects')?.hooks({
     before: {
-      all: [typedValidateQuery(boardObjectQueryValidator), requireAuth],
+      all: [rejectNonScalarExternalId, typedValidateQuery(boardObjectQueryValidator), requireAuth],
       // Board-objects may reference a branch or may be loose board/card/layout
       // rows. The service composes this marker into an object-specific SQL
       // predicate: branch-bound rows require branch access; loose rows require
@@ -2103,7 +2102,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('cards')?.hooks({
     before: {
-      all: [requireAuth],
+      all: [rejectNonScalarExternalId, requireAuth],
       find: [scopeFindToAccessibleBoardsSql(superadminOpts)],
       get: [cardAccess('view', 'view this card')],
       create: [
@@ -2157,7 +2156,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('artifacts')?.hooks({
     before: {
-      all: [requireAuth],
+      all: [rejectNonScalarExternalId, requireAuth],
       find: [scopeFindToAccessibleBranchesSql(superadminOpts)],
       create: [requireMinimumRole(ROLES.MEMBER, 'create artifacts'), injectCreatedBy()],
       publishFromExecutor: [requireMinimumRole(ROLES.MEMBER, 'publish artifacts')],
@@ -2387,7 +2386,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('board-comments')?.hooks({
     before: {
-      all: [typedValidateQuery(boardCommentQueryValidator), requireAuth],
+      all: [rejectNonScalarExternalId, typedValidateQuery(boardCommentQueryValidator), requireAuth],
       find: [scopeFindToAccessibleBoardsSql(superadminOpts)],
       get: [boardCommentAccess('view', 'view this board comment')],
       create: [
@@ -3389,6 +3388,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       return context;
     },
     protectGatewaySourceMetadata,
+    protectScheduledRunMetadata,
     // created_by and unix_username remain immutable identity/history stamps.
     // unix_username is load-bearing for delegated execution-home Sessions;
     // branch-home Sessions deliberately use the current prompt actor instead.
@@ -3414,6 +3414,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create sessions'),
         protectGatewaySourceMetadata,
+        protectScheduledRunMetadata,
         // Stamp session with creator's unix_username (MUST run first). Also
         setSessionUnixUsername(usersRepository, executionMode.unixUserMode),
         async (context: HookContext) => {
@@ -3580,8 +3581,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
   // Schedules hooks
   // ============================================================================
-  // Schedules inherit RBAC from the parent branch (same model as
-  // sessions).
+  // Schedules spawn unattended runs, so every write needs branch Manager ('all'), like run-now.
 
   const scheduleRepository = new ScheduleRepository(db);
 
@@ -3596,7 +3596,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create schedules'),
         loadBranch(branchRepository, 'branch_id'),
-        ensureCanCreateSession(superadminOpts),
+        // No superadmin bypass: the run executes as the caller, who must really be a Manager.
+        ensureBranchPermission('all', 'create schedules on this branch', {
+          allowSuperadmin: false,
+        }),
         enforcePublicWriteFields('Schedule', SCHEDULE_CREATE_WRITE_FIELDS),
         injectCreatedBy(),
         validateScheduleConfig(),
@@ -3606,7 +3609,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       patch: [
         requireMinimumRole(ROLES.MEMBER, 'update schedules'),
         loadScheduleAndBranch(scheduleRepository, branchRepository),
-        ensureCanModifySchedule(superadminOpts),
+        ensureBranchPermission('all', 'modify schedules on this branch', superadminOpts),
         enforcePublicWriteFields('Schedule', SCHEDULE_PATCH_WRITE_FIELDS),
         // The following validators consume the current+patch shape.
         ensureCurrentScheduleLoaded(scheduleRepository),
@@ -3723,18 +3726,35 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       const id = boardIdentifierFromHookContext(context);
       if (!id) throw new BadRequest('Board ID is required');
 
-      const board = await boardRepository.findBySlugOrId(id);
+      // A canonical UUID is an ID; otherwise exact slug first, else an ID prefix among visible boards.
+      // Hidden, missing and ambiguous identifiers converge on one denial.
+      let board: Board | null = null;
+      try {
+        const bySlug = isValidUUID(id) ? null : await boardRepository.findBySlug(id);
+        board = bySlug
+          ? (await boardRepository.canViewResolved(bySlug, user.user_id as UserID))
+            ? bySlug
+            : null
+          : await boardRepository.findVisibleById(user.user_id as UUID, id);
+      } catch (error) {
+        if (!(error instanceof AmbiguousIdError)) throw error;
+      }
       if (!board) throw new Forbidden(`Board not found: ${id}`);
-      const allowed =
-        mode === 'view'
-          ? await boardRepository.canViewResolved(board, user.user_id as UserID)
-          : await boardRepository.canMutateResolved(board, user.user_id as UserID);
-      if (!allowed) {
-        throw new Forbidden(
-          mode === 'view'
-            ? `You need board access to ${action}`
-            : `You need Board Editor or Manager access to ${action}`
-        );
+      if (
+        mode === 'mutate' &&
+        !(await boardRepository.canMutateResolved(board, user.user_id as UserID))
+      ) {
+        throw new Forbidden(`You need Board Editor or Manager access to ${action}`);
+      }
+      // Hand the service the authorized board's ID, never the raw slug/prefix it would re-resolve differently.
+      if (typeof context.id === 'string') context.id = board.board_id;
+      else if (typeof context.params.route?.id === 'string') {
+        context.params.route = { ...context.params.route, id: board.board_id };
+      } else if (typeof context.data === 'string') {
+        // findBySlug takes an exact slug, which is what the check above matched.
+        if (context.method !== 'findBySlug') context.data = board.board_id;
+      } else if (context.data && typeof context.data === 'object') {
+        context.data = { ...context.data, boardId: board.board_id };
       }
       if (context.path === 'boards' && context.method === 'get' && context.id) {
         // The same tenant transaction and caller authority immediately enter
@@ -3840,7 +3860,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('boards')?.hooks({
     before: {
-      all: [typedValidateQuery(boardQueryValidator), requireAuth],
+      all: [rejectNonScalarExternalId, typedValidateQuery(boardQueryValidator), requireAuth],
       find: [scopeFindToAccessibleBoardsSql(superadminOpts)],
       get: [ensureCanViewBoard('view this board')],
       findBySlug: [ensureCanViewBoard('view this board')],
@@ -3884,6 +3904,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               objectsCount: Object.keys(result.objects || {}).length,
             });
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
@@ -3904,6 +3926,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
@@ -3924,6 +3948,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
@@ -3979,6 +4005,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               context.params
             );
             context.result = result.board;
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
@@ -3998,6 +4026,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result;
             // Manually emit 'patched' event for WebSocket broadcasting (ONCE)
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
@@ -4019,6 +4049,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             );
             context.result = result.board;
             // Manually emit 'patched' event for WebSocket broadcasting
+            // The manual commit-bound publish replaces Feathers' default patched event.
+            context.event = null;
             emitServiceEvent(app, {
               path: 'boards',
               event: 'patched',
