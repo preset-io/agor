@@ -124,9 +124,9 @@ describe('ExportPackModal', () => {
     expect(within(dialog).getByText('20 sessions, 40 MB')).toBeInTheDocument();
     expect(within(dialog).getByText('Start fresh')).toBeInTheDocument();
     expect(
-      within(dialog).getByText(/1 sessions may contain a password or API key\./)
+      within(dialog).getByText(/1 session may contain a password or API key\./)
     ).toBeInTheDocument();
-    expect(within(dialog).getByRole('switch', { name: 'Leave these 1 out' })).toBeChecked();
+    expect(within(dialog).getByRole('switch', { name: 'Leave this 1 out' })).toBeChecked();
     expect(within(dialog).getByText('About 15 MB')).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole('button', { name: /Download/ }));

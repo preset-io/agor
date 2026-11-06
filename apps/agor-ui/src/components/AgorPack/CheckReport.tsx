@@ -22,10 +22,10 @@ export interface CheckReportProps {
 const COUNTS: Array<{ key: keyof PackCheckCounts; one: string; many: string }> = [
   { key: 'teammates', one: PACK_COPY.cntTeammate, many: PACK_COPY.cntTeammates },
   { key: 'boards', one: PACK_COPY.cntBoard, many: PACK_COPY.cntBoards },
-  { key: 'artifacts', one: PACK_COPY.cntArtifacts, many: PACK_COPY.cntArtifacts },
-  { key: 'docs', one: PACK_COPY.cntDocs, many: PACK_COPY.cntDocs },
-  { key: 'schedules', one: PACK_COPY.cntSchedules, many: PACK_COPY.cntSchedules },
-  { key: 'sessions', one: PACK_COPY.cntSessions, many: PACK_COPY.cntSessions },
+  { key: 'artifacts', one: 'artifact', many: PACK_COPY.cntArtifacts },
+  { key: 'docs', one: 'knowledge doc', many: PACK_COPY.cntDocs },
+  { key: 'schedules', one: 'schedule', many: PACK_COPY.cntSchedules },
+  { key: 'sessions', one: 'session', many: PACK_COPY.cntSessions },
 ];
 
 /** "Check before moving/importing": what moves, what to reconnect, what won't work. */
@@ -106,8 +106,12 @@ export const CheckReport: React.FC<CheckReportProps> = ({
           description={
             <Flex vertical gap={6}>
               {check.wont.map((blocker) => (
-                <Flex key={`${blocker.teammate}:${blocker.kind}:${blocker.host}`} gap={8}>
-                  <Tag>{blocker.teammate}</Tag>
+                <Flex
+                  key={`${blocker.teammate}:${blocker.kind}:${blocker.host}`}
+                  gap={8}
+                  align="flex-start"
+                >
+                  <Tag style={{ marginInlineEnd: 0 }}>{blocker.teammate}</Tag>
                   <span>
                     {blocker.kind === 'docker'
                       ? fill(PACK_COPY.wontDocker, { name: blocker.teammate })
@@ -140,7 +144,8 @@ export const FlaggedSessionsCard: React.FC<
 > = ({ check, leaveOut, onLeaveOutChange }) => {
   const { token } = theme.useToken();
   if (check.flaggedCount === 0) return null;
-  const toggle = fill(PACK_COPY.lookToggle, { n: check.flaggedCount });
+  const n = check.flaggedCount;
+  const toggle = n === 1 ? 'Leave this 1 out' : fill(PACK_COPY.lookToggle, { n });
   return (
     <Card
       size="small"
@@ -158,7 +163,7 @@ export const FlaggedSessionsCard: React.FC<
       }
     >
       <Typography.Text>
-        {fill(PACK_COPY.lookKeys, { n: check.flaggedCount })}{' '}
+        {n === 1 ? '1 session may contain a password or API key.' : fill(PACK_COPY.lookKeys, { n })}{' '}
         {check.flagged.length > 0 && (
           <Popover
             trigger="click"

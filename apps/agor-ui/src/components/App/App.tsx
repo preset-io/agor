@@ -1503,7 +1503,7 @@ export const App: React.FC<AppProps> = ({
                         branch={primaryTeammateBranch}
                         client={client}
                         currentUser={user}
-                        style={{ position: 'absolute', top: 12, left: 12, width: 280, zIndex: 5 }}
+                        style={{ position: 'absolute', top: 12, right: 12, width: 280, zIndex: 5 }}
                       />
                     )}
                   </div>

@@ -307,7 +307,12 @@ export const ImportPackSection: React.FC<ImportPackSectionProps> = ({ selfHosted
           <ImportProgress
             receipt={receipt}
             keys={selected.length ? selected : receipt.results.map((r) => r.key)}
-            fileChip={fileChip(PACK_COPY.impProgress)}
+            fileChip={fileChip(
+              receipt.status === 'applied' &&
+                !receipt.results.some((r) => r.filesystem === 'pending')
+                ? PACK_COPY.progDone
+                : PACK_COPY.impProgress
+            )}
             applying={applying}
             onRetry={(keys) => apply(keys)}
             onOpenTeammate={onOpenTeammate}
