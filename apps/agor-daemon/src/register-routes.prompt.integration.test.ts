@@ -33,11 +33,13 @@ import type {
   SessionUpdate,
   Task,
   TaskID,
+  UserID,
 } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { getLogContext, runWithLogContext } from '@agor/core/utils/log-context';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setTestBranchUserRole } from '../../../packages/core/src/db/test-helpers.js';
 import { createRequireAuthHook } from './auth/require-auth.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from './auth/runtime-tokens.js';
 import { type RegisterRoutesContext, registerRoutes } from './register-routes.js';
@@ -708,5 +710,44 @@ describe('dispatch log context', () => {
       expect.stringContaining('Failed to write system error message'),
       expect.anything()
     );
+  });
+});
+
+describe('scheduled initial Task admission', () => {
+  it('refuses the initial Task when its creator is not a branch Manager at admission', async () => {
+    const f = await fixture();
+    const initialTaskId = generateId() as TaskID;
+    const creator = await f.scoped(async () => {
+      const user = await new UsersRepository(f.db).create({
+        email: 'schedule-creator@example.invalid',
+        role: 'member',
+      });
+      await setTestBranchUserRole(
+        f.db,
+        f.session.branch_id,
+        user.user_id as UserID,
+        'collaborator',
+        'read',
+        f.actor.user_id as UserID
+      );
+      await f.sessionsRepository.update(f.session.session_id, {
+        created_by: user.user_id,
+        scheduled_from_branch: true,
+        custom_context: {
+          scheduled_run: { rendered_prompt: 'Run', run_index: 1, initial_task_id: initialTaskId },
+        },
+      });
+      return user;
+    });
+
+    await expect(
+      f.prompt({ prompt: 'Run', idempotencyTaskId: initialTaskId }, { user: creator })
+    ).rejects.toThrow(/no longer has Manager access/);
+    expect(await f.scoped(() => f.taskRepo.findById(initialTaskId))).toBeNull();
+
+    // The creator's own follow-up prompts keep ordinary Collaborator authority.
+    await expect(f.prompt({ prompt: 'Follow up' }, { user: creator })).resolves.toMatchObject({
+      created_by: creator.user_id,
+    });
   });
 });

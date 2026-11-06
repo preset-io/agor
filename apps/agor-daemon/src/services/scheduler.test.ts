@@ -827,6 +827,142 @@ describe('scheduler HA occurrence recovery', () => {
     expect(prompt).not.toHaveBeenCalled();
   });
 
+  async function seedManagerSchedule(db: SchedulerDb, managerRole: 'manager' | 'collaborator') {
+    const { branch, creator: owner } = await seedRunnableSchedule(
+      db,
+      { email: `scheduler-owner-${generateId()}@example.com`, name: 'Branch owner' },
+      { agentic_tool: 'claude-code' }
+    );
+    const manager = await new UsersRepository(db).create({
+      email: `scheduler-manager-${generateId()}@example.com`,
+      name: 'Schedule creator',
+      role: 'member',
+    });
+    const schedule = await new ScheduleRepository(db).create({
+      branch_id: branch.branch_id,
+      created_by: manager.user_id,
+      name: 'Manager schedule',
+      cron_expression: '0 * * * *',
+      timezone_mode: 'utc',
+      prompt: 'Manager run',
+      enabled: true,
+      retention: 0,
+      allow_concurrent_runs: false,
+      agentic_tool_config: { agentic_tool: 'claude-code' },
+    });
+    const setBranchRole = async (role: 'manager' | 'collaborator') => {
+      const policies = new CapabilityPolicyRepository(db);
+      const current = await policies.getBranchPolicy(branch.branch_id);
+      const config = structuredClone(current.override_config!);
+      config.access.sharing_mode = 'shared';
+      config.access.entries = [
+        {
+          entry_id: generateId(),
+          principal: { principal_type: 'user', user_id: manager.user_id },
+          preset: role,
+          capabilities: capabilityPolicyPresetCapabilities('branch_access', role, 'read') ?? [],
+          fs_access: 'read',
+        },
+      ];
+      await policies.replaceBranchPolicy(
+        branch.branch_id,
+        { ...current, override_config: config },
+        owner.user_id
+      );
+    };
+    await setBranchRole(managerRole);
+    return { manager, schedule, setBranchRole };
+  }
+
+  const fireCron = (scheduler: SchedulerService, schedule: Schedule, now: number) =>
+    (
+      scheduler as unknown as { processSchedule(schedule: Schedule, now: number): Promise<void> }
+    ).processSchedule(schedule, now);
+
+  dbTest('fires a schedule whose creator is a branch Manager', async ({ db }) => {
+    const { schedule } = await seedManagerSchedule(db, 'manager');
+    const { app, prompt } = createSchedulerApp(db);
+
+    await fireCron(new SchedulerService(db, app, {}), schedule, NOW + 30_000);
+
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(1);
+  });
+
+  dbTest('skips a cron fire once the creator is no longer a branch Manager', async ({ db }) => {
+    const { schedule } = await seedManagerSchedule(db, 'collaborator');
+    const { app, prompt } = createSchedulerApp(db);
+    const cronNow = NOW + 30_000;
+
+    await expect(
+      fireCron(new SchedulerService(db, app, {}), schedule, cronNow)
+    ).rejects.toMatchObject<ScheduleNotReadyError>({ code: 'schedule_permission_revoked' });
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(0);
+    expect((await new ScheduleRepository(db).findById(schedule.schedule_id))?.next_run_at).toBe(
+      Date.parse('2026-05-24T16:00:00Z')
+    );
+  });
+
+  dbTest('skips a cron fire once the creator drops below workspace member', async ({ db }) => {
+    const { manager, schedule } = await seedManagerSchedule(db, 'manager');
+    await new UsersRepository(db).update(manager.user_id, { role: 'viewer' });
+    const { app, prompt } = createSchedulerApp(db);
+
+    await expect(
+      fireCron(new SchedulerService(db, app, {}), schedule, NOW + 30_000)
+    ).rejects.toMatchObject<ScheduleNotReadyError>({ code: 'schedule_permission_revoked' });
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(0);
+  });
+
+  for (const demotion of ['workspace role', 'branch role'] as const) {
+    dbTest(
+      `recovery does not prompt for a creator whose ${demotion} drops after admission`,
+      async ({ db }) => {
+        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+        try {
+          const { manager, schedule, setBranchRole } = await seedManagerSchedule(db, 'manager');
+          const { app, prompt } = createSchedulerApp(db);
+          const killed = new SchedulerService(db, app, {
+            tenantId: 'default',
+            testHooks: {
+              afterSessionAdmission: () => {
+                throw new Error('simulated process death');
+              },
+            },
+          });
+          await expect(
+            killed.executeScheduleNow({
+              scheduleId: schedule.schedule_id,
+              triggeredBy: manager.user_id,
+            })
+          ).rejects.toThrow('simulated process death');
+          if (demotion === 'workspace role') {
+            await new UsersRepository(db).update(manager.user_id, { role: 'viewer' });
+          } else {
+            await setBranchRole('collaborator');
+          }
+
+          nowSpy.mockReturnValue(NOW + 10 * 60_000);
+          const replacement = new SchedulerService(db, app, { tenantId: 'default' });
+          await (replacement as unknown as { tick(): Promise<unknown> }).tick();
+
+          expect(prompt).not.toHaveBeenCalled();
+          const [session] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+          expect(session).toMatchObject({
+            scheduler_init_failure_code: 'schedule_permission_revoked',
+            scheduler_init_failure_stage: 'prompt_admission',
+          });
+        } finally {
+          nowSpy.mockRestore();
+        }
+      }
+    );
+  }
+
   dbTest('retention defers active overflow occurrences until they are terminal', async ({ db }) => {
     const { creator, schedule: createdSchedule } = await seedRunnableSchedule(
       db,

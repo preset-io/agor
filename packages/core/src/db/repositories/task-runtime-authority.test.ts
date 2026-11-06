@@ -1,18 +1,28 @@
-import type { BranchID, SessionSdkHomeScope, Task, UserID, UUID } from '@agor/core/types';
+import type { BranchID, SessionSdkHomeScope, Task, TaskID, UserID, UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { select } from '../database-wrapper';
+import { select, update } from '../database-wrapper';
 import { tasks as tasksTable } from '../schema';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
+import { resolveSessionRuntimeBranchAccess } from './branch-access';
 import { BranchRepository } from './branches';
 import { CapabilityPolicyRepository } from './capability-policies';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository, type TaskRuntimeAuthorityScope } from './tasks';
 import { UsersRepository } from './users';
+
+// Delegates to the real projection; single tests can substitute one revision.
+vi.mock('./branch-access', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./branch-access')>();
+  return {
+    ...actual,
+    resolveSessionRuntimeBranchAccess: vi.fn(actual.resolveSessionRuntimeBranchAccess),
+  };
+});
 
 let branchUnique = (Date.now() % 1_000_000) + 7_000_000;
 
@@ -376,6 +386,164 @@ describe('Task runtime heartbeat authority (SQLite)', () => {
       ).resolves.toMatchObject({
         outcome: 'authorization_revoked',
         reason: 'launch_authority_missing',
+      });
+    }
+  );
+});
+
+describe('scheduled initial Task launch authority', () => {
+  async function seedScheduledInitialTask(
+    db: Database,
+    persistedStatus: typeof TaskStatus.CREATED | typeof TaskStatus.QUEUED,
+    snapshotInitialTaskId = true
+  ) {
+    const users = new UsersRepository(db);
+    const owner = await users.create({
+      user_id: generateId() as UserID,
+      email: `${generateId()}-schedule-owner@example.com`,
+    });
+    const creator = await users.create({
+      user_id: generateId() as UserID,
+      email: `${generateId()}-schedule-creator@example.com`,
+      role: 'member',
+    });
+    const repo = await new RepoRepository(db).create({
+      repo_id: generateId(),
+      slug: `scheduled-launch-${generateId()}`,
+      name: 'Scheduled launch',
+      repo_type: 'remote',
+      remote_url: 'https://example.invalid/scheduled-launch.git',
+      local_path: `/tmp/${generateId()}`,
+      default_branch: 'main',
+    });
+    const branch = await new BranchRepository(db).create({
+      branch_id: generateId(),
+      repo_id: repo.repo_id,
+      name: 'scheduled-launch',
+      ref: 'main',
+      branch_unique_id: branchUnique++,
+      path: `/tmp/${generateId()}`,
+      created_by: owner.user_id,
+    });
+    const setRole = (role: 'manager' | 'collaborator') =>
+      setTestBranchUserRole(db, branch.branch_id, creator.user_id, role, 'write', owner.user_id);
+    await setRole('manager');
+    const initialTaskId = generateId() as TaskID;
+    const session = await new SessionRepository(db).create({
+      session_id: generateId(),
+      branch_id: branch.branch_id,
+      created_by: creator.user_id,
+      agentic_tool: 'codex',
+      sdk_home_scope: 'branch',
+      scheduled_from_branch: true,
+      scheduled_run_at: Date.parse('2026-08-28T00:00:00.000Z'),
+      custom_context: {
+        scheduled_run: {
+          rendered_prompt: 'Run',
+          run_index: 1,
+          ...(snapshotInitialTaskId ? { initial_task_id: initialTaskId } : {}),
+        },
+      },
+    });
+    const tasks = new TaskRepository(db);
+    // Persisted before a crash, then claimed for launch by a recovering daemon.
+    const persist = async (taskId: TaskID) => {
+      await tasks.create({
+        task_id: taskId,
+        session_id: session.session_id,
+        created_by: creator.user_id as UUID,
+        full_prompt: 'Run',
+        status: persistedStatus,
+        message_range: {
+          start_index: 0,
+          end_index: 0,
+          start_timestamp: '2026-08-28T00:00:00.000Z',
+        },
+        git_state: { ref_at_start: 'main', sha_at_start: 'scheduled' },
+      });
+      await update(db, tasksTable)
+        .set({ status: TaskStatus.DISPATCHING })
+        .where(eq(tasksTable.task_id, taskId))
+        .run();
+    };
+    return { creator, tasks, initialTaskId, persist, setRole };
+  }
+
+  for (const persistedStatus of [TaskStatus.CREATED, TaskStatus.QUEUED] as const) {
+    dbTest(
+      `refuses a ${persistedStatus} initial Task after its creator loses Manager`,
+      async ({ db }) => {
+        const seed = await seedScheduledInitialTask(db, persistedStatus);
+        await seed.persist(seed.initialTaskId);
+        await seed.setRole('collaborator');
+
+        await expect(seed.tasks.bindExecutorLaunchAuthority(seed.initialTaskId)).rejects.toThrow(
+          'Authorization to launch this task is unavailable'
+        );
+      }
+    );
+  }
+
+  dbTest(
+    'refuses a legacy initial Task without a snapshotted ID after demotion',
+    async ({ db }) => {
+      const seed = await seedScheduledInitialTask(db, TaskStatus.QUEUED, false);
+      await seed.persist(seed.initialTaskId);
+      const followUpId = generateId() as TaskID;
+      await seed.persist(followUpId);
+      await seed.setRole('collaborator');
+
+      await expect(seed.tasks.bindExecutorLaunchAuthority(seed.initialTaskId)).rejects.toThrow(
+        'Authorization to launch this task is unavailable'
+      );
+      await expect(seed.tasks.bindExecutorLaunchAuthority(followUpId)).resolves.toMatchObject({
+        principal_user_id: seed.creator.user_id,
+      });
+    }
+  );
+
+  dbTest(
+    'decides Manager authority from the same projection as the launch floor',
+    async ({ db }) => {
+      const seed = await seedScheduledInitialTask(db, TaskStatus.QUEUED);
+      await seed.persist(seed.initialTaskId);
+      const actual = await vi.importActual<typeof import('./branch-access')>('./branch-access');
+      // The launch read sees a demoted revision while the stored policy still says Manager.
+      vi.mocked(resolveSessionRuntimeBranchAccess).mockImplementationOnce(async (txDb, input) => {
+        const current = await actual.resolveSessionRuntimeBranchAccess(txDb, input);
+        return current && { ...current, can_manage_branch: false };
+      });
+
+      await expect(seed.tasks.bindExecutorLaunchAuthority(seed.initialTaskId)).rejects.toThrow(
+        'Authorization to launch this task is unavailable'
+      );
+    }
+  );
+
+  dbTest('refuses the initial Task once its creator drops below member', async ({ db }) => {
+    const seed = await seedScheduledInitialTask(db, TaskStatus.QUEUED);
+    await seed.persist(seed.initialTaskId);
+    await new UsersRepository(db).update(seed.creator.user_id, { role: 'viewer' });
+
+    await expect(seed.tasks.bindExecutorLaunchAuthority(seed.initialTaskId)).rejects.toThrow(
+      'Authorization to launch this task is unavailable'
+    );
+  });
+
+  dbTest(
+    'launches the initial Task for a Manager and follow-ups for a Collaborator',
+    async ({ db }) => {
+      const seed = await seedScheduledInitialTask(db, TaskStatus.QUEUED);
+      await seed.persist(seed.initialTaskId);
+      await expect(
+        seed.tasks.bindExecutorLaunchAuthority(seed.initialTaskId)
+      ).resolves.toMatchObject({ principal_user_id: seed.creator.user_id });
+
+      await seed.setRole('collaborator');
+      const followUpId = generateId() as TaskID;
+      await seed.persist(followUpId);
+      await expect(seed.tasks.bindExecutorLaunchAuthority(followUpId)).resolves.toMatchObject({
+        principal_user_id: seed.creator.user_id,
       });
     }
   );

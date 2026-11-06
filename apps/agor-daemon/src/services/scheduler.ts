@@ -91,11 +91,13 @@ import type {
 } from '@agor/core/types';
 import {
   EXECUTING_SESSION_STATUSES,
+  hasMinimumRole,
   isAgenticToolName,
   isSessionExecuting,
   isTaskPendingDispatch,
   isTerminalTaskStatus,
   NONTERMINAL_TASK_STATUSES,
+  ROLES,
   SessionStatus,
 } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
@@ -866,21 +868,24 @@ export class SchedulerService {
         `Schedule ${schedule.schedule_id} references missing branch ${schedule.branch_id}`
       );
     }
+    // Fire-time half of the write gate: the creator must still be a workspace member and branch Manager.
+    const permissionRevoked = async () => {
+      if (!manual) await this.advanceScheduleCursor(schedule, now);
+      return new ScheduleNotReadyError(
+        'schedule_permission_revoked',
+        `Schedule creator ${schedule.created_by} no longer has Manager access to branch ${schedule.branch_id}`
+      );
+    };
     const creatorAccess = await this.withTenantDatabase(() =>
       this.branchRepo.resolveUserAccess(branch, schedule.created_by)
     );
-    if (!['session', 'prompt', 'all'].includes(creatorAccess.can)) {
-      if (!manual) await this.advanceScheduleCursor(schedule, now);
-      throw new ScheduleNotReadyError(
-        'schedule_permission_revoked',
-        `Schedule creator ${schedule.created_by} no longer has Collaborator access to branch ${schedule.branch_id}`
-      );
-    }
+    if (creatorAccess.can !== 'all') throw await permissionRevoked();
+    const { creator, unixUsername } = await this.resolveCreatorUnixUsername(schedule);
+    if (!hasMinimumRole(creator.role, ROLES.MEMBER)) throw await permissionRevoked();
     // Prepare all configuration outside the admission transaction. The only
     // work performed while the schedule row is locked is existing/busy checks
     // and the session insert.
     const renderedPrompt = renderSchedulePrompt(schedule.prompt, branch, schedule, scheduledRunAt);
-    const { creator, unixUsername } = await this.resolveCreatorUnixUsername(schedule);
     let resolvedConfig: Awaited<ReturnType<typeof resolveScheduleAgenticToolConfig>>;
     try {
       resolvedConfig = await this.withTenantDatabase(() =>
@@ -1444,7 +1449,20 @@ export class SchedulerService {
             session.sdk_home_scope
           )
         );
-        if (!authority.allowed) {
+        // Recovery can run long after admission, so repeat the Manager + member half of the gate too.
+        const currentBranch = await this.withTenantDatabase(() =>
+          this.branchRepo.findById(session.branch_id)
+        );
+        const creatorAccess = currentBranch
+          ? await this.withTenantDatabase(() =>
+              this.branchRepo.resolveUserAccess(currentBranch, session.created_by as UUID)
+            )
+          : undefined;
+        if (
+          !authority.allowed ||
+          creatorAccess?.can !== 'all' ||
+          !hasMinimumRole(creator?.role, ROLES.MEMBER)
+        ) {
           throw new PermanentScheduledInitializationError(
             'schedule_permission_revoked' as Exclude<
               SchedulerInitializationFailureCode,

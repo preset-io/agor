@@ -934,6 +934,36 @@ export function protectGatewaySourceMetadata(context: HookContext): HookContext 
   return context;
 }
 
+/**
+ * Keep schedule-occurrence identity under scheduler ownership.
+ *
+ * The scheduler dedupes, recovers, retains and records runs by these fields,
+ * so an external write could suppress or rewrite another user's schedule.
+ */
+export function protectScheduledRunMetadata(context: HookContext): HookContext {
+  if (!context.params.provider) return context;
+
+  const writes = Array.isArray(context.data) ? context.data : [context.data];
+  for (const write of writes) {
+    if (!write || typeof write !== 'object') continue;
+    for (const field of ['schedule_id', 'scheduled_run_at', 'scheduled_from_branch'] as const) {
+      if (Object.hasOwn(write, field)) {
+        throw new Forbidden(`session.${field} is server-managed`);
+      }
+    }
+    const customContext = (write as { custom_context?: unknown }).custom_context;
+    if (
+      customContext &&
+      typeof customContext === 'object' &&
+      Object.hasOwn(customContext, 'scheduled_run')
+    ) {
+      throw new Forbidden('session.custom_context.scheduled_run is server-managed');
+    }
+  }
+
+  return context;
+}
+
 type CallbackConfig = NonNullable<Session['callback_config']>;
 
 /** Where and whether completion callbacks deliver, resolved as dispatch does. */
@@ -1783,8 +1813,8 @@ export function determineSpawnIdentity(
 // ============================================================================
 // Schedule-tier RBAC helpers
 // ============================================================================
-// Schedules inherit their RBAC from the parent branch (same model as
-// sessions).
+// Schedules inherit their RBAC from the parent branch: reads need view,
+// writes and run-now need Manager ('all').
 
 /**
  * Scope schedules.find() to schedules whose parent branch the user can view.
@@ -1878,54 +1908,6 @@ export function loadScheduleAndBranch(
 
     context.params.schedule = schedule;
     await cacheBranchAccess(context.params, branchRepo, branch);
-    return context;
-  };
-}
-
-/**
- * Enforce the modify-schedule tier: `session` for the schedule's
- * creator, `all` for everyone else. Mirrors the
- * sessions.patch rule (see register-hooks.ts:1765-1791).
- *
- * Must run AFTER `loadScheduleAndBranch`.
- */
-export function ensureCanModifySchedule(options?: { allowSuperadmin?: boolean }) {
-  return (context: HookContext) => {
-    if (!context.params.provider) return context;
-    if (context.params.user?._isServiceAccount) return context;
-    if (!context.params.user) throw new NotAuthenticated('Authentication required');
-
-    const branch = context.params.branch;
-    const schedule = context.params.schedule;
-    const isOwner = context.params.isBranchOwner ?? false;
-    if (!branch || !schedule) {
-      throw new Error('loadScheduleAndBranch hook must run before ensureCanModifySchedule');
-    }
-
-    const userId = context.params.user.user_id as UUID;
-    const userRole = context.params.user.role as string | undefined;
-    const allowSuperadmin = options?.allowSuperadmin ?? true;
-
-    // "Own" = the schedule's creator gets the Collaborator/session-tier bar;
-    // everyone else needs Manager/all.
-    const requiredTier: BranchPermissionLevel = schedule.created_by === userId ? 'session' : 'all';
-
-    if (
-      !hasBranchPermission(
-        branch,
-        userId,
-        isOwner,
-        requiredTier,
-        userRole,
-        allowSuperadmin,
-        context.params.branchPermission
-      )
-    ) {
-      throw new Forbidden(
-        `You need '${requiredTier}' permission on branch ${shortId(branch.branch_id)} to modify schedule ${shortId(schedule.schedule_id)}.`
-      );
-    }
-
     return context;
   };
 }

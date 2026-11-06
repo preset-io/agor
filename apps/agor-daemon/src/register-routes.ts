@@ -45,6 +45,7 @@ import {
   generateId,
   getCurrentTenantId,
   getMCPEgressGatewayMode,
+  isScheduledInitialTaskRevoked,
   MCPCatalogCandidateRepository,
   MCPServerRepository,
   MessagesRepository,
@@ -2455,6 +2456,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 }
                 const admissionSession = (await sessionsService.get(id, params)) as Session;
                 await assertCurrentPromptAuthority(operationDb, admissionSession);
+                // An already-admitted initial Task is re-checked at its launch fence instead.
+                if (
+                  !prior &&
+                  data.idempotencyTaskId &&
+                  (await isScheduledInitialTaskRevoked(operationDb, {
+                    sessionId: id,
+                    taskId: data.idempotencyTaskId,
+                    principalUserId: createdBy,
+                  }))
+                ) {
+                  throw new Forbidden(
+                    "This schedule's creator no longer has Manager access to its branch"
+                  );
+                }
                 if (admissionFence) await admissionFence(operationDb);
                 return new TaskRepository(operationDb).createPending({
                   task_id: data.idempotencyTaskId,
