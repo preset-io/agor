@@ -1,7 +1,8 @@
-import type {
-  AgorCloudLinkStatus,
-  AgorCloudMove,
-  AgorPackPreflightTeammate,
+import {
+  AGOR_CLOUD,
+  type AgorCloudLinkStatus,
+  type AgorCloudMove,
+  type AgorPackPreflightTeammate,
 } from '@agor/core/types';
 import type { Branch, User } from '@agor-live/client';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -18,6 +19,7 @@ import {
   startCloudLink,
   startCloudMove,
 } from '../../utils/agorPack';
+import { MoveToCloudModal } from '../AgorPack/MoveToCloudModal';
 import { MoveToCloudSection } from './MoveToCloudSection';
 
 vi.mock('../../utils/agorPack', () => ({
@@ -116,6 +118,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  sessionStorage.clear();
   vi.clearAllMocks();
   window.history.replaceState(null, '', '/');
 });
@@ -326,5 +329,73 @@ describe('Settings → Agor Cloud', () => {
     expect(await within(modal).findByText('Moves to Agor Cloud')).toBeInTheDocument();
     expect(within(modal).getByRole('button', { name: 'Move Ada' })).toBeEnabled();
     expect(startCloudMove).not.toHaveBeenCalled();
+  });
+
+  it('a teammate-menu move remounted after a daemon restart says tracking stopped', async () => {
+    vi.mocked(getCloudLink).mockResolvedValue(signedIn);
+    vi.mocked(getLatestCloudMove).mockResolvedValue(move('sending'));
+    vi.mocked(getCloudMove).mockResolvedValue(move('sending'));
+    const first = mount(
+      <MoveToCloudModal open currentUser={member} initialBranchIds={['b1']} onClose={vi.fn()} />
+    );
+    expect(await screen.findByText('Moving your teammates')).toBeInTheDocument();
+    first.unmount();
+    // The daemon restarted: it has no move any more.
+    vi.mocked(getLatestCloudMove).mockResolvedValue(null);
+    vi.mocked(getCloudMove).mockResolvedValue(null);
+    mount(
+      <MoveToCloudModal open currentUser={member} initialBranchIds={['b1']} onClose={vi.fn()} />
+    );
+    expect(
+      await screen.findByText(/Tracking stopped because Agor restarted/, undefined, {
+        timeout: 3000,
+      })
+    ).toBeInTheDocument();
+  });
+
+  it('Done links each moved teammate to its own import', async () => {
+    vi.mocked(getCloudLink).mockResolvedValue(signedIn);
+    const two = move('done', { open_url: 'https://c.test/ada' });
+    two.items.push({
+      ...two.items[0]!,
+      branch_id: 'b9',
+      display_name: 'Cy',
+      open_url: 'https://c.test/cy',
+    });
+    vi.mocked(getLatestCloudMove).mockResolvedValue(two);
+    mount(<MoveToCloudModal open currentUser={member} onClose={vi.fn()} />);
+    expect(await screen.findByText('Ada and Cy are ready in Agor Cloud')).toBeInTheDocument();
+    const links = screen.getAllByRole('link', { name: /Open in Agor Cloud/ });
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      'https://c.test/ada',
+      'https://c.test/cy',
+    ]);
+    // The footer opens the workspace itself (through the console's launch-init).
+    expect(screen.getByRole('link', { name: /^Open Agor Cloud/ })).toHaveAttribute(
+      'href',
+      expect.stringContaining('return_to=%2Fui%2F')
+    );
+  });
+
+  it('an expired sign-in link offers Sign in again', async () => {
+    vi.mocked(getCloudLink).mockResolvedValue(signedOut);
+    vi.mocked(completeCloudLink).mockRejectedValue(new Error(AGOR_CLOUD.signInExpiredMessage));
+    vi.mocked(startCloudLink).mockReturnValue(new Promise(() => undefined));
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    window.history.replaceState(
+      null,
+      '',
+      `/settings/move-to-cloud/#state=s1&launch_code=launch_x&workspace_url=${encodeURIComponent(WORKSPACE)}`
+    );
+    mount(<MoveToCloudSection currentUser={member} />);
+    const modal = await dialog();
+    fireEvent.click(
+      within(modal).getByRole('button', { name: /Connect to acme.dp-us1a.agor.cloud/ })
+    );
+    expect(await within(modal).findByText('The sign-in link expired.')).toBeInTheDocument();
+    fireEvent.click(within(modal).getByRole('button', { name: 'Sign in again' }));
+    await waitFor(() => expect(startCloudLink).toHaveBeenCalled());
+    expect(open).toHaveBeenCalledWith('', '_blank');
+    open.mockRestore();
   });
 });

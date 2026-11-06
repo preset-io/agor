@@ -242,6 +242,16 @@ dbTest('complete refuses a workspace outside the configured Cloud hosts', async 
   })
 );
 
+dbTest('an expired launch code says the sign-in link expired', async ({ db }) =>
+  withFixture(db, async (fx) => {
+    const ada = client(fx, fx.ada);
+    const refused = await ada.complete(await ada.start(), { launch_code: 'launch_expired' });
+    expect(refused.status).toBe(400);
+    expect(JSON.stringify(refused.body)).toContain(AGOR_CLOUD.signInExpiredMessage);
+    expect((await ada.call('GET', '/agor-pack/cloud/link')).body).toMatchObject({ link: null });
+  })
+);
+
 dbTest('a returned sign-in cannot be replayed', async ({ db }) =>
   withFixture(db, async (fx) => {
     const ada = client(fx, fx.ada);

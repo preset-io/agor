@@ -41,6 +41,11 @@ export const AGOR_CLOUD = {
   /** A link nobody used for this long is forgotten. */
   linkIdleMs: 7 * 24 * 60 * 60 * 1000,
   maxReturnToLength: 2048,
+  /**
+   * The workspace refused the one-time launch code (it lives about a minute
+   * after the workspace is picked) or the sign-in round trip timed out.
+   */
+  signInExpiredMessage: 'The sign-in link expired. Sign in again.',
 } as const;
 
 /** Fields the console puts in the return URL fragment. */

@@ -410,7 +410,10 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     [primaryTeammateBranch, sessionsByBranch, importedSessions]
   );
   const [exportOpen, setExportOpen] = useState(false);
-  const [moveOpen, setMoveOpen] = useState(false);
+  // The teammate a Move to Agor Cloud was started for. The modal renders
+  // outside the teammate view, so a reload of the board (e.g. the daemon
+  // reconnecting) doesn't unmount it mid-move.
+  const [moveFor, setMoveFor] = useState<string | null>(null);
   // Move to Agor Cloud is offered on self-hosted installs only.
   const selfHosted = useAuthConfigSnapshot().config?.externalLaunch?.enabled !== true;
   const setupUser = authenticatedUser ?? currentUser;
@@ -539,7 +542,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                       { key: 'export', icon: <DownloadOutlined />, label: PACK_COPY.menuExport },
                     ],
                     onClick: ({ key }) => {
-                      if (key === 'move') setMoveOpen(true);
+                      if (key === 'move') setMoveFor(primaryTeammateBranch.branch_id);
                       if (key === 'export') setExportOpen(true);
                     },
                   }}
@@ -554,14 +557,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                 </Dropdown>
               )}
             </div>
-            {moveOpen && (
-              <MoveToCloudModal
-                open
-                currentUser={setupUser}
-                initialBranchIds={[primaryTeammateBranch.branch_id]}
-                onClose={() => setMoveOpen(false)}
-              />
-            )}
             {exportOpen && (
               <ExportPackModal
                 open
@@ -742,6 +737,14 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
         overflow: 'hidden',
       }}
     >
+      {moveFor && (
+        <MoveToCloudModal
+          open
+          currentUser={setupUser}
+          initialBranchIds={[moveFor]}
+          onClose={() => setMoveFor(null)}
+        />
+      )}
       <Tabs
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as BoardTeammatePanelTab)}

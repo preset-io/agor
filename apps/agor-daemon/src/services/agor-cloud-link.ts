@@ -299,13 +299,10 @@ export class AgorCloudLinkService {
   ): Promise<AgorCloudLinkStatus> {
     const presented = sha256(input.state);
     const expected = Buffer.from(pending.state_sha256, 'hex');
-    if (
-      expected.length !== presented.length ||
-      !timingSafeEqual(expected, presented) ||
-      pending.expires_at < Date.now()
-    ) {
+    if (expected.length !== presented.length || !timingSafeEqual(expected, presented)) {
       throw new BadRequest('This sign-in has expired or was already used. Sign in again.');
     }
+    if (pending.expires_at < Date.now()) throw new BadRequest(AGOR_CLOUD.signInExpiredMessage);
     const workspaceUrl = validateWorkspaceUrl(
       input.workspace_url,
       this.settings.workspaceHostSuffixes
@@ -327,8 +324,11 @@ export class AgorCloudLinkService {
       user?: { user_id?: unknown; email?: unknown };
     };
     if (launched.status !== 201 && launched.status !== 200) {
+      // A refused code is almost always an expired one (it lives about a minute).
       throw new BadRequest(
-        'Agor Cloud did not accept this sign-in (it may have expired). Sign in again.'
+        launched.status < 500
+          ? AGOR_CLOUD.signInExpiredMessage
+          : `${new URL(workspaceUrl).host} couldn't finish the sign-in right now. Sign in again.`
       );
     }
     if (typeof accessToken !== 'string' || typeof refreshToken !== 'string') {

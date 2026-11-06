@@ -104,6 +104,39 @@ function clearCloudReturn(): void {
   pendingCloudReturn = null;
 }
 
+/**
+ * The running move, kept in this tab's sessionStorage so the modal can say
+ * "tracking stopped" after a daemon restart lost it (the daemon only keeps
+ * moves in memory). Cleared once the move finishes.
+ */
+const RUNNING_MOVE_KEY = 'agor:agor-cloud-running-move';
+
+function rememberRunningMove(move: AgorCloudMove): void {
+  try {
+    if (move.status === 'moving') sessionStorage.setItem(RUNNING_MOVE_KEY, JSON.stringify(move));
+    else sessionStorage.removeItem(RUNNING_MOVE_KEY);
+  } catch {
+    // Storage unavailable: nothing to remember.
+  }
+}
+
+function rememberedRunningMove(): AgorCloudMove | null {
+  try {
+    const raw = sessionStorage.getItem(RUNNING_MOVE_KEY);
+    return raw ? (JSON.parse(raw) as AgorCloudMove) : null;
+  } catch {
+    return null;
+  }
+}
+
+function forgetRunningMove(): void {
+  try {
+    sessionStorage.removeItem(RUNNING_MOVE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 /** Where the console sends the browser back to: Settings → Agor Cloud. */
 export function cloudReturnTo(): string {
   return `${window.location.origin}${uiRouteHref('/settings/move-to-cloud/')}`;
@@ -258,6 +291,8 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
   const [step, setStep] = useState(0);
   const [cloud, setCloud] = useState<AgorCloudLinkStatus | null>(null);
   const [cloudError, setCloudError] = useState<string | null>(null);
+  /** Why Connect failed (usually an expired one-time code); offers Sign in again. */
+  const [connectError, setConnectError] = useState<string | null>(null);
   const [returned, setReturned] = useState<CloudReturn | null>(() => peekCloudReturn());
   const [waiting, setWaiting] = useState(false);
   const [workspaceChoice, setWorkspaceChoice] = useState<'linked' | 'new'>('linked');
@@ -293,6 +328,7 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
   const showMove = useCallback(
     (next: AgorCloudMove) => {
       setMove(next);
+      rememberRunningMove(next);
       onMoveChange?.(next);
     },
     [onMoveChange]
@@ -313,7 +349,16 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
     void Promise.all([status, latest]).then(([linkStatus, last]) => {
       if (cancelled) return;
       setCloud(linkStatus);
-      if (!last) return;
+      if (!last) {
+        // The daemon restarted mid-move (it lost the move): show the last
+        // state seen here, and following it reports that tracking stopped.
+        const remembered = rememberedRunningMove();
+        if (remembered && remembered.workspace_url === linkStatus.link?.workspace_url) {
+          setMove(remembered);
+          setStep(3);
+        }
+        return;
+      }
       const wanted = initialKey ? initialKey.split(',') : [];
       const restore =
         last.status === 'moving' ||
@@ -401,7 +446,7 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
         setCloud(await completeCloudLink(fields));
         setCloudError(null);
       } catch (error) {
-        setCloudError(error instanceof Error ? error.message : String(error));
+        setConnectError(error instanceof Error ? error.message : String(error));
       }
     });
 
@@ -608,6 +653,29 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
             />
           )}
           {cloudError && <Alert type="error" showIcon message={cloudError} />}
+          {connectError && !link && !returned && (
+            <Alert
+              type="warning"
+              showIcon
+              message={
+                connectError === AGOR_CLOUD.signInExpiredMessage
+                  ? 'The sign-in link expired.'
+                  : connectError
+              }
+              action={
+                <Button
+                  size="small"
+                  type="primary"
+                  onClick={() => {
+                    setConnectError(null);
+                    openSignIn();
+                  }}
+                >
+                  Sign in again
+                </Button>
+              }
+            />
+          )}
           {body}
         </Flex>
       ),
@@ -784,9 +852,17 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
         ),
         footer: (
           <>
-            <Button onClick={onClose}>{PACK_COPY.doneClose}</Button>
             <Button
               onClick={() => {
+                forgetRunningMove();
+                onClose();
+              }}
+            >
+              {PACK_COPY.doneClose}
+            </Button>
+            <Button
+              onClick={() => {
+                forgetRunningMove();
                 setLost(false);
                 setMove(null);
                 setStep(link ? 1 : 0);
@@ -959,13 +1035,31 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
           })}
         </Typography.Text>
         {/* Switch over happens later, from the Agor Cloud card, once accounts are reconnected. */}
-        <Flex gap={6} wrap justify="center">
-          {move.items.map((item) => (
-            <Tag key={item.branch_id} style={{ marginInlineEnd: 0 }}>
-              {item.emoji ?? '🤖'} {item.display_name}
-            </Tag>
-          ))}
-        </Flex>
+        {one ? (
+          <Flex gap={6} wrap justify="center">
+            {move.items.map((item) => (
+              <Tag key={item.branch_id} style={{ marginInlineEnd: 0 }}>
+                {item.emoji ?? '🤖'} {item.display_name}
+              </Tag>
+            ))}
+          </Flex>
+        ) : (
+          // Each teammate is its own import in Agor Cloud, so each gets its own link.
+          <Flex vertical gap={6} style={{ alignSelf: 'stretch' }}>
+            {move.items.map((item) => (
+              <Flex key={item.branch_id} align="center" justify="space-between" gap={8}>
+                <Tag style={{ marginInlineEnd: 0 }}>
+                  {item.emoji ?? '🤖'} {item.display_name}
+                </Tag>
+                {item.open_url && (
+                  <Typography.Link href={item.open_url} target="_blank" rel="noopener noreferrer">
+                    Open in Agor Cloud <ExportOutlined />
+                  </Typography.Link>
+                )}
+              </Flex>
+            ))}
+          </Flex>
+        )}
         <Flex
           align="center"
           gap={10}
@@ -1020,7 +1114,15 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
             <Button onClick={onClose}>{PACK_COPY.doneClose}</Button>
             <Button
               type="primary"
-              href={move?.items.find((item) => item.open_url)?.open_url}
+              href={
+                move && move.items.length > 1
+                  ? agorCloudWorkspacePageUrl(
+                      cloud?.console_url ?? AGOR_CLOUD.defaultConsoleUrl,
+                      move.workspace_url,
+                      '/ui/'
+                    )
+                  : move?.items[0]?.open_url
+              }
               target="_blank"
               rel="noopener noreferrer"
             >
