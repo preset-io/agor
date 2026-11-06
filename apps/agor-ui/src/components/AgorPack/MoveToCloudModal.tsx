@@ -267,9 +267,6 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
   const [sessions, setSessions] = useState<AgorPackSessionMode>(AGOR_PACK_DEFAULT_SESSION_MODE);
   const [leaveOut, setLeaveOut] = useState(true);
   const [move, setMove] = useState<AgorCloudMove | null>(null);
-  const [switchState, setSwitchState] = useState<Record<string, AgorPackSwitchOverState | null>>(
-    {}
-  );
   const [busy, setBusy] = useState<string | null>(null);
 
   const link = cloud?.link ?? null;
@@ -911,29 +908,12 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
             keep: one ? 'keeps' : 'keep',
           })}
         </Typography.Text>
-        <Flex
-          vertical
-          gap={6}
-          style={{
-            alignSelf: 'stretch',
-            padding: '8px 12px',
-            borderRadius: token.borderRadiusLG,
-            border: `1px solid ${token.colorBorderSecondary}`,
-          }}
-        >
+        {/* Switch over happens later, from the Agor Cloud card, once accounts are reconnected. */}
+        <Flex gap={6} wrap justify="center">
           {move.items.map((item) => (
-            <Flex key={item.branch_id} align="center" justify="space-between" gap={8}>
-              <Typography.Text>
-                {item.emoji ?? '🤖'} {item.display_name}
-              </Typography.Text>
-              <SwitchOverControl
-                branchId={item.branch_id}
-                state={switchState[item.branch_id]}
-                onChange={(state) =>
-                  setSwitchState((prev) => ({ ...prev, [item.branch_id]: state }))
-                }
-              />
-            </Flex>
+            <Tag key={item.branch_id} style={{ marginInlineEnd: 0 }}>
+              {item.emoji ?? '🤖'} {item.display_name}
+            </Tag>
           ))}
         </Flex>
         <Flex
@@ -953,15 +933,6 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
       </Flex>
     );
   };
-
-  // Switch-over state of the moved teammates, from the preflight.
-  useEffect(() => {
-    if (!allPreflight) return;
-    setSwitchState((prev) => ({
-      ...Object.fromEntries(allPreflight.map((row) => [row.branch_id, row.switch_over])),
-      ...prev,
-    }));
-  }, [allPreflight]);
 
   /** Leave a finished move and start another (signed in, so from Choose). */
   const moreButton = (

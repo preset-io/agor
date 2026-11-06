@@ -245,7 +245,8 @@ describe('Settings → Agor Cloud', () => {
       screen.getByText('Ada keeps running on Community Edition until you switch over.')
     ).toBeInTheDocument();
     const doneModal = await dialog();
-    expect(within(doneModal).getByRole('button', { name: 'Switch over' })).toBeInTheDocument();
+    // Switch over waits for the Agor Cloud card, after reconnecting in Cloud.
+    expect(within(doneModal).queryByRole('button', { name: 'Switch over' })).toBeNull();
     expect(within(doneModal).getByRole('link', { name: /Open Agor Cloud/ })).toHaveAttribute(
       'href',
       `${WORKSPACE}/ui/settings/import?import=imp-1`
