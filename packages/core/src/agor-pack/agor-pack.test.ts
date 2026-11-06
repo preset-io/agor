@@ -3,7 +3,12 @@ import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { ZipFile } from 'yazl';
 import { generateId } from '../lib/ids';
-import { AGOR_PACK, type AgorPackManifest, agorPackPrivateHost } from '../types/agor-pack';
+import {
+  AGOR_PACK,
+  type AgorPackManifest,
+  agorPackExportRequestSchema,
+  agorPackPrivateHost,
+} from '../types/agor-pack';
 import { classifyEnvironmentVariants } from './environment-classification';
 import {
   AgorPackFormatError,
@@ -347,5 +352,61 @@ describe('agorPackPrivateHost', () => {
     'node server.internal.js',
   ])('ignores %s', (text) => {
     expect(agorPackPrivateHost(text)).toBeNull();
+  });
+});
+
+describe('secret scan: credentials in URLs', () => {
+  it.each([
+    'https://user:hunter22@api.example.test/v1',
+    'https://api.example.test/v1?api_key=plainsecret123',
+    'https://api.example.test/v1?region=eu&access_token=abcdefgh12345',
+  ])('catches %s', (text) => {
+    expect(scanForSecrets(text).map((hit) => hit.id)).not.toEqual([]);
+  });
+
+  it.each([
+    'https://api.example.test/v1?api_key={{ user.env.ACME_KEY }}',
+    'https://{{ user.env.USER }}:{{ user.env.PASS }}@api.example.test/',
+    'https://api.example.test/v1?api_key=[redacted]',
+    'https://git@github.com/preset-io/agor.git',
+    'https://api.example.test/v1?page=2&sort=desc',
+  ])('ignores %s', (text) => {
+    expect(scanForSecrets(text)).toEqual([]);
+  });
+});
+
+describe('older packs', () => {
+  it('reads a manifest exported with the earlier 30-day session default', async () => {
+    const pack = await buildPack(
+      (writer) => writer.addJson('teammates/t01/teammate.json', { a: 1 }),
+      (manifest) => ({
+        ...manifest,
+        options: { ...manifest.options, sessions: 'last_30_days' },
+        teammates: manifest.teammates.map((teammate) => ({
+          ...teammate,
+          sections: {
+            ...teammate.sections,
+            sessions: {
+              mode: 'last_30_days',
+              count: 0,
+              messages: 0,
+              others_included: false,
+              redacted_values: 0,
+            },
+          },
+        })),
+      })
+    );
+    const reader = await AgorPackReader.open(bufferByteSource(pack));
+    expect(reader.manifest.options.sessions).toBe('last_30_days');
+    expect(reader.manifest.teammates[0]?.sections.sessions?.mode).toBe('last_30_days');
+    reader.close();
+    // New exports only write the current modes.
+    expect(
+      agorPackExportRequestSchema.safeParse({
+        branch_ids: [generateId()],
+        sessions: 'last_30_days',
+      }).success
+    ).toBe(false);
   });
 });

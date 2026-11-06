@@ -3,7 +3,13 @@ import type { Branch, Schedule, Session } from '@agor-live/client';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { mount } from '../../test/harness';
-import { applyPackImport, exportPack, getPackImport, uploadPack } from '../../utils/agorPack';
+import {
+  applyPackImport,
+  exportPack,
+  fetchPackPreflight,
+  getPackImport,
+  uploadPack,
+} from '../../utils/agorPack';
 import { RowActionsShownContext } from '../SessionRow';
 import { ExportPackModal } from './ExportPackModal';
 import { ExportPackPanel } from './ExportPackPanel';
@@ -147,6 +153,25 @@ describe('ExportPackModal', () => {
         exclude_session_ids: ['s-recent'],
       })
     );
+  });
+});
+
+describe('a failed preflight', () => {
+  it('shows the error with Retry and blocks the export until the check succeeds', async () => {
+    vi.mocked(fetchPackPreflight).mockRejectedValueOnce(new Error('daemon unavailable'));
+    vi.mocked(exportPack).mockClear();
+    mount(<ExportPackModal open teammate={adaBranch} onClose={vi.fn()} />);
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText(/daemon unavailable/)).toBeInTheDocument();
+    const download = within(dialog).getByRole('button', { name: /Download/ });
+    expect(download).toBeDisabled();
+    fireEvent.click(download);
+    expect(exportPack).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Retry' }));
+    expect(await within(dialog).findByRole('switch', { name: 'Leave this 1 out' })).toBeChecked();
+    expect(within(dialog).queryByText(/daemon unavailable/)).toBeNull();
+    expect(within(dialog).getByRole('button', { name: /Download/ })).toBeEnabled();
   });
 });
 

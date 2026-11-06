@@ -43,8 +43,12 @@ import { LocalUploadStagingStore } from '../src/host/local/upload-staging-store.
 import type { RegisterHooksContext } from '../src/register-hooks.js';
 import { createUploadAuthMiddleware } from '../src/register-routes.js';
 import { registerAgorPackRoutes } from '../src/routes/agor-pack.js';
-import { setAgorPackChunkBytesForTests } from '../src/services/agor-pack-chunked-upload.js';
+import {
+  AgorPackChunkedUploads,
+  setAgorPackChunkBytesForTests,
+} from '../src/services/agor-pack-chunked-upload.js';
 import { AgorPackExporter, type AgorPackServiceContext } from '../src/services/agor-pack-export.js';
+import { AgorPackImporter } from '../src/services/agor-pack-import.js';
 import { KnowledgeDocumentsService } from '../src/services/knowledge-documents.js';
 import { ReposService } from '../src/services/repos.js';
 import { createSchedulesService } from '../src/services/schedules.js';
@@ -627,6 +631,50 @@ export async function expectChunkedUploadWorks(
       retryDelayMs: 0,
     });
     expect(flaky.import_id).toBe(receipt.import_id);
+
+    // Overlapping `complete` calls (a client retrying a slow one): one
+    // assembles, the others wait and return the same receipt, never a 404.
+    setAgorPackChunkBytesForTests(2048);
+    const fresh = (await (
+      await init(bea, { size: pack.byteLength, sha256 })
+    ).json()) as AgorPackChunkedUpload;
+    expect(fresh.upload_id).not.toBe(state.upload_id);
+    for (let index = 0; index < fresh.chunks; index++) {
+      const put = await fetch(`${base}/${fresh.upload_id}/${index}`, {
+        method: 'PUT',
+        headers: { ...as(bea), 'content-type': 'application/octet-stream' },
+        body: pack.subarray(index * 2048, (index + 1) * 2048),
+      });
+      expect(put.status).toBe(200);
+    }
+    // The first completer pauses inside staging while a second one starts:
+    // without the claim, one of them reads chunks the other already deleted.
+    const real = new AgorPackImporter(fx.ctx(bea), fx.params(bea));
+    let openGate: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    let entered: () => void = () => undefined;
+    const firstEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const paused = {
+      stage: async (stream: NodeJS.ReadableStream, size: number) => {
+        entered();
+        await gate;
+        return real.stage(stream, size);
+      },
+      get: (id: string) => real.get(id),
+      isUsable: (id: string) => real.isUsable(id),
+    } as unknown as AgorPackImporter;
+    const uploads = () => new AgorPackChunkedUploads({ ...fx.ctx(bea) });
+    const holder = fx.unit(() => uploads().complete(fresh.upload_id, paused));
+    await firstEntered;
+    const late = fx.unit(() => uploads().complete(fresh.upload_id, real));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    openGate();
+    const ids = (await Promise.all([holder, late])).map((result) => result.import_id);
+    expect(new Set(ids)).toEqual(new Set([receipt.import_id]));
   } finally {
     setAgorPackChunkBytesForTests();
   }

@@ -59,6 +59,14 @@ export type AgorPackSection = (typeof AGOR_PACK_SECTIONS)[number];
 
 export const AGOR_PACK_SESSION_MODES = ['none', 'last_90_days', 'all'] as const;
 export type AgorPackSessionMode = (typeof AGOR_PACK_SESSION_MODES)[number];
+/**
+ * Session modes a manifest may record: exports write the current ones, and
+ * packs from releases whose recent window was 30 days still read.
+ */
+export const AGOR_PACK_MANIFEST_SESSION_MODES = [
+  ...AGOR_PACK_SESSION_MODES,
+  'last_30_days',
+] as const;
 /** Session history included when the exporter doesn't choose (UI, CLI, and API). */
 export const AGOR_PACK_DEFAULT_SESSION_MODE: AgorPackSessionMode = 'last_90_days';
 
@@ -222,7 +230,7 @@ export const agorPackTeammateSectionsSchema = z.looseObject({
     .nullable(),
   sessions: z
     .object({
-      mode: z.enum(AGOR_PACK_SESSION_MODES),
+      mode: z.enum(AGOR_PACK_MANIFEST_SESSION_MODES),
       count: nonNegativeInt,
       messages: nonNegativeInt,
       others_included: z.boolean(),
@@ -304,7 +312,7 @@ export const agorPackManifestSchema = z
     options: z
       .object({
         sections: z.array(z.enum(AGOR_PACK_SECTIONS)),
-        sessions: z.enum(AGOR_PACK_SESSION_MODES),
+        sessions: z.enum(AGOR_PACK_MANIFEST_SESSION_MODES),
         include_others_sessions: z.boolean(),
       })
       .strict(),

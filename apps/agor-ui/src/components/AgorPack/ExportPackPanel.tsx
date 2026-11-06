@@ -9,7 +9,7 @@ import type { Branch } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
 import { DownloadOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { Alert, Button, Checkbox, Flex, Form, Select, Skeleton, Typography } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { type AgorPackExportResult, exportPack, fetchPackPreflight } from '../../utils/agorPack';
 import { useThemedMessage } from '../../utils/message';
 import { CheckReport } from './CheckReport';
@@ -17,36 +17,59 @@ import { checkFromPreflight, exportEstimate } from './packCheck';
 import { countLabel, fill, megabytes, PACK_COPY } from './packCopy';
 import { SessionHistoryPicker } from './SessionHistoryPicker';
 
-/** Preflight of the chosen teammates (null while loading). */
+/**
+ * Preflight of the chosen teammates. Null while loading and after a failure
+ * (with `error`): nothing may be exported from a check that didn't run.
+ */
 export function usePackPreflight(branchIds: string[]): {
   preflight: AgorPackPreflightTeammate[] | null;
   error: string | null;
+  retry: () => void;
 } {
   const [preflight, setPreflight] = useState<AgorPackPreflightTeammate[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const key = branchIds.join(',');
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` re-runs the preflight
   useEffect(() => {
     const ids = key ? key.split(',') : [];
+    setError(null);
     if (ids.length === 0) {
       setPreflight([]);
       return;
     }
     let cancelled = false;
     setPreflight(null);
-    setError(null);
     fetchPackPreflight(ids)
       .then((result) => !cancelled && setPreflight(result))
       .catch((reason: unknown) => {
         if (cancelled) return;
-        setPreflight([]);
         setError(reason instanceof Error ? reason.message : String(reason));
       });
     return () => {
       cancelled = true;
     };
-  }, [key]);
-  return { preflight, error };
+  }, [key, attempt]);
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
+  return { preflight, error, retry };
 }
+
+/** The preflight's failure, with Retry. */
+export const PreflightError: React.FC<{ error: string; onRetry: () => void }> = ({
+  error,
+  onRetry,
+}) => (
+  <Alert
+    type="error"
+    showIcon
+    message={`Couldn't check what moves: ${error}`}
+    action={
+      <Button size="small" onClick={onRetry}>
+        {PACK_COPY.progRetry}
+      </Button>
+    }
+  />
+);
 
 /** Archived/private rows left behind and Knowledge links kept as-is, per teammate. */
 export function preflightNotes(teammate: AgorPackPreflightTeammate, mode: AgorPackSessionMode) {
@@ -90,7 +113,7 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
   const [includeOthers, setIncludeOthers] = useState(false);
   const [leaveOut, setLeaveOut] = useState(true);
   const [exporting, setExporting] = useState(false);
-  const { preflight, error } = usePackPreflight(branchIds);
+  const { preflight, error, retry } = usePackPreflight(branchIds);
   const others = sessions !== 'none' && includeOthers;
 
   const options = useMemo(
@@ -112,6 +135,8 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
   );
 
   const handleExport = async () => {
+    // Never export without a completed check (its exclusions apply).
+    if (!check) return;
     setExporting(true);
     try {
       const result = await exportPack(
@@ -164,8 +189,9 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
         <Typography.Title level={5} style={{ margin: 0 }}>
           {PACK_COPY.checkTitle}
         </Typography.Title>
-        {error && <Alert type="error" showIcon message={error} />}
-        {check ? (
+        {error ? (
+          <PreflightError error={error} onRetry={retry} />
+        ) : check ? (
           <CheckReport
             check={check}
             mode="move"
