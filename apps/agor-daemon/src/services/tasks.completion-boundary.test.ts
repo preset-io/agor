@@ -118,3 +118,87 @@ it.each([false, true])(
     }
   }
 );
+
+it.each([false, true])(
+  'gateway final reply flush follows native commit, never rollback (%s)',
+  async (rollback) => {
+    const raw = createDatabase({ dialect: 'sqlite', url: ':memory:' });
+    const db = createTenantScopedDatabaseProxy(raw);
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000088',
+      session_id: '018f0000-0000-7000-8000-000000000087',
+      status: TaskStatus.COMPLETED,
+      metadata: {
+        gateway_reply_metadata: { processing_comment_id: 42 },
+      },
+    };
+    const session = {
+      session_id: task.session_id,
+      tasks: [task.task_id],
+      title: 'Existing Non-Null Title',
+    };
+    const patchSession = vi.fn();
+    const flushOutboundBuffer = vi.fn(async () => {});
+    const wakeDeliveryLoop = vi.fn();
+
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'db', db);
+    Reflect.set(
+      service,
+      'get',
+      vi.fn(async () => ({ ...task, status: TaskStatus.RUNNING }))
+    );
+    Reflect.set(service, 'id', 'task_id');
+    Reflect.set(service, 'repository', {
+      update: async () => task,
+    });
+    Reflect.set(
+      service,
+      'dispatchCompletionCallbacks',
+      vi.fn(async () => {})
+    );
+    Reflect.set(service, 'app', {
+      service: (name: string) => {
+        if (name === 'sessions') {
+          return { get: async () => session, patch: patchSession };
+        }
+        if (name === 'gateway') {
+          return { flushOutboundBuffer, wakeDeliveryLoop };
+        }
+        return {};
+      },
+    });
+
+    try {
+      const completion = runWithTenantDatabaseTransaction(
+        db,
+        'tenant-gateway-completion',
+        async () => {
+          await service.patch(
+            task.task_id,
+            { status: TaskStatus.COMPLETED },
+            { suppressTerminalQueueProcessing: true }
+          );
+          expect(patchSession).not.toHaveBeenCalled();
+          expect(flushOutboundBuffer).not.toHaveBeenCalled();
+          if (rollback) throw new Error('gateway test rollback');
+        }
+      );
+
+      if (rollback) await expect(completion).rejects.toThrow('gateway test rollback');
+      else await completion;
+
+      await nextTurn();
+      expect(patchSession).not.toHaveBeenCalled();
+      expect(flushOutboundBuffer).toHaveBeenCalledTimes(rollback ? 0 : 1);
+      if (!rollback) {
+        expect(flushOutboundBuffer).toHaveBeenCalledWith(task.session_id, {
+          taskId: task.task_id,
+        });
+        expect(wakeDeliveryLoop).toHaveBeenCalledTimes(1);
+      }
+    } finally {
+      (raw as typeof raw & { $client: { close(): void } }).$client.close();
+    }
+  }
+);
