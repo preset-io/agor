@@ -896,10 +896,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             wakeDeliveryLoop?(): void;
           };
           if (gatewayService?.flushOutboundBuffer) {
-            await gatewayService.flushOutboundBuffer(task.session_id, {
-              taskId: task.task_id,
-            });
-            gatewayService.wakeDeliveryLoop?.();
+            try {
+              await gatewayService.flushOutboundBuffer(task.session_id, {
+                taskId: task.task_id,
+              });
+            } finally {
+              gatewayService.wakeDeliveryLoop?.();
+            }
           }
         } catch (error) {
           console.warn(

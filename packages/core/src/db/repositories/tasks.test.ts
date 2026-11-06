@@ -4843,7 +4843,7 @@ describe('durable single-attempt cleanup and explicit retry', () => {
             channel_type: 'github',
             gateway_channel_id: 'chan-1',
             thread_id: 'owner/repo#1',
-            thread_session_map_id: 'map-101',
+            thread_session_map_id: '019fd900-0000-7000-8000-000000000101' as UUID,
             provider_user_id: 'user-1',
           },
         },
@@ -4901,7 +4901,7 @@ describe('durable single-attempt cleanup and explicit retry', () => {
     // Initial discovery
     const dueRefs = await repo.findDueGatewayFinalReplyRefs();
     expect(dueRefs.map((r) => r.task_id)).toEqual([dueTask.task_id]);
-    expect(dueRefs[0].thread_session_map_id).toBe('map-101');
+    expect(dueRefs[0].thread_session_map_id).toBe('019fd900-0000-7000-8000-000000000101');
 
     // Update metadata to claim (processing)
     await repo.updateGatewayReplyMetadata(dueTask.task_id, {
@@ -4919,11 +4919,48 @@ describe('durable single-attempt cleanup and explicit retry', () => {
     expect(recoveredRefs.map((r) => r.task_id)).toEqual([dueTask.task_id]);
 
     // Mark delivered
-    await repo.updateGatewayReplyMetadata(dueTask.task_id, {
+    const deliveredResult = await repo.updateGatewayReplyMetadata(dueTask.task_id, {
       delivery_status: 'delivered',
       delivered_at: new Date().toISOString(),
     });
+    expect(deliveredResult.updated).toBe(true);
     expect(await repo.findDueGatewayFinalReplyRefs({ staleClaimTimeoutMs: 0 })).toEqual([]);
+
+    // Stale or conflicting update cannot revert delivered state
+    const revertAttempt = await repo.updateGatewayReplyMetadata(dueTask.task_id, {
+      delivery_status: 'pending',
+    });
+    expect(revertAttempt.updated).toBe(false);
+
+    // Stale worker with mismatched expectedClaimToken is rejected
+    const tokenTask = await repo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.COMPLETED,
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 103,
+            delivery_status: 'processing',
+            claim_token: 'token-active',
+            claimed_at: new Date().toISOString(),
+          },
+        },
+      })
+    );
+
+    const staleWorkerUpdate = await repo.updateGatewayReplyMetadata(
+      tokenTask.task_id,
+      { delivery_status: 'delivered' },
+      { expectedClaimToken: 'token-stale' }
+    );
+    expect(staleWorkerUpdate.updated).toBe(false);
+
+    const validWorkerUpdate = await repo.updateGatewayReplyMetadata(
+      tokenTask.task_id,
+      { delivery_status: 'delivered', delivered_at: new Date().toISOString() },
+      { expectedClaimToken: 'token-active' }
+    );
+    expect(validWorkerUpdate.updated).toBe(true);
 
     // Advance time past future task's next_retry_at
     const futureDue = await repo.findDueGatewayFinalReplyRefs({

@@ -1152,7 +1152,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         const data = row.data as { metadata?: Task['metadata'] } | undefined;
         const threadSessionMapId = data?.metadata?.gateway_task_source?.thread_session_map_id;
         return {
-          tenant_id: row.tenant_id,
+          tenant_id: (row as { tenant_id?: string }).tenant_id ?? getCurrentTenantId() ?? 'default',
           task_id: row.task_id as TaskID,
           session_id: row.session_id as SessionID,
           thread_session_map_id: threadSessionMapId,
@@ -1168,7 +1168,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
-   * Mutate gateway reply delivery metadata under task row lock.
+   * Mutate gateway reply delivery metadata under task row lock with atomic claim fencing.
    */
   async updateGatewayReplyMetadata(
     taskId: string,
@@ -1177,11 +1177,17 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       attempts?: number;
       next_retry_at?: string | null;
       claimed_at?: string | null;
+      claim_token?: string | null;
       claim_expires_at?: string | null;
       delivered_at?: string | null;
       last_error?: string | null;
-    }
-  ): Promise<Task> {
+      last_attempt_at?: string | null;
+    },
+    options: {
+      expectedClaimToken?: string | null;
+      staleClaimTimeoutMs?: number;
+    } = {}
+  ): Promise<{ updated: boolean; task: Task }> {
     return this.runTaskMutation(() =>
       runDatabaseTransaction(
         this.db,
@@ -1194,6 +1200,38 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
           const currentReplyMetadata =
             (task.metadata?.gateway_reply_metadata as Record<string, unknown>) ?? {};
+
+          // Invariant: Once delivered, a task delivery state cannot be reverted
+          if (
+            currentReplyMetadata.delivery_status === 'delivered' &&
+            updates.delivery_status !== 'delivered'
+          ) {
+            return { updated: false, task };
+          }
+
+          // Invariant: When acquiring a 'processing' claim, ensure no active unexpired claim exists
+          if (updates.delivery_status === 'processing') {
+            const currentStatus = currentReplyMetadata.delivery_status;
+            if (currentStatus === 'delivered' || currentStatus === 'dead_letter') {
+              return { updated: false, task };
+            }
+            if (currentStatus === 'processing') {
+              const claimedAtMs = Date.parse((currentReplyMetadata.claimed_at as string) ?? '');
+              const staleTimeoutMs = options.staleClaimTimeoutMs ?? 5 * 60 * 1000;
+              if (Number.isFinite(claimedAtMs) && Date.now() - claimedAtMs < staleTimeoutMs) {
+                return { updated: false, task };
+              }
+            }
+          }
+
+          // Invariant: If expectedClaimToken is specified, the caller must still own the claim
+          if (
+            options.expectedClaimToken !== undefined &&
+            currentReplyMetadata.claim_token !== options.expectedClaimToken
+          ) {
+            return { updated: false, task };
+          }
+
           const mergedReplyMetadata = {
             ...currentReplyMetadata,
             ...updates,
@@ -1213,7 +1251,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             .returning()
             .one();
 
-          return this.rowToTask(updated);
+          return { updated: true, task: this.rowToTask(updated) };
         },
         { sqliteImmediate: true, sqliteBusyRetries: 9 }
       )

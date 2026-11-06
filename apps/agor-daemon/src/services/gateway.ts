@@ -1668,19 +1668,45 @@ export class GatewayService {
   }
 
   private async discoverDueFinalReplies(limit: number): Promise<DueGatewayFinalReplyRef[]> {
-    const tenants =
-      this.activeChannelTenants.size > 0
-        ? [...this.activeChannelTenants]
-        : [getCurrentTenantId() ?? 'default'];
+    const tenantSet = new Set<string>(this.activeChannelTenants);
+    const currentTenant = getCurrentTenantId();
+
+    if (currentTenant) {
+      tenantSet.add(currentTenant);
+    } else if (await this.detectDurableListenerOwnership()) {
+      try {
+        const discoveredTenants = await runWithSystemDatabaseScope(
+          this.db,
+          'gateway final reply tenant discovery',
+          async (systemDb) =>
+            new GatewayListenerDiscoveryRepository(systemDb).findEnabledChannelTenantIds({
+              channelTypes: ['github', 'shortcut'],
+            }),
+          { capability: 'gateway_listener_discovery' }
+        );
+        for (const t of discoveredTenants) {
+          tenantSet.add(t);
+          this.activeChannelTenants.add(t);
+        }
+      } catch (error) {
+        console.warn(
+          '[gateway] Failed to discover enabled channel tenants for final reply delivery',
+          error
+        );
+      }
+    }
+
+    if (tenantSet.size === 0) {
+      tenantSet.add('default');
+    }
+
     const allRefs: DueGatewayFinalReplyRef[] = [];
-    for (const tenantId of tenants) {
+    for (const tenantId of tenantSet) {
       if (allRefs.length >= limit) break;
       const refs = await runWithTenantContext(tenantId, async () => {
-        return (
-          (await this.taskRepo.findDueGatewayFinalReplyRefs?.({
-            limit: limit - allRefs.length,
-          })) ?? []
-        );
+        return await this.taskRepo.findDueGatewayFinalReplyRefs({
+          limit: limit - allRefs.length,
+        });
       });
       allRefs.push(...refs);
     }
@@ -7904,12 +7930,19 @@ export class GatewayService {
     >;
     const currentDeliveryStatus = replyMetadata.delivery_status as string | undefined;
 
+    // Authority model for Gateway final reply delivery:
+    // 1. Task metadata (gateway_reply_metadata): Authoritative source of truth for
+    //    delivery lifecycle, attempt counts, retry scheduling, and dead-letter state.
+    // 2. Message metadata (gateway_final_reply): Short-lived atomic row lock concurrency
+    //    fence across concurrent workers when an assistant message exists.
+    // 3. Thread-map metadata (gateway_last_flushed_task_id): Provides cross-process
+    //    send idempotency to prevent duplicate provider edits.
     if (
       currentDeliveryStatus === 'delivered' ||
       mappingMetadata.gateway_last_flushed_task_id === taskId
     ) {
       if (currentDeliveryStatus !== 'delivered') {
-        await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
+        await this.taskRepo.updateGatewayReplyMetadata(taskId, {
           delivery_status: 'delivered',
           delivered_at: (replyMetadata.delivered_at as string) ?? new Date().toISOString(),
         });
@@ -7955,7 +7988,7 @@ export class GatewayService {
       if (attempts < 3) {
         const nextAttempts = attempts + 1;
         const delayMs = boundedBackoff(nextAttempts);
-        await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
+        await this.taskRepo.updateGatewayReplyMetadata(taskId, {
           delivery_status: 'pending',
           attempts: nextAttempts,
           last_attempt_at: new Date().toISOString(),
@@ -7973,7 +8006,7 @@ export class GatewayService {
       claimMessage &&
       mappingMetadata.gateway_last_flushed_message_id === claimMessage.message_id
     ) {
-      await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
+      await this.taskRepo.updateGatewayReplyMetadata(taskId, {
         delivery_status: 'delivered',
         delivered_at: new Date().toISOString(),
       });
@@ -8013,12 +8046,32 @@ export class GatewayService {
       messageClaimAcquired = true;
     }
 
-    await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
-      delivery_status: 'processing',
-      claim_token: claimToken,
-      claimed_at: claimedAt.toISOString(),
-      last_attempt_at: claimedAt.toISOString(),
-    });
+    const claimResult = await this.taskRepo.updateGatewayReplyMetadata(
+      taskId,
+      {
+        delivery_status: 'processing',
+        claim_token: claimToken,
+        claimed_at: claimedAt.toISOString(),
+        last_attempt_at: claimedAt.toISOString(),
+      },
+      { staleClaimTimeoutMs: GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS }
+    );
+    if (!claimResult.updated) {
+      if (claimMessage && messageClaimAcquired) {
+        try {
+          await this.messagesRepo.mutateMetadataLocked(claimMessage.message_id, (metadata) => {
+            const state = gatewayFinalReplyState(metadata);
+            if (state?.status !== 'processing' || state.claim_token !== claimToken) return null;
+            return { ...(metadata ?? {}), gateway_final_reply: { status: 'pending' } };
+          });
+        } catch (_releaseError) {
+          console.warn(
+            '[gateway] Failed to release final reply message claim after task claim rejection'
+          );
+        }
+      }
+      return;
+    }
 
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
@@ -8050,13 +8103,17 @@ export class GatewayService {
         if (!completed.changed) throw new Error('Gateway final reply claim was lost');
       }
 
-      await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
-        delivery_status: 'delivered',
-        delivered_at: new Date().toISOString(),
-        claim_token: null,
-        next_retry_at: null,
-        last_error: null,
-      });
+      await this.taskRepo.updateGatewayReplyMetadata(
+        taskId,
+        {
+          delivery_status: 'delivered',
+          delivered_at: new Date().toISOString(),
+          claim_token: null,
+          next_retry_at: null,
+          last_error: null,
+        },
+        { expectedClaimToken: claimToken }
+      );
 
       try {
         await this.threadMapRepo.mergeMetadata(mapping.id, {
@@ -8084,49 +8141,57 @@ export class GatewayService {
       }
 
       const status = providerStatus(error);
+      const errRecord = error as Record<string, unknown> | undefined;
+      const respRecord = errRecord?.response as Record<string, unknown> | undefined;
+      const dataRecord = respRecord?.data as Record<string, unknown> | undefined;
+      const combinedMessage = `${String(errRecord?.message ?? '')} ${String(dataRecord?.message ?? '')}`;
       const isRateLimited =
         status === 429 ||
         (status === 403 &&
           (retryAfterMs(error) !== undefined ||
-            /secondary rate limit|rate limit exceeded/i.test(
-              `${String((error as Record<string, unknown>)?.message ?? '')} ${String(((error as Record<string, unknown>)?.response as Record<string, unknown>)?.data?.message ?? '')}`
-            )));
+            /secondary rate limit|rate limit exceeded/i.test(combinedMessage)));
 
       const nextAttempts = attempts + 1;
       const isPermanent =
         !isRateLimited && (isDefinitiveProviderFailure(error) || nextAttempts >= 10);
 
-      const errObj = error as Record<string, unknown> | undefined;
-      const responseData = errObj?.response as Record<string, unknown> | undefined;
-      const responseDataBody = responseData?.data as Record<string, unknown> | undefined;
+      const responseDataBody = dataRecord;
       const errorMessage =
         error instanceof Error
           ? error.message.slice(0, 500)
-          : typeof errObj?.message === 'string'
-            ? errObj.message.slice(0, 500)
+          : typeof errRecord?.message === 'string'
+            ? errRecord.message.slice(0, 500)
             : typeof responseDataBody?.message === 'string'
-              ? responseDataBody.message.slice(0, 500)
+              ? (responseDataBody.message as string).slice(0, 500)
               : String(error ?? 'Unknown error').slice(0, 500);
 
       if (isPermanent) {
-        await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
-          delivery_status: 'dead_letter',
-          attempts: nextAttempts,
-          last_attempt_at: new Date().toISOString(),
-          next_retry_at: null,
-          last_error: errorMessage,
-          claim_token: null,
-        });
+        await this.taskRepo.updateGatewayReplyMetadata(
+          taskId,
+          {
+            delivery_status: 'dead_letter',
+            attempts: nextAttempts,
+            last_attempt_at: new Date().toISOString(),
+            next_retry_at: null,
+            last_error: errorMessage,
+            claim_token: null,
+          },
+          { expectedClaimToken: claimToken }
+        );
       } else {
         const delayMs = boundedBackoff(nextAttempts, retryAfterMs(error));
-        await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
-          delivery_status: 'pending',
-          attempts: nextAttempts,
-          last_attempt_at: new Date().toISOString(),
-          next_retry_at: new Date(Date.now() + delayMs).toISOString(),
-          last_error: errorMessage,
-          claim_token: null,
-        });
+        await this.taskRepo.updateGatewayReplyMetadata(
+          taskId,
+          {
+            delivery_status: 'pending',
+            attempts: nextAttempts,
+            last_attempt_at: new Date().toISOString(),
+            next_retry_at: new Date(Date.now() + delayMs).toISOString(),
+            last_error: errorMessage,
+            claim_token: null,
+          },
+          { expectedClaimToken: claimToken }
+        );
       }
 
       console.error(

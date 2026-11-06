@@ -1,6 +1,7 @@
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
+  GatewayListenerDiscoveryRepository,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithTenantContext,
@@ -250,11 +251,48 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
     findById: vi.fn(
       async (taskId: string) => tasks.find((task) => task.task_id === taskId) ?? null
     ),
-    updateGatewayReplyMetadata: vi.fn(async (taskId: string, patch: Record<string, unknown>) => {
-      const task = tasks.find((t) => t.task_id === taskId);
-      if (task) {
+    updateGatewayReplyMetadata: vi.fn(
+      async (
+        taskId: string,
+        patch: Record<string, unknown>,
+        options: { expectedClaimToken?: string | null; staleClaimTimeoutMs?: number } = {}
+      ) => {
+        const task = tasks.find((t) => t.task_id === taskId);
+        if (!task) return { updated: false, task: null as any };
         const metadata = (task.metadata ?? {}) as Record<string, unknown>;
         const replyMetadata = (metadata.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+
+        // Invariant: Once delivered, a task delivery state cannot be reverted
+        if (
+          replyMetadata.delivery_status === 'delivered' &&
+          patch.delivery_status !== 'delivered'
+        ) {
+          return { updated: false, task };
+        }
+
+        // Invariant: When acquiring a 'processing' claim, ensure no active unexpired claim exists
+        if (patch.delivery_status === 'processing') {
+          const currentStatus = replyMetadata.delivery_status;
+          if (currentStatus === 'delivered' || currentStatus === 'dead_letter') {
+            return { updated: false, task };
+          }
+          if (currentStatus === 'processing') {
+            const claimedAtMs = Date.parse((replyMetadata.claimed_at as string) ?? '');
+            const staleTimeoutMs = options.staleClaimTimeoutMs ?? 5 * 60 * 1000;
+            if (Number.isFinite(claimedAtMs) && Date.now() - claimedAtMs < staleTimeoutMs) {
+              return { updated: false, task };
+            }
+          }
+        }
+
+        // Invariant: If expectedClaimToken is specified, the caller must still own the claim
+        if (
+          options.expectedClaimToken !== undefined &&
+          replyMetadata.claim_token !== options.expectedClaimToken
+        ) {
+          return { updated: false, task };
+        }
+
         task.metadata = {
           ...metadata,
           gateway_reply_metadata: {
@@ -262,8 +300,9 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
             ...patch,
           },
         };
+        return { updated: true, task };
       }
-    }),
+    ),
     findDueGatewayFinalReplyRefs: vi.fn(async ({ limit }: { limit?: number } = {}) => {
       const now = Date.now();
       return tasks
@@ -1300,5 +1339,152 @@ describe('GatewayService GitHub integration', () => {
     const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
     expect(replyMeta.delivery_status).toBe('delivered');
     expect(replyMeta.delivered_at).toBeDefined();
+  });
+
+  it('rejects concurrent worker flush when task claim is actively held', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000092';
+    const recentClaimTime = new Date(Date.now() - 30 * 1000).toISOString();
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 902,
+            delivery_status: 'processing',
+            claim_token: 'active-worker-token',
+            claimed_at: recentClaimTime,
+          },
+        },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000093',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: 'Concurrent output.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+
+    // sendMessage was NOT called because claim was actively held
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale worker completion update when claim token was superseded', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000094';
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 903,
+            delivery_status: 'processing',
+            claim_token: 'newer-worker-token',
+            claimed_at: new Date().toISOString(),
+          },
+        },
+      } as unknown as Task,
+    ]);
+
+    // An old worker with claim token 'stale-token' tries to update metadata
+    const result = await harness.taskRepo.updateGatewayReplyMetadata(
+      taskId,
+      {
+        delivery_status: 'delivered',
+        delivered_at: new Date().toISOString(),
+      },
+      { expectedClaimToken: 'stale-token' }
+    );
+
+    expect(result.updated).toBe(false);
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('processing');
+    expect(replyMeta.claim_token).toBe('newer-worker-token');
+  });
+
+  it('discovers pending replies across tenants on cold start without prior inbound traffic', async () => {
+    const coldTenantId = 'tenant-cold-start' as TenantID;
+    const mapping = githubMapping({
+      id: '019fd900-0000-7000-8000-000000000099',
+      tenant_id: coldTenantId,
+    });
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000090';
+
+    // Cold start: activeChannelTenants is empty
+    (
+      harness.service as unknown as { activeChannelTenants: Set<string> }
+    ).activeChannelTenants.clear();
+    // Simulate PostgreSQL durable listener ownership
+    (
+      harness.service as unknown as { detectDurableListenerOwnership: () => Promise<boolean> }
+    ).detectDurableListenerOwnership = vi.fn(async () => true);
+
+    const spy = vi
+      .spyOn(GatewayListenerDiscoveryRepository.prototype, 'findEnabledChannelTenantIds')
+      .mockResolvedValueOnce([coldTenantId]);
+
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 999,
+            delivery_status: 'pending',
+          },
+        },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000091',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: 'Cold-start discovered reply.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    harness.taskRepo.findDueGatewayFinalReplyRefs.mockImplementation(async () => [
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        tenant_id: coldTenantId,
+        attempts: 0,
+      },
+    ]);
+
+    const count = await harness.service.checkFinalReplyDeliveryOnce();
+    expect(count).toBe(1);
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Cold-start discovered reply.',
+        metadata: { edit_comment_id: 999 },
+      })
+    );
+    expect(
+      (
+        harness.service as unknown as { activeChannelTenants: Set<string> }
+      ).activeChannelTenants.has(coldTenantId)
+    ).toBe(true);
+    spy.mockRestore();
   });
 });

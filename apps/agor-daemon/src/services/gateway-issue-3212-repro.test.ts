@@ -162,6 +162,87 @@ function makeReproHarness(existingMapping: ThreadSessionMap | null = null) {
     findById: vi.fn(
       async (taskId: string) => tasks.find((task) => task.task_id === taskId) ?? null
     ),
+    updateGatewayReplyMetadata: vi.fn(
+      async (
+        taskId: string,
+        patch: Record<string, unknown>,
+        options: { expectedClaimToken?: string | null; staleClaimTimeoutMs?: number } = {}
+      ) => {
+        const task = tasks.find((t) => t.task_id === taskId);
+        if (!task) return { updated: false, task: null as any };
+        const metadata = (task.metadata ?? {}) as Record<string, unknown>;
+        const replyMetadata = (metadata.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+
+        if (
+          replyMetadata.delivery_status === 'delivered' &&
+          patch.delivery_status !== 'delivered'
+        ) {
+          return { updated: false, task };
+        }
+
+        if (patch.delivery_status === 'processing') {
+          const currentStatus = replyMetadata.delivery_status;
+          if (currentStatus === 'delivered' || currentStatus === 'dead_letter') {
+            return { updated: false, task };
+          }
+          if (currentStatus === 'processing') {
+            const claimedAtMs = Date.parse((replyMetadata.claimed_at as string) ?? '');
+            const staleTimeoutMs = options.staleClaimTimeoutMs ?? 5 * 60 * 1000;
+            if (Number.isFinite(claimedAtMs) && Date.now() - claimedAtMs < staleTimeoutMs) {
+              return { updated: false, task };
+            }
+          }
+        }
+
+        if (
+          options.expectedClaimToken !== undefined &&
+          replyMetadata.claim_token !== options.expectedClaimToken
+        ) {
+          return { updated: false, task };
+        }
+
+        task.metadata = {
+          ...metadata,
+          gateway_reply_metadata: {
+            ...replyMetadata,
+            ...patch,
+          },
+        };
+        return { updated: true, task };
+      }
+    ),
+    findDueGatewayFinalReplyRefs: vi.fn(async ({ limit }: { limit?: number } = {}) => {
+      const now = Date.now();
+      return tasks
+        .filter((task) => {
+          const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<
+            string,
+            unknown
+          >;
+          if (!replyMeta.processing_comment_id) return false;
+          const status = (replyMeta.delivery_status as string) ?? 'pending';
+          if (status === 'delivered' || status === 'dead_letter') return false;
+          if (replyMeta.next_retry_at && Date.parse(replyMeta.next_retry_at as string) > now) {
+            return false;
+          }
+          if (status === 'processing') {
+            const claimedAt = Date.parse((replyMeta.claimed_at as string) ?? '');
+            if (Number.isFinite(claimedAt) && now - claimedAt < 5 * 60 * 1000) {
+              return false;
+            }
+          }
+          return true;
+        })
+        .slice(0, limit ?? 50)
+        .map((task) => ({
+          task_id: task.task_id,
+          session_id: task.session_id,
+          tenant_id: tenantId,
+          attempts: Number(
+            (task.metadata?.gateway_reply_metadata as Record<string, unknown>)?.attempts ?? 0
+          ),
+        }));
+    }),
   };
 
   Object.assign(service as unknown as Record<string, unknown>, {
@@ -189,23 +270,16 @@ function makeReproHarness(existingMapping: ThreadSessionMap | null = null) {
   };
 }
 
-describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
+describe('Issue #3212 Regression & Recovery Suite: Gateway Final Reply Delivery', () => {
   const taskId = '019fd900-0000-7000-8000-000000000050';
   const processingCommentId = 901;
 
-  it('Test Case 0: Trigger omission - TasksService terminal transition never patches session when title is set', async () => {
-    // When a task finishes, TasksService.processTerminalTaskTransition runs.
-    // It emits 'sessions.patched' event (for websocket/UI), but does NOT call sessions.patch()
-    // unless autoTitleSession runs AND session.title == null.
+  it('Test Case 0: Terminal transition executes post-commit delivery trigger independently of session patching', async () => {
+    // In the original defect, Agor relied solely on sessions.patch hooks to trigger delivery.
     // Because gateway sessions have title initialized at creation (gateway.ts:6716),
-    // session.title is NEVER null.
-    // Consequently, sessions.patch() is NEVER called upon task completion.
-    // Therefore, the only caller of flushOutboundBuffer (sessions.after.patch) NEVER FIRES!
-
+    // session.title is never null, so autoTitleSession never calls sessions.patch().
     const patchSessionMock = vi.fn();
-    const _emitEventMock = vi.fn();
     const autoTitleSession = async (task: Task, sessionTitle: string | null) => {
-      // Replicates TasksService.autoTitleSession (tasks.ts:524-546)
       if (!task.full_prompt) return;
       if (sessionTitle == null) {
         patchSessionMock(task.session_id, { title: 'Derived Title' });
@@ -219,20 +293,15 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
       full_prompt: '@agor fix bug in issue #42',
     } as unknown as Task;
 
-    // Gateway-created session has title set from prompt text (e.g. gateway.ts:6716)
     const gatewaySessionTitle = '@agor fix bug in issue #42'.substring(0, 100);
-
-    // Run autoTitleSession as TasksService does during terminal transition
     await autoTitleSession(task, gatewaySessionTitle);
-
-    // sessions.patch() is NOT called!
     expect(patchSessionMock).not.toHaveBeenCalled();
 
-    // Because sessions.patch() is never called, sessions.after.patch hooks never fire,
-    // and flushOutboundBuffer is NEVER invoked upon task completion!
+    // The fix decouples delivery from session patching by registering triggerGatewayOutboundFlushAfterCommit
+    // directly in TasksService.processTerminalTaskTransition.
   });
 
-  it('Test Case 1: Missing final assistant message race permanently abandons delivery', async () => {
+  it('Test Case 1: Missing final assistant message race schedules bounded backoff retry', async () => {
     const mapping = githubMapping();
     const harness = makeReproHarness(mapping);
 
@@ -248,20 +317,23 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
       } as unknown as Task,
     ]);
 
-    // 2. At the time flushOutboundBuffer is called, the assistant message has not yet landed in DB.
-    // (Only user message exists, or messages list is empty)
+    // 2. Assistant message has not landed yet
     harness.setMessages([]);
 
-    // 3. flushOutboundBuffer executes (single caller from sessions.patch hook)
+    // 3. flushOutboundBuffer executes
     await runWithTenantContext(tenantId, () =>
       harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
     );
 
-    // 4. Verification: flushOutboundBuffer returned silently without sending message or recording claim
+    // 4. Verification: send was deferred, retry metadata scheduled
     expect(harness.sendMessage).not.toHaveBeenCalled();
-    expect(harness.messagesRepo.mutateMetadataLocked).not.toHaveBeenCalled();
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('pending');
+    expect(replyMeta.attempts).toBe(1);
+    expect(replyMeta.next_retry_at).toBeDefined();
 
-    // 5. Message becomes available in DB afterward
+    // 5. Message lands in DB
     harness.setMessages([
       {
         message_id: '019fd900-0000-7000-8000-000000000052',
@@ -273,12 +345,20 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
       } as unknown as Message,
     ]);
 
-    // 6. Because no retry mechanism exists and no further session patch occurs,
-    // the system is stuck: sendMessage remains uncalled forever.
-    expect(harness.sendMessage).not.toHaveBeenCalled();
+    // 6. Retry executes and successfully delivers
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    const updatedTask = (await harness.taskRepo.findById(taskId)) as Task;
+    const updatedMeta = (updatedTask.metadata?.gateway_reply_metadata ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(updatedMeta.delivery_status).toBe('delivered');
   });
 
-  it('Test Case 2: Transient GitHub API failure releases claim to pending without scheduling a retry', async () => {
+  it('Test Case 2: Transient GitHub API failure schedules backoff retry and records error details', async () => {
     const mapping = githubMapping();
     const harness = makeReproHarness(mapping);
     const messageId = '019fd900-0000-7000-8000-000000000052';
@@ -304,33 +384,30 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
       } as unknown as Message,
     ]);
 
-    // GitHub API fails transiently (e.g. ECONNRESET or 502)
+    // GitHub API fails transiently (502)
     harness.sendMessage.mockRejectedValueOnce(new Error('GitHub API 502 Bad Gateway'));
 
-    // flushOutboundBuffer fires once
     await runWithTenantContext(tenantId, () =>
       harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
     );
 
-    // Verification:
-    // 1. External call was attempted
     expect(harness.sendMessage).toHaveBeenCalledOnce();
 
-    // 2. Claim was released to { status: 'pending' }
-    const updatedMessage = harness.getMessages().find((m) => m.message_id === messageId);
-    expect(updatedMessage?.metadata?.gateway_final_reply).toEqual({ status: 'pending' });
-
-    // 3. No background timer, cron, or retry loop exists:
-    // The comment on GitHub remains stuck at 'Processing...' forever unless an external patch occurs.
+    // Verification: Task reply metadata is scheduled for retry with attempts incremented
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('pending');
+    expect(replyMeta.attempts).toBe(1);
+    expect(replyMeta.next_retry_at).toBeDefined();
+    expect(replyMeta.last_error).toContain('502 Bad Gateway');
   });
 
-  it('Test Case 3: Process crash during external call leaves abandoned processing claim with no recovery', async () => {
+  it('Test Case 3: Process crash during external call is recovered after claim timeout expires', async () => {
     const mapping = githubMapping();
     const harness = makeReproHarness(mapping);
     const messageId = '019fd900-0000-7000-8000-000000000053';
+    const staleClaimTime = new Date(Date.now() - 6 * 60 * 1000).toISOString();
 
-    // Simulate crash after acquiring claim:
-    // The message is left with { status: 'processing', claim_token: 'dead-daemon-claim', claimed_at: pastDate }
     harness.setTasks([
       {
         task_id: taskId,
@@ -338,7 +415,14 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
         status: TaskStatus.COMPLETED,
         created_at: '2026-08-14T00:00:01.000Z',
         completed_at: '2026-08-14T00:00:03.000Z',
-        metadata: { gateway_reply_metadata: { processing_comment_id: processingCommentId } },
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: processingCommentId,
+            delivery_status: 'processing',
+            claim_token: 'dead-daemon-claim',
+            claimed_at: staleClaimTime,
+          },
+        },
       } as unknown as Task,
     ]);
     harness.setMessages([
@@ -353,16 +437,26 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
           gateway_final_reply: {
             status: 'processing',
             claim_token: 'dead-daemon-claim',
-            claimed_at: '2026-08-14T00:00:00.000Z',
+            claimed_at: staleClaimTime,
           },
         },
       } as unknown as Message,
     ]);
 
-    // Daemon restarts. In existing architecture:
-    // Startup does NOT scan for unfinished gateway final replies.
-    // If no session patch lands, it is never retried even after timeout expires.
-    expect(harness.sendMessage).not.toHaveBeenCalled();
+    // Active channel tenants populate for background worker
+    (harness.service as unknown as { activeChannelTenants: Set<string> }).activeChannelTenants.add(
+      tenantId
+    );
+
+    const reconciled = await runWithTenantContext(tenantId, () =>
+      harness.service.checkFinalReplyDeliveryOnce()
+    );
+
+    expect(reconciled).toBe(1);
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('delivered');
   });
 
   it('Test Case 4: Concurrent workers are atomic and fence duplicate sends', async () => {
@@ -401,14 +495,16 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
 
     // Only one send occurred
     expect(harness.sendMessage).toHaveBeenCalledOnce();
-    const updated = harness.getMessages().find((m) => m.message_id === messageId);
-    expect(updated?.metadata?.gateway_final_reply?.status).toBe('delivered');
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('delivered');
   });
 
-  it('Test Case 5: Claim timeout allows second worker to steal claim, causing duplicate external call', async () => {
+  it('Test Case 5: Expired claim handover recovers delivery across worker crash boundary', async () => {
     const mapping = githubMapping();
     const harness = makeReproHarness(mapping);
     const messageId = '019fd900-0000-7000-8000-000000000055';
+    const staleClaimTime = new Date(Date.now() - 6 * 60 * 1000).toISOString();
 
     harness.setTasks([
       {
@@ -417,7 +513,14 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
         status: TaskStatus.COMPLETED,
         created_at: '2026-08-14T00:00:01.000Z',
         completed_at: '2026-08-14T00:00:03.000Z',
-        metadata: { gateway_reply_metadata: { processing_comment_id: processingCommentId } },
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: processingCommentId,
+            delivery_status: 'processing',
+            claim_token: 'worker-1-token',
+            claimed_at: staleClaimTime,
+          },
+        },
       } as unknown as Task,
     ]);
     harness.setMessages([
@@ -432,30 +535,25 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
           gateway_final_reply: {
             status: 'processing',
             claim_token: 'worker-1-token',
-            // Stale claim: > 5 minutes old
-            claimed_at: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
+            claimed_at: staleClaimTime,
           },
         },
       } as unknown as Message,
     ]);
 
-    // Worker 2 runs flushOutboundBuffer and steals claim
+    // Worker 2 runs flushOutboundBuffer and reclaims the expired claim
     await runWithTenantContext(tenantId, () =>
       harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
     );
 
-    // Worker 2 succeeded in sending
+    // Worker 2 succeeded in sending and marking delivered
     expect(harness.sendMessage).toHaveBeenCalledOnce();
-    const updated = harness.getMessages().find((m) => m.message_id === messageId);
-    expect(updated?.metadata?.gateway_final_reply?.status).toBe('delivered');
-
-    // Note on effectively-once semantics:
-    // Both Worker 1 and Worker 2 issue `octokit.issues.updateComment` with the exact same
-    // `edit_comment_id` and body. Because GitHub's updateComment is idempotent,
-    // duplicate execution results in the same final comment state.
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('delivered');
   });
 
-  it('Test Case 6: Permanent failure (e.g. 404 Comment Not Found) is treated as pending and lacks dead-letter handling', async () => {
+  it('Test Case 6: Permanent provider failure transitions task to dead_letter state', async () => {
     const mapping = githubMapping();
     const harness = makeReproHarness(mapping);
     const messageId = '019fd900-0000-7000-8000-000000000056';
@@ -489,13 +587,14 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
       harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
     );
 
-    // Existing behavior: resets to 'pending' instead of distinguishing permanent failure / dead-letter
-    const updated = harness.getMessages().find((m) => m.message_id === messageId);
-    expect(updated?.metadata?.gateway_final_reply).toEqual({ status: 'pending' });
-    // There is no error classification, no dead_letter status, and no record of the 404 status.
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('dead_letter');
+    expect(replyMeta.next_retry_at).toBeNull();
+    expect(replyMeta.last_error).toContain('Not Found');
   });
 
-  it('Test Case 7: Rate limiting headers (Retry-After) are discarded', async () => {
+  it('Test Case 7: Rate limiting headers (Retry-After) are incorporated into backoff schedule', async () => {
     const mapping = githubMapping();
     const harness = makeReproHarness(mapping);
     const messageId = '019fd900-0000-7000-8000-000000000057';
@@ -524,17 +623,22 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
     // GitHub returns 403 rate limit with retry-after
     const rateLimitError = Object.assign(new Error('API rate limit exceeded'), {
       status: 403,
+      retryAfter: 60,
       response: { headers: { 'retry-after': '60' } },
     });
     harness.sendMessage.mockRejectedValueOnce(rateLimitError);
 
+    const before = Date.now();
     await runWithTenantContext(tenantId, () =>
       harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
     );
 
-    // Existing behavior: simply sets status: 'pending' and drops retry-after information completely
-    const updated = harness.getMessages().find((m) => m.message_id === messageId);
-    expect(updated?.metadata?.gateway_final_reply).toEqual({ status: 'pending' });
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('pending');
+    expect(replyMeta.next_retry_at).toBeDefined();
+    const nextRetryMs = Date.parse(replyMeta.next_retry_at as string);
+    expect(nextRetryMs).toBeGreaterThanOrEqual(before + 59 * 1000);
   });
 
   it('Test Case 8: Cross-tenant isolation prevents accessing or delivering another tenant task', async () => {
@@ -551,15 +655,13 @@ describe('Issue #3212 Reproduction Tests: Gateway Final Reply Delivery', () => {
       } as unknown as Task,
     ]);
 
-    // In a multi-tenant DB with RLS, taskRepo.findById or messagesRepo under a foreign tenant
-    // will return null / empty.
+    // Foreign tenant isolation
     harness.taskRepo.findById.mockImplementationOnce(async () => null);
 
     await runWithTenantContext(otherTenantId, () =>
       harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
     );
 
-    // Delivery was safely skipped for the wrong tenant
     expect(harness.sendMessage).not.toHaveBeenCalled();
   });
 });
