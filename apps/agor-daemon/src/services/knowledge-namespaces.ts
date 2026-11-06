@@ -4,6 +4,7 @@
 
 import { PAGINATION } from '@agor/core/config';
 import {
+  BranchRepository,
   GroupRepository,
   KnowledgeNamespaceRepository,
   type TenantScopeAwareDatabase,
@@ -57,6 +58,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
 > {
   private repo: KnowledgeNamespaceRepository;
   private groups: GroupRepository;
+  private branches: BranchRepository;
 
   constructor(
     db: TenantScopeAwareDatabase,
@@ -73,6 +75,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
     });
     this.repo = repo;
     this.groups = new GroupRepository(db);
+    this.branches = new BranchRepository(db);
   }
 
   private withEffectivePermission(
@@ -152,6 +155,21 @@ export class KnowledgeNamespacesService extends DrizzleService<
     const user = params?.user as User | undefined;
     if (this.isAdmin(user) && requestedUserId) return requestedUserId;
     return (user?.user_id as UserID | undefined) ?? null;
+  }
+
+  // A branch's owner gets owner access to namespaces bound to it, so only that owner or an admin may bind one.
+  private async assertCanBindBranch(
+    data: Partial<KnowledgeNamespace>,
+    params?: KnowledgeNamespaceParams,
+    existing?: KnowledgeNamespace
+  ): Promise<void> {
+    if (!data.branch_id || data.branch_id === existing?.branch_id) return;
+    const user = params?.user as User | undefined;
+    if (this.isAdmin(user)) return;
+    const branch = await this.branches.findById(data.branch_id);
+    if (!branch || !user?.user_id || branch.primary_owner_user_id !== user.user_id) {
+      throw new Forbidden('Only the branch owner or an admin can bind a knowledge namespace to it');
+    }
   }
 
   private assertSlugUnchanged(
@@ -313,6 +331,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
     data: Partial<KnowledgeNamespace>,
     params?: KnowledgeNamespaceParams
   ): Promise<KnowledgeNamespace> {
+    await this.assertCanBindBranch(data, params);
     const userId = params?.user?.user_id as UserID | undefined;
     const createdBy = this.attributionUserId(params, data.created_by);
     const result = await this.repo.create({
@@ -352,6 +371,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
     if (!existing) throw new NotFound(`Knowledge namespace not found: ${id}`);
     await this.assertCanManage(existing, params);
     await this.assertOwnerUserChangeKeepsCallerOwner(existing, data, params);
+    await this.assertCanBindBranch(data, params, existing);
     this.assertSlugUnchanged(existing, data);
     const result = await this.repo.update(String(id), {
       ...data,
@@ -372,6 +392,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
     if (!existing) throw new NotFound(`Knowledge namespace not found: ${id}`);
     await this.assertCanManage(existing, params);
     await this.assertOwnerUserChangeKeepsCallerOwner(existing, data, params);
+    await this.assertCanBindBranch(data, params, existing);
     this.assertSlugUnchanged(existing, data);
     const result = await this.repo.update(String(id), {
       ...data,
@@ -409,6 +430,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
       const existing = await this.repo.findById(String(namespaceId));
       if (!existing) throw new NotFound(`Knowledge namespace not found: ${namespaceId}`);
       await this.assertCanManage(existing, params);
+      await this.assertCanBindBranch(namespaceData, params, existing);
       this.assertSlugUnchanged(existing, namespaceData);
       const result = await this.repo.updateWithAcl(
         existing.namespace_id,
@@ -425,6 +447,7 @@ export class KnowledgeNamespacesService extends DrizzleService<
       return result;
     }
 
+    await this.assertCanBindBranch(namespaceData, params);
     const userId = params?.user?.user_id as UserID | undefined;
     const createdBy = this.attributionUserId(params, namespaceData.created_by);
     const result = await this.repo.createWithAcl(

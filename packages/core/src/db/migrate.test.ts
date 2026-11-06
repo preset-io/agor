@@ -200,6 +200,27 @@ describe('migration status introspection', () => {
     });
   });
 
+  it('reports the Knowledge others_can normalization as an offline cutover on both dialects', () => {
+    for (const [dialect, name] of [
+      ['sqlite', '0119_kb_namespace_others_can_tighten'],
+      ['postgresql', '0120_kb_namespace_others_can_tighten'],
+    ] as const) {
+      const report = introspectMigrationStatus(dialect, {
+        applied: ['0000_init'],
+        pending: [name],
+        dbAheadOfBinary: false,
+      });
+      expect(report.requiresOfflineCutover).toBe(true);
+      expect(report.pendingMigrations[0]).toMatchObject({
+        requiresOfflineCutover: true,
+        impact: { classification: 'data', userAction: 'required' },
+      });
+      expect(report.pendingMigrations[0]?.impact.summary.length).toBeLessThanOrEqual(
+        MIGRATION_IMPACT_SUMMARY_MAX_LENGTH
+      );
+    }
+  });
+
   it('uses an explicit conservative representation for absent impact metadata', () => {
     expect(getMigrationImpact('9999_unregistered')).toEqual({
       classification: 'unknown',
