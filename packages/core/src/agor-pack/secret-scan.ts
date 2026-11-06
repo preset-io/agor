@@ -1,5 +1,5 @@
 /**
- * Last-line secret scan for `.agorpack` content. Exporters never copy secret
+ * Last-line secret scan for `.agor` content. Exporters never copy secret
  * columns in the first place; this pass catches values that leaked into free
  * text (memory files, prompts, working-tree files) before they leave the
  * install. Patterns are token *shapes*, so a hit is a strong signal.

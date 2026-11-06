@@ -914,7 +914,7 @@ interface ApiKeyHttpAuthenticationService {
 export function createUploadAuthMiddleware(input: {
   authentication: BearerHttpAuthenticationService & Partial<ApiKeyHttpAuthenticationService>;
   multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
-  /** Also accept personal API keys (opt-in per route, e.g. `.agorpack` transfers). */
+  /** Also accept personal API keys (opt-in per route, e.g. `.agor` transfers). */
   apiKeys?: { resolveHostTenant?: ReturnType<typeof createApiKeyHostTenantResolver> };
 }) {
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 middleware request augmentation
@@ -2411,7 +2411,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // archived local ancestors and descendants keep their own state, so
         // the Session can intentionally appear as a root until they are
         // restored separately.
-        // Sessions imported from an .agorpack are history without SDK resume
+        // Sessions imported from a .agor are history without SDK resume
         // state; reviving one would start an agent with none of that context.
         if (session.archived && session.archived_reason === 'imported') {
           throw new BadRequest(

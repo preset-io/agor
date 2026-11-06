@@ -1,13 +1,14 @@
 /**
- * Shared `.agorpack` test fixture: a real REST app with the pack routes, a
+ * Shared `.agor` test fixture: a real REST app with the pack routes, a
  * seeded teammate (board, Knowledge, artifact, schedule, sessions, attachment)
  * owned by Ada, and its exported pack. Used by the SQLite and PostgreSQL
  * round-trip tests.
  */
 
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { AgorPackWriter } from '@agor/core/agor-pack';
+import { type AgorPackUploadSend, AgorPackWriter, uploadPackChunked } from '@agor/core/agor-pack';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   ArtifactRepository,
@@ -27,6 +28,9 @@ import {
 } from '@agor/core/db';
 import { authenticate } from '@agor/core/feathers';
 import {
+  AGOR_PACK,
+  type AgorPackChunkedUpload,
+  type AgorPackImport,
   type AgorPackManifest,
   type BranchID,
   type HookContext,
@@ -39,6 +43,7 @@ import { LocalUploadStagingStore } from '../src/host/local/upload-staging-store.
 import type { RegisterHooksContext } from '../src/register-hooks.js';
 import { createUploadAuthMiddleware } from '../src/register-routes.js';
 import { registerAgorPackRoutes } from '../src/routes/agor-pack.js';
+import { setAgorPackChunkBytesForTests } from '../src/services/agor-pack-chunked-upload.js';
 import { AgorPackExporter, type AgorPackServiceContext } from '../src/services/agor-pack-export.js';
 import { KnowledgeDocumentsService } from '../src/services/knowledge-documents.js';
 import { ReposService } from '../src/services/repos.js';
@@ -464,4 +469,165 @@ export async function expectPackRoutesIsolated(
     const branch = await new BranchRepository(fx.db).findById(seeded.branch.branch_id);
     expect(branch?.agor_pack?.switch_over ?? null).toBeNull();
   });
+}
+
+/**
+ * Resumable upload over HTTP: out-of-order and repeated chunks, resume after
+ * a dropped connection, a repeated `complete`, a wrong checksum, the size
+ * caps, and isolation (another user or tenant can't see, extend, or finish
+ * someone's upload; the same file uploaded by two users stays two uploads).
+ */
+export async function expectChunkedUploadWorks(
+  fx: PackFixture,
+  expect: typeof import('vitest').expect,
+  foreign: Array<{ user: User; tenantId: TenantID }> = []
+) {
+  const { server, ada, bea } = fx;
+  const tenantOf = (tenantId: TenantID) =>
+    resolveMultiTenancyConfig(server.app.get('config')).mode === 'static' ? undefined : tenantId;
+  const home = fx.ctx(ada).tenantId;
+  const as = (user: User, tenantId: TenantID = home) =>
+    server.headers(user.user_id as never, tenantOf(tenantId));
+  const base = `${server.url}/agor-pack/uploads/chunked`;
+  const send =
+    (user: User, tenantId: TenantID = home): AgorPackUploadSend =>
+    (path, init) => {
+      const headers = new Headers(as(user, tenantId));
+      for (const [name, value] of Object.entries(init.headers ?? {})) headers.set(name, value);
+      return fetch(`${server.url}${path}`, {
+        method: init.method,
+        headers,
+        body: init.body as never,
+      });
+    };
+  const { pack } = await fx.exportPack();
+  const sha256 = createHash('sha256').update(pack).digest('hex');
+  setAgorPackChunkBytesForTests(1024);
+  try {
+    const init = async (user: User, body: unknown, tenantId: TenantID = home) =>
+      fetch(base, {
+        method: 'POST',
+        headers: { ...as(user, tenantId), 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    const put = (user: User, id: string, index: number, bytes: Buffer, tenantId = home) =>
+      fetch(`${base}/${id}/${index}`, {
+        method: 'PUT',
+        headers: { ...as(user, tenantId), 'content-type': 'application/octet-stream' },
+        body: bytes,
+      });
+    const chunk = (index: number) => pack.subarray(index * 1024, (index + 1) * 1024);
+
+    // Caps and shape.
+    expect((await init(bea, { size: AGOR_PACK.maxBytes + 1, sha256 })).status).toBe(413);
+    expect((await init(bea, { size: pack.byteLength })).status).toBe(400);
+    const started = await init(bea, { size: pack.byteLength, sha256 });
+    expect(started.status, await started.clone().text()).toBe(200);
+    const state = (await started.json()) as AgorPackChunkedUpload;
+    expect(state).toMatchObject({ chunk_size: 1024, received: [], import_id: null });
+    expect(state.chunks).toBeGreaterThan(2);
+    const last = state.chunks - 1;
+    expect((await put(bea, state.upload_id, state.chunks, chunk(0))).status).toBe(400);
+    expect((await put(bea, state.upload_id, 0, chunk(0).subarray(1))).status).toBe(400);
+    expect((await put(bea, state.upload_id, 0, Buffer.alloc(1025))).status).toBe(413);
+
+    // Out of order and repeated; then the connection "drops".
+    expect((await put(bea, state.upload_id, last, chunk(last))).status).toBe(200);
+    expect((await put(bea, state.upload_id, 1, chunk(1))).status).toBe(200);
+    const again = await put(bea, state.upload_id, 1, chunk(1));
+    expect(((await again.json()) as AgorPackChunkedUpload).received).toEqual([1, last]);
+
+    // Nobody else sees, extends, or finishes it.
+    for (const { user, tenantId } of [{ user: ada, tenantId: home }, ...foreign]) {
+      expect(
+        (await fetch(`${base}/${state.upload_id}`, { headers: as(user, tenantId) })).status
+      ).toBe(404);
+      expect((await put(user, state.upload_id, 0, chunk(0), tenantId)).status).toBe(404);
+      const complete = await fetch(`${base}/${state.upload_id}/complete`, {
+        method: 'POST',
+        headers: as(user, tenantId),
+      });
+      expect(complete.status).toBe(404);
+      // The same file from someone else is their own upload.
+      const theirs = (await (
+        await init(user, { size: pack.byteLength, sha256 }, tenantId)
+      ).json()) as AgorPackChunkedUpload;
+      expect(theirs.received).toEqual([]);
+    }
+
+    // Incomplete: refused; resuming sends only what's missing.
+    const early = await fetch(`${base}/${state.upload_id}/complete`, {
+      method: 'POST',
+      headers: as(bea),
+    });
+    expect(early.status).toBe(409);
+    const sent: number[] = [];
+    const receipt = await uploadPackChunked({
+      size: pack.byteLength,
+      sha256,
+      readChunk: async (start, end) => pack.subarray(start, end),
+      send: (path, request) => {
+        const index = /\/(\d+)$/.exec(path)?.[1];
+        if (request.method === 'PUT' && index) sent.push(Number(index));
+        return send(bea)(path, request);
+      },
+      retryDelayMs: 0,
+    });
+    expect(sent).not.toContain(1);
+    expect(sent).not.toContain(last);
+    expect(sent).toHaveLength(state.chunks - 2);
+    expect(receipt.manifest.teammates[0]?.display_name).toBe('Ada');
+
+    // Repeating `complete` (a lost response) or the whole upload returns the receipt.
+    const repeated = await fetch(`${base}/${state.upload_id}/complete`, {
+      method: 'POST',
+      headers: as(bea),
+    });
+    expect(((await repeated.json()) as AgorPackImport).import_id).toBe(receipt.import_id);
+    const resent: number[] = [];
+    const second = await uploadPackChunked({
+      size: pack.byteLength,
+      sha256,
+      readChunk: async (start, end) => pack.subarray(start, end),
+      send: (path, request) => {
+        if (request.method === 'PUT') resent.push(1);
+        return send(bea)(path, request);
+      },
+      retryDelayMs: 0,
+    });
+    expect(second.import_id).toBe(receipt.import_id);
+    expect(resent).toEqual([]);
+
+    // A wrong checksum is refused and the chunks are dropped.
+    const wrong = createHash('sha256').update('something else').digest('hex');
+    await expect(
+      uploadPackChunked({
+        size: pack.byteLength,
+        sha256: wrong,
+        readChunk: async (start, end) => pack.subarray(start, end),
+        send: send(bea),
+        retryDelayMs: 0,
+      })
+    ).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/checksum/) });
+    const dropped = (await (
+      await init(bea, { size: pack.byteLength, sha256: wrong })
+    ).json()) as AgorPackChunkedUpload;
+    expect(dropped.received).toEqual([]);
+
+    // A transient failure mid-upload is retried, not fatal.
+    let failures = 1;
+    const flaky = await uploadPackChunked({
+      size: pack.byteLength,
+      sha256,
+      readChunk: async (start, end) => pack.subarray(start, end),
+      send: async (path, request) => {
+        if (request.method === 'POST' && failures-- > 0) throw new TypeError('fetch failed');
+        return send(bea)(path, request);
+      },
+      retryDelayMs: 0,
+    });
+    expect(flaky.import_id).toBe(receipt.import_id);
+  } finally {
+    setAgorPackChunkBytesForTests();
+  }
 }

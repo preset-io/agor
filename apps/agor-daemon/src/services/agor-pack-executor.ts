@@ -1,5 +1,5 @@
 /**
- * Launch the `.agorpack` executor legs (`branch.pack.collect` /
+ * Launch the `.agor` executor legs (`branch.pack.collect` /
  * `branch.pack.materialize`) for one branch as the requesting user, with the
  * same authority resolution as other branch filesystem commands: branch
  * permission + filesystem access, sandbox owner home, delegated home key, and

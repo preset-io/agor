@@ -57,7 +57,7 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
   teammates,
   initialBranchIds,
   onExported,
-  exportLabel = 'Export .agorpack',
+  exportLabel = 'Export .agor',
 }) => {
   const { showError, showSuccess } = useThemedMessage();
   const [branchIds, setBranchIds] = useState<string[]>(initialBranchIds);
@@ -158,7 +158,7 @@ export const ExportPackPanel: React.FC<ExportPackPanelProps> = ({
             onChange={(event) => setSessions(event.target.value)}
             options={[
               { value: 'none', label: 'None' },
-              { value: 'last_30_days', label: 'Last 30 days' },
+              { value: 'last_90_days', label: 'Last 90 days' },
               { value: 'all', label: 'All' },
             ]}
           />

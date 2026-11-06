@@ -59,7 +59,7 @@ function toRecord(row: Row): AgorPackImportRecord {
   };
 }
 
-/** `.agorpack` import receipts: idempotency key, dry-run cache, and remap. */
+/** `.agor` import receipts: idempotency key, dry-run cache, and remap. */
 export class AgorPackImportRepository {
   constructor(private readonly db: Database) {}
 

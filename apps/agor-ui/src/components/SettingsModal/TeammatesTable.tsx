@@ -184,7 +184,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
       width: 136,
       render: (_: unknown, record: Branch) => (
         <SettingsActionGroup>
-          <Tooltip title="Export .agorpack">
+          <Tooltip title="Export .agor">
             <Button
               type="text"
               size="small"
@@ -251,7 +251,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
         primaryActions={
           <Space wrap>
             <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>
-              Import .agorpack
+              Import .agor
             </Button>
             <Button
               icon={<DownloadOutlined />}

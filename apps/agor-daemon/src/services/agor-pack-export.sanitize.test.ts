@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { sanitizeMcpArgs, sanitizeMcpUrl } from './agor-pack-export';
 
-describe('MCP credential sanitizing for .agorpack', () => {
+describe('MCP credential sanitizing for .agor', () => {
   it('drops userinfo and credential-named query values, keeping env references', () => {
     expect(
       sanitizeMcpUrl('https://user:pw@example.test/mcp?api_key=plain&region=eu&design=x')

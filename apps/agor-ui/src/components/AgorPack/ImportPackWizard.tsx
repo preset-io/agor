@@ -150,7 +150,7 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
 
   return (
     <AdaptiveSettingsModal
-      title="Import teammates (.agorpack)"
+      title="Import teammates (.agor)"
       open={open}
       onCancel={onClose}
       width={880}
@@ -187,7 +187,7 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
         {step === 0 && (
           <Flex vertical gap="small">
             <Upload.Dragger
-              accept=".agorpack,application/zip"
+              accept=".agor,application/zip"
               multiple={false}
               showUploadList={false}
               disabled={progress !== null}
@@ -199,7 +199,7 @@ export const ImportPackWizard: React.FC<ImportPackWizardProps> = ({
               <p className="ant-upload-drag-icon">
                 <InboxOutlined />
               </p>
-              <p className="ant-upload-text">Drop a .agorpack file here, or click to choose one</p>
+              <p className="ant-upload-text">Drop a .agor file here, or click to choose one</p>
               <p className="ant-upload-hint">
                 Nothing is imported until you review the contents on the next step.
               </p>

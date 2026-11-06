@@ -603,7 +603,7 @@ export interface Session {
    * - 'manual': User manually archived this session
    * - 'parent_archived': Cascaded from parent session being manually archived
    * - 'btw_completed': Ephemeral btw fork auto-archived after task completion
-   * - 'imported': Read-only history restored from an `.agorpack`
+   * - 'imported': Read-only history restored from a `.agor`
    */
   archived_reason?: 'branch_archived' | 'manual' | 'parent_archived' | 'btw_completed' | 'imported';
 

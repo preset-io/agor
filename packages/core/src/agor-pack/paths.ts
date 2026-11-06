@@ -1,5 +1,5 @@
 /**
- * Entry-name rules for `.agorpack` files. Every name is validated before any
+ * Entry-name rules for `.agor` files. Every name is validated before any
  * byte of the entry is read: relative, normalized, no traversal or control
  * characters, and matching one of the known layout patterns. The same rules
  * gate what the executor collects from a branch and what it writes back.
@@ -69,7 +69,7 @@ export function assertAgorPackEntryPath(path: string): void {
   assertSafeRelativePackPath(path);
   if (path === AGOR_PACK.manifestPath) return;
   if (!LAYOUT.some((pattern) => pattern.test(path))) {
-    throw new AgorPackFormatError(`Pack entry is not part of the .agorpack layout: ${path}`);
+    throw new AgorPackFormatError(`Pack entry is not part of the .agor layout: ${path}`);
   }
   const worktree = new RegExp(`${PREFIX}git/worktree/(.+)$`).exec(path);
   if (worktree && !isPortableWorktreePath(worktree[1] as string)) {

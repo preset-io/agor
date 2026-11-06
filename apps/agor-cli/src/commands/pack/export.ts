@@ -1,5 +1,5 @@
 /**
- * `agor pack export` — export AI teammates to a portable `.agorpack` file.
+ * `agor pack export` — export AI teammates to a portable `.agor` file.
  */
 
 import { createWriteStream } from 'node:fs';
@@ -8,19 +8,17 @@ import { pipeline } from 'node:stream/promises';
 import {
   AGOR_PACK,
   AGOR_PACK_DEFAULT_SESSION_MODE,
-  AGOR_PACK_SECTIONS,
   type AgorPackExportRequest,
   type AgorPackManifest,
-  type AgorPackSection,
 } from '@agor/core/types';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 import { packFetch, packJson } from '../../lib/pack/http';
 
-const SESSION_MODES: Record<string, AgorPackExportRequest['sessions']> = {
+const SESSION_MODES: Record<string, NonNullable<AgorPackExportRequest['sessions']>> = {
   none: 'none',
-  '30d': 'last_30_days',
+  '90d': 'last_90_days',
   all: 'all',
 };
 const DEFAULT_SESSIONS_FLAG = Object.keys(SESSION_MODES).find(
@@ -28,15 +26,16 @@ const DEFAULT_SESSIONS_FLAG = Object.keys(SESSION_MODES).find(
 ) as string;
 
 export default class PackExport extends BaseCommand {
-  static override summary = 'Export AI teammates to a .agorpack file';
+  static override summary = 'Export AI teammates to a .agor file';
   static override description =
-    'Writes one secret-free .agorpack with the selected teammates: board, Knowledge, artifacts, ' +
-    'schedules, Claude memory, attachments, git history and uncommitted files, and optionally ' +
-    'session history. Credentials never leave this install; the import shows what to reconnect.';
+    'Writes one secret-free .agor file with the selected teammates: board, Knowledge, artifacts, ' +
+    'schedules, Claude memory, attachments, git history and uncommitted files, and session ' +
+    'history (last 90 days by default). Credentials never leave this install; the import shows ' +
+    'what to reconnect.';
 
   static override examples = [
-    '<%= config.bin %> <%= command.id %> 01933e4a -o ada.agorpack',
-    '<%= config.bin %> <%= command.id %> 01933e4a 01933e4b --sections board,knowledge --sessions 30d -o team.agorpack',
+    '<%= config.bin %> <%= command.id %> 01933e4a -o ada.agor',
+    '<%= config.bin %> <%= command.id %> 01933e4a 01933e4b --sessions all -o team.agor',
   ];
 
   static override strict = false;
@@ -47,9 +46,6 @@ export default class PackExport extends BaseCommand {
 
   static override flags = {
     output: Flags.string({ char: 'o', description: 'Output file', required: true }),
-    sections: Flags.string({
-      description: `Comma-separated sections (${AGOR_PACK_SECTIONS.join(', ')}); default: all`,
-    }),
     sessions: Flags.string({
       description: 'Session history to include',
       options: Object.keys(SESSION_MODES),
@@ -63,14 +59,6 @@ export default class PackExport extends BaseCommand {
 
   async run(): Promise<void> {
     const { argv, flags } = await this.parse(PackExport);
-    const sections = flags.sections
-      ? flags.sections.split(',').map((value) => value.trim())
-      : [...AGOR_PACK_SECTIONS];
-    for (const section of sections) {
-      if (!(AGOR_PACK_SECTIONS as readonly string[]).includes(section)) {
-        this.error(`Unknown section "${section}". Choose from: ${AGOR_PACK_SECTIONS.join(', ')}`);
-      }
-    }
     const client = await this.connectToDaemon();
     try {
       const branchIds: string[] = [];
@@ -88,7 +76,6 @@ export default class PackExport extends BaseCommand {
         manifest: AgorPackManifest;
       }>(daemonUrl, bearer, '/agor-pack/exports', {
         branch_ids: branchIds,
-        sections: sections as AgorPackSection[],
         sessions: SESSION_MODES[flags.sessions] ?? AGOR_PACK_DEFAULT_SESSION_MODE,
         include_others_sessions: flags['include-others-sessions'],
       } satisfies AgorPackExportRequest);

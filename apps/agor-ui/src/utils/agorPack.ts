@@ -1,5 +1,5 @@
 /**
- * Browser client for the daemon's raw `.agorpack` routes. Packs are binary
+ * Browser client for the daemon's raw `.agor` routes. Packs are binary
  * and can be large, so these use fetch/XHR with the stored bearer (refreshed
  * once on 401, like attachment uploads) instead of the Feathers socket.
  */

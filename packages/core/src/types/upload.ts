@@ -42,7 +42,7 @@ export type UploadProvenance =
   | 'gateway-discord'
   | 'gateway-teams'
   | 'mcp-slack'
-  /** Restored from an `.agorpack` import (and the staged pack itself). */
+  /** Restored from a `.agor` import (and the staged pack itself). */
   | 'import';
 export type UploadStatus = 'pending' | 'active' | 'deleting';
 
@@ -201,7 +201,8 @@ export interface UploadStagingStore {
  * owner (the import/export they belong to and its user) instead of a
  * session/branch, their own byte namespace, and the same expiry sweep.
  */
-export type StagedBlobKind = 'agor-pack';
+/** `agor-pack-chunk`: one part of a resumable pack upload (and its bookkeeping). */
+export type StagedBlobKind = 'agor-pack' | 'agor-pack-chunk';
 
 export interface StagedBlobOwner {
   tenantId: TenantID;
@@ -241,6 +242,8 @@ export interface BlobStagingStore {
     input: StagedBlobReadInput & { offset?: number; length?: number }
   ): Promise<NodeJS.ReadableStream>;
   delete(input: StagedBlobReadInput): Promise<void>;
+  /** The caller's blobs of one kind whose scope starts with `scopePrefix`. */
+  list(input: Omit<StagedBlobOwner, 'scopeId'> & { scopePrefix: string }): Promise<StagedBlob[]>;
   /** Sweep one expired blob if it is still expired and not in use; true when removed. */
   sweepExpired(input: StagedBlobReadInput, now?: Date): Promise<boolean>;
   cleanupExpired(owner: Pick<UploadOwner, 'tenantId'>, now?: Date): Promise<number>;

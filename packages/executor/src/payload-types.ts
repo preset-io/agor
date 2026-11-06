@@ -641,7 +641,7 @@ export const BranchUploadMaterializePayloadSchema = BasePayloadSchema.extend({
 export type BranchUploadMaterializePayload = z.infer<typeof BranchUploadMaterializePayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
-// Teammate pack (.agorpack) Payloads
+// Teammate pack (.agor) Payloads
 // ═══════════════════════════════════════════════════════════
 
 const packBranchHomeParams = {

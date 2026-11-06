@@ -1,5 +1,5 @@
 /**
- * `.agorpack` — a portable, secret-free zip of one or more AI teammates.
+ * `.agor` — a portable, secret-free zip of one or more AI teammates.
  *
  * The pack carries versioned section DTOs, never raw table rows, so packs move
  * between Agor releases and between SQLite and PostgreSQL installs without the
@@ -26,21 +26,26 @@ import { z } from 'zod';
 export const AGOR_PACK = {
   format: 'agor-pack',
   version: 1,
-  extension: '.agorpack',
+  extension: '.agor',
   mimeType: 'application/zip',
   manifestPath: 'manifest.json',
-  /** Compressed pack size accepted by the import route. */
-  maxBytes: 1024 * 1024 * 1024,
+  /** Compressed pack size accepted by the import routes. */
+  maxBytes: 2 * 1024 * 1024 * 1024,
+  /**
+   * Chunk size of the resumable upload (`/agor-pack/uploads/chunked`), small
+   * enough for ingress request limits in front of hosted workspaces.
+   */
+  chunkBytes: 8 * 1024 * 1024,
   maxEntries: 50_000,
   maxEntryBytes: 256 * 1024 * 1024,
   maxUncompressedBytes: 4 * 1024 * 1024 * 1024,
   /** JSON/YAML/Markdown entries are parsed in memory; keep them bounded. */
   maxTextEntryBytes: 64 * 1024 * 1024,
   maxTeammates: 50,
-  recentSessionDays: 30,
+  recentSessionDays: 90,
 } as const;
 
-/** Optional sections chosen with checkboxes at export time. */
+/** Pack sections; an export includes all of them unless a caller narrows the list. */
 export const AGOR_PACK_SECTIONS = [
   'board',
   'knowledge',
@@ -52,10 +57,10 @@ export const AGOR_PACK_SECTIONS = [
 ] as const;
 export type AgorPackSection = (typeof AGOR_PACK_SECTIONS)[number];
 
-export const AGOR_PACK_SESSION_MODES = ['none', 'last_30_days', 'all'] as const;
+export const AGOR_PACK_SESSION_MODES = ['none', 'last_90_days', 'all'] as const;
 export type AgorPackSessionMode = (typeof AGOR_PACK_SESSION_MODES)[number];
 /** Session history included when the exporter doesn't choose (UI, CLI, and API). */
-export const AGOR_PACK_DEFAULT_SESSION_MODE: AgorPackSessionMode = 'last_30_days';
+export const AGOR_PACK_DEFAULT_SESSION_MODE: AgorPackSessionMode = 'last_90_days';
 
 const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/);
 const uuid = z.string().uuid();
@@ -68,12 +73,21 @@ export const agorPackTeammateKey = z.string().regex(/^t[0-9]{2,3}$/);
 export const agorPackExportRequestSchema = z
   .object({
     branch_ids: z.array(uuid).min(1).max(AGOR_PACK.maxTeammates),
-    sections: z.array(z.enum(AGOR_PACK_SECTIONS)).max(AGOR_PACK_SECTIONS.length),
+    /** Everything by default; narrowing it is an API/CLI-only option. */
+    sections: z
+      .array(z.enum(AGOR_PACK_SECTIONS))
+      .max(AGOR_PACK_SECTIONS.length)
+      .default([...AGOR_PACK_SECTIONS]),
     sessions: z.enum(AGOR_PACK_SESSION_MODES).default(AGOR_PACK_DEFAULT_SESSION_MODE),
     include_others_sessions: z.boolean().default(false),
+    /** Sessions to leave out (the preflight's "may contain passwords" list). */
+    exclude_session_ids: z.array(uuid).max(100_000).default([]),
   })
   .strict();
-export type AgorPackExportRequest = z.infer<typeof agorPackExportRequestSchema>;
+/** What a client sends (defaults omitted). */
+export type AgorPackExportRequest = z.input<typeof agorPackExportRequestSchema>;
+/** A parsed request, defaults applied. */
+export type AgorPackExportOptions = z.output<typeof agorPackExportRequestSchema>;
 
 export const agorPackEntrySchema = z
   .object({ path: z.string().min(1).max(1024), bytes: nonNegativeInt, sha256: sha256Hex })
@@ -137,6 +151,18 @@ export const agorPackArchivedSkipsSchema = z
   .strict();
 export type AgorPackArchivedSkips = z.infer<typeof agorPackArchivedSkipsSchema>;
 
+/**
+ * Hosts only reachable on the source network (localhost, RFC 1918 addresses,
+ * `*.internal` / `*.local` / `*.lan` names). Agor Cloud can't reach them.
+ */
+const PRIVATE_HOST =
+  /(?<![\w.-])(localhost|\[::1\]|0\.0\.0\.0|127(?:\.\d{1,3}){3}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:internal|local|lan|localhost))(?![\w-]|\.[\w-])/i;
+
+/** The first private-network host in `text` (a URL or command), or null. */
+export function agorPackPrivateHost(text: string | null | undefined): string | null {
+  return text ? (PRIVATE_HOST.exec(text)?.[1] ?? null) : null;
+}
+
 /** `pluralize(1, 'artifact')` → "1 artifact"; `pluralize(2, 'artifact')` → "2 artifacts". */
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
@@ -193,6 +219,8 @@ export const agorPackTeammateSectionsSchema = z.looseObject({
       messages: nonNegativeInt,
       others_included: z.boolean(),
       redacted_values: nonNegativeInt,
+      /** Sessions with a redacted value (absent in older packs). */
+      flagged: nonNegativeInt.optional(),
     })
     .strict()
     .nullable(),
@@ -442,6 +470,8 @@ export const agorPackSessionFileSchema = z
       })
       .strict(),
     tasks: z.array(agorPackTaskSchema).max(100_000),
+    /** Secret-shaped values redacted from this session (absent in older packs). */
+    redacted_values: nonNegativeInt.optional(),
   })
   .strict();
 export type AgorPackSessionFile = z.infer<typeof agorPackSessionFileSchema>;
@@ -530,9 +560,12 @@ export const agorPackApplyRequestSchema = z
     teammates: z.array(agorPackTeammateKey).min(1).max(AGOR_PACK.maxTeammates),
     /** `new` creates a board per teammate; otherwise an existing board id. */
     board_id: uuid.nullable().default(null),
+    /** Leave out sessions the export flagged (a value was redacted). */
+    skip_flagged_sessions: z.boolean().default(false),
   })
   .strict();
-export type AgorPackApplyRequest = z.infer<typeof agorPackApplyRequestSchema>;
+export type AgorPackApplyRequest = z.input<typeof agorPackApplyRequestSchema>;
+export type AgorPackApplyOptions = z.output<typeof agorPackApplyRequestSchema>;
 
 export type AgorPackFilesystemStatus = 'pending' | 'ready' | 'failed' | 'skipped';
 
@@ -605,6 +638,50 @@ export interface AgorPackImport {
   applied_at: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Resumable upload (`/agor-pack/uploads/chunked`)
+//
+//   POST /agor-pack/uploads/chunked                    { size, sha256 } → state
+//   GET  /agor-pack/uploads/chunked/:uploadId          state (what to resend)
+//   PUT  /agor-pack/uploads/chunked/:uploadId/:index   raw chunk bytes → state
+//   POST /agor-pack/uploads/chunked/:uploadId/complete → dry-run receipt
+//
+// Chunk `i` covers bytes [i * chunk_size, min(size, (i + 1) * chunk_size)).
+// The upload id is derived from (size, sha256), so starting the same file
+// again resumes it; a PUT of a chunk the server has is a no-op.
+// ---------------------------------------------------------------------------
+
+export const agorPackChunkedUploadInitSchema = z
+  .object({ size: z.number().int().positive(), sha256: sha256Hex })
+  .strict();
+export type AgorPackChunkedUploadInit = z.infer<typeof agorPackChunkedUploadInitSchema>;
+
+export interface AgorPackChunkedUpload {
+  upload_id: string;
+  size: number;
+  sha256: string;
+  chunk_size: number;
+  chunks: number;
+  /** Chunk indexes the server has, ascending. */
+  received: number[];
+  /** Set once the upload completed: its dry-run receipt. */
+  import_id: string | null;
+}
+
+/** Number of chunks of a `size`-byte upload. */
+export function agorPackChunkCount(size: number, chunkSize: number = AGOR_PACK.chunkBytes): number {
+  return Math.ceil(size / chunkSize);
+}
+
+/** Byte length of chunk `index` (the last one may be shorter). */
+export function agorPackChunkLength(
+  size: number,
+  index: number,
+  chunkSize: number = AGOR_PACK.chunkBytes
+): number {
+  return Math.max(0, Math.min(chunkSize, size - index * chunkSize));
+}
+
 /** Where an imported teammate came from (on the imported branch). */
 export interface AgorPackImportedFrom {
   pack_id: string;
@@ -627,12 +704,33 @@ export interface AgorPackSwitchOverState {
   disabled_channel_ids: string[];
 }
 
+/** Session counts (or estimated bytes) by owner and age. */
+export interface AgorPackSessionTally {
+  own: number;
+  others: number;
+  recent_own: number;
+  recent_others: number;
+}
+
+/** A session whose history has secret-shaped text the export would redact. */
+export interface AgorPackFlaggedSession {
+  session_id: string;
+  title: string | null;
+  own: boolean;
+  recent: boolean;
+}
+
 export interface AgorPackPreflightTeammate {
   branch_id: string;
   display_name: string;
   local_home: boolean;
   remote_url: string | null;
-  sessions: { own: number; others: number; recent_own: number; recent_others: number };
+  sessions: AgorPackSessionTally;
+  /** Estimated uncompressed size of that session history. */
+  session_bytes: AgorPackSessionTally;
+  /** Estimated size of everything else (artifacts, Knowledge, schedules). */
+  other_bytes: number;
+  flagged_sessions: AgorPackFlaggedSession[];
   schedules: number;
   artifacts: number;
   knowledge_documents: number;

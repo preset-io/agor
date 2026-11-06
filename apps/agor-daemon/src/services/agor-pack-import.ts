@@ -1,5 +1,5 @@
 /**
- * `.agorpack` import: stage → dry-run → apply.
+ * `.agor` import: stage → dry-run → apply.
  *
  * - The importer owns everything it creates (`created_by`/owner = importer);
  *   the original author survives only as "originally by" metadata.
@@ -274,7 +274,7 @@ export class AgorPackImporter {
         scopeId: scope,
         createdBy: this.ctx.user.user_id as UserID,
       },
-      name: 'import.agorpack',
+      name: 'import.agor',
       mimeType: 'application/zip',
       body,
       sizeHint: size,
@@ -336,6 +336,16 @@ export class AgorPackImporter {
       return publicImport(winner);
     }
     return publicImport(created);
+  }
+
+  /**
+   * Whether the caller's receipt can still be followed or applied without a
+   * new upload (a worker holds it, or its pack is still staged).
+   */
+  async isUsable(importId: string): Promise<boolean> {
+    const record = await this.unit(() => this.receipts().findById(importId));
+    if (!record || record.owner_user_id !== this.ctx.user.user_id) return false;
+    return liveClaim(record) || (await this.isStaged(record));
   }
 
   private async isStaged(record: AgorPackImportRecord): Promise<boolean> {
@@ -520,7 +530,14 @@ export class AgorPackImporter {
             const repo = await this.ensureRepo(file, check);
             let plan = progress[teammate.key];
             if (!plan) {
-              plan = await this.plan(reader, teammate, file, repo, request.board_id);
+              plan = await this.plan(
+                reader,
+                teammate,
+                file,
+                repo,
+                request.board_id ?? null,
+                request.skip_flagged_sessions === true
+              );
               progress[teammate.key] = plan;
               await save({ progress });
             }
@@ -534,7 +551,7 @@ export class AgorPackImporter {
               teammate,
               file,
               repo,
-              request.board_id,
+              request.board_id ?? null,
               state,
               { check, fenced },
               persist
@@ -590,7 +607,8 @@ export class AgorPackImporter {
     summary: AgorPackTeammateSummary,
     file: AgorPackTeammateFile,
     repo: Repo,
-    existingBoardId: string | null
+    existingBoardId: string | null,
+    skipFlaggedSessions: boolean
   ): Promise<AgorPackTeammateProgress> {
     const path = (relative: string) => teammatePackPath(summary.key, relative);
     const artifacts: Record<string, string> = {};
@@ -608,6 +626,8 @@ export class AgorPackImporter {
     for (const entry of reader.list(path('sessions/'))) {
       if (!entry.path.endsWith('.json')) continue;
       const sessionFile = await reader.readJson(entry.path, agorPackSessionFileSchema);
+      // A session left out of the plan is never created (nor its attachments).
+      if (skipFlaggedSessions && (sessionFile.redacted_values ?? 0) > 0) continue;
       sessions[sessionFile.session.source_session_id] = generateId();
     }
     const uploadRefs: Record<string, string> = {};
@@ -1060,9 +1080,10 @@ export class AgorPackImporter {
     for (const { file: sessionFile } of sessionEntries) {
       const source = sessionFile.session;
       const parentSource = source.parent_source_session_id ?? source.forked_from_source_session_id;
-      if (!parentSource || !remap.sessions[parentSource]) continue;
+      const childId = remap.sessions[source.source_session_id];
+      if (!parentSource || !remap.sessions[parentSource] || !childId) continue;
       const list = childrenOf.get(parentSource) ?? [];
-      list.push(remap.sessions[source.source_session_id] as SessionID);
+      list.push(childId as SessionID);
       childrenOf.set(parentSource, list);
     }
     const sessionsRepo = new SessionRepository(this.ctx.db);

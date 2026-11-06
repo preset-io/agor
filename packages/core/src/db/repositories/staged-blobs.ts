@@ -6,7 +6,7 @@ import type {
   UploadRef,
   UserID,
 } from '@agor/core/types';
-import { and, asc, eq, lt } from 'drizzle-orm';
+import { and, asc, eq, like, lt } from 'drizzle-orm';
 import type { Database, SystemDatabase } from '../client';
 import { deleteFrom, insert, isPostgresDatabase, select, update } from '../database-wrapper';
 import { stagedBlobs } from '../schema';
@@ -58,6 +58,28 @@ export class StagedBlobRepository {
   async find(tenantId: TenantID, ref: UploadRef): Promise<StagedBlob | null> {
     const row = await select(this.db).from(stagedBlobs).where(eq(stagedBlobs.blob_ref, ref)).one();
     return row ? logical(row, tenantId) : null;
+  }
+
+  /** One creator's blobs of a kind whose scope starts with `prefix` (no LIKE wildcards). */
+  async findByScopePrefix(
+    tenantId: TenantID,
+    kind: StagedBlobKind,
+    prefix: string,
+    createdBy: UserID
+  ): Promise<StagedBlob[]> {
+    if (/[%_\\]/.test(prefix)) throw new RepositoryError('Invalid blob scope prefix');
+    const rows = await select(this.db)
+      .from(stagedBlobs)
+      .where(
+        and(
+          eq(stagedBlobs.kind, kind),
+          eq(stagedBlobs.created_by, createdBy),
+          like(stagedBlobs.scope_id, `${prefix}%`)
+        )
+      )
+      .orderBy(asc(stagedBlobs.created_at))
+      .all();
+    return rows.map((row: Row) => logical(row, tenantId));
   }
 
   async remove(ref: UploadRef): Promise<void> {

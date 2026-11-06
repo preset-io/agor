@@ -19,7 +19,7 @@ import type {
  */
 export class MetadataUploadStagingStore implements UploadStagingStore {
   private readonly repository: UploadRepository;
-  /** Non-attachment blobs (`.agorpack` files), when a blob byte namespace is configured. */
+  /** Non-attachment blobs (`.agor` files), when a blob byte namespace is configured. */
   readonly blobs?: BlobStagingStore;
 
   constructor(
@@ -252,6 +252,17 @@ class MetadataBlobStagingStore implements BlobStagingStore {
     if (!(await this.authorize(input, false))) return;
     await this.bytes.delete(this.byteInput(input, input.ref));
     await this.unit(input.tenantId, () => this.repository.remove(input.ref));
+  }
+
+  async list(input: Parameters<BlobStagingStore['list']>[0]): Promise<StagedBlob[]> {
+    return this.unit(input.tenantId, () =>
+      this.repository.findByScopePrefix(
+        input.tenantId,
+        input.kind,
+        input.scopePrefix,
+        input.createdBy
+      )
+    );
   }
 
   /**

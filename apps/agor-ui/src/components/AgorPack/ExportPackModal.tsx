@@ -16,7 +16,7 @@ export const ExportPackModal: React.FC<ExportPackModalProps> = ({
   onClose,
 }) => (
   <AdaptiveSettingsModal
-    title="Export teammates (.agorpack)"
+    title="Export teammates (.agor)"
     open={open}
     onCancel={onClose}
     footer={null}

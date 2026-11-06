@@ -193,7 +193,7 @@ Teammates appear as branch cards on boards, distinguished by a robot icon and bl
 
 ## Moving teammates between workspaces
 
-**Settings → Teammates → Export** writes an `.agorpack` file with the teammates
+**Settings → Teammates → Export** writes a `.agor` file with the teammates
 you pick. Checkboxes choose what goes in: the board, Knowledge (optionally with
 version history), artifacts, schedules, Claude memory, attachments, and session
 history (none, the last 30 days by default, or all; your own sessions unless you also
@@ -206,7 +206,7 @@ as-is; the export shows these counts before you download.
 The file never contains secrets. Environment variables, MCP credentials, and
 gateway tokens travel by **name** only.
 
-**Settings → Teammates → Import .agorpack** shows what is inside before anything
+**Settings → Teammates → Import .agor** shows what is inside before anything
 is created. You own everything you import; the original author is kept as
 "originally by". Schedules arrive paused, custom MCP servers arrive disabled
 without credentials, and sessions arrive as archived, read-only history. A

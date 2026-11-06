@@ -23,7 +23,7 @@ export interface MoveToCloudSectionProps {
 }
 
 /**
- * Self-hosted → Agor Cloud: export teammates to a .agorpack, import it in the
+ * Self-hosted → Agor Cloud: export teammates to a .agor, import it in the
  * Cloud workspace, then switch over here so both copies don't run at once.
  */
 export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
@@ -109,7 +109,7 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
             <ExportPackPanel
               teammates={teammates}
               initialBranchIds={mine.length ? mine : teammates.map((t) => t.branch_id)}
-              exportLabel="Download .agorpack"
+              exportLabel="Download .agor"
               onExported={(result) => {
                 setExported(result);
                 setStep(1);
@@ -130,8 +130,8 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
             <Typography.Paragraph>
               In your Agor Cloud workspace, open{' '}
               <Typography.Text strong>Settings → Teammates</Typography.Text> and choose{' '}
-              <Typography.Text strong>Import .agorpack</Typography.Text>. You'll review what's
-              inside before anything is created, then reconnect credentials and turn schedules on.
+              <Typography.Text strong>Import .agor</Typography.Text>. You'll review what's inside
+              before anything is created, then reconnect credentials and turn schedules on.
             </Typography.Paragraph>
             <Space>
               <Button

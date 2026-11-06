@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { AgorPackReader, bufferByteSource } from '@agor/core/agor-pack';
+import { AgorPackReader, AgorPackWriter, bufferByteSource } from '@agor/core/agor-pack';
 import {
   AgorPackImportRepository,
   ArtifactRepository,
@@ -23,6 +23,8 @@ import {
 } from '@agor/core/db';
 import {
   AGOR_PACK,
+  AGOR_PACK_SECTIONS,
+  agorPackExportRequestSchema,
   type BranchID,
   getTeammateConfig,
   type SessionID,
@@ -33,6 +35,7 @@ import { afterEach, beforeEach, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   createPackFixture,
+  expectChunkedUploadWorks,
   expectPackRoutesIsolated,
   type PackFixture,
 } from '../../test/agor-pack-fixture';
@@ -334,6 +337,77 @@ dbTest(
       const receipt = await unit(() => new AgorPackImportRepository(db).findById(staged.import_id));
       expect(receipt?.progress).toEqual({});
       expect(receipt?.claim_token).toBeNull();
+    })
+);
+
+dbTest(
+  'sessions that may contain passwords: the preflight lists them, the export or the import leaves them out',
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { db, unit, ctx, params, ada, bea, seeded } = fx;
+      await unit(() =>
+        new MessagesRepository(db).create({
+          session_id: seeded.first.session_id,
+          task_id: seeded.task.task_id,
+          type: 'assistant',
+          role: 'assistant',
+          index: 1,
+          timestamp: new Date().toISOString(),
+          content_preview: 'creds',
+          content: `token ghp_${'a'.repeat(36)}`,
+        } as never)
+      );
+      const [preflight] = await new AgorPackExporter(ctx(ada)).preflight([seeded.branch.branch_id]);
+      expect(preflight?.flagged_sessions).toEqual([
+        { session_id: seeded.first.session_id, title: 'First', own: true, recent: true },
+      ]);
+      expect(preflight?.session_bytes.own).toBeGreaterThan(0);
+      expect(preflight?.session_bytes.recent_own).toBe(preflight?.session_bytes.own);
+
+      const exportWith = async (exclude: string[]) => {
+        const writer = new AgorPackWriter();
+        const chunks: Buffer[] = [];
+        writer.output.on('data', (chunk: Buffer) => chunks.push(chunk));
+        const ended = new Promise((resolve) => writer.output.on('end', resolve));
+        const manifest = await new AgorPackExporter(ctx(ada)).export(
+          agorPackExportRequestSchema.parse({
+            branch_ids: [seeded.branch.branch_id],
+            sessions: 'all',
+            exclude_session_ids: exclude,
+          }),
+          writer
+        );
+        await ended;
+        return { pack: Buffer.concat(chunks), manifest };
+      };
+      // Left out at export ("Leave these out"): everything else is the default.
+      const without = await exportWith([seeded.first.session_id]);
+      expect(without.manifest.options.sections).toEqual([...AGOR_PACK_SECTIONS].sort());
+      expect(without.manifest.teammates[0]?.sections.sessions).toMatchObject({
+        count: 1,
+        flagged: 0,
+      });
+
+      // Kept at export, left out at import.
+      const { pack, manifest } = await exportWith([]);
+      expect(manifest.teammates[0]?.sections.sessions).toMatchObject({ count: 2, flagged: 1 });
+      const importer = new AgorPackImporter(ctx(bea), params(bea));
+      const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+      const applied = await importer.apply(staged.import_id, {
+        teammates: ['t01'],
+        board_id: null,
+        skip_flagged_sessions: true,
+      });
+      const result = applied.results[0]!;
+      expect(Object.keys(result.remap.sessions)).toEqual([seeded.second.session_id]);
+      // The attachment lived in the skipped session.
+      expect(result.remap.uploads).toEqual([]);
+      await unit(async () => {
+        const second = await new SessionRepository(db).findById(
+          result.remap.sessions[seeded.second.session_id]!
+        );
+        expect(second?.genealogy.parent_session_id ?? null).toBeNull();
+      });
     })
 );
 
@@ -890,4 +964,12 @@ dbTest("pack routes never serve another user's export, import, or teammate", asy
   withFixture(raw, async (fx) => {
     await expectPackRoutesIsolated(fx, expect);
   })
+);
+
+dbTest(
+  'a chunked upload resumes, checks its sha256, and stays with its uploader',
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      await expectChunkedUploadWorks(fx, expect);
+    })
 );

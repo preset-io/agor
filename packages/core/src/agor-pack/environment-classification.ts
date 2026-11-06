@@ -2,17 +2,16 @@
  * Classify a repository's environment variants for a move into Agor Cloud.
  * Cloud runs shell lifecycle commands as short ephemeral jobs with no Docker
  * socket, no ingress, and no long-lived processes, so container tooling,
- * localhost endpoints, and host service managers will not work there. The
+ * private-network endpoints, and host service managers will not work there. The
  * configuration is imported unchanged; this only drives warnings.
  */
 
 import { resolveVariant } from '../config/variant-resolver';
 import { isUrlShapedManagedEnvCommand } from '../environment/webhook';
-import type { AgorPackEnvironmentStatus } from '../types/agor-pack';
+import { type AgorPackEnvironmentStatus, agorPackPrivateHost } from '../types/agor-pack';
 import type { RepoEnvironment } from '../types/branch';
 
 const WONT_RUN = /\b(docker(-compose)?|podman|compose|sudo|systemctl|launchctl|brew services)\b/i;
-const LOCALHOST = /\b(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])\b/i;
 
 export interface EnvironmentVariantClassification {
   name: string;
@@ -38,8 +37,8 @@ export function classifyEnvironmentVariants(
         if (hit) return { name, status: 'wont_run_in_cloud' as const, match: hit[0] };
       }
       for (const value of [...lifecycle, variant.health, variant.app]) {
-        const hit = typeof value === 'string' ? LOCALHOST.exec(value) : null;
-        if (hit) return { name, status: 'needs_webhook' as const, match: hit[0] };
+        const host = typeof value === 'string' ? agorPackPrivateHost(value) : null;
+        if (host) return { name, status: 'needs_webhook' as const, match: host };
       }
       return { name, status: 'ok' as const, match: null };
     });

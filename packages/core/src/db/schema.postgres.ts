@@ -928,7 +928,7 @@ export const branches = pgTable(
         // Custom context for templates (accessible as {{custom.*}})
         custom_context?: Record<string, unknown>;
 
-        // `.agorpack` provenance and switch-over state (never in templates)
+        // `.agor` provenance and switch-over state (never in templates)
         agor_pack?: import('@agor/core/types').AgorPackBranchState;
 
         // Default MCP servers for new sessions in this branch
@@ -3838,7 +3838,7 @@ export const kbImportReceipts = pgTable(
 );
 
 /**
- * `.agorpack` import receipts: one row per (owner, pack content). Caches the
+ * `.agor` import receipts: one row per (owner, pack content). Caches the
  * dry-run, records the per-teammate result/remap for idempotent re-import,
  * and points at the staged pack bytes. No FKs: receipts are history.
  */
@@ -3875,7 +3875,7 @@ export const agorPackImports = pgTable(
 );
 
 /**
- * Daemon-staged blobs that are not session attachments (`.agorpack` files and
+ * Daemon-staged blobs that are not session attachments (`.agor` files and
  * executor pack fragments). Bytes live in the upload store under their own
  * namespace; this row is the ownership authority and the sweep's expiry index.
  */
@@ -3884,7 +3884,7 @@ export const stagedBlobs = pgTable(
   {
     blob_ref: text('blob_ref').primaryKey(),
     tenant_id: text('tenant_id').notNull().default('default'),
-    kind: text('kind', { enum: ['agor-pack'] }).notNull(),
+    kind: text('kind', { enum: ['agor-pack', 'agor-pack-chunk'] }).notNull(),
     scope_id: varchar('scope_id', { length: 36 }).notNull(),
     created_by: varchar('created_by', { length: 36 }).notNull(),
     size_bytes: bigint('size_bytes', { mode: 'number' }).notNull(),
