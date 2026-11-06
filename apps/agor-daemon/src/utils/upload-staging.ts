@@ -87,7 +87,25 @@ export function configureUploadStagingStoreFromConfig(
             maxBytes: AGOR_PACK.maxBytes,
             ttlMs: PACK_TTL_MS,
           });
-      return new MetadataUploadStagingStore(db, adapter, { bytes: packBytes, ttlMs: PACK_TTL_MS });
+      // Restored attachments: the uploads namespace with the pack entry limit.
+      const restoreBytes = s3Factory
+        ? s3Factory(url, {
+            ...config,
+            uploads: {
+              ...config.uploads,
+              max_file_size_mb: AGOR_PACK.maxEntryBytes / (1024 * 1024),
+            },
+          })
+        : new S3UploadStagingStore(parseS3UploadLocation(url), {
+            maxBytes: AGOR_PACK.maxEntryBytes,
+            ttlMs,
+          });
+      return new MetadataUploadStagingStore(
+        db,
+        adapter,
+        { bytes: packBytes, ttlMs: PACK_TTL_MS },
+        { bytes: restoreBytes, maxBytes: AGOR_PACK.maxEntryBytes }
+      );
     });
     return;
   }
@@ -100,10 +118,18 @@ export function configureUploadStagingStoreFromConfig(
       resolveLocalUploadDirectory(expanded, tenantId, tenantSeparated);
     const adapter = new LocalUploadStagingStore(root, { maxBytes, ttlMs });
     if (!db) return adapter;
-    return new MetadataUploadStagingStore(db, adapter, {
-      bytes: localPackBytes((tenantId) => join(root(tenantId), 'agor-packs')),
-      ttlMs: PACK_TTL_MS,
-    });
+    return new MetadataUploadStagingStore(
+      db,
+      adapter,
+      {
+        bytes: localPackBytes((tenantId) => join(root(tenantId), 'agor-packs')),
+        ttlMs: PACK_TTL_MS,
+      },
+      {
+        bytes: new LocalUploadStagingStore(root, { maxBytes: AGOR_PACK.maxEntryBytes, ttlMs }),
+        maxBytes: AGOR_PACK.maxEntryBytes,
+      }
+    );
   });
 }
 

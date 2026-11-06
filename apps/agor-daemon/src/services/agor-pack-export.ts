@@ -128,6 +128,12 @@ const UPLOAD_LINK = new RegExp(
   'g'
 );
 
+/** "2 attachments are too large to move (over 256 MB) and were left out." */
+function tooLargeAttachmentsNote(count: number): string {
+  const limit = Math.round(AGOR_PACK.maxEntryBytes / (1024 * 1024));
+  return `${pluralize(count, 'attachment')} ${count === 1 ? 'is' : 'are'} too large to move (over ${limit} MB) and ${count === 1 ? 'was' : 'were'} left out.`;
+}
+
 /** A pack blob of this import/export, owned by the caller. */
 export function agorPackBlob(
   ctx: Pick<AgorPackServiceContext, 'tenantId' | 'user'>,
@@ -192,6 +198,48 @@ const CREDENTIAL_NAME =
   /(api[_-]?key|access[_-]?key|key$|token|secret|passw|pwd|credential|signature|^-*sig$|^-*auth$|authorization)/i;
 const REDACTED = '[redacted]';
 const isTemplate = (value: string) => value.includes('{{');
+
+/** MCP auth fields holding secret values (the rest is configuration). */
+const MCP_AUTH_SECRET_FIELDS = new Set([
+  'token',
+  'api_token',
+  'api_secret',
+  'oauth_client_secret',
+  'oauth_access_token',
+  'oauth_refresh_token',
+]);
+/** Runtime OAuth state: never part of a server's definition. */
+const MCP_AUTH_RUNTIME_FIELDS = new Set([
+  'oauth_access_token',
+  'oauth_refresh_token',
+  'oauth_token_expires_at',
+]);
+const ONLY_ENV_REFERENCES = /^\s*(\{\{\s*user\.env\.[A-Za-z_][A-Za-z0-9_]*\s*\}\}\s*)+$/;
+
+/**
+ * An MCP server's auth shape for a pack: configuration fields as they are,
+ * secret fields only when they merely reference `{{ user.env.NAME }}`
+ * (names, not secrets). `removed` lists secret fields that held values.
+ */
+export function sanitizeMcpAuth(auth: MCPServer['auth']): {
+  auth: Record<string, string | boolean> | null;
+  removed: string[];
+} {
+  if (!auth) return { auth: null, removed: [] };
+  const out: Record<string, string | boolean> = {};
+  const removed: string[] = [];
+  for (const [field, value] of Object.entries(auth)) {
+    if (value === undefined || value === null || MCP_AUTH_RUNTIME_FIELDS.has(field)) continue;
+    if (typeof value !== 'string' && typeof value !== 'boolean') continue;
+    if (MCP_AUTH_SECRET_FIELDS.has(field)) {
+      if (typeof value === 'string' && ONLY_ENV_REFERENCES.test(value)) out[field] = value;
+      else if (value !== '') removed.push(field);
+      continue;
+    }
+    out[field] = value;
+  }
+  return { auth: out, removed };
+}
 
 /**
  * Drop credentials an MCP server URL carries inline (userinfo, credential-named
@@ -455,6 +503,7 @@ export class AgorPackExporter {
       // choice, and the sessions it would redact ("may contain passwords").
       const sessionBytes = { own: 0, others: 0, recent_own: 0, recent_others: 0 };
       const flagged: AgorPackFlaggedSession[] = [];
+      const large: AgorPackPreflightTeammate['large_attachments'] = [];
       for (const session of all) {
         const { file, lines, redacted } = await this.serializeSession(session, new Set());
         const bytes =
@@ -464,6 +513,20 @@ export class AgorPackExporter {
         const isRecent = Date.parse(session.last_updated) >= since;
         sessionBytes[isOwn ? 'own' : 'others'] += bytes;
         if (isRecent) sessionBytes[isOwn ? 'recent_own' : 'recent_others'] += bytes;
+        for (const line of lines) {
+          for (const match of line.matchAll(UPLOAD_LINK)) {
+            const row = await this.unit(() =>
+              new UploadRepository(this.ctx.db).findOwned(this.ctx.tenantId, match[1] as UploadRef)
+            );
+            if (
+              row?.status === 'active' &&
+              row.sessionId === session.session_id &&
+              row.size > AGOR_PACK.maxEntryBytes
+            ) {
+              large.push({ name: row.displayName, size: row.size, own: isOwn, recent: isRecent });
+            }
+          }
+        }
         if (redacted > 0) {
           flagged.push({
             session_id: session.session_id,
@@ -520,6 +583,7 @@ export class AgorPackExporter {
           ),
         flagged_sessions: flagged,
         board: Boolean(branch.board_id) && !boardHidden,
+        large_attachments: large,
         schedules: schedules.length,
         artifacts: artifacts.length,
         knowledge_documents: knowledge.documents,
@@ -1032,9 +1096,15 @@ export class AgorPackExporter {
       const store = getUploadStagingStore();
       let count = 0;
       let bytes = 0;
+      let tooLarge = 0;
       for (const [ref, sessionId] of [...uploadRefs.entries()].sort()) {
         const row = await this.unit(() => uploads.findOwned(this.ctx.tenantId, ref as UploadRef));
         if (row?.status !== 'active' || row.sessionId !== sessionId) continue;
+        // One entry can't exceed the pack entry limit; leave it out, don't fail.
+        if (row.size > AGOR_PACK.maxEntryBytes) {
+          tooLarge += 1;
+          continue;
+        }
         let stream: NodeJS.ReadableStream;
         try {
           stream = await store.read({
@@ -1093,7 +1163,8 @@ export class AgorPackExporter {
         count += 1;
         bytes += row.size;
       }
-      summary.uploads = { count, bytes };
+      summary.uploads = { count, bytes, ...(tooLarge ? { too_large: tooLarge } : {}) };
+      if (tooLarge) warnings.push(tooLargeAttachmentsNote(tooLarge));
     }
 
     // Git history, dirty files, and Claude memory via the executor.
@@ -1142,9 +1213,15 @@ export class AgorPackExporter {
       mcp_servers: custom.map((server) => {
         const url = server.url ? sanitizeMcpUrl(server.url) : null;
         const args = server.args ? sanitizeMcpArgs(server.args) : null;
+        const auth = sanitizeMcpAuth(server.auth);
         if (url?.changed || args?.changed) {
           warnings.push(
             `MCP server "${server.name}" had credentials in its URL or arguments; they were removed. Re-enter them after import.`
+          );
+        }
+        if (auth.removed.length) {
+          warnings.push(
+            `MCP server "${server.name}" auth (${auth.removed.join(', ')}) was removed; reconnect it after import.`
           );
         }
         return {
@@ -1157,6 +1234,8 @@ export class AgorPackExporter {
           args: args?.args ?? null,
           env_names: Object.keys(server.env ?? {}),
           header_names: Object.keys(server.headers ?? {}),
+          scope: server.scope,
+          auth: auth.auth,
         };
       }),
       claude_project_slug: claudeProjectSlug(branch.path),

@@ -56,6 +56,8 @@ export const PACK_COPY = {
   wontDockerLink: 'See other ways to run previews',
   wontHost: '{name} uses {host}, which only works on your network. Agor Cloud can’t reach it.',
   wontHostLink: 'See options',
+  tooLarge: '{n} attachments are too large to move (over 256 MB) and will be left out.',
+  tooLargeOne: '1 attachment is too large to move (over 256 MB) and will be left out.',
   grpLook: 'May contain passwords',
   lookKeys: '{n} sessions may contain a password or API key.',
   lookShow: 'Show sessions',
@@ -123,6 +125,7 @@ export const PACK_COPY = {
   schedPaused: 'Paused until you switch over',
   schedWaits: 'Waiting for {app}',
   impBar: 'This session is read-only. Continue it in a new session.',
+  impLine: 'Imported from Community Edition on {date}',
 
   cancel: 'Cancel',
   back: 'Back',

@@ -112,20 +112,28 @@ export const CheckReport: React.FC<CheckReportProps> = ({
                   align="flex-start"
                 >
                   <Tag style={{ marginInlineEnd: 0 }}>{blocker.teammate}</Tag>
-                  <span>
-                    {blocker.kind === 'docker'
-                      ? fill(PACK_COPY.wontDocker, { name: blocker.teammate })
-                      : fill(PACK_COPY.wontHost, {
-                          name: blocker.teammate,
-                          host: blocker.host ?? '',
-                        })}{' '}
-                    <Typography.Link href={ENVIRONMENT_DOCS} target="_blank" rel="noreferrer">
+                  {blocker.kind === 'attachments' ? (
+                    <span>
+                      {blocker.count === 1
+                        ? PACK_COPY.tooLargeOne
+                        : fill(PACK_COPY.tooLarge, { n: blocker.count ?? 0 })}
+                    </span>
+                  ) : (
+                    <span>
                       {blocker.kind === 'docker'
-                        ? PACK_COPY.wontDockerLink
-                        : PACK_COPY.wontHostLink}{' '}
-                      <ExportOutlined />
-                    </Typography.Link>
-                  </span>
+                        ? fill(PACK_COPY.wontDocker, { name: blocker.teammate })
+                        : fill(PACK_COPY.wontHost, {
+                            name: blocker.teammate,
+                            host: blocker.host ?? '',
+                          })}{' '}
+                      <Typography.Link href={ENVIRONMENT_DOCS} target="_blank" rel="noreferrer">
+                        {blocker.kind === 'docker'
+                          ? PACK_COPY.wontDockerLink
+                          : PACK_COPY.wontHostLink}{' '}
+                        <ExportOutlined />
+                      </Typography.Link>
+                    </span>
+                  )}
                 </Flex>
               ))}
             </Flex>

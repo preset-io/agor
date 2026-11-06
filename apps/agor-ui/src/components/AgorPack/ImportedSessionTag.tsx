@@ -1,5 +1,6 @@
 import type { AgorClient, Branch, Session } from '@agor-live/client';
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
+import { RowActionsShownContext } from '../SessionRow';
 import { Tag } from '../Tag';
 import { PACK_COPY } from './packCopy';
 
@@ -9,10 +10,22 @@ export function isImportedSession(session: Pick<Session, 'archived' | 'archived_
 }
 
 /** "Imported" on session rows of imported history. */
-export const ImportedSessionTag: React.FC<{ session: Session }> = ({ session }) =>
-  isImportedSession(session) ? (
-    <Tag style={{ marginInlineEnd: 0, flex: '0 0 auto' }}>{PACK_COPY.tagImported}</Tag>
+export const ImportedSessionTag: React.FC<{ session: Session }> = ({ session }) => {
+  // The row's hover actions take this spot; the tag steps aside meanwhile.
+  const actionsShown = useContext(RowActionsShownContext);
+  return isImportedSession(session) ? (
+    <Tag
+      style={{
+        marginInlineEnd: 0,
+        flex: '0 0 auto',
+        opacity: actionsShown ? 0 : 1,
+        transition: 'opacity 0.15s ease-in-out',
+      }}
+    >
+      {PACK_COPY.tagImported}
+    </Tag>
   ) : null;
+};
 
 /**
  * Imported history of a teammate. Archived sessions aren't in the store's

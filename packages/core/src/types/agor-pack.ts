@@ -211,7 +211,15 @@ export const agorPackTeammateSectionsSchema = z.looseObject({
   artifacts: nonNegativeInt.nullable(),
   schedules: nonNegativeInt.nullable(),
   claude_memory: z.object({ files: nonNegativeInt, bytes: nonNegativeInt }).strict().nullable(),
-  uploads: z.object({ count: nonNegativeInt, bytes: nonNegativeInt }).strict().nullable(),
+  uploads: z
+    .object({
+      count: nonNegativeInt,
+      bytes: nonNegativeInt,
+      /** Attachments over `AGOR_PACK.maxEntryBytes`, left out (absent in older packs). */
+      too_large: nonNegativeInt.optional(),
+    })
+    .strict()
+    .nullable(),
   sessions: z
     .object({
       mode: z.enum(AGOR_PACK_SESSION_MODES),
@@ -360,6 +368,16 @@ export const agorPackTeammateFileSchema = z
             args: z.array(z.string().max(4096)).max(100).nullable(),
             env_names: z.array(z.string().max(200)).max(200),
             header_names: z.array(z.string().max(200)).max(200),
+            /** Absent in older packs (recreated global). */
+            scope: z.enum(['global', 'session']).optional(),
+            /**
+             * Auth shape without secret values: secret fields survive only as
+             * `{{ user.env.NAME }}` references. Absent in older packs.
+             */
+            auth: z
+              .record(z.string().max(200), z.union([z.string().max(4096), z.boolean()]))
+              .nullable()
+              .optional(),
           })
           .strict()
       )
@@ -737,6 +755,8 @@ export interface AgorPackPreflightTeammate {
   flagged_sessions: AgorPackFlaggedSession[];
   /** The teammate has a board the exporter can view (it goes into the pack). */
   board: boolean;
+  /** Attachments over `AGOR_PACK.maxEntryBytes`; an export leaves them out. */
+  large_attachments: Array<{ name: string; size: number; own: boolean; recent: boolean }>;
   schedules: number;
   artifacts: number;
   knowledge_documents: number;

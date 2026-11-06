@@ -1,12 +1,15 @@
 import type { AgorPackImport, AgorPackPreflightTeammate } from '@agor/core/types';
-import type { Branch, Schedule } from '@agor-live/client';
+import type { Branch, Schedule, Session } from '@agor-live/client';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { mount } from '../../test/harness';
 import { applyPackImport, exportPack, getPackImport, uploadPack } from '../../utils/agorPack';
+import { RowActionsShownContext } from '../SessionRow';
 import { ExportPackModal } from './ExportPackModal';
 import { ExportPackPanel } from './ExportPackPanel';
 import { scheduleStateLine } from './FinishSetup';
+import { ImportedSessionLine } from './ImportedSessionBar';
+import { ImportedSessionTag } from './ImportedSessionTag';
 import { ImportPackSection } from './ImportPackSection';
 import { checkFromPreflight, checkFromReceipt } from './packCheck';
 import { finishSetupItems } from './useFinishSetup';
@@ -25,6 +28,7 @@ const ada: AgorPackPreflightTeammate = {
     { session_id: 's-old', title: 'Old creds', own: true, recent: false },
   ],
   board: true,
+  large_attachments: [{ name: 'demo.mov', size: 300 * MB, own: true, recent: false }],
   schedules: 2,
   artifacts: 4,
   knowledge_documents: 12,
@@ -104,6 +108,12 @@ describe('Check report data', () => {
       { teammate: 'Ada', kind: 'docker' },
       { teammate: 'Ada', kind: 'host', host: 'jenkins.internal' },
     ]);
+    // The 300 MB attachment is older than 90 days: only "All" would carry it.
+    expect(checkFromPreflight([ada], 'all', false, true).wont).toContainEqual({
+      teammate: 'Ada',
+      kind: 'attachments',
+      count: 1,
+    });
   });
 
   it('reads an uploaded pack the same way', () => {
@@ -157,6 +167,11 @@ describe('ExportPackPanel', () => {
       )
     ).toBeInTheDocument();
     expect(screen.getByText('Ada: 3 archived sessions skipped')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('All'));
+    expect(
+      screen.getByText('1 attachment is too large to move (over 256 MB) and will be left out.')
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Last 90 days'));
     expect(screen.getByText('1 teammate, about 15 MB')).toBeInTheDocument();
     fireEvent.click(screen.getByText('None'));
     expect(screen.getByText('1 teammate, about 3 MB')).toBeInTheDocument();
@@ -320,5 +335,39 @@ describe('Finish setup', () => {
     expect(scheduleStateLine(schedule, waiting('Notion')).text).toBe('Waiting for Notion');
     expect(scheduleStateLine(schedule, waiting(null)).text).toBe('Paused until you switch over');
     expect(scheduleStateLine({ ...schedule, enabled: true }, waiting(null)).text).toBe('On');
+  });
+});
+
+describe('Imported sessions', () => {
+  const imported = {
+    session_id: 's-imp',
+    archived: true,
+    archived_reason: 'imported',
+    created_at: '2026-10-01T00:00:00.000Z',
+    custom_context: { import: { imported_at: '2026-10-28T12:00:00.000Z' } },
+  } as unknown as Session;
+
+  it('opens with the "Imported from" line', () => {
+    mount(<ImportedSessionLine session={imported} />);
+    const date = new Date('2026-10-28T12:00:00.000Z').toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+    });
+    expect(screen.getByText(`Imported from Community Edition on ${date}`)).toBeInTheDocument();
+  });
+
+  it('steps the Imported tag aside while the row actions show', () => {
+    const { rerender } = mount(
+      <RowActionsShownContext.Provider value={false}>
+        <ImportedSessionTag session={imported} />
+      </RowActionsShownContext.Provider>
+    );
+    expect(screen.getByText('Imported')).toHaveStyle({ opacity: '1' });
+    rerender(
+      <RowActionsShownContext.Provider value>
+        <ImportedSessionTag session={imported} />
+      </RowActionsShownContext.Provider>
+    );
+    expect(screen.getByText('Imported')).toHaveStyle({ opacity: '0' });
   });
 });

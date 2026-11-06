@@ -18,16 +18,24 @@ import {
   ScheduleRepository,
   SessionRepository,
   StagedBlobRepository,
+  TaskRepository,
   UploadRepository,
+  UsersRepository,
   update,
+  uploads,
 } from '@agor/core/db';
+import { feathers } from '@agor/core/feathers';
 import {
   AGOR_PACK,
   AGOR_PACK_SECTIONS,
   agorPackExportRequestSchema,
   type BranchID,
   getTeammateConfig,
+  type Message,
+  type Paginated,
   type SessionID,
+  type Task,
+  TaskStatus,
   type TenantID,
   type UploadRef,
 } from '@agor/core/types';
@@ -40,12 +48,16 @@ import {
   type PackFixture,
 } from '../../test/agor-pack-fixture';
 import type { ReposServiceImpl } from '../declarations';
+import { LocalUploadStagingStore } from '../host/local/upload-staging-store';
 import type { RegisterHooksContext } from '../register-hooks';
-import type { MetadataUploadStagingStore } from '../utils/metadata-upload-staging-store';
+import { MetadataUploadStagingStore } from '../utils/metadata-upload-staging-store';
 import { spawnExecutorFireAndForget } from '../utils/spawn-executor';
+import { configureUploadLimits } from '../utils/upload';
 import {
+  configureUploadStagingStore,
   getBlobStagingStore,
   getUploadStagingStore,
+  localPackBytes,
   resetUploadStagingStoreForTests,
 } from '../utils/upload-staging';
 import { runAgorPackExecutorCommand } from './agor-pack-executor';
@@ -53,6 +65,8 @@ import { AgorPackExporter } from './agor-pack-export';
 import { AgorPackImporter } from './agor-pack-import';
 import { BranchesService } from './branches';
 import { KnowledgeDocumentsService } from './knowledge-documents';
+import { MessagesService } from './messages';
+import { createTasksService } from './tasks';
 
 vi.mock('../utils/spawn-executor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/spawn-executor')>()),
@@ -290,6 +304,38 @@ dbTest(
           sessionId: newFirst!.session_id as SessionID,
         });
         expect(messages).toHaveLength(2);
+        // The session view reads the Session's Tasks (queued excluded), then
+        // each Task's Messages, through these services: the imported
+        // transcript must come back the same way.
+        const rows = <T>(result: T[] | Paginated<T>) =>
+          Array.isArray(result) ? result : result.data;
+        const shownTasks = rows(
+          (await createTasksService(db, feathers()).find({
+            query: {
+              session_id: newFirst!.session_id,
+              status: { $ne: TaskStatus.QUEUED },
+              $sort: { created_at: 1, task_id: 1 },
+              $limit: 100,
+            },
+          })) as Task[] | Paginated<Task>
+        );
+        expect(shownTasks).toHaveLength(1);
+        const shownMessages = rows(
+          (await new MessagesService(db).find({
+            query: { task_id: shownTasks[0]!.task_id, $sort: { index: 1 }, $limit: 100 },
+          })) as Message[] | Paginated<Message>
+        );
+        expect(shownMessages.map((m) => m.index)).toEqual([0, 1]);
+        expect(shownMessages.every((m) => m.session_id === newFirst!.session_id)).toBe(true);
+        // Finished history keeps its original start and ends at its last
+        // message (the source recorded no end), so no timer runs "since".
+        const sourceTask = await new TaskRepository(db).findById(seeded.task.task_id);
+        expect(Date.parse(String(shownTasks[0]!.started_at))).toBe(
+          Date.parse(String(sourceTask!.created_at))
+        );
+        expect(Date.parse(String(shownTasks[0]!.completed_at))).toBe(
+          Math.max(...shownMessages.map((m) => Date.parse(String(m.timestamp))))
+        );
 
         // The attachment gets a fresh ref (refs are global keys) rewritten into
         // the message; the original stays with Ada's session.
@@ -408,6 +454,87 @@ dbTest(
         );
         expect(second?.genealogy.parent_session_id ?? null).toBeNull();
       });
+    })
+);
+
+dbTest(
+  'attachments over the interactive upload cap are restored from a pack, or named with the reason',
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { pack } = await fx.exportPack();
+      // A workspace whose interactive per-file cap (4 bytes) is below the
+      // 9-byte attachment; `restore` is the pack-limit adapter the daemon wires.
+      const configure = (restore: boolean) => {
+        configureUploadLimits(4);
+        configureUploadStagingStore(() => {
+          const root = (tenant: string) => join(uploadsRoot, tenant);
+          return new MetadataUploadStagingStore(
+            fx.db,
+            new LocalUploadStagingStore(root, { ttlMs: 0, maxBytes: 4 }),
+            { bytes: localPackBytes((t) => join(root(t), 'agor-packs')), ttlMs: 60 * 60 * 1000 },
+            restore
+              ? {
+                  bytes: new LocalUploadStagingStore(root, {
+                    ttlMs: 0,
+                    maxBytes: AGOR_PACK.maxEntryBytes,
+                  }),
+                  maxBytes: AGOR_PACK.maxEntryBytes,
+                }
+              : undefined
+          );
+        });
+      };
+      const importAs = async (email: string) => {
+        const user = await fx.createUser(email);
+        const importer = new AgorPackImporter(fx.ctx(user), fx.params(user));
+        expect(user.onboarding_completed).toBeFalsy();
+        const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+        const applied = await importer.apply(staged.import_id, { teammates: ['t01'] });
+        // Having imported a teammate, first-run onboarding is done for them.
+        const after = await fx.unit(() => new UsersRepository(fx.db).findById(user.user_id));
+        expect(after?.onboarding_completed).toBe(true);
+        return { staged, applied };
+      };
+
+      configure(false);
+      const refused = await importAs('cap@example.test');
+      expect(refused.staged.dry_run[0]?.warnings).toContain(
+        'Attachment "chart.png" (1 MB) is larger than this workspace accepts (1 MB) and won\'t be restored.'
+      );
+      expect(refused.applied.results[0]?.remap.uploads).toEqual([]);
+      expect(refused.applied.results[0]?.warnings.join(' ')).toMatch(
+        /Attachment "chart\.png" could not be restored: it is larger than this workspace accepts/
+      );
+
+      configure(true);
+      const restored = await importAs('restore@example.test');
+      expect(restored.staged.dry_run[0]?.warnings.join(' ')).not.toMatch(/chart\.png/);
+      expect(restored.applied.results[0]?.remap.uploads).toHaveLength(1);
+    })
+);
+
+dbTest(
+  'an attachment over the pack entry limit is left out and reported, not fatal',
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { db, unit, ctx, ada, seeded, upload } = fx;
+      // The recorded size decides; the bytes are never read.
+      await unit(() =>
+        update(db, uploads)
+          .set({ size_bytes: AGOR_PACK.maxEntryBytes + 1 })
+          .where(eq(uploads.upload_ref, upload.ref))
+          .run()
+      );
+      const [preflight] = await new AgorPackExporter(ctx(ada)).preflight([seeded.branch.branch_id]);
+      expect(preflight?.large_attachments).toEqual([
+        { name: 'chart.png', size: AGOR_PACK.maxEntryBytes + 1, own: true, recent: true },
+      ]);
+      const { manifest } = await fx.exportPack();
+      const teammate = manifest.teammates[0]!;
+      expect(teammate.sections.uploads).toEqual({ count: 0, bytes: 0, too_large: 1 });
+      expect(teammate.warnings).toContain(
+        '1 attachment is too large to move (over 256 MB) and was left out.'
+      );
     })
 );
 
