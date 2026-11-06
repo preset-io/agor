@@ -57,6 +57,17 @@ and narrow.
 - Details: [`rbac-and-unix-isolation.md`](context/guides/rbac-and-unix-isolation.md),
   [`session-sharing.md`](context/concepts/session-sharing.md).
 
+### Frontend state
+
+- One zustand store (`apps/agor-ui/src/store/agorStore.ts`) holds normalized entity rows. Route
+  entity updates through the store's hydration/realtime actions; keep optimistic state local.
+  Transcripts live in ref-counted handles (`retainReactiveSession`, `packages/client`), never in
+  the store.
+- Entity state is memory-only. A reload keeps only the URL, tokens, drafts, and UI preferences.
+- Give every cache an explicit retention policy.
+- Details: [`frontend-state.md`](context/concepts/frontend-state.md),
+  [`user-first-scoped-hydration.md`](context/concepts/user-first-scoped-hydration.md).
+
 ## Where to look first
 
 | Task                              | Start here                                                                                                                                                                                 |
