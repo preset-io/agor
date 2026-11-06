@@ -495,6 +495,9 @@ export class MCPOAuthClientRegistrationRepository {
   }): Promise<boolean> {
     const masterSecret = input.masterSecret ?? process.env.AGOR_MASTER_SECRET;
     if (!masterSecret) {
+      console.warn(
+        `[MCP OAuth DCR] Invalidation skipped: AGOR_MASTER_SECRET is unavailable server_id=${input.serverId}`
+      );
       return false;
     }
 
@@ -527,7 +530,7 @@ export class MCPOAuthClientRegistrationRepository {
       return false;
     }
 
-    if (parsed.clientId !== input.clientId) {
+    if (typeof parsed?.clientId !== 'string' || parsed.clientId !== input.clientId) {
       return false;
     }
 

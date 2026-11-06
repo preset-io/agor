@@ -2819,12 +2819,15 @@ export async function registerMCPServices(
             : undefined,
         invalidateDynamicClientRegistration:
           durableBinding && durableOAuthClientRegistrations
-            ? (clientId: string) =>
-                durableOAuthClientRegistrations.invalidateIfCurrentMatchesClientId(
+            ? async (clientId: string) => {
+                assertFlowAuthority?.();
+                await assertDurableClientRegistrationAuthority?.();
+                return durableOAuthClientRegistrations.invalidateIfCurrentMatchesClientId(
                   durableBinding.tenantId,
                   durableBinding.mcpServerId,
                   clientId
-                )
+                );
+              }
             : undefined,
         resourceUri: effectiveMcpUrl,
         compatibilityMode: effectiveCompatibilityMode,

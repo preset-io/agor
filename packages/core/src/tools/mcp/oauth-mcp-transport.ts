@@ -18,7 +18,11 @@ import type {
   MCPOAuthTokenEndpointAuthMethod,
 } from '../../types/mcp.js';
 import { MCP_OAUTH_DEFAULT_DCR_MODE } from '../../types/mcp.js';
-import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import {
+  assertSafeOAuthUrl,
+  OutboundPreDispatchAuthorityError,
+  safeOutboundFetch,
+} from '../../utils/safe-outbound-fetch';
 import { asMCPExternalError } from './external-error.js';
 import { applyTokenEndpointClientAuth, type OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
@@ -2172,6 +2176,19 @@ export async function validateMCPOAuthMetadata(
  */
 /** Bounded preflight probe timeout to verify cached DCR clients before opening the browser. */
 const OAUTH_AUTHORIZE_PREFLIGHT_TIMEOUT_MS = 5_000;
+const OAUTH_AUTHORIZE_PREFLIGHT_MAX_BYTES = 64 * 1024;
+
+function isClientUnregisteredDescription(desc: string): boolean {
+  if (!desc) return false;
+  return (
+    /(?:unknown|unregistered|not\s+registered|not\s+found|does\s+not\s+exist|invalid)\s+client/i.test(
+      desc
+    ) ||
+    /client\s+(?:is\s+)?(?:not\s+registered|unknown|not\s+found|does\s+not\s+exist)/i.test(desc) ||
+    /no\s+such\s+client/i.test(desc) ||
+    /invalid\s+client(?:_id)?\b/i.test(desc)
+  );
+}
 
 function hasStaleClientOAuthError(
   error: string,
@@ -2181,7 +2198,9 @@ function hasStaleClientOAuthError(
   const err = error.trim().toLowerCase();
   const desc = description.trim().toLowerCase();
   if (err === 'invalid_client' || err === 'unauthorized_client') return true;
-  if (err === 'invalid_request') return desc.includes('client') || hasRegistrationLink;
+  if (err === 'invalid_request') {
+    return hasRegistrationLink || isClientUnregisteredDescription(desc);
+  }
   return false;
 }
 
@@ -2200,13 +2219,25 @@ function isStaleClientAuthorizeLocation(locationHeader: string | null): boolean 
   }
 }
 
+function hasClientNotRegisteredPhrase(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return (
+    lower.includes('client') &&
+    (lower.includes('not registered') ||
+      lower.includes('unregistered') ||
+      lower.includes('unknown') ||
+      lower.includes('not found'))
+  );
+}
+
 /**
  * Detects whether an authorization endpoint response indicates an unregistered / stale client.
  *
  * Signals recognized:
  * 1. 3xx redirect Location (query or fragment) with error=invalid_client / unauthorized_client.
  * 2. HTTP 400 containing OAuth 2.1 registration Link header (rel="...#registration").
- * 3. HTTP 400 with plain-text body or statusText containing "is not registered" (e.g. FastMCP / Cloudflare).
+ * 3. HTTP 400 with plain-text body or statusText indicating the client is not registered (e.g. FastMCP / Cloudflare).
  * 4. HTTP 400 with JSON error: invalid_client, unauthorized_client, or invalid_request indicating client issues.
  */
 function isStaleClientAuthorizeResponse(
@@ -2221,13 +2252,11 @@ function isStaleClientAuthorizeResponse(
   }
   if (status !== 400) return false;
 
-  const statusTextLower = (statusText || '').toLowerCase();
-  if (statusTextLower.includes('is not registered')) {
+  if (hasClientNotRegisteredPhrase(statusText || '')) {
     return true;
   }
 
-  const rawBodyLower = (rawBody || '').toLowerCase();
-  if (rawBodyLower.includes('is not registered')) {
+  if (hasClientNotRegisteredPhrase(rawBody || '')) {
     return true;
   }
 
@@ -2248,15 +2277,20 @@ function isStaleClientAuthorizeResponse(
 
 async function checkAuthorizeProbe(
   url: string,
-  allowLocalhostHttp: boolean
+  allowLocalhostHttp: boolean,
+  assertCurrent?: () => void
 ): Promise<{ isStale: boolean }> {
+  assertCurrent?.();
   try {
     const probeResponse = await safeOutboundFetch(url, {
       method: 'GET',
       redirect: 'manual',
       signal: AbortSignal.timeout(OAUTH_AUTHORIZE_PREFLIGHT_TIMEOUT_MS),
+      maxResponseBytes: OAUTH_AUTHORIZE_PREFLIGHT_MAX_BYTES,
       allowLocalhostHttp,
+      assertCurrent,
     });
+    assertCurrent?.();
     const status = probeResponse.status;
     if (status >= 300 && status < 400) {
       return { isStale: isStaleClientAuthorizeResponse(status, probeResponse.headers) };
@@ -2266,8 +2300,10 @@ async function checkAuthorizeProbe(
       let bodyJson: { error?: string; error_description?: string } | undefined;
       try {
         rawText = await probeResponse.text();
+        assertCurrent?.();
         bodyJson = JSON.parse(rawText) as { error?: string; error_description?: string };
       } catch {
+        assertCurrent?.();
         // Plain text or unparseable JSON
       }
       return {
@@ -2280,7 +2316,11 @@ async function checkAuthorizeProbe(
         ),
       };
     }
-  } catch {
+  } catch (error) {
+    assertCurrent?.();
+    if (error instanceof OutboundPreDispatchAuthorityError) {
+      throw error;
+    }
     // Network errors, timeouts, or unmocked URL in tests: proceed normally
   }
   return { isStale: false };
@@ -2426,15 +2466,30 @@ async function startMCPOAuthFlowWithAS(opts: {
 
   // Preflight check: bounded probe for cached dynamic clients to detect forgotten registrations before browser redirect.
   if (resolvedClient.method === 'dynamic_registration' && resolvedClient.cached) {
-    const probe = await checkAuthorizeProbe(authUrl.toString(), allowLocalhostHttp);
+    opts.assertCurrent?.();
+    const probe = await checkAuthorizeProbe(
+      authUrl.toString(),
+      allowLocalhostHttp,
+      opts.assertCurrent
+    );
+    opts.assertCurrent?.();
     if (probe.isStale) {
       console.log(
         `[MCP OAuth] event=oauth_preflight_stale_detected client_id=${resolvedClient.clientId}`
       );
       if (opts.invalidateDynamicClientRegistration) {
-        const invalidated = await opts
-          .invalidateDynamicClientRegistration(resolvedClient.clientId)
-          .catch(() => false);
+        opts.assertCurrent?.();
+        let invalidated = false;
+        try {
+          invalidated = await opts.invalidateDynamicClientRegistration(resolvedClient.clientId);
+        } catch (error) {
+          opts.assertCurrent?.();
+          console.warn(
+            `[MCP OAuth] event=oauth_dcr_invalidation_failed client_id=${resolvedClient.clientId} trigger=preflight`,
+            error
+          );
+        }
+        opts.assertCurrent?.();
         if (invalidated) {
           console.log(
             `[MCP OAuth] event=oauth_dcr_invalidated client_id=${resolvedClient.clientId} trigger=preflight`
@@ -2442,13 +2497,17 @@ async function startMCPOAuthFlowWithAS(opts: {
         }
       }
       if (resolvedClient.registrationEndpoint) {
-        dynamicClientCache.delete(resolvedClient.registrationEndpoint);
+        const cached = dynamicClientCache.get(resolvedClient.registrationEndpoint);
+        if (!cached || cached.client_id === resolvedClient.clientId) {
+          dynamicClientCache.delete(resolvedClient.registrationEndpoint);
+        }
       }
 
       console.log(
         `[MCP OAuth] event=oauth_preflight_recovery_started client_id=${resolvedClient.clientId}`
       );
 
+      opts.assertCurrent?.();
       resolvedClient = await resolveOAuthClient({
         clientId,
         clientSecret: opts.clientSecret,
@@ -2474,7 +2533,13 @@ async function startMCPOAuthFlowWithAS(opts: {
       assertAuthorizeRedirectUriMatchesClient(resolvedClient, actualRedirectUri);
       logOAuthAuthorizeBuilt(resolvedClient, actualRedirectUri, authorizationEndpoint);
 
-      const retryProbe = await checkAuthorizeProbe(authUrl.toString(), allowLocalhostHttp);
+      opts.assertCurrent?.();
+      const retryProbe = await checkAuthorizeProbe(
+        authUrl.toString(),
+        allowLocalhostHttp,
+        opts.assertCurrent
+      );
+      opts.assertCurrent?.();
       if (retryProbe.isStale) {
         console.warn(
           `[MCP OAuth] event=oauth_preflight_retry_failed client_id=${resolvedClient.clientId}`
