@@ -104,23 +104,24 @@ function setup(
   {
     suppressed = false,
     afterSeen = feed({ unread_notification_ids: [], pending_popup_items: [] }),
+    as = user,
   } = {}
 ) {
   const find = vi.fn(async () => initial);
   const create = vi.fn(async () => afterSeen);
   const service = vi.fn((path: string) => {
-    if (path === FEATURE_ANNOUNCEMENTS_SERVICE) return { find };
+    if (path === FEATURE_ANNOUNCEMENTS_SERVICE) return { find, on: vi.fn(), off: vi.fn() };
     if (path === FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE) return { create };
     if (path === 'users') return { getPrimaryTeammate: vi.fn(async () => null) };
     throw new Error(`Unexpected service ${path}`);
   });
   const client = { service } as unknown as AgorClient;
-  const { shell } = renderTab(client, { suppressed });
+  const { shell } = renderTab(client, { suppressed, as });
   return { find, create, shell };
 }
 
 /** One browser tab of the app shell; `rerender` swaps in a changed user. */
-function renderTab(client: AgorClient, { suppressed = false } = {}) {
+function renderTab(client: AgorClient, { suppressed = false, as = user } = {}) {
   const shell = { openWorkspaceSettings: vi.fn(), openModelSettings: vi.fn() };
   const tree = (tabUser: User) => (
     <ThemeProvider>
@@ -135,27 +136,45 @@ function renderTab(client: AgorClient, { suppressed = false } = {}) {
       </AntdApp>
     </ThemeProvider>
   );
-  const view = render(tree(user));
+  const view = render(tree(as));
   return { shell, rerender: (next: User) => view.rerender(tree(next)) };
 }
 
-/** A daemon stand-in that persists seen pop-ups the way the real one does. */
+/**
+ * A daemon stand-in that persists seen pop-ups the way the real one does, and
+ * can change its announcements and publish the `changed` event.
+ */
 function fakeServer(pending: FeatureAnnouncementClientItem[]) {
   const seen = new Set<string>();
+  let announcements = releases;
+  const listeners = new Set<() => void>();
   const current = () =>
-    feed({ pending_popup_items: pending.filter((popup) => !seen.has(popup.id)) });
+    feed({
+      announcements,
+      pending_popup_items: pending.filter((popup) => !seen.has(popup.id)),
+    });
   const create = vi.fn(async (body: { itemIds?: string[] }) => {
     for (const id of body.itemIds ?? []) seen.add(id);
     return current();
   });
+  const service = {
+    find: async () => current(),
+    on: (_event: string, listener: () => void) => listeners.add(listener),
+    off: (_event: string, listener: () => void) => listeners.delete(listener),
+  };
   const client = {
     service: (path: string) => {
-      if (path === FEATURE_ANNOUNCEMENTS_SERVICE) return { find: async () => current() };
+      if (path === FEATURE_ANNOUNCEMENTS_SERVICE) return service;
       if (path === FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE) return { create };
       throw new Error(`Unexpected service ${path}`);
     },
   } as unknown as AgorClient;
-  return { client, create, seen };
+  /** A Cloud poll changed the announcements: the daemon publishes `changed`. */
+  const publish = (next: FeatureAnnouncementClientRelease[]) => {
+    announcements = next;
+    for (const listener of listeners) listener();
+  };
+  return { client, create, seen, publish };
 }
 
 beforeEach(() => {
@@ -240,6 +259,28 @@ it('shows big launches as one carousel and records each slide as it is displayed
   expect(create).toHaveBeenCalledTimes(2);
 });
 
+it('keeps focus and arrow keys in the pop-up when an arrow disables itself', async () => {
+  setup(feed({ pending_popup_items: [zones, slack] }), {
+    afterSeen: feed({ pending_popup_items: [slack] }),
+  });
+  const title = await screen.findByText('Zones can arrange your cards');
+  // On open the slide takes focus (not the close button).
+  await waitFor(() => expect(title.closest('[tabindex="-1"]')).toHaveFocus());
+
+  fireEvent.click(screen.getByLabelText('Next'));
+  await screen.findByText('Slack setup listens everywhere');
+  await waitFor(() => expect(screen.getByLabelText('Previous')).toHaveFocus());
+
+  fireEvent.click(screen.getByLabelText('Previous'));
+  await screen.findByText('Zones can arrange your cards');
+  // Previous is now disabled; focus moved to Next instead of the page.
+  await waitFor(() => expect(screen.getByLabelText('Next')).toHaveFocus());
+
+  // Arrow keys still work from there.
+  fireEvent.keyDown(screen.getByLabelText('Next'), { key: 'ArrowRight' });
+  expect(await screen.findByText('Slack setup listens everywhere')).toBeInTheDocument();
+});
+
 it('closing records the slides that were not displayed', async () => {
   // The daemon keeps listing the launch nobody has displayed yet.
   const { create } = setup(feed({ pending_popup_items: [zones, slack] }), {
@@ -312,7 +353,8 @@ it('a slow fetch from before a dismissal cannot reopen the pop-up', async () => 
     .mockImplementationOnce(() => new Promise((resolve) => (resolveStale = resolve)));
   const create = vi.fn(async () => feed({ pending_popup_items: [] }));
   const client = {
-    service: (path: string) => (path === FEATURE_ANNOUNCEMENTS_SERVICE ? { find } : { create }),
+    service: (path: string) =>
+      path === FEATURE_ANNOUNCEMENTS_SERVICE ? { find, on: vi.fn(), off: vi.fn() } : { create },
   } as unknown as AgorClient;
   const tab = renderTab(client);
 
@@ -338,6 +380,31 @@ it('opens the Agor page a button names', async () => {
   fireEvent.click(await screen.findByText('See it on my board'));
   expect(shell.openWorkspaceSettings).toHaveBeenCalledWith('artifacts');
   expect(create).toHaveBeenCalledWith({ scope: 'popup', itemIds: ['zones'] });
+});
+
+it('shows a page button only to people who can use that page', async () => {
+  const integrations = item('slack-setup', {
+    title: 'Slack setup listens everywhere',
+    learn_more_url: 'https://agor.live/guide/slack',
+    button: { action: 'agor_page', target: 'integrations', label: 'Open Slack setup' },
+    popup: true,
+  });
+
+  setup(feed({ pending_popup_items: [integrations] }), {
+    as: makeUser({ role: 'member' }),
+  });
+  await screen.findByText('Slack setup listens everywhere');
+  // Members cannot open workspace integrations: no button, Learn more stays.
+  expect(screen.queryByText('Open Slack setup')).not.toBeInTheDocument();
+  expect(screen.getByText('Learn more').closest('a')).toHaveAttribute(
+    'href',
+    'https://agor.live/guide/slack'
+  );
+  cleanup();
+
+  const { shell } = setup(feed({ pending_popup_items: [integrations] }));
+  fireEvent.click(await screen.findByText('Open Slack setup'));
+  expect(shell.openWorkspaceSettings).toHaveBeenCalledWith('gateway');
 });
 
 it('sends people without a teammate to set one up', async () => {
@@ -416,6 +483,22 @@ it('does not reopen a seen launch or its notification after an operator edits it
   expect(await screen.findByText('Zones arrange your cards for you')).toBeInTheDocument();
   // Every visible release is already seen, so opening Release notes writes nothing.
   expect(create).toHaveBeenCalledTimes(1);
+});
+
+it('drops an announcement removed upstream from an open tab, without a reload', async () => {
+  const server = fakeServer([]);
+  renderTab(server.client);
+  fireEvent.click(await screen.findByLabelText('Notifications, 1 unread', { selector: 'button' }));
+  fireEvent.click(await screen.findByText('Release notes'));
+  expect(await screen.findByText('Zones can arrange your cards')).toBeInTheDocument();
+
+  // An operator removes the release in the console; the next poll publishes `changed`.
+  server.publish([releases[1]]);
+
+  await waitFor(() =>
+    expect(screen.queryByText('Zones can arrange your cards')).not.toBeInTheDocument()
+  );
+  expect(screen.getByText('Knowledge docs link to each other')).toBeInTheDocument();
 });
 
 it('waits while onboarding is open', async () => {

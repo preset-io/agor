@@ -5,6 +5,7 @@ import type {
   User,
 } from '@agor-live/client';
 import {
+  FEATURE_ANNOUNCEMENTS_CHANGED_EVENT,
   FEATURE_ANNOUNCEMENTS_MARK_SEEN_SERVICE,
   FEATURE_ANNOUNCEMENTS_SERVICE,
 } from '@agor-live/client';
@@ -18,8 +19,12 @@ import {
   useState,
 } from 'react';
 
-/** Cloud announcements refresh on the daemon every 15 minutes; follow at the same pace. */
-const REFRESH_INTERVAL_MS = 15 * 60_000;
+/**
+ * The daemon publishes a content-free `changed` event when its announcements
+ * change, and open tabs refetch on it. This slower refetch only covers an
+ * event missed while the socket was reconnecting.
+ */
+const FALLBACK_REFRESH_MS = 5 * 60_000;
 
 export type FeatureAnnouncementsTab = 'notifications' | 'release-notes';
 
@@ -107,9 +112,12 @@ export function FeatureAnnouncementsProvider({
         () => !cancelled
       );
     load();
-    const timer = window.setInterval(load, REFRESH_INTERVAL_MS);
+    const service = client.service(FEATURE_ANNOUNCEMENTS_SERVICE);
+    service.on(FEATURE_ANNOUNCEMENTS_CHANGED_EVENT, load);
+    const timer = window.setInterval(load, FALLBACK_REFRESH_MS);
     return () => {
       cancelled = true;
+      service.off(FEATURE_ANNOUNCEMENTS_CHANGED_EVENT, load);
       window.clearInterval(timer);
     };
   }, [active, client, userId, seenKey, request]);

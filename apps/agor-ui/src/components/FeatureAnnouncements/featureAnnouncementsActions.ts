@@ -1,4 +1,5 @@
 import type { FeatureAnnouncementAgorPage, User } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { useCallback } from 'react';
 import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { readLocalStorageJson } from '../../hooks/localStorageJson';
@@ -18,6 +19,25 @@ export function currentOrRecentBoardId(user: User | null | undefined): string | 
   const recent = readLocalStorageJson<unknown>(recentBoardsStorageKey(user?.user_id), []);
   const first = Array.isArray(recent) ? recent.find((id) => typeof id === 'string') : undefined;
   return first ?? user?.preferences?.mainBoardId;
+}
+
+/**
+ * Whether the user can use the page a button opens; otherwise the button is
+ * hidden (Learn more stays). Workspace integrations are admin-only, and
+ * connecting an MCP server needs a member.
+ */
+export function canOpenAgorPage(
+  target: FeatureAnnouncementAgorPage,
+  user: User | null | undefined
+): boolean {
+  switch (target) {
+    case 'integrations':
+      return hasMinimumRole(user?.role, ROLES.ADMIN);
+    case 'mcp':
+      return hasMinimumRole(user?.role, ROLES.MEMBER);
+    default:
+      return true;
+  }
 }
 
 /** Opens one of the fixed places in Agor an announcement button can point at. */

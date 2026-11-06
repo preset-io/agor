@@ -23,7 +23,11 @@ import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/available
 import { usePrimaryAssistantSend } from '../PrimaryAssistantCompose';
 import { AnnouncementVisual, tint } from './AnnouncementVisual';
 import { useFeatureAnnouncements } from './FeatureAnnouncementsContext';
-import { currentOrRecentBoardId, useOpenAgorPage } from './featureAnnouncementsActions';
+import {
+  canOpenAgorPage,
+  currentOrRecentBoardId,
+  useOpenAgorPage,
+} from './featureAnnouncementsActions';
 
 export interface NewInAgorModalProps {
   client: AgorClient | null;
@@ -132,6 +136,8 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
   // The prototype's light teal for text on the dark surface; Agor teal on light.
   const accent = isDark ? token.colorPrimaryTextHover : token.colorPrimaryTextActive;
   const slideRef = useRef<HTMLDivElement>(null);
+  const previousRef = useRef<HTMLButtonElement>(null);
+  const nextRef = useRef<HTMLButtonElement>(null);
   // Slides this carousel has displayed; they stay for the life of the pop-up.
   const shown = useRef(new Set<string>());
 
@@ -171,11 +177,19 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
     featureAnnouncements.markPopupsSeen(slides.map((item) => item.id));
     setSlides(NO_ITEMS);
   };
-  const go = (next: number) => setIndex(Math.max(0, Math.min(slides.length - 1, next)));
+  const go = (next: number) => {
+    const target = Math.max(0, Math.min(slides.length - 1, next));
+    setIndex(target);
+    // Reaching either end disables the arrow just used, which would drop focus
+    // to the page: hand it to the other arrow so focus and arrow keys stay here.
+    const keep = target === 0 ? nextRef : target === slides.length - 1 ? previousRef : undefined;
+    if (keep) window.setTimeout(() => keep.current?.focus());
+  };
 
   const action = (button: FeatureAnnouncementButton) => {
     switch (button.action) {
       case 'agor_page':
+        if (!canOpenAgorPage(button.target, props.user)) return null;
         return (
           <Button
             type="primary"
@@ -331,6 +345,7 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
           {many && (
             <Flex align="center" justify="center" gap={10} style={{ marginTop: 14 }}>
               <Button
+                ref={previousRef}
                 type="text"
                 size="small"
                 aria-label="Previous"
@@ -359,6 +374,7 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
                 ))}
               </Flex>
               <Button
+                ref={nextRef}
                 type="text"
                 size="small"
                 aria-label="Next"
