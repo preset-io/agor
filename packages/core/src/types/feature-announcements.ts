@@ -209,6 +209,9 @@ export interface FeatureAnnouncementsPreferences {
 }
 
 export const FEATURE_ANNOUNCEMENTS_LIMITS = {
+  /** `feature_announcements.poll_interval_seconds`: how often a Cell polls Agor Cloud. */
+  pollIntervalSecondsDefault: 900,
+  pollIntervalSecondsMin: 30,
   /** Cap on `seenPopupItemIds`; older IDs belong to releases no longer served. */
   seenPopupItemIds: 200,
   /** Cap on `seenReleaseIds`; above the most releases a feed carries. */

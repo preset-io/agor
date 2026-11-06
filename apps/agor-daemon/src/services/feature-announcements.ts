@@ -48,7 +48,6 @@ import { withPreferencesMerge } from './users.js';
  */
 const CLOUD_FEATURE_ANNOUNCEMENTS_PATH = '/api/internal/runtime/feature-announcements';
 const CLOUD_FEATURE_ANNOUNCEMENTS_SCOPE = 'feature_announcements:read';
-const CLOUD_POLL_INTERVAL_MS = 15 * 60_000;
 const CLOUD_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const CLOUD_MAX_RELEASES = 50;
 const DAY_MS = 86_400_000;
@@ -177,6 +176,14 @@ export function loadBundledFeatureAnnouncements(
   );
 }
 
+/** `feature_announcements.poll_interval_seconds` in milliseconds (validated at config load). */
+export function featureAnnouncementsPollIntervalMs(config: AgorConfig): number {
+  return (
+    (config.feature_announcements?.poll_interval_seconds ??
+      FEATURE_ANNOUNCEMENTS_LIMITS.pollIntervalSecondsDefault) * 1000
+  );
+}
+
 /** Polls Agor Cloud; keeps the last good answer and stays quiet on failure. */
 export class CloudFeatureAnnouncementsPoller implements FeatureAnnouncementsProvider {
   readonly source = 'cloud' as const;
@@ -198,9 +205,9 @@ export class CloudFeatureAnnouncementsPoller implements FeatureAnnouncementsProv
     this.credential = loadCloudRuntimeCredential(env);
   }
 
-  start(): this {
+  start(intervalMs = featureAnnouncementsPollIntervalMs({})): this {
     void this.refresh();
-    setInterval(() => void this.refresh(), CLOUD_POLL_INTERVAL_MS).unref();
+    setInterval(() => void this.refresh(), intervalMs).unref();
     return this;
   }
 
@@ -251,7 +258,9 @@ export function createFeatureAnnouncementsProvider(
   const mediaOrigins = featureAnnouncementMediaOrigins(config);
   if (source === 'cloud') {
     try {
-      return new CloudFeatureAnnouncementsPoller(env, mediaOrigins).start();
+      return new CloudFeatureAnnouncementsPoller(env, mediaOrigins).start(
+        featureAnnouncementsPollIntervalMs(config)
+      );
     } catch (error) {
       console.warn(
         '[feature-announcements] Cloud source unavailable; showing no feature announcements:',

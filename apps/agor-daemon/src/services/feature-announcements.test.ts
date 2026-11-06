@@ -17,6 +17,7 @@ import {
   FeatureAnnouncementsMarkSeenService,
   FeatureAnnouncementsService,
   featureAnnouncementItemsForAgents,
+  featureAnnouncementsPollIntervalMs,
   mergeFeatureAnnouncementsSeen,
   parseFeatureAnnouncements,
   resolveFeatureAnnouncementsSource,
@@ -372,6 +373,15 @@ const CLOUD_ENV = {
   AGOR_CLOUD_RUNTIME_KEY_ID: 'key-1',
   AGOR_CLOUD_RUNTIME_SIGNING_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
 };
+
+describe('featureAnnouncementsPollIntervalMs', () => {
+  it('polls every 15 minutes unless configured', () => {
+    expect(featureAnnouncementsPollIntervalMs({} as AgorConfig)).toBe(900_000);
+    expect(
+      featureAnnouncementsPollIntervalMs({ feature_announcements: { poll_interval_seconds: 30 } })
+    ).toBe(30_000);
+  });
+});
 
 describe('resolveFeatureAnnouncementsSource', () => {
   it('prefers config, then the Cloud runtime credential, then the bundled changelog', () => {

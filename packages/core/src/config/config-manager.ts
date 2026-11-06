@@ -15,7 +15,10 @@ import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agenti
 import type { Database } from '../db/client';
 import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
 import type { AgenticToolName } from '../types';
-import { FEATURE_ANNOUNCEMENTS_SOURCES } from '../types/feature-announcements';
+import {
+  FEATURE_ANNOUNCEMENTS_LIMITS,
+  FEATURE_ANNOUNCEMENTS_SOURCES,
+} from '../types/feature-announcements';
 import { normalizeHttpBaseUrl } from '../utils/url';
 import {
   agorHomePath,
@@ -870,7 +873,11 @@ function validateConfig(config: AgorConfig): void {
   ]);
   assertValidRawExternalLaunchConfig(config.external_launch);
   only(config.mcp_oauth_relay, 'mcp_oauth_relay', ['callback_origin']);
-  only(config.feature_announcements, 'feature_announcements', ['source', 'media_origin']);
+  only(config.feature_announcements, 'feature_announcements', [
+    'source',
+    'media_origin',
+    'poll_interval_seconds',
+  ]);
   if (
     config.feature_announcements?.source !== undefined &&
     !FEATURE_ANNOUNCEMENTS_SOURCES.includes(config.feature_announcements.source)
@@ -883,6 +890,16 @@ function validateConfig(config: AgorConfig): void {
   if (mediaOrigin !== undefined && !isHttpsOrigin(mediaOrigin)) {
     throw new Error(
       'Config error: feature_announcements.media_origin must be an https: origin such as https://console.example.com'
+    );
+  }
+  const pollInterval = config.feature_announcements?.poll_interval_seconds;
+  if (
+    pollInterval !== undefined &&
+    (!Number.isInteger(pollInterval) ||
+      pollInterval < FEATURE_ANNOUNCEMENTS_LIMITS.pollIntervalSecondsMin)
+  ) {
+    throw new Error(
+      `Config error: feature_announcements.poll_interval_seconds must be a whole number of at least ${FEATURE_ANNOUNCEMENTS_LIMITS.pollIntervalSecondsMin}`
     );
   }
   only(config.identity, 'identity', [

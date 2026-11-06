@@ -1600,6 +1600,8 @@ export interface AgorConfig {
      * Cloud console). Added to the CSP `img-src` and `media-src`; unset by default.
      */
     media_origin?: string;
+    /** Seconds between polls of Agor Cloud (`source: cloud`). Default 900, minimum 30. */
+    poll_interval_seconds?: number;
   };
 
   /** User identity, lifecycle, role, and local-login authority. */

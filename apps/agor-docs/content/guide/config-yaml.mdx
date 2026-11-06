@@ -397,6 +397,7 @@ where the announcements come from:
 feature_announcements:
   source: bundled # bundled | cloud | off
   media_origin: https://console.example.com # optional
+  poll_interval_seconds: 900 # optional, cloud only
 ```
 
 - `bundled` (default for self-hosted): the highlights of each release in the `CHANGELOG.md` shipped
@@ -409,6 +410,8 @@ feature_announcements:
 - `media_origin`: the HTTPS origin that serves uploaded announcement pictures and videos (the Agor
   Cloud console). It is added to the CSP `img-src` and `media-src`; pictures from any other origin
   except `https://agor.live` are dropped. Unset by default.
+- `poll_interval_seconds`: how often the daemon asks Agor Cloud for announcements (`source: cloud`).
+  Default 900 (15 minutes), minimum 30. Restarting the daemon polls at once.
 
 Each user's read state is stored with their preferences.
 

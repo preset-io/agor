@@ -895,6 +895,14 @@ describe('loadConfig', () => {
     expect(() =>
       assertValidRawConfig({ feature_announcements: { media_origin: 'https://cdn.example.com' } })
     ).not.toThrow();
+    expect(() =>
+      assertValidRawConfig({ feature_announcements: { poll_interval_seconds: 30 } })
+    ).not.toThrow();
+    for (const poll_interval_seconds of [29, 0, 60.5]) {
+      expect(() =>
+        assertValidRawConfig({ feature_announcements: { poll_interval_seconds } })
+      ).toThrow(/poll_interval_seconds must be a whole number of at least 30/);
+    }
     for (const media_origin of ['http://cdn.example.com', 'https://cdn.example.com/uploads']) {
       expect(() => assertValidRawConfig({ feature_announcements: { media_origin } })).toThrow(
         /feature_announcements.media_origin must be an https: origin/
