@@ -8,7 +8,7 @@ import type {
 } from '@agor-live/client';
 import { ArrowRightOutlined, GiftOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { Button, Flex, Modal, Tag, Typography, theme } from 'antd';
-import { useEffect, useRef, useState } from 'react';
+import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useTheme } from '../../contexts/ThemeContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
@@ -39,6 +39,21 @@ export interface NewInAgorModalProps {
 }
 
 const NO_ITEMS: FeatureAnnouncementClientItem[] = [];
+
+/**
+ * Every footer button, whatever its action or label: one height, padding and
+ * line height, centred, and no primary drop shadow, so Not now and the primary
+ * button sit level.
+ */
+const FOOTER_BUTTON: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  height: 36,
+  paddingInline: 14,
+  fontSize: 14.5,
+  lineHeight: '20px',
+  boxShadow: 'none',
+};
 
 /**
  * Starts a session with the user's primary teammate (else the board's) with the
@@ -79,6 +94,7 @@ const TeammateChatButton: React.FC<
   return (
     <Button
       type="primary"
+      style={FOOTER_BUTTON}
       loading={compose.submitting !== null}
       disabled={compose.resolving}
       onClick={() => {
@@ -115,7 +131,6 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
   const { isDark } = useTheme();
   // The prototype's light teal for text on the dark surface; Agor teal on light.
   const accent = isDark ? token.colorPrimaryTextHover : token.colorPrimaryTextActive;
-  const footerButton = { height: 36, paddingInline: 14, fontSize: 14.5 };
   const slideRef = useRef<HTMLDivElement>(null);
   // Slides this carousel has displayed; they stay for the life of the pop-up.
   const shown = useRef(new Set<string>());
@@ -164,7 +179,7 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
         return (
           <Button
             type="primary"
-            style={footerButton}
+            style={FOOTER_BUTTON}
             onClick={() => {
               close();
               openAgorPage(button.target);
@@ -177,7 +192,7 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
         return (
           <Button
             type="primary"
-            style={footerButton}
+            style={FOOTER_BUTTON}
             href={button.url}
             target="_blank"
             rel="noopener noreferrer"
@@ -240,8 +255,8 @@ export const NewInAgorModal: React.FC<NewInAgorModalProps> = ({ suppressed, ...p
             >
               All updates <ArrowRightOutlined />
             </Button>
-            <Flex gap={token.marginXS} wrap>
-              <Button style={footerButton} onClick={close}>
+            <Flex align="center" gap={token.marginXS} wrap>
+              <Button style={FOOTER_BUTTON} onClick={close}>
                 Not now
               </Button>
               {slide.button && action(slide.button)}

@@ -350,6 +350,13 @@ it('sends people without a teammate to set one up', async () => {
 
   const button = await screen.findByText('Ask my teammate');
   await waitFor(() => expect(button.closest('button')).not.toBeDisabled());
+  // Same footer sizing as Not now, so the two buttons sit level.
+  const notNow = screen.getByText('Not now').closest('button') as HTMLElement;
+  for (const style of ['height', 'padding-inline', 'line-height', 'box-shadow']) {
+    expect(button.closest('button')?.style.getPropertyValue(style)).toBe(
+      notNow.style.getPropertyValue(style)
+    );
+  }
   fireEvent.click(button);
 
   await waitFor(() => expect(screen.getByLabelText('Location')).toHaveTextContent('/teammates'));
