@@ -2178,15 +2178,16 @@ export async function validateMCPOAuthMetadata(
 const OAUTH_AUTHORIZE_PREFLIGHT_TIMEOUT_MS = 5_000;
 const OAUTH_AUTHORIZE_PREFLIGHT_MAX_BYTES = 64 * 1024;
 
-function isClientUnregisteredDescription(desc: string): boolean {
-  if (!desc) return false;
+function isClientUnregisteredPhrase(text: string): boolean {
+  if (!text) return false;
   return (
-    /(?:unknown|unregistered|not\s+registered|not\s+found|does\s+not\s+exist|invalid)\s+client/i.test(
-      desc
+    /(?:unknown|unregistered|not\s+registered|not\s+found|does\s+not\s+exist|invalid)[_\s]client(?:_id)?\b/i.test(
+      text
     ) ||
-    /client\s+(?:is\s+)?(?:not\s+registered|unknown|not\s+found|does\s+not\s+exist)/i.test(desc) ||
-    /no\s+such\s+client/i.test(desc) ||
-    /invalid\s+client(?:_id)?\b/i.test(desc)
+    /client(?:_id)?(?:\s+['"][^'"\n\r]+['"]|\s+[`][^`\n\r]+[`])?\s+(?:is\s+)?(?:not\s+registered|unregistered|unknown|not\s+found|does\s+not\s+exist)\b/i.test(
+      text
+    ) ||
+    /no\s+such\s+client(?:_id)?\b/i.test(text)
   );
 }
 
@@ -2196,10 +2197,9 @@ function hasStaleClientOAuthError(
   hasRegistrationLink = false
 ): boolean {
   const err = error.trim().toLowerCase();
-  const desc = description.trim().toLowerCase();
   if (err === 'invalid_client' || err === 'unauthorized_client') return true;
   if (err === 'invalid_request') {
-    return hasRegistrationLink || isClientUnregisteredDescription(desc);
+    return hasRegistrationLink || isClientUnregisteredPhrase(description);
   }
   return false;
 }
@@ -2217,18 +2217,6 @@ function isStaleClientAuthorizeLocation(locationHeader: string | null): boolean 
   } catch {
     return false;
   }
-}
-
-function hasClientNotRegisteredPhrase(text: string): boolean {
-  if (!text) return false;
-  const lower = text.toLowerCase();
-  return (
-    lower.includes('client') &&
-    (lower.includes('not registered') ||
-      lower.includes('unregistered') ||
-      lower.includes('unknown') ||
-      lower.includes('not found'))
-  );
 }
 
 /**
@@ -2252,11 +2240,11 @@ function isStaleClientAuthorizeResponse(
   }
   if (status !== 400) return false;
 
-  if (hasClientNotRegisteredPhrase(statusText || '')) {
+  if (isClientUnregisteredPhrase(statusText || '')) {
     return true;
   }
 
-  if (hasClientNotRegisteredPhrase(rawBody || '')) {
+  if (isClientUnregisteredPhrase(rawBody || '')) {
     return true;
   }
 
@@ -2318,7 +2306,10 @@ async function checkAuthorizeProbe(
     }
   } catch (error) {
     assertCurrent?.();
-    if (error instanceof OutboundPreDispatchAuthorityError) {
+    if (
+      error instanceof OutboundPreDispatchAuthorityError ||
+      (error as { name?: string })?.name === 'Forbidden'
+    ) {
       throw error;
     }
     // Network errors, timeouts, or unmocked URL in tests: proceed normally
@@ -2484,6 +2475,12 @@ async function startMCPOAuthFlowWithAS(opts: {
           invalidated = await opts.invalidateDynamicClientRegistration(resolvedClient.clientId);
         } catch (error) {
           opts.assertCurrent?.();
+          if (
+            error instanceof OutboundPreDispatchAuthorityError ||
+            (error as { name?: string })?.name === 'Forbidden'
+          ) {
+            throw error;
+          }
           console.warn(
             `[MCP OAuth] event=oauth_dcr_invalidation_failed client_id=${resolvedClient.clientId} trigger=preflight`,
             error

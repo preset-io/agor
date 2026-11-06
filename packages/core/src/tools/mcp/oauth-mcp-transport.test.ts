@@ -11,26 +11,31 @@ import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MCPOAuthClientRegistrationID, MCPOAuthDCRDiagnostic } from '../../types/mcp.js';
 
-vi.mock('../../utils/safe-outbound-fetch', () => ({
-  assertSafeOAuthUrl: (input: string, options: { allowLocalhostHttp?: boolean } = {}) => {
-    const url = new URL(input);
-    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-    if (url.protocol !== 'https:' && !(options.allowLocalhostHttp && loopback)) {
-      throw new Error('OAuth endpoints require HTTPS');
-    }
-    return url;
-  },
-  safeOutboundFetch: vi.fn((input: string | URL, options: Record<string, unknown> = {}) => {
-    const {
-      timeoutMs: _timeout,
-      maxRedirects: _max,
-      maxResponseBytes: _bytes,
-      allowLocalhostHttp: _local,
-      ...init
-    } = options;
-    return globalThis.fetch(input, init as RequestInit);
-  }),
-}));
+vi.mock('../../utils/safe-outbound-fetch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/safe-outbound-fetch')>();
+  return {
+    ...actual,
+    assertSafeOAuthUrl: (input: string, options: { allowLocalhostHttp?: boolean } = {}) => {
+      const url = new URL(input);
+      const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+      if (url.protocol !== 'https:' && !(options.allowLocalhostHttp && loopback)) {
+        throw new Error('OAuth endpoints require HTTPS');
+      }
+      return url;
+    },
+    safeOutboundFetch: vi.fn((input: string | URL, options: Record<string, unknown> = {}) => {
+      const {
+        timeoutMs: _timeout,
+        maxRedirects: _max,
+        maxResponseBytes: _bytes,
+        allowLocalhostHttp: _local,
+        assertCurrent: _assert,
+        ...init
+      } = options;
+      return globalThis.fetch(input, init as RequestInit);
+    }),
+  };
+});
 
 import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import type { MCPOAuthDynamicClientRegistrationResolver } from './oauth-mcp-transport';
@@ -2171,6 +2176,58 @@ describe('/authorize preflight probe + stale client recovery', () => {
 
     expect(invalidateFn).not.toHaveBeenCalled();
     expect(ctx.clientId).toBe('cached-client-ok');
+  });
+
+  it('does not invalidate DCR when text mentions client and user not registered in unrelated sentences', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'cached-client-ok',
+      redirect_uri: redirectUri,
+    });
+
+    const invalidateFn = vi.fn();
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      return new Response('Client authentication failed. User is not registered.', {
+        status: 400,
+        headers: { 'Content-Type': 'text/plain' },
+      });
+    }) as unknown as typeof fetch;
+
+    const ctx = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      invalidateDynamicClientRegistration: invalidateFn,
+    });
+
+    expect(invalidateFn).not.toHaveBeenCalled();
+    expect(ctx.clientId).toBe('cached-client-ok');
+  });
+
+  it('aborts immediately without re-registering when DCR invalidation encounters Forbidden authority revocation', async () => {
+    __seedDynamicClientCacheForTests('https://auth.provider.example/oauth/register', {
+      client_id: 'cached-client-stale',
+      redirect_uri: redirectUri,
+    });
+
+    const forbiddenErr = new Error(
+      'MCP OAuth client-registration authority changed. Restart OAuth.'
+    );
+    forbiddenErr.name = 'Forbidden';
+    const invalidateFn = vi.fn().mockRejectedValue(forbiddenErr);
+
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({ error: 'invalid_client', error_description: 'Unknown client' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      startMCPOAuthFlow('', undefined, redirectUri, {
+        ...prefetchedOptions,
+        invalidateDynamicClientRegistration: invalidateFn,
+      })
+    ).rejects.toThrow('MCP OAuth client-registration authority changed. Restart OAuth.');
+
+    expect(invalidateFn).toHaveBeenCalledWith('cached-client-stale');
   });
 
   it('fences preflight probe and invalidation with assertCurrent: loses authority during probe', async () => {
