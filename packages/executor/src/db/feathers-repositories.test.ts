@@ -6,7 +6,33 @@ import {
   FeathersMCPServersRepository,
   FeathersMessagesRepository,
   FeathersSessionMCPServersRepository,
+  FeathersSessionsRepository,
 } from './feathers-repositories';
+
+/** The Feathers client rejects with the daemon error's name and HTTP code. */
+const feathersError = (name: string, code: number) =>
+  Object.assign(new Error(name), { name, code });
+
+describe('FeathersSessionsRepository', () => {
+  const repoRejecting = (error: Error) =>
+    new FeathersSessionsRepository({
+      service: () => ({ get: vi.fn().mockRejectedValue(error) }),
+    } as unknown as AgorClient);
+
+  it('reports a missing session as null', async () => {
+    await expect(
+      repoRejecting(feathersError('NotFound', 404)).findById('session-1' as SessionID)
+    ).resolves.toBeNull();
+  });
+
+  it.each([
+    feathersError('Unavailable', 503),
+    feathersError('Forbidden', 403),
+    new Error('socket timeout'),
+  ])('surfaces a failed read instead of reporting the session missing: %s', async (error) => {
+    await expect(repoRejecting(error).findById('session-1' as SessionID)).rejects.toBe(error);
+  });
+});
 
 describe('FeathersMessagesRepository', () => {
   it('fetches only the first user row used by prompt idempotency', async () => {

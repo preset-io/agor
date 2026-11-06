@@ -17,6 +17,7 @@ import {
   sessionPromptDeniedMessage,
 } from '../utils/branch-authorization.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { withoutSessionMcpToken } from '../utils/session-mcp-token-hook.js';
 
 export type PermissionDecisionDelivery = PermissionDecision & {
   sessionId: SessionID;
@@ -88,7 +89,9 @@ export async function deliverPermissionDecision(options: {
   // This hooked external read is load-bearing for branch/user authorization,
   // while the route's tenant around-hook and PostgreSQL RLS own tenant
   // isolation. Do not replace it with an unscoped repository lookup.
-  const session = (await app.service('sessions').get(sessionId, params)) as Session;
+  const session = (await app
+    .service('sessions')
+    .get(sessionId, withoutSessionMcpToken(params))) as Session;
 
   // Viewing a Session is not sufficient to control its executor. Permission
   // decisions use the same branch-session sharing authority as prompting.

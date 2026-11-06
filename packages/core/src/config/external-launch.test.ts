@@ -234,3 +234,19 @@ describe('external launch effective config', () => {
     });
   });
 });
+
+it('binds launch revision authority to trusted provider configuration and environment', () => {
+  const effective = resolveEffectiveExternalLaunchConfig(completeProvider, {
+    AGOR_EXTERNAL_LAUNCH_RESTRICTION_CONTROLLER_ID: 'cloud-controller',
+  });
+  expect(
+    resolveValidExternalLaunchProvider({ external_launch: effective }).restrictionControllerId
+  ).toBe('cloud-controller');
+  for (const id of ['', 'bad/id', 'x'.repeat(201)]) {
+    expect(() =>
+      resolveValidExternalLaunchProvider({
+        external_launch: { ...completeProvider, restriction_controller_id: id },
+      })
+    ).toThrow();
+  }
+});

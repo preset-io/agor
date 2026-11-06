@@ -1,3 +1,12 @@
+import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+
+const assertRuntimeTenantAccess = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../auth/tenant-access.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../auth/tenant-access.js')>()),
+  assertRuntimeTenantAccess,
+  isCurrentTenantRuntimeActive: vi.fn().mockResolvedValue(true),
+}));
+
 import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +24,12 @@ vi.mock('../termination-coordinator.js', async (importOriginal) => ({
 vi.mock('../utils/tenant-db-scope.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/tenant-db-scope.js')>()),
   withFreshTenantWrite,
+}));
+
+// Isolates heartbeat ordering; epoch admission has its own PostgreSQL and negative tests.
+vi.mock('../auth/tenant-credential-epoch.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../auth/tenant-credential-epoch.js')>()),
+  assertTenantCredentialEpoch: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { TasksService } from './tasks.js';
@@ -74,7 +89,103 @@ function serviceHarness(input: {
 describe('TasksService heartbeat authority control', () => {
   beforeEach(() => {
     beginExecutorTermination.mockReset();
+    assertRuntimeTenantAccess.mockReset().mockResolvedValue(undefined);
     withFreshTenantWrite.mockClear();
+  });
+
+  it('turns restricted running telemetry into Stop without callback automation', async () => {
+    const stopping = { ...task, status: TaskStatus.STOPPING };
+    const { service, reportRuntimeTelemetry } = serviceHarness({
+      report: { outcome: 'continued', task },
+    });
+    const callback = vi.fn();
+    Reflect.set(service, 'handleExecutorHeartbeat', callback);
+    Reflect.set(service, 'heartbeatCallbackRunner', { isConfigured: () => true });
+    assertRuntimeTenantAccess.mockRejectedValueOnce(
+      new Forbidden('Tenant access is restricted', { code: 'tenant_restricted' })
+    );
+    beginExecutorTermination.mockResolvedValueOnce(stopping);
+    await expect(
+      service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams())
+    ).resolves.toBe(stopping);
+    expect(reportRuntimeTelemetry).toHaveBeenCalledBefore(assertRuntimeTenantAccess);
+    expect(beginExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: 'tenant_suspension' })
+    );
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it('keeps genuine durable authorization revocation Failed-cause even when the tenant is also restricted', async () => {
+    const { service } = serviceHarness({
+      report: { outcome: 'authorization_revoked', task, reason: 'token_revoked' },
+    });
+    assertRuntimeTenantAccess.mockRejectedValueOnce(
+      new Forbidden('Tenant access is restricted', { code: 'tenant_restricted' })
+    );
+    beginExecutorTermination.mockResolvedValueOnce({ ...task, status: TaskStatus.STOPPING });
+    await service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams());
+    expect(beginExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: 'authorization_revoked', durableRevocation: true })
+    );
+  });
+
+  it('keeps an in-flight suspension Stop Stopped-cause when reactivation makes its generation stale', async () => {
+    const stopping = {
+      ...task,
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'tenant_suspension',
+        requested_at: '2026-08-28T00:00:10.000Z',
+        error_message: 'Tenant access is restricted.',
+      },
+    };
+    const { service } = serviceHarness({ report: { outcome: 'continued', task: stopping } });
+    assertRuntimeTenantAccess.mockRejectedValueOnce(
+      new NotAuthenticated('Runtime credential generation is stale')
+    );
+    beginExecutorTermination.mockResolvedValueOnce(stopping);
+    await expect(
+      service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams())
+    ).resolves.toBe(stopping);
+    expect(beginExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: 'tenant_suspension' })
+    );
+  });
+
+  it('stops a running task with a stale generation as a suspension, never as a durable revocation', async () => {
+    // The generation moves only with restriction records, so a codeless mismatch is a restriction change.
+    const { service } = serviceHarness({ report: { outcome: 'continued', task } });
+    assertRuntimeTenantAccess.mockRejectedValueOnce(
+      new NotAuthenticated('Runtime credential generation is stale')
+    );
+    beginExecutorTermination.mockResolvedValueOnce({ ...task, status: TaskStatus.STOPPING });
+    await service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams());
+    expect(beginExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: 'tenant_suspension', durableRevocation: false })
+    );
+  });
+
+  it('keeps a durable revocation Failed-cause when the generation is also stale', async () => {
+    const { service } = serviceHarness({
+      report: { outcome: 'authorization_revoked', task, reason: 'token_revoked' },
+    });
+    assertRuntimeTenantAccess.mockRejectedValueOnce(
+      new NotAuthenticated('Runtime credential generation is stale')
+    );
+    beginExecutorTermination.mockResolvedValueOnce({ ...task, status: TaskStatus.STOPPING });
+    await service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams());
+    expect(beginExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: 'authorization_revoked', durableRevocation: true })
+    );
+  });
+
+  it('rejects durable scope mismatch before restricted telemetry can stop another task', async () => {
+    const { service } = serviceHarness({ report: { outcome: 'scope_mismatch' } });
+    await expect(
+      service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams())
+    ).rejects.toMatchObject({ code: 403 });
+    expect(assertRuntimeTenantAccess).not.toHaveBeenCalled();
+    expect(beginExecutorTermination).not.toHaveBeenCalled();
   });
 
   it('claims the existing fenced STOPPING path with one sanitized revoked cause', async () => {

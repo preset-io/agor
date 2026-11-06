@@ -51,6 +51,7 @@ import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { gatewayCommandFixture } from '../../test/gateway-command-fixture.js';
+import * as tenantAccess from '../auth/tenant-access.js';
 import {
   ingestDiscordInboundImages,
   ingestInboundAttachments,
@@ -2805,6 +2806,9 @@ describe('GatewayService durable listener delivery fences', () => {
   });
 
   it('uses guarded tenant DB units for durable inbound admission and completion', async () => {
+    // This fixture verifies unit-of-work routing, not PostgreSQL restriction SQL.
+    vi.spyOn(tenantAccess, 'isCurrentTenantEventAdmitted').mockResolvedValue(true);
+    vi.spyOn(tenantAccess, 'isCurrentTenantRuntimeActive').mockResolvedValue(true);
     const { db, observations, touch } = makeGuardedPostgresDatabase();
     const service = new GatewayService(db, { service: vi.fn(), get: vi.fn() } as never);
     Object.assign(service as unknown as Record<string, unknown>, {
@@ -3061,7 +3065,8 @@ describe('GatewayService durable listener delivery fences', () => {
     );
   });
 
-  it('prepares and routes one duplicate provider occurrence only once', async () => {
+  it.each([false, true])('dedupes one provider occurrence (suppressed=%s)', async (suppressed) => {
+    if (suppressed) vi.spyOn(tenantAccess, 'isCurrentTenantEventAdmitted').mockResolvedValue(false);
     const service = new GatewayService(
       { run: vi.fn() } as never,
       { service: vi.fn(), get: vi.fn() } as never
@@ -3132,6 +3137,13 @@ describe('GatewayService durable listener delivery fences', () => {
     await invoke();
     await invoke();
 
+    if (suppressed) {
+      expect(create).not.toHaveBeenCalled();
+      expect(prepareDelivery).not.toHaveBeenCalled();
+      expect(recordDeliveryMetadata).not.toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledOnce();
+      return;
+    }
     expect(create).toHaveBeenCalledOnce();
     expect(prepareDelivery).toHaveBeenCalledOnce();
     expect(recordDeliveryMetadata).toHaveBeenCalledWith(
@@ -3141,6 +3153,65 @@ describe('GatewayService durable listener delivery fences', () => {
       gateway_inbound_event_id: eventId,
       metadata: { processing_comment_id: 42 },
     });
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it('treats an occurrence within the clock-skew grace of the reactivation cutoff as before it', async () => {
+    const occurredAt = Date.parse('2026-01-01T00:00:10.000Z');
+    const resumeAfter = occurredAt - 2_000;
+    vi.spyOn(tenantAccess, 'isCurrentTenantEventAdmitted').mockImplementation(
+      async (_db, at) => at > resumeAfter
+    );
+    const service = new GatewayService(
+      { run: vi.fn() } as never,
+      { service: vi.fn(), get: vi.fn() } as never
+    );
+    const complete = vi.fn(async () => true);
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+      inboundEventRepo: {
+        claim: vi.fn(async () => ({
+          outcome: 'claimed',
+          event: { id: '01927f9d-0000-7000-8000-000000000098' },
+        })),
+        complete,
+        recordDeliveryMetadata: vi.fn(async () => true),
+      },
+      channelRepo: { listenerClaimIsCurrent: vi.fn(async () => true) },
+    });
+    const create = vi.spyOn(service, 'create');
+    const channel = attachHiddenTenant(
+      { ...slackChannel, id: 'durable-channel' as never },
+      { tenant_id: 'tenant-durable' }
+    );
+    await (
+      service as unknown as {
+        handleListenerInboundMessage: (...args: unknown[]) => Promise<void>;
+      }
+    ).handleListenerInboundMessage(
+      channel,
+      'tenant-durable',
+      {
+        providerEventId: 'slack:event:Ev-skew',
+        threadId: 'C1-1.0',
+        text: 'hello',
+        userId: 'U1',
+        timestamp: String(occurredAt / 1000),
+        prepareDelivery: vi.fn(),
+      },
+      {
+        channel_id: channel.id,
+        claim_token: 'opaque-owner',
+        generation: 1,
+        claimed_at: '2026-01-01T00:00:00.000Z',
+        lease_expires_at: '2026-01-01T00:00:30.000Z',
+        instance_id: 'daemon-a',
+        boot_id: 'boot-a',
+        checkpoint: null,
+      }
+    );
+
+    expect(create).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledOnce();
   });
 
@@ -3573,6 +3644,9 @@ describe('GatewayService MCP resolution', () => {
   });
 
   it('attaches gateway MCP defaults through the real guarded SessionsService boundary', async () => {
+    // This fixture verifies unit-of-work routing, not PostgreSQL restriction SQL.
+    vi.spyOn(tenantAccess, 'isCurrentTenantEventAdmitted').mockResolvedValue(true);
+    vi.spyOn(tenantAccess, 'isCurrentTenantRuntimeActive').mockResolvedValue(true);
     const { db, observations, touch } = makeGuardedPostgresDatabase();
     // Channel/user defaults are inherited, not a caller selection: they must
     // not suppress implicit global servers the way an explicit create does.

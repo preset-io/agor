@@ -84,6 +84,9 @@
         "subtopics": {
           "gate": {
             "description": "Manage tenant write gates"
+          },
+          "restriction": {
+            "description": "Apply and read tenant restriction intent"
           }
         }
       },

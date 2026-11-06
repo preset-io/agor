@@ -3,6 +3,7 @@ import { generateId } from '../../lib/ids';
 import {
   ENVIRONMENT_COMMAND_BUDGET as BUDGET,
   EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+  EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
   environmentStartConfirmation,
 } from '../../types';
 import { dbTest } from '../test-helpers';
@@ -145,6 +146,21 @@ describe('shared environment command admission and transitions', () => {
       ).rejects.toThrow('still active');
     }
   );
+
+  dbTest('fails a restricted unclaimed attempt with the suspension message', async ({ db }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const commands = new EnvironmentCommandRepository(db);
+    const attemptId = generateId();
+    await commands.admit({ branch, action: 'start', attemptId, userId: user.user_id });
+    await commands.dispatchFailed(branch.branch_id, attemptId, 'launch_restricted');
+    const environment = (await new BranchRepository(db).findById(branch.branch_id))!
+      .environment_instance!;
+    expect(environment.last_command).toMatchObject({
+      attempt_id: attemptId,
+      status: 'failed',
+      message: EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
+    });
+  });
 
   dbTest('fails a refused unclaimed attempt but never releases a claimed one', async ({ db }) => {
     const { branch, user } = await seedEnvironmentCommandBranch(db);

@@ -1,3 +1,6 @@
+import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import { readRequestTenantRestriction } from './tenant-access.js';
+import { assertTenantCredentialEpoch } from './tenant-credential-epoch.js';
 /**
  * Runtime JWT Authentication Strategy
  *
@@ -54,6 +57,7 @@ function propagateTenantFromJwtPayload(
 }
 
 export interface RuntimeJWTStrategyOptions {
+  db?: TenantScopeAwareDatabase;
   sessionTokenService?: SessionTokenService;
   multiTenancy?: ResolvedMultiTenancyConfig;
   executorRevocationFence?: ExecutorConnectionRevocationFence;
@@ -69,9 +73,11 @@ export class RuntimeJWTStrategy extends JWTStrategy {
   private readonly sessionTokenService?: SessionTokenService;
   private readonly executorRevocationFence?: ExecutorConnectionRevocationFence;
   private readonly multiTenancy?: ResolvedMultiTenancyConfig;
+  private readonly db?: TenantScopeAwareDatabase;
 
   constructor(options: RuntimeJWTStrategyOptions = {}) {
     super();
+    this.db = options.db;
     this.sessionTokenService = options.sessionTokenService;
     this.multiTenancy = options.multiTenancy;
     this.executorRevocationFence = options.executorRevocationFence;
@@ -298,6 +304,17 @@ export class RuntimeJWTStrategy extends JWTStrategy {
       throw new Error('JWT type is not valid for daemon API authentication');
     }
 
+    if (this.db) {
+      const tenant = resolveSignedRuntimeTenant(this.multiTenancy, payload);
+      if (tenant) {
+        await assertTenantCredentialEpoch(
+          this.db,
+          tenant.tenant_id,
+          payload,
+          readRequestTenantRestriction
+        );
+      }
+    }
     if (result.user) {
       assertUserTokenNotInvalidated(result.user, payload);
     }

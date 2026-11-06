@@ -68,6 +68,15 @@ describe('fire-and-forget environment launcher handoff', () => {
     });
     await expect(dispatchEnvironmentCommand({}, {})).rejects.toThrow('outcome unknown');
   });
+  it('marks a restricted launcher refusal so the attempt fails with the suspension message', async () => {
+    configureLaunchRefusedExit({ AGOR_EXECUTOR_LAUNCH_RESTRICTED_EXIT: '76' });
+    vi.mocked(spawnExecutor).mockImplementation((_payload, options) => {
+      void options?.onExit?.(76, { mode: 'templated' });
+    });
+    await expect(
+      dispatchEnvironmentCommand({ command: 'environment.lifecycle' }, {})
+    ).rejects.toMatchObject({ name: 'ExecutorLaunchRefusedError', restricted: true });
+  });
   it('keeps exit 75 an unknown outcome without the launcher opt-in', async () => {
     vi.mocked(spawnExecutor).mockImplementation((_payload, options) => {
       void options?.onExit?.(75, { mode: 'templated' });

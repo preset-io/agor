@@ -40,6 +40,7 @@ import {
   type DeliveryDueRef,
   type DeliveryOutbox,
   type DeliveryOutboxRow,
+  deferDue,
   deliveryMessageText,
   findDueRefs,
   purgeTerminal,
@@ -213,6 +214,15 @@ export class DiscordMessageDeliveryRepository {
       ...ref,
       delivery_id: ref.delivery_id as DiscordMessageDeliveryID,
     }));
+  }
+
+  /** Hold an unclaimed due delivery for `delayMs` without spending an attempt. */
+  async deferDue(
+    deliveryId: DiscordMessageDeliveryID,
+    delayMs: number,
+    now = new Date()
+  ): Promise<boolean> {
+    return deferDue(DISCORD_OUTBOX, this.db, { deliveryId, delayMs, now });
   }
 
   async claim(

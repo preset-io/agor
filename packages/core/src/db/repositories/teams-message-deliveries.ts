@@ -46,6 +46,7 @@ import {
   type DeliveryDueRef,
   type DeliveryOutbox,
   type DeliveryOutboxRow,
+  deferDue,
   findDueRefs,
   purgeTerminal,
   renewClaim,
@@ -218,6 +219,15 @@ export class TeamsMessageDeliveryRepository {
       ...ref,
       delivery_id: ref.delivery_id as TeamsMessageDeliveryID,
     }));
+  }
+
+  /** Hold an unclaimed due delivery for `delayMs` without spending an attempt. */
+  async deferDue(
+    deliveryId: TeamsMessageDeliveryID,
+    delayMs: number,
+    now?: Date
+  ): Promise<boolean> {
+    return deferDue(TEAMS_OUTBOX, this.db, { deliveryId, delayMs, now });
   }
 
   /** A lapsed claim whose chunk marker is still set becomes terminal `ambiguous`. */

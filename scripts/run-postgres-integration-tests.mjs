@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const workspaces = ['packages/core', 'apps/agor-daemon'];
+const workspaces = ['packages/core', 'apps/agor-daemon', 'apps/agor-cli'];
 const defaultConcurrency = 3;
 const maxConcurrency = 8;
 // Each isolated suite initializes the full schema. On shared CI runners, three

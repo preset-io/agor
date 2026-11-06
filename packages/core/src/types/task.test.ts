@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EXECUTOR_CLEANUP_CAUSES,
   type ExecutorCleanupContext,
+  type ExecutorCleanupRequestCause,
+  executorCleanupCause,
   isTaskExecuting,
   isTaskPendingDispatch,
   NONTERMINAL_TASK_STATUSES,
@@ -49,8 +52,8 @@ describe('task execution helpers', () => {
 
 // A deliberate v1 wire snapshot, not a second production declaration.
 describe('cleanup v1 cause contract', () => {
-  it('keeps the runtime family and serialized context cause exhaustive', () => {
-    const v1: Record<TerminationCause, true> = {
+  it('keeps the serialized context cause exhaustive', () => {
+    const v1: Record<ExecutorCleanupRequestCause, true> = {
       user_stop: true,
       startup_timeout: true,
       heartbeat_lost: true,
@@ -59,8 +62,8 @@ describe('cleanup v1 cause contract', () => {
       authorization_revoked: true,
       launch_refused: true,
     };
-    expect([...TERMINATION_CAUSES].sort()).toEqual(Object.keys(v1).sort());
-    for (const cause of TERMINATION_CAUSES) {
+    expect([...EXECUTOR_CLEANUP_CAUSES].sort()).toEqual(Object.keys(v1).sort());
+    for (const cause of EXECUTOR_CLEANUP_CAUSES) {
       const context: ExecutorCleanupContext = {
         version: 1,
         tenant_id: 'tenant',
@@ -73,5 +76,14 @@ describe('cleanup v1 cause contract', () => {
       };
       expect(JSON.parse(JSON.stringify(context))).toMatchObject({ version: 1, cause });
     }
+  });
+
+  it('sends every runtime cause as a v1 wire cause', () => {
+    const runtimeOnly: TerminationCause[] = TERMINATION_CAUSES.filter(
+      (cause) => !(EXECUTOR_CLEANUP_CAUSES as readonly string[]).includes(cause)
+    );
+    expect(runtimeOnly).toEqual(['tenant_suspension']);
+    expect(executorCleanupCause('tenant_suspension')).toBe('user_stop');
+    for (const cause of EXECUTOR_CLEANUP_CAUSES) expect(executorCleanupCause(cause)).toBe(cause);
   });
 });

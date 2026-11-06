@@ -1,6 +1,6 @@
 import type { Task } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { reportExecutorQuiescence } from './termination-report.js';
+import { readExecutorTerminationState, reportExecutorQuiescence } from './termination-report.js';
 
 const requestedAt = '2026-07-23T12:00:00.000Z';
 const stopping = (executorQuiescedAt?: string) =>
@@ -101,5 +101,44 @@ describe('reportExecutorQuiescence', () => {
     expect(warn).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenNthCalledWith(1, expect.stringContaining('quiescence_report_failed'));
     expect(warn).toHaveBeenNthCalledWith(2, expect.stringContaining('quiescence_report_exhausted'));
+  });
+});
+
+describe('readExecutorTerminationState', () => {
+  it('falls back to the task read when an older daemon lacks the projection method', async () => {
+    const tasks = {
+      getTerminationState: vi.fn().mockRejectedValue(
+        Object.assign(new Error("Method 'getTerminationState' not allowed"), {
+          name: 'MethodNotAllowed',
+          code: 405,
+        })
+      ),
+      get: vi.fn().mockResolvedValue({ ...stopping('2026-07-23T12:00:01.000Z'), prompt: 'x' }),
+    };
+
+    await expect(readExecutorTerminationState(tasks, 'task-1')).resolves.toEqual({
+      task_id: 'task-1',
+      status: 'stopping',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: requestedAt,
+        executor_quiesced_at: '2026-07-23T12:00:01.000Z',
+      },
+    });
+    expect(tasks.get).toHaveBeenCalledWith('task-1');
+  });
+
+  it('does not fall back on other refusals', async () => {
+    const tasks = {
+      getTerminationState: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('Forbidden'), { name: 'Forbidden', code: 403 })),
+      get: vi.fn(),
+    };
+
+    await expect(readExecutorTerminationState(tasks, 'task-1')).rejects.toMatchObject({
+      code: 403,
+    });
+    expect(tasks.get).not.toHaveBeenCalled();
   });
 });

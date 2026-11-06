@@ -1,4 +1,9 @@
 import { safeTeamsMetadata } from '@agor/core/gateway';
+import {
+  gatewayOccurrenceTime,
+  isCurrentTenantEventAdmitted,
+  isCurrentTenantRuntimeActive,
+} from '../auth/tenant-access.js';
 /**
  * Gateway Service
  *
@@ -360,6 +365,8 @@ const MCP_SLACK_REPAIR_BATCH = 50;
 /** Connect-lane pages one tenant visit may walk. Bounds what one page can hide. */
 const MCP_SLACK_CONNECT_REPAIR_PAGES = 4;
 const MCP_SLACK_REPAIR_HORIZON_MS = 24 * 60 * 60_000;
+/** Provider clocks are compared with the database cutoff; an occurrence this close to it is treated as before it. */
+const GATEWAY_OCCURRENCE_SKEW_GRACE_MS = 5_000;
 const MCP_SLACK_SWEEP_INTERVAL_MS = 30_000;
 const MCP_SLACK_SWEEP_TENANT_BUDGET = 10;
 
@@ -1726,6 +1733,8 @@ export class GatewayService {
         return;
       }
       void runWithTenantContext(tenantId, async () => {
+        // Ordinary Slack projections, not safety settlement: a restricted tenant starts no repair pass.
+        if (!(await isCurrentTenantRuntimeActive(this.db))) return;
         const now = new Date();
         const horizon = new Date(now.getTime() - MCP_SLACK_REPAIR_HORIZON_MS);
         // Per-item repair failures, tallied rather than logged one by one:
@@ -1754,6 +1763,8 @@ export class GatewayService {
         // that makes this sweep safe to run every tick.
         let cursor: MCPSlackConnectDueCursor | undefined;
         for (let pageIndex = 0; pageIndex < MCP_SLACK_CONNECT_REPAIR_PAGES; pageIndex += 1) {
+          // Items skip their own read, so a pass that began before a restriction re-checks per page.
+          if (!(await isCurrentTenantRuntimeActive(this.db))) break;
           const cards = await this.messagesRepo.findMcpSlackConnectDuePage({
             limit: MCP_SLACK_REPAIR_BATCH,
             now,
@@ -2151,6 +2162,13 @@ export class GatewayService {
     });
   }
 
+  /** Restricted tenants post nothing and keep durable markers; sweep items (with a tally) were admitted at pass start. */
+  private async mcpSlackDeliveryAdmitted(
+    failures?: Map<string, McpSlackRepairFailureTally>
+  ): Promise<boolean> {
+    return !!failures || isCurrentTenantRuntimeActive(this.db);
+  }
+
   /**
    * Post or edit the one Slack row that belongs to this recovery notice, and
    * account for an exception that escapes the attempt.
@@ -2166,6 +2184,7 @@ export class GatewayService {
     attempt = 0,
     failures?: Map<string, McpSlackRepairFailureTally>
   ): Promise<void> {
+    if (!(await this.mcpSlackDeliveryAdmitted(failures))) return;
     const claimRef: McpSlackRecoveryClaimRef = {};
     try {
       await this.renderMcpSlackRecoveryNotice(task, attempt, failures, claimRef);
@@ -2604,6 +2623,7 @@ export class GatewayService {
     /** The sweep pass's failure tally, when this notice is one of its items. */
     failures?: Map<string, McpSlackRepairFailureTally>
   ): Promise<void> {
+    if (!(await this.mcpSlackDeliveryAdmitted(failures))) return;
     const { recoveryEnabled, mode } = await this.readInTenantScope(async (db) => ({
       recoveryEnabled: await isMcpRuntimeRecoveryEnabled(db),
       mode: await getMCPEgressGatewayMode(db),
@@ -3176,6 +3196,7 @@ export class GatewayService {
      */
     failures?: Map<string, McpSlackRepairFailureTally>
   ): Promise<void> {
+    if (!(await this.mcpSlackDeliveryAdmitted(failures))) return;
     // One ref for the whole delivery, re-entrant calls included, because a
     // claim is held by the DELIVERY and not by a stack frame: the three
     // internal re-renders below hand it down rather than wrapping themselves,
@@ -5744,6 +5765,8 @@ export class GatewayService {
    * for the given thread, and sends the prompt to the session.
    */
   async create(data: PostMessageData, params?: AuthenticatedParams): Promise<PostMessageResult> {
+    if (!(await isCurrentTenantRuntimeActive(this.db)))
+      throw new Forbidden('Tenant access is restricted');
     const durableListenerOwnership = await this.detectDurableListenerOwnership();
     const verifiedHttpAuthority = isVerifiedHttpGatewayCreate(data);
     const inboundAuthority = verifiedHttpGatewayAuthority(data);
@@ -8670,6 +8693,27 @@ export class GatewayService {
             !(await this.channelRepo.listenerClaimIsCurrent(channel.id, lease.claim_token))
           ) {
             throw new Error('Gateway listener ownership lost before provider acknowledgement');
+          }
+          if (
+            !(await isCurrentTenantEventAdmitted(
+              this.db,
+              gatewayOccurrenceTime(msg.timestamp) - GATEWAY_OCCURRENCE_SKEW_GRACE_MS
+            ))
+          ) {
+            // Consume the delivery (retry dedup stays) without prompts, downloads, or provider threads.
+            if (eventId && lease) {
+              const completed = await this.inboundEventRepo.complete({
+                eventId,
+                channelId: channel.id,
+                processingToken: lease.claim_token,
+                requireListenerClaim: true,
+              });
+              if (!completed)
+                throw new Error(
+                  'Gateway listener ownership lost before restricted event completion'
+                );
+            }
+            return;
           }
           let skipProviderThreadMaterialization = false;
           if (

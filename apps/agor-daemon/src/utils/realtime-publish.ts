@@ -36,6 +36,16 @@ import {
   type User,
   type UserID,
 } from '@agor/core/types';
+import { getAuthenticatedConnectionCredentialPayload } from '../auth/authenticated-connection-authority.js';
+import {
+  createTenantReadCache,
+  TENANT_RESTRICTION_OBSERVATION_MS,
+  TENANT_RESTRICTION_READ_TIMEOUT_MS,
+} from '../auth/tenant-access.js';
+import {
+  assertTenantCredentialEpochValue,
+  readTenantCredentialEpoch,
+} from '../auth/tenant-credential-epoch.js';
 import {
   executorTaskRoomName,
   isExecutorTaskRoomName,
@@ -932,6 +942,30 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     realtimeRelay,
   } = options;
 
+  // Per-tenant single-flight epoch read: a publication observes state at most one monitor tick old.
+  const epochReads = db
+    ? createTenantReadCache((tenantId) => readTenantCredentialEpoch(db, tenantId), {
+        // A read that never settles is abandoned after two timeouts so one wedged read cannot suppress delivery forever.
+        abandonAfterMs: 2 * TENANT_RESTRICTION_READ_TIMEOUT_MS,
+        reuseMs: TENANT_RESTRICTION_OBSERVATION_MS,
+      })
+    : undefined;
+  const readPublicationEpoch = (tenantId: string): Promise<string | undefined> => {
+    const now = performance.now();
+    // Without a running bound the cache always returns an entry.
+    const entry = epochReads!(tenantId)!;
+    if (entry.until !== Number.POSITIVE_INFINITY) return entry.value;
+    // A stuck shared read suppresses this tick's delivery instead of holding it until statement_timeout.
+    const timeout = new Error('Publication restriction read timed out');
+    const remaining = entry.startedAt + TENANT_RESTRICTION_READ_TIMEOUT_MS - now;
+    if (remaining <= 0) return Promise.reject(timeout);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(timeout), remaining);
+    });
+    return Promise.race([entry.value, timedOut]).finally(() => clearTimeout(timer));
+  };
+
   const resolveLocalDelivery = async (data: unknown, context: HookContext) => {
     // Default-deny. Feathers routes EVERY service event that has no publisher
     // of its own through this handler, so an undeclared path is one nobody
@@ -968,6 +1002,32 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       }
     }
 
+    // Only the exact task termination signal is a safety channel; every other publication revalidates admission.
+    let credentialAdmitted = (_connection: unknown) => true;
+    if (
+      db &&
+      tenantId &&
+      !(context.path === 'tasks' && context.event === 'termination_requested')
+    ) {
+      try {
+        const epoch = await readPublicationEpoch(tenantId);
+        credentialAdmitted = (connection: unknown) => {
+          try {
+            assertTenantCredentialEpochValue(
+              epoch,
+              getAuthenticatedConnectionCredentialPayload(connection)
+            );
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        tenantScoped = tenantScoped.filter(credentialAdmitted);
+      } catch {
+        return { delivery: [] as PublishChannel[], tenantId };
+      }
+    }
+
     // Authentication/tenant channels are deliberately broad. Narrow them to
     // the declared service read floor before ANY audience resolution so the
     // global, branch, knowledge, streaming, and Redis-relay paths cannot
@@ -982,7 +1042,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       const taskId = extractTaskId(data);
       if (!tenantId || !taskId) return { delivery: [] as PublishChannel[], tenantId };
       const room = existingChannel(app, executorTaskChannelName(tenantId, taskId));
-      return { delivery: room ? [room] : ([] as PublishChannel[]), tenantId };
+      return {
+        delivery: room ? [room.filter(credentialAdmitted)] : ([] as PublishChannel[]),
+        tenantId,
+      };
     }
 
     const resolveDelivery = async (): Promise<PublishChannel | PublishChannel[]> => {

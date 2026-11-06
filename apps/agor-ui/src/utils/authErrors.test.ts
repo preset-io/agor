@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { isDefiniteAuthFailure, isTransientConnectionError } from './authErrors';
+import {
+  isDefiniteAuthFailure,
+  isTenantRestrictedError,
+  isTransientConnectionError,
+} from './authErrors';
 
 describe('isDefiniteAuthFailure', () => {
   it('returns true for 401 via `code`, `status`, `statusCode`', () => {
@@ -69,5 +73,50 @@ describe('isTransientConnectionError', () => {
     expect(isTransientConnectionError(new Error('something boring'))).toBe(false);
     expect(isTransientConnectionError(null)).toBe(false);
     expect(isTransientConnectionError(undefined)).toBe(false);
+  });
+});
+
+describe('isTenantRestrictedError', () => {
+  it('recognizes the code on the 403, the coded 401 and handshake data, keeping tokens without retry', () => {
+    // Feathers keeps the status beside `data`; Socket.IO delivers only message + data on connect_error.
+    for (const coded of [
+      Object.assign(new Error('Tenant access is restricted'), {
+        code: 403,
+        className: 'forbidden',
+        data: { code: 'tenant_restricted' },
+      }),
+      // The generation check runs ahead of admission, so a closed workspace answers JWT paths with this.
+      Object.assign(new Error('Tenant credential cannot be verified'), {
+        code: 401,
+        className: 'not-authenticated',
+        data: { code: 'tenant_restricted' },
+      }),
+      Object.assign(new Error('Tenant access is restricted'), {
+        data: { code: 'tenant_restricted' },
+      }),
+    ]) {
+      expect(isTenantRestrictedError(coded)).toBe(true);
+      expect(isDefiniteAuthFailure(coded)).toBe(false);
+      expect(isTransientConnectionError(coded)).toBe(false);
+    }
+  });
+
+  it('never infers a restriction from message text, a bare status, a 503 or an uncoded 401', () => {
+    expect(isTenantRestrictedError(new Error('Tenant access is restricted'))).toBe(false);
+    expect(isTenantRestrictedError({ code: 403 })).toBe(false);
+    expect(
+      isTenantRestrictedError(
+        Object.assign(new Error('Tenant access cannot be verified'), { code: 503 })
+      )
+    ).toBe(false);
+    expect(isTenantRestrictedError(null)).toBe(false);
+    expect(isTenantRestrictedError('tenant_restricted')).toBe(false);
+    // A released workspace rejects the stale generation codelessly, which must still fail over to sign-in.
+    const stale = Object.assign(new Error('Tenant credential cannot be verified'), {
+      code: 401,
+      className: 'not-authenticated',
+    });
+    expect(isTenantRestrictedError(stale)).toBe(false);
+    expect(isDefiniteAuthFailure(stale)).toBe(true);
   });
 });

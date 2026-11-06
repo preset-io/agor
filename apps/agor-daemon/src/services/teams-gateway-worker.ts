@@ -21,6 +21,7 @@ import {
   TEAMS_INBOUND_LEASE_MS,
   type TenantID,
 } from '@agor/core/types';
+import { isCurrentTenantEventAdmitted } from '../auth/tenant-access.js';
 import { gatewayInboundSessionId, gatewayInboundTaskId } from '../utils/durable-task-id.js';
 import type { GatewayService } from './gateway.js';
 import { withVerifiedHttpGatewayAuthority } from './gateway-authority.js';
@@ -220,7 +221,14 @@ export class TeamsGatewayWorker {
           activity.hasMention ||
           parseGatewayChatCommand(activity.text)));
     let result: { sessionId?: string; taskId?: TaskID } = {};
-    if (admissible) {
+    let eventAdmitted: boolean;
+    try {
+      eventAdmitted = await isCurrentTenantEventAdmitted(this.db, Date.parse(event.received_at));
+    } catch (error) {
+      throw new TeamsInboundError('teams_gateway_service_unavailable', true, error);
+    }
+    // Consume an event received while the tenant was closed without prompts or chat controls.
+    if (admissible && eventAdmitted) {
       if (!this.gatewayService) {
         throw new TeamsInboundError('teams_gateway_service_unavailable', true);
       }

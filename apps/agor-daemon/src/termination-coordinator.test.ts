@@ -2,6 +2,7 @@ import { runWithTenantContext } from '@agor/core/db';
 import {
   AGENTIC_TOOL_NAMES,
   EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+  EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
   type Task,
   TaskStatus,
 } from '@agor/core/types';
@@ -689,6 +690,56 @@ describe('termination coordinator', () => {
     }
   );
 
+  // The same refusal when Cloud refused because the tenant is suspended (launcher exit 76).
+  const restrictedDispatch = () =>
+    task(TaskStatus.STOPPING, {
+      executor_mode: 'templated',
+      started_at: '2026-01-01T00:00:00.500Z',
+      termination_request: {
+        cause: 'tenant_suspension',
+        requested_at: '2026-01-01T00:00:01.000Z',
+        error_message: EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
+      },
+      sdk_failure: { reason: 'launch_restricted', termination: 'requested' },
+    });
+
+  it.each(AGENTIC_TOOL_NAMES)(
+    'settles a restricted templated launch of %s as verified absent',
+    async (tool) => {
+      const state = appDouble(tool);
+      state.claim(restrictedDispatch());
+      state.settle(
+        task(TaskStatus.STOPPED, {
+          termination_request: restrictedDispatch().termination_request,
+          sdk_failure: { reason: 'launch_restricted', termination: 'verified' },
+        })
+      );
+
+      await expect(
+        requestExecutorTermination({
+          app: state.app,
+          taskId,
+          cause: 'tenant_suspension',
+          errorMessage: EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
+          absenceVerified: true,
+          sdkFailure: {
+            reason: 'launch_restricted',
+            detected_at: '2026-01-01T00:00:01.000Z',
+            tool,
+            termination: 'requested',
+          },
+          requireExecutorDisconnected: true,
+          runInFreshTenantWriteDatabase,
+        })
+      ).resolves.toMatchObject({ status: 'terminal', task: { status: TaskStatus.STOPPED } });
+      expect(state.settleTermination).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId, outcome: 'verified_absent' }),
+        expect.anything()
+      );
+      expect(containExecutorProcess).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([false, true])(
     'keeps the OpenCode safeguard for bare launcher absence (hosted=%s)',
     async (hosted) => {
@@ -1125,6 +1176,36 @@ describe('remote cleanup integration', () => {
       })
     );
   }
+  it('reads the cleanup session through a termination read, so a closed tenant still reaches cleanup', async () => {
+    const state = appDouble('codex', { config });
+    const readParams: object[] = [];
+    state.sessionGet.mockImplementation(async (...args: unknown[]) => {
+      readParams.push(args[1] as object);
+      return { session_id: sessionId, agentic_tool: 'codex', branch_id: 'branch-a' };
+    });
+    state.claim({ ...stopping('tenant_suspension'), executor_mode: 'templated' as const });
+    state.settle(task(TaskStatus.STOPPED));
+    await runWithTenantContext('tenant-a', () =>
+      requestExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'tenant_suspension',
+        errorMessage: 'Workspace suspended',
+        cooperativeGraceMs: 0,
+        remoteConnectDeadlineExpired: true,
+        runInFreshTenantWriteDatabase,
+      })
+    );
+    // v1 helpers reject unknown causes; a suspension travels as a deliberate stop.
+    expect(runCleanup).toHaveBeenCalledWith(
+      'trusted-cleanup',
+      expect.objectContaining({ cause: 'user_stop' }),
+      20000
+    );
+    // Only readTerminationEntity attaches its single-call grant symbol.
+    expect(readParams.at(-1)).toMatchObject({ provider: undefined });
+    expect(Object.getOwnPropertySymbols(readParams.at(-1))).toHaveLength(1);
+  });
   it('uses exact trusted context, waits for confirmation, then settles', async () => {
     const state = appDouble('codex', { config });
     state.claim({

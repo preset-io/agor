@@ -1,8 +1,26 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Session, Task } from '@agor/core/types';
+import type { TenantRestrictionState } from '@agor/core/db';
+import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import type { Session, Task, TenantRestrictionRecord } from '@agor/core/types';
+import { TENANT_RESTRICTED_ERROR_CODE } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { authorizeTaskExecutorSessionMcpRead, type RouteParams } from './register-routes';
+import {
+  readTenantCredentialEpoch,
+  tenantCredentialEpochClaims,
+} from './auth/tenant-credential-epoch';
+import {
+  assertMcpProjectionTenantCredential,
+  authorizeTaskExecutorSessionMcpRead,
+  type RouteParams,
+} from './register-routes';
+
+const { read } = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock('@agor/core/db', async (original) => ({
+  ...(await original<typeof import('@agor/core/db')>()),
+  readTenantRestrictionState: read,
+  isPostgresDatabaseHandle: () => true,
+}));
 
 const session = {
   session_id: 'session-a',
@@ -94,5 +112,46 @@ describe('Session MCP executor read scope', () => {
         /authorizeAndLoadSessionForMcpConfig\(id, params, \{\s*allowExecutorProjection: true,?\s*\}\)/g
       )
     ).toHaveLength(1);
+  });
+});
+
+describe('MCP projection tenant credential check', () => {
+  const record = (phase: TenantRestrictionRecord['phase']): TenantRestrictionRecord => ({
+    version: 1,
+    controllerId: 'c',
+    placementId: 'p',
+    operationId: 'op',
+    revision: 3,
+    phase,
+  });
+  const restriction = (phase: TenantRestrictionRecord['phase']): TenantRestrictionState => ({
+    records: [record(phase)],
+    closed: phase !== 'active',
+  });
+  const db = {} as never;
+
+  it('admits an API key on an open tenant with restriction history without a generation claim', async () => {
+    read.mockResolvedValue(restriction('active'));
+    await expect(
+      assertMcpProjectionTenantCredential(db, 't', { strategy: 'api-key' })
+    ).resolves.toBeUndefined();
+    // A signed runtime JWT still has to carry the current generation.
+    await expect(
+      assertMcpProjectionTenantCredential(db, 't', { strategy: 'jwt', payload: {} })
+    ).rejects.toBeInstanceOf(NotAuthenticated);
+    const epoch = await readTenantCredentialEpoch(db, 't');
+    await expect(
+      assertMcpProjectionTenantCredential(db, 't', {
+        strategy: 'jwt',
+        payload: tenantCredentialEpochClaims(epoch),
+      })
+    ).resolves.toBe(epoch);
+  });
+
+  it('still refuses an API key on a closed tenant with the stable code', async () => {
+    read.mockResolvedValue(restriction('restricted'));
+    const refusal = assertMcpProjectionTenantCredential(db, 't', { strategy: 'api-key' });
+    await expect(refusal).rejects.toBeInstanceOf(Forbidden);
+    await expect(refusal).rejects.toMatchObject({ data: { code: TENANT_RESTRICTED_ERROR_CODE } });
   });
 });

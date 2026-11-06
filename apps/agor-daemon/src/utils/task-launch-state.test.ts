@@ -1,10 +1,15 @@
-import { EXECUTOR_LAUNCH_REFUSED_MESSAGE, TaskStatus } from '@agor/core/types';
+import {
+  EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+  EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
+  TaskStatus,
+} from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildTaskLaunchState,
   classifyExecutorExit,
   configureLaunchRefusedExit,
   executorExitTermination,
+  isLaunchRefusal,
 } from './task-launch-state.js';
 
 describe('buildTaskLaunchState', () => {
@@ -104,20 +109,72 @@ describe('launch-refused exit opt-in', () => {
   });
 });
 
+describe('launch-restricted exit opt-in', () => {
+  afterEach(() => {
+    configureLaunchRefusedExit({});
+    vi.restoreAllMocks();
+  });
+
+  it('reads templated exit 76 as restricted only with its own exact opt-in', () => {
+    configureLaunchRefusedExit({ AGOR_EXECUTOR_LAUNCH_RESTRICTED_EXIT: '76' });
+    for (const nonzeroMayHaveDispatched of [false, true]) {
+      expect(classifyExecutorExit({ mode: 'templated', code: 76, nonzeroMayHaveDispatched })).toBe(
+        'restricted'
+      );
+    }
+    expect(classifyExecutorExit({ mode: 'local', code: 76, nonzeroMayHaveDispatched: false })).toBe(
+      'authoritative'
+    );
+    // The refused opt-in is independent: 75 stays an ordinary exit without it.
+    expect(
+      classifyExecutorExit({ mode: 'templated', code: 75, nonzeroMayHaveDispatched: false })
+    ).toBe('authoritative');
+  });
+
+  it('keeps exit 76 an ordinary nonzero exit with only the refused opt-in', () => {
+    configureLaunchRefusedExit({ AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT: '75' });
+    expect(
+      classifyExecutorExit({ mode: 'templated', code: 76, nonzeroMayHaveDispatched: true })
+    ).toBe('ambiguous');
+  });
+
+  it.each(['75', '076', 'true'])('ignores the value %j with one warning', (value) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    configureLaunchRefusedExit({ AGOR_EXECUTOR_LAUNCH_RESTRICTED_EXIT: value });
+    expect(warn).toHaveBeenCalledOnce();
+    expect(
+      classifyExecutorExit({ mode: 'templated', code: 76, nonzeroMayHaveDispatched: false })
+    ).toBe('authoritative');
+  });
+
+  it('treats both refusals as created-nothing', () => {
+    expect(isLaunchRefusal('refused')).toBe(true);
+    expect(isLaunchRefusal('restricted')).toBe(true);
+    expect(isLaunchRefusal('authoritative')).toBe(false);
+  });
+});
+
 describe('executorExitTermination', () => {
   it('records a refused launch with the shared message and no heartbeat loss', () => {
-    expect(executorExitTermination(75, true)).toEqual({
+    expect(executorExitTermination(75, 'refused')).toEqual({
       cause: 'launch_refused',
       errorMessage: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
     });
   });
 
+  it('records a restricted launch as a suspension stop', () => {
+    expect(executorExitTermination(76, 'restricted')).toEqual({
+      cause: 'tenant_suspension',
+      errorMessage: EXECUTOR_LAUNCH_RESTRICTED_MESSAGE,
+    });
+  });
+
   it('keeps every other exit a lost executor', () => {
-    expect(executorExitTermination(75, false)).toEqual({
+    expect(executorExitTermination(75, 'authoritative')).toEqual({
       cause: 'heartbeat_lost',
       errorMessage: 'Executor exited unexpectedly with code 75.',
     });
-    expect(executorExitTermination(null, false).errorMessage).toBe(
+    expect(executorExitTermination(null, 'authoritative').errorMessage).toBe(
       'Executor exited unexpectedly with code unknown.'
     );
   });

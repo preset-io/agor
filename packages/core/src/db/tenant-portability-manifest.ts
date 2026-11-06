@@ -39,6 +39,8 @@ import { IMPERATIVE_TENANT_TABLES } from './tenant-imperative-tables';
  * made portable by rewriting only tenant_id. Imports require reauthorization.
  */
 export const NON_PORTABLE_TENANT_TABLES: ReadonlySet<string> = new Set([
+  // Deployment-bound controller revisions must be reasserted, never imported.
+  'tenant_restrictions',
   'executor_session_token_authorities',
   'mcp_oauth_client_registrations',
   'mcp_oauth_pending_flows',

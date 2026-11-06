@@ -18,6 +18,7 @@ import { resolveSdkWatchdogConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type {
   ExecutorInterruptionInput,
+  ExecutorTerminationState,
   MessageSource,
   PermissionMode,
   PermissionScope,
@@ -42,7 +43,7 @@ import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-wa
 import { type AgorClient, createExecutorClient } from './services/feathers-client.js';
 import { createExecutorSignalShutdown } from './signal-shutdown.js';
 import { isTaskFailurePersisted, tryMarkTaskTerminal } from './terminal-task.js';
-import { reportExecutorQuiescence } from './termination-report.js';
+import { readExecutorTerminationState, reportExecutorQuiescence } from './termination-report.js';
 import {
   isDaemonOwnedAbort,
   isExecutorCleanupUnverified,
@@ -95,7 +96,7 @@ export class AgorExecutor {
   private signalShutdown: Promise<void> | null = null;
   private heartbeat: ExecutorHeartbeatHandle | null = null;
   private watchdog: SdkWatchdog | null = null;
-  private terminationRequest: Task['termination_request'];
+  private terminationRequest: ExecutorTerminationState['termination_request'];
   private terminationReport: Promise<void> | null = null;
   private terminationObservedAtMs: number | null = null;
   private providerCleanupSlowTimer: ReturnType<typeof setTimeout> | null = null;
@@ -341,7 +342,7 @@ export class AgorExecutor {
   }
 
   private handleTaskLifecycleUpdate(
-    task: Task,
+    task: ExecutorTerminationState,
     source: TerminationObservationSource = 'unknown'
   ): void {
     if (
@@ -392,7 +393,10 @@ export class AgorExecutor {
 
   private async refreshTerminationState(source: TerminationObservationSource): Promise<void> {
     if (!this.client) return;
-    const task = (await this.client.service('tasks').get(this.config.taskId)) as Task;
+    const task = await readExecutorTerminationState(
+      this.client.service('tasks'),
+      this.config.taskId
+    );
     this.handleTaskLifecycleUpdate(task, source);
   }
 
@@ -412,7 +416,7 @@ export class AgorExecutor {
             task_id: this.config.taskId,
             requested_at: requestedAt,
           }),
-        readTask: () => client.service('tasks').get(this.config.taskId) as Promise<Task>,
+        readTask: () => readExecutorTerminationState(client.service('tasks'), this.config.taskId),
       });
       this.terminationReport = report;
     }

@@ -221,22 +221,44 @@ describe('TaskRuntimeReconciler', () => {
   });
 
   it('resumes a committed refused launch with absence proof, and no other cause', async () => {
-    const stranded = (id: string, cause: string) => ({
+    const stranded = (id: string, cause: string, sdkFailureReason?: string) => ({
       task_id: `018f0000-0000-7000-8000-0000000000${id}`,
       session_id: `018f0000-0000-7000-8000-0000000001${id}`,
       status: 'stopping',
       executor_mode: 'templated',
       termination_request: { cause, requested_at: '2026-01-01T00:00:00.000Z' },
+      ...(sdkFailureReason ? { sdk_failure: { reason: sdkFailureReason } } : {}),
     });
     const refused = stranded('61', 'launch_refused');
     const lost = stranded('71', 'heartbeat_lost');
+    // A restricted refusal stops as a suspension; its diagnosis carries the absence proof.
+    const restricted = stranded('81', 'tenant_suspension', 'launch_restricted');
+    const suspended = stranded('91', 'tenant_suspension');
     discovery.termination.mockResolvedValue([
       { task_id: refused.task_id },
       { task_id: lost.task_id },
+      { task_id: restricted.task_id },
+      { task_id: suspended.task_id },
     ]);
-    const { create } = harness({ [refused.task_id]: refused, [lost.task_id]: lost });
+    const { create } = harness({
+      [refused.task_id]: refused,
+      [lost.task_id]: lost,
+      [restricted.task_id]: restricted,
+      [suspended.task_id]: suspended,
+    });
 
     await create().checkOnce();
+
+    expect(requestExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: restricted.task_id,
+        cause: 'tenant_suspension',
+        absenceVerified: true,
+      })
+    );
+    expect(requestExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: suspended.task_id, absenceVerified: false })
+    );
 
     expect(requestExecutorTermination).toHaveBeenCalledWith(
       expect.objectContaining({

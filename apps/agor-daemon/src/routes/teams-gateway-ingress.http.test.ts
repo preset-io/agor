@@ -13,17 +13,23 @@ import {
   select,
   teamsConversationAddresses,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Unavailable } from '@agor/core/feathers';
 import type { BranchID, GatewayChannel, UUID } from '@agor/core/types';
 import { clearJwksClients } from '@microsoft/agents-hosting';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, vi } from 'vitest';
 import { ownedDbTest } from '../../../../packages/core/src/db/test-helpers';
+import { isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
 import {
   registerTeamsGatewayIngressRoute,
   resetTeamsSigningJwksCache,
 } from './teams-gateway-ingress';
+
+vi.mock('../auth/tenant-access.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../auth/tenant-access.js')>();
+  return { ...actual, isCurrentTenantRuntimeActive: vi.fn(actual.isCurrentTenantRuntimeActive) };
+});
 
 // Only the JWKS transport is redirected. The pinned SDK, jwks-rsa key selection,
 // jsonwebtoken RS256 verification, Express route, and repositories are real.
@@ -243,6 +249,22 @@ describe('registered Teams HTTP ingress with real SDK JWT verification', {
         release();
       }
       expect((await response).status).toBe(200);
+    });
+  });
+
+  ownedDbTest('stores nothing for a closed tenant and answers 200', async ({ db }) => {
+    await withRoute(db, async ({ sign, post }) => {
+      vi.mocked(isCurrentTenantRuntimeActive).mockResolvedValueOnce(false);
+      expect((await post(sign())).status).toBe(200);
+      await expectNoPersistence(db);
+    });
+  });
+
+  ownedDbTest('asks Teams to retry when tenant access cannot be verified', async ({ db }) => {
+    await withRoute(db, async ({ sign, post }) => {
+      vi.mocked(isCurrentTenantRuntimeActive).mockRejectedValueOnce(new Unavailable('unverified'));
+      expect((await post(sign())).status).toBe(503);
+      await expectNoPersistence(db);
     });
   });
 

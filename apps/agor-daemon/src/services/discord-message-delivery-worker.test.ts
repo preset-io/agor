@@ -14,11 +14,16 @@ import type {
   ThreadSessionMap,
 } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
 import {
   DiscordMessageDeliveryWorker,
   deterministicDiscordDeliveryNonce,
   fairOrderByTenant,
 } from './discord-message-delivery-worker';
+
+vi.mock('../auth/tenant-access.js', () => ({
+  isCurrentTenantRuntimeActive: vi.fn(async () => true),
+}));
 
 const DELIVERY_ID = '018f5f63-0fd1-7c2e-9e7d-8fb27d4a6e1a' as DiscordMessageDeliveryID;
 const MESSAGE_ID = '018f5f63-0fd1-7c2e-9e7d-8fb27d4a6e1b' as never;
@@ -105,6 +110,12 @@ class FakeDeliveryRepository {
           },
         ]
       : [];
+  }
+
+  async deferDue(deliveryId: DiscordMessageDeliveryID, delayMs: number, now = new Date()) {
+    if (deliveryId !== this.row.delivery_id) return false;
+    this.row = { ...this.row, next_attempt_at: new Date(now.getTime() + delayMs).toISOString() };
+    return true;
   }
 
   async claim(
@@ -618,6 +629,19 @@ describe('DiscordMessageDeliveryWorker', () => {
       });
     }
   );
+
+  it('holds a closed tenant’s delivery without claiming or posting it', async () => {
+    const harness = makeHarness();
+    vi.mocked(isCurrentTenantRuntimeActive).mockResolvedValueOnce(false);
+    await harness.makeWorker().checkOnce();
+
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    expect(harness.repository.row).toMatchObject({ status: 'pending', attempt_count: 0 });
+    // Deferred off discovery, so a page of held rows cannot starve other tenants.
+    expect(await harness.repository.findDueRefs(undefined as never, { now: harness.now })).toEqual(
+      []
+    );
+  });
 
   it('reclaims a lease after a crash before the provider call', async () => {
     const harness = makeHarness();

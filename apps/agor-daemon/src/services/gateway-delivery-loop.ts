@@ -8,6 +8,7 @@
  */
 
 import {
+  getCurrentTenantId,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -77,6 +78,33 @@ export function isDefinitiveProviderFailure(error: unknown): boolean {
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_MAX_MS = 5 * 60_000;
 const BACKOFF_MAX_RATE_LIMIT_MS = 10 * 60_000;
+
+/** How long a closed or unverifiable tenant's due delivery is held before discovery sees it again. */
+export const TENANT_HOLD_DELAY_MS = 30_000;
+
+const HOLD_DEFER_WARNING_INTERVAL_MS = 60_000;
+const holdDeferWarnedAt = new Map<string, number>();
+
+/** Defer a held delivery; a tenant-local failure (e.g. its write gate) is logged so the scan reaches other tenants. */
+export async function deferHeldDelivery(
+  area: string,
+  deliveryId: string,
+  defer: (delayMs: number) => Promise<boolean>,
+  now: () => number = Date.now
+): Promise<void> {
+  try {
+    await defer(TENANT_HOLD_DELAY_MS);
+  } catch (error) {
+    // The row stays due, so this repeats every scan: at most one line per tenant per minute.
+    const key = `${area}:${getCurrentTenantId() ?? 'unknown'}`;
+    const at = now();
+    if (at - (holdDeferWarnedAt.get(key) ?? -Infinity) < HOLD_DEFER_WARNING_INTERVAL_MS) return;
+    holdDeferWarnedAt.set(key, at);
+    console.warn(
+      `[${area}] event=tenant_hold_defer_failed delivery_id=${deliveryId} code=${gatewayFailureCode(error)}`
+    );
+  }
+}
 
 export function boundedBackoff(attempt: number, retryAfter?: number): number {
   if (retryAfter !== undefined) return Math.min(BACKOFF_MAX_RATE_LIMIT_MS, Math.max(0, retryAfter));

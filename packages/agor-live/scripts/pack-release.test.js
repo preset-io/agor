@@ -13,6 +13,14 @@ const runtimeManifest = JSON.parse(
   await readFile(new URL('../package.json', import.meta.url), 'utf8')
 );
 
+test('daemon validators use the Zod dependency supplied by the published runtime', async () => {
+  const daemon = JSON.parse(
+    await readFile(new URL('../../../apps/agor-daemon/package.json', import.meta.url), 'utf8')
+  );
+  assert.equal(typeof daemon.dependencies.zod, 'string');
+  assert.equal(daemon.dependencies.zod, runtimeManifest.dependencies.zod);
+});
+
 test('only the local runtime denies native Windows', async () => {
   assert.deepEqual(runtimeManifest.os, ['!win32']);
   assert.deepEqual(createPublishManifest(runtimeManifest).os, runtimeManifest.os);
