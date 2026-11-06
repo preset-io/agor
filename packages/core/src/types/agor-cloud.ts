@@ -118,3 +118,51 @@ export interface AgorCloudTransfer {
 export function agorCloudReconnectUrl(workspaceUrl: string, importId: string): string {
   return `${workspaceUrl.replace(/\/$/, '')}/ui/settings/teammates?import=${encodeURIComponent(importId)}`;
 }
+
+/**
+ * Hosts a self-hosted Agor may be reached on over plain http and still sign
+ * in to Agor Cloud: loopback (localhost, 127.0.0.0/8, ::1), RFC 1918 IPv4
+ * (10/8, 172.16/12, 192.168/16), IPv6 ULA (fc00::/7), `.local` / `.internal` /
+ * `.lan` names, and single-label names. Never a public host. Takes
+ * `URL.hostname` (IPv6 in brackets, IPv4 already normalized by the parser).
+ * The Cloud console applies the same rule to `return_to`.
+ */
+export function isPrivateNetworkHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  if (host.startsWith('[') && host.endsWith(']')) {
+    const address = host.slice(1, -1);
+    if (address === '::1') return true;
+    const first = address.split(':')[0] ?? '';
+    // fc00::/7: the first 16-bit group is fcxx or fdxx.
+    return /^[0-9a-f]{1,4}$/.test(first) && (Number.parseInt(first, 16) & 0xfe00) === 0xfc00;
+  }
+  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4) {
+    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+  }
+  if (host === 'localhost') return true;
+  if (/^[a-z0-9-]+$/.test(host)) return true;
+  return /^([a-z0-9-]+\.)+(local|internal|lan)$/.test(host);
+}
+
+/**
+ * Why a URL can't be the sign-in `return_to`, or null when it can: absolute
+ * `https:` anywhere, or `http:` on a {@link isPrivateNetworkHost} host; no
+ * userinfo, no fragment, at most {@link AGOR_CLOUD.maxReturnToLength} chars.
+ */
+export function agorCloudReturnToProblem(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return 'return_to must be an absolute URL';
+  }
+  if (value.length > AGOR_CLOUD.maxReturnToLength) return 'return_to is too long';
+  if (url.username || url.password || url.hash) {
+    return 'return_to must not carry credentials or a fragment';
+  }
+  if (url.protocol === 'https:') return null;
+  if (url.protocol === 'http:' && isPrivateNetworkHost(url.hostname)) return null;
+  return 'Agor must be served over https, or over http on a private network address, to sign in to Agor Cloud';
+}

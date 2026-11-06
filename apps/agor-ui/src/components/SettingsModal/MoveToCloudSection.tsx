@@ -4,6 +4,7 @@ import {
   type AgorCloudLinkStatus,
   type AgorCloudTransfer,
   type AgorPackSwitchOverState,
+  agorCloudReturnToProblem,
   hasMinimumRole,
   pluralize,
   ROLES,
@@ -222,11 +223,14 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
     }
   };
 
+  // Where the console sends the browser back to; the daemon applies the same rule.
+  const returnTo = `${window.location.origin}${window.location.pathname}`;
+  const returnToProblem = agorCloudReturnToProblem(returnTo);
+  const overHttp = window.location.protocol === 'http:';
+
   const signIn = () =>
     run('sign-in', async () => {
-      const { authorize_url } = await startCloudLink(
-        `${window.location.origin}${window.location.pathname}`
-      );
+      const { authorize_url } = await startCloudLink(returnTo);
       window.location.assign(authorize_url);
     });
 
@@ -387,6 +391,7 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
           type="primary"
           icon={<CloudOutlined />}
           loading={busy === 'sign-in'}
+          disabled={Boolean(returnToProblem)}
           onClick={signIn}
         >
           Sign in to Agor Cloud
@@ -584,6 +589,17 @@ export const MoveToCloudSection: React.FC<MoveToCloudSectionProps> = ({
                 { title: 'Switch over', disabled: !link && !transfer },
               ]}
             />
+            {step === 0 && overHttp && (
+              <Alert
+                type={returnToProblem ? 'error' : 'warning'}
+                showIcon
+                message={
+                  returnToProblem
+                    ? 'This Agor is served over http on a public address, so it cannot sign in to Agor Cloud. Serve it over HTTPS, or use the download below.'
+                    : "This Agor isn't served over HTTPS; the sign-in code returns over an unencrypted connection on your network."
+                }
+              />
+            )}
             {step === 0 && renderSignIn()}
             {step === 1 &&
               (noTeammates || (

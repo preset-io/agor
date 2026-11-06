@@ -97,6 +97,9 @@ describe('MoveToCloudSection', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Sign in to Agor Cloud/ }));
     expect(startCloudLink).toHaveBeenCalledWith(`${window.location.origin}/settings/move-to-cloud`);
     expect(screen.getByRole('button', { name: /Download a .agorpack file instead/ })).toBeVisible();
+    // jsdom serves the page over http on localhost: allowed, with a warning.
+    expect(window.location.protocol).toBe('http:');
+    expect(screen.getByText(/isn't served over HTTPS/)).toBeInTheDocument();
   });
 
   it('shows the returned workspace host and connects only after a click', async () => {

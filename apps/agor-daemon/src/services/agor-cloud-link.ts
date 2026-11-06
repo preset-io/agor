@@ -27,6 +27,7 @@ import {
   type AgorCloudLinkPublic,
   type AgorCloudLinkStartResult,
   type AgorCloudLinkStatus,
+  agorCloudReturnToProblem,
   type DeepReadonly,
 } from '@agor/core/types';
 import type { AgorPackServiceContext } from './agor-pack-export.js';
@@ -95,29 +96,11 @@ export function resolveAgorCloudSettings(config: DeepReadonly<AgorConfig>): Agor
   };
 }
 
-const isLoopback = (hostname: string) =>
-  hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
-
-/** Where the console may send the browser back to: https, or http on loopback. */
+/** Where the console may send the browser back to (rule shared with the UI). */
 export function validateReturnTo(value: string): string {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new BadRequest('return_to must be an absolute URL');
-  }
-  if (
-    value.length > AGOR_CLOUD.maxReturnToLength ||
-    url.username ||
-    url.password ||
-    url.hash ||
-    !(url.protocol === 'https:' || (url.protocol === 'http:' && isLoopback(url.hostname)))
-  ) {
-    throw new BadRequest(
-      'return_to must be an https URL (or http on localhost) without a fragment'
-    );
-  }
-  return url.toString();
+  const problem = agorCloudReturnToProblem(value);
+  if (problem) throw new BadRequest(problem);
+  return new URL(value).toString();
 }
 
 /** The Cloud workspace origin, accepted only on a configured host suffix. */

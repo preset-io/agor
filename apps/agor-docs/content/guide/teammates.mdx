@@ -238,7 +238,11 @@ forgotten when you click **Disconnect** or **Done**, or after 7 days unused
 (checked the next time it is used); the Cloud session itself expires after 30
 days. A send stays tied to the sign-in it started with: if you disconnect or
 sign in again, it stops and you start it again. The install needs outbound
-HTTPS to your Cloud workspace.
+HTTPS to your Cloud workspace. Sign-in works when this Agor is served over
+HTTPS, or over plain http on a private network address (localhost, 10.x,
+172.16-31.x, 192.168.x, IPv6 `fc00::/7`, `.local` / `.internal` / `.lan`
+names, or a single-label name). On http, Settings warns that the sign-in code
+returns over an unencrypted connection on your network.
 
 **Download a .agorpack file instead** keeps the manual route: download the file
 here, then use **Import .agorpack** in the Cloud workspace.
