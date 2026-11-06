@@ -19,6 +19,7 @@ import {
 import {
   BranchRepository,
   DiscordMessageDeliveryRepository,
+  type DueGatewayFinalReplyRef,
   type FencedTeamsAddress,
   GatewayChannelRepository,
   GatewayChatCommandRepository,
@@ -216,6 +217,13 @@ import {
   teamsInboundAdmissionFence,
   verifiedHttpGatewayAuthority,
 } from './gateway-authority.js';
+import {
+  boundedBackoff,
+  GatewayDeliveryLoop,
+  isDefinitiveProviderFailure,
+  providerStatus,
+  retryAfterMs,
+} from './gateway-delivery-loop.js';
 import {
   issueMCPOAuthConnectLink,
   type MCPOAuthConnectLinkDeps,
@@ -1598,6 +1606,7 @@ export class GatewayService {
   private mcpSlackRecoveryTenants = new Set<string>();
   private mcpSlackSweepTimer: NodeJS.Timeout | null = null;
   private mcpSlackSweepCursor = 0;
+  private readonly finalReplyLoop: GatewayDeliveryLoop<DueGatewayFinalReplyRef>;
   private static SLACK_PROGRESS_MIN_UPDATE_MS = 2500;
   private static SLACK_STREAM_STATUS_REFRESH_MS = 300;
   /** How often one key may re-report a degraded outbound addressing decision. */
@@ -1637,6 +1646,51 @@ export class GatewayService {
       instanceId: 'daemon',
       bootId: `gateway-${generateId()}`,
     };
+    this.finalReplyLoop = new GatewayDeliveryLoop<DueGatewayFinalReplyRef>({
+      area: 'distributed-work.gateway-final-reply',
+      scanBatchSize: 25,
+      maxConcurrency: 5,
+      shutdownTimeoutMs: 10_000,
+      recoveryIntervalMs: 30_000,
+      random: Math.random,
+      discover: (limit) => this.discoverDueFinalReplies(limit),
+      lane: (ref) => ref.thread_session_map_id ?? ref.session_id,
+      process: (ref) => this.processDueFinalReply(ref),
+    });
+  }
+
+  wakeDeliveryLoop(): void {
+    this.finalReplyLoop?.wake();
+  }
+
+  async checkFinalReplyDeliveryOnce(): Promise<number> {
+    return this.finalReplyLoop.checkOnce();
+  }
+
+  private async discoverDueFinalReplies(limit: number): Promise<DueGatewayFinalReplyRef[]> {
+    const tenants =
+      this.activeChannelTenants.size > 0
+        ? [...this.activeChannelTenants]
+        : [getCurrentTenantId() ?? 'default'];
+    const allRefs: DueGatewayFinalReplyRef[] = [];
+    for (const tenantId of tenants) {
+      if (allRefs.length >= limit) break;
+      const refs = await runWithTenantContext(tenantId, async () => {
+        return (
+          (await this.taskRepo.findDueGatewayFinalReplyRefs?.({
+            limit: limit - allRefs.length,
+          })) ?? []
+        );
+      });
+      allRefs.push(...refs);
+    }
+    return allRefs;
+  }
+
+  private async processDueFinalReply(ref: DueGatewayFinalReplyRef): Promise<void> {
+    await runWithTenantContext(ref.tenant_id, async () => {
+      await this.flushOutboundBuffer(ref.session_id, { taskId: ref.task_id });
+    });
   }
 
   private listenerKey(tenantId: TenantID | string, channelId: string): string {
@@ -5752,6 +5806,8 @@ export class GatewayService {
     if (!channel) {
       throw new Error('Invalid channel_key');
     }
+    const currentTenant = getCurrentTenantId() ?? tenantIdFromGatewayChannel(channel);
+    if (currentTenant) this.activeChannelTenants.add(currentTenant);
 
     if (!channel.enabled) {
       throw new Error('Channel is disabled');
@@ -7830,8 +7886,11 @@ export class GatewayService {
     ) {
       return;
     }
-    const processingCommentId =
-      terminalTask.metadata?.gateway_reply_metadata?.processing_comment_id;
+    const replyMetadata = (terminalTask.metadata?.gateway_reply_metadata ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const processingCommentId = replyMetadata.processing_comment_id;
     if (typeof processingCommentId !== 'number') {
       console.warn(
         `[gateway] Task ${shortId(taskId)} has no provider acknowledgement; final reply was not sent`
@@ -7843,13 +7902,39 @@ export class GatewayService {
       string,
       unknown
     >;
+    const currentDeliveryStatus = replyMetadata.delivery_status as string | undefined;
+
+    if (
+      currentDeliveryStatus === 'delivered' ||
+      mappingMetadata.gateway_last_flushed_task_id === taskId
+    ) {
+      if (currentDeliveryStatus !== 'delivered') {
+        await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
+          delivery_status: 'delivered',
+          delivered_at: (replyMetadata.delivered_at as string) ?? new Date().toISOString(),
+        });
+      }
+      return;
+    }
+
+    if (currentDeliveryStatus === 'dead_letter') {
+      return;
+    }
+
+    if (currentDeliveryStatus === 'processing') {
+      const claimedAtStr = replyMetadata.claimed_at as string | undefined;
+      const claimedAtMs = claimedAtStr ? Date.parse(claimedAtStr) : NaN;
+      const claimAgeMs = Number.isFinite(claimedAtMs) ? Date.now() - claimedAtMs : Infinity;
+      if (claimAgeMs < GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS) {
+        return;
+      }
+    }
 
     const messages = await this.messagesRepo.findByTaskId(taskId);
     const latestAssistant = [...messages]
       .reverse()
       .find((message) => message.role === 'assistant' && gatewayMessageText(message));
     const claimMessage = latestAssistant ?? messages.at(-1);
-    if (!claimMessage) return;
 
     let finalMessage = latestAssistant ? gatewayMessageText(latestAssistant) : undefined;
     if (terminalTask.status === TaskStatus.FAILED || terminalTask.status === TaskStatus.TIMED_OUT) {
@@ -7863,12 +7948,35 @@ export class GatewayService {
         sessionId as SessionID
       );
     }
-    if (!finalMessage) return;
+
+    const attempts = typeof replyMetadata.attempts === 'number' ? replyMetadata.attempts : 0;
+
+    if (!finalMessage) {
+      if (attempts < 3) {
+        const nextAttempts = attempts + 1;
+        const delayMs = boundedBackoff(nextAttempts);
+        await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
+          delivery_status: 'pending',
+          attempts: nextAttempts,
+          last_attempt_at: new Date().toISOString(),
+          next_retry_at: new Date(Date.now() + delayMs).toISOString(),
+          last_error: 'Missing assistant message for completed task',
+        });
+        this.wakeDeliveryLoop();
+        return;
+      }
+      finalMessage = 'Agor completed this request without generating any output.';
+    }
 
     if (
-      mappingMetadata.gateway_last_flushed_task_id === taskId ||
+      mappingMetadata.gateway_last_flushed_message_id &&
+      claimMessage &&
       mappingMetadata.gateway_last_flushed_message_id === claimMessage.message_id
     ) {
+      await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
+        delivery_status: 'delivered',
+        delivered_at: new Date().toISOString(),
+      });
       return;
     }
 
@@ -7876,29 +7984,41 @@ export class GatewayService {
     // same short claim/finish pattern used by widget resolution and avoids a
     // new delivery table or Task-repository state machine.
     const claimToken = generateId();
-    const claim = await this.messagesRepo.mutateMetadataLocked(
-      claimMessage.message_id,
-      (metadata) => {
-        const claimedAt = new Date();
-        const state = gatewayFinalReplyState(metadata);
-        if (state?.status === 'delivered') return null;
-        if (state?.status === 'processing') {
-          const claimAgeMs = claimedAt.getTime() - Date.parse(state.claimed_at);
-          if (Number.isFinite(claimAgeMs) && claimAgeMs < GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS) {
-            return null;
+    const claimedAt = new Date();
+    let messageClaimAcquired = false;
+
+    if (claimMessage) {
+      const claim = await this.messagesRepo.mutateMetadataLocked(
+        claimMessage.message_id,
+        (metadata) => {
+          const state = gatewayFinalReplyState(metadata);
+          if (state?.status === 'delivered') return null;
+          if (state?.status === 'processing') {
+            const claimAgeMs = claimedAt.getTime() - Date.parse(state.claimed_at);
+            if (Number.isFinite(claimAgeMs) && claimAgeMs < GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS) {
+              return null;
+            }
           }
+          return {
+            ...(metadata ?? {}),
+            gateway_final_reply: {
+              status: 'processing',
+              claim_token: claimToken,
+              claimed_at: claimedAt.toISOString(),
+            },
+          };
         }
-        return {
-          ...(metadata ?? {}),
-          gateway_final_reply: {
-            status: 'processing',
-            claim_token: claimToken,
-            claimed_at: claimedAt.toISOString(),
-          },
-        };
-      }
-    );
-    if (!claim.changed) return;
+      );
+      if (!claim.changed) return;
+      messageClaimAcquired = true;
+    }
+
+    await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
+      delivery_status: 'processing',
+      claim_token: claimToken,
+      claimed_at: claimedAt.toISOString(),
+      last_attempt_at: claimedAt.toISOString(),
+    });
 
     try {
       const connector = getConnector(channel.channel_type as ChannelType, channel.config);
@@ -7912,25 +8032,35 @@ export class GatewayService {
         metadata: { edit_comment_id: processingCommentId },
       });
 
-      const completed = await this.messagesRepo.mutateMetadataLocked(
-        claimMessage.message_id,
-        (metadata) => {
-          const state = gatewayFinalReplyState(metadata);
-          if (state?.status !== 'processing' || state.claim_token !== claimToken) return null;
-          return {
-            ...(metadata ?? {}),
-            gateway_final_reply: {
-              status: 'delivered',
-              delivered_at: new Date().toISOString(),
-            },
-          };
-        }
-      );
-      if (!completed.changed) throw new Error('Gateway final reply claim was lost');
+      if (claimMessage && messageClaimAcquired) {
+        const completed = await this.messagesRepo.mutateMetadataLocked(
+          claimMessage.message_id,
+          (metadata) => {
+            const state = gatewayFinalReplyState(metadata);
+            if (state?.status !== 'processing' || state.claim_token !== claimToken) return null;
+            return {
+              ...(metadata ?? {}),
+              gateway_final_reply: {
+                status: 'delivered',
+                delivered_at: new Date().toISOString(),
+              },
+            };
+          }
+        );
+        if (!completed.changed) throw new Error('Gateway final reply claim was lost');
+      }
+
+      await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
+        delivery_status: 'delivered',
+        delivered_at: new Date().toISOString(),
+        claim_token: null,
+        next_retry_at: null,
+        last_error: null,
+      });
 
       try {
         await this.threadMapRepo.mergeMetadata(mapping.id, {
-          gateway_last_flushed_message_id: claimMessage.message_id,
+          gateway_last_flushed_message_id: claimMessage?.message_id,
           gateway_last_flushed_task_id: taskId,
         });
       } catch (_error) {
@@ -7941,15 +8071,57 @@ export class GatewayService {
         `[gateway] Flushed ${channel.channel_type} final reply for session ${shortId(sessionId)} → ${mapping.thread_id} (${finalMessage.length} chars)`
       );
     } catch (error) {
-      try {
-        await this.messagesRepo.mutateMetadataLocked(claimMessage.message_id, (metadata) => {
-          const state = gatewayFinalReplyState(metadata);
-          if (state?.status !== 'processing' || state.claim_token !== claimToken) return null;
-          return { ...(metadata ?? {}), gateway_final_reply: { status: 'pending' } };
-        });
-      } catch (_releaseError) {
-        console.warn('[gateway] Failed to release final reply claim');
+      if (claimMessage && messageClaimAcquired) {
+        try {
+          await this.messagesRepo.mutateMetadataLocked(claimMessage.message_id, (metadata) => {
+            const state = gatewayFinalReplyState(metadata);
+            if (state?.status !== 'processing' || state.claim_token !== claimToken) return null;
+            return { ...(metadata ?? {}), gateway_final_reply: { status: 'pending' } };
+          });
+        } catch (_releaseError) {
+          console.warn('[gateway] Failed to release final reply claim');
+        }
       }
+
+      const status = providerStatus(error);
+      const isRateLimited =
+        status === 429 ||
+        (status === 403 &&
+          (retryAfterMs(error) !== undefined ||
+            /secondary rate limit|rate limit exceeded/i.test(
+              `${String((error as Record<string, unknown>)?.message ?? '')} ${String(((error as Record<string, unknown>)?.response as Record<string, unknown>)?.data?.message ?? '')}`
+            )));
+
+      const nextAttempts = attempts + 1;
+      const isPermanent =
+        !isRateLimited && (isDefinitiveProviderFailure(error) || nextAttempts >= 10);
+
+      const errorMessage =
+        error instanceof Error
+          ? error.message.slice(0, 500)
+          : String(error ?? 'Unknown error').slice(0, 500);
+
+      if (isPermanent) {
+        await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
+          delivery_status: 'dead_letter',
+          attempts: nextAttempts,
+          last_attempt_at: new Date().toISOString(),
+          next_retry_at: null,
+          last_error: errorMessage,
+          claim_token: null,
+        });
+      } else {
+        const delayMs = boundedBackoff(nextAttempts, retryAfterMs(error));
+        await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {
+          delivery_status: 'pending',
+          attempts: nextAttempts,
+          last_attempt_at: new Date().toISOString(),
+          next_retry_at: new Date(Date.now() + delayMs).toISOString(),
+          last_error: errorMessage,
+          claim_token: null,
+        });
+      }
+
       console.error(
         `[gateway] Failed to flush ${channel.channel_type} final reply for session ${shortId(sessionId)}:`,
         error
@@ -8106,6 +8278,7 @@ export class GatewayService {
    * the gateway's create() method (same path as webhook POST).
    */
   async startListeners(): Promise<void> {
+    this.finalReplyLoop.start();
     const tenantId = requireCurrentTenantId(
       'Missing tenant context while starting gateway listeners'
     );
@@ -8151,6 +8324,7 @@ export class GatewayService {
    * connector-owned work are reloaded under the discovered tenant's RLS scope.
    */
   async startListenersAcrossTenants(): Promise<void> {
+    this.finalReplyLoop.start();
     this.durableListenerOwnership = await runWithSystemDatabaseScope(
       this.db,
       'gateway listener dialect detection',
@@ -8828,6 +9002,7 @@ export class GatewayService {
    * Stop all active listeners (called on shutdown)
    */
   async stopListeners(): Promise<void> {
+    await this.finalReplyLoop.stop();
     this.listenerStopped = true;
     this.listenerDraining = true;
     this.teamsTyping.stopAll();
