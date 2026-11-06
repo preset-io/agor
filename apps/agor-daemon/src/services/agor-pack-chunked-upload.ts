@@ -167,6 +167,21 @@ export class AgorPackChunkedUploads {
     return record?.status === 'active' ? record.scopeId : null;
   }
 
+  /** Forget a completion whose receipt can no longer be used (metadata only). */
+  private async clearDone(uploadId: string): Promise<void> {
+    try {
+      await this.store.deleteRecord({
+        tenantId: this.ctx.tenantId,
+        kind: KIND,
+        createdBy: this.ctx.user.user_id as UserID,
+        ref: this.doneRef(uploadId),
+      });
+    } catch (error) {
+      console.error('[agor-pack] could not clear a finished upload:', error);
+      throw new Conflict("This file's earlier upload couldn't be cleared; try again shortly");
+    }
+  }
+
   /**
    * Publish the completion record (one conditional insert of a complete row):
    * true when ours, false when another completer's is already there.
@@ -184,13 +199,12 @@ export class AgorPackChunkedUploads {
     await this.writable();
     const uploadId = agorPackChunkedUploadId(input.sha256, input.size, chunkBytes);
     let pieces = await this.pieces(uploadId);
+    // A finished upload is reused only while its receipt can still be applied;
+    // otherwise it starts over.
     const done = await this.doneImportId(uploadId);
-    // A finished upload is reused only while its receipt can still be applied.
     if (done && !(await importer.isUsable(done))) {
+      await this.clearDone(uploadId);
       await this.drop(pieces);
-      await this.store
-        .delete({ ...this.owner(done), ref: this.doneRef(uploadId) })
-        .catch(() => undefined);
       pieces = [];
     }
     if (!(await this.marker(pieces, INFO))) {
@@ -273,7 +287,13 @@ export class AgorPackChunkedUploads {
   async complete(uploadId: string, importer: AgorPackImporter): Promise<AgorPackImport> {
     const pieces = await this.pieces(uploadId);
     const state = await this.describe(uploadId, pieces);
-    if (state.import_id) return importer.get(state.import_id);
+    if (state.import_id) {
+      if (await importer.isUsable(state.import_id)) return importer.get(state.import_id);
+      // Never hand back a receipt that can't be used.
+      await this.writable();
+      await this.clearDone(uploadId);
+      state.import_id = null;
+    }
     await this.writable();
     return this.assemble(uploadId, importer, pieces, state);
   }

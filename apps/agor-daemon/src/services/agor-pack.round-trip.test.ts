@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,6 +60,7 @@ import {
   localPackBytes,
   resetUploadStagingStoreForTests,
 } from '../utils/upload-staging';
+import { AgorPackChunkedUploads } from './agor-pack-chunked-upload';
 import { runAgorPackExecutorCommand } from './agor-pack-executor';
 import { AgorPackExporter } from './agor-pack-export';
 import { AgorPackImporter } from './agor-pack-import';
@@ -535,6 +536,71 @@ dbTest(
       expect(teammate.warnings).toContain(
         '1 attachment is too large to move (over 256 MB) and was left out.'
       );
+    })
+);
+
+dbTest(
+  'a finished upload whose receipt is no longer usable starts over, even where missing objects 403',
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { pack } = await fx.exportPack();
+      // Like S3 without ListBucket: HEAD/DELETE of a missing object is a 403.
+      const root = (tenant: string) => join(uploadsRoot, tenant);
+      const inner = localPackBytes((t) => join(root(t), 'agor-packs'));
+      const forbidMissing = async (input: Parameters<typeof inner.inspect>[0]) => {
+        try {
+          await inner.inspect(input);
+        } catch {
+          throw Object.assign(new Error('Forbidden'), { status: 403 });
+        }
+      };
+      const bytes = Object.assign(Object.create(inner), {
+        inspect: async (input: Parameters<typeof inner.inspect>[0]) => {
+          await forbidMissing(input);
+          return inner.inspect(input);
+        },
+        delete: async (input: Parameters<typeof inner.delete>[0]) => {
+          await forbidMissing(input);
+          return inner.delete(input);
+        },
+      }) as typeof inner;
+      configureUploadStagingStore(
+        () =>
+          new MetadataUploadStagingStore(fx.db, new LocalUploadStagingStore(root, { ttlMs: 0 }), {
+            bytes,
+            ttlMs: 60 * 60 * 1000,
+          })
+      );
+      const sha256 = createHash('sha256').update(pack).digest('hex');
+      const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+      const uploads = new AgorPackChunkedUploads(fx.ctx(fx.bea));
+      const upload = async () => {
+        const state = await uploads.init({ size: pack.byteLength, sha256 }, importer);
+        for (const index of Array.from({ length: state.chunks }, (_, i) => i)) {
+          if (state.received.includes(index)) continue;
+          const chunk = pack.subarray(index * state.chunk_size, (index + 1) * state.chunk_size);
+          await uploads.putChunk(state.upload_id, index, Readable.from([chunk]), chunk.byteLength);
+        }
+        return { state, receipt: await uploads.complete(state.upload_id, importer) };
+      };
+      const first = await upload();
+      expect((await uploads.init({ size: pack.byteLength, sha256 }, importer)).import_id).toBe(
+        first.receipt.import_id
+      );
+
+      // The receipt can't be used any more (its pack expired, say).
+      const unusable = vi.spyOn(importer, 'isUsable').mockResolvedValue(false);
+      try {
+        const fresh = await uploads.init({ size: pack.byteLength, sha256 }, importer);
+        expect(fresh).toMatchObject({ import_id: null, received: [] });
+        // And `complete` never hands that receipt back either.
+        expect((await uploads.status(first.state.upload_id)).import_id).toBeNull();
+      } finally {
+        unusable.mockRestore();
+      }
+      // Uploading again completes normally.
+      const second = await upload();
+      expect(second.receipt.manifest.teammates[0]?.display_name).toBe('Ada');
     })
 );
 
