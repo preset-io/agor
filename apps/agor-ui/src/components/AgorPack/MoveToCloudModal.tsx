@@ -60,7 +60,7 @@ import { uiRouteHref } from '../../utils/uiRoutes';
 import { AdaptiveSettingsModal } from '../SettingsModal/AdaptiveSettingsModal';
 import { Tag } from '../Tag';
 import { CheckReport } from './CheckReport';
-import { usePackPreflight } from './ExportPackPanel';
+import { PreflightError, usePackPreflight } from './ExportPackPanel';
 import { canExportTeammate, checkFromPreflight, exportEstimate } from './packCheck';
 import { countLabel, fill, listNames, megabytes, PACK_COPY } from './packCopy';
 import { SessionHistoryPicker } from './SessionHistoryPicker';
@@ -273,9 +273,11 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
   const link = cloud?.link ?? null;
   const chosen = who === 'all' ? allIds : picked.filter((id) => allIds.includes(id));
   // One preflight for every movable teammate, from Choose on; the steps read the chosen ones.
-  const { preflight: allPreflight, error: preflightError } = usePackPreflight(
-    step >= 1 ? allIds : []
-  );
+  const {
+    preflight: allPreflight,
+    error: preflightError,
+    retry: retryPreflight,
+  } = usePackPreflight(step >= 1 ? allIds : []);
   const preflight = useMemo(
     () => allPreflight?.filter((t) => chosen.includes(t.branch_id)) ?? null,
     [allPreflight, chosen]
@@ -414,14 +416,17 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
     exclude_session_ids: leaveOut ? (check?.flagged ?? []).map((s) => s.session_id) : [],
   });
 
+  // Nothing moves or downloads without a completed check (its exclusions apply).
   const startMove = () =>
     run('move', async () => {
+      if (!check) return;
       showMove(await startCloudMove(request()));
       setStep(3);
     });
 
   const download = () =>
     run('download', async () => {
+      if (!check) return;
       const result = await exportPack(request());
       showSuccess(fill(PACK_COPY.expToast, { file: result.filename }));
       onClose();
@@ -679,7 +684,7 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
             preflight={preflight}
             includeOthers={false}
           />
-          {preflightError && <Alert type="error" showIcon message={preflightError} />}
+          {preflightError && <PreflightError error={preflightError} onRetry={retryPreflight} />}
         </Flex>
       ),
       footerStart: (
@@ -715,7 +720,9 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
     body: (
       <Flex vertical gap={12}>
         {stepTitle(PACK_COPY.checkTitle)}
-        {check ? (
+        {preflightError ? (
+          <PreflightError error={preflightError} onRetry={retryPreflight} />
+        ) : check ? (
           <CheckReport
             check={check}
             mode="move"
@@ -725,7 +732,7 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
         ) : (
           <Skeleton active paragraph={{ rows: 4 }} />
         )}
-        {!fileOnly && <div>{downloadLink}</div>}
+        {!fileOnly && check && <div>{downloadLink}</div>}
       </Flex>
     ),
     footerStart: (

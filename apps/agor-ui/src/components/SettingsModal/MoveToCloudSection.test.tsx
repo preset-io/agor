@@ -10,6 +10,7 @@ import { agorStore } from '../../store/agorStore';
 import { mount } from '../../test/harness';
 import {
   completeCloudLink,
+  fetchPackPreflight,
   getCloudLink,
   getCloudMove,
   getLatestCloudMove,
@@ -105,6 +106,7 @@ const move = (status: AgorCloudMove['items'][number]['status'], extra = {}): Ago
 });
 
 beforeEach(() => {
+  vi.mocked(getLatestCloudMove).mockResolvedValue(null);
   agorStore.setState({
     branchById: new Map([
       ['b1', teammate('b1', 'u1', 'Ada')],
@@ -304,5 +306,25 @@ describe('Settings → Agor Cloud', () => {
     expect(await within(modal).findByText('Choose what to move')).toBeInTheDocument();
     await new Promise((resolve) => setTimeout(resolve, 1500));
     expect(vi.mocked(getCloudMove).mock.calls.length).toBe(calls);
+  });
+
+  it('fails closed when the check fails: no Move until Retry succeeds', async () => {
+    vi.mocked(getCloudLink).mockResolvedValue(signedIn);
+    vi.mocked(fetchPackPreflight).mockRejectedValueOnce(new Error('daemon unavailable'));
+    mount(<MoveToCloudSection currentUser={member} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Move to Agor Cloud/ }));
+    const modal = await dialog();
+    fireEvent.click(await within(modal).findByRole('button', { name: 'Continue' }));
+    expect(
+      await within(modal).findByText("Couldn't check what moves: daemon unavailable")
+    ).toBeInTheDocument();
+    fireEvent.click(within(modal).getByRole('button', { name: 'Continue' }));
+    expect(await within(modal).findByText('Check before moving')).toBeInTheDocument();
+    expect(within(modal).getByRole('button', { name: 'Move Ada' })).toBeDisabled();
+    expect(within(modal).queryByText(/Download an .agor file instead/)).toBeNull();
+    fireEvent.click(within(modal).getAllByRole('button', { name: 'Retry' })[0] as HTMLElement);
+    expect(await within(modal).findByText('Moves to Agor Cloud')).toBeInTheDocument();
+    expect(within(modal).getByRole('button', { name: 'Move Ada' })).toBeEnabled();
+    expect(startCloudMove).not.toHaveBeenCalled();
   });
 });
