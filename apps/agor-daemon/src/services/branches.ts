@@ -138,6 +138,7 @@ import {
   verifyRecordedProcessGroupAbsent,
 } from '../executor-tracking.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
+import { authorizeCallerBoard } from '../utils/board-route-authorization.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import {
   ensureCanControlBranchEnvironment,
@@ -287,6 +288,20 @@ export type EnvironmentHealthCheckOptions =
 /**
  * Extended branches service with custom methods
  */
+/** Canvas fields follow board visibility for external non-admin callers; others see them all. */
+function canvasViewer(params?: BranchParams): { visibleToUserId?: UUID } | undefined {
+  const user = params?.user;
+  if (
+    !params?.provider ||
+    !user ||
+    user._isServiceAccount ||
+    hasMinimumRole(user.role, ROLES.ADMIN)
+  ) {
+    return undefined;
+  }
+  return { visibleToUserId: user.user_id as UUID };
+}
+
 export class BranchesService extends DrizzleService<Branch, Partial<Branch>, BranchParams> {
   private branchRepo: BranchRepository;
   private boardRepo: BoardRepository;
@@ -1468,7 +1483,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         this.app.get('config').execution?.allow_superadmin === true
       );
       const saved = await this.branchRepo.recordProvisioningProvenance(id, provenance, attemptId);
-      return (await this.branchRepo.enrichWithZoneInfo(saved)) as BranchWithZoneAndSessions;
+      return (await this.branchRepo.enrichWithZoneInfo(
+        saved,
+        canvasViewer(params)
+      )) as BranchWithZoneAndSessions;
     }
     if (params?.provider && Object.hasOwn(data, 'provisioning_operation'))
       throw new BadRequest('Provisioning ownership is server-managed.');
@@ -1525,7 +1543,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           `[branch-provisioning ${shortId(id)}] discarded terminal acknowledgement for a stale or inactive attempt`
         );
       }
-      return (await this.branchRepo.enrichWithZoneInfo(result.branch)) as BranchWithZoneAndSessions;
+      return (await this.branchRepo.enrichWithZoneInfo(
+        result.branch,
+        canvasViewer(params)
+      )) as BranchWithZoneAndSessions;
     }
 
     const oldBoardId = currentBranch.board_id;
@@ -1585,7 +1606,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Handle board_objects changes if board_id changed
     if (!boardIdProvided) {
-      const withZone = await this.branchRepo.enrichWithZoneInfo(updatedBranch);
+      const withZone = await this.branchRepo.enrichWithZoneInfo(
+        updatedBranch,
+        canvasViewer(params)
+      );
 
       // Only enrich with session activity if explicitly requested
       if (params?.query?.include_sessions === true || params?.query?.include_sessions === 'true') {
@@ -1643,7 +1667,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     }
 
-    const withZone = await this.branchRepo.enrichWithZoneInfo(updatedBranch);
+    const withZone = await this.branchRepo.enrichWithZoneInfo(updatedBranch, canvasViewer(params));
 
     // Only enrich with session activity if explicitly requested
     if (params?.query?.include_sessions === true || params?.query?.include_sessions === 'true') {
@@ -1678,7 +1702,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const includeSessions = includeSessionsRoot ?? includeSessionsQuery;
 
     const branch = await super.get(id, params);
-    const withZone = await this.branchRepo.enrichWithZoneInfo(branch as Branch);
+    const withZone = await this.branchRepo.enrichWithZoneInfo(
+      branch as Branch,
+      canvasViewer(params)
+    );
 
     // A missing runtime config is unknown, never an implicit local capability.
     const config = this.app.get('config');
@@ -1826,7 +1853,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           (query?.$sort as Record<string, 1 | -1> | undefined) ??
           (teammate ? { branch_id: -1 } : undefined),
       });
-      const enriched = await this.branchRepo.enrichManyWithZoneInfo(page.data);
+      const enriched = await this.branchRepo.enrichManyWithZoneInfo(
+        page.data,
+        canvasViewer(params)
+      );
       return {
         total: page.total,
         limit,
@@ -1844,9 +1874,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Handle both paginated and non-paginated results
     if (Array.isArray(result)) {
-      return this.branchRepo.enrichManyWithZoneInfo(result as Branch[]);
+      return this.branchRepo.enrichManyWithZoneInfo(result as Branch[], canvasViewer(params));
     } else {
-      const enriched = await this.branchRepo.enrichManyWithZoneInfo(result.data as Branch[]);
+      const enriched = await this.branchRepo.enrichManyWithZoneInfo(
+        result.data as Branch[],
+        canvasViewer(params)
+      );
       return {
         ...result,
         data: enriched,
@@ -2483,6 +2516,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             object_id: string;
           } | null;
           if (!existingObject) {
+            // Restoring the canvas card is a board edit; a denied caller still gets the branch back.
+            await authorizeCallerBoard(
+              this.boardRepo,
+              params,
+              targetBoardId,
+              'mutate',
+              'restore this branch on its board'
+            );
             const position = await this.computeDefaultBoardPositionForBranch(
               targetBoardId,
               id,

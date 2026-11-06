@@ -514,8 +514,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * and handles edge cases like hex-looking slugs (e.g., board named "deadbeef")
    */
   async findBySlugOrId(param: string): Promise<Board | null> {
-    // Always try slug lookup first, regardless of what the param looks like
-    // This handles edge cases where a board name looks like a hex ID (e.g., "deadbeef")
+    // A canonical UUID is always an ID, so a board slugged with another board's ID cannot shadow it.
+    if (isValidUUID(param)) return this.findById(param);
+    // Otherwise try slug first; this handles hex-looking slugs (e.g., "deadbeef").
     const bySlug = await this.findBySlug(param);
     if (bySlug) return bySlug;
 

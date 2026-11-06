@@ -474,6 +474,18 @@ describe('BoardRepository.findById', () => {
 // FindBySlug
 // ============================================================================
 
+describe('BoardRepository.findBySlugOrId', () => {
+  dbTest('resolves a canonical UUID as an ID even when another slug equals it', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const target = await repo.create(createBoardData({ name: 'Target' }));
+    await repo.create(createBoardData({ name: 'Shadow', slug: target.board_id }));
+    await repo.create(createBoardData({ name: 'Hex', slug: 'deadbeef' }));
+
+    expect((await repo.findBySlugOrId(target.board_id))?.name).toBe('Target');
+    expect((await repo.findBySlugOrId('deadbeef'))?.name).toBe('Hex');
+  });
+});
+
 describe('BoardRepository.findBySlug', () => {
   dbTest('should find board by exact slug match', async ({ db }) => {
     const repo = new BoardRepository(db);

@@ -253,6 +253,7 @@ import { buildAuthRateLimitKey } from './utils/auth-rate-limit-key.js';
 import {
   ensureMinimumRole,
   registerAuthenticatedRoute as registerAuthenticatedRouteUnscoped,
+  rejectNonScalarExternalId,
   requireMinimumRole,
 } from './utils/authorization.js';
 import { authorizeBranchArchiveDelete } from './utils/branch-archive-delete-authorization.js';
@@ -7154,7 +7155,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       all: aroundAll,
     },
     before: {
-      all: [enforcePasswordChange],
+      // Every service's record hooks only ever see scalar IDs from transports.
+      all: [rejectNonScalarExternalId, enforcePasswordChange],
     },
   });
 
