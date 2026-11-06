@@ -19,7 +19,9 @@ import {
   SessionRepository,
   StagedBlobRepository,
   UploadRepository,
+  UsersRepository,
   update,
+  uploads,
 } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import {
@@ -45,12 +47,16 @@ import {
   type PackFixture,
 } from '../../test/agor-pack-fixture';
 import type { ReposServiceImpl } from '../declarations';
+import { LocalUploadStagingStore } from '../host/local/upload-staging-store';
 import type { RegisterHooksContext } from '../register-hooks';
-import type { MetadataUploadStagingStore } from '../utils/metadata-upload-staging-store';
+import { MetadataUploadStagingStore } from '../utils/metadata-upload-staging-store';
 import { spawnExecutorFireAndForget } from '../utils/spawn-executor';
+import { configureUploadLimits } from '../utils/upload';
 import {
+  configureUploadStagingStore,
   getBlobStagingStore,
   getUploadStagingStore,
+  localPackBytes,
   resetUploadStagingStoreForTests,
 } from '../utils/upload-staging';
 import { runAgorPackExecutorCommand } from './agor-pack-executor';
@@ -438,6 +444,87 @@ dbTest(
         );
         expect(second?.genealogy.parent_session_id ?? null).toBeNull();
       });
+    })
+);
+
+dbTest(
+  'attachments over the interactive upload cap are restored from a pack, or named with the reason',
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { pack } = await fx.exportPack();
+      // A workspace whose interactive per-file cap (4 bytes) is below the
+      // 9-byte attachment; `restore` is the pack-limit adapter the daemon wires.
+      const configure = (restore: boolean) => {
+        configureUploadLimits(4);
+        configureUploadStagingStore(() => {
+          const root = (tenant: string) => join(uploadsRoot, tenant);
+          return new MetadataUploadStagingStore(
+            fx.db,
+            new LocalUploadStagingStore(root, { ttlMs: 0, maxBytes: 4 }),
+            { bytes: localPackBytes((t) => join(root(t), 'agor-packs')), ttlMs: 60 * 60 * 1000 },
+            restore
+              ? {
+                  bytes: new LocalUploadStagingStore(root, {
+                    ttlMs: 0,
+                    maxBytes: AGOR_PACK.maxEntryBytes,
+                  }),
+                  maxBytes: AGOR_PACK.maxEntryBytes,
+                }
+              : undefined
+          );
+        });
+      };
+      const importAs = async (email: string) => {
+        const user = await fx.createUser(email);
+        const importer = new AgorPackImporter(fx.ctx(user), fx.params(user));
+        expect(user.onboarding_completed).toBeFalsy();
+        const staged = await importer.stage(Readable.from([pack]), pack.byteLength);
+        const applied = await importer.apply(staged.import_id, { teammates: ['t01'] });
+        // Having imported a teammate, first-run onboarding is done for them.
+        const after = await fx.unit(() => new UsersRepository(fx.db).findById(user.user_id));
+        expect(after?.onboarding_completed).toBe(true);
+        return { staged, applied };
+      };
+
+      configure(false);
+      const refused = await importAs('cap@example.test');
+      expect(refused.staged.dry_run[0]?.warnings).toContain(
+        'Attachment "chart.png" (1 MB) is larger than this workspace accepts (1 MB) and won\'t be restored.'
+      );
+      expect(refused.applied.results[0]?.remap.uploads).toEqual([]);
+      expect(refused.applied.results[0]?.warnings.join(' ')).toMatch(
+        /Attachment "chart\.png" could not be restored: it is larger than this workspace accepts/
+      );
+
+      configure(true);
+      const restored = await importAs('restore@example.test');
+      expect(restored.staged.dry_run[0]?.warnings.join(' ')).not.toMatch(/chart\.png/);
+      expect(restored.applied.results[0]?.remap.uploads).toHaveLength(1);
+    })
+);
+
+dbTest(
+  'an attachment over the pack entry limit is left out and reported, not fatal',
+  async ({ db: raw }) =>
+    withFixture(raw, async (fx) => {
+      const { db, unit, ctx, ada, seeded, upload } = fx;
+      // The recorded size decides; the bytes are never read.
+      await unit(() =>
+        update(db, uploads)
+          .set({ size_bytes: AGOR_PACK.maxEntryBytes + 1 })
+          .where(eq(uploads.upload_ref, upload.ref))
+          .run()
+      );
+      const [preflight] = await new AgorPackExporter(ctx(ada)).preflight([seeded.branch.branch_id]);
+      expect(preflight?.large_attachments).toEqual([
+        { name: 'chart.png', size: AGOR_PACK.maxEntryBytes + 1, own: true, recent: true },
+      ]);
+      const { manifest } = await fx.exportPack();
+      const teammate = manifest.teammates[0]!;
+      expect(teammate.sections.uploads).toEqual({ count: 0, bytes: 0, too_large: 1 });
+      expect(teammate.warnings).toContain(
+        '1 attachment is too large to move (over 256 MB) and was left out.'
+      );
     })
 );
 

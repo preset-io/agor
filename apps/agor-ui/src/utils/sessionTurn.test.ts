@@ -60,4 +60,18 @@ describe('canSessionStartTurn', () => {
       false
     );
   });
+
+  it('never starts a turn in imported (read-only) history', () => {
+    expect(
+      canSessionStartTurn(
+        {
+          status: SessionStatus.FAILED,
+          ready_for_prompt: true,
+          archived: true,
+          archived_reason: 'imported',
+        },
+        0
+      )
+    ).toBe(false);
+  });
 });

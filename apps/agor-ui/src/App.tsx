@@ -129,6 +129,7 @@ import {
   buildResumedOnboardingPreferences,
   isOnboardingDeferred,
   type OnboardingReopenMode,
+  ownsAnyTeammate,
 } from './utils/onboardingLifecycle';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingPreferences';
 import { savePromptDraft } from './utils/promptDrafts';
@@ -599,6 +600,8 @@ function AppContent() {
   // Onboarding provisions boards, repos, branches and sessions. A viewer is a
   // read-only role, so its first login must enter the workspace without opening
   // a flow the daemon will correctly refuse at every write boundary.
+  // First-run onboarding creates the first teammate.
+  const ownsTeammate = useAgorStore((s) => ownsAnyTeammate(s.branchById, currentUser?.user_id));
   const canRunOnboarding = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
 
   // Keep the global ErrorBoundary's crash context populated so a render
@@ -635,7 +638,9 @@ function AppContent() {
     authenticationGeneration,
     eligible: canRunOnboarding,
     ready: onboardingReady,
-    completed: onboardingCompletionObserved,
+    // Owning a teammate already (imported, or made elsewhere) counts as done:
+    // it never auto-opens, while Settings can still restart it explicitly.
+    completed: onboardingCompletionObserved || ownsTeammate,
     deferred: onboardingDeferred,
     isAuthenticationOwnerCurrent,
   });

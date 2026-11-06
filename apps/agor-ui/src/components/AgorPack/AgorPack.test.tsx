@@ -28,6 +28,7 @@ const ada: AgorPackPreflightTeammate = {
     { session_id: 's-old', title: 'Old creds', own: true, recent: false },
   ],
   board: true,
+  large_attachments: [{ name: 'demo.mov', size: 300 * MB, own: true, recent: false }],
   schedules: 2,
   artifacts: 4,
   knowledge_documents: 12,
@@ -107,6 +108,12 @@ describe('Check report data', () => {
       { teammate: 'Ada', kind: 'docker' },
       { teammate: 'Ada', kind: 'host', host: 'jenkins.internal' },
     ]);
+    // The 300 MB attachment is older than 90 days: only "All" would carry it.
+    expect(checkFromPreflight([ada], 'all', false, true).wont).toContainEqual({
+      teammate: 'Ada',
+      kind: 'attachments',
+      count: 1,
+    });
   });
 
   it('reads an uploaded pack the same way', () => {
@@ -160,6 +167,11 @@ describe('ExportPackPanel', () => {
       )
     ).toBeInTheDocument();
     expect(screen.getByText('Ada: 3 archived sessions skipped')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('All'));
+    expect(
+      screen.getByText('1 attachment is too large to move (over 256 MB) and will be left out.')
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Last 90 days'));
     expect(screen.getByText('1 teammate, about 15 MB')).toBeInTheDocument();
     fireEvent.click(screen.getByText('None'));
     expect(screen.getByText('1 teammate, about 3 MB')).toBeInTheDocument();

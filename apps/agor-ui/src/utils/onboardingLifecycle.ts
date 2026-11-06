@@ -1,4 +1,5 @@
-import type { OnboardingState, UserPreferences } from '@agor-live/client';
+import type { Branch, OnboardingState, UserPreferences } from '@agor-live/client';
+import { isTeammate } from '@agor-live/client';
 
 export type OnboardingReopenMode = 'resume' | 'restart';
 
@@ -42,4 +43,38 @@ export function buildRestartedOnboardingPreferences(
   const preferences = { ...(latest ?? {}) };
   delete preferences.onboarding;
   return preferences;
+}
+
+const ownsTeammateCache = new WeakMap<ReadonlyMap<string, Branch>, Map<string, boolean>>();
+
+/**
+ * Whether `userId` owns a live teammate (primary owner, else creator). Cached
+ * per branch-map snapshot: the app shell evaluates it on every store update.
+ */
+export function ownsAnyTeammate(
+  branchById: ReadonlyMap<string, Branch>,
+  userId: string | undefined
+): boolean {
+  if (!userId) return false;
+  let byUser = ownsTeammateCache.get(branchById);
+  if (!byUser) {
+    byUser = new Map();
+    ownsTeammateCache.set(branchById, byUser);
+  }
+  let owns = byUser.get(userId);
+  if (owns === undefined) {
+    owns = false;
+    for (const branch of branchById.values()) {
+      if (
+        !branch.archived &&
+        isTeammate(branch) &&
+        (branch.primary_owner_user_id ?? branch.created_by) === userId
+      ) {
+        owns = true;
+        break;
+      }
+    }
+    byUser.set(userId, owns);
+  }
+  return owns;
 }

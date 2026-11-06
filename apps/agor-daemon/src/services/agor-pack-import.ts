@@ -102,6 +102,7 @@ import type { BoardsServiceImpl, ReposServiceImpl } from '../declarations.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { withImportedRowId } from '../utils/imported-row-id.js';
 import { MetadataUploadStagingStore } from '../utils/metadata-upload-staging-store.js';
+import { getUploadLimits } from '../utils/upload.js';
 import { getBlobStagingStore, getUploadStagingStore } from '../utils/upload-staging.js';
 import {
   agorPackMaterializeExecutorCommandId,
@@ -144,6 +145,26 @@ function receiptError(error: unknown): string {
   }
   console.error('[agor-pack] apply failed:', error);
   return 'Something went wrong while importing; details are in the server log';
+}
+
+const megabytes = (bytes: number) => Math.ceil(bytes / (1024 * 1024));
+
+/** Largest attachment the upload store restores from a pack. */
+function restoreLimitBytes(): number {
+  const store = getUploadStagingStore();
+  return store instanceof MetadataUploadStagingStore
+    ? store.restoreLimitBytes()
+    : getUploadLimits().maxFileBytes;
+}
+
+/** Why an attachment wasn't restored, without storage internals. */
+function attachmentRestoreReason(error: unknown): string {
+  const status = (error as { status?: unknown; code?: unknown }).status;
+  if (status === 413) {
+    return `it is larger than this workspace accepts (${megabytes(restoreLimitBytes())} MB).`;
+  }
+  console.error('[agor-pack] attachment restore failed:', error);
+  return 'the file could not be stored; see the server log.';
 }
 
 /** The staged pack bytes of a receipt (`<scope>:<ref>`), owned by its importer. */
@@ -282,11 +303,16 @@ export class AgorPackImporter {
     const pending = { owner_user_id: this.ctx.user.user_id, staging_ref: `${scope}:${staged.ref}` };
     const discard = () => store.delete(stagedPackBlob(this.ctx, pending)!).catch(() => undefined);
     let manifest: AgorPackManifest;
+    let notRestorable: Map<string, string[]>;
     try {
       const { source } = await openStagedPack(this.ctx, pending);
       const reader = await AgorPackReader.open(source);
       manifest = reader.manifest;
-      reader.close();
+      try {
+        notRestorable = await this.attachmentsOverLimit(reader);
+      } finally {
+        reader.close();
+      }
     } catch (error) {
       await discard();
       throw error;
@@ -300,12 +326,12 @@ export class AgorPackImporter {
     if (existing && (liveClaim(existing) || (await this.isStaged(existing)))) {
       await discard();
       if (liveClaim(existing)) return publicImport(existing);
-      const dryRun = await this.dryRun(manifest, existing.results);
+      const dryRun = await this.dryRun(manifest, existing.results, notRestorable);
       return publicImport(
         await this.write(() => this.receipts().update(existing.import_id, { dry_run: dryRun }))
       );
     }
-    const dryRun = await this.dryRun(manifest, existing?.results ?? []);
+    const dryRun = await this.dryRun(manifest, existing?.results ?? [], notRestorable);
     if (existing) {
       const updated = await this.write(() =>
         this.receipts().update(existing.import_id, {
@@ -359,6 +385,22 @@ export class AgorPackImporter {
       );
   }
 
+  /**
+   * Someone who imported a teammate has one: first-run onboarding (which
+   * creates the first teammate) must not open over it. Through the users
+   * service, so open clients observe it like a completed wizard.
+   */
+  private async markOnboarded(): Promise<void> {
+    if (this.ctx.user.onboarding_completed) return;
+    await this.ctx.app
+      .service('users')
+      .patch(this.ctx.user.user_id, { onboarding_completed: true } as never, this.params)
+      .then(() => {
+        this.ctx.user = { ...this.ctx.user, onboarding_completed: true };
+      })
+      .catch((error: unknown) => console.warn('[agor-pack] could not mark onboarding done', error));
+  }
+
   private async findRepoByRemote(remoteUrl: string): Promise<Repo | null> {
     const wanted = normalizeRepoUrl(remoteUrl);
     const repos = await this.unit(() => new RepoRepository(this.ctx.db).findAll());
@@ -367,13 +409,35 @@ export class AgorPackImporter {
     );
   }
 
+  /**
+   * Attachments this workspace won't take (larger than its restore limit),
+   * per teammate key, so the check shows them before anything is imported.
+   */
+  private async attachmentsOverLimit(reader: AgorPackReader): Promise<Map<string, string[]>> {
+    const limit = restoreLimitBytes();
+    const out = new Map<string, string[]>();
+    for (const teammate of reader.manifest.teammates) {
+      for (const entry of reader.list(teammatePackPath(teammate.key, 'uploads/'))) {
+        if (!entry.path.endsWith('.json')) continue;
+        const meta = await reader.readJson(entry.path, agorPackUploadFileSchema);
+        if (meta.size <= limit) continue;
+        out.set(teammate.key, [
+          ...(out.get(teammate.key) ?? []),
+          `Attachment "${meta.name}" (${megabytes(meta.size)} MB) is larger than this workspace accepts (${megabytes(limit)} MB) and won't be restored.`,
+        ]);
+      }
+    }
+    return out;
+  }
+
   private async dryRun(
     manifest: AgorPackManifest,
-    results: AgorPackTeammateResult[]
+    results: AgorPackTeammateResult[],
+    notRestorable: Map<string, string[]> = new Map()
   ): Promise<AgorPackDryRunTeammate[]> {
     const out: AgorPackDryRunTeammate[] = [];
     for (const teammate of manifest.teammates) {
-      const warnings = [...teammate.warnings];
+      const warnings = [...teammate.warnings, ...(notRestorable.get(teammate.key) ?? [])];
       const repoStatus: AgorPackDryRunTeammate['repo_status'] = teammate.repo.local_home
         ? 'framework'
         : teammate.repo.remote_url && (await this.findRepoByRemote(teammate.repo.remote_url))
@@ -559,6 +623,7 @@ export class AgorPackImporter {
             results = [...results, result];
             delete progress[teammate.key];
             await save({ results, progress });
+            await this.markOnboarded();
           }
         } finally {
           reader.close();
@@ -979,7 +1044,9 @@ export class AgorPackImporter {
               ...(server.url ? { url: server.url } : {}),
               ...(server.command ? { command: server.command } : {}),
               ...(server.args ? { args: server.args } : {}),
-              scope: 'global',
+              ...(server.auth ? { auth: server.auth } : {}),
+              // A session-scoped server stays session-scoped.
+              scope: server.scope ?? 'global',
               enabled: false,
             },
             this.params
@@ -1235,7 +1302,9 @@ export class AgorPackImporter {
         } catch (error) {
           if (attempt) await uploadStore.delete({ ...owner, ref: attempt }).catch(() => undefined);
           if (error instanceof AgorPackImportClaimLostError) throw error;
-          warn(`Attachment "${meta.name}" could not be restored.`);
+          warn(
+            `Attachment "${meta.name}" could not be restored: ${attachmentRestoreReason(error)}`
+          );
           continue;
         }
       }

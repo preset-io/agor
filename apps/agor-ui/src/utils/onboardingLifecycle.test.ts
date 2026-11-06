@@ -4,6 +4,7 @@ import {
   buildRestartedOnboardingPreferences,
   buildResumedOnboardingPreferences,
   isOnboardingDeferred,
+  ownsAnyTeammate,
 } from './onboardingLifecycle';
 
 describe('onboarding deferral preferences', () => {
@@ -66,5 +67,22 @@ describe('onboarding deferral preferences', () => {
         },
       })
     ).toEqual({ mainBoardId: 'board-main' });
+  });
+});
+
+describe('ownsAnyTeammate', () => {
+  const teammate = (id: string, owner: string, archived = false) =>
+    ({
+      branch_id: id,
+      archived,
+      created_by: owner,
+      custom_context: { teammate: { kind: 'teammate', displayName: 'Ada' } },
+    }) as never;
+  it('is true once the user owns a live teammate (e.g. an imported one)', () => {
+    const plain = { branch_id: 'b0', archived: false, created_by: 'me' } as never;
+    expect(ownsAnyTeammate(new Map([['b0', plain]]), 'me')).toBe(false);
+    expect(ownsAnyTeammate(new Map([['b1', teammate('b1', 'someone-else')]]), 'me')).toBe(false);
+    expect(ownsAnyTeammate(new Map([['b2', teammate('b2', 'me', true)]]), 'me')).toBe(false);
+    expect(ownsAnyTeammate(new Map([['b3', teammate('b3', 'me')]]), 'me')).toBe(true);
   });
 });

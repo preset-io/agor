@@ -27,9 +27,11 @@ export interface PackCheckCounts {
 
 export interface PackCheckBlocker {
   teammate: string;
-  kind: 'docker' | 'host';
+  kind: 'docker' | 'host' | 'attachments';
   /** The private host for `host`. */
   host?: string;
+  /** Attachments too large to move, for `attachments`. */
+  count?: number;
 }
 
 export interface PackCheck {
@@ -154,9 +156,17 @@ export function checkFromPreflight(
         (leaveOutFlagged ? flagged.length : 0),
     },
     reconnect: reconnectLabels(preflight.map((teammate) => teammate.requirements)),
-    wont: preflight.flatMap((teammate) =>
-      blockers(teammate.display_name, teammate.environment, teammate.requirements)
-    ),
+    wont: preflight.flatMap((teammate) => {
+      const large = (teammate.large_attachments ?? []).filter(
+        (file) => mode !== 'none' && (includeOthers || file.own) && (mode === 'all' || file.recent)
+      ).length;
+      return [
+        ...blockers(teammate.display_name, teammate.environment, teammate.requirements),
+        ...(large
+          ? [{ teammate: teammate.display_name, kind: 'attachments' as const, count: large }]
+          : []),
+      ];
+    }),
     flagged,
     flaggedCount: flagged.length,
   };

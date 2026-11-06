@@ -12,6 +12,7 @@ import type {
   UploadStageInput,
   UploadStagingStore,
 } from '@agor/core/types';
+import { getUploadLimits } from './upload.js';
 
 /**
  * Application-level composition of the byte-store port and the database
@@ -25,7 +26,13 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
   constructor(
     private readonly db: ConstructorParameters<typeof UploadRepository>[0],
     private readonly bytes: UploadStagingStore,
-    blobs?: { bytes: UploadStagingStore; ttlMs: number }
+    blobs?: { bytes: UploadStagingStore; ttlMs: number },
+    /**
+     * Attachments restored from a pack (`provenance: 'import'`): the same
+     * byte namespace as `bytes`, bounded by the pack entry limit instead of
+     * the interactive per-file upload cap.
+     */
+    private readonly restore?: { bytes: UploadStagingStore; maxBytes: number }
   ) {
     this.repository = new UploadRepository(db);
     if (blobs) this.blobs = new MetadataBlobStagingStore(db, blobs.bytes, blobs.ttlMs);
@@ -45,7 +52,9 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
       })
     );
     try {
-      const metadata = await this.bytes.stage({ ...input, reservedRef: ref });
+      const adapter =
+        input.provenance === 'import' && this.restore ? this.restore.bytes : this.bytes;
+      const metadata = await adapter.stage({ ...input, reservedRef: ref });
       if (metadata.ref !== ref) throw new Error('Upload adapter changed reserved identity');
       await runWithTenantDatabaseScope(this.db, input.owner.tenantId, () =>
         this.repository.complete(input.owner, metadata)
@@ -116,6 +125,11 @@ export class MetadataUploadStagingStore implements UploadStagingStore {
     await runWithTenantDatabaseScope(this.db, input.tenantId, () =>
       this.repository.remove(input.tenantId, input.ref)
     );
+  }
+
+  /** Largest attachment a pack import can restore here. */
+  restoreLimitBytes(): number {
+    return this.restore?.maxBytes ?? getUploadLimits().maxFileBytes;
   }
 
   /**
