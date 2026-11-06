@@ -23,11 +23,13 @@ import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 import { packFetch, packJson } from '../../lib/pack/http';
 import {
+  apiKeyProblem,
   applyPack,
   exportRequest,
   isAgorCloudHost,
   packContentFlags,
   printDryRun,
+  redactSecret,
   uploadPackFile,
 } from '../../lib/pack/options';
 
@@ -41,8 +43,8 @@ export default class PackSend extends BaseCommand {
     'Exports the teammates from the connected daemon and uploads the .agor file to another ' +
     'self-hosted Agor with a personal API key from it, read from an environment variable. ' +
     'Prints the dry-run; with --apply, imports them (each on a new board) and prints the link ' +
-    'to Finish setup there. An interrupted upload resumes; sending the same file again changes ' +
-    'nothing. For Agor Cloud, use Settings → Move to Agor Cloud.';
+    'to Finish setup there. A dropped connection is retried and resumed within the run; each ' +
+    'run exports a fresh file. For Agor Cloud, use Settings → Move to Agor Cloud.';
 
   static override examples = [
     'TARGET_AGOR_API_KEY=agor_sk_… <%= config.bin %> <%= command.id %> 01933e4a --to https://agor.example.com --api-key-env TARGET_AGOR_API_KEY --apply',
@@ -84,13 +86,16 @@ export default class PackSend extends BaseCommand {
     const targetUrl = target.origin;
     const targetKey = process.env[flags['api-key-env']]?.trim();
     if (!targetKey) this.error(`Set ${flags['api-key-env']} to an API key of the target Agor.`);
+    const keyProblem = apiKeyProblem(targetKey);
+    if (keyProblem) this.error(`The API key in ${flags['api-key-env']} ${keyProblem}.`);
     const client = await this.connectToDaemon();
+    let bearer: string | undefined;
     try {
       const branchIds: string[] = [];
       for (const id of argv as string[]) {
         branchIds.push((await client.service('branches').get(id)).branch_id);
       }
-      const bearer = await this.resolveHttpBearer();
+      bearer = await this.resolveHttpBearer();
       const daemonUrl = this.daemonUrl as string;
       this.logToStderr(chalk.dim(`Packing ${branchIds.length} teammate(s)…`));
       const exported = await packJson<{
@@ -137,7 +142,9 @@ export default class PackSend extends BaseCommand {
       }
       this.log(JSON.stringify(receipt));
     } catch (error) {
-      this.error(`Send failed: ${error instanceof Error ? error.message : String(error)}`);
+      // Never echo the target's API key (nor this daemon's bearer) back.
+      const message = error instanceof Error ? error.message : String(error);
+      this.error(`Send failed: ${redactSecret(redactSecret(message, targetKey), bearer ?? '')}`);
     } finally {
       await this.cleanupClient(client);
     }

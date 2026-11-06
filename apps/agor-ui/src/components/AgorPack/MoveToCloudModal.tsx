@@ -9,6 +9,7 @@ import {
   type AgorPackSessionMode,
   type AgorPackSwitchOverState,
   agorCloudReturnToProblem,
+  agorCloudWorkspacePageUrl,
 } from '@agor/core/types';
 import type { Branch, User } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
@@ -340,18 +341,20 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
     return () => clearInterval(timer);
   }, [open, waiting]);
 
-  // Follow the move while it runs.
+  // Follow the move while it runs. A 404 means the daemon restarted and lost
+  // it: stop following and say so.
+  const [lost, setLost] = useState(false);
   const moveId = move?.move_id;
   const moving = move?.status === 'moving';
   useEffect(() => {
-    if (!open || !moveId || !moving) return;
+    if (!open || !moveId || !moving || lost) return;
     const timer = setInterval(() => {
       getCloudMove(moveId)
-        .then(showMove)
+        .then((next) => (next ? showMove(next) : setLost(true)))
         .catch(() => undefined);
     }, 1000);
     return () => clearInterval(timer);
-  }, [open, moveId, moving, showMove]);
+  }, [open, moveId, moving, lost, showMove]);
 
   const run = async (key: string, work: () => Promise<void>) => {
     setBusy(key);
@@ -760,6 +763,46 @@ export const MoveToCloudModal: React.FC<MoveToCloudModalProps> = ({
   // ------------------------------------------------------------------- Move
   const renderMove = () => {
     if (!move) return { body: <Spin />, footer: null };
+    if (lost) {
+      return {
+        body: (
+          <Flex vertical gap={12}>
+            {stepTitle(PACK_COPY.progTitle)}
+            <Alert
+              type="warning"
+              showIcon
+              message="Tracking stopped because Agor restarted. The import may have finished in Agor Cloud — open Agor Cloud to check, or start the move again."
+            />
+          </Flex>
+        ),
+        footer: (
+          <>
+            <Button onClick={onClose}>{PACK_COPY.doneClose}</Button>
+            <Button
+              onClick={() => {
+                setLost(false);
+                setMove(null);
+                setStep(link ? 1 : 0);
+              }}
+            >
+              Move again
+            </Button>
+            <Button
+              type="primary"
+              href={agorCloudWorkspacePageUrl(
+                cloud?.console_url ?? AGOR_CLOUD.defaultConsoleUrl,
+                move.workspace_url,
+                '/ui/settings/import'
+              )}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {PACK_COPY.doneOpen} <ExportOutlined />
+            </Button>
+          </>
+        ),
+      };
+    }
     const percent = movePercent(move);
     const failed = move.items.filter((item) => item.status === 'failed').length;
     return {

@@ -223,6 +223,11 @@ export class AgorCloudLinkService {
     return link ?? null;
   }
 
+  /** The current sign-in's generation (what moves bind to), or null when signed out. */
+  async generation(): Promise<string | null> {
+    return (await this.current())?.generation ?? null;
+  }
+
   async status(): Promise<AgorCloudLinkStatus> {
     const link = await this.current();
     return {

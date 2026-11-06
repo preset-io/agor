@@ -282,4 +282,27 @@ describe('Settings → Agor Cloud', () => {
     fireEvent.click(within(modal).getByRole('button', { name: 'Move more teammates' }));
     expect(await within(modal).findByText('Choose what to move')).toBeInTheDocument();
   });
+
+  it('stops following a move the daemon lost to a restart (404)', async () => {
+    vi.mocked(getCloudLink).mockResolvedValue(signedIn);
+    vi.mocked(getLatestCloudMove).mockResolvedValue(move('sending'));
+    vi.mocked(getCloudMove).mockResolvedValue(null);
+    mount(<MoveToCloudSection currentUser={member} />);
+    fireEvent.click(await screen.findByText('Moving your teammates'));
+    const modal = await dialog();
+    expect(
+      await within(modal).findByText(/Tracking stopped because Agor restarted/, undefined, {
+        timeout: 3000,
+      })
+    ).toBeInTheDocument();
+    const calls = vi.mocked(getCloudMove).mock.calls.length;
+    expect(within(modal).getByRole('link', { name: /Open Agor Cloud/ })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/api/launch-codes/init?return_host=acme.dp-us1a.agor.cloud')
+    );
+    fireEvent.click(within(modal).getByRole('button', { name: 'Move again' }));
+    expect(await within(modal).findByText('Choose what to move')).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(vi.mocked(getCloudMove).mock.calls.length).toBe(calls);
+  });
 });

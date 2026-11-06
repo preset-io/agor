@@ -477,6 +477,100 @@ dbTest('Retry resends the same file and resumes the import in the workspace', as
   })
 );
 
+dbTest('Retry follows the known receipt; only a 404 from it sends the file again', async ({ db }) =>
+  withFixture(db, async (fx) => {
+    const ada = client(fx, fx.ada);
+    expect((await ada.complete(await ada.start())).status).toBe(201);
+    let applies = 0;
+    let receiptReads = 0;
+    let inits = 0;
+    let importId = '';
+    cloud.hook = async (pathname, init) => {
+      if (pathname === '/agor-pack/uploads/chunked' && init?.method === 'POST') inits++;
+      if (pathname.endsWith('/apply')) {
+        applies++;
+        return applies === 1 ? reply(500, { error: 'Pack operation failed' }) : undefined;
+      }
+      if (importId && pathname === `/agor-pack/imports/${importId}`) {
+        receiptReads++;
+        if (receiptReads === 1) return reply(503, { error: 'busy' });
+        if (receiptReads === 2) return reply(404, { error: 'Import not found' });
+      }
+      return undefined;
+    };
+    const retry = (id: string) =>
+      ada.call('POST', `/agor-pack/cloud/moves/${id}/retry`, {
+        branch_id: fx.seeded.branch.branch_id,
+      });
+    const id = ((await ada.call('POST', '/agor-pack/cloud/moves', MOVE(fx))).body as AgorCloudMove)
+      .move_id;
+    const failed = await pollMove(fx, id, (m) => m.status === 'finished');
+    importId = failed.items[0]?.import_id as string;
+    expect(importId).toBeTruthy();
+    expect(inits).toBe(1);
+
+    // A transient error reading the receipt fails the try; nothing is sent again.
+    await retry(id);
+    const transient = await pollMove(fx, id, (m) => m.status === 'finished');
+    expect(transient.items[0]).toMatchObject({ status: 'failed', error: 'busy' });
+    expect(inits).toBe(1);
+
+    // The workspace says the import doesn't exist: only then the file goes again.
+    await retry(id);
+    const done = await pollMove(fx, id, (m) => m.status === 'finished');
+    expect(done.items[0]).toMatchObject({ status: 'done' });
+    expect(inits).toBe(2);
+  })
+);
+
+dbTest(
+  'one move at a time per user, start and retry alike; moves follow the sign-in',
+  async ({ db }) =>
+    withFixture(db, async (fx) => {
+      const ada = client(fx, fx.ada);
+      expect((await ada.complete(await ada.start())).status).toBe(201);
+      let failApply = true;
+      let release: () => void = () => undefined;
+      let gate: Promise<void> | null = null;
+      cloud.hook = async (pathname, init) => {
+        if (failApply && pathname.endsWith('/apply')) return reply(500, { error: 'nope' });
+        if (gate && isChunk(pathname, init)) await gate;
+        return undefined;
+      };
+      const old = (
+        (await ada.call('POST', '/agor-pack/cloud/moves', MOVE(fx))).body as AgorCloudMove
+      ).move_id;
+      await pollMove(fx, old, (m) => m.status === 'finished');
+
+      failApply = false;
+      gate = new Promise((resolve) => {
+        release = resolve;
+      });
+      const starts = await Promise.all([
+        ada.call('POST', '/agor-pack/cloud/moves', MOVE(fx)),
+        ada.call('POST', '/agor-pack/cloud/moves', MOVE(fx)),
+      ]);
+      expect(starts.map((r) => r.status).sort()).toEqual([201, 409]);
+      const running = starts.find((r) => r.status === 201)?.body as AgorCloudMove;
+      // Retrying the old failed move doesn't get around it either.
+      expect(
+        (
+          await ada.call('POST', `/agor-pack/cloud/moves/${old}/retry`, {
+            branch_id: fx.seeded.branch.branch_id,
+          })
+        ).status
+      ).toBe(409);
+      release();
+      await pollMove(fx, running.move_id, (m) => m.status === 'finished');
+      expect((await ada.call('GET', '/agor-pack/cloud/moves')).body).toMatchObject({
+        move: { move_id: running.move_id },
+      });
+      // A new sign-in (even to the same workspace) doesn't offer the old moves.
+      expect((await ada.complete(await ada.start())).status).toBe(201);
+      expect((await ada.call('GET', '/agor-pack/cloud/moves')).body).toEqual({ move: null });
+    })
+);
+
 dbTest('a transient refresh failure keeps the link; a rejection forgets it', async ({ db }) =>
   withFixture(db, async (fx) => {
     const ada = client(fx, fx.ada);

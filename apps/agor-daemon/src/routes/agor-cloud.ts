@@ -107,7 +107,7 @@ export function registerAgorCloudRoutes(
         return moves(params).start(parse(agorPackExportRequestSchema, data, 'move request'));
       },
       async find(params: RouteParams) {
-        return { move: moves(params).latest() };
+        return { move: await moves(params).latest() };
       },
       async get(moveId: string, params: RouteParams) {
         return moves(params).get(moveId);

@@ -61,6 +61,12 @@ interface MoveRecord extends Omit<AgorCloudMove, 'items'> {
 }
 
 const moves = new Map<string, MoveRecord>();
+/**
+ * One running move per user: `${tenant}:${user}` → move id ('' while a start
+ * is still checking). Taken synchronously before any await by start and
+ * retry, released when the move's run ends.
+ */
+const active = new Map<string, string>();
 
 function prune(now = Date.now()): void {
   for (const [id, record] of moves) {
@@ -172,12 +178,26 @@ export class AgorCloudMoveService {
     return record;
   }
 
-  /** The caller's latest move (running, or finished in the last day), if any. */
-  latest(): AgorCloudMove | null {
+  private get activeKey(): string {
+    return `${this.ctx.tenantId}:${this.ctx.user.user_id}`;
+  }
+
+  /**
+   * The caller's latest move for the current sign-in (running, or finished in
+   * the last day), if any. Moves of an earlier sign-in can't be retried, so
+   * they aren't offered.
+   */
+  async latest(): Promise<AgorCloudMove | null> {
     prune();
+    const generation = await this.link.generation();
+    if (!generation) return null;
     let latest: MoveRecord | null = null;
     for (const record of moves.values()) {
-      if (record.tenant_id !== this.ctx.tenantId || record.user_id !== this.ctx.user.user_id) {
+      if (
+        record.tenant_id !== this.ctx.tenantId ||
+        record.user_id !== this.ctx.user.user_id ||
+        record.link_generation !== generation
+      ) {
         continue;
       }
       if (!latest || record.created_at > latest.created_at) latest = record;
@@ -195,13 +215,18 @@ export class AgorCloudMoveService {
    */
   async start(request: AgorPackExportOptions): Promise<AgorCloudMove> {
     prune();
-    const running = this.latest();
-    if (running?.status === 'moving') {
-      throw new Conflict('A move is already running. Wait until it finishes.');
+    this.reserve('');
+    let teammates: Awaited<ReturnType<AgorPackExporter['authorize']>>;
+    let session: Awaited<ReturnType<AgorCloudLinkService['session']>>;
+    let link: Awaited<ReturnType<AgorCloudLinkService['status']>>['link'];
+    try {
+      teammates = await new AgorPackExporter(this.ctx).authorize(request.branch_ids);
+      session = await this.link.session();
+      link = (await this.link.status()).link;
+    } catch (error) {
+      active.delete(this.activeKey);
+      throw error;
     }
-    const teammates = await new AgorPackExporter(this.ctx).authorize(request.branch_ids);
-    const session = await this.link.session();
-    const { link } = await this.link.status();
     const { branch_ids: _branchIds, ...options } = request;
     const record: MoveRecord = {
       move_id: generateId(),
@@ -229,6 +254,7 @@ export class AgorCloudMoveService {
       options,
     };
     moves.set(record.move_id, record);
+    active.set(this.activeKey, record.move_id);
     console.log(`[agor-cloud] move ${record.move_id} started (${record.items.length} teammates)`);
     this.launch(record);
     return publicView(record);
@@ -240,12 +266,21 @@ export class AgorCloudMoveService {
     const item = record.items.find((candidate) => candidate.branch_id === branchId);
     if (!item) throw new NotFound('Teammate not in this move');
     if (item.status === 'failed') {
+      if (!record.running) this.reserve(record.move_id);
       item.status = 'waiting';
       item.error = undefined;
       record.updated_at = Date.now();
       this.launch(record);
     }
     return publicView(record);
+  }
+
+  /** Take the caller's one-move slot (synchronously) or refuse. */
+  private reserve(moveId: string): void {
+    if (active.has(this.activeKey)) {
+      throw new Conflict('A move is already running. Wait until it finishes.');
+    }
+    active.set(this.activeKey, moveId);
   }
 
   private launch(record: MoveRecord): void {
@@ -280,6 +315,8 @@ export class AgorCloudMoveService {
       record.running = false;
       record.status = 'finished';
       record.updated_at = Date.now();
+      const key = `${record.tenant_id}:${record.user_id}`;
+      if (active.get(key) === record.move_id) active.delete(key);
     }
   }
 
@@ -288,6 +325,19 @@ export class AgorCloudMoveService {
     const touch = () => {
       record.updated_at = Date.now();
     };
+    // The file already reached the workspace: follow its receipt. Only a
+    // receipt the workspace says doesn't exist (404) sends the file again;
+    // any other error fails this try, so a changed teammate is never imported twice.
+    if (item.import_id) {
+      const known = await this.receipt(record, item.import_id);
+      if (known) {
+        item.status = 'importing';
+        touch();
+        await this.finishImport(record, item, known);
+        return;
+      }
+      item.import_id = undefined;
+    }
     // Rebuild the file when it was never built or its staging has expired.
     const staged =
       item.export &&
@@ -321,7 +371,7 @@ export class AgorCloudMoveService {
     // Our own refusals (a changed or expired sign-in) stop the upload at once
     // instead of being retried as network errors.
     const refused = new AbortController();
-    let receipt = await uploadPackChunked({
+    const receipt = await uploadPackChunked({
       size: file.size,
       sha256: file.sha256,
       readChunk: async (start, end) =>
@@ -350,7 +400,28 @@ export class AgorCloudMoveService {
     item.import_id = receipt.import_id;
     item.status = 'importing';
     touch();
+    await this.finishImport(record, item, receipt);
+  }
 
+  /** The workspace's receipt for an import, or null when it has none (404). */
+  private async receipt(record: MoveRecord, importId: string): Promise<AgorPackImport | null> {
+    const response = await this.cloudFetch(record, `/agor-pack/imports/${importId}`, (bearer) => ({
+      headers: { Authorization: `Bearer ${bearer}`, Accept: 'application/json' },
+      redirect: 'error',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    }));
+    if (response.status === 404) return null;
+    if (!response.ok) throw await cloudError(response);
+    return (await response.json()) as AgorPackImport;
+  }
+
+  /** Apply (or resume) the import in the workspace and follow it until it settles. */
+  private async finishImport(
+    record: MoveRecord,
+    item: ItemRecord,
+    staged: AgorPackImport
+  ): Promise<void> {
+    let receipt = staged;
     // A file the workspace already has returns its receipt, maybe applied.
     const importPath = `/agor-pack/imports/${receipt.import_id}`;
     if (receipt.status !== 'applied' && receipt.status !== 'applying') {
@@ -367,12 +438,12 @@ export class AgorCloudMoveService {
       throw new Error(receipt.error ?? 'The import in Agor Cloud stopped');
     }
     item.status = 'done';
+    record.updated_at = Date.now();
     item.open_url = agorCloudFinishSetupUrl(
       this.link.settings.consoleUrl,
       record.workspace_url,
       receipt.import_id
     );
-    touch();
     console.log(`[agor-cloud] move ${record.move_id}: ${item.branch_id} done`);
   }
 }
@@ -380,4 +451,5 @@ export class AgorCloudMoveService {
 /** Test seam. */
 export function resetAgorCloudMovesForTests(): void {
   moves.clear();
+  active.clear();
 }

@@ -7,7 +7,7 @@ import { stat } from 'node:fs/promises';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
-import { applyPack, printDryRun, uploadPackFile } from '../../lib/pack/options';
+import { applyPack, printDryRun, redactSecret, uploadPackFile } from '../../lib/pack/options';
 
 export default class PackImport extends BaseCommand {
   static override summary = 'Import AI teammates from a .agor file';
@@ -34,8 +34,9 @@ export default class PackImport extends BaseCommand {
   async run(): Promise<void> {
     const { args, flags } = await this.parse(PackImport);
     const client = await this.connectToDaemon();
+    let bearer: string | undefined;
     try {
-      const bearer = await this.resolveHttpBearer();
+      bearer = await this.resolveHttpBearer();
       const daemonUrl = this.daemonUrl as string;
       const { size } = await stat(args.file);
       this.logToStderr(chalk.dim(`Uploading ${args.file} (${size} bytes)…`));
@@ -62,7 +63,8 @@ export default class PackImport extends BaseCommand {
       }
       this.log(JSON.stringify(receipt));
     } catch (error) {
-      this.error(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      this.error(`Import failed: ${redactSecret(message, bearer ?? '')}`);
     } finally {
       await this.cleanupClient(client);
     }

@@ -140,19 +140,28 @@ export function agorPackImportPath(importId: string): string {
 }
 
 /**
- * Finish setup for an import in an Agor Cloud workspace, entered through the
- * console's launch-init so a browser that isn't signed in to the workspace
- * signs in first and still lands on the import.
+ * A page of an Agor Cloud workspace, entered through the console's
+ * launch-init so a browser that isn't signed in to the workspace signs in
+ * first and still lands on `path` (site-relative).
  */
+export function agorCloudWorkspacePageUrl(
+  consoleUrl: string,
+  workspaceUrl: string,
+  path: string
+): string {
+  const url = new URL(`${consoleUrl.replace(/\/+$/, '')}${AGOR_CLOUD.launchInitPath}`);
+  url.searchParams.set('return_host', new URL(workspaceUrl).host);
+  url.searchParams.set('return_to', path);
+  return url.toString();
+}
+
+/** Finish setup for an import in an Agor Cloud workspace (see {@link agorCloudWorkspacePageUrl}). */
 export function agorCloudFinishSetupUrl(
   consoleUrl: string,
   workspaceUrl: string,
   importId: string
 ): string {
-  const url = new URL(`${consoleUrl.replace(/\/+$/, '')}${AGOR_CLOUD.launchInitPath}`);
-  url.searchParams.set('return_host', new URL(workspaceUrl).host);
-  url.searchParams.set('return_to', agorPackImportPath(importId));
-  return url.toString();
+  return agorCloudWorkspacePageUrl(consoleUrl, workspaceUrl, agorPackImportPath(importId));
 }
 
 const HOSTNAME_PATTERN =

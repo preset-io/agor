@@ -63,6 +63,21 @@ export async function isAgorCloudHost(host: string): Promise<boolean> {
   return suffixes.some((suffix) => name === suffix || name.endsWith(`.${suffix}`));
 }
 
+/**
+ * Why an API key can't be sent as a Bearer, or null. Never includes the key:
+ * Node's header check would otherwise throw with the whole header value.
+ */
+export function apiKeyProblem(key: string): string | null {
+  return /^[\x21-\x7e]+$/.test(key)
+    ? null
+    : 'contains spaces, line breaks or other invalid characters';
+}
+
+/** `message` with every occurrence of `secret` replaced, for errors shown to the user. */
+export function redactSecret(message: string, secret: string): string {
+  return secret ? message.split(secret).join('[redacted]') : message;
+}
+
 type Log = (line: string) => void;
 
 /**

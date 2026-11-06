@@ -61,6 +61,16 @@ async function errorMessage(response: Response): Promise<string> {
   }
 }
 
+/** A failed pack request, with its HTTP status. */
+export class PackRequestError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'PackRequestError';
+    this.status = status;
+  }
+}
+
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
   const send = async (token: string | null) =>
     fetch(`${daemonUrl()}${path}`, {
@@ -69,7 +79,7 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
     });
   let response = await send(await bearer());
   if (response.status === 401) response = await send(await bearer(true));
-  if (!response.ok) throw new Error(await errorMessage(response));
+  if (!response.ok) throw new PackRequestError(await errorMessage(response), response.status);
   return response;
 }
 
@@ -207,8 +217,14 @@ export function getLatestCloudMove(): Promise<AgorCloudMove | null> {
   return json<{ move: AgorCloudMove | null }>('/agor-pack/cloud/moves').then((r) => r.move);
 }
 
-export function getCloudMove(moveId: string): Promise<AgorCloudMove> {
-  return json<AgorCloudMove>(`/agor-pack/cloud/moves/${moveId}`);
+/** The move, or null when this daemon doesn't know it (it restarted since). */
+export async function getCloudMove(moveId: string): Promise<AgorCloudMove | null> {
+  try {
+    return await json<AgorCloudMove>(`/agor-pack/cloud/moves/${moveId}`);
+  } catch (error) {
+    if (error instanceof PackRequestError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 export function retryCloudMove(moveId: string, branchId: string): Promise<AgorCloudMove> {
