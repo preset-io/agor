@@ -170,6 +170,38 @@ export class GatewayListenerDiscoveryRepository {
     }
     return refs;
   }
+
+  /**
+   * Discover distinct tenant IDs that currently have enabled gateway channels.
+   * Used for cold-start delivery reconciliation across tenants without requiring
+   * an inbound webhook to first populate in-memory tenant caches.
+   */
+  async findEnabledChannelTenantIds(
+    options: { channelTypes?: ChannelType[] } = {}
+  ): Promise<TenantID[]> {
+    const tenantColumn = (gatewayChannels as unknown as { tenant_id?: typeof gatewayChannels.id })
+      .tenant_id;
+    if (!isPostgresDatabase(this.db) || !tenantColumn) {
+      return [];
+    }
+
+    const conditions = [eq(gatewayChannels.enabled, true)];
+    if (options.channelTypes && options.channelTypes.length > 0) {
+      conditions.push(inArray(gatewayChannels.channel_type, options.channelTypes));
+    }
+
+    const rows = (await select(this.db, {
+      tenant_id: tenantColumn,
+    })
+      .from(gatewayChannels)
+      .where(and(...conditions))
+      .groupBy(tenantColumn)
+      .all()) as Array<{ tenant_id: unknown }>;
+
+    return rows
+      .map((r) => r.tenant_id)
+      .filter((t): t is TenantID => typeof t === 'string' && t.length > 0);
+  }
 }
 
 /**

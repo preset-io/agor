@@ -880,6 +880,41 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
   }
 
+  private async triggerGatewayOutboundFlushAfterCommit(
+    task: Task,
+    _params?: TaskParams
+  ): Promise<void> {
+    const processingCommentId = task.metadata?.gateway_reply_metadata?.processing_comment_id;
+    if (typeof processingCommentId !== 'number') return;
+
+    await this.runAfterTenantDatabaseCommit(
+      'gateway_final_reply',
+      async () => {
+        try {
+          const gatewayService = this.app.service('gateway') as unknown as {
+            flushOutboundBuffer(sessionId: string, options: { taskId: string }): Promise<void>;
+            wakeDeliveryLoop?(): void;
+          };
+          if (gatewayService?.flushOutboundBuffer) {
+            try {
+              await gatewayService.flushOutboundBuffer(task.session_id, {
+                taskId: task.task_id,
+              });
+            } finally {
+              gatewayService.wakeDeliveryLoop?.();
+            }
+          }
+        } catch (error) {
+          console.warn(
+            `[tasks.gateway_flush] Failed to trigger gateway flush for task ${shortId(task.task_id)}:`,
+            error
+          );
+        }
+      },
+      'identity'
+    );
+  }
+
   private async processTerminalTaskTransition(
     task: Task,
     status: Task['status'],
@@ -923,6 +958,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         if (runCompletionSideEffects && !isStop) {
           await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
         }
+        await this.triggerGatewayOutboundFlushAfterCommit(task, params);
         return false;
       }
 
@@ -942,6 +978,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // drain queued work without dispatching completion callbacks or cleaning
       // up ephemeral forks as though the provider had completed its turn.
       if (!runCompletionSideEffects) {
+        await this.triggerGatewayOutboundFlushAfterCommit(task, params);
         if (!params?.suppressTerminalQueueProcessing) {
           await this.triggerQueueProcessingAfterCommit(task.session_id, params);
         }
@@ -959,6 +996,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       if (!isStop) {
         await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
       }
+      await this.triggerGatewayOutboundFlushAfterCommit(task, params);
 
       if (session.fork_origin === 'btw') {
         // Keep archive atomic with completion: deferring it could re-archive
