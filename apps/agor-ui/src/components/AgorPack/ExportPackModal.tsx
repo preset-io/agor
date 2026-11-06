@@ -12,7 +12,7 @@ import { exportPack } from '../../utils/agorPack';
 import { useThemedMessage } from '../../utils/message';
 import { AdaptiveSettingsModal } from '../SettingsModal/AdaptiveSettingsModal';
 import { FlaggedSessionsCard } from './CheckReport';
-import { usePackPreflight } from './ExportPackPanel';
+import { PreflightError, usePackPreflight } from './ExportPackPanel';
 import { checkFromPreflight, exportEstimate } from './packCheck';
 import { fill, megabytes, PACK_COPY } from './packCopy';
 import { SessionHistoryPicker } from './SessionHistoryPicker';
@@ -31,7 +31,7 @@ export const ExportPackModal: React.FC<ExportPackModalProps> = ({ open, teammate
   const [sessions, setSessions] = useState<AgorPackSessionMode>(AGOR_PACK_DEFAULT_SESSION_MODE);
   const [leaveOut, setLeaveOut] = useState(true);
   const [exporting, setExporting] = useState(false);
-  const { preflight } = usePackPreflight([teammate.branch_id]);
+  const { preflight, error, retry } = usePackPreflight([teammate.branch_id]);
   const check = preflight ? checkFromPreflight(preflight, sessions, false, leaveOut) : null;
   const estimate = preflight ? exportEstimate(preflight, sessions, false) : null;
   const filename = `${
@@ -42,6 +42,8 @@ export const ExportPackModal: React.FC<ExportPackModalProps> = ({ open, teammate
   }${AGOR_PACK.extension}`;
 
   const handleDownload = async () => {
+    // Never export without a completed check (its exclusions apply).
+    if (!check) return;
     setExporting(true);
     try {
       const result = await exportPack({
@@ -100,7 +102,9 @@ export const ExportPackModal: React.FC<ExportPackModalProps> = ({ open, teammate
           preflight={preflight}
           includeOthers={false}
         />
-        {check ? (
+        {error ? (
+          <PreflightError error={error} onRetry={retry} />
+        ) : check ? (
           <FlaggedSessionsCard check={check} leaveOut={leaveOut} onLeaveOutChange={setLeaveOut} />
         ) : (
           <Skeleton active paragraph={{ rows: 1 }} />

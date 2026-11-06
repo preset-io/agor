@@ -1,3 +1,4 @@
+import { scanForSecrets } from '@agor/core/agor-pack';
 import { describe, expect, it } from 'vitest';
 import { sanitizeMcpArgs, sanitizeMcpAuth, sanitizeMcpUrl } from './agor-pack-export';
 
@@ -62,4 +63,30 @@ describe('MCP auth in a pack', () => {
       sanitizeMcpAuth({ type: 'bearer', token: 'Bearer {{ user.env.X }} and literal' }).removed
     ).toEqual(['token']);
   });
+});
+
+describe('MCP auth URL fields in a pack', () => {
+  it.each(['api_url', 'oauth_token_url', 'oauth_authorization_url'])(
+    'strips credentials embedded in %s and keeps env references',
+    (field) => {
+      const leaky = sanitizeMcpAuth({
+        type: 'jwt',
+        [field]: 'https://user:hunter22@auth.example.test/token?api_key=plainsecret123&region=eu',
+      });
+      expect(leaky.auth?.[field]).toBe(
+        'https://auth.example.test/token?api_key=[redacted]&region=eu'
+      );
+      expect(leaky.removed).toEqual([`${field} credentials`]);
+      expect(scanForSecrets(JSON.stringify(leaky.auth))).toEqual([]);
+
+      const templated = sanitizeMcpAuth({
+        type: 'jwt',
+        [field]: 'https://auth.example.test/token?api_key={{ user.env.ACME_KEY }}',
+      });
+      expect(templated.auth?.[field]).toBe(
+        'https://auth.example.test/token?api_key={{ user.env.ACME_KEY }}'
+      );
+      expect(templated.removed).toEqual([]);
+    }
+  );
 });

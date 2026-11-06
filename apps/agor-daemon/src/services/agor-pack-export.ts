@@ -236,6 +236,13 @@ export function sanitizeMcpAuth(auth: MCPServer['auth']): {
       else if (value !== '') removed.push(field);
       continue;
     }
+    // URL fields (api_url, oauth_token_url, …) can carry credentials too.
+    if (typeof value === 'string' && field.endsWith('_url')) {
+      const url = sanitizeMcpUrl(value);
+      if (url.changed) removed.push(`${field} credentials`);
+      out[field] = url.url;
+      continue;
+    }
     out[field] = value;
   }
   return { auth: out, removed };

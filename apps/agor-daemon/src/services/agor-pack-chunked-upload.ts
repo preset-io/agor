@@ -11,6 +11,7 @@
  *   <id>:i      zero bytes; its name records `<sha256>-<size>-<chunk size>`
  *   <id>:<n>    chunk n
  *   <id>:d      zero bytes after `complete`; its name is the receipt's import id
+ *   <id>:c      a row without bytes: the claim of the one `complete` running
  *
  * `<id>` is derived from (sha256, size, chunk size), so starting the same file again
  * resumes it, and a `complete` whose response was lost can be repeated.
@@ -18,7 +19,11 @@
 
 import { createHash } from 'node:crypto';
 import { pipeline, Readable, Transform } from 'node:stream';
-import { assertTenantWritable, runWithTenantDatabaseScope } from '@agor/core/db';
+import {
+  assertTenantWritable,
+  runWithTenantDatabaseScope,
+  StagedBlobRepository,
+} from '@agor/core/db';
 import { BadRequest, Conflict, NotFound } from '@agor/core/feathers';
 import {
   AGOR_PACK,
@@ -41,6 +46,10 @@ const KIND = 'agor-pack-chunk';
 const UPLOAD_ID = /^[0-9a-f]{24}$/;
 const INFO = 'i';
 const DONE = 'd';
+const CLAIM = 'c';
+/** A claim older than this belongs to a completer that died; it can be taken over. */
+const CLAIM_STALE_MS = 30 * 60 * 1000;
+const CLAIM_POLL_MS = 500;
 
 function httpError(message: string, code: number): Error {
   return Object.assign(new Error(message), { code });
@@ -223,9 +232,74 @@ export class AgorPackChunkedUploads {
    * Assemble the chunks in order, check the whole file's SHA-256, and stage it
    * through the importer (dry-run receipt). Repeating it returns the receipt.
    */
+  /**
+   * The claim row's key is derived from (tenant, creator, upload), so the
+   * primary key admits one claim at a time: an insert either wins or fails.
+   */
+  private claimRef(uploadId: string): UploadRef {
+    const hex = createHash('sha256')
+      .update(`${this.ctx.tenantId}:${this.ctx.user.user_id}:${uploadId}:claim`)
+      .digest('hex');
+    return `upl_${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}` as UploadRef;
+  }
+
+  private repo<T>(work: (repository: StagedBlobRepository) => Promise<T>): Promise<T> {
+    return runWithTenantDatabaseScope(this.ctx.db, this.ctx.tenantId, () =>
+      work(new StagedBlobRepository(this.ctx.db))
+    );
+  }
+
+  /** Take the completion claim; a stale one (its completer died) is replaced. */
+  private async claim(uploadId: string): Promise<boolean> {
+    const ref = this.claimRef(uploadId);
+    const insert = () =>
+      this.repo((repository) =>
+        repository.reserve(
+          this.owner(`${uploadId}:${CLAIM}`),
+          ref,
+          new Date(Date.now() + CLAIM_STALE_MS)
+        )
+      ).then(
+        () => true,
+        () => false
+      );
+    if (await insert()) return true;
+    if (await this.repo((repository) => repository.removeIfExpired(ref, new Date()))) {
+      return insert();
+    }
+    return false;
+  }
+
+  private release(uploadId: string): Promise<void> {
+    return this.repo((repository) => repository.remove(this.claimRef(uploadId)));
+  }
+
+  /**
+   * Assemble once even when `complete` is called concurrently (a client
+   * retrying a slow request): one caller holds the claim and finishes; the
+   * others wait for its completed marker and return the same receipt.
+   */
   async complete(uploadId: string, importer: AgorPackImporter): Promise<AgorPackImport> {
-    const pieces = await this.pieces(uploadId);
+    for (;;) {
+      const state = await this.describe(uploadId, await this.pieces(uploadId));
+      if (state.import_id) return importer.get(state.import_id);
+      if (await this.claim(uploadId)) {
+        try {
+          return await this.assemble(uploadId, importer);
+        } finally {
+          await this.release(uploadId);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, CLAIM_POLL_MS));
+    }
+  }
+
+  private async assemble(uploadId: string, importer: AgorPackImporter): Promise<AgorPackImport> {
+    const pieces = (await this.pieces(uploadId)).filter(
+      (piece) => !piece.scopeId.endsWith(`:${CLAIM}`)
+    );
     const state = await this.describe(uploadId, pieces);
+    // Finished by the previous holder between our check and our claim.
     if (state.import_id) return importer.get(state.import_id);
     const missing = state.chunks - state.received.length;
     if (missing > 0) {

@@ -22,6 +22,15 @@ export const AGOR_PACK_SECRET_PATTERNS: readonly SecretPattern[] = [
   { id: 'github_pat', pattern: /\bgithub_pat_[A-Za-z0-9_]{22,}/ },
   { id: 'anthropic_key', pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
   { id: 'aws_access_key', pattern: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/ },
+  // A password in a URL (`https://user:password@host`). Template references
+  // (`{{ user.env.X }}`) contain braces and never match.
+  { id: 'url_userinfo', pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@{}]+:[^\s/@{}]{3,}@/i },
+  // A credential-named query parameter with a literal value.
+  {
+    id: 'url_credential_param',
+    pattern:
+      /[?&](?:api[_-]?key|apikey|access[_-]?key|access[_-]?token|client[_-]?secret|token|secret|password|passwd|pwd|signature|sig)=[A-Za-z0-9._~%+/-]{8,}/i,
+  },
   // The whole block (header, key material, footer), or to the end of the text
   // when the footer is missing, so redaction never leaves usable key material.
   {
