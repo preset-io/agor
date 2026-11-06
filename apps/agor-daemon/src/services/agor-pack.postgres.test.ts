@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,6 +33,7 @@ import {
   getUploadStagingStore,
   resetUploadStagingStoreForTests,
 } from '../utils/upload-staging';
+import { AgorPackChunkedUploads } from './agor-pack-chunked-upload';
 import { AgorPackImporter } from './agor-pack-import';
 
 vi.mock('../utils/spawn-executor', async (importOriginal) => ({
@@ -211,6 +213,36 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           await releaseTenantWriteGate(raw, tenant, { generation });
         }
         expect(await blobs()).toHaveLength(before);
+      } finally {
+        await fx.close();
+      }
+    }, 60_000);
+
+    it('a write-gated tenant cannot complete a chunked upload; it completes after the gate', async () => {
+      const tenant = 'pack-pg-chunk-gate' as TenantID;
+      const fx = await createPackFixture({ raw, tenant, config: CONFIG, uploadsRoot });
+      try {
+        const { pack } = await fx.exportPack();
+        const sha256 = createHash('sha256').update(pack).digest('hex');
+        const importer = new AgorPackImporter(fx.ctx(fx.bea), fx.params(fx.bea));
+        const uploads = new AgorPackChunkedUploads(fx.ctx(fx.bea));
+        const state = await uploads.init({ size: pack.byteLength, sha256 }, importer);
+        for (let index = 0; index < state.chunks; index++) {
+          const chunk = pack.subarray(index * state.chunk_size, (index + 1) * state.chunk_size);
+          await uploads.putChunk(state.upload_id, index, Readable.from([chunk]), chunk.byteLength);
+        }
+        const { generation } = await acquireTenantWriteGate(raw, tenant);
+        try {
+          await expect(uploads.complete(state.upload_id, importer)).rejects.toThrow(/write/i);
+        } finally {
+          await releaseTenantWriteGate(raw, tenant, { generation });
+        }
+        // Nothing was consumed: the chunks are all there and nothing completed.
+        const after = await uploads.status(state.upload_id);
+        expect(after.received).toHaveLength(after.chunks);
+        expect(after.import_id).toBeNull();
+        const receipt = await uploads.complete(state.upload_id, importer);
+        expect(receipt.manifest.teammates[0]?.display_name).toBe('Ada');
       } finally {
         await fx.close();
       }

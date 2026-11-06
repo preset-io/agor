@@ -360,6 +360,11 @@ describe('secret scan: credentials in URLs', () => {
     'https://user:hunter22@api.example.test/v1',
     'https://api.example.test/v1?api_key=plainsecret123',
     'https://api.example.test/v1?region=eu&access_token=abcdefgh12345',
+    // A literal next to a reference is still a literal.
+    'https://{{ user.env.USER }}:literal-password@example.test/auth',
+    'https://{{ user.env.USER }}:{{ user.env.PASS }}x@example.test/auth',
+    'https://api.example.test/v1?api_key={{ user.env.KEY }}plainsecret',
+    'https://api.example.test/v1?api_key=sk{{ user.env.KEY }}',
   ])('catches %s', (text) => {
     expect(scanForSecrets(text).map((hit) => hit.id)).not.toEqual([]);
   });
@@ -370,6 +375,8 @@ describe('secret scan: credentials in URLs', () => {
     'https://api.example.test/v1?api_key=[redacted]',
     'https://git@github.com/preset-io/agor.git',
     'https://api.example.test/v1?page=2&sort=desc',
+    'https://api.example.test/v1?token={{ user.env.TOKEN }}&region=eu',
+    'https://alice:{{ user.env.PASS }}@example.test/auth',
   ])('ignores %s', (text) => {
     expect(scanForSecrets(text)).toEqual([]);
   });

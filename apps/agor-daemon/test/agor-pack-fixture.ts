@@ -643,49 +643,70 @@ export async function expectChunkedUploadWorks(
     });
     expect(flaky.import_id).toBe(receipt.import_id);
 
-    // Overlapping `complete` calls (a client retrying a slow one): one
-    // assembles, the others wait and return the same receipt, never a 404.
-    setAgorPackChunkBytesForTests(2048);
-    const fresh = (await (
-      await init(bea, { size: pack.byteLength, sha256 })
-    ).json()) as AgorPackChunkedUpload;
-    expect(fresh.upload_id).not.toBe(state.upload_id);
-    for (let index = 0; index < fresh.chunks; index++) {
-      const put = await fetch(`${base}/${fresh.upload_id}/${index}`, {
-        method: 'PUT',
-        headers: { ...as(bea), 'content-type': 'application/octet-stream' },
-        body: pack.subarray(index * 2048, (index + 1) * 2048),
-      });
-      expect(put.status).toBe(200);
-    }
-    // The first completer pauses inside staging while a second one starts:
-    // without the claim, one of them reads chunks the other already deleted.
+    // A fresh upload of the pack (a new chunk size gives a new upload id).
+    const uploadAll = async (chunkSize: number) => {
+      setAgorPackChunkBytesForTests(chunkSize);
+      const fresh = (await (
+        await init(bea, { size: pack.byteLength, sha256 })
+      ).json()) as AgorPackChunkedUpload;
+      expect(fresh.import_id).toBeNull();
+      for (let index = 0; index < fresh.chunks; index++) {
+        const put = await fetch(`${base}/${fresh.upload_id}/${index}`, {
+          method: 'PUT',
+          headers: { ...as(bea), 'content-type': 'application/octet-stream' },
+          body: pack.subarray(index * chunkSize, (index + 1) * chunkSize),
+        });
+        expect(put.status).toBe(200);
+      }
+      return fresh;
+    };
     const real = new AgorPackImporter(fx.ctx(bea), fx.params(bea));
+    const uploads = () => new AgorPackChunkedUploads({ ...fx.ctx(bea) });
+
+    // Overlapping `complete` calls (a client retrying a slow one) all return
+    // the same receipt.
+    const overlapping = await uploadAll(2048);
+    const together = await Promise.all(
+      [0, 1, 2].map(() => fx.unit(() => uploads().complete(overlapping.upload_id, real)))
+    );
+    expect(new Set(together.map((result) => result.import_id))).toEqual(
+      new Set([receipt.import_id])
+    );
+
+    // A completer that read the upload, then found its chunks cleaned up by
+    // one that finished first, returns the finished receipt.
+    const cleaned = await uploadAll(4096);
     let openGate: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
       openGate = resolve;
     });
     let entered: () => void = () => undefined;
-    const firstEntered = new Promise<void>((resolve) => {
+    const slowEntered = new Promise<void>((resolve) => {
       entered = resolve;
     });
     const paused = {
-      stage: async (stream: NodeJS.ReadableStream, size: number) => {
+      stage: async (
+        stream: NodeJS.ReadableStream,
+        size: number,
+        options?: { scopeId?: string }
+      ) => {
         entered();
         await gate;
-        return real.stage(stream, size);
+        return real.stage(stream, size, options);
       },
       get: (id: string) => real.get(id),
       isUsable: (id: string) => real.isUsable(id),
     } as unknown as AgorPackImporter;
-    const uploads = () => new AgorPackChunkedUploads({ ...fx.ctx(bea) });
-    const holder = fx.unit(() => uploads().complete(fresh.upload_id, paused));
-    await firstEntered;
-    const late = fx.unit(() => uploads().complete(fresh.upload_id, real));
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const slow = fx.unit(() => uploads().complete(cleaned.upload_id, paused));
+    await slowEntered;
+    const quick = await fx.unit(() => uploads().complete(cleaned.upload_id, real));
+    const after = (await (
+      await fetch(`${base}/${cleaned.upload_id}`, { headers: as(bea) })
+    ).json()) as AgorPackChunkedUpload;
+    expect(after).toMatchObject({ received: [], import_id: quick.import_id });
     openGate();
-    const ids = (await Promise.all([holder, late])).map((result) => result.import_id);
-    expect(new Set(ids)).toEqual(new Set([receipt.import_id]));
+    expect((await slow).import_id).toBe(quick.import_id);
+    expect(quick.import_id).toBe(receipt.import_id);
   } finally {
     setAgorPackChunkBytesForTests();
   }

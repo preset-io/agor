@@ -12,6 +12,14 @@ export interface SecretPattern {
   pattern: RegExp;
 }
 
+/** Exactly one `{{ user.env.NAME }}` reference. */
+const ENV_REFERENCE = String.raw`\{\{\s*user\.env\.[A-Za-z_][A-Za-z0-9_]*\s*\}\}`;
+/** One piece of a URL username / password: a whole template, or a plain character. */
+const USER_TOKEN = String.raw`\{\{[^{}]*\}\}|[^\s/:@{}]`;
+const URL_TOKEN = String.raw`\{\{[^{}]*\}\}|[^\s/@{}]`;
+/** One piece of a query value: a whole template, or a plain character. */
+const QUERY_TOKEN = String.raw`\{\{[^{}]*\}\}|[^&#\s"'{}]`;
+
 export const AGOR_PACK_SECRET_PATTERNS: readonly SecretPattern[] = [
   // Agor's AES-GCM envelope (`salt:iv:tag:data`, hex).
   { id: 'agor_encrypted_value', pattern: ENCRYPTED_ENVELOPE_PATTERN },
@@ -22,14 +30,24 @@ export const AGOR_PACK_SECRET_PATTERNS: readonly SecretPattern[] = [
   { id: 'github_pat', pattern: /\bgithub_pat_[A-Za-z0-9_]{22,}/ },
   { id: 'anthropic_key', pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
   { id: 'aws_access_key', pattern: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/ },
-  // A password in a URL (`https://user:password@host`). Template references
-  // (`{{ user.env.X }}`) contain braces and never match.
-  { id: 'url_userinfo', pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@{}]+:[^\s/@{}]{3,}@/i },
-  // A credential-named query parameter with a literal value.
+  // A password in a URL (`https://user:password@host`), unless the password
+  // is exactly one `{{ user.env.NAME }}` reference (templates count as one
+  // token here, so a literal mixed with a reference still matches).
+  {
+    id: 'url_userinfo',
+    pattern: new RegExp(
+      String.raw`\b[a-z][a-z0-9+.-]*:\/\/(?:${USER_TOKEN})+:(?!${ENV_REFERENCE}@)(?:${URL_TOKEN})+@`,
+      'i'
+    ),
+  },
+  // A credential-named query parameter whose value is not exactly one
+  // reference: a literal of 8+ characters, or anything mixing in a template.
   {
     id: 'url_credential_param',
-    pattern:
-      /[?&](?:api[_-]?key|apikey|access[_-]?key|access[_-]?token|client[_-]?secret|token|secret|password|passwd|pwd|signature|sig)=[A-Za-z0-9._~%+/-]{8,}/i,
+    pattern: new RegExp(
+      String.raw`[?&](?:api[_-]?key|apikey|access[_-]?key|access[_-]?token|client[_-]?secret|token|secret|password|passwd|pwd|signature|sig)=(?!(?:${ENV_REFERENCE}|\[redacted(?::[a-z_]+)?\])(?:[&#\s"']|$))(?:(?:${QUERY_TOKEN})*\{\{[^{}]*\}\}(?:${QUERY_TOKEN})*|[^&#\s"'{}]{8,})`,
+      'i'
+    ),
   },
   // The whole block (header, key material, footer), or to the end of the text
   // when the footer is missing, so redaction never leaves usable key material.
