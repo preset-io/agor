@@ -1623,11 +1623,21 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       if (!context.params.provider) return context;
       const user = context.params.user;
       if (!user) throw new NotAuthenticated('Authentication required');
-      if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return context;
-
       const data = context.data as
         | { board_id?: BoardID; branch_id?: import('@agor/core/types').BranchID }
         | undefined;
+      if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) {
+        // The bypass skips RBAC, not tenancy: a new placement's board and branch must be in this tenant.
+        if (context.method === 'create') {
+          const [board, branch] = await Promise.all([
+            data?.board_id ? boardRepository.findById(data.board_id).catch(() => null) : null,
+            data?.branch_id ? branchRepository.findById(data.branch_id).catch(() => null) : null,
+          ]);
+          if (!board || !branch) throw new Forbidden(`Board resource is unavailable to ${action}`);
+        }
+        return context;
+      }
+
       if (context.method === 'create') {
         if (!data?.board_id || !data.branch_id) {
           throw new Forbidden(`Board resource is unavailable to ${action}`);
