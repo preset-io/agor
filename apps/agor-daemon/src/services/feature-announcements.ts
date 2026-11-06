@@ -234,6 +234,8 @@ export class CloudFeatureAnnouncementsPoller implements FeatureAnnouncementsProv
         z.object({ announcements: z.unknown() }).parse(body).announcements,
         this.mediaOrigins
       );
+      // Debug level: shown in development, filtered out by default in production.
+      console.debug(`[feature-announcements] Cloud poll ok: ${this.cached.length} announcement(s)`);
       if (this.failing)
         console.log('[feature-announcements] Cloud feature announcements recovered');
       this.failing = false;
