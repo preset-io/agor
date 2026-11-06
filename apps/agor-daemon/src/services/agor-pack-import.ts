@@ -1214,6 +1214,19 @@ export class AgorPackImporter {
             },
           },
         });
+        // Each task's last message time: its end when the source recorded none.
+        const lastMessageAt = new Map<string, string>();
+        for (const line of lines) {
+          const { source_task_id: taskId, timestamp } = JSON.parse(line) as {
+            source_task_id?: string | null;
+            timestamp?: string;
+          };
+          if (!taskId || !timestamp) continue;
+          const previous = lastMessageAt.get(taskId);
+          if (!previous || Date.parse(timestamp) > Date.parse(previous)) {
+            lastMessageAt.set(taskId, timestamp);
+          }
+        }
         for (const task of sessionFile.tasks) {
           await tasksRepo.create({
             task_id: taskIds.get(task.source_task_id) as TaskID,
@@ -1224,7 +1237,11 @@ export class AgorPackImporter {
               ? task.status
               : TaskStatus.STOPPED) as never,
             ...(task.model ? { model: task.model } : {}),
-            ...(task.completed_at ? { completed_at: task.completed_at } : {}),
+            // History is finished: keep the original start and end (or the
+            // last message) so its timer shows how long it took, not "since".
+            started_at: task.created_at,
+            completed_at:
+              task.completed_at ?? lastMessageAt.get(task.source_task_id) ?? task.created_at,
             ...(task.duration_ms !== null ? { duration_ms: task.duration_ms } : {}),
             ...(task.message_range ? { message_range: task.message_range as never } : {}),
           });

@@ -18,6 +18,7 @@ import {
   ScheduleRepository,
   SessionRepository,
   StagedBlobRepository,
+  TaskRepository,
   UploadRepository,
   UsersRepository,
   update,
@@ -326,6 +327,15 @@ dbTest(
         );
         expect(shownMessages.map((m) => m.index)).toEqual([0, 1]);
         expect(shownMessages.every((m) => m.session_id === newFirst!.session_id)).toBe(true);
+        // Finished history keeps its original start and ends at its last
+        // message (the source recorded no end), so no timer runs "since".
+        const sourceTask = await new TaskRepository(db).findById(seeded.task.task_id);
+        expect(Date.parse(String(shownTasks[0]!.started_at))).toBe(
+          Date.parse(String(sourceTask!.created_at))
+        );
+        expect(Date.parse(String(shownTasks[0]!.completed_at))).toBe(
+          Math.max(...shownMessages.map((m) => Date.parse(String(m.timestamp))))
+        );
 
         // The attachment gets a fresh ref (refs are global keys) rewritten into
         // the message; the original stays with Ada's session.
