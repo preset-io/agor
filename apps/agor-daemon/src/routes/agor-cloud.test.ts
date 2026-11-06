@@ -2,13 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AppVariableRepository } from '@agor/core/db';
-import { AGOR_CLOUD, type AgorCloudTransfer, type TenantID, type User } from '@agor/core/types';
+import { AGOR_CLOUD, type AgorCloudMove, type TenantID, type User } from '@agor/core/types';
 import { afterEach, beforeEach, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { createPackFixture, type PackFixture } from '../../test/agor-pack-fixture';
 import type { RegisterHooksContext } from '../register-hooks';
 import { AgorCloudLinkService } from '../services/agor-cloud-link';
-import { resetAgorCloudTransfersForTests } from '../services/agor-cloud-transfer';
+import { resetAgorCloudMovesForTests } from '../services/agor-cloud-move';
 import { resetUploadStagingStoreForTests } from '../utils/upload-staging';
 
 vi.mock('../utils/spawn-executor', async (importOriginal) => ({
@@ -37,12 +37,16 @@ const realFetch = globalThis.fetch;
 const cloud: {
   launches: number;
   refreshes: number;
-  failUploads: number;
-  uploads: number;
+  /** Chunk PUTs to answer 503 before passing them on. */
+  failChunks: number;
+  chunks: number;
   token: string;
   /** Runs first for every workspace request; a Response short-circuits it. */
   hook?: (pathname: string, init?: RequestInit) => Promise<Response | undefined>;
-} = { launches: 0, refreshes: 0, failUploads: 0, uploads: 0, token: '' };
+} = { launches: 0, refreshes: 0, failChunks: 0, chunks: 0, token: '' };
+
+const isChunk = (pathname: string, init?: RequestInit) =>
+  init?.method === 'PUT' && pathname.startsWith('/agor-pack/uploads/chunked/');
 
 const reply = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -71,11 +75,10 @@ function fakeCloud(fx: PackFixture, cloudUser: User) {
       cloud.refreshes++;
       return reply(201, { accessToken: cloud.token, refreshToken: 'refresh-2' });
     }
-    if (pathname === '/agor-pack/uploads') {
-      cloud.uploads++;
-      if (cloud.failUploads > 0) {
-        cloud.failUploads--;
-        await new Response(init?.body as never).arrayBuffer();
+    if (isChunk(pathname, init)) {
+      cloud.chunks++;
+      if (cloud.failChunks > 0) {
+        cloud.failChunks--;
         return reply(503, { error: 'Service unavailable' });
       }
     }
@@ -86,12 +89,12 @@ function fakeCloud(fx: PackFixture, cloudUser: User) {
 beforeEach(async () => {
   uploadsRoot = await mkdtemp(join(tmpdir(), 'agor-cloud-link-'));
   vi.stubEnv('AGOR_MASTER_SECRET', 'agor-cloud-link-test-master-secret');
-  Object.assign(cloud, { launches: 0, refreshes: 0, failUploads: 0, uploads: 0, hook: undefined });
+  Object.assign(cloud, { launches: 0, refreshes: 0, failChunks: 0, chunks: 0, hook: undefined });
 });
 afterEach(async () => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
-  resetAgorCloudTransfersForTests();
+  resetAgorCloudMovesForTests();
   resetUploadStagingStoreForTests();
   await rm(uploadsRoot, { recursive: true, force: true });
 });
@@ -249,60 +252,66 @@ dbTest('a returned sign-in cannot be replayed', async ({ db }) =>
   })
 );
 
+/** A light move request for the seeded teammate. */
+const MOVE = (fx: PackFixture) => ({
+  branch_ids: [fx.seeded.branch.branch_id],
+  sections: ['board', 'schedules'],
+  sessions: 'none',
+});
+
+async function pollMove(fx: PackFixture, id: string, until: (m: AgorCloudMove) => boolean) {
+  for (let i = 0; i < 150; i++) {
+    const { body } = await client(fx, fx.ada).call('GET', `/agor-pack/cloud/moves/${id}`);
+    if (until(body)) return body as AgorCloudMove;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('move did not settle');
+}
+
 dbTest(
-  'send streams the staged export, retries a 503, applies, and links the checklist',
+  'a move exports, sends in resumable chunks (retrying a 503), imports, and links Finish setup',
   async ({ db }) =>
     withFixture(db, async (fx) => {
       const ada = client(fx, fx.ada);
       expect((await ada.complete(await ada.start())).status).toBe(201);
-      const exported = await ada.call('POST', '/agor-pack/exports', {
-        branch_ids: [fx.seeded.branch.branch_id],
-        sections: ['board', 'schedules'],
-        sessions: 'none',
-        include_others_sessions: false,
-      });
-      const { export_id, ref, size } = exported.body as {
-        export_id: string;
-        ref: string;
-        size: number;
-      };
-      // Bea cannot send Ada's export.
+      // Bea has no link, and can't move Ada's teammate anyway.
       expect(
-        (await client(fx, fx.bea).call('POST', '/agor-pack/cloud/transfers', { export_id, ref }))
-          .status
+        (await client(fx, fx.bea).call('POST', '/agor-pack/cloud/moves', MOVE(fx))).status
       ).toBeGreaterThanOrEqual(400);
 
-      cloud.failUploads = 1;
-      const started = await ada.call('POST', '/agor-pack/cloud/transfers', { export_id, ref });
+      cloud.failChunks = 1;
+      const started = await ada.call('POST', '/agor-pack/cloud/moves', MOVE(fx));
       expect(started.status).toBe(201);
-      const id = (started.body as AgorCloudTransfer).transfer_id;
-      const poll = async (until: (t: AgorCloudTransfer) => boolean) => {
-        for (let i = 0; i < 100; i++) {
-          const { body } = await ada.call('GET', `/agor-pack/cloud/transfers/${id}`);
-          if (until(body)) return body as AgorCloudTransfer;
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-        throw new Error('transfer did not finish');
-      };
-      const staged = await poll((t) => t.status !== 'uploading');
-      expect(staged).toMatchObject({ status: 'staged', bytes_sent: size, bytes_total: size });
-      expect(cloud.uploads).toBe(2);
-      // Other users never see the transfer.
-      expect(
-        (await client(fx, fx.bea).call('GET', `/agor-pack/cloud/transfers/${id}`)).status
-      ).toBe(404);
-
-      const applied = await ada.call('POST', `/agor-pack/cloud/transfers/${id}/apply`, {
-        teammates: ['t01'],
+      const id = (started.body as AgorCloudMove).move_id;
+      expect(started.body).toMatchObject({
+        status: 'moving',
+        workspace_url: WORKSPACE,
+        workspace_display_name: 'Acme',
+        items: [{ branch_id: fx.seeded.branch.branch_id, display_name: expect.any(String) }],
       });
-      expect(applied.status).toBe(201);
-      const done = await poll((t) => t.status === 'applied' || t.status === 'failed');
-      expect(done.status).toBe('applied');
-      expect(done.open_url).toBe(
-        `${WORKSPACE}/ui/settings/teammates?import=${done.import?.import_id}`
+      // One move at a time.
+      expect((await ada.call('POST', '/agor-pack/cloud/moves', MOVE(fx))).status).toBe(409);
+      // Other users never see the move.
+      expect((await client(fx, fx.bea).call('GET', `/agor-pack/cloud/moves/${id}`)).status).toBe(
+        404
       );
-      // The imported teammate belongs to the Cloud-side user.
-      expect(done.import?.results[0]?.branch_id).toBeTruthy();
+      expect((await client(fx, fx.bea).call('GET', '/agor-pack/cloud/moves')).body).toEqual({
+        move: null,
+      });
+
+      const done = await pollMove(fx, id, (m) => m.status === 'finished');
+      const [item] = done.items;
+      expect(item).toMatchObject({ status: 'done', import_id: expect.any(String) });
+      expect(item?.bytes_sent).toBe(item?.bytes_total);
+      expect(cloud.chunks).toBe(2);
+      expect(item?.open_url).toBe(`${WORKSPACE}/ui/settings/import?import=${item?.import_id}`);
+      // Reopening the modal finds it.
+      expect((await ada.call('GET', '/agor-pack/cloud/moves')).body).toMatchObject({
+        move: { move_id: id, status: 'finished' },
+      });
+      // The import happened as the Cloud-side user.
+      const receipt = await client(fx, fx.bea).call('GET', `/agor-pack/imports/${item?.import_id}`);
+      expect(receipt.body).toMatchObject({ status: 'applied' });
     })
 );
 
@@ -353,40 +362,29 @@ async function stageExport(fx: PackFixture) {
   return exported.body as { export_id: string; ref: string };
 }
 
-async function pollTransfer(fx: PackFixture, id: string, until: (t: AgorCloudTransfer) => boolean) {
-  for (let i = 0; i < 100; i++) {
-    const { body } = await client(fx, fx.ada).call('GET', `/agor-pack/cloud/transfers/${id}`);
-    if (until(body)) return body as AgorCloudTransfer;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error('transfer did not settle');
-}
-
-dbTest('a transfer stops when the user signs in again mid-upload', async ({ db }) =>
+dbTest('a move stops when the user signs in again mid-upload', async ({ db }) =>
   withFixture(db, async (fx) => {
     const ada = client(fx, fx.ada);
     expect((await ada.complete(await ada.start())).status).toBe(201);
-    const { export_id, ref } = await stageExport(fx);
     cloud.hook = async (pathname, init) => {
-      if (pathname !== '/agor-pack/uploads') return undefined;
-      cloud.uploads++;
-      await new Response(init?.body as never).arrayBuffer();
-      // Relink while the first attempt is in flight, then fail it.
-      if (cloud.uploads === 1) expect((await ada.complete(await ada.start())).status).toBe(201);
+      if (!isChunk(pathname, init)) return undefined;
+      cloud.chunks++;
+      // Relink while the first chunk is in flight, then fail it.
+      if (cloud.chunks === 1) expect((await ada.complete(await ada.start())).status).toBe(201);
       return reply(503, { error: 'Service unavailable' });
     };
-    const started = await ada.call('POST', '/agor-pack/cloud/transfers', { export_id, ref });
-    const done = await pollTransfer(
+    const started = await ada.call('POST', '/agor-pack/cloud/moves', MOVE(fx));
+    const done = await pollMove(
       fx,
-      (started.body as AgorCloudTransfer).transfer_id,
-      (t) => t.status !== 'uploading'
+      (started.body as AgorCloudMove).move_id,
+      (m) => m.status === 'finished'
     );
-    expect(done).toMatchObject({
+    expect(done.items[0]).toMatchObject({
       status: 'failed',
       error: 'Cloud connection changed; start again.',
     });
     // The retry never went out under the new sign-in.
-    expect(cloud.uploads).toBe(1);
+    expect(cloud.chunks).toBe(1);
   })
 );
 
@@ -435,46 +433,39 @@ dbTest('concurrent completions of one sign-in: exactly one redeems', async ({ db
   })
 );
 
-dbTest('an applied transfer can import its remaining teammates later', async ({ db }) =>
+dbTest('Retry resends the same file and resumes the import in the workspace', async ({ db }) =>
   withFixture(db, async (fx) => {
     const ada = client(fx, fx.ada);
     expect((await ada.complete(await ada.start())).status).toBe(201);
-    const { export_id, ref } = await stageExport(fx);
-    // A two-teammate receipt from the workspace: t01 applied, t02 not yet.
-    const receipt = (results: unknown[]) => ({
-      import_id: 'imp-1',
-      status: 'applied',
-      content_sha256: 'a'.repeat(64),
-      manifest: { teammates: [{ key: 't01' }, { key: 't02' }] },
-      dry_run: [],
-      results,
-      error: null,
-      created_at: '2026-11-05T00:00:00.000Z',
-      applied_at: '2026-11-05T00:00:00.000Z',
-    });
-    const applied: unknown[] = [];
-    cloud.hook = async (pathname, init) => {
-      if (pathname === '/agor-pack/uploads') {
-        await new Response(init?.body as never).arrayBuffer();
-        return reply(200, receipt([{ key: 't01', branch_id: 'b-t01' }]));
-      }
-      if (pathname === '/agor-pack/imports/imp-1/apply') {
-        applied.push(JSON.parse(String(init?.body)));
-        return reply(200, receipt([{ key: 't01' }, { key: 't02' }]));
-      }
-      return undefined;
+    let applies = 0;
+    cloud.hook = async (pathname) => {
+      if (!pathname.endsWith('/apply')) return undefined;
+      applies++;
+      return applies === 1 ? reply(500, { error: 'Pack operation failed' }) : undefined;
     };
-    const started = await ada.call('POST', '/agor-pack/cloud/transfers', { export_id, ref });
-    const id = (started.body as AgorCloudTransfer).transfer_id;
-    expect(await pollTransfer(fx, id, (t) => t.status !== 'uploading')).toMatchObject({
-      status: 'applied',
+    const started = await ada.call('POST', '/agor-pack/cloud/moves', MOVE(fx));
+    const id = (started.body as AgorCloudMove).move_id;
+    const failed = await pollMove(fx, id, (m) => m.status === 'finished');
+    expect(failed.items[0]).toMatchObject({ status: 'failed', error: 'Pack operation failed' });
+    const chunks = cloud.chunks;
+
+    const retried = await ada.call('POST', `/agor-pack/cloud/moves/${id}/retry`, {
+      branch_id: fx.seeded.branch.branch_id,
     });
-    const more = await ada.call('POST', `/agor-pack/cloud/transfers/${id}/apply`, {
-      teammates: ['t02'],
-    });
-    expect(more.status).toBe(201);
-    expect(applied).toEqual([{ teammates: ['t02'], board_id: null }]);
-    expect((more.body as AgorCloudTransfer).import?.results).toHaveLength(2);
+    expect(retried.status).toBe(201);
+    // Bea can't retry Ada's move.
+    expect(
+      (
+        await client(fx, fx.bea).call('POST', `/agor-pack/cloud/moves/${id}/retry`, {
+          branch_id: fx.seeded.branch.branch_id,
+        })
+      ).status
+    ).toBe(404);
+    const done = await pollMove(fx, id, (m) => m.status === 'finished');
+    expect(done.items[0]).toMatchObject({ status: 'done', import_id: failed.items[0]?.import_id });
+    // The workspace already had the file: no chunk went out again.
+    expect(cloud.chunks).toBe(chunks);
+    expect(applies).toBe(2);
   })
 );
 

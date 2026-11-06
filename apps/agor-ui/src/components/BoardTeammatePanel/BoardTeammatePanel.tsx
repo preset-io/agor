@@ -8,7 +8,14 @@ import type {
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
-import { LeftOutlined, MoreOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
+import {
+  CloudUploadOutlined,
+  DownloadOutlined,
+  LeftOutlined,
+  MoreOutlined,
+  PlusOutlined,
+  RobotOutlined,
+} from '@ant-design/icons';
 import {
   Badge,
   Button,
@@ -25,6 +32,7 @@ import {
 } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useAuthConfigSnapshot } from '../../hooks/useAuthConfig';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { type AgorState, useAgorStore } from '../../store/agorStore';
@@ -43,8 +51,9 @@ import { useThemedMessage } from '../../utils/message';
 import { ExportPackModal } from '../AgorPack/ExportPackModal';
 import { FinishSetupCard, TeammateSchedules } from '../AgorPack/FinishSetup';
 import { useImportedSessions } from '../AgorPack/ImportedSessionTag';
+import { MoveToCloudModal } from '../AgorPack/MoveToCloudModal';
 import { canExportTeammate } from '../AgorPack/packCheck';
-import { PACK_COPY } from '../AgorPack/packCopy';
+import { fill, PACK_COPY } from '../AgorPack/packCopy';
 import { BranchSessionSections } from '../BranchCard';
 import { BranchFilesystemRecovery } from '../BranchFilesystemRecovery';
 import { BranchHeaderPill } from '../BranchHeaderPill';
@@ -401,6 +410,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     [primaryTeammateBranch, sessionsByBranch, importedSessions]
   );
   const [exportOpen, setExportOpen] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  // Move to Agor Cloud is offered on self-hosted installs only.
+  const selfHosted = useAuthConfigSnapshot().config?.externalLaunch?.enabled !== true;
   const setupUser = authenticatedUser ?? currentUser;
 
   // Subscribes to the failed flag only, so other partition entry changes don't re-render the panel.
@@ -512,8 +524,24 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                 <Dropdown
                   trigger={['click']}
                   menu={{
-                    items: [{ key: 'export', label: PACK_COPY.menuExport }],
-                    onClick: ({ key }) => key === 'export' && setExportOpen(true),
+                    items: [
+                      ...(selfHosted
+                        ? [
+                            {
+                              key: 'move',
+                              icon: <CloudUploadOutlined />,
+                              label: fill(PACK_COPY.menuMove, {
+                                name: teammateConfig?.displayName ?? primaryTeammateBranch.name,
+                              }),
+                            },
+                          ]
+                        : []),
+                      { key: 'export', icon: <DownloadOutlined />, label: PACK_COPY.menuExport },
+                    ],
+                    onClick: ({ key }) => {
+                      if (key === 'move') setMoveOpen(true);
+                      if (key === 'export') setExportOpen(true);
+                    },
                   }}
                 >
                   <Button
@@ -526,6 +554,14 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                 </Dropdown>
               )}
             </div>
+            {moveOpen && (
+              <MoveToCloudModal
+                open
+                currentUser={setupUser}
+                initialBranchIds={[primaryTeammateBranch.branch_id]}
+                onClose={() => setMoveOpen(false)}
+              />
+            )}
             {exportOpen && (
               <ExportPackModal
                 open

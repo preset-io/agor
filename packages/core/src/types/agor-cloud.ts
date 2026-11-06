@@ -1,13 +1,13 @@
 /**
- * "Sign in to Agor Cloud" from a self-hosted install (Settings → Move to Agor
- * Cloud → Send).
+ * "Sign in to Agor Cloud" from a self-hosted install (Settings → Agor Cloud →
+ * Move to Agor Cloud).
  *
  * The self-hosted UI sends the browser to the Cloud console's connect page;
  * the console signs the user in, lets them pick a workspace, mints an ordinary
  * one-time launch code and redirects back with the code in the URL fragment.
  * The self-hosted daemon redeems it at the workspace's `/auth/launch` and keeps
  * the resulting workspace session sealed server-side; the browser never sees
- * those tokens. The daemon then streams a staged `.agorpack` to the workspace.
+ * those tokens. The daemon then sends `.agor` files to the workspace.
  *
  * Contract with the console page:
  *
@@ -19,7 +19,6 @@
  */
 
 import { z } from 'zod';
-import { AGOR_PACK, type AgorPackImport, agorPackTeammateKey } from './agor-pack';
 
 export const AGOR_CLOUD = {
   /** Production Cloud console (`agor_cloud.console_url` overrides it). */
@@ -63,15 +62,9 @@ export const agorCloudLinkCompleteSchema = z
   .strict();
 export type AgorCloudLinkCompleteRequest = z.infer<typeof agorCloudLinkCompleteSchema>;
 
-export const agorCloudTransferStartSchema = z
-  .object({ export_id: z.string().uuid(), ref: z.string().min(1).max(200) })
-  .strict();
-export type AgorCloudTransferStartRequest = z.infer<typeof agorCloudTransferStartSchema>;
-
-export const agorCloudTransferApplySchema = z
-  .object({ teammates: z.array(agorPackTeammateKey).min(1).max(AGOR_PACK.maxTeammates) })
-  .strict();
-export type AgorCloudTransferApplyRequest = z.infer<typeof agorCloudTransferApplySchema>;
+/** Retry one teammate of a move that failed. */
+export const agorCloudMoveRetrySchema = z.object({ branch_id: z.string().uuid() }).strict();
+export type AgorCloudMoveRetryRequest = z.infer<typeof agorCloudMoveRetrySchema>;
 
 export interface AgorCloudLinkPublic {
   workspace_url: string;
@@ -92,31 +85,52 @@ export interface AgorCloudLinkStartResult {
   expires_at: string;
 }
 
-export const AGOR_CLOUD_TRANSFER_STATUSES = [
-  'uploading',
-  'staged',
-  'applying',
-  'applied',
+/**
+ * One teammate of a move: exported here, sent to the workspace with the
+ * resumable chunked upload, then imported there (a new board).
+ */
+export const AGOR_CLOUD_MOVE_ITEM_STATUSES = [
+  'waiting',
+  'exporting',
+  'sending',
+  'importing',
+  'done',
   'failed',
 ] as const;
-export type AgorCloudTransferStatus = (typeof AGOR_CLOUD_TRANSFER_STATUSES)[number];
+export type AgorCloudMoveItemStatus = (typeof AGOR_CLOUD_MOVE_ITEM_STATUSES)[number];
 
-export interface AgorCloudTransfer {
-  transfer_id: string;
-  status: AgorCloudTransferStatus;
+export interface AgorCloudMoveItem {
+  branch_id: string;
+  display_name: string;
+  emoji: string | null;
+  status: AgorCloudMoveItemStatus;
+  /** Bytes of the `.agor` file sent so far (0 until it is exported). */
   bytes_sent: number;
   bytes_total: number;
-  workspace_url: string;
-  /** The workspace's dry-run receipt once staged, then its apply progress. */
-  import?: AgorPackImport;
-  /** Reconnect checklist in the Cloud workspace, once applied. */
+  /** The workspace's import, once the file is there. */
+  import_id?: string;
+  /** Finish setup for this teammate in the workspace, once imported. */
   open_url?: string;
   error?: string;
 }
 
-/** The Cloud UI route that opens the reconnect checklist for one import. */
+/**
+ * `POST /agor-pack/cloud/moves`: teammates move one after another on the
+ * daemon, so the browser can close. `moving` until every item is done or
+ * failed.
+ */
+export interface AgorCloudMove {
+  move_id: string;
+  status: 'moving' | 'finished';
+  workspace_url: string;
+  workspace_display_name: string | null;
+  created_at: string;
+  items: AgorCloudMoveItem[];
+}
+
+/** The Cloud UI route that opens Finish setup for one import. */
 export function agorCloudReconnectUrl(workspaceUrl: string, importId: string): string {
-  return `${workspaceUrl.replace(/\/$/, '')}/ui/settings/teammates?import=${encodeURIComponent(importId)}`;
+  return `${workspaceUrl.replace(/\/$/, '')}/ui/settings/import?import=${encodeURIComponent(importId)}`;
 }
 
 const HOSTNAME_PATTERN =

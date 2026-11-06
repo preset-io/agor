@@ -3196,7 +3196,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       apiKeys: { resolveHostTenant: createApiKeyHostTenantResolver({ db, config }) },
     }),
   });
-  registerAgorCloudRoutes({ app, db, config, registerLongAuthenticatedRoute, requireAuth });
+  registerAgorCloudRoutes({
+    app,
+    db,
+    config,
+    agorVersion: AGOR_VERSION,
+    registerLongAuthenticatedRoute,
+    requireAuth,
+  });
 
   // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
   (app as any).post(

@@ -479,7 +479,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           )
         );
       case 'move-to-cloud':
-        return <MoveToCloudSection currentUser={currentUser} branchById={branchById} />;
+        return <MoveToCloudSection currentUser={currentUser} />;
       case 'import':
         return <ImportPackSection selfHosted={selfHosted} onClose={onClose} />;
       case 'card-types':

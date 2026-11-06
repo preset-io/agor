@@ -10,7 +10,7 @@ import {
   type AgorCloudLinkCompleteRequest,
   type AgorCloudLinkStartResult,
   type AgorCloudLinkStatus,
-  type AgorCloudTransfer,
+  type AgorCloudMove,
   type AgorPackApplyRequest,
   type AgorPackExportRequest,
   type AgorPackImport,
@@ -176,7 +176,7 @@ export function switchOverTeammate(
 }
 
 // ---------------------------------------------------------------------------
-// Sign in to Agor Cloud / Send (the daemon holds the Cloud session)
+// Sign in to Agor Cloud / Move (the daemon holds the Cloud session)
 // ---------------------------------------------------------------------------
 
 export function getCloudLink(): Promise<AgorCloudLinkStatus> {
@@ -197,17 +197,20 @@ export function disconnectCloudLink(): Promise<AgorCloudLinkStatus> {
   return json<AgorCloudLinkStatus>('/agor-pack/cloud/link', undefined, 'DELETE');
 }
 
-export function startCloudTransfer(exportId: string, ref: string): Promise<AgorCloudTransfer> {
-  return json<AgorCloudTransfer>('/agor-pack/cloud/transfers', { export_id: exportId, ref });
+/** Move teammates to the linked workspace; the daemon runs it (the window can close). */
+export function startCloudMove(body: AgorPackExportRequest): Promise<AgorCloudMove> {
+  return json<AgorCloudMove>('/agor-pack/cloud/moves', body);
 }
 
-export function getCloudTransfer(transferId: string): Promise<AgorCloudTransfer> {
-  return json<AgorCloudTransfer>(`/agor-pack/cloud/transfers/${transferId}`);
+/** The caller's latest move (running, or finished in the last day). */
+export function getLatestCloudMove(): Promise<AgorCloudMove | null> {
+  return json<{ move: AgorCloudMove | null }>('/agor-pack/cloud/moves').then((r) => r.move);
 }
 
-export function applyCloudTransfer(
-  transferId: string,
-  teammates: string[]
-): Promise<AgorCloudTransfer> {
-  return json<AgorCloudTransfer>(`/agor-pack/cloud/transfers/${transferId}/apply`, { teammates });
+export function getCloudMove(moveId: string): Promise<AgorCloudMove> {
+  return json<AgorCloudMove>(`/agor-pack/cloud/moves/${moveId}`);
+}
+
+export function retryCloudMove(moveId: string, branchId: string): Promise<AgorCloudMove> {
+  return json<AgorCloudMove>(`/agor-pack/cloud/moves/${moveId}/retry`, { branch_id: branchId });
 }

@@ -136,7 +136,14 @@ export async function createPackFixture(input: {
         multiTenancy: resolveMultiTenancyConfig(config),
       }),
     });
-    registerAgorCloudRoutes({ app, db, config, registerLongAuthenticatedRoute, requireAuth });
+    registerAgorCloudRoutes({
+      app,
+      db,
+      config,
+      agorVersion: '0.0.0-test',
+      registerLongAuthenticatedRoute,
+      requireAuth,
+    });
   });
   Object.assign(server.app, {
     sessionTokenService: { generateCommandToken: async () => 'command-token' },

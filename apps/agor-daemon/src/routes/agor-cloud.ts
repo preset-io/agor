@@ -1,15 +1,16 @@
 /**
- * Self-hosted "Sign in to Agor Cloud" and "Send to Agor Cloud" (Settings →
- * Move to Agor Cloud). Long authenticated routes, MEMBER, each caller only
- * ever reads or changes their own link and transfers.
+ * Self-hosted "Sign in to Agor Cloud" and "Move to Agor Cloud" (Settings →
+ * Agor Cloud, and the teammate menu). Long authenticated routes, MEMBER, each
+ * caller only ever reads or changes their own link and moves.
  *
- *   GET    /agor-pack/cloud/link                       { console_url, link } (no tokens)
- *   DELETE /agor-pack/cloud/link                       forget the link
- *   POST   /agor-pack/cloud/link/start                 { return_to } → { authorize_url }
- *   POST   /agor-pack/cloud/link/complete              fragment fields → link status
- *   POST   /agor-pack/cloud/transfers                  { export_id, ref } → transfer
- *   GET    /agor-pack/cloud/transfers/:id              progress, receipt
- *   POST   /agor-pack/cloud/transfers/:transferId/apply { teammates } → transfer
+ *   GET    /agor-pack/cloud/link                  { console_url, link } (no tokens)
+ *   DELETE /agor-pack/cloud/link                  forget the link
+ *   POST   /agor-pack/cloud/link/start            { return_to } → { authorize_url }
+ *   POST   /agor-pack/cloud/link/complete         fragment fields → link status
+ *   POST   /agor-pack/cloud/moves                 export request → move (runs on the daemon)
+ *   GET    /agor-pack/cloud/moves                 { move } the caller's latest, or null
+ *   GET    /agor-pack/cloud/moves/:id             progress per teammate
+ *   POST   /agor-pack/cloud/moves/:moveId/retry   { branch_id } → move
  */
 
 import { BadRequest } from '@agor/core/feathers';
@@ -17,15 +18,16 @@ import {
   type AuthenticatedParams,
   agorCloudLinkCompleteSchema,
   agorCloudLinkStartSchema,
-  agorCloudTransferApplySchema,
-  agorCloudTransferStartSchema,
+  agorCloudMoveRetrySchema,
+  agorPackExportRequestSchema,
   ROLES,
   type TenantID,
   type User,
 } from '@agor/core/types';
 import type { z } from 'zod';
-import { type AgorCloudLinkContext, AgorCloudLinkService } from '../services/agor-cloud-link.js';
-import { AgorCloudTransferService } from '../services/agor-cloud-transfer.js';
+import { AgorCloudLinkService } from '../services/agor-cloud-link.js';
+import { AgorCloudMoveService } from '../services/agor-cloud-move.js';
+import type { AgorPackServiceContext } from '../services/agor-pack-export.js';
 import type { AgorPackRouteContext } from './agor-pack.js';
 
 type RouteParams = AuthenticatedParams & { route?: Record<string, string> };
@@ -41,19 +43,21 @@ function parse<T extends z.ZodTypeAny>(schema: T, data: unknown, what: string): 
 export function registerAgorCloudRoutes(
   ctx: Pick<
     AgorPackRouteContext,
-    'app' | 'db' | 'config' | 'registerLongAuthenticatedRoute' | 'requireAuth'
+    'app' | 'db' | 'config' | 'agorVersion' | 'registerLongAuthenticatedRoute' | 'requireAuth'
   >
 ): void {
-  const { app, db, config, registerLongAuthenticatedRoute, requireAuth } = ctx;
+  const { app, db, config, agorVersion, registerLongAuthenticatedRoute, requireAuth } = ctx;
   const member = (action: string) => ({ role: ROLES.MEMBER, action });
-  const context = (params: AuthenticatedParams): AgorCloudLinkContext => ({
+  const context = (params: AuthenticatedParams): AgorPackServiceContext => ({
+    app,
     db,
     config,
     tenantId: params.tenant?.tenant_id as TenantID,
     user: params.user as User,
+    agorVersion,
   });
   const link = (params: AuthenticatedParams) => new AgorCloudLinkService(context(params));
-  const transfers = (params: AuthenticatedParams) => new AgorCloudTransferService(context(params));
+  const moves = (params: AuthenticatedParams) => new AgorCloudMoveService(context(params));
 
   registerLongAuthenticatedRoute(
     app,
@@ -97,30 +101,36 @@ export function registerAgorCloudRoutes(
 
   registerLongAuthenticatedRoute(
     app,
-    '/agor-pack/cloud/transfers',
+    '/agor-pack/cloud/moves',
     {
       async create(data: unknown, params: RouteParams) {
-        const body = parse(agorCloudTransferStartSchema, data, 'transfer');
-        return transfers(params).start(body.export_id, body.ref);
+        return moves(params).start(parse(agorPackExportRequestSchema, data, 'move request'));
       },
-      async get(transferId: string, params: RouteParams) {
-        return transfers(params).get(transferId);
+      async find(params: RouteParams) {
+        return { move: moves(params).latest() };
+      },
+      async get(moveId: string, params: RouteParams) {
+        return moves(params).get(moveId);
       },
     },
-    { create: member('send teammates to Agor Cloud'), get: member('send teammates to Agor Cloud') },
+    {
+      create: member('move teammates to Agor Cloud'),
+      find: member('move teammates to Agor Cloud'),
+      get: member('move teammates to Agor Cloud'),
+    },
     requireAuth
   );
 
   registerLongAuthenticatedRoute(
     app,
-    '/agor-pack/cloud/transfers/:transferId/apply',
+    '/agor-pack/cloud/moves/:moveId/retry',
     {
       async create(data: unknown, params: RouteParams) {
-        const body = parse(agorCloudTransferApplySchema, data, 'import request');
-        return transfers(params).apply(String(params.route?.transferId ?? ''), body.teammates);
+        const body = parse(agorCloudMoveRetrySchema, data, 'retry request');
+        return moves(params).retry(String(params.route?.moveId ?? ''), body.branch_id);
       },
     },
-    { create: member('send teammates to Agor Cloud') },
+    { create: member('move teammates to Agor Cloud') },
     requireAuth
   );
 }

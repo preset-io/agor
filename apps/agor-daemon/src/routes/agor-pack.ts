@@ -24,7 +24,7 @@
  */
 
 import { Transform } from 'node:stream';
-import { AgorPackFormatError, AgorPackSecretError, AgorPackWriter } from '@agor/core/agor-pack';
+import { AgorPackFormatError, AgorPackSecretError } from '@agor/core/agor-pack';
 import { type AgorConfig, resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   AgorPackImportRepository,
@@ -33,7 +33,6 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { type Application, BadRequest } from '@agor/core/feathers';
-import { generateId } from '@agor/core/ids';
 import {
   AGOR_PACK,
   type AuthenticatedParams,
@@ -166,51 +165,11 @@ export function registerAgorPackRoutes(ctx: AgorPackRouteContext): void {
         if (!parsed.success) {
           throw new BadRequest(`Invalid export request: ${parsed.error.issues[0]?.message ?? ''}`);
         }
-        const exportId = generateId();
-        const context = serviceContext(params);
-        const exporter = new AgorPackExporter(context);
+        const exporter = new AgorPackExporter(serviceContext(params));
         // Refusals (unknown teammate, not the owner, no access) answer before
         // any pack stream exists.
         const teammates = await handle(() => exporter.authorize(parsed.data.branch_ids));
-        const writer = new AgorPackWriter();
-        // A failure can abort the stream before staging listens to it; the
-        // export call below still rejects and the staged write is awaited.
-        writer.output.on('error', () => undefined);
-        // The finished pack is staged so a failure anywhere surfaces as a
-        // clean error instead of a truncated download.
-        const staged = getBlobStagingStore().stage({
-          owner: {
-            tenantId: context.tenantId,
-            kind: 'agor-pack',
-            scopeId: exportId,
-            createdBy: context.user.user_id as UserID,
-          },
-          name: `export${AGOR_PACK.extension}`,
-          mimeType: AGOR_PACK.mimeType,
-          body: writer.output,
-        });
-        let manifest: Awaited<ReturnType<AgorPackExporter['export']>>;
-        try {
-          manifest = await handle(() => exporter.export(parsed.data, writer, teammates));
-        } catch (error) {
-          writer.abort(error instanceof Error ? error : new Error(String(error)));
-          await staged.catch(() => undefined);
-          throw error;
-        }
-        const metadata = await staged;
-        const first = manifest.teammates[0]?.display_name ?? 'teammates';
-        const slug =
-          first
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/^-|-$/g, '') || 'teammates';
-        return {
-          export_id: exportId,
-          ref: metadata.ref,
-          size: metadata.size,
-          filename: `${slug}${manifest.teammates.length > 1 ? `-and-${manifest.teammates.length - 1}-more` : ''}${AGOR_PACK.extension}`,
-          manifest,
-        };
+        return handle(() => exporter.stage(parsed.data, teammates));
       },
     },
     { create: member('export teammates') },

@@ -560,11 +560,11 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'agor-pack/cloud/link/start': { audience: 'none', why: NO_CONSUMER },
   'agor-pack/cloud/link/complete': { audience: 'none', why: NO_CONSUMER },
-  'agor-pack/cloud/transfers': {
+  'agor-pack/cloud/moves': {
     audience: 'none',
-    why: `${NO_CONSUMER} The sender polls its transfer.`,
+    why: `${NO_CONSUMER} The mover polls its move.`,
   },
-  'agor-pack/cloud/transfers/:transferId/apply': { audience: 'none', why: NO_CONSUMER },
+  'agor-pack/cloud/moves/:moveId/retry': { audience: 'none', why: NO_CONSUMER },
   'widgets/:id/submit': {
     audience: 'none',
     why: 'Widget input is deliberately kept out of broadcast.',
