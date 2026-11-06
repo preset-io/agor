@@ -2620,3 +2620,53 @@ describe('agor_sessions_archive tools', () => {
     });
   });
 });
+
+describe('prompt delivery tool-result notice', () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ['agor_sessions_prompt', { mode: 'continue' }, 'running'],
+    ['agor_sessions_prompt', { mode: 'continue' }, 'queued'],
+    ['agor_sessions_prompt', { mode: 'fork' }, 'running'],
+    ['agor_sessions_prompt', { mode: 'btw' }, 'running'],
+    ['agor_sessions_prompt', { mode: 'subsession' }, 'running'],
+    ['agor_sessions_spawn', {}, 'running'],
+    ['agor_sessions_create', { initialPrompt: 'hello', parentSessionId: null }, 'running'],
+  ] as const)('%s %j (%s) explains the server stamp to the sender', async (tool, args, status) => {
+    const session = {
+      session_id: 'sess-recipient',
+      branch_id: 'branch-1',
+      agentic_tool: 'claude-code',
+      genealogy: { children: [] },
+    };
+    const app = makeFakeApp({
+      users: { get: async () => ({ user_id: 'user-1' }) },
+      branches: { get: async () => ({ branch_id: 'branch-1' }) },
+      sessions: {
+        get: async () => session,
+        create: async () => session,
+        patch: async () => session,
+        spawn: async () => session,
+        fork: async () => session,
+      },
+      '/sessions/:id/prompt': { create: async () => ({ task_id: 'task-1', status }) },
+    });
+    const handlers = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-sender' },
+      [tool]
+    );
+    const response = await handlers[tool]({
+      sessionId: 'sess-target',
+      branchId: 'branch-1',
+      agenticTool: 'claude-code',
+      prompt: 'hello',
+      ...args,
+    });
+    expect(JSON.parse(response.content[0].text).promptProvenance).toBe(
+      'The recipient receives a server-stamped provenance block naming the sender session.'
+    );
+  });
+});
