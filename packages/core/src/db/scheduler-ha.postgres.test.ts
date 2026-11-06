@@ -7,6 +7,8 @@
  *   pnpm --filter @agor/core exec vitest run src/db/scheduler-ha.postgres.test.ts
  */
 
+import { createHash } from 'node:crypto';
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { SessionID, TaskID, UUID } from '../types/id';
@@ -14,7 +16,7 @@ import type { ScheduleID } from '../types/schedule';
 import { SessionStatus } from '../types/session';
 import { TaskStatus } from '../types/task';
 import { createDatabase, type Database } from './client';
-import { isPostgresDatabase } from './database-wrapper';
+import { executeRaw, isPostgresDatabase, rawRows } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import {
   BranchRepository,
@@ -326,5 +328,80 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('scheduler HA (PostgreSQL)'
     const recoveryTenants = new Map(recoveries.map((ref) => [ref.session_id, ref.tenant_id]));
     expect(recoveryTenants.get(pendingA.session_id)).toBe(a.tenantId);
     expect(recoveryTenants.get(pendingB.session_id)).toBe(b.tenantId);
+  });
+
+  it('discovers a trigger token tenant only by hash and only under its capability', async () => {
+    const a = await seedTenant(db, `trigger-a-${generateId()}`);
+    const b = await seedTenant(db, `trigger-b-${generateId()}`);
+    const hashA = createHash('sha256').update(`token-a-${generateId()}`).digest('hex');
+    const hashB = createHash('sha256').update(`token-b-${generateId()}`).digest('hex');
+    await runWithTenantDatabaseScope(db, a.tenantId, (scoped) =>
+      new ScheduleRepository(scoped).setTriggerTokenHash(a.scheduleId, hashA)
+    );
+    const discover = (
+      hash: string,
+      capability: 'schedule_trigger_discovery' | 'task_queue_discovery'
+    ) =>
+      runWithSystemDatabaseScope(
+        db,
+        'schedule trigger integration discovery',
+        (systemDb) => new ScheduleRepository(systemDb).findTriggerRef(hash),
+        { capability }
+      );
+
+    expect(await discover(hashA, 'schedule_trigger_discovery')).toEqual({
+      schedule_id: a.scheduleId,
+      tenant_id: a.tenantId,
+    });
+    expect(await discover(hashB, 'schedule_trigger_discovery')).toBeNull();
+    expect(await discover(hashA, 'task_queue_discovery')).toBeNull();
+
+    // The database, not the query, narrows the capability: an unfiltered read
+    // or a wrong bound hash sees no rows, even with other token-enabled rows.
+    const rawDiscovery = (boundHash: string | null) =>
+      runWithSystemDatabaseScope(
+        db,
+        'schedule trigger raw discovery',
+        async (systemDb) => {
+          if (boundHash) {
+            await executeRaw(
+              systemDb,
+              sql`SELECT set_config('agor.schedule_trigger_token_hash', ${boundHash}, true)`
+            );
+          }
+          return rawRows(
+            await executeRaw(systemDb, sql`SELECT tenant_id, schedule_id FROM schedules`)
+          );
+        },
+        { capability: 'schedule_trigger_discovery' }
+      );
+    expect(await rawDiscovery(null)).toEqual([]);
+    expect(await rawDiscovery(hashB)).toEqual([]);
+    expect(await rawDiscovery(hashA)).toEqual([
+      { tenant_id: a.tenantId, schedule_id: a.scheduleId },
+    ]);
+
+    // The capability is SELECT-only: it cannot consume or rewrite trigger state.
+    expect(
+      await runWithSystemDatabaseScope(
+        db,
+        'schedule trigger integration write attempt',
+        (systemDb) => new ScheduleRepository(systemDb).claimTriggerPending(a.scheduleId),
+        { capability: 'schedule_trigger_discovery' }
+      )
+    ).toBe(false);
+
+    await runWithTenantDatabaseScope(db, b.tenantId, async (scoped) => {
+      const schedules = new ScheduleRepository(scoped);
+      expect(await schedules.findTriggerRef(hashA)).toBeNull();
+      expect(await schedules.findTriggerTokenHash(a.scheduleId)).toBeNull();
+      await expect(schedules.setTriggerTokenHash(a.scheduleId, hashB)).rejects.toThrow();
+      await schedules.markTriggerPending(a.scheduleId, Date.now());
+    });
+    await runWithTenantDatabaseScope(db, a.tenantId, async (scoped) => {
+      const schedules = new ScheduleRepository(scoped);
+      expect(await schedules.findTriggerTokenHash(a.scheduleId)).toBe(hashA);
+      expect((await schedules.findById(a.scheduleId))?.trigger_pending_at).toBeUndefined();
+    });
   });
 });

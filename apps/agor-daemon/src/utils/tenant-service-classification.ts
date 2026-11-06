@@ -244,6 +244,19 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   },
 
   // --------------------------------------------------------------------------
+  // Schedule trigger URL. Token management is an ordinary scoped route; the
+  // trigger itself has no user session, so its tenant comes from the token.
+  // --------------------------------------------------------------------------
+  'schedules/:id/trigger-token': {
+    scopeClass: 'scoped',
+    why: 'Registered through createTenantScopedAuthenticatedRouteRegistrar; owner-only (run-now authority) hash write on one schedule in the request scope.',
+  },
+  'schedules/:id/trigger': {
+    scopeClass: 'identity-only',
+    why: 'Unauthenticated bearer route: SchedulerService discovers the tenant from the token hash under the narrow schedule_trigger_discovery capability, then re-enters that tenant and reaches the database only through its tenant-bound repositories. The run crosses executor dispatch, so no request-long transaction.',
+  },
+
+  // --------------------------------------------------------------------------
   // Repository `.agor.yml` import. The file is read by an executor, so like
   // retry-provisioning above it is a long route: no request-long transaction
   // is held across the spawn.

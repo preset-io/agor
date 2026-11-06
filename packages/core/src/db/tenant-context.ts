@@ -51,6 +51,7 @@ export type SystemDatabaseCapability =
   | 'teams_message_delivery_discovery'
   | 'knowledge_embedding_discovery'
   | 'scheduler_discovery'
+  | 'schedule_trigger_discovery'
   | 'task_queue_discovery'
   | 'task_runtime_discovery'
   | 'branch_maintenance_discovery'

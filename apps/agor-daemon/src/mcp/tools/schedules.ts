@@ -13,6 +13,7 @@ import {
   type ScheduleAgenticToolConfig,
   type ScheduleCreateData,
   type SchedulePatchData,
+  type ScheduleTriggerTokenResult,
   TIMEZONE_MODES,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -359,6 +360,31 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
       const result = await ctx.app
         .service('/schedules/:id/run-now')
         .create({}, { route: { id: scheduleId }, ...ctx.baseServiceParams });
+      return textResult(result);
+    }
+  );
+
+  // agor_schedules_set_trigger
+  server.registerTool(
+    'agor_schedules_set_trigger',
+    {
+      description:
+        "Read or turn off a schedule's inbound trigger URL (`POST /schedules/:id/trigger` with a bearer token; the request body is ignored and the run uses the schedule's own prompt as its owner). 'status' returns trigger_enabled, trigger_url and last_triggered_at; 'disable' revokes the token. Tokens are never returned here so they cannot enter a transcript: to turn the trigger on or rotate its token, ask the schedule owner to use the Trigger URL section of the schedule editor (or the REST trigger-token route), which shows the token once. Same permission as run-now.",
+      inputSchema: z.strictObject({
+        scheduleId: mcpRequiredId('scheduleId', 'Schedule'),
+        action: z
+          .enum(['status', 'disable'])
+          .describe("'status' reads the trigger state; 'disable' revokes the current token."),
+      }),
+    },
+    async (args) => {
+      const scheduleId = await resolveScheduleId(ctx, args.scheduleId);
+      const { token: _never, ...result } = (await ctx.app
+        .service('/schedules/:id/trigger-token')
+        .create(
+          { action: args.action },
+          { route: { id: scheduleId }, ...ctx.baseServiceParams }
+        )) as ScheduleTriggerTokenResult;
       return textResult(result);
     }
   );

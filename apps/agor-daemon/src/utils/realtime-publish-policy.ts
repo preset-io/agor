@@ -511,6 +511,11 @@ export const REALTIME_PUBLISH_POLICY = {
   'branches/:id/execute-schedule-now': { audience: 'none', why: NO_CONSUMER },
   'branches/:id/fire-zone-trigger': { audience: 'none', why: NO_CONSUMER },
   'schedules/:id/run-now': { audience: 'none', why: `${NO_CONSUMER} Lands as schedules.patched.` },
+  'schedules/:id/trigger-token': {
+    audience: 'none',
+    why: 'The response carries the raw trigger token. Lands as schedules.patched.',
+  },
+  'schedules/:id/trigger': { audience: 'none', why: `${NO_CONSUMER} Lands as sessions.created.` },
   'boards/:id/archive': { audience: 'none', why: `${NO_CONSUMER} Lands as boards.patched.` },
   'boards/:id/unarchive': { audience: 'none', why: `${NO_CONSUMER} Lands as boards.patched.` },
   'boards/:id/sessions': { audience: 'none', why: NO_CONSUMER },
