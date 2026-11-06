@@ -21,13 +21,18 @@ import {
   UploadRepository,
   update,
 } from '@agor/core/db';
+import { feathers } from '@agor/core/feathers';
 import {
   AGOR_PACK,
   AGOR_PACK_SECTIONS,
   agorPackExportRequestSchema,
   type BranchID,
   getTeammateConfig,
+  type Message,
+  type Paginated,
   type SessionID,
+  type Task,
+  TaskStatus,
   type TenantID,
   type UploadRef,
 } from '@agor/core/types';
@@ -53,6 +58,8 @@ import { AgorPackExporter } from './agor-pack-export';
 import { AgorPackImporter } from './agor-pack-import';
 import { BranchesService } from './branches';
 import { KnowledgeDocumentsService } from './knowledge-documents';
+import { MessagesService } from './messages';
+import { createTasksService } from './tasks';
 
 vi.mock('../utils/spawn-executor', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/spawn-executor')>()),
@@ -290,6 +297,29 @@ dbTest(
           sessionId: newFirst!.session_id as SessionID,
         });
         expect(messages).toHaveLength(2);
+        // The session view reads the Session's Tasks (queued excluded), then
+        // each Task's Messages, through these services: the imported
+        // transcript must come back the same way.
+        const rows = <T>(result: T[] | Paginated<T>) =>
+          Array.isArray(result) ? result : result.data;
+        const shownTasks = rows(
+          (await createTasksService(db, feathers()).find({
+            query: {
+              session_id: newFirst!.session_id,
+              status: { $ne: TaskStatus.QUEUED },
+              $sort: { created_at: 1, task_id: 1 },
+              $limit: 100,
+            },
+          })) as Task[] | Paginated<Task>
+        );
+        expect(shownTasks).toHaveLength(1);
+        const shownMessages = rows(
+          (await new MessagesService(db).find({
+            query: { task_id: shownTasks[0]!.task_id, $sort: { index: 1 }, $limit: 100 },
+          })) as Message[] | Paginated<Message>
+        );
+        expect(shownMessages.map((m) => m.index)).toEqual([0, 1]);
+        expect(shownMessages.every((m) => m.session_id === newFirst!.session_id)).toBe(true);
 
         // The attachment gets a fresh ref (refs are global keys) rewritten into
         // the message; the original stays with Ada's session.

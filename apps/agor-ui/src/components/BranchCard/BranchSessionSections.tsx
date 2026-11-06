@@ -69,6 +69,7 @@ import {
   getSessionRowTitleStyle,
   isSessionRowFailed,
   isSessionRowRead,
+  RowActionsShownContext,
   SessionRowLogo,
   SessionStatusMark,
 } from '../SessionRow';
@@ -233,7 +234,9 @@ const SessionItemWithActions: React.FC<{
         }
       }}
     >
-      {children}
+      <RowActionsShownContext.Provider value={showActions}>
+        {children}
+      </RowActionsShownContext.Provider>
       {actionsRevealed && (
         <div
           style={{

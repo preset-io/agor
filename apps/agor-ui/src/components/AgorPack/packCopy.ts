@@ -83,6 +83,7 @@ export const PACK_COPY = {
   schedPaused: 'Paused until you switch over',
   schedWaits: 'Waiting for {app}',
   impBar: 'This session is read-only. Continue it in a new session.',
+  impLine: 'Imported from Community Edition on {date}',
 
   cancel: 'Cancel',
   back: 'Back',
