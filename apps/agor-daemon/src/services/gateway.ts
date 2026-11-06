@@ -8096,10 +8096,17 @@ export class GatewayService {
       const isPermanent =
         !isRateLimited && (isDefinitiveProviderFailure(error) || nextAttempts >= 10);
 
+      const errObj = error as Record<string, unknown> | undefined;
+      const responseData = errObj?.response as Record<string, unknown> | undefined;
+      const responseDataBody = responseData?.data as Record<string, unknown> | undefined;
       const errorMessage =
         error instanceof Error
           ? error.message.slice(0, 500)
-          : String(error ?? 'Unknown error').slice(0, 500);
+          : typeof errObj?.message === 'string'
+            ? errObj.message.slice(0, 500)
+            : typeof responseDataBody?.message === 'string'
+              ? responseDataBody.message.slice(0, 500)
+              : String(error ?? 'Unknown error').slice(0, 500);
 
       if (isPermanent) {
         await this.taskRepo.updateGatewayReplyMetadata?.(taskId, {

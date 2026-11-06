@@ -250,6 +250,52 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
     findById: vi.fn(
       async (taskId: string) => tasks.find((task) => task.task_id === taskId) ?? null
     ),
+    updateGatewayReplyMetadata: vi.fn(async (taskId: string, patch: Record<string, unknown>) => {
+      const task = tasks.find((t) => t.task_id === taskId);
+      if (task) {
+        const metadata = (task.metadata ?? {}) as Record<string, unknown>;
+        const replyMetadata = (metadata.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+        task.metadata = {
+          ...metadata,
+          gateway_reply_metadata: {
+            ...replyMetadata,
+            ...patch,
+          },
+        };
+      }
+    }),
+    findDueGatewayFinalReplyRefs: vi.fn(async ({ limit }: { limit?: number } = {}) => {
+      const now = Date.now();
+      return tasks
+        .filter((task) => {
+          const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<
+            string,
+            unknown
+          >;
+          if (!replyMeta.processing_comment_id) return false;
+          const status = (replyMeta.delivery_status as string) ?? 'pending';
+          if (status === 'delivered' || status === 'dead_letter') return false;
+          if (replyMeta.next_retry_at && Date.parse(replyMeta.next_retry_at as string) > now) {
+            return false;
+          }
+          if (status === 'processing') {
+            const claimedAt = Date.parse((replyMeta.claimed_at as string) ?? '');
+            if (Number.isFinite(claimedAt) && now - claimedAt < 5 * 60 * 1000) {
+              return false;
+            }
+          }
+          return true;
+        })
+        .slice(0, limit ?? 50)
+        .map((task) => ({
+          task_id: task.task_id,
+          session_id: task.session_id,
+          tenant_id: tenantId,
+          attempts: Number(
+            (task.metadata?.gateway_reply_metadata as Record<string, unknown>)?.attempts ?? 0
+          ),
+        }));
+    }),
   };
   Object.assign(service as unknown as Record<string, unknown>, {
     channelRepo,
@@ -871,5 +917,388 @@ describe('GatewayService GitHub integration', () => {
     expect(harness.threadMapRepo.findBySessionAmbiguityAware).toHaveBeenCalledOnce();
     expect(harness.messagesRepo.findByTaskId).not.toHaveBeenCalled();
     expect(harness.channelRepo.findById).not.toHaveBeenCalled();
+  });
+
+  it('reconciles pending final replies via checkFinalReplyDeliveryOnce()', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000070';
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 901,
+            delivery_status: 'pending',
+          },
+        },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000071',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: 'Task finished successfully.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    const deliveredCount = await runWithTenantContext(tenantId, () =>
+      harness.service.checkFinalReplyDeliveryOnce()
+    );
+
+    expect(deliveredCount).toBe(1);
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Task finished successfully.',
+        metadata: { edit_comment_id: 901 },
+      })
+    );
+
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('delivered');
+    expect(replyMeta.delivered_at).toBeDefined();
+    expect(replyMeta.next_retry_at).toBeNull();
+  });
+
+  it('retries transient 429 rate limit with backoff and delivers on subsequent reconciliation', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000072';
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 901,
+          },
+        },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000073',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: 'Rate limit recovery test.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    harness.sendMessage.mockRejectedValueOnce({
+      status: 429,
+      message: 'Too Many Requests',
+      retryAfter: 2,
+    });
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('pending');
+    expect(replyMeta.attempts).toBe(1);
+    expect(replyMeta.next_retry_at).toBeDefined();
+    expect(replyMeta.last_error).toBe('Too Many Requests');
+
+    // Simulate clock advancing past retry-after
+    replyMeta.next_retry_at = new Date(Date.now() - 1000).toISOString();
+
+    harness.sendMessage.mockResolvedValueOnce('901');
+    const reconciled = await runWithTenantContext(tenantId, () =>
+      harness.service.checkFinalReplyDeliveryOnce()
+    );
+
+    expect(reconciled).toBe(1);
+    expect(harness.sendMessage).toHaveBeenCalledTimes(2);
+    const updatedTask = (await harness.taskRepo.findById(taskId)) as Task;
+    const updatedMeta = (updatedTask.metadata?.gateway_reply_metadata ?? {}) as Record<
+      string,
+      unknown
+    >;
+    expect(updatedMeta.delivery_status).toBe('delivered');
+    expect(updatedMeta.delivered_at).toBeDefined();
+  });
+
+  it('retries GitHub 403 secondary rate limit with backoff without permanent failure', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000074';
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 901,
+          },
+        },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000075',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: 'Secondary rate limit test.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    harness.sendMessage.mockRejectedValueOnce({
+      status: 403,
+      response: { data: { message: 'You have exceeded a secondary rate limit.' } },
+    });
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('pending');
+    expect(replyMeta.attempts).toBe(1);
+    expect(replyMeta.next_retry_at).toBeDefined();
+    expect(replyMeta.last_error).toContain('secondary rate limit');
+  });
+
+  it('transitions permanent 403 permission error directly to dead_letter', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000076';
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 901,
+          },
+        },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000077',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: 'Permanent failure test.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    harness.sendMessage.mockRejectedValueOnce({
+      status: 403,
+      message: 'Resource not accessible by integration',
+    });
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('dead_letter');
+    expect(replyMeta.attempts).toBe(1);
+    expect(replyMeta.next_retry_at).toBeNull();
+    expect(replyMeta.last_error).toBe('Resource not accessible by integration');
+
+    // Sweep will skip dead_letter rows
+    const reconciled = await runWithTenantContext(tenantId, () =>
+      harness.service.checkFinalReplyDeliveryOnce()
+    );
+    expect(reconciled).toBe(0);
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it('handles transiently missing assistant message with bounded retry and delivers fallback after max attempts', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000078';
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 901,
+          },
+        },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([]);
+
+    // Attempt 1: missing message recorded, retry scheduled
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+    let task = (await harness.taskRepo.findById(taskId)) as Task;
+    let replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('pending');
+    expect(replyMeta.attempts).toBe(1);
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+
+    // Attempt 2
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+    task = (await harness.taskRepo.findById(taskId)) as Task;
+    replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.attempts).toBe(2);
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+
+    // Attempt 3
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+    task = (await harness.taskRepo.findById(taskId)) as Task;
+    replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.attempts).toBe(3);
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+
+    // Attempt 4 (attempts >= 3): delivers fallback message
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+    task = (await harness.taskRepo.findById(taskId)) as Task;
+    replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('delivered');
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Agor completed this request without generating any output.',
+        metadata: { edit_comment_id: 901 },
+      })
+    );
+  });
+
+  it('recovers when assistant message arrives during retry window', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000080';
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 901,
+          },
+        },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([]);
+
+    // Attempt 1: message missing
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+
+    // Now message arrives
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000081',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: 'Delayed output has arrived.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    // Retry flush
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Delayed output has arrived.',
+        metadata: { edit_comment_id: 901 },
+      })
+    );
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('delivered');
+  });
+
+  it('reclaims crashed in-flight processing task when claim timeout expires', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000082';
+    const staleClaimTime = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: {
+          gateway_reply_metadata: {
+            processing_comment_id: 901,
+            delivery_status: 'processing',
+            claim_token: 'stale-crashed-worker-token',
+            claimed_at: staleClaimTime,
+          },
+        },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000083',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: 'Output from recovered crashed task.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    const reconciled = await runWithTenantContext(tenantId, () =>
+      harness.service.checkFinalReplyDeliveryOnce()
+    );
+
+    expect(reconciled).toBe(1);
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Output from recovered crashed task.',
+        metadata: { edit_comment_id: 901 },
+      })
+    );
+    const task = (await harness.taskRepo.findById(taskId)) as Task;
+    const replyMeta = (task.metadata?.gateway_reply_metadata ?? {}) as Record<string, unknown>;
+    expect(replyMeta.delivery_status).toBe('delivered');
+    expect(replyMeta.delivered_at).toBeDefined();
   });
 });
