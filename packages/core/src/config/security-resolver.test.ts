@@ -16,6 +16,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { loadCuratedCatalog } from '../mcp-catalog/curated-loader';
 import {
+  FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN,
   getDefaultGitConfigParameters,
   gitConfigParameterLooksSecret,
   MCP_CATALOG_CSP_IMG_SRCS,
@@ -49,6 +50,24 @@ describe('resolveSecurity — CSP defaults', () => {
   it('allows Slack avatar images by default', () => {
     const { csp } = resolveSecurity(EMPTY, { daemonUrl: 'http://localhost:3030' });
     expect(csp.directives['img-src']).toContain(SLACK_AVATAR_CSP_IMG_SRC);
+  });
+
+  it('allows feature announcement visuals from the docs site by default', () => {
+    const { csp } = resolveSecurity(EMPTY, { daemonUrl: 'http://localhost:3030' });
+    expect(csp.directives['img-src']).toContain(FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN);
+    expect(csp.directives['media-src']).toEqual(["'self'", FEATURE_ANNOUNCEMENTS_MEDIA_ORIGIN]);
+  });
+
+  it('allows the configured feature announcement media origin only when set', () => {
+    const origin = 'https://console.example.com';
+    const { csp } = resolveSecurity(
+      { feature_announcements: { media_origin: origin } },
+      { daemonUrl: 'http://localhost:3030' }
+    );
+    expect(csp.directives['img-src']).toContain(origin);
+    expect(csp.directives['media-src']).toContain(origin);
+    const defaults = resolveSecurity(EMPTY, { daemonUrl: 'http://localhost:3030' }).csp;
+    expect(defaults.directives['img-src']).not.toContain(origin);
   });
 
   it('allows checked-in MCP catalog logo origins by default', () => {

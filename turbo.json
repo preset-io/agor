@@ -41,6 +41,11 @@
     },
     "@agor/daemon#build": {
       "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/CHANGELOG.md",
+        "$TURBO_ROOT$/apps/agor-docs/public/whats-new/highlights.json"
+      ],
       "outputs": ["dist/**", ".next/**", "build/**"],
       "env": ["AGOR_BUILD_SHA", "AGOR_BUILT_AT"]
     },

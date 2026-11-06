@@ -45,6 +45,7 @@ import {
 } from '../../utils/shellEvents';
 import { patchUserPreferences } from '../../utils/userPreferences';
 import type { CreateModalKind } from '../CreateMenu';
+import { FeatureAnnouncementsBell } from '../FeatureAnnouncements';
 import { HomeAskBox } from './HomeAskBox';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
 import { HomeMyWork, MY_WORK_PAGE, type MyWorkTab } from './HomeMyWork';
@@ -446,9 +447,13 @@ export const HomePage = memo(function HomePage({
         />
       )}
       <div style={{ minWidth: 0 }}>
-        <Typography.Title level={HOME_PAGE_TITLE_LEVEL} style={{ margin: 0 }}>
-          Good {greeting()}, {firstName}
-        </Typography.Title>
+        {/* The mobile shell has no navbar; its bell sits next to the greeting. */}
+        <Flex align="center" justify="space-between" gap={token.marginXS}>
+          <Typography.Title level={HOME_PAGE_TITLE_LEVEL} style={{ margin: 0 }}>
+            Good {greeting()}, {firstName}
+          </Typography.Title>
+          {isMobile && <FeatureAnnouncementsBell />}
+        </Flex>
         {!hydrated ? (
           <Skeleton.Input active size="small" style={{ width: 220 }} />
         ) : (

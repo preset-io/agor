@@ -12,6 +12,8 @@
 - Change 3
 -->
 
+<!-- User-visible feature? Add its highlight to apps/agor-docs/public/whats-new/highlights.json (see the README there). -->
+
 ## Why / context
 
 <!-- What problem does this solve? Include user impact, root cause, or design context when useful. -->

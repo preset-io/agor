@@ -2028,5 +2028,61 @@
     "rationale": "Runs only the trusted operator cleanup command after the termination coordinator verifies tenant/task context and durably claims the attempt. Sends scoped context on stdin without shell interpolation, uses the sanitized launcher environment, discards raw output, and bounds execution by terminating only the helper's owned process group. The helper must enforce tenant/task workload identity and confirm containment before returning zero; this is not a branch-filesystem capability.",
     "reviewTarget": null,
     "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-253",
+    "class": "A",
+    "file": "apps/agor-daemon/src/services/feature-announcements.ts",
+    "import": "node:fs",
+    "symbol": "existsSync",
+    "local": "existsSync",
+    "operation": "call:existsSync@findUp#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Reads the CHANGELOG.md and highlights.json shipped with the daemon (dist/ or the source checkout) once at startup; fixed install paths, never a caller-supplied or tenant path.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-254",
+    "class": "A",
+    "file": "apps/agor-daemon/src/services/feature-announcements.ts",
+    "import": "node:fs",
+    "symbol": "existsSync",
+    "local": "existsSync",
+    "operation": "call:existsSync@loadBundledFeatureAnnouncements#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Reads the CHANGELOG.md and highlights.json shipped with the daemon (dist/ or the source checkout) once at startup; fixed install paths, never a caller-supplied or tenant path.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-255",
+    "class": "A",
+    "file": "apps/agor-daemon/src/services/feature-announcements.ts",
+    "import": "node:fs",
+    "symbol": "readFileSync",
+    "local": "readFileSync",
+    "operation": "call:readFileSync@loadBundledFeatureAnnouncements#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Reads the CHANGELOG.md and highlights.json shipped with the daemon (dist/ or the source checkout) once at startup; fixed install paths, never a caller-supplied or tenant path.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-256",
+    "class": "A",
+    "file": "apps/agor-daemon/src/services/feature-announcements.ts",
+    "import": "node:fs",
+    "symbol": "readFileSync",
+    "local": "readFileSync",
+    "operation": "call:readFileSync@loadBundledFeatureAnnouncements#2",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Reads the CHANGELOG.md and highlights.json shipped with the daemon (dist/ or the source checkout) once at startup; fixed install paths, never a caller-supplied or tenant path.",
+    "reviewTarget": null,
+    "reviewDate": null
   }
 ]

@@ -4,6 +4,7 @@
 
 import type { InstallableAgenticTool } from '../agentic-integrations';
 import type { ManagedEnvExecutionMode } from '../environment/webhook';
+import type { FeatureAnnouncementsSource } from '../types/feature-announcements';
 import type { AgorPasswordPolicyProfile } from './password-policy';
 
 export type { ManagedEnvExecutionMode };
@@ -1593,6 +1594,23 @@ export interface AgorConfig {
    */
   mcp_oauth_relay?: {
     callback_origin: string;
+  };
+
+  /**
+   * In-app feature announcements source. `bundled` reads the CHANGELOG shipped
+   * with the daemon; `cloud` polls Agor Cloud with the Cell runtime credential;
+   * `off` hides the bell. Unset resolves to `cloud` when the `AGOR_CLOUD_*`
+   * runtime credential is complete, otherwise `bundled`.
+   */
+  feature_announcements?: {
+    source?: FeatureAnnouncementsSource;
+    /**
+     * HTTPS origin serving uploaded announcement pictures and videos (the Agor
+     * Cloud console). Added to the CSP `img-src` and `media-src`; unset by default.
+     */
+    media_origin?: string;
+    /** Seconds between polls of Agor Cloud (`source: cloud`). Default 900, minimum 30. */
+    poll_interval_seconds?: number;
   };
 
   /** User identity, lifecycle, role, and local-login authority. */

@@ -34,6 +34,7 @@ import type {
   CreateAgenticToolPreset,
   CreateMCPServerInput,
   CreateSessionInput,
+  FeatureAnnouncementsFeed,
   GatewayChannel,
   GatewayChannelCreateData,
   GatewayChannelPatchData,
@@ -346,6 +347,7 @@ export interface ServiceTypes {
   'opencode-auth': OpenCodeProviderSettings;
   'opencode-models': OpenCodeModelCatalog;
   'executor-git-environment': ExecutorGitEnvironment;
+  'feature-announcements': FeatureAnnouncementsFeed;
 }
 
 /**

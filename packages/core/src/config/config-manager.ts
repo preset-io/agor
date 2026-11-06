@@ -15,6 +15,10 @@ import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agenti
 import type { Database } from '../db/client';
 import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
 import type { AgenticToolName } from '../types';
+import {
+  FEATURE_ANNOUNCEMENTS_LIMITS,
+  FEATURE_ANNOUNCEMENTS_SOURCES,
+} from '../types/feature-announcements';
 import { normalizeHttpBaseUrl } from '../utils/url';
 import {
   agorHomePath,
@@ -596,6 +600,16 @@ function validatePrivateOutboundDestinations(value: unknown): void {
   }
 }
 
+/** An exact `https://host[:port]` origin: no path, query or credentials. */
+function isHttpsOrigin(value: unknown): boolean {
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'https:' && url.origin === value;
+  } catch {
+    return false;
+  }
+}
+
 function validateConfig(config: AgorConfig): void {
   requirePlainConfigRecord(config, 'config');
   const configuredAnalyticsPlugins = (config.analytics as { plugins?: unknown[] } | undefined)
@@ -684,6 +698,7 @@ function validateConfig(config: AgorConfig): void {
     'database',
     'external_launch',
     'mcp_oauth_relay',
+    'feature_announcements',
     'identity',
     'execution',
     'security',
@@ -905,6 +920,35 @@ function validateConfig(config: AgorConfig): void {
   ]);
   assertValidRawExternalLaunchConfig(config.external_launch);
   only(config.mcp_oauth_relay, 'mcp_oauth_relay', ['callback_origin']);
+  only(config.feature_announcements, 'feature_announcements', [
+    'source',
+    'media_origin',
+    'poll_interval_seconds',
+  ]);
+  if (
+    config.feature_announcements?.source !== undefined &&
+    !FEATURE_ANNOUNCEMENTS_SOURCES.includes(config.feature_announcements.source)
+  ) {
+    throw new Error(
+      `Config error: feature_announcements.source must be one of ${FEATURE_ANNOUNCEMENTS_SOURCES.join(', ')}`
+    );
+  }
+  const mediaOrigin = config.feature_announcements?.media_origin;
+  if (mediaOrigin !== undefined && !isHttpsOrigin(mediaOrigin)) {
+    throw new Error(
+      'Config error: feature_announcements.media_origin must be an https: origin such as https://console.example.com'
+    );
+  }
+  const pollInterval = config.feature_announcements?.poll_interval_seconds;
+  if (
+    pollInterval !== undefined &&
+    (!Number.isInteger(pollInterval) ||
+      pollInterval < FEATURE_ANNOUNCEMENTS_LIMITS.pollIntervalSecondsMin)
+  ) {
+    throw new Error(
+      `Config error: feature_announcements.poll_interval_seconds must be a whole number of at least ${FEATURE_ANNOUNCEMENTS_LIMITS.pollIntervalSecondsMin}`
+    );
+  }
   only(config.identity, 'identity', [
     'user_lifecycle',
     'avatar_authority',

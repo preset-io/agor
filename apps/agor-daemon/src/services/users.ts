@@ -91,6 +91,7 @@ import type {
   UserAvatarSyncRequest,
   UserAvatarSyncResult,
   UserID,
+  UserPreferences,
   UserRole,
 } from '@agor/core/types';
 import {
@@ -175,6 +176,19 @@ export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
 export const AUTH_INTERNAL_USER_LOOKUP_PARAM = Symbol('agor.users.auth-internal-lookup');
 const USER_PATCH_LOCK_HELD_PARAM = Symbol('agor.users.patch-lock-held');
 const USER_CREDENTIAL_LOCK_HELD_PARAM = Symbol('agor.users.credential-lock-held');
+const USER_PREFERENCES_MERGE_PARAM = Symbol('agor.users.preferences-merge');
+
+type PreferencesMerge = (current: UserPreferences | undefined) => UserPreferences;
+
+/**
+ * In-process only: have `users.patch` compute `preferences` from the row it
+ * reads under its per-user lock and compare-and-set write, so a merge of one
+ * preference key cannot lose a concurrent write. A symbol, so REST, socket and
+ * MCP callers cannot supply one.
+ */
+export function withPreferencesMerge<P extends Params>(params: P, merge: PreferencesMerge): P {
+  return { ...params, [USER_PREFERENCES_MERGE_PARAM]: merge };
+}
 
 // SQLite runs one daemon and has no cross-process writer, but two async
 // requests can still read the same users.data snapshot and then overlap on the
@@ -1043,6 +1057,9 @@ export class UsersService {
     const now = new Date();
     const updates: Record<string, unknown> = { updated_at: now };
     const selectionNamesToRemove = new Set<string>();
+    const preferencesMerge = (
+      params as (Params & { [USER_PREFERENCES_MERGE_PARAM]?: PreferencesMerge }) | undefined
+    )?.[USER_PREFERENCES_MERGE_PARAM];
 
     // Handle password separately (needs hashing)
     if (assignedPassword !== undefined) {
@@ -1078,6 +1095,7 @@ export class UsersService {
       data.avatar_source_id !== undefined ||
       data.avatar_synced_at !== undefined ||
       data.preferences ||
+      preferencesMerge ||
       data.agentic_tools ||
       data.agentic_auth_methods ||
       data.agentic_credential_sources ||
@@ -1407,7 +1425,9 @@ export class UsersService {
           (avatarSourceChangedAwayFromSlack && data.avatar_synced_at === undefined)
             ? undefined
             : (data.avatar_synced_at ?? current.avatar_synced_at),
-        preferences: data.preferences ?? current.preferences,
+        preferences: preferencesMerge
+          ? preferencesMerge(current.preferences)
+          : (data.preferences ?? current.preferences),
         agentic_tools: Object.keys(nextAgenticTools).length > 0 ? nextAgenticTools : undefined,
         agentic_auth_methods:
           Object.keys(nextAgenticAuthMethods).length > 0 ? nextAgenticAuthMethods : undefined,

@@ -52,6 +52,8 @@ export interface FeaturesConfig {
   permanentBranchDeletion?: import('@agor/core/types').BranchMaintenanceCapability;
   /** Instance-owned informational copy; never a capability or repository override. */
   environmentDisclaimerMarkdown?: string;
+  /** What's new source; `off` (or an older daemon) hides the notification center. */
+  featureAnnouncements?: import('@agor/core/types').FeatureAnnouncementsSource;
   environmentCommands?: ReturnType<
     typeof import('@agor/core/config/browser').environmentCommandCapabilities
   >;

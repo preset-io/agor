@@ -30,6 +30,9 @@ or PR. Durable behavior changes update the relevant guide, `context/` doc, or co
 - CLI errors are clean, user-facing messages, not stack traces.
 - Boards display **branches**, not sessions. Read [`branches.md`](context/concepts/branches.md)
   before touching boards.
+- A PR that ships a user-visible feature adds its in-app highlight to
+  `apps/agor-docs/public/whats-new/highlights.json`, keyed by the PR number
+  ([README](apps/agor-docs/public/whats-new/README.md)); `pnpm check:whats-new-highlights` checks it.
 - Before writing user-facing copy, read **Messaging & Positioning** in the Agor team Knowledge base
   ([`marketing/messaging-and-positioning`](https://agor.sandbox.preset.zone/kb/agor-cloud-team/marketing/messaging-and-positioning.md));
   don't invent framing from code.

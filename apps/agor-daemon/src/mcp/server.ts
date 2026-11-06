@@ -59,6 +59,7 @@ import { registerBranchTools } from './tools/branches.js';
 import { registerCardTypeTools } from './tools/card-types.js';
 import { registerCardTools } from './tools/cards.js';
 import { registerEnvironmentTools } from './tools/environment.js';
+import { registerFeatureAnnouncementsTools } from './tools/feature-announcements.js';
 import { registerGatewayChannelTools } from './tools/gateway-channels.js';
 import { registerKnowledgeTools } from './tools/knowledge.js';
 import { registerMcpServerTools } from './tools/mcp-servers.js';
@@ -260,6 +261,7 @@ const DOMAIN_TOOL_REGISTRARS: DomainToolRegistrar[] = [
   { domain: 'gateway', register: registerGatewayChannelTools },
   { domain: 'knowledge', register: registerKnowledgeTools },
   { domain: 'schedules', register: registerScheduleTools },
+  { domain: 'feature-announcements', register: registerFeatureAnnouncementsTools },
 ];
 
 function registerDomainTools(
