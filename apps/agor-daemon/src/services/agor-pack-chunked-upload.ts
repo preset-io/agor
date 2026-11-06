@@ -10,8 +10,9 @@
  *
  *   <id>:i      zero bytes; its name records `<sha256>-<size>-<chunk size>`
  *   <id>:<n>    chunk n
- *   <id>:d      zero bytes after `complete`; its name is the receipt's import id
- *   <id>:c      a row without bytes: the claim of the one `complete` running
+ *   <id>:d      zero bytes after `complete`; its name is the receipt's import id.
+ *               Its key is derived from (tenant, creator, upload), so it is
+ *               published once; chunks are deleted only after it exists.
  *
  * `<id>` is derived from (sha256, size, chunk size), so starting the same file again
  * resumes it, and a `complete` whose response was lost can be repeated.
@@ -19,11 +20,7 @@
 
 import { createHash } from 'node:crypto';
 import { pipeline, Readable, Transform } from 'node:stream';
-import {
-  assertTenantWritable,
-  runWithTenantDatabaseScope,
-  StagedBlobRepository,
-} from '@agor/core/db';
+import { assertTenantWritable, runWithTenantDatabaseScope } from '@agor/core/db';
 import { BadRequest, Conflict, NotFound } from '@agor/core/feathers';
 import {
   AGOR_PACK,
@@ -46,10 +43,6 @@ const KIND = 'agor-pack-chunk';
 const UPLOAD_ID = /^[0-9a-f]{24}$/;
 const INFO = 'i';
 const DONE = 'd';
-const CLAIM = 'c';
-/** A claim older than this belongs to a completer that died; it can be taken over. */
-const CLAIM_STALE_MS = 30 * 60 * 1000;
-const CLAIM_POLL_MS = 500;
 
 function httpError(message: string, code: number): Error {
   return Object.assign(new Error(message), { code });
@@ -140,14 +133,39 @@ export class AgorPackChunkedUploads {
     }
   }
 
-  private async stageEmpty(scopeId: string, name: string): Promise<void> {
+  private async stageEmpty(scopeId: string, name: string, ref?: UploadRef): Promise<void> {
     await this.store.stage({
       owner: this.owner(scopeId),
       name,
       mimeType: 'application/octet-stream',
       body: Readable.from([]),
       sizeHint: 0,
+      ...(ref ? { ref } : {}),
     });
+  }
+
+  /** A (v4-shaped) UUID derived from (tenant, creator, upload, purpose). */
+  private derivedId(uploadId: string, purpose: string): string {
+    const hex = createHash('sha256')
+      .update(`${this.ctx.tenantId}:${this.ctx.user.user_id}:${uploadId}:${purpose}`)
+      .digest('hex');
+    const variant = '89ab'[Number.parseInt(hex[16] as string, 16) % 4];
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  }
+
+  /**
+   * Publish the completed marker under its derived key: the first completer
+   * inserts it, a concurrent one's insert fails on the key. True when ours.
+   */
+  private publishDone(uploadId: string, importId: string): Promise<boolean> {
+    return this.stageEmpty(
+      `${uploadId}:${DONE}`,
+      importId,
+      `upl_${this.derivedId(uploadId, 'done')}` as UploadRef
+    ).then(
+      () => true,
+      () => false
+    );
   }
 
   /** Start or resume the upload of a (size, sha256) file. */
@@ -233,76 +251,42 @@ export class AgorPackChunkedUploads {
    * through the importer (dry-run receipt). Repeating it returns the receipt.
    */
   /**
-   * The claim row's key is derived from (tenant, creator, upload), so the
-   * primary key admits one claim at a time: an insert either wins or fails.
-   */
-  private claimRef(uploadId: string): UploadRef {
-    const hex = createHash('sha256')
-      .update(`${this.ctx.tenantId}:${this.ctx.user.user_id}:${uploadId}:claim`)
-      .digest('hex');
-    return `upl_${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}` as UploadRef;
-  }
-
-  private repo<T>(work: (repository: StagedBlobRepository) => Promise<T>): Promise<T> {
-    return runWithTenantDatabaseScope(this.ctx.db, this.ctx.tenantId, () =>
-      work(new StagedBlobRepository(this.ctx.db))
-    );
-  }
-
-  /** Take the completion claim; a stale one (its completer died) is replaced. */
-  private async claim(uploadId: string): Promise<boolean> {
-    const ref = this.claimRef(uploadId);
-    const insert = () =>
-      this.repo((repository) =>
-        repository.reserve(
-          this.owner(`${uploadId}:${CLAIM}`),
-          ref,
-          new Date(Date.now() + CLAIM_STALE_MS)
-        )
-      ).then(
-        () => true,
-        () => false
-      );
-    if (await insert()) return true;
-    if (await this.repo((repository) => repository.removeIfExpired(ref, new Date()))) {
-      return insert();
-    }
-    return false;
-  }
-
-  private release(uploadId: string): Promise<void> {
-    return this.repo((repository) => repository.remove(this.claimRef(uploadId)));
-  }
-
-  /**
-   * Assemble once even when `complete` is called concurrently (a client
-   * retrying a slow request): one caller holds the claim and finishes; the
-   * others wait for its completed marker and return the same receipt.
+   * Assemble the chunks, check the whole file's SHA-256, and stage it through
+   * the importer (dry-run receipt). Idempotent by ordering, so overlapping or
+   * repeated calls all return the same receipt:
+   *   1. the pack is staged under a scope derived from the upload (the
+   *      importer keeps one receipt per pack content);
+   *   2. the completed marker is published once (derived key);
+   *   3. chunks are deleted only after the marker exists, and a completer
+   *      that finds them gone returns the marker's receipt.
    */
   async complete(uploadId: string, importer: AgorPackImporter): Promise<AgorPackImport> {
-    for (;;) {
-      const state = await this.describe(uploadId, await this.pieces(uploadId));
-      if (state.import_id) return importer.get(state.import_id);
-      if (await this.claim(uploadId)) {
-        try {
-          return await this.assemble(uploadId, importer);
-        } finally {
-          await this.release(uploadId);
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, CLAIM_POLL_MS));
-    }
+    const pieces = await this.pieces(uploadId);
+    const state = await this.describe(uploadId, pieces);
+    if (state.import_id) return importer.get(state.import_id);
+    await this.writable();
+    return this.assemble(uploadId, importer, pieces, state);
   }
 
-  private async assemble(uploadId: string, importer: AgorPackImporter): Promise<AgorPackImport> {
-    const pieces = (await this.pieces(uploadId)).filter(
-      (piece) => !piece.scopeId.endsWith(`:${CLAIM}`)
-    );
-    const state = await this.describe(uploadId, pieces);
-    // Finished by the previous holder between our check and our claim.
-    if (state.import_id) return importer.get(state.import_id);
+  /** The receipt of a completion another call finished, if any. */
+  private async finished(
+    uploadId: string,
+    importer: AgorPackImporter
+  ): Promise<AgorPackImport | null> {
+    const done = await this.marker(await this.pieces(uploadId), DONE);
+    return done ? importer.get(done) : null;
+  }
+
+  private async assemble(
+    uploadId: string,
+    importer: AgorPackImporter,
+    pieces: StagedBlob[],
+    state: AgorPackChunkedUpload
+  ): Promise<AgorPackImport> {
     const missing = state.chunks - state.received.length;
     if (missing > 0) {
+      const finished = await this.finished(uploadId, importer);
+      if (finished) return finished;
       throw new Conflict(`The upload is missing ${missing} of ${state.chunks} chunks`);
     }
     const chunkOf = new Map<number, StagedBlob>();
@@ -332,14 +316,32 @@ export class AgorPackChunkedUploads {
     }
     let receipt: AgorPackImport;
     try {
-      receipt = await importer.stage(Readable.from(verified()), state.size);
+      receipt = await importer.stage(Readable.from(verified()), state.size, {
+        scopeId: this.derivedId(uploadId, 'pack'),
+      });
     } catch (error) {
       // Corrupt chunks can't be told apart: start over.
-      if (checksumMismatch) await this.drop(pieces);
+      if (checksumMismatch) {
+        await this.drop(pieces);
+        throw error;
+      }
+      // Another completer may have finished and cleaned up the chunks.
+      const finished = await this.finished(uploadId, importer);
+      if (finished) return finished;
       throw error;
     }
-    await this.stageEmpty(`${uploadId}:${DONE}`, receipt.import_id);
-    await this.drop(pieces.filter((piece) => !piece.scopeId.endsWith(`:${INFO}`)));
+    if (!(await this.publishDone(uploadId, receipt.import_id))) {
+      // Another completer's marker (it may still be writing it). Without one
+      // the chunks stay: they are the only way to finish the upload.
+      let finished: AgorPackImport | null = null;
+      for (let attempt = 0; attempt < 25 && !finished; attempt++) {
+        finished = await this.finished(uploadId, importer);
+        if (!finished) await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      if (!finished) throw new Error('The completed upload could not be recorded');
+      receipt = finished;
+    }
+    await this.drop(pieces.filter((piece) => /:\d+$/.test(piece.scopeId)));
     return receipt;
   }
 }

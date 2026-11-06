@@ -282,12 +282,17 @@ export class AgorPackImporter {
    * Stage an uploaded pack, validate it, and return the dry-run. Re-uploading
    * a pack this user already imported returns the existing receipt.
    */
-  async stage(body: NodeJS.ReadableStream, size: number): Promise<AgorPackImport> {
+  async stage(
+    body: NodeJS.ReadableStream,
+    size: number,
+    /** The staged pack's scope (the resumable upload derives it from the upload). */
+    options: { scopeId?: string } = {}
+  ): Promise<AgorPackImport> {
     const store = getBlobStagingStore();
     // Also the write admission check: nothing is staged while the tenant is gated.
     await this.write(() => this.receipts().failStale(staleBefore(), INTERRUPTED));
     await store.cleanupExpired({ tenantId: this.ctx.tenantId }).catch(() => 0);
-    const scope = generateId();
+    const scope = options.scopeId ?? generateId();
     const staged = await store.stage({
       owner: {
         tenantId: this.ctx.tenantId,

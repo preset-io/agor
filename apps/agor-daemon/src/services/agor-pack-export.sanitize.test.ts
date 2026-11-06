@@ -90,3 +90,42 @@ describe('MCP auth URL fields in a pack', () => {
     }
   );
 });
+
+describe('mixed literal and reference credentials', () => {
+  it.each([
+    [
+      'https://{{ user.env.USER }}:literal-password@example.test/auth',
+      'https://{{ user.env.USER }}@example.test/auth',
+    ],
+    ['https://alice:{{ user.env.PASS }}@example.test/auth', 'https://example.test/auth'],
+    [
+      'https://{{ user.env.USER }}:{{ user.env.PASS }}@example.test/auth',
+      'https://{{ user.env.USER }}:{{ user.env.PASS }}@example.test/auth',
+    ],
+    [
+      'https://example.test/mcp?api_key={{ user.env.KEY }}plainsecret&region=eu',
+      'https://example.test/mcp?api_key=[redacted]&region=eu',
+    ],
+    [
+      'https://example.test/mcp?token=Bearer%20{{ user.env.TOKEN }}',
+      'https://example.test/mcp?token=[redacted]',
+    ],
+  ])('%s → %s', (input, expected) => {
+    const { url } = sanitizeMcpUrl(input);
+    expect(url).toBe(expected);
+    expect(scanForSecrets(url)).toEqual([]);
+  });
+
+  it('applies the same rule to arguments and auth secrets', () => {
+    expect(sanitizeMcpArgs(['--api-key={{ user.env.KEY }}x']).args).toEqual([
+      '--api-key=[redacted]',
+    ]);
+    expect(sanitizeMcpArgs(['--token', '{{ user.env.TOKEN }}']).args).toEqual([
+      '--token',
+      '{{ user.env.TOKEN }}',
+    ]);
+    expect(
+      sanitizeMcpAuth({ type: 'bearer', token: '{{ user.env.A }}{{ user.env.B }}' }).removed
+    ).toEqual(['token']);
+  });
+});

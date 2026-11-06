@@ -198,11 +198,18 @@ class MetadataBlobStagingStore implements BlobStagingStore {
   }
 
   async stage(input: Parameters<BlobStagingStore['stage']>[0]): Promise<UploadMetadata> {
-    const ref = `upl_${randomUUID()}` as UploadRef;
+    const ref = input.ref ?? (`upl_${randomUUID()}` as UploadRef);
     const { owner } = input;
-    await this.unit(owner.tenantId, () =>
-      this.repository.reserve(owner, ref, new Date(Date.now() + this.ttlMs))
-    );
+    const expiresAt = new Date(Date.now() + this.ttlMs);
+    if (input.ref) {
+      // A caller-derived key is claimed by the row insert, before any byte.
+      const reserved = await this.unit(owner.tenantId, () =>
+        this.repository.reserveIfAbsent(owner, ref, expiresAt)
+      );
+      if (!reserved) throw Object.assign(new Error('Blob already exists'), { status: 409 });
+    } else {
+      await this.unit(owner.tenantId, () => this.repository.reserve(owner, ref, expiresAt));
+    }
     const byteOwner = this.byteInput(owner, ref);
     try {
       const metadata = await this.bytes.stage({

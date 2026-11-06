@@ -236,6 +236,8 @@ export interface BlobStagingStore {
     mimeType: string;
     body: NodeJS.ReadableStream;
     sizeHint?: number;
+    /** A caller-derived key: staging fails, writing nothing, if it exists. */
+    ref?: UploadRef;
   }): Promise<UploadMetadata>;
   inspect(input: StagedBlobReadInput): Promise<UploadMetadata>;
   read(

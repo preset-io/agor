@@ -184,7 +184,13 @@ function scrubbedJson(path: string, value: unknown): string {
 const CREDENTIAL_NAME =
   /(api[_-]?key|access[_-]?key|key$|token|secret|passw|pwd|credential|signature|^-*sig$|^-*auth$|authorization)/i;
 const REDACTED = '[redacted]';
-const isTemplate = (value: string) => value.includes('{{');
+/**
+ * A credential slot may travel only as exactly one `{{ user.env.NAME }}`
+ * reference (a name, not a secret); a literal, or a literal mixed with a
+ * reference, is stripped.
+ */
+const isEnvReference = (value: string) =>
+  /^\{\{\s*user\.env\.[A-Za-z_][A-Za-z0-9_]*\s*\}\}$/.test(value);
 
 /** MCP auth fields holding secret values (the rest is configuration). */
 const MCP_AUTH_SECRET_FIELDS = new Set([
@@ -201,7 +207,6 @@ const MCP_AUTH_RUNTIME_FIELDS = new Set([
   'oauth_refresh_token',
   'oauth_token_expires_at',
 ]);
-const ONLY_ENV_REFERENCES = /^\s*(\{\{\s*user\.env\.[A-Za-z_][A-Za-z0-9_]*\s*\}\}\s*)+$/;
 
 /**
  * An MCP server's auth shape for a pack: configuration fields as they are,
@@ -219,7 +224,7 @@ export function sanitizeMcpAuth(auth: MCPServer['auth']): {
     if (value === undefined || value === null || MCP_AUTH_RUNTIME_FIELDS.has(field)) continue;
     if (typeof value !== 'string' && typeof value !== 'boolean') continue;
     if (MCP_AUTH_SECRET_FIELDS.has(field)) {
-      if (typeof value === 'string' && ONLY_ENV_REFERENCES.test(value)) out[field] = value;
+      if (typeof value === 'string' && isEnvReference(value)) out[field] = value;
       else if (value !== '') removed.push(field);
       continue;
     }
@@ -241,18 +246,26 @@ export function sanitizeMcpAuth(auth: MCPServer['auth']): {
  */
 export function sanitizeMcpUrl(url: string): { url: string; changed: boolean } {
   let changed = false;
-  let out = url.replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#@]*)@/i, (whole, scheme, userinfo) => {
-    if (isTemplate(userinfo)) return whole;
-    changed = true;
-    return scheme;
-  });
+  let out = url.replace(
+    /^([a-z][a-z0-9+.-]*:\/\/)([^/?#@]*)@/i,
+    (whole, scheme: string, userinfo: string) => {
+      // Username and password are checked separately.
+      const colon = userinfo.indexOf(':');
+      const user = colon < 0 ? userinfo : userinfo.slice(0, colon);
+      const password = colon < 0 ? null : userinfo.slice(colon + 1);
+      const keepPassword = password === null || password === '' || isEnvReference(password);
+      if (isEnvReference(user) && keepPassword) return whole;
+      changed = true;
+      return isEnvReference(user) ? `${scheme}${user}@` : scheme;
+    }
+  );
   out = out.replace(/\?([^#]*)/, (whole, query: string) => {
     const parts = query.split('&').map((part) => {
       const eq = part.indexOf('=');
       if (eq < 0) return part;
       const name = part.slice(0, eq);
       const value = part.slice(eq + 1);
-      if (!CREDENTIAL_NAME.test(name) || isTemplate(value) || value === '') return part;
+      if (!CREDENTIAL_NAME.test(name) || isEnvReference(value) || value === '') return part;
       changed = true;
       return `${name}=${REDACTED}`;
     });
@@ -270,14 +283,14 @@ export function sanitizeMcpArgs(args: readonly string[]): { args: string[]; chan
     const flag = /^(-{1,2}[A-Za-z0-9_.-]+)(=(.*))?$/.exec(arg);
     if (!flag || !CREDENTIAL_NAME.test(flag[1] as string)) continue;
     if (flag[2] !== undefined) {
-      if (!isTemplate(flag[3] as string) && flag[3] !== '') {
+      if (!isEnvReference(flag[3] as string) && flag[3] !== '') {
         out[i] = `${flag[1]}=${REDACTED}`;
         changed = true;
       }
       continue;
     }
     const next = out[i + 1];
-    if (next !== undefined && !next.startsWith('-') && !isTemplate(next)) {
+    if (next !== undefined && !next.startsWith('-') && !isEnvReference(next)) {
       out[i + 1] = REDACTED;
       changed = true;
       i += 1;
