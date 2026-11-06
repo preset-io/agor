@@ -8,6 +8,7 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { Forbidden } from '@feathersjs/errors';
 import { z } from 'zod';
 import type {
   MCPOAuthClientRegistrationID,
@@ -2308,6 +2309,7 @@ async function checkAuthorizeProbe(
     assertCurrent?.();
     if (
       error instanceof OutboundPreDispatchAuthorityError ||
+      error instanceof Forbidden ||
       (error as { name?: string })?.name === 'Forbidden'
     ) {
       throw error;
@@ -2348,7 +2350,10 @@ async function startMCPOAuthFlowWithAS(opts: {
   /** PostgreSQL daemons inject a fleet-wide encrypted registration authority. */
   resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
   /** Invalidate dynamic client registration if current matches clientId. */
-  invalidateDynamicClientRegistration?: (clientId: string) => Promise<boolean>;
+  invalidateDynamicClientRegistration?: (
+    clientId: string,
+    registrationId?: MCPOAuthClientRegistrationID
+  ) => Promise<boolean>;
   resourceUri: string;
   issuer: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
@@ -2472,11 +2477,17 @@ async function startMCPOAuthFlowWithAS(opts: {
         opts.assertCurrent?.();
         let invalidated = false;
         try {
-          invalidated = await opts.invalidateDynamicClientRegistration(resolvedClient.clientId);
+          invalidated = resolvedClient.clientRegistrationId
+            ? await opts.invalidateDynamicClientRegistration(
+                resolvedClient.clientId,
+                resolvedClient.clientRegistrationId
+              )
+            : await opts.invalidateDynamicClientRegistration(resolvedClient.clientId);
         } catch (error) {
           opts.assertCurrent?.();
           if (
             error instanceof OutboundPreDispatchAuthorityError ||
+            error instanceof Forbidden ||
             (error as { name?: string })?.name === 'Forbidden'
           ) {
             throw error;
@@ -2619,7 +2630,10 @@ export async function startMCPOAuthFlow(
     /** Fleet-wide DCR lease/persistence boundary for multi-daemon callers. */
     resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
     /** Invalidate dynamic client registration if current matches clientId. */
-    invalidateDynamicClientRegistration?: (clientId: string) => Promise<boolean>;
+    invalidateDynamicClientRegistration?: (
+      clientId: string,
+      registrationId?: MCPOAuthClientRegistrationID
+    ) => Promise<boolean>;
     /** Exact protected resource identifier sent to authorization/token endpoints. */
     resourceUri?: string;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;

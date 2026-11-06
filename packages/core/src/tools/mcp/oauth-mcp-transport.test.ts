@@ -2228,6 +2228,10 @@ describe('/authorize preflight probe + stale client recovery', () => {
     ).rejects.toThrow('MCP OAuth client-registration authority changed. Restart OAuth.');
 
     expect(invalidateFn).toHaveBeenCalledWith('cached-client-stale');
+    expect(globalThis.fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('/register'),
+      expect.anything()
+    );
   });
 
   it('fences preflight probe and invalidation with assertCurrent: loses authority during probe', async () => {
@@ -2299,7 +2303,8 @@ describe('/authorize preflight probe + stale client recovery', () => {
       }
       if (
         url.startsWith('https://auth.provider.example/oauth/authorize') &&
-        url.includes('client_id=fresh-client-3')
+        (url.includes('client_id=fresh-client-3') ||
+          url.includes('client_id=newer-client-from-concurrent-worker'))
       ) {
         return new Response(null, { status: 302, headers: { Location: '/login' } });
       }
@@ -2312,6 +2317,12 @@ describe('/authorize preflight probe + stale client recovery', () => {
     });
 
     expect(invalidateFn).toHaveBeenCalledWith('stale-client-1');
+
+    const nextFlow = await startMCPOAuthFlow('', undefined, redirectUri, {
+      ...prefetchedOptions,
+      reuseDynamicClientRegistration: true,
+    });
+    expect(nextFlow.clientId).toBe('newer-client-from-concurrent-worker');
   });
 });
 

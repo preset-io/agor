@@ -491,6 +491,7 @@ export class MCPOAuthClientRegistrationRepository {
     tenantId: string;
     serverId: MCPServerID;
     clientId: string;
+    registrationId?: MCPOAuthClientRegistrationID;
     masterSecret?: string;
   }): Promise<boolean> {
     const masterSecret = input.masterSecret ?? process.env.AGOR_MASTER_SECRET;
@@ -513,6 +514,10 @@ export class MCPOAuthClientRegistrationRepository {
     );
     const row = rawRows(currentResult)[0];
     if (!row || typeof row.sealed_material !== 'string') {
+      return false;
+    }
+
+    if (input.registrationId && row.registration_id !== input.registrationId) {
       return false;
     }
 

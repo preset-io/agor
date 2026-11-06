@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MCPServerID } from '../../types';
+import type { MCPOAuthClientRegistrationID, MCPServerID } from '../../types';
 import type { Database } from '../client';
 import { sealBoundSecret } from '../oauth-secret-envelope';
 import {
@@ -68,6 +68,28 @@ describe('MCPOAuthClientRegistrationRepository.invalidateIfCurrentMatchesClientI
       tenantId,
       serverId,
       clientId: 'dcr_client_stale_failed_refresh',
+      masterSecret,
+    });
+
+    expect(ok).toBe(false);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves current registration untouched when registrationId is provided but differs from row', async () => {
+    const targetClient = 'dcr_client_active';
+    const execute = vi.fn().mockResolvedValue([
+      {
+        registration_id: registrationId,
+        binding_fingerprint: bindingFingerprint,
+        sealed_material: sealMaterial(targetClient),
+      },
+    ]);
+
+    const ok = await repo(execute).invalidateIfCurrentMatchesClientId({
+      tenantId,
+      serverId,
+      clientId: targetClient,
+      registrationId: 'dcr_reg_newer_epoch' as MCPOAuthClientRegistrationID,
       masterSecret,
     });
 

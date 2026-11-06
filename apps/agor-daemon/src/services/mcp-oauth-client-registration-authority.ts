@@ -436,7 +436,8 @@ export class MCPOAuthClientRegistrationAuthority {
   async invalidateIfCurrentMatchesClientId(
     tenantId: string,
     serverId: MCPServerID,
-    clientId: string
+    clientId: string,
+    registrationId?: MCPOAuthClientRegistrationID
   ): Promise<boolean> {
     return runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
       const invalidated = await new MCPOAuthClientRegistrationRepository(
@@ -445,6 +446,7 @@ export class MCPOAuthClientRegistrationAuthority {
         tenantId,
         serverId,
         clientId,
+        registrationId,
         masterSecret: this.masterSecret,
       });
       if (invalidated) {
