@@ -243,6 +243,8 @@ export interface BlobStagingStore {
    * False when the key already exists.
    */
   putRecord(owner: StagedBlobOwner, ref: UploadRef): Promise<boolean>;
+  /** Remove a `putRecord` row: ownership-checked, metadata only (it has no bytes). */
+  deleteRecord(input: Omit<StagedBlobOwner, 'scopeId'> & { ref: UploadRef }): Promise<void>;
   /** The caller's row under `ref` (any scope), or null. */
   findRecord(
     input: Omit<StagedBlobOwner, 'scopeId'> & { ref: UploadRef }

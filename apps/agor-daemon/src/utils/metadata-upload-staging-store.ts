@@ -232,6 +232,11 @@ class MetadataBlobStagingStore implements BlobStagingStore {
     );
   }
 
+  async deleteRecord(input: Omit<StagedBlobOwner, 'scopeId'> & { ref: UploadRef }): Promise<void> {
+    if (!(await this.findRecord(input))) return;
+    await this.unit(input.tenantId, () => this.repository.remove(input.ref));
+  }
+
   async findRecord(
     input: Omit<StagedBlobOwner, 'scopeId'> & { ref: UploadRef }
   ): Promise<StagedBlob | null> {
