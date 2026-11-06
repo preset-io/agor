@@ -73,9 +73,24 @@ export function apiKeyProblem(key: string): string | null {
     : 'contains spaces, line breaks or other invalid characters';
 }
 
-/** `message` with every occurrence of `secret` replaced, for errors shown to the user. */
-export function redactSecret(message: string, secret: string): string {
-  return secret ? message.split(secret).join('[redacted]') : message;
+/**
+ * The first key that can't be sent as a Bearer, named by its `label` (never
+ * the key itself), or null. Check every key before any request uses one.
+ */
+export function apiKeysProblem(keys: Array<{ key: string; label: string }>): string | null {
+  for (const { key, label } of keys) {
+    const problem = apiKeyProblem(key);
+    if (problem) return `${label} ${problem}.`;
+  }
+  return null;
+}
+
+/** `message` with every occurrence of each secret replaced, for errors shown to the user. */
+export function redactSecrets(message: string, secrets: Array<string | undefined>): string {
+  return secrets.reduce<string>(
+    (text, secret) => (secret ? text.split(secret).join('[redacted]') : text),
+    message
+  );
 }
 
 type Log = (line: string) => void;

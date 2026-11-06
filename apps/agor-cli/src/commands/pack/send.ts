@@ -23,13 +23,13 @@ import chalk from 'chalk';
 import { BaseCommand } from '../../base-command';
 import { packFetch, packJson } from '../../lib/pack/http';
 import {
-  apiKeyProblem,
+  apiKeysProblem,
   applyPack,
   exportRequest,
   isAgorCloudHost,
   packContentFlags,
   printDryRun,
-  redactSecret,
+  redactSecrets,
   uploadPackFile,
 } from '../../lib/pack/options';
 
@@ -86,16 +86,21 @@ export default class PackSend extends BaseCommand {
     const targetUrl = target.origin;
     const targetKey = process.env[flags['api-key-env']]?.trim();
     if (!targetKey) this.error(`Set ${flags['api-key-env']} to an API key of the target Agor.`);
-    const keyProblem = apiKeyProblem(targetKey);
-    if (keyProblem) this.error(`The API key in ${flags['api-key-env']} ${keyProblem}.`);
-    const client = await this.connectToDaemon();
-    let bearer: string | undefined;
+    // Both keys are checked before any request uses them (a malformed key would
+    // otherwise surface in a header error), and redacted from every error after.
+    const bearer = await this.resolveHttpBearer();
+    const keyProblem = apiKeysProblem([
+      { key: bearer, label: 'The API key for this Agor (AGOR_API_KEY or your sign-in)' },
+      { key: targetKey, label: `The API key in ${flags['api-key-env']}` },
+    ]);
+    if (keyProblem) this.error(keyProblem);
+    let client: Awaited<ReturnType<typeof this.connectToDaemon>> | undefined;
     try {
+      client = await this.connectToDaemon();
       const branchIds: string[] = [];
       for (const id of argv as string[]) {
         branchIds.push((await client.service('branches').get(id)).branch_id);
       }
-      bearer = await this.resolveHttpBearer();
       const daemonUrl = this.daemonUrl as string;
       this.logToStderr(chalk.dim(`Packing ${branchIds.length} teammate(s)…`));
       const exported = await packJson<{
@@ -142,11 +147,11 @@ export default class PackSend extends BaseCommand {
       }
       this.log(JSON.stringify(receipt));
     } catch (error) {
-      // Never echo the target's API key (nor this daemon's bearer) back.
+      // Never echo either API key back.
       const message = error instanceof Error ? error.message : String(error);
-      this.error(`Send failed: ${redactSecret(redactSecret(message, targetKey), bearer ?? '')}`);
+      this.error(`Send failed: ${redactSecrets(message, [targetKey, bearer])}`);
     } finally {
-      await this.cleanupClient(client);
+      if (client) await this.cleanupClient(client);
     }
   }
 }
