@@ -119,50 +119,59 @@ export function agorCloudReconnectUrl(workspaceUrl: string, importId: string): s
   return `${workspaceUrl.replace(/\/$/, '')}/ui/settings/teammates?import=${encodeURIComponent(importId)}`;
 }
 
+const HOSTNAME_PATTERN =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
+const IPV4_PATTERN = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const PRIVATE_NAME_SUFFIXES = ['.local', '.internal', '.lan'];
+
 /**
- * Hosts a self-hosted Agor may be reached on over plain http and still sign
- * in to Agor Cloud: loopback (localhost, 127.0.0.0/8, ::1), RFC 1918 IPv4
- * (10/8, 172.16/12, 192.168/16), IPv6 ULA (fc00::/7), `.local` / `.internal` /
- * `.lan` names, and single-label names. Never a public host. Takes
- * `URL.hostname` (IPv6 in brackets, IPv4 already normalized by the parser).
- * The Cloud console applies the same rule to `return_to`.
+ * Whether a WHATWG-normalized `URL.hostname` names a private-network host, the
+ * only hosts a self-hosted Agor may be reached on over plain `http:` and still
+ * sign in to Agor Cloud. Identical rule in the Cloud console
+ * (preset-io/agor-cloud `packages/contracts/src/self-hosted-connect.ts`):
+ * - `localhost`, 127.0.0.0/8, `[::1]`;
+ * - RFC 1918 IPv4: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16;
+ * - IPv6 unique-local fc00::/7;
+ * - a name ending in `.local`, `.internal` or `.lan`, or a single-label name (no dot).
+ * The URL parser has already lowercased the host and canonicalized IPv4
+ * (`10.1` → `10.0.0.1`, an all-digit label → IPv4) and IPv6. Trailing-dot
+ * names and IPv4-mapped IPv6 do not match.
  */
 export function isPrivateNetworkHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/, '');
-  if (host.startsWith('[') && host.endsWith(']')) {
-    const address = host.slice(1, -1);
-    if (address === '::1') return true;
-    const first = address.split(':')[0] ?? '';
-    // fc00::/7: the first 16-bit group is fcxx or fdxx.
-    return /^[0-9a-f]{1,4}$/.test(first) && (Number.parseInt(first, 16) & 0xfe00) === 0xfc00;
+  if (hostname.startsWith('[')) {
+    return hostname === '[::1]' || /^\[f[cd][0-9a-f]{2}:/.test(hostname);
   }
-  const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  const ipv4 = IPV4_PATTERN.exec(hostname);
   if (ipv4) {
     const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
     return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
   }
-  if (host === 'localhost') return true;
-  if (/^[a-z0-9-]+$/.test(host)) return true;
-  return /^([a-z0-9-]+\.)+(local|internal|lan)$/.test(host);
+  if (!HOSTNAME_PATTERN.test(hostname)) return false;
+  return (
+    !hostname.includes('.') || PRIVATE_NAME_SUFFIXES.some((suffix) => hostname.endsWith(suffix))
+  );
 }
 
 /**
- * Why a URL can't be the sign-in `return_to`, or null when it can: absolute
- * `https:` anywhere, or `http:` on a {@link isPrivateNetworkHost} host; no
- * userinfo, no fragment, at most {@link AGOR_CLOUD.maxReturnToLength} chars.
+ * Why a URL can't be the sign-in `return_to`, or null when it can (same rule
+ * as the console's `parseSelfHostedReturnTo`): absolute `https:` on any valid
+ * host, or `http:` only on a {@link isPrivateNetworkHost} host; no userinfo,
+ * no `#`, at most {@link AGOR_CLOUD.maxReturnToLength} chars.
  */
 export function agorCloudReturnToProblem(value: string): string | null {
+  if (value.length > AGOR_CLOUD.maxReturnToLength) return 'return_to is too long';
+  if (value.includes('#')) return 'return_to must not carry a fragment';
   let url: URL;
   try {
     url = new URL(value);
   } catch {
     return 'return_to must be an absolute URL';
   }
-  if (value.length > AGOR_CLOUD.maxReturnToLength) return 'return_to is too long';
-  if (url.username || url.password || url.hash) {
-    return 'return_to must not carry credentials or a fragment';
-  }
+  if (url.username || url.password) return 'return_to must not carry credentials';
+  const host = url.hostname;
+  const validHost = host.startsWith('[') || (host.length <= 253 && HOSTNAME_PATTERN.test(host));
+  if (!validHost) return 'return_to has an invalid host';
   if (url.protocol === 'https:') return null;
-  if (url.protocol === 'http:' && isPrivateNetworkHost(url.hostname)) return null;
+  if (url.protocol === 'http:' && isPrivateNetworkHost(host)) return null;
   return 'Agor must be served over https, or over http on a private network address, to sign in to Agor Cloud';
 }
